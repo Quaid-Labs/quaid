@@ -1110,6 +1110,46 @@ conn.close()
     log.info("Journal files created");
   }
 
+  // Initialize git repo for workspace (required for doc staleness tracking)
+  const gitDir = path.join(WORKSPACE, ".git");
+  if (!fs.existsSync(gitDir)) {
+    s.start("Initializing git repository...");
+    spawnSync("git", ["init"], { cwd: WORKSPACE, stdio: "pipe" });
+    // Create .gitignore for runtime artifacts
+    const gitignore = [
+      "# Runtime data",
+      "data/*.db",
+      "data/*.db-*",
+      "logs/",
+      ".env",
+      ".env.*",
+      "",
+      "# Python",
+      "__pycache__/",
+      "*.pyc",
+      ".pytest_cache/",
+      "",
+      "# OS",
+      ".DS_Store",
+      "Thumbs.db",
+      "",
+      "# Build",
+      "node_modules/",
+      "build/",
+      "",
+    ].join("\n");
+    const ignorePath = path.join(WORKSPACE, ".gitignore");
+    if (!fs.existsSync(ignorePath)) {
+      fs.writeFileSync(ignorePath, gitignore);
+    }
+    // Initial commit so git diff/log have a baseline
+    spawnSync("git", ["add", "-A"], { cwd: WORKSPACE, stdio: "pipe" });
+    spawnSync("git", ["commit", "-m", "Initial Quaid workspace"], { cwd: WORKSPACE, stdio: "pipe" });
+    s.stop(C.green("Git repository initialized"));
+  } else {
+    log.info("Git repository already exists");
+  }
+
   // Create owner Person node
   s.start("Creating owner node...");
   const storeScript = `
