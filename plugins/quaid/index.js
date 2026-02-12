@@ -846,7 +846,7 @@ QUALITY RULES:
   If the speaker says "dinner at Shelter", do NOT add "tomorrow". If they say "a necklace", do NOT add "surprise".
   If one sentence contains multiple facts, extract them as separate items — but each must match what was said.
 - ONE FACT PER CONCEPT: Do not split one statement into overlapping facts.
-  "My sister Amber's husband is named Nate" = ONE fact, not three separate facts about sister/husband/brother-in-law.
+  "My sister Melina's husband is named Nate" = ONE fact, not three separate facts about sister/husband/brother-in-law.
 
 ${isAssistantMessage ?
         `CRITICAL: Extract facts ABOUT the user (User), NOT about the assistant.
@@ -860,7 +860,7 @@ PRIVACY CLASSIFICATION (per fact):
   Examples: "planning a surprise party for X", "salary is $X", "diagnosed with X"
 - "shared": Most facts go here. Family info, names, relationships, schedules, preferences,
   routines, project details, household knowledge, general personal facts.
-  Examples: "dinner is at 7pm", "sister is named Amber", "likes spicy food", "works from home"
+  Examples: "dinner is at 7pm", "sister is named Melina", "likes spicy food", "works from home"
 - "public": Widely known or non-personal facts. Examples: "Bali is in Indonesia"
 IMPORTANT: Default to "shared". Only use "private" for genuinely secret or sensitive information.
 Family names, daily routines, and preferences are "shared", NOT "private".
@@ -1139,7 +1139,7 @@ const quaidPlugin = {
 
 Your job: identify which numbered facts should be loaded. Think about what the assistant would need to know to give a great, personalized response.
 
-CRITICAL RULE: When the user mentions someone by name (e.g., "Melina", "Yuni", "Cohaagen"), you MUST include EVERY fact that mentions that person — their job, family, relationships, preferences, everything about them. The assistant needs the full picture of anyone being discussed.
+CRITICAL RULE: When the user mentions someone by name (e.g., "Melina", "Lori", "Cohaagen"), you MUST include EVERY fact that mentions that person — their job, family, relationships, preferences, everything about them. The assistant needs the full picture of anyone being discussed.
 
 Also include: facts about the user themselves, their plans, preferences, or anything that adds useful context.
 
@@ -1858,9 +1858,9 @@ For RELATIONSHIP facts, also extract edges that connect entities. An edge repres
 
 EDGE DIRECTION RULES (critical):
 - parent_of: PARENT is subject. "Lori is User's mom" → Lori --parent_of--> User
-- sibling_of: alphabetical order (symmetric). "Amber is User's sister" → Amber --sibling_of--> User
+- sibling_of: alphabetical order (symmetric). "Melina is User's sister" → Melina --sibling_of--> User
 - spouse_of: alphabetical order (symmetric). "Cohaagen is Melina's husband" → Cohaagen --spouse_of--> Melina
-- has_pet: OWNER is subject. "User has a dog named Madu" → User --has_pet--> Madu
+- has_pet: OWNER is subject. "User has a dog named Pixel" → User --has_pet--> Pixel
 - friend_of: alphabetical order (symmetric)
 - works_at: PERSON is subject
 - lives_at: PERSON is subject

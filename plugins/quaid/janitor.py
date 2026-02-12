@@ -1115,7 +1115,7 @@ _INVERSE_MAP = {
     "founded_by": "founded",
     "employs": "works_at",     # employs(Facebook, User) → works_at(User, Facebook)
     "employed_by": "works_at",
-    "pet_of": "has_pet",       # pet_of(Madu, User) → has_pet(User, Madu)
+    "pet_of": "has_pet",       # pet_of(Pixel, User) → has_pet(User, Pixel)
     "led_to": "caused_by",     # led_to(A, B) → caused_by(B, A) — A led to B
     "caused": "caused_by",     # caused(A, B) → caused_by(B, A) — A caused B
     "resulted_in": "caused_by",  # resulted_in(A, B) → caused_by(B, A)
@@ -1854,7 +1854,7 @@ Respond with a JSON array only, no markdown fencing:
   {{"id": "uuid", "action": "KEEP"}},
   {{"id": "uuid", "action": "DELETE"}},
   {{"id": "uuid", "action": "FIX", "new_text": "corrected text"}},
-  {{"id": "uuid", "action": "FIX", "new_text": "Amber is {owner}'s sister", "edges": [{{"subject": "Amber", "relation": "sibling_of", "object": "{owner_full}"}}]}},
+  {{"id": "uuid", "action": "FIX", "new_text": "Melina is {owner}'s sister", "edges": [{{"subject": "Melina", "relation": "sibling_of", "object": "{owner_full}"}}]}},
   {{"action": "MERGE", "merge_ids": ["uuid1", "uuid2"], "merged_text": "consolidated"}}
 ]"""
 
@@ -3167,7 +3167,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # --- Task 8: Unit Tests (subprocess) ---
         # Only run tests in dev mode: set QUAID_DEV=1 or janitor.run_tests=true in config
         _dev_mode = os.environ.get("QUAID_DEV", "").strip() in ("1", "true", "yes")
-        _run_tests_cfg = getattr(cfg.janitor, "run_tests", False) or _dev_mode
+        _run_tests_cfg = getattr(_cfg.janitor, "run_tests", False) or _dev_mode
         if task == "tests" or (task == "all" and _run_tests_cfg):
             if not _skip_if_over_budget("Task 8: Tests", 30):
                 print("[Task 8: Unit Tests]")

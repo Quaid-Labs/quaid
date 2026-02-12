@@ -2,8 +2,8 @@
 # quaid - Total Recall memory system CLI
 #
 # Usage:
-#   quaid search "query" --owner solomon
-#   quaid store "fact" --owner solomon
+#   quaid search "query" --owner default
+#   quaid store "fact" --owner default
 #   quaid stats
 #   quaid get-edges <node_id>
 #   quaid janitor --task all --dry-run
