@@ -43,7 +43,7 @@ This dramatically reduces token use compared to stuffing full conversation histo
 
 ## Benchmark Results
 
-Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) -- 10 long conversations with 1,540 scored question-answer pairs testing memory extraction, temporal reasoning, and multi-hop recall. LoCoMo is currently the best available benchmark for conversational memory systems, and we use it as a rapid test bed for A/B testing retrieval parameters and pipeline changes.
+Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (ACL 2024) using Mem0's exact evaluation methodology -- same judge model (GPT-4o-mini), same prompt, same scoring. 10 long conversations, 1,540 scored question-answer pairs testing memory extraction, temporal reasoning, and multi-hop recall.
 
 | System | Accuracy |
 |--------|----------|
@@ -60,7 +60,6 @@ Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) -- 
 >
 > **Understanding the LLM split:** In this benchmark, the "high-reasoning" vs "low-reasoning" result reflects which LLM synthesizes the answer from retrieved facts. In production, there's no separate answer step -- Quaid passes retrieved memories directly to whatever LLM the agent is already using. If your agent runs on a high-reasoning model (as most OpenClaw setups do), the 75.0% result is the relevant one. The low-reasoning result (70.3%) shows the lower bound when the answering model is weaker.
 >
-> LoCoMo tests fact extraction and recall but does not evaluate project intelligence, codebase awareness, or documentation tracking. We are actively evaluating against additional benchmarks as they become available.
 > Full methodology and per-category breakdowns: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
 ---

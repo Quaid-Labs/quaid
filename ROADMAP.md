@@ -31,10 +31,13 @@ feature stability before committing to a longer benchmark run.
 - Publish results alongside LoCoMo numbers
 - Compare vs: Emergence AI (86%), Supermemory (81.6%), Zep+GPT-4o (71.2%)
 
-### Custom Benchmark Dataset
-Build a benchmark dataset purpose-built for Quaid's use case:
-- Long-running personal assistant conversations (not academic Q&A)
-- Tests all 5 subsystems: extraction, janitor, core files, journal, projects
+### Purpose-Built Benchmark
+No existing benchmark fully evaluates long-running personal memory systems -- LoCoMo
+comes closest, but the field needs a dataset that tests the full lifecycle: multi-session
+accumulation, fact evolution over time, maintenance decisions, and project-level awareness.
+Building one is a priority, but creating a rigorous, peer-reviewable dataset is costly and
+time-intensive. Until then, we continue to evaluate and optimize against LoCoMo.
+- Full lifecycle testing (extraction → janitor → recall across weeks)
 - Evolution chains (facts that change over time)
 - Multi-session context accumulation
 - Adversarial queries (plausible but wrong)

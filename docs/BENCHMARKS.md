@@ -4,8 +4,6 @@
 
 [LoCoMo](https://github.com/snap-research/locomo) is an industry-standard benchmark for conversational memory systems. It consists of 10 long conversations (5,882 turns) with 1,540 scored question-answer pairs across four categories: single-hop lookup, multi-hop reasoning, temporal reasoning, and open-domain inference.
 
-We use LoCoMo because it's the best available benchmark for memory extraction and recall. It is an older benchmark and does not test several Quaid capabilities -- notably the projects system, codebase awareness, and documentation tracking. We are actively evaluating against additional benchmarks as they become available.
-
 We evaluate Quaid using **Mem0's exact methodology** -- same judge model (GPT-4o-mini), same prompt, same temperature (0.0), same JSON response format, same scoring. This makes the comparison peer-review valid.
 
 ---
@@ -178,9 +176,8 @@ Mem0 uses GPT-4o-mini for answer generation. We report both Haiku answers (simil
 
 These results are from early alpha testing (February 2026). We are actively:
 
-- **Testing and refining** extraction quality, retrieval parameters, and janitor decisions against LoCoMo and additional benchmarks
+- **Testing and refining** extraction quality, retrieval parameters, and janitor decisions against LoCoMo
 - **Evaluating journal scalability** -- the journal A/B test shows promise but token costs need optimization for long-running agents
-- **Seeking additional benchmarks** -- LoCoMo tests fact extraction and recall but not project intelligence, codebase awareness, or documentation tracking
 
 Quaid conserves context across restarts -- when the agent compacts or resets, memories are extracted before the context is cleared. A full crash before compaction can cause memory loss for that session.
 
