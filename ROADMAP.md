@@ -26,7 +26,8 @@ alternative to Ollama. Enables Quaid on machines without a GPU.
 ### LongMemEval Benchmark
 Run the full [LongMemEval](https://github.com/xiaowu0162/LongMemEval) evaluation
 (ICLR 2025). 500 QA pairs, 7 question types, 19,195 sessions. Code is written
-and smoke-tested — needs a full run (~$60, Haiku extract+answer).
+and smoke-tested. Currently in an intense A/B testing period on LoCoMo to find
+feature stability before committing to a longer benchmark run.
 - Publish results alongside LoCoMo numbers
 - Compare vs: Emergence AI (86%), Supermemory (81.6%), Zep+GPT-4o (71.2%)
 
@@ -47,10 +48,6 @@ events at compaction (PreCompact hook), but there's no shared project context.
 - Coordinated compaction — Claude Code's context feeds into the same memory pipeline
 - Project-scoped tool registration (Claude Code gets project-specific tools)
 - Use case: Claude Code handles implementation, OpenClaw agent handles communication and scheduling, both share project state through Quaid
-
-### Batch API for Janitor
-Use Anthropic's Batch API for janitor LLM calls. 50% token cost savings on
-nightly runs. Review, dedup, contradiction, and decay tasks are all batchable.
 
 ## Later (v0.3+)
 
@@ -94,10 +91,6 @@ server. Any MCP-compatible client can store and recall memories.
 - `memory_store`, `memory_recall`, `memory_search` tools
 - Stateless server, SQLite backend
 - Works with Claude Desktop, Cursor, Windsurf, etc.
-
-### Streaming Extraction
-Extract facts during the conversation (not just at compaction). Lower latency,
-more granular capture. Requires careful dedup against compaction extraction.
 
 ### Privacy Controls
 PII detection and memory redaction:

@@ -392,28 +392,47 @@ The schema maintains indexes on high-query-frequency columns: `owner_id + status
 
 ## 5. Janitor Pipeline (Nightly Maintenance)
 
-The janitor (`janitor.py`) runs 17 tasks in a fixed execution order. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
+The janitor (`janitor.py`) runs 16 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
 
 ### Execution Order
 
-| # | Task | Purpose | LLM? |
-|---|------|---------|------|
-| 0b | embeddings | Backfill missing embeddings via Ollama | No |
-| 2 | review | High-reasoning LLM reviews pending facts (approve/reject/rewrite) | High |
-| 2a | temporal | Resolve relative dates ("last Tuesday") to absolute dates | No |
-| 2b | dedup_review | Review recent dedup rejections (were they correct?) | High |
-| 3+4 | duplicates + contradictions | Shared recall pass, then dedup (cosine > 0.85) + contradiction detection | Low |
-| 4b | contradictions (resolve) | High-reasoning LLM resolves detected contradictions (keep_a/keep_b/merge) | High |
-| 5 | decay | Ebbinghaus exponential confidence decay on old unused facts | No |
-| 5b | decay_review | Review memories that decayed below threshold (delete/extend/pin) | High |
-| 1 | workspace | Core markdown bloat monitoring + high-reasoning LLM review | High |
-| 1b | docs_staleness | Auto-update stale docs from git diffs (low-reasoning pre-filter + high-reasoning update) | Both |
-| 1c | docs_cleanup | Clean bloated docs based on churn metrics | Low |
-| 1d-snippets | snippets | Review soul snippets: FOLD (merge into file), REWRITE, or DISCARD | High |
-| 1d-journal | journal | Distill journal entries into core markdown, archive originals | High |
-| 7 | rag | Reindex docs for RAG search + auto-discover new projects | No |
-| 8 | tests | Run pytest suite (dev/CI only, gated by `QUAID_DEV=1`) | No |
-| 9 | cleanup | Prune old logs, orphaned embeddings, stale lock files | No |
+The task numbering is historical -- tasks were added over time and the numbers reflect that. The execution order is what matters, not the labels.
+
+**Phase 1: Preparation**
+
+| Task | Purpose | LLM? |
+|------|---------|------|
+| embeddings | Backfill missing embeddings via Ollama | No |
+
+**Phase 2: Memory Pipeline** (fail-fast -- if any task fails, remaining memory tasks are skipped)
+
+| Task | Purpose | LLM? |
+|------|---------|------|
+| review | High-reasoning LLM reviews pending facts (approve/reject/rewrite) | High |
+| temporal | Resolve relative dates ("last Tuesday") to absolute dates | No |
+| dedup_review | Review recent dedup rejections (were they correct?) | High |
+| duplicates + contradictions | Shared recall pass, then dedup (cosine > 0.85) + contradiction detection | Low |
+| contradictions (resolve) | High-reasoning LLM resolves detected contradictions (keep_a/keep_b/merge) | High |
+| decay | Ebbinghaus exponential confidence decay on old unused facts | No |
+| decay_review | Review memories that decayed below threshold (delete/extend/pin) | High |
+
+**Phase 3: Workspace & Docs** (independent of memory pipeline)
+
+| Task | Purpose | LLM? |
+|------|---------|------|
+| workspace | Core markdown bloat monitoring + high-reasoning LLM review | High |
+| docs_staleness | Auto-update stale docs from git diffs (low-reasoning pre-filter + high-reasoning update) | Both |
+| docs_cleanup | Clean bloated docs based on churn metrics | Low |
+| snippets | Review soul snippets: FOLD (merge into file), REWRITE, or DISCARD | High |
+| journal | Distill journal entries into core markdown, archive originals | High |
+
+**Phase 4: Infrastructure** (always runs)
+
+| Task | Purpose | LLM? |
+|------|---------|------|
+| rag | Reindex docs for RAG search + auto-discover new projects | No |
+| tests | Run pytest suite (dev/CI only, gated by `QUAID_DEV=1`) | No |
+| cleanup | Prune old logs, orphaned embeddings, stale lock files | No |
 
 ### Fail-Fast Behavior
 
@@ -445,9 +464,9 @@ All three merge paths (dedup, contradiction resolution, review) use a shared `_m
 - Sets winner status to `active`
 - Inherits `owner_id` from the original nodes (not hardcoded)
 
-### System Gates
+### System Gates (Experimental)
 
-Each task is gated by a system toggle in config:
+Each task is gated by a system toggle in config. This feature is experimental and may change:
 
 ```python
 _TASK_SYSTEM_GATE = {
