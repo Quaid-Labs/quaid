@@ -455,7 +455,7 @@ _TASK_SYSTEM_GATE = {
     "snippets": "journal", "journal": "journal",
     "docs_staleness": "projects", "rag": "projects",
     "workspace": "workspace",
-    # backup, tests, cleanup: always run (infrastructure)
+    # tests, cleanup: always run (infrastructure)
 }
 ```
 
@@ -726,7 +726,7 @@ The notification system (`notify.py`) sends status updates to the user's last ac
 | `notify_janitor_summary()` | After janitor run | Task results, token usage, cost breakdown |
 | `notify_daily_memories()` | On scheduled trigger | Daily memory digest |
 | `notify_doc_update()` | After doc auto-update | Which docs changed and why |
-| `notify_update_alert()` | On staleness detection | Which docs need attention |
+| `notify_docs_search()` | After RAG search | Search results with scores |
 
 ### Verbosity Levels
 

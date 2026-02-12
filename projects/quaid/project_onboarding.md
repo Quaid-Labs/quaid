@@ -1,13 +1,13 @@
 # Project Onboarding — Agent Instructions
 
-When the user asks to set up projects, when you receive a MOVE_TO_PROJECT notification,
+When the user asks to set up projects, when the pending project review file exists,
 or when the projects system has no registered projects, follow this workflow to discover
 and register them.
 
 ## When to Trigger
 
 - User says "set up projects", "find my projects", "onboard projects"
-- You receive a **[Quaid] Content Moved to Project** notification (automatic after janitor)
+- `logs/janitor/pending-project-review.json` exists (checked on heartbeat)
 - The `quaid stats` output shows 0 registered projects
 - First conversation after a fresh Quaid install
 
@@ -18,10 +18,13 @@ like project-specific content in core markdown files (TOOLS.md, AGENTS.md, etc.)
 NOT move anything — that's your job, with the user's approval.
 
 ```python
-# Read pending reviews (clears the file)
-from workspace_audit import get_pending_project_reviews
+# Read pending reviews (non-destructive — file persists until ack'd)
+from workspace_audit import get_pending_project_reviews, clear_pending_project_reviews
 reviews = get_pending_project_reviews()
 # Returns: [{"section", "source_file", "project_hint", "content_preview", "reason", "timestamp"}, ...]
+
+# Only after ALL items have been reviewed with the user:
+clear_pending_project_reviews()
 ```
 
 For each detected item, walk the user through:
