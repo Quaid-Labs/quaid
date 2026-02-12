@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# quaid - Total Recall memory system CLI
+#
+# Usage:
+#   quaid search "query" --owner solomon
+#   quaid store "fact" --owner solomon
+#   quaid stats
+#   quaid get-edges <node_id>
+#   quaid janitor --task all --dry-run
+#   quaid docs search "query"
+#   quaid docs check
+#   quaid registry list --project quaid
+#   quaid help
+#
+# This is a convenience wrapper around the Python modules.
+
+set -euo pipefail
+
+# Resolve symlinks to find the real plugin directory
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+CMD="${1:-help}"
+shift 2>/dev/null || true
+
+case "$CMD" in
+  # Janitor commands
+  janitor)
+    exec python3 "$SCRIPT_DIR/janitor.py" "$@"
+    ;;
+
+  # Docs subsystem
+  docs)
+    SUBCMD="${1:-help}"
+    shift 2>/dev/null || true
+    case "$SUBCMD" in
+      search)  exec python3 "$SCRIPT_DIR/docs_rag.py" search "$@" ;;
+      check)   exec python3 "$SCRIPT_DIR/docs_updater.py" check "$@" ;;
+      update)  exec python3 "$SCRIPT_DIR/docs_updater.py" update-stale "$@" ;;
+      changelog) exec python3 "$SCRIPT_DIR/docs_updater.py" changelog "$@" ;;
+      *)       echo "Usage: quaid docs {search|check|update|changelog} [args...]"; exit 1 ;;
+    esac
+    ;;
+
+  # Registry/projects subsystem
+  registry|project|projects)
+    exec python3 "$SCRIPT_DIR/docs_registry.py" "$@"
+    ;;
+
+  # Project updater
+  updater)
+    exec python3 "$SCRIPT_DIR/project_updater.py" "$@"
+    ;;
+
+  # Everything else goes to memory_graph.py
+  search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|search-all|search-fts|backfill-hashes|health)
+    exec python3 "$SCRIPT_DIR/memory_graph.py" "$CMD" "$@"
+    ;;
+
+  help|--help|-h)
+    echo "quaid - Total Recall memory system"
+    echo ""
+    echo "Memory commands:"
+    echo "  search <query>       Search memories (semantic + FTS)"
+    echo "  store <text>         Store a new memory"
+    echo "  recall <query>       Full recall pipeline (search + rerank + graph)"
+    echo "  stats                Database statistics"
+    echo "  health               Knowledge base health metrics"
+    echo "  get-node <id>        Get a specific node"
+    echo "  get-edges <id>       Get edges for a node"
+    echo "  search-all <query>   Search memories + docs"
+    echo ""
+    echo "Maintenance:"
+    echo "  janitor [args]       Run janitor pipeline"
+    echo ""
+    echo "Docs:"
+    echo "  docs search <query>  Search RAG docs"
+    echo "  docs check           Check doc staleness"
+    echo "  docs update --apply  Update stale docs"
+    echo "  docs changelog       View update history"
+    echo ""
+    echo "Projects:"
+    echo "  registry [cmd]       Project/doc registry CLI"
+    echo "  updater [cmd]        Project event processor"
+    echo ""
+    echo "Run from: $SCRIPT_DIR"
+    ;;
+
+  *)
+    # Try memory_graph.py as fallback
+    exec python3 "$SCRIPT_DIR/memory_graph.py" "$CMD" "$@"
+    ;;
+esac

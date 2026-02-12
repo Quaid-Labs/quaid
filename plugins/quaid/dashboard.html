@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Injection Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 30px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .header h1 {
+            color: #00f5ff;
+            font-size: 2.5em;
+            font-weight: 300;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px rgba(0, 245, 255, 0.3);
+        }
+        
+        .header p {
+            color: #b0b0b0;
+            font-size: 1.1em;
+        }
+        
+        .input-section {
+            background: #1a1a1a;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            border: 1px solid #333;
+        }
+        
+        .input-group {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .input-group label {
+            color: #00f5ff;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        
+        .input-group input {
+            flex: 1;
+            min-width: 200px;
+            padding: 12px 16px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+        
+        .input-group input:focus {
+            outline: none;
+            border-color: #00f5ff;
+            box-shadow: 0 0 0 2px rgba(0, 245, 255, 0.1);
+        }
+        
+        .input-group button {
+            padding: 12px 24px;
+            background: linear-gradient(45deg, #00f5ff, #0080ff);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+        
+        .input-group button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 245, 255, 0.3);
+        }
+        
+        .input-group button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .session-info {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            border: 1px solid #333;
+        }
+        
+        .session-info h2 {
+            color: #00f5ff;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+        
+        .session-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .stat-card {
+            background: #252525;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #444;
+        }
+        
+        .stat-label {
+            color: #888;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            color: #e0e0e0;
+            font-size: 1.2em;
+            font-weight: 500;
+        }
+        
+        .memories-section {
+            background: #1a1a1a;
+            border-radius: 12px;
+            border: 1px solid #333;
+            overflow: hidden;
+        }
+        
+        .memories-header {
+            background: #252525;
+            padding: 20px;
+            border-bottom: 1px solid #333;
+        }
+        
+        .memories-header h2 {
+            color: #00f5ff;
+            margin-bottom: 10px;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .tab {
+            padding: 8px 16px;
+            background: #333;
+            border: none;
+            border-radius: 6px;
+            color: #b0b0b0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .tab.active {
+            background: #00f5ff;
+            color: #000;
+        }
+        
+        .tab:hover:not(.active) {
+            background: #444;
+        }
+        
+        .memories-content {
+            padding: 20px;
+        }
+        
+        .memory-item {
+            background: #252525;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+        
+        .memory-item:hover {
+            border-color: #00f5ff;
+            box-shadow: 0 0 10px rgba(0, 245, 255, 0.1);
+        }
+        
+        .memory-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .memory-category {
+            background: #00f5ff;
+            color: #000;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        
+        .memory-similarity {
+            color: #888;
+            font-size: 0.9em;
+        }
+        
+        .memory-text {
+            color: #e0e0e0;
+            line-height: 1.6;
+            word-wrap: break-word;
+        }
+        
+        .memory-id {
+            color: #666;
+            font-size: 0.8em;
+            margin-top: 8px;
+            font-family: monospace;
+        }
+        
+        .error {
+            background: #ff4444;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+            font-size: 1.1em;
+        }
+        
+        .loading::after {
+            content: '';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+        
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60% { content: '...'; }
+            80%, 100% { content: ''; }
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+        
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: #b0b0b0;
+        }
+        
+        @media (max-width: 768px) {
+            .input-group {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .input-group input {
+                min-width: unset;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .session-stats {
+                grid-template-columns: 1fr;
+            }
+            
+            .memory-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Memory Injection Dashboard</h1>
+            <p>View memories automatically injected into agent sessions</p>
+        </div>
+        
+        <div class="input-section">
+            <div class="input-group">
+                <label for="sessionId">Session ID:</label>
+                <input type="text" id="sessionId" placeholder="Enter session ID (e.g., 2c35bbf2d2b7)">
+                <button onclick="loadSession()">Load Session</button>
+            </div>
+        </div>
+        
+        <div id="content">
+            <div class="empty-state">
+                <h3>No session loaded</h3>
+                <p>Enter a session ID above to view injected memories</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentData = null;
+        let activeTab = 'newly-injected';
+        
+        async function loadSession() {
+            const sessionId = document.getElementById('sessionId').value.trim();
+            
+            if (!sessionId) {
+                alert('Please enter a session ID');
+                return;
+            }
+            
+            const content = document.getElementById('content');
+            content.innerHTML = '<div class="loading">Loading session data</div>';
+            
+            try {
+                const response = await fetch(`/memory/injected?sessionId=${encodeURIComponent(sessionId)}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                currentData = await response.json();
+                renderSession(currentData);
+            } catch (error) {
+                content.innerHTML = `<div class="error">Error loading session: ${error.message}</div>`;
+            }
+        }
+        
+        function renderSession(data) {
+            const content = document.getElementById('content');
+            
+            // Parse memory details
+            const injectedDetails = data.injectedMemoriesDetail || [];
+            const newlyInjectedDetails = injectedDetails.filter(memory => 
+                data.newlyInjected.some(ni => ni.includes(memory.text) || memory.text.includes(ni))
+            );
+            
+            content.innerHTML = `
+                <div class="session-info">
+                    <h2>Session Information</h2>
+                    <div class="session-stats">
+                        <div class="stat-card">
+                            <div class="stat-label">Session ID</div>
+                            <div class="stat-value">${data.sessionId}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Timestamp</div>
+                            <div class="stat-value">${new Date(data.timestamp).toLocaleString()}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Newly Injected</div>
+                            <div class="stat-value">${data.memoriesInjected}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Total in Session</div>
+                            <div class="stat-value">${data.totalMemoriesInSession}</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="memories-section">
+                    <div class="memories-header">
+                        <h2>Injected Memories</h2>
+                        <div class="tabs">
+                            <button class="tab ${activeTab === 'newly-injected' ? 'active' : ''}" onclick="switchTab('newly-injected')">
+                                Newly Injected (${newlyInjectedDetails.length})
+                            </button>
+                            <button class="tab ${activeTab === 'all-details' ? 'active' : ''}" onclick="switchTab('all-details')">
+                                All Details (${injectedDetails.length})
+                            </button>
+                        </div>
+                    </div>
+                    <div class="memories-content" id="memories-content">
+                        ${renderMemories()}
+                    </div>
+                </div>
+            `;
+        }
+        
+        function switchTab(tab) {
+            activeTab = tab;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab:nth-child(${tab === 'newly-injected' ? '1' : '2'})`).classList.add('active');
+            
+            document.getElementById('memories-content').innerHTML = renderMemories();
+        }
+        
+        function renderMemories() {
+            if (!currentData) return '';
+            
+            let memories;
+            if (activeTab === 'newly-injected') {
+                const injectedDetails = currentData.injectedMemoriesDetail || [];
+                memories = injectedDetails.filter(memory => 
+                    currentData.newlyInjected.some(ni => ni.includes(memory.text) || memory.text.includes(ni))
+                );
+            } else {
+                memories = currentData.injectedMemoriesDetail || [];
+            }
+            
+            if (memories.length === 0) {
+                return `
+                    <div class="empty-state">
+                        <h3>No memories found</h3>
+                        <p>No ${activeTab === 'newly-injected' ? 'newly injected' : 'detailed'} memories in this session</p>
+                    </div>
+                `;
+            }
+            
+            return memories.map(memory => {
+                const memoryText = memory.text || '';
+                const isNewlyInjected = currentData.newlyInjected.some(ni => 
+                    ni.includes(memoryText) || memoryText.includes(ni)
+                );
+                
+                // Extract ID from text if present
+                const idMatch = memoryText.match(/\|ID:([a-f0-9-]+)$/);
+                const textWithoutId = idMatch ? memoryText.replace(/\s*\|ID:[a-f0-9-]+$/, '') : memoryText;
+                const memoryId = idMatch ? idMatch[1] : null;
+                
+                return `
+                    <div class="memory-item ${isNewlyInjected ? 'newly-injected' : ''}">
+                        <div class="memory-header">
+                            <div class="memory-category">${memory.category || 'Unknown'}</div>
+                            <div class="memory-similarity">${Math.round((memory.similarity || 0) * 100)}% similarity</div>
+                        </div>
+                        <div class="memory-text">${textWithoutId}</div>
+                        ${memoryId ? `<div class="memory-id">ID: ${memoryId}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Auto-focus session ID input
+        window.addEventListener('load', () => {
+            document.getElementById('sessionId').focus();
+        });
+        
+        // Allow Enter key to trigger load
+        document.getElementById('sessionId').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loadSession();
+            }
+        });
+        
+        // Get session ID from URL if provided
+        window.addEventListener('load', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const sessionId = urlParams.get('sessionId');
+            if (sessionId) {
+                document.getElementById('sessionId').value = sessionId;
+                loadSession();
+            }
+        });
+    </script>
+</body>
+</html>

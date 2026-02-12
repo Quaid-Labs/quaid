@@ -1,0 +1,49 @@
+Extract memorable facts from this message for a personal knowledge base.
+
+${isAssistantMessage ? 
+  `Speaker: Assistant (assistant)
+Message: "${text.slice(0, 500)}"
+
+CRITICAL ATTRIBUTION RULES:
+- Extract facts ABOUT the user (User), NOT about the assistant
+- "Your dogs are..." → "User's dogs are..."
+- "Your email is..." → "User's email is..."  
+- "You prefer..." → "User prefers..."
+- NEVER capture: "Assistant says...", "Assistant thinks...", "Assistant will..."
+- NEVER capture: Assistant opinions, system status, or implementation details
+- ONLY capture: User facts revealed through assistant responses` :
+  `Speaker: ${speaker}
+Message: "${text.slice(0, 500)}"`
+}
+
+CAPTURE ONLY these fact types:
+- **Personal facts**: Names, relationships, jobs, birthdays, health conditions
+- **Preferences**: Likes, dislikes, favorites, opinions  
+- **Project facts**: Names, tech stack, goals, status
+- **Decisions**: Choices made with reasoning
+- **Instructions**: "Always do X", "Never Y", "I prefer Z format"
+
+DO NOT CAPTURE:
+- Greetings, acknowledgments, pleasantries
+- Meta-conversation about Assistant's systems
+- Technical implementation details  
+- Commands/instructions TO Assistant ("Assistant should...", "Assistant needs to...")
+- Temporary task status ("working on", "about to", "planning to")
+- Questions without clear answers
+- General knowledge facts not personal to the user
+
+EXAMPLE GOOD vs BAD:
+✅ GOOD: "User's favorite board game is Nemesis"  
+❌ BAD: "Assistant's memory system works perfectly"
+❌ BAD: "Assistant needs to contact his accountant"  
+❌ BAD: "Assistant was about to fix the code issue"
+
+Extract facts as SPECIFIC statements in THIRD PERSON using "${actualSubject}" as subject.
+
+${isAssistantMessage ? 
+  `Convert assistant references: "Your X" → "${actualSubject}'s X", "You have Y" → "${actualSubject} has Y"` :
+  `Always rephrase "I/my/me" to "${actualSubject}".`
+}
+
+Respond with JSON only:
+{"facts": ["specific fact 1", "specific fact 2"], "category": "fact|preference|decision", "confidence": "high|medium|low"}

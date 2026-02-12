@@ -1,0 +1,789 @@
+#!/usr/bin/env python3
+"""
+Workspace Audit Module - Single-pass Opus review of core markdown files.
+
+This module:
+1. Reads coreMarkdown config for file purposes and maxLines
+2. Tracks file modification times vs last janitor run
+3. On changes: reads file contents, checks for bloat, calls high-reasoning LLM for review
+4. Parses KEEP/MOVE_TO_PROJECT/MOVE_TO_MEMORY/TRIM decisions
+5. MOVE_TO_PROJECT only detects and queues for agent review (no files moved)
+"""
+
+import json
+import logging
+import os
+import re
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+
+from llm_clients import call_high_reasoning, parse_json_response
+from config import get_config
+
+# Configuration
+WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+
+# Configure logging
+LOG_DIR = WORKSPACE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "workspace-audit.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+BACKUP_DIR = WORKSPACE_DIR / "backups" / "workspace"
+DATA_DIR = WORKSPACE_DIR / "logs" / "janitor"
+DOCS_DIR = WORKSPACE_DIR / "docs"
+
+# State files
+MTIME_TRACKER = DATA_DIR / "workspace-mtimes.json"
+REVIEW_DECISIONS = DATA_DIR / "workspace-review-decisions.json"
+PENDING_PROJECT_REVIEW = DATA_DIR / "pending-project-review.json"
+
+
+def _queue_project_review(
+    section: str,
+    source_file: str,
+    reason: str = "",
+    project_hint: str = "",
+    content_preview: str = "",
+) -> None:
+    """Append a detected project content finding to the pending review file.
+
+    The janitor does NOT move content — it only detects and queues.
+    The agent's heartbeat checks this file on the next active conversation
+    and walks the user through what to do with it.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    pending = []
+    if PENDING_PROJECT_REVIEW.exists():
+        try:
+            with open(PENDING_PROJECT_REVIEW, "r") as f:
+                pending = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pending = []
+
+    pending.append({
+        "section": section,
+        "source_file": source_file,
+        "project_hint": project_hint,
+        "content_preview": content_preview,
+        "reason": reason,
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    with open(PENDING_PROJECT_REVIEW, "w") as f:
+        json.dump(pending, f, indent=2)
+
+    logger.info(f"Queued project review: '{section}' in {source_file}")
+
+
+def get_pending_project_reviews() -> List[Dict[str, Any]]:
+    """Read the pending project review queue (non-destructive).
+
+    Called by the agent/heartbeat when the user is next active.
+    Returns the list of pending findings. Call clear_pending_project_reviews()
+    only after the agent has successfully walked the user through all items.
+    """
+    if not PENDING_PROJECT_REVIEW.exists():
+        return []
+
+    try:
+        with open(PENDING_PROJECT_REVIEW, "r") as f:
+            pending = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+    return pending
+
+
+def clear_pending_project_reviews() -> None:
+    """Clear the pending project review queue after successful processing.
+
+    Only call this after the agent has walked the user through all findings.
+    If the agent crashes before calling this, the findings persist for retry.
+    """
+    PENDING_PROJECT_REVIEW.unlink(missing_ok=True)
+
+
+def _strip_protected_regions(content: str) -> tuple:
+    """Strip <!-- protected --> ... <!-- /protected --> blocks from content.
+
+    Returns:
+        (stripped_content, protected_ranges) where protected_ranges is a list of
+        (start, end) character positions of the protected blocks in the original content.
+    """
+    pattern = re.compile(
+        r'<!--\s*protected\s*-->.*?<!--\s*/protected\s*-->',
+        re.DOTALL
+    )
+
+    protected_ranges = []
+    for match in pattern.finditer(content):
+        protected_ranges.append((match.start(), match.end()))
+
+    if not protected_ranges:
+        return content, []
+
+    # Build stripped content by removing protected regions
+    parts = []
+    prev_end = 0
+    for start, end in protected_ranges:
+        parts.append(content[prev_end:start])
+        prev_end = end
+    parts.append(content[prev_end:])
+    stripped = ''.join(parts)
+
+    return stripped, protected_ranges
+
+
+def _is_position_protected(pos: int, protected_ranges: list) -> bool:
+    """Check if a character position falls within a protected region."""
+    for start, end in protected_ranges:
+        if start <= pos < end:
+            return True
+    return False
+
+
+def _section_overlaps_protected(section_start: int, section_end: int, protected_ranges: list) -> bool:
+    """Check if a section range overlaps with any protected region."""
+    for p_start, p_end in protected_ranges:
+        if p_start < section_end and p_end > section_start:
+            return True
+    return False
+
+
+def get_monitored_files() -> Dict[str, Dict[str, Any]]:
+    """
+    Get monitored files from coreMarkdown config.
+    Returns dict mapping filename to {purpose, maxLines}.
+    """
+    try:
+        cfg = get_config()
+        if hasattr(cfg, 'docs') and hasattr(cfg.docs, 'core_markdown'):
+            core_md = cfg.docs.core_markdown
+            if hasattr(core_md, 'files') and core_md.files:
+                return core_md.files
+    except Exception as e:
+        logger.warning(f"Could not load coreMarkdown config: {e}")
+
+    # Fallback to hardcoded list if config not available
+    return {
+        "AGENTS.md": {"purpose": "System operations, memory system, behavioral rules", "maxLines": 350},
+        "SOUL.md": {"purpose": "Personality, vibe, values, interaction style", "maxLines": 80},
+        "TOOLS.md": {"purpose": "API docs, tool definitions, credentials, configs", "maxLines": 350},
+        "USER.md": {"purpose": "Biography and soul of users", "maxLines": 150},
+        "MEMORY.md": {"purpose": "Core memories loaded every session", "maxLines": 100},
+        "IDENTITY.md": {"purpose": "Name, avatar, minimal identity", "maxLines": 20},
+        "HEARTBEAT.md": {"purpose": "Periodic task instructions", "maxLines": 50},
+        "TODO.md": {"purpose": "Planning and task list", "maxLines": 150},
+    }
+
+
+def build_review_prompt(files_config: Dict[str, Dict[str, Any]]) -> str:
+    """Build the Opus review prompt with file purposes."""
+
+    file_purposes = "\n".join([
+        f"- **{fname}**: {info.get('purpose', 'Unknown')} (max {info.get('maxLines', 'N/A')} lines)"
+        for fname, info in files_config.items()
+    ])
+
+    return f"""You are reviewing core markdown files for an AI assistant's workspace.
+
+These files load on EVERY API call, EVERY turn. Tokens are precious. Keep them focused.
+
+## File Purposes
+{file_purposes}
+
+## Review Each Changed File For:
+
+1. **BLOAT** - Content exceeding file's purpose or maxLines
+   - Project-specific specs, API docs, tool definitions → should be in projects/ (MOVE_TO_PROJECT)
+   - Queryable facts (phone numbers, dates, preferences) → should be in Memory DB
+
+2. **OUTDATED INFO** - Facts that are no longer true
+   - Old system states, deprecated features, wrong information
+
+3. **MISPLACED CONTENT** - Content in wrong file
+   - Personality stuff in TOOLS.md → should be in SOUL.md
+   - Facts about the user in AGENTS.md → should be in USER.md or MEMORY.md
+   - Project specs in TOOLS.md or AGENTS.md → should be in projects/ (MOVE_TO_PROJECT)
+
+## Actions
+
+- **KEEP** - Content is appropriate and belongs here
+- **MOVE_TO_PROJECT** - Project specs, tool definitions, API docs for a specific project → flag for migration to a project directory. Set "project_hint" to a short description of what project this belongs to (e.g. "React frontend app", "memory plugin", "API server"). Note: content inside `<!-- protected -->` tags has already been excluded from your review — the user has opted out of migration for those sections.
+- **MOVE_TO_MEMORY** - Personal facts → store in memory DB, remove from file
+- **TRIM** - Outdated or redundant → suggest removal
+- **FLAG_BLOAT** - File exceeds maxLines → warn but don't auto-fix
+
+## Response Format
+
+Respond with JSON only, no markdown fencing:
+{{
+  "reviewed_at": "ISO timestamp",
+  "file_stats": {{
+    "AGENTS.md": {{"lines": 288, "maxLines": 350, "over_limit": false}},
+    "TOOLS.md": {{"lines": 320, "maxLines": 350, "over_limit": false}}
+  }},
+  "decisions": [
+    {{
+      "file": "TOOLS.md",
+      "section": "Section Title",
+      "action": "KEEP",
+      "reason": "Essential quick-reference"
+    }},
+    {{
+      "file": "TOOLS.md",
+      "section": "My App API Reference",
+      "action": "MOVE_TO_PROJECT",
+      "project_hint": "React frontend app with Express API",
+      "reason": "Project-specific API docs don't belong in core TOOLS.md"
+    }},
+    {{
+      "file": "USER.md",
+      "section": "Contact Info",
+      "action": "MOVE_TO_MEMORY",
+      "memory_type": "verified",
+      "reason": "Queryable fact, not biographical"
+    }},
+    {{
+      "file": "MEMORY.md",
+      "section": "Old Project Status",
+      "action": "TRIM",
+      "reason": "Outdated, project completed"
+    }},
+    {{
+      "file": "AGENTS.md",
+      "action": "FLAG_BLOAT",
+      "reason": "File is 400 lines, max is 350"
+    }}
+  ],
+  "summary": "Brief summary of findings"
+}}"""
+
+
+def backup_workspace_files(files: Optional[List[str]] = None) -> Dict[str, str]:
+    """
+    Create timestamped backups of workspace files before modification.
+    Returns dict mapping original path to backup path.
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+
+    files_config = get_monitored_files()
+    files_to_backup = files or list(files_config.keys())
+    backups = {}
+
+    for filename in files_to_backup:
+        source = WORKSPACE_DIR / filename
+        if source.exists():
+            backup_name = f"{filename}.{timestamp}.bak"
+            backup_path = BACKUP_DIR / backup_name
+            shutil.copy2(source, backup_path)
+            backups[str(source)] = str(backup_path)
+            logger.info(f"Backed up: {filename} -> {backup_name}")
+            print(f"  Backed up: {filename} -> {backup_name}")
+
+    return backups
+
+
+def get_file_mtimes() -> Dict[str, float]:
+    """Get current modification times for all monitored files."""
+    files_config = get_monitored_files()
+    mtimes = {}
+    for filename in files_config.keys():
+        filepath = WORKSPACE_DIR / filename
+        if filepath.exists():
+            mtimes[filename] = filepath.stat().st_mtime
+    return mtimes
+
+
+def load_last_mtimes() -> Dict[str, float]:
+    """Load previously recorded modification times."""
+    if MTIME_TRACKER.exists():
+        try:
+            with open(MTIME_TRACKER, 'r') as f:
+                data = json.load(f)
+                return data.get("mtimes", {})
+        except Exception:
+            pass
+    return {}
+
+
+def save_mtimes(mtimes: Dict[str, float]):
+    """Save current modification times."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(MTIME_TRACKER, 'w') as f:
+        json.dump({
+            "mtimes": mtimes,
+            "updated_at": datetime.now().isoformat()
+        }, f, indent=2)
+
+
+def detect_changed_files() -> List[str]:
+    """
+    Compare current mtimes with last recorded mtimes.
+    Returns list of files that have changed.
+    """
+    current = get_file_mtimes()
+    last = load_last_mtimes()
+
+    changed = []
+    for filename, mtime in current.items():
+        last_mtime = last.get(filename, 0)
+        if mtime > last_mtime:
+            changed.append(filename)
+
+    return changed
+
+
+def get_file_line_counts() -> Dict[str, int]:
+    """Get line counts for all monitored files."""
+    files_config = get_monitored_files()
+    counts = {}
+    for filename in files_config.keys():
+        filepath = WORKSPACE_DIR / filename
+        if filepath.exists():
+            counts[filename] = len(filepath.read_text().splitlines())
+    return counts
+
+
+def check_bloat() -> Dict[str, Dict[str, Any]]:
+    """
+    Check all monitored files for bloat (exceeding maxLines).
+    Returns dict of files with their stats.
+    """
+    files_config = get_monitored_files()
+    line_counts = get_file_line_counts()
+
+    stats = {}
+    for filename, info in files_config.items():
+        max_lines = info.get("maxLines", 999)
+        actual_lines = line_counts.get(filename, 0)
+        stats[filename] = {
+            "lines": actual_lines,
+            "maxLines": max_lines,
+            "over_limit": actual_lines > max_lines,
+            "purpose": info.get("purpose", "Unknown")
+        }
+
+    return stats
+
+
+def _read_file_contents(changed_files: List[str]) -> Dict[str, str]:
+    """Read contents of changed workspace files."""
+    contents = {}
+    for filename in changed_files:
+        filepath = WORKSPACE_DIR / filename
+        if filepath.exists():
+            contents[filename] = filepath.read_text()
+    return contents
+
+
+def apply_review_decisions(dry_run: bool = True,
+                           decisions_data: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
+    """
+    Apply the review decisions made by the high-reasoning LLM.
+
+    Actions:
+    - MOVE_TO_PROJECT: Detect project content, queue for agent review (no files modified)
+    - MOVE_TO_DOCS: Legacy — extract section, write to docs/, replace with pointer
+    - MOVE_TO_MEMORY: Extract facts, store in memory DB, remove section
+    - TRIM: Remove section (with backup)
+    - FLAG_BLOAT: Just log warning
+    - KEEP: No action
+
+    If decisions_data is provided, use it directly. Otherwise load from file.
+    """
+    from memory_graph import store as store_memory
+
+    if decisions_data is None:
+        # Fallback: load from file
+        if REVIEW_DECISIONS.exists():
+            try:
+                with open(REVIEW_DECISIONS, 'r') as f:
+                    decisions_data = json.load(f)
+            except Exception:
+                pass
+
+    if not decisions_data:
+        print("  No decisions data available")
+        return {"moved_to_docs": 0, "moved_to_memory": 0, "trimmed": 0, "bloat_warnings": 0, "project_detected": 0, "errors": 0}
+
+    decisions = decisions_data.get("decisions", [])
+    if not decisions:
+        print("  No decisions to apply")
+        return {"moved_to_docs": 0, "moved_to_memory": 0, "trimmed": 0, "bloat_warnings": 0, "project_detected": 0, "errors": 0}
+
+    stats = {"moved_to_docs": 0, "moved_to_memory": 0, "trimmed": 0, "bloat_warnings": 0, "project_detected": 0, "kept": 0, "errors": 0}
+
+    # Backup before modifying
+    if not dry_run:
+        changed_files = list(set(d["file"] for d in decisions if "file" in d))
+        backup_workspace_files(changed_files)
+
+    # Group by file for batch processing
+    by_file = {}
+    for d in decisions:
+        filename = d.get("file", "")
+        if not filename:
+            continue
+        if filename not in by_file:
+            by_file[filename] = []
+        by_file[filename].append(d)
+
+    for filename, file_decisions in by_file.items():
+        filepath = WORKSPACE_DIR / filename
+        if not filepath.exists():
+            continue
+
+        content = filepath.read_text()
+
+        # Detect protected regions so we can skip operations within them
+        _, protected_ranges = _strip_protected_regions(content)
+
+        # First pass: resolve positions in original content (before any modifications)
+        # Then apply in reverse order to avoid position corruption
+        resolved_ops = []  # [(start_pos, end_pos, decision, section_content)]
+
+        for decision in file_decisions:
+            action = decision.get("action", "KEEP")
+            section = decision.get("section", "")
+            reason = decision.get("reason", "")
+
+            if action == "KEEP":
+                stats["kept"] += 1
+                continue
+
+            if action == "FLAG_BLOAT":
+                print(f"  BLOAT WARNING: {filename} - {reason}")
+                logger.warning(f"BLOAT: {filename} - {reason}")
+                stats["bloat_warnings"] += 1
+                continue
+
+            if not section:
+                continue
+
+            # Find the section in the file (simple header matching)
+            pattern = rf'^(#{{1,6}})\s+{re.escape(section)}\s*$'
+            match = re.search(pattern, content, re.MULTILINE)
+
+            if not match:
+                print(f"  Section not found: {section} in {filename}")
+                stats["errors"] += 1
+                continue
+
+            # Find section boundaries
+            start_pos = match.start()
+            header_level = len(match.group(1))
+
+            # Find next section of same or higher level
+            next_section = re.search(
+                rf'^#{{1,{header_level}}}\s+',
+                content[match.end():],
+                re.MULTILINE
+            )
+
+            if next_section:
+                end_pos = match.end() + next_section.start()
+            else:
+                end_pos = len(content)
+
+            # Skip sections that overlap with protected regions
+            if _section_overlaps_protected(start_pos, end_pos, protected_ranges):
+                print(f"  Skipping protected section: {section} in {filename}")
+                continue
+
+            section_content = content[start_pos:end_pos].strip()
+            resolved_ops.append((start_pos, end_pos, decision, section_content, header_level))
+
+        # Sort by start position descending so we modify from end of file backward
+        resolved_ops.sort(key=lambda x: x[0], reverse=True)
+
+        for start_pos, end_pos, decision, section_content, header_level in resolved_ops:
+            action = decision.get("action", "KEEP")
+            section = decision.get("section", "")
+            reason = decision.get("reason", "")
+
+            try:
+                if action == "MOVE_TO_PROJECT":
+                    # Detection only — don't move anything.
+                    # Queue the finding for the agent to discuss with the user
+                    # on their next active conversation. The agent handles the
+                    # actual move after getting user approval.
+                    project_hint = decision.get("project_hint", section)
+
+                    if dry_run:
+                        print(f"  Detected project content: '{section}' in {filename} (hint: {project_hint})")
+                    else:
+                        print(f"  Detected project content: '{section}' in {filename}")
+                        try:
+                            _queue_project_review(
+                                section=section,
+                                source_file=filename,
+                                reason=reason,
+                                project_hint=project_hint,
+                                content_preview=section_content[:1000],
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to queue project review: {e}")
+
+                    stats["project_detected"] = stats.get("project_detected", 0) + 1
+
+                elif action == "MOVE_TO_DOCS":
+                    # Legacy fallback — prefer MOVE_TO_PROJECT for project content
+                    target = decision.get("target", f"docs/{section.lower().replace(' ', '-')}.md")
+                    target_path = (WORKSPACE_DIR / target).resolve()
+                    # Prevent path traversal from LLM-controlled target
+                    if not str(target_path).startswith(str(WORKSPACE_DIR.resolve())):
+                        logger.error(f"Path traversal blocked: {target}")
+                        stats["errors"] = stats.get("errors", 0) + 1
+                        continue
+
+                    if dry_run:
+                        print(f"  Would move '{section}' from {filename} -> {target}")
+                    else:
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+                        doc_content = f"# {section}\n\n"
+                        doc_content += f"> Migrated from `{filename}` on {datetime.now().strftime('%Y-%m-%d')}\n"
+                        doc_content += f"> Reason: {reason}\n\n"
+                        doc_content += section_content
+
+                        target_path.write_text(doc_content)
+
+                        pointer = f"{'#' * header_level} {section}\n\n"
+                        pointer += f"**Detailed docs:** `{target}`\n"
+
+                        content = content[:start_pos] + pointer + content[end_pos:]
+
+                        logger.info(f"MOVE_TO_DOCS: '{section}' from {filename} -> {target}")
+                        print(f"  Moved '{section}' -> {target}")
+
+                    stats["moved_to_docs"] += 1
+
+                elif action == "MOVE_TO_MEMORY":
+                    memory_type = decision.get("memory_type", "verified")
+
+                    if dry_run:
+                        print(f"  Would store '{section}' from {filename} as {memory_type} memory")
+                    else:
+                        cfg = get_config()
+                        try:
+                            default_owner = cfg.users.default_owner
+                        except Exception:
+                            default_owner = "default"
+                        result = store_memory(
+                            text=section_content[:2000],
+                            category="fact",
+                            source=f"workspace_audit:{filename}",
+                            owner_id=default_owner,
+                            verified=(memory_type == "verified"),
+                            pinned=(memory_type == "pinned"),
+                        )
+
+                        content = content[:start_pos] + content[end_pos:]
+
+                        logger.info(f"MOVE_TO_MEMORY: '{section}' from {filename} -> {memory_type} memory")
+                        print(f"  Stored '{section}' as {memory_type} memory")
+
+                    stats["moved_to_memory"] += 1
+
+                elif action == "TRIM":
+                    if dry_run:
+                        print(f"  Would trim '{section}' from {filename}: {reason}")
+                    else:
+                        content = content[:start_pos] + content[end_pos:]
+                        logger.info(f"TRIM: '{section}' from {filename} - {reason}")
+                        print(f"  Trimmed '{section}' from {filename}")
+
+                    stats["trimmed"] += 1
+
+            except Exception as e:
+                logger.error(f"Error processing '{section}' in {filename}: {e}")
+                print(f"  Error processing '{section}': {e}")
+                stats["errors"] += 1
+
+        # Write modified file
+        if not dry_run:
+            filepath.write_text(content)
+            print(f"  Updated {filename}")
+
+    # Update mtimes after successful application
+    if not dry_run:
+        save_mtimes(get_file_mtimes())
+
+        # Clean up decisions file if it exists
+        if REVIEW_DECISIONS.exists():
+            REVIEW_DECISIONS.unlink()
+
+        logger.info(f"WORKSPACE AUDIT COMPLETE: moved_to_docs={stats['moved_to_docs']}, "
+                   f"moved_to_memory={stats['moved_to_memory']}, trimmed={stats['trimmed']}, "
+                   f"bloat_warnings={stats['bloat_warnings']}, project_detected={stats.get('project_detected', 0)}, "
+                   f"kept={stats['kept']}, errors={stats['errors']}")
+
+    return stats
+
+
+def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
+    """
+    Main entry point for workspace audit — single-pass Opus review.
+
+    1. Check bloat status first
+    2. Detect changed files
+    3. If changes found, read contents and call Opus for review
+    4. Parse and apply decisions immediately
+    """
+    _cfg = get_config()
+    max_tokens = _cfg.janitor.opus_review.max_tokens
+    files_config = get_monitored_files()
+
+    print("\n" + "=" * 80)
+    print("WORKSPACE AUDIT - Core Markdown Review")
+    print(f"Mode: {'DRY RUN' if dry_run else 'APPLY'}")
+    print(f"Monitoring: {', '.join(files_config.keys())}")
+    print("=" * 80)
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Check bloat status
+    print("\n  Checking file sizes...")
+    bloat_stats = check_bloat()
+    bloated_files = [f for f, s in bloat_stats.items() if s["over_limit"]]
+
+    for filename, stats in bloat_stats.items():
+        status = "⚠️  OVER" if stats["over_limit"] else "✓"
+        print(f"    {filename}: {stats['lines']}/{stats['maxLines']} lines {status}")
+
+    if bloated_files:
+        print(f"\n  ⚠️  {len(bloated_files)} file(s) over limit: {', '.join(bloated_files)}")
+
+    # Check for a leftover decisions file (from a previous interrupted run)
+    if REVIEW_DECISIONS.exists():
+        print("\n  Found pending decisions file, applying...")
+        stats = apply_review_decisions(dry_run)
+        return {"phase": "apply", "bloat_stats": bloat_stats, **stats}
+
+    # Detect changed files
+    print("\n  Checking for changed files...")
+    changed = detect_changed_files()
+
+    if not changed and not bloated_files:
+        print("  No changes and no bloat issues")
+        # Still update mtimes so we don't re-check
+        save_mtimes(get_file_mtimes())
+        return {
+            "phase": "no_changes",
+            "checked_files": list(files_config.keys()),
+            "bloat_stats": bloat_stats
+        }
+
+    # If we have bloated files but no changes, still review them
+    files_to_review = list(set(changed + bloated_files))
+    print(f"  Files to review: {', '.join(files_to_review)}")
+
+    # Read file contents
+    files_content = _read_file_contents(files_to_review)
+    if not files_content:
+        print("  Could not read any files")
+        return {"phase": "error", "error": "no readable files", "bloat_stats": bloat_stats}
+
+    # Build user message with file contents and line counts
+    # Strip protected regions before sending to Opus for review
+    user_parts = [f"Review the following {len(files_content)} core markdown files:\n"]
+    for filename, content in files_content.items():
+        stripped_content, _ = _strip_protected_regions(content)
+        line_count = len(stripped_content.splitlines())
+        max_lines = files_config.get(filename, {}).get("maxLines", "N/A")
+        purpose = files_config.get(filename, {}).get("purpose", "Unknown")
+        user_parts.append(f"--- {filename} ({line_count} lines, max {max_lines}) ---")
+        user_parts.append(f"Purpose: {purpose}")
+        user_parts.append(f"{stripped_content}\n")
+    user_message = "\n".join(user_parts)
+
+    # Build prompt with file purposes
+    review_prompt = build_review_prompt(files_config)
+
+    # Call high-reasoning model (config-driven, handles API key errors)
+    print(f"  Calling high-reasoning model for review of {len(files_content)} files...")
+    response_text, duration = call_high_reasoning(
+        prompt=user_message,
+        system_prompt=review_prompt,
+        max_tokens=max_tokens
+    )
+
+    if not response_text:
+        print(f"  Opus returned empty response after {duration:.1f}s")
+        return {"phase": "error", "error": "empty API response", "bloat_stats": bloat_stats}
+
+    print(f"  Received response in {duration:.1f}s")
+
+    # Parse decisions
+    decisions_data = parse_json_response(response_text)
+    if not isinstance(decisions_data, dict) or "decisions" not in decisions_data:
+        print(f"  Failed to parse Opus response as decisions JSON")
+        logger.error(f"Invalid workspace review response: {response_text[:500]}")
+        return {"phase": "error", "error": "invalid JSON response", "bloat_stats": bloat_stats}
+
+    decision_count = len(decisions_data.get("decisions", []))
+    print(f"  Parsed {decision_count} decisions")
+
+    # Show summary if provided
+    summary = decisions_data.get("summary", "")
+    if summary:
+        print(f"  Summary: {summary}")
+
+    # Apply decisions directly
+    stats = apply_review_decisions(dry_run, decisions_data=decisions_data)
+
+    # Save mtimes after successful processing
+    if not dry_run:
+        save_mtimes(get_file_mtimes())
+
+    return {"phase": "apply", "bloat_stats": bloat_stats, **stats}
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Workspace Audit - Core Markdown Review")
+    parser.add_argument("--apply", action="store_true", help="Apply changes (default: dry-run)")
+    parser.add_argument("--backup-only", action="store_true", help="Just create backups")
+    parser.add_argument("--check-only", action="store_true", help="Only check for changes and bloat")
+    parser.add_argument("--bloat", action="store_true", help="Check bloat status only")
+
+    args = parser.parse_args()
+
+    if args.backup_only:
+        print("Creating backups...")
+        backups = backup_workspace_files()
+        print(f"Created {len(backups)} backups")
+    elif args.bloat:
+        print("Checking bloat status...")
+        stats = check_bloat()
+        for filename, s in stats.items():
+            status = "⚠️  OVER" if s["over_limit"] else "✓"
+            print(f"  {filename}: {s['lines']}/{s['maxLines']} lines {status}")
+    elif args.check_only:
+        changed = detect_changed_files()
+        bloat = check_bloat()
+        if changed:
+            print(f"Changed files: {', '.join(changed)}")
+        else:
+            print("No files changed")
+        bloated = [f for f, s in bloat.items() if s["over_limit"]]
+        if bloated:
+            print(f"Bloated files: {', '.join(bloated)}")
+    else:
+        result = run_workspace_check(dry_run=not args.apply)
+        print(f"\nResult: {json.dumps(result, indent=2)}")

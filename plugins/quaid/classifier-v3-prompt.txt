@@ -1,0 +1,72 @@
+Extract memorable facts from this message for a personal knowledge base.
+
+${isAssistantMessage ? 
+  `Speaker: Assistant (assistant)
+Message: "${text.slice(0, 500)}"
+
+CRITICAL ATTRIBUTION RULES:
+- Extract facts ABOUT the user (User), NOT about the assistant
+- "Your dogs are..." → "User's dogs are..."
+- "Your email is..." → "User's email is..."  
+- "You prefer..." → "User prefers..."
+- NEVER capture: "Assistant says...", "Assistant thinks...", "Assistant will..."
+- NEVER capture: Assistant opinions, system status, or implementation details
+- ONLY capture: User facts revealed through assistant responses` :
+  `Speaker: ${speaker}
+Message: "${text.slice(0, 500)}"`
+}
+
+CAPTURE ONLY these fact types:
+- **Personal facts**: Names, relationships, jobs, birthdays, health conditions, addresses
+- **Preferences**: Likes, dislikes, favorites, opinions, communication styles
+- **Project facts**: Names, tech stack, goals, milestones, decisions with reasoning
+- **Instructions**: "Always do X", "Never Y", "I prefer Z format" (permanent rules)
+- **Important relationships**: Staff, contacts, business partners
+- **Significant events**: Major life changes, health diagnoses, big decisions
+
+NOISE PATTERNS - NEVER CAPTURE:
+- **Conversational fragments**: Questions ("Should I...?"), suggestions ("Maybe we could..."), worries ("I'm concerned that...")
+- **System/technical noise**: Plugin file paths, debugging events, error messages, system states
+- **Entity stubs**: Single words, camera names, room names, device IDs without context
+- **Meta-conversation**: Discussion about Assistant's systems, memory, capabilities, development
+- **Temporal work-in-progress**: "working on", "about to", "planning to", "will do", "going to"
+- **Commands/requests**: "Assistant should...", "Assistant needs to...", "Can you...", "Please..."
+- **Already documented**: Facts that would be in static files like USER.md, TOOLS.md, AGENTS.md
+- **Duplicates**: Information already well-established (check for obvious repetition)
+- **Acknowledgments**: "Thanks", "Got it", "Sounds good", "Perfect", "OK"
+- **General knowledge**: Facts not specific to this person/household
+
+QUALITY FILTERS:
+- **Completeness**: Skip partial facts like "User's mother" without name/context
+- **Specificity**: "User likes spicy food" > "User likes food"  
+- **Stability**: Permanent/semi-permanent facts > temporary states
+- **Uniqueness**: Personal details > common knowledge
+- **Attribution confidence**: Clear speaker context required
+
+COMMON PITFALLS FROM REVIEW:
+❌ "Assistant's mother/pets/house" (wrong attribution)
+❌ "Router reboots daily at 3am" (system config, temporary)
+❌ "User suggested we try..." (conversational fragment)
+❌ "Working on the memory system" (temporal work status)
+❌ "plugins/quaid/file.py" (technical noise)
+❌ "Master Bedroom" (entity stub without context)
+❌ "Nemesis" (missing context - game? movie? what?)
+
+EXAMPLE GOOD vs BAD:
+✅ GOOD: "User's favorite board game is Nemesis"
+✅ GOOD: "User's elimination diet excludes wheat, eggs, soy, nuts, dairy, fish"
+✅ GOOD: "User's mother Lori cannot tolerate any spice due to a childhood allergy"
+❌ BAD: "Assistant's memory system works perfectly"
+❌ BAD: "User wants to fix the router issue"  
+❌ BAD: "The user prefers concise responses"
+❌ BAD: "Checking the calendar for events"
+
+Extract facts as SPECIFIC, COMPLETE statements in THIRD PERSON using "${actualSubject}" as subject.
+
+${isAssistantMessage ? 
+  `Convert assistant references: "Your X" → "${actualSubject}'s X", "You have Y" → "${actualSubject} has Y"` :
+  `Always rephrase "I/my/me" to "${actualSubject}".`
+}
+
+Respond with JSON only:
+{"facts": ["specific fact 1", "specific fact 2"], "category": "fact|preference|decision|relationship|instruction", "confidence": "high|medium|low"}
