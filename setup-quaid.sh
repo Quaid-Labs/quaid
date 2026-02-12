@@ -1240,6 +1240,42 @@ print('[+] Database initialized')
         done
     fi
 
+    # Initialize git repo for workspace (required for doc staleness tracking)
+    if [[ ! -d "${WORKSPACE_ROOT}/.git" ]]; then
+        info "Initializing git repository..."
+        git -C "$WORKSPACE_ROOT" init --quiet
+        # Create .gitignore for runtime artifacts
+        if [[ ! -f "${WORKSPACE_ROOT}/.gitignore" ]]; then
+            cat > "${WORKSPACE_ROOT}/.gitignore" << 'GITIGNORE'
+# Runtime data
+data/*.db
+data/*.db-*
+logs/
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+node_modules/
+build/
+GITIGNORE
+        fi
+        # Initial commit so git diff/log have a baseline
+        git -C "$WORKSPACE_ROOT" add -A
+        git -C "$WORKSPACE_ROOT" commit --quiet -m "Initial Quaid workspace"
+        success "Git repository initialized"
+    else
+        info "Git repository already exists"
+    fi
+
     # Create owner's Person node
     info "Creating owner node in memory graph..."
     (
