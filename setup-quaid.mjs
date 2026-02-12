@@ -1016,6 +1016,13 @@ function installHeartbeatSchedule(hour) {
     "",
     "**Timeout:** 60 minutes max. Typical: 5-30 minutes.",
     "",
+    "## Post-Janitor Review",
+    "",
+    "If `logs/janitor/pending-project-review.json` exists, the janitor detected",
+    "project-specific content in TOOLS.md or AGENTS.md. Read the file and walk",
+    "the user through each finding using `projects/quaid/project_onboarding.md`.",
+    "Only clear the file after the user has reviewed everything.",
+    "",
   ].join("\n");
 
   try {
@@ -1371,8 +1378,8 @@ else:
     `${C.bcyan("→")} Run the janitor now to discover and organize your projects:`,
     `   ${C.bcyan("cd plugins/quaid && python3 janitor.py --task workspace --apply")}`,
     `   The janitor will scan TOOLS.md and AGENTS.md for project specs`,
-    `   and organize them into project directories. Your agent will walk`,
-    `   you through the results and help you refine project settings.`,
+    `   and flag them for review. Your agent will walk you through the`,
+    `   findings on your next conversation and help organize them.`,
     `${C.bcyan("→")} Run ${C.bcyan("quaid doctor")} anytime to check system health`,
     `${C.bcyan("→")} Run ${C.bcyan("quaid stats")} to see your memory database grow`,
     "",
