@@ -13,32 +13,40 @@ and register them.
 
 ## Post-Janitor Project Review
 
-When `logs/janitor/pending-project-review.json` exists, the janitor found project specs
-and moved them. Read the file to get the details (it auto-clears after reading), then
-walk the user through each move:
+When `logs/janitor/pending-project-review.json` exists, the janitor detected what looks
+like project-specific content in core markdown files (TOOLS.md, AGENTS.md, etc.). It did
+NOT move anything — that's your job, with the user's approval.
 
 ```python
 # Read pending reviews (clears the file)
 from workspace_audit import get_pending_project_reviews
 reviews = get_pending_project_reviews()
-# Returns: [{"section", "source_file", "target_path", "project_name", "is_new_project", "reason", "timestamp"}, ...]
+# Returns: [{"section", "source_file", "project_hint", "content_preview", "reason", "timestamp"}, ...]
 ```
 
-For each move, walk the user through:
+For each detected item, walk the user through:
 
-1. **Summarize what happened**: "The janitor found project specs in your TOOLS.md and
-   moved them to `projects/<name>/`. Here's what it did..."
-2. **Ask about naming**: "It named the project `<name>` — does that work, or would you
-   prefer a different name?"
-3. **Ask about organization**: "Should any other files be moved into this project? Are
+1. **Show what was found**: "The janitor noticed what looks like a project spec in your
+   TOOLS.md — a section called `<section>`. Here's a preview: ..."
+2. **Ask if it should be a project**: "Should this be its own project, or does it belong
+   to an existing one? Or should we leave it where it is?"
+3. **If creating a project — ask about naming**: "What would you like to call this project?
+   Based on the content, something like `<suggestion>` might work."
+4. **Ask about organization**: "Should any other files be moved into this project? Are
    there related configs, scripts, or docs that belong together?"
-4. **Ask about external files**: "Are there files outside the workspace that this project
+5. **Ask about external files**: "Are there files outside the workspace that this project
    should track? For example, a separate git repo, a shared config, or API docs?"
-5. **Suggest next steps**: "Want me to create a PROJECT.md with an overview? I can also
-   set up TOOLS.md and AGENTS.md for project-specific instructions."
+6. **Handle opt-out**: If the user wants to keep content where it is and stop the janitor
+   from flagging it again, wrap it in `<!-- protected -->` tags:
+   ```markdown
+   <!-- protected -->
+   ## My Section That Should Stay Here
+   Content the janitor should ignore...
+   <!-- /protected -->
+   ```
 
-If the user disagrees with the janitor's decision, help them move content back or
-reassign it to the correct project.
+Only move content after the user confirms. Use `docs_registry.py` to create projects
+and register files.
 
 ## Discovery Steps
 
