@@ -194,7 +194,7 @@ User message
     v
 [1] Strip gateway metadata (channel info, user IDs)
     |
-[2] Resolve entity aliases (e.g. "Mom" -> "Shannon")
+[2] Resolve entity aliases (e.g. short names -> canonical names)
     |
 [3] Classify intent (WHO, WHEN, WHERE, WHAT, PREFERENCE, RELATION, WHY, GENERAL)
     |

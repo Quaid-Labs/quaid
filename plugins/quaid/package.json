@@ -1,0 +1,45 @@
+{
+  "name": "quaid",
+  "version": "1.0.0",
+  "description": "Total Recall memory system — graph-based memory plugin using SQLite + Ollama",
+  "main": "index.js",
+  "type": "module",
+  "keywords": [
+    "clawdbot",
+    "plugin",
+    "memory",
+    "local",
+    "sqlite",
+    "ollama"
+  ],
+  "author": "Assistant",
+  "license": "MIT",
+  "scripts": {
+    "test": "node test-runner.js",
+    "test:raw": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest"
+  },
+  "clawdbot": {
+    "extensions": [
+      "index.js"
+    ]
+  },
+  "openclaw": {
+    "extensions": [
+      "index.js"
+    ]
+  },
+  "peerDependencies": {
+    "clawdbot": "*"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.32.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.0.18",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

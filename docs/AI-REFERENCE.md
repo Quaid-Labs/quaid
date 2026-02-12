@@ -298,7 +298,7 @@ Merges are crash-safe, executed in single database transactions.
 - **FTS5 BM25**: Porter stemming, column weights (name 2x, keywords 1x)
 - **Temporal contiguity**: Co-session facts surface together
 - **Competitive inhibition**: Reranker losers lose storage_strength (Bjork model)
-- **Entity alias resolution**: Sol -> Solomon Steadman, Mom -> Shannon
+- **Entity alias resolution**: Maps short names/nicknames to canonical entity names
 - **Graph path explanation**: Traversal chains included in results
 - **Read-time injection filtering**: `_sanitize_for_context()` + `[MEMORY]` prefix tags
 
@@ -418,7 +418,7 @@ The UPDATE SQL in `update_node()` deliberately excludes `created_at`. If you nee
 MUST explicitly pass `db_path` to the `MemoryGraph()` constructor. The `DB_PATH` default parameter is captured at import time, so changing the environment variable alone does not work.
 
 ### Dedup Merge owner_id
-`janitor.py` hardcodes `owner_id="solomon"`. Benchmark reprocessing needs a post-janitor SQL fixup to correct the owner.
+`janitor.py` hardcodes the default `owner_id`. Benchmark reprocessing needs a post-janitor SQL fixup to correct the owner.
 
 ### Contradiction Detection Scope
 Only checks `pending` / `approved` facts. The ingest pipeline stores facts as `active`, making contradiction detection a no-op for benchmarks unless status is adjusted.
@@ -445,10 +445,10 @@ All commands run from the `plugins/quaid/` directory.
 
 ```bash
 # Store a fact
-python3 memory_graph.py store "Solomon prefers dark mode" --owner solomon --category preference
+python3 memory_graph.py store "Quaid prefers dark mode" --owner default --category preference
 
 # Search memories (hybrid retrieval)
-python3 memory_graph.py search "dark mode preferences" --owner solomon --limit 10
+python3 memory_graph.py search "dark mode preferences" --owner default --limit 10
 
 # Search memories + docs (combined)
 python3 memory_graph.py search-all "dark mode"
@@ -551,7 +551,7 @@ python3 test_recall.py --query "custom query" --verbose
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `CLAWDBOT_WORKSPACE` | Workspace root directory | `~/<username>/clawd` (dev) |
+| `CLAWDBOT_WORKSPACE` | Workspace root directory | Auto-detected from gateway |
 | `MEMORY_DB_PATH` | Override database file path | `<workspace>/data/memory.db` |
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from `.env` file or macOS Keychain |

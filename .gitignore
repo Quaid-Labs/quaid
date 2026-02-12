@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data
+*.db
+*.db-*
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+node_modules/
+dist/
+build/
+
+# Runtime
+data/
+logs/
+journal/
+memory/
