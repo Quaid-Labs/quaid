@@ -665,6 +665,21 @@ conn.close()
         fi
     fi
 
+    # Check git
+    if ! command -v git &>/dev/null; then
+        warn "Git not found."
+        if _try_brew_install "git" "Git"; then
+            if ! command -v git &>/dev/null; then
+                error "Git still not found after install. Add it to your PATH and re-run."
+                exit 1
+            fi
+        else
+            error "Git is required for doc staleness tracking and project management."
+            exit 1
+        fi
+    fi
+    info "Git $(git --version | sed 's/git version //') — OK"
+
     # Check gateway compatibility (hooks from PR #13287)
     info "Checking OpenClaw gateway for memory hooks..."
     echo -e "  ${DIM}Quaid hooks into conversation events (compaction, reset) to extract memories.${RESET}"

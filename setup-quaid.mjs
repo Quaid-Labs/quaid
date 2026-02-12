@@ -396,6 +396,18 @@ async function step1_preflight() {
     s.stop(C.green("FTS5 support"));
   }
 
+  // --- Git ---
+  s.start("Checking git...");
+  if (!canRun("git")) {
+    s.stop(C.red("Git not found"), 2);
+    const installed = await tryBrewInstall("git", "Git");
+    if (!installed) bail("Git is required for doc staleness tracking and project management.");
+    s.start("Rechecking git...");
+    if (!canRun("git")) bail("Git still not found. Install it and re-run.");
+  }
+  const gitVer = shell("git --version").replace("git version ", "").trim();
+  s.stop(C.green(`Git ${gitVer}`));
+
   // --- Gateway hooks ---
   s.start("Checking gateway memory hooks...");
   const gwDir = findGateway();
