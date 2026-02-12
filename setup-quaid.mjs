@@ -1368,7 +1368,11 @@ else:
   const nextSteps = [
     `${C.bcyan("→")} Facts are extracted automatically on context compaction and new sessions`,
     `${C.bcyan("→")} The nightly janitor reviews, deduplicates, and maintains memories`,
-    `${C.bcyan("→")} A default project was created — ask your agent to discover more`,
+    `${C.bcyan("→")} Run the janitor now to discover and organize your projects:`,
+    `   ${C.bcyan("cd plugins/quaid && python3 janitor.py --task workspace --apply")}`,
+    `   The janitor will scan TOOLS.md and AGENTS.md for project specs`,
+    `   and organize them into project directories. Your agent will walk`,
+    `   you through the results and help you refine project settings.`,
     `${C.bcyan("→")} Run ${C.bcyan("quaid doctor")} anytime to check system health`,
     `${C.bcyan("→")} Run ${C.bcyan("quaid stats")} to see your memory database grow`,
     "",
