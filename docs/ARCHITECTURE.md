@@ -50,11 +50,13 @@ Quaid sits between the OpenClaw gateway and the AI agent. The gateway exposes li
 
 ### Three Main Loops
 
-**Extraction** -- Fires at context compaction or session reset. An Opus LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and await janitor review before graduating to `active`.
+**Extraction** -- Fires at context compaction or session reset. A high-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and await janitor review before graduating to `active`.
 
-**Retrieval** -- Fires before each agent turn. The agent's query is classified by intent, expanded via HyDE, and searched across three channels (vector, FTS5, graph). Results are fused via RRF, reranked by Haiku, and injected into the agent's context as `[MEMORY]`-prefixed messages.
+**Retrieval** -- Fires before each agent turn. The agent's query is classified by intent, expanded via HyDE, and searched across three channels (vector, FTS5, graph). Results are fused via RRF, reranked by a low-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
 
-**Maintenance** -- A nightly janitor pipeline runs 17 tasks: reviewing pending facts, deduplicating near-identical memories, resolving contradictions, decaying stale memories, updating documentation, and running structural health checks.
+**Maintenance** -- A nightly janitor pipeline reviews pending facts, deduplicates near-identical memories, resolves contradictions, decays stale memories, updates documentation, and runs structural health checks.
+
+Almost every decision in the system is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. This means Quaid naturally scales with AI models -- as reasoning capabilities improve, every decision in the pipeline gets better without code changes.
 
 ### Data Flow
 
@@ -62,7 +64,7 @@ Quaid sits between the OpenClaw gateway and the AI agent. The gateway exposes li
 Conversation messages
         |
         v
-  [Extraction]  Opus extracts facts + edges + snippets + journal entries
+  [Extraction]  High-reasoning LLM extracts facts + edges + snippets + journal entries
         |
         +---> nodes table (status: pending)
         +---> edges table (source_fact_id links to originating fact)
@@ -99,7 +101,7 @@ Both hooks call the same `extractMemoriesFromMessages()` function.
 
 1. **Message collection** -- The gateway provides the full message array. Any queued memory notes (from the `memory_note` tool) are prepended to the transcript.
 
-2. **Opus extraction** -- A single high-reasoning LLM call processes the transcript and produces:
+2. **LLM extraction** -- A single high-reasoning LLM call processes the transcript and produces:
    - **Facts**: Structured observations with name, category, confidence, speaker, knowledge_type
    - **Edges**: Relationships between entities (subject, relation, object)
    - **Soul snippets**: Bullet-point observations for core markdown files
@@ -127,7 +129,7 @@ class Node:
     owner_id: str              # Multi-user support
     knowledge_type: str        # fact, belief, preference, experience
     fact_type: str             # mutable, immutable, contextual
-    speaker: str               # Who stated this (e.g. "Solomon", "Shannon")
+    speaker: str               # Who stated this (e.g. "Quaid", "Melina")
     source_type: str           # user, assistant, tool, import
     content_hash: str          # SHA256 of name text (fast dedup)
     keywords: str              # Space-separated search terms
@@ -139,7 +141,7 @@ class Node:
 
 ### Edge Normalization
 
-Edges are normalized to canonical forms to prevent duplicates like `child_of(A, B)` and `parent_of(B, A)` coexisting:
+Edges are normalized to canonical forms to prevent duplicates like `child_of(A, B)` and `parent_of(B, A)` coexisting. Normalization is maintained by the janitor pipeline and arbitrated by a high-reasoning LLM when ambiguity exists:
 
 ```python
 # Inverse map: flip subject/object AND rename relation
@@ -196,8 +198,8 @@ User message
     |
 [3] Classify intent (WHO, WHEN, WHERE, WHAT, PREFERENCE, RELATION, WHY, GENERAL)
     |
-[4] HyDE expansion: Haiku rephrases question as declarative statement
-    |     "Where does Sol's mom live?" -> "Solomon's mother lives in..."
+[4] HyDE expansion: low-reasoning LLM rephrases question as declarative statement
+    |     "Where does Quaid's wife live?" -> "Quaid's wife lives in..."
     |
 [5] Hybrid search (vector + FTS5 in parallel via ThreadPoolExecutor)
     |
@@ -205,7 +207,7 @@ User message
     |
 [7] Composite scoring (relevance 60% + recency 20% + frequency 15%)
     |
-[8] Haiku reranker (graded 0-5 relevance scoring, single API call)
+[8] LLM reranker (graded 0-5 relevance scoring, single API call)
     |
 [9] Competitive inhibition (reranker losers lose storage_strength)
     |
@@ -253,7 +255,7 @@ SQLite FTS5 with Porter stemming and Unicode61 tokenization. Column weights: `na
 Starting from nodes found by vector/FTS search, the graph is traversed via edges to find related facts. BEAM search keeps only the top-B candidates per hop level (default B=5, max depth=2), using adaptive scoring:
 
 - Fast heuristic scoring considers edge weight, node confidence, intent alignment, and relation selectivity
-- When candidates exceed beam width (truncation needed), the top 2*B candidates are re-scored via Haiku reranker in a single batched API call
+- When candidates exceed beam width (truncation needed), the top 2*B candidates are re-scored via a low-reasoning LLM reranker in a single batched API call
 - Score decays by `hop_decay` (0.7) per level: a 2-hop result gets 0.49x the score of a direct hit
 
 ### RRF Fusion
@@ -275,12 +277,12 @@ def _get_fusion_weights(intent):
 # score = weight / (k + rank)   where k=60 (configurable)
 ```
 
-### Haiku Reranker
+### LLM Reranker
 
-After fusion, the top 20 candidates are sent to Haiku in a single API call for graded relevance scoring (0-5 scale). The reranker score is blended with the original score at a configurable ratio (default 50/50):
+After fusion, the top 20 candidates are sent to a low-reasoning LLM in a single API call for graded relevance scoring (0-5 scale). The reranker score is blended with the original score at a configurable ratio. Benchmarks showed the LLM reranker contributes significantly to accuracy, so the blend favors the reranker score:
 
 ```
-blended = 0.5 * (reranker_grade / 5.0) + 0.5 * original_score
+blended = 0.6 * (reranker_grade / 5.0) + 0.4 * original_score
 ```
 
 ### Competitive Inhibition
@@ -344,7 +346,7 @@ contradictions          -- Detected conflicting facts (pending/resolved/false_po
 dedup_log               -- All dedup decisions (for review)
 decay_review_queue      -- Memories queued for human review instead of silent deletion
 
-entity_aliases          -- Fuzzy name resolution (e.g. "Sol" -> "Solomon Steadman")
+entity_aliases          -- Fuzzy name resolution (e.g. "Doug" -> "Douglas Quaid")
 edge_keywords           -- LLM-generated trigger keywords per relation type
 embedding_cache         -- Avoids recomputing embeddings for identical text
 
@@ -396,28 +398,26 @@ The janitor (`janitor.py`) runs 17 tasks in a fixed execution order. It is desig
 
 | # | Task | Purpose | LLM? |
 |---|------|---------|------|
-| 0 | backup | Keychain + core file backups | No |
 | 0b | embeddings | Backfill missing embeddings via Ollama | No |
-| 2 | review | Opus reviews pending facts (approve/reject/rewrite) | High |
+| 2 | review | High-reasoning LLM reviews pending facts (approve/reject/rewrite) | High |
 | 2a | temporal | Resolve relative dates ("last Tuesday") to absolute dates | No |
 | 2b | dedup_review | Review recent dedup rejections (were they correct?) | High |
 | 3+4 | duplicates + contradictions | Shared recall pass, then dedup (cosine > 0.85) + contradiction detection | Low |
-| 4b | contradictions (resolve) | Opus resolves detected contradictions (keep_a/keep_b/merge) | High |
+| 4b | contradictions (resolve) | High-reasoning LLM resolves detected contradictions (keep_a/keep_b/merge) | High |
 | 5 | decay | Ebbinghaus exponential confidence decay on old unused facts | No |
 | 5b | decay_review | Review memories that decayed below threshold (delete/extend/pin) | High |
-| 1 | workspace | Core markdown bloat monitoring + Opus review | High |
-| 1b | docs_staleness | Auto-update stale docs from git diffs (Haiku pre-filter + Opus update) | Both |
+| 1 | workspace | Core markdown bloat monitoring + high-reasoning LLM review | High |
+| 1b | docs_staleness | Auto-update stale docs from git diffs (low-reasoning pre-filter + high-reasoning update) | Both |
 | 1c | docs_cleanup | Clean bloated docs based on churn metrics | Low |
 | 1d-snippets | snippets | Review soul snippets: FOLD (merge into file), REWRITE, or DISCARD | High |
 | 1d-journal | journal | Distill journal entries into core markdown, archive originals | High |
-| 6 | (deprecated) | Edge extraction -- now happens at capture time | -- |
 | 7 | rag | Reindex docs for RAG search + auto-discover new projects | No |
 | 8 | tests | Run pytest suite (dev/CI only, gated by `QUAID_DEV=1`) | No |
 | 9 | cleanup | Prune old logs, orphaned embeddings, stale lock files | No |
 
 ### Fail-Fast Behavior
 
-Memory tasks (2 through 5) form a critical pipeline. If any memory task fails, all remaining memory tasks are skipped and fact graduation is blocked. Non-memory tasks (workspace, docs, RAG) continue independently.
+Memory tasks (2 through 5) form a critical pipeline. If any memory task fails, all remaining memory tasks are skipped and fact graduation is blocked. Pending facts are left in place and picked up by the next successful janitor review. Non-memory tasks (workspace, docs, RAG) continue independently.
 
 ### Token-Based Batching
 
@@ -473,7 +473,7 @@ The half-life is extended by access frequency (`access_bonus_factor * access_cou
 
 ## 6. Dual Learning System
 
-Two complementary systems capture different types of learning from conversations. They are intentionally separate -- snippets handle fast, tactical updates while journal handles slow, reflective synthesis.
+Two complementary systems capture different types of learning from conversations, focused on three domains: understanding the **user**, developing the agent's own **self**-awareness, and tracking the **world** around it. They are intentionally separate -- snippets handle fast, tactical updates while journal handles slow, reflective synthesis.
 
 ### Snippets (Fast Path)
 
@@ -481,14 +481,14 @@ Two complementary systems capture different types of learning from conversations
 Conversation
     |
     v
-Opus extracts bullet-point observations ("soul_snippets")
+High-reasoning LLM extracts bullet-point observations ("soul_snippets")
     |
     v
 Written to *.snippets.md (per target file, e.g. SOUL.snippets.md)
     |
     v
 Nightly janitor (task 1d-snippets):
-    Opus reviews each snippet against the target file:
+    High-reasoning LLM reviews each snippet against the target file:
     - FOLD: merge into the file at the right location
     - REWRITE: snippet needs refinement before folding
     - DISCARD: redundant or low-value
@@ -511,13 +511,13 @@ Snippet format (in `*.snippets.md`):
 Conversation
     |
     v
-Opus extracts diary-style paragraphs ("journal_entries")
+High-reasoning LLM extracts diary-style paragraphs ("journal_entries")
     |
     v
 Written to journal/*.journal.md (newest entries at top)
     |
     v
-Weekly (configurable) Opus distillation:
+Weekly (configurable) high-reasoning LLM distillation:
     Reads accumulated journal entries for each target file,
     synthesizes themes, and proposes edits to core markdown
     |
@@ -531,13 +531,13 @@ Journal format (in `journal/SOUL.journal.md`):
 ## 2026-02-12 - Compaction
 
 Today's conversation revealed a pattern I've been developing around...
-The way Solomon framed the debugging problem suggests he values...
+Today's debugging session revealed a pattern worth noting...
 ```
 
 ### Why Two Systems?
 
-- **Snippets** are for continuous small lessons that should update core files frequently. "Solomon prefers dark mode" goes directly into USER.md.
-- **Journal** is for long-term pattern recognition. A single journal entry about a debugging conversation isn't actionable, but after 10 entries about debugging style, Opus can synthesize: "Solomon approaches bugs systematically -- reproduces first, then bisects."
+- **Snippets** are for continuous small lessons that should update core files frequently. "User prefers dark mode" goes directly into USER.md.
+- **Journal** is for long-term pattern recognition. A single journal entry about a debugging conversation isn't actionable, but after 10 entries about debugging style, the high-reasoning LLM can synthesize: "The user approaches bugs systematically -- reproduces first, then bisects."
 
 Both systems dedup by date+trigger per file (at most one Compaction entry and one Reset entry per day per target file).
 
@@ -559,8 +559,8 @@ docs_registry.py discover --project myproject    # Auto-discover docs in project
 ```
 
 **Doc Auto-Update** (`docs_updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
-1. **Haiku pre-filter**: Classifies git diffs as "trivial" (whitespace, comments) or "significant" (logic changes). Trivial diffs skip the expensive Opus update.
-2. **Opus update**: Reads the stale doc + relevant diffs, proposes targeted edits.
+1. **Low-reasoning pre-filter**: Classifies git diffs as "trivial" (whitespace, comments) or "significant" (logic changes). Trivial diffs skip the expensive update step.
+2. **High-reasoning update**: Reads the stale doc + relevant diffs, proposes targeted edits.
 
 **RAG Search** (`docs_rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
 
@@ -675,12 +675,12 @@ The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The `camelC
 
 ```python
 def call_high_reasoning(prompt, max_tokens=4000, timeout=120, system_prompt=None):
-    """High-reasoning model (default: Claude Opus). Used for fact review,
-    contradiction resolution, workspace audits, journal distillation."""
+    """High-reasoning model. Used for fact review, contradiction resolution,
+    workspace audits, journal distillation."""
 
 def call_low_reasoning(prompt, max_tokens=500, timeout=30, system_prompt=None):
-    """Low-reasoning model (default: Claude Haiku). Used for dedup verification,
-    reranking, HyDE expansion, doc pre-filtering."""
+    """Low-reasoning model. Used for dedup verification, reranking,
+    HyDE expansion, doc pre-filtering."""
 ```
 
 Both return `(response_text, duration_seconds)`. Model selection is config-driven -- callers never reference specific model IDs.
@@ -699,16 +699,13 @@ class ModelConfig:
 
 ### API Key Resolution
 
-Keys are resolved in priority order:
-1. Environment variable (`ANTHROPIC_API_KEY`)
-2. `.env` file in workspace root
-3. macOS Keychain (may not work from all execution contexts)
-
-Failed key lookups are cached with a 5-minute retry cooldown to avoid hammering the Keychain.
+Quaid uses pass-through API keys from the main system agent -- it does not manage keys directly. Keys are resolved in priority order:
+1. Environment variable (`ANTHROPIC_API_KEY`) -- typically set by the gateway or agent runtime
+2. `.env` file in workspace root (fallback for standalone CLI use)
 
 ### Prompt Caching
 
-Anthropic's prompt caching is used for system prompts that repeat across calls (e.g. the janitor review prompt). This yields approximately 90% token savings on the cached portion of repeated prompts.
+Prompt caching is used for system prompts that repeat across calls (e.g. the janitor review prompt). This yields approximately 90% token savings on the cached portion of repeated prompts. Currently supported with Anthropic's API; other providers may benefit from similar caching mechanisms.
 
 ### Token Usage Tracking
 
