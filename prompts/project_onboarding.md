@@ -13,8 +13,18 @@ and register them.
 
 ## Post-Janitor Project Review
 
-When the janitor's workspace audit moves content to a project (you'll get a notification),
-walk the user through the decision:
+When `logs/janitor/pending-project-review.json` exists, the janitor found project specs
+and moved them. Read the file to get the details (it auto-clears after reading), then
+walk the user through each move:
+
+```python
+# Read pending reviews (clears the file)
+from workspace_audit import get_pending_project_reviews
+reviews = get_pending_project_reviews()
+# Returns: [{"section", "source_file", "target_path", "project_name", "is_new_project", "reason", "timestamp"}, ...]
+```
+
+For each move, walk the user through:
 
 1. **Summarize what happened**: "The janitor found project specs in your TOOLS.md and
    moved them to `projects/<name>/`. Here's what it did..."
