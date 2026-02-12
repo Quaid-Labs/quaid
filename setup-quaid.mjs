@@ -102,7 +102,45 @@ if (!clack) {
   process.exit(1);
 }
 
-const { intro, outro, select, confirm, text, spinner, note, cancel, isCancel, log } = clack;
+// --- Test mode: read canned answers from JSON instead of interactive prompts ---
+const TEST_ANSWERS_PATH = process.env.QUAID_TEST_ANSWERS;
+let _testAnswers = null;
+let _testIdx = 0;
+if (TEST_ANSWERS_PATH) {
+  _testAnswers = JSON.parse(fs.readFileSync(TEST_ANSWERS_PATH, "utf8"));
+  _testIdx = 0;
+}
+
+function _nextAnswer(type, message) {
+  if (!_testAnswers) return undefined;
+  const answer = _testAnswers.answers[_testIdx];
+  if (answer === undefined) throw new Error(`Test mode: ran out of answers at index ${_testIdx} (${type}: ${message})`);
+  _testIdx++;
+  return answer;
+}
+
+const _clack = clack;
+const { intro: _intro, outro: _outro, note: _note, cancel: _cancel, isCancel: _isCancel, log: _log, spinner: _spinner } = _clack;
+
+const intro = _intro;
+const outro = _outro;
+const note = _note;
+const cancel = _cancel;
+const isCancel = _isCancel;
+const log = _log;
+
+const select = _testAnswers
+  ? async (opts) => { const a = _nextAnswer("select", opts.message); log.info(C.dim(`[test] select "${opts.message}" → ${a}`)); return a; }
+  : _clack.select;
+const confirm = _testAnswers
+  ? async (opts) => { const a = _nextAnswer("confirm", opts.message); log.info(C.dim(`[test] confirm "${opts.message}" → ${a}`)); return a; }
+  : _clack.confirm;
+const text = _testAnswers
+  ? async (opts) => { const a = _nextAnswer("text", opts.message); log.info(C.dim(`[test] text "${opts.message}" → ${a}`)); return a; }
+  : _clack.text;
+const spinner = _testAnswers
+  ? () => ({ start: (m) => log.info(C.dim(`[test] spinner: ${m}`)), stop: (m) => log.info(C.dim(`[test] done: ${m}`)) })
+  : _clack.spinner;
 
 // --- Helpers ---
 function shell(cmd, trim = true) {
@@ -133,6 +171,7 @@ function getSystemRAM() {
 }
 
 async function waitForKey(msg = "Press any key to continue...") {
+  if (_testAnswers) return; // skip in test mode
   log.message(C.dim(msg));
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
@@ -144,6 +183,7 @@ async function waitForKey(msg = "Press any key to continue...") {
 }
 
 function clearScreen() {
+  if (_testAnswers) return; // skip in test mode
   process.stdout.write("\x1B[2J\x1B[H");
 }
 
@@ -213,6 +253,13 @@ async function step1_preflight() {
   intro(C.dim("Checking your system..."));
 
   log.info(C.dim(`Workspace: ${WORKSPACE}`));
+
+  // Snapshot existing files BEFORE any clawdbot commands — those commands load
+  // the quaid plugin which creates data/memory.db, giving a false "dirty" signal.
+  const _existingFiles = ["SOUL.md", "USER.md", "MEMORY.md", "TOOLS.md", "AGENTS.md"]
+    .filter(f => fs.existsSync(path.join(WORKSPACE, f)));
+  const _hasConfig = fs.existsSync(path.join(CONFIG_DIR, "memory.json"));
+  const _hasDb = fs.existsSync(path.join(DATA_DIR, "memory.db"));
 
   const s = spinner();
 
@@ -364,12 +411,8 @@ async function step1_preflight() {
   await waitForKey("Press any key to begin installation...");
 
   // --- Backup (only if existing files) ---
-  const existingFiles = ["SOUL.md", "USER.md", "MEMORY.md", "TOOLS.md", "AGENTS.md"]
-    .filter(f => fs.existsSync(path.join(WORKSPACE, f)));
-  const hasConfig = fs.existsSync(path.join(CONFIG_DIR, "memory.json"));
-  const hasDb = fs.existsSync(path.join(DATA_DIR, "memory.db"));
-
-  if (existingFiles.length > 0 || hasConfig || hasDb) {
+  // Uses snapshots from before clawdbot commands (which create data/memory.db)
+  if (_existingFiles.length > 0 || _hasConfig || _hasDb) {
     log.warn("Quaid's nightly janitor modifies your workspace markdown files");
     log.warn("(SOUL.md, USER.md, etc.) to keep them current. Back up first.");
 
@@ -383,8 +426,8 @@ async function step1_preflight() {
         const src = path.join(WORKSPACE, f);
         if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(backupDir, f)); count++; }
       }
-      if (hasConfig) { fs.copyFileSync(path.join(CONFIG_DIR, "memory.json"), path.join(backupDir, "memory.json")); count++; }
-      if (hasDb) { fs.copyFileSync(path.join(DATA_DIR, "memory.db"), path.join(backupDir, "memory.db")); count++; }
+      if (_hasConfig) { fs.copyFileSync(path.join(CONFIG_DIR, "memory.json"), path.join(backupDir, "memory.json")); count++; }
+      if (_hasDb) { fs.copyFileSync(path.join(DATA_DIR, "memory.db"), path.join(backupDir, "memory.db")); count++; }
 
       note(
         `${C.green(count + " files")} backed up to:\n${C.bcyan(backupDir)}`,
@@ -1575,8 +1618,30 @@ async function main() {
     const schedule = await step6_schedule(embeddings);
     await step7_install(pluginSrc, owner, models, embeddings, systems);
     await step8_validate(owner, models, embeddings, systems);
+
+    // In test mode, write results for the test runner to verify
+    if (_testAnswers && process.env.QUAID_TEST_RESULTS) {
+      fs.writeFileSync(process.env.QUAID_TEST_RESULTS, JSON.stringify({
+        success: true,
+        owner,
+        models: { provider: models.provider, highModel: models.highModel, lowModel: models.lowModel },
+        embeddings,
+        systems,
+        schedule,
+        workspace: WORKSPACE,
+        answersUsed: _testIdx,
+      }, null, 2));
+    }
   } catch (err) {
     if (err.message === "Setup cancelled.") process.exit(0);
+    if (_testAnswers && process.env.QUAID_TEST_RESULTS) {
+      fs.writeFileSync(process.env.QUAID_TEST_RESULTS, JSON.stringify({
+        success: false,
+        error: err.message,
+        stack: err.stack,
+        answersUsed: _testIdx,
+      }, null, 2));
+    }
     console.error(`\n${C.red("[x] Unexpected error:")} ${err.message}`);
     console.error(err.stack);
     process.exit(1);

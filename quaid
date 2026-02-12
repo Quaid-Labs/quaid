@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-WORKSPACE_ROOT="${CLAWDBOT_WORKSPACE:-$(cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" && pwd)}"
+WORKSPACE_ROOT="${CLAWDBOT_WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 PLUGIN_DIR="${WORKSPACE_ROOT}/plugins/quaid"
 CONFIG_DIR="${WORKSPACE_ROOT}/config"
 DATA_DIR="${WORKSPACE_ROOT}/data"
