@@ -151,7 +151,7 @@ _INVERSE_MAP = {
     "led_to": "caused_by",         # led_to(A, B) -> caused_by(B, A)
     "caused": "caused_by",
     "resulted_in": "caused_by",
-    "employs": "works_at",         # employs(Facebook, Sol) -> works_at(Sol, Facebook)
+    "employs": "works_at",         # employs(Facebook, User) -> works_at(User, Facebook)
     "pet_of": "has_pet",
     # ...
 }

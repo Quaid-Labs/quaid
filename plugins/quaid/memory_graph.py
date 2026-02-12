@@ -1870,7 +1870,7 @@ def _get_owner_names() -> set:
         names = set()
         for identity in cfg.users.identities.values():
             if identity.person_node_name:
-                # Add full name and each part: "Default User" -> {"default", "steadman", "default steadman"}
+                # Add full name and each part: "Default User" -> {"default", "user", "default user"}
                 full = identity.person_node_name.lower()
                 names.add(full)
                 names.update(full.split())
@@ -4178,7 +4178,7 @@ if __name__ == "__main__":
 
         # --- add-alias ---
         add_alias_p = subparsers.add_parser("add-alias", help="Add an entity alias")
-        add_alias_p.add_argument("alias", help="The alias name (e.g., 'Sol')")
+        add_alias_p.add_argument("alias", help="The alias name (e.g., 'Dave')")
         add_alias_p.add_argument("canonical", help="The canonical name (e.g., 'Default User')")
         add_alias_p.add_argument("--node-id", default=None, help="Optional canonical node ID")
         add_alias_p.add_argument("--owner", default=None, help="Owner ID")
