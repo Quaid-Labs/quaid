@@ -166,7 +166,36 @@ function handleCancel(value, msg = "Setup cancelled.") {
 
 function getSystemRAM() {
   const total = Math.round(os.totalmem() / 1024 / 1024 / 1024);
-  const free = Math.round(os.freemem() / 1024 / 1024 / 1024);
+  let free;
+
+  if (process.platform === "darwin") {
+    // macOS: os.freemem() only counts truly free pages, ignoring reclaimable cache.
+    // vm_stat gives free + inactive + speculative + purgeable for realistic availability.
+    try {
+      const { stdout } = spawnSync("vm_stat", { encoding: "utf8", stdio: "pipe" });
+      const pageSizeMatch = stdout.match(/page size of (\d+) bytes/);
+      const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1]) : 16384;
+      const parse = (label) => {
+        const m = stdout.match(new RegExp(`${label}:\\s+(\\d+)`));
+        return m ? parseInt(m[1]) : 0;
+      };
+      const available = (parse("Pages free") + parse("Pages inactive") +
+        parse("Pages speculative") + parse("Pages purgeable")) * pageSize;
+      free = Math.round(available / 1024 / 1024 / 1024);
+    } catch {
+      free = Math.round(os.freemem() / 1024 / 1024 / 1024);
+    }
+  } else {
+    // Linux: /proc/meminfo MemAvailable is the kernel's own availability estimate
+    try {
+      const meminfo = fs.readFileSync("/proc/meminfo", "utf8");
+      const m = meminfo.match(/MemAvailable:\s+(\d+)\s+kB/);
+      free = m ? Math.round(parseInt(m[1]) / 1024 / 1024) : Math.round(os.freemem() / 1024 / 1024 / 1024);
+    } catch {
+      free = Math.round(os.freemem() / 1024 / 1024 / 1024);
+    }
+  }
+
   return { total, free };
 }
 
@@ -574,9 +603,14 @@ async function step4_embeddings() {
 
   // Check Ollama
   let ollamaRunning = false;
-  try { execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" }); ollamaRunning = true; } catch {}
+  if (process.env.QUAID_TEST_NO_OLLAMA) {
+    // Test mode: simulate Ollama not installed/running
+    ollamaRunning = false;
+  } else {
+    try { execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" }); ollamaRunning = true; } catch {}
+  }
 
-  if (!ollamaRunning && canRun("ollama")) {
+  if (!ollamaRunning && !process.env.QUAID_TEST_NO_OLLAMA && canRun("ollama")) {
     log.warn("Ollama is installed but not running.");
     const start = handleCancel(await confirm({ message: "Start Ollama now?" }));
     if (start) {
@@ -595,7 +629,7 @@ async function step4_embeddings() {
     }
   }
 
-  if (!ollamaRunning && !canRun("ollama")) {
+  if (!ollamaRunning && (process.env.QUAID_TEST_NO_OLLAMA || !canRun("ollama"))) {
     log.warn("Ollama not found.");
     log.info(C.dim("Ollama runs embedding models locally — free, fast, and private."));
     log.info(C.dim("Without it, Quaid uses keyword search only (no semantic recall)."));
@@ -1102,7 +1136,27 @@ except Exception as e:
     }));
     if (doMigrate) {
       s.start("Extracting facts from workspace files...");
-      const migrateScript = `
+      const useMock = process.env.QUAID_TEST_MOCK_MIGRATION === "1";
+      const migrateScript = useMock ? `
+import os, sys
+os.environ['CLAWDBOT_WORKSPACE'] = '${WORKSPACE}'
+os.environ['QUAID_QUIET'] = '1'
+sys.path.insert(0, '.')
+from memory_graph import store
+files = ${JSON.stringify(mdFiles)}
+total = 0
+for fname in files:
+    fpath = os.path.join('${WORKSPACE}', fname)
+    with open(fpath) as f:
+        lines = f.read().strip().split('\\n')
+    for line in lines:
+        line = line.strip().lstrip('- ')
+        if line and not line.startswith('#') and len(line) > 15:
+            cat = 'preference' if any(w in line.lower() for w in ['prefer', 'like', 'enjoy', 'favorite']) else 'fact'
+            store(line, owner_id='${owner.id}', category=cat, source='migration')
+            total += 1
+print(total)
+` : `
 import os, sys
 os.environ['CLAWDBOT_WORKSPACE'] = '${WORKSPACE}'
 os.environ['QUAID_QUIET'] = '1'

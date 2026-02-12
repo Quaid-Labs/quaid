@@ -151,6 +151,8 @@ Quaid conserves context across restarts -- when your agent compacts or resets, m
 
 Quaid is in early alpha. The recommended configuration is **Anthropic** (Claude) for reasoning + **Ollama** for local embeddings. Other providers (OpenAI-compatible APIs, OpenRouter, Together) are supported but less thoroughly tested.
 
+The system is backed by over 1,000 unit tests (Python + TypeScript), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md) and [LongMemEval](https://github.com/xiaowu0162/LongMemEval).
+
 We're actively testing and refining the system against benchmarks and welcome collaboration. If you're interested in contributing, testing, or just have ideas -- open an issue or reach out.
 
 ---
