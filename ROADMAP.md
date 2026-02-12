@@ -38,6 +38,16 @@ Build a benchmark dataset purpose-built for Quaid's use case:
 - Multi-session context accumulation
 - Adversarial queries (plausible but wrong)
 
+### Claude Code Project Integration
+Bidirectional project awareness between Claude Code and the OpenClaw agent.
+Today Claude Code tracks file edits (PostToolUse hook) and stages project
+events at compaction (PreCompact hook), but there's no shared project context.
+- Claude Code reads project docs (PROJECT.md, TOOLS.md, AGENTS.md) for context
+- Shared project event bus — both agents see file changes, doc updates, project creation
+- Coordinated compaction — Claude Code's context feeds into the same memory pipeline
+- Project-scoped tool registration (Claude Code gets project-specific tools)
+- Use case: Claude Code handles implementation, OpenClaw agent handles communication and scheduling, both share project state through Quaid
+
 ### Batch API for Janitor
 Use Anthropic's Batch API for janitor LLM calls. 50% token cost savings on
 nightly runs. Review, dedup, contradiction, and decay tasks are all batchable.
