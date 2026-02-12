@@ -1,0 +1,227 @@
+{
+  "_comment": "Quaid Memory Plugin — Configuration Template. Copy to config/memory.json and customize.",
+
+  "systems": {
+    "memory": true,
+    "journal": true,
+    "projects": true,
+    "workspace": true,
+    "_notes": "Toggle subsystems on/off. memory: fact extraction+recall, journal: personality snippets+reflective log, projects: auto-update project docs, workspace: core markdown health monitoring. Infrastructure tasks (backup, tests, cleanup) always run."
+  },
+
+  "models": {
+    "provider": "anthropic",
+    "apiKeyEnv": "ANTHROPIC_API_KEY",
+    "baseUrl": null,
+    "lowReasoning": "claude-haiku-4-5",
+    "highReasoning": "claude-opus-4-6",
+    "lowReasoningContext": 200000,
+    "highReasoningContext": 200000,
+    "lowReasoningMaxOutput": 8192,
+    "highReasoningMaxOutput": 16384,
+    "batchBudgetPercent": 0.5,
+    "_notes": "provider: 'anthropic' or 'openai' (covers OpenAI, OpenRouter, Together, Ollama reasoning, etc). For OpenRouter: set provider='openai', baseUrl='https://openrouter.ai/api/v1', apiKeyEnv='OPENROUTER_API_KEY'. For local Ollama reasoning: provider='openai', baseUrl='http://localhost:11434/v1', apiKeyEnv='' (empty = no key needed)."
+  },
+
+  "capture": {
+    "enabled": true,
+    "strictness": "high",
+    "skipPatterns": [
+      "^(thanks|ok|sure|yes|no)$",
+      "^(hi|hello|hey)\\b"
+    ],
+    "_notes": "strictness: high = only clear facts, medium = default, low = capture more. skipPatterns: regex patterns to skip during extraction."
+  },
+
+  "decay": {
+    "enabled": true,
+    "thresholdDays": 30,
+    "ratePercent": 10,
+    "minimumConfidence": 0.1,
+    "protectVerified": true,
+    "protectPinned": true,
+    "reviewQueueEnabled": true,
+    "mode": "exponential",
+    "baseHalfLifeDays": 60,
+    "accessBonusFactor": 0.15,
+    "_notes": "Ebbinghaus exponential decay. baseHalfLifeDays: half-life for facts with 0 accesses. Each access extends half-life by accessBonusFactor (15%). thresholdDays: minimum age before decay starts."
+  },
+
+  "janitor": {
+    "enabled": true,
+    "dryRun": false,
+    "taskTimeoutMinutes": 60,
+    "opusReview": {
+      "enabled": true,
+      "batchSize": 50,
+      "maxTokens": 4000
+    },
+    "dedup": {
+      "similarityThreshold": 0.85,
+      "highSimilarityThreshold": 0.95,
+      "autoRejectThreshold": 0.98,
+      "grayZoneLow": 0.88,
+      "haikuVerifyEnabled": true
+    },
+    "contradiction": {
+      "enabled": true,
+      "timeoutMinutes": 60,
+      "minSimilarity": 0.6,
+      "maxSimilarity": 0.85
+    },
+    "_notes": "Nightly maintenance pipeline. opusReview: LLM reviews pending facts. dedup: similarity thresholds for duplicate detection. contradiction: detect conflicting facts."
+  },
+
+  "retrieval": {
+    "defaultLimit": 5,
+    "maxLimit": 8,
+    "minSimilarity": 0.6,
+    "notifyMinSimilarity": 0.85,
+    "boostRecent": true,
+    "boostFrequent": true,
+    "maxTokens": 2000,
+    "notifyOnRecall": true,
+    "reranker": {
+      "enabled": true,
+      "provider": "anthropic",
+      "model": "qwen2.5:7b",
+      "topK": 20,
+      "instruction": "Given a personal memory query, determine if this memory is relevant to the query",
+      "_notes": "provider: 'anthropic' uses the low-reasoning model via API (~$0.002/recall). 'ollama' uses the local model specified in 'model' field."
+    },
+    "rrfK": 60,
+    "rerankerBlend": 0.5,
+    "compositeRelevanceWeight": 0.60,
+    "compositeRecencyWeight": 0.20,
+    "compositeFrequencyWeight": 0.15,
+    "multiPassGate": 0.70,
+    "mmrLambda": 0.7,
+    "coSessionDecay": 0.6,
+    "recencyDecayDays": 90,
+    "useHyde": true,
+    "traversal": {
+      "useBeam": true,
+      "beamWidth": 5,
+      "maxDepth": 2,
+      "hopDecay": 0.7,
+      "_notes": "BEAM search for graph traversal. hopDecay: score multiplier per hop depth."
+    }
+  },
+
+  "logging": {
+    "enabled": true,
+    "level": "info",
+    "retentionDays": 30,
+    "components": ["memory", "janitor"]
+  },
+
+  "notifications": {
+    "level": "normal",
+    "janitor": { "verbosity": null, "channel": "last_used" },
+    "extraction": { "verbosity": null, "channel": "last_used" },
+    "retrieval": { "verbosity": null, "channel": "last_used" },
+    "fullText": true,
+    "showProcessingStart": true,
+    "_notes_level": "Master verbosity: 'quiet' (errors only), 'normal' (summaries), 'verbose' (more detail), 'debug' (everything). Default: normal.",
+    "_notes_features": "Per-feature config — verbosity: 'off', 'summary', or 'full' (null = inherit master level). channel: 'last_used' (follow user's active channel) or a specific channel name like 'telegram', 'discord', 'slack'. Shorthand: set to just a string like 'summary' for verbosity-only (no channel override).",
+    "_notes_defaults": "quiet: all off. normal: janitor=summary, extraction=off, retrieval=summary. verbose: all summary. debug: all full.",
+    "_notes_tip": "You can ask your agent to adjust verbosity or channel routing at any time, e.g. 'send janitor reports to discord' or 'make memory notifications quieter'."
+  },
+
+  "docs": {
+    "autoUpdateOnCompact": true,
+    "maxDocsPerUpdate": 3,
+    "stalenessCheckEnabled": true,
+    "updateTimeoutSeconds": 120,
+    "coreMarkdown": {
+      "enabled": true,
+      "monitorForBloat": true,
+      "monitorForOutdated": true,
+      "files": {
+        "SOUL.md": {
+          "purpose": "Personality, vibe, values, interaction style",
+          "maxLines": 80
+        },
+        "USER.md": {
+          "purpose": "About the user — who they are, preferences, context",
+          "maxLines": 150
+        },
+        "MEMORY.md": {
+          "purpose": "Core memories loaded every session",
+          "maxLines": 100
+        },
+        "TOOLS.md": {
+          "purpose": "API docs, tool definitions, system configs",
+          "maxLines": 150
+        }
+      },
+      "_notes": "Janitor monitors these files for bloat and outdated info. These load every turn — keep them concise."
+    },
+    "journal": {
+      "enabled": true,
+      "snippetsEnabled": true,
+      "mode": "distilled",
+      "injectFull": false,
+      "journalDir": "journal",
+      "targetFiles": ["SOUL.md", "USER.md", "MEMORY.md"],
+      "maxEntriesPerFile": 50,
+      "maxTokens": 8192,
+      "distillationIntervalDays": 7,
+      "archiveAfterDistillation": true,
+      "_notes": "Dual system: snippets (fast path, bullet points merged into core markdown nightly) + journal (slow path, reflective paragraphs distilled weekly). mode: 'distilled' = journal not loaded into context, 'full' = journal injected every turn. injectFull: EXPERIMENTAL — inject full journal text into agent context every turn (warning: journal size is uncapped, may consume significant context window)."
+    },
+    "sourceMapping": {},
+    "docPurposes": {},
+    "_notes": "sourceMapping: maps source files to their documentation files. docPurposes: describes what each doc covers. Both populated automatically by project discovery."
+  },
+
+  "projects": {
+    "enabled": true,
+    "projectsDir": "projects/",
+    "stagingDir": "projects/staging/",
+    "definitions": {},
+    "defaultProject": "default",
+    "_notes": "Projects are auto-discovered from the projects/ directory. You can also define them manually here."
+  },
+
+  "users": {
+    "defaultOwner": "default",
+    "identities": {
+      "default": {
+        "channels": {
+          "cli": ["*"]
+        },
+        "speakers": ["User"],
+        "personNodeName": "User"
+      }
+    },
+    "_notes": "The setup script populates this with your actual identity. personNodeName is used for the Person node in the memory graph."
+  },
+
+  "database": {
+    "path": "data/memory.db",
+    "archivePath": "data/memory_archive.db",
+    "walMode": true
+  },
+
+  "ollama": {
+    "url": "http://localhost:11434",
+    "embeddingModel": "qwen3-embedding:8b",
+    "embeddingDim": 4096,
+    "_WARNING_BEFORE_CHANGING_MODEL": [
+      "STOP! Changing embeddingModel invalidates ALL existing embeddings.",
+      "You MUST re-embed everything after changing: run 'quaid re-embed'.",
+      "embeddingDim must match the new model's output dimension.",
+      "Common models: qwen3-embedding:8b (4096, ~6GB RAM), nomic-embed-text (768, ~1.5GB), all-minilm (384, ~500MB)."
+    ]
+  },
+
+  "rag": {
+    "docsDir": "docs",
+    "chunkMaxTokens": 800,
+    "chunkOverlapTokens": 100,
+    "maxResults": 5,
+    "searchLimit": 5,
+    "minSimilarity": 0.3
+  }
+}

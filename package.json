@@ -1,0 +1,31 @@
+{
+  "name": "quaid",
+  "version": "0.1.0-alpha",
+  "description": "Persistent long-term memory plugin for OpenClaw",
+  "author": "Solomon Steadman <solstead@users.noreply.github.com> (https://github.com/solstead)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rekall-inc/quaid.git"
+  },
+  "homepage": "https://github.com/rekall-inc/quaid",
+  "keywords": [
+    "memory",
+    "llm",
+    "openclaw",
+    "clawdbot",
+    "ai",
+    "knowledge-graph",
+    "sqlite-vec",
+    "rag"
+  ],
+  "type": "module",
+  "main": "plugins/quaid/index.js",
+  "scripts": {
+    "setup": "node setup-quaid.mjs",
+    "test": "cd plugins/quaid && python3 -m pytest tests/ -x -q"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
