@@ -422,6 +422,19 @@ cmd_uninstall() {
 
     echo -e "${BOLD}Quaid Uninstaller${RESET}"
     echo ""
+    echo "This will remove the Quaid plugin and revert your core markdown files"
+    echo "(SOUL.md, USER.md, IDENTITY.md, etc.) to the backup made at install time."
+    echo ""
+    echo "What gets removed:"
+    echo "  - Quaid plugin code (plugins/quaid/)"
+    echo "  - Quaid config (config/memory.json)"
+    echo "  - Quaid snippet files (journal/*.snippets.md)"
+    echo ""
+    echo "What stays untouched:"
+    echo "  - Your project directories (projects/)"
+    echo "  - Your journal entries (journal/*.journal.md)"
+    echo "  - Your memory database (data/memory.db)"
+    echo ""
 
     # --- List available backups ---
     local RESTORE_FROM=""
@@ -435,10 +448,13 @@ cmd_uninstall() {
             echo -e "${BOLD}Available backups:${RESET}"
             for i in "${!BACKUPS[@]}"; do
                 local bdir="${BACKUPS[$i]}"
-                local fcount
-                fcount=$(find "$bdir" -type f | wc -l | tr -d ' ')
-                echo -e "  ${GREEN}$((i+1)))${RESET} $(basename "$bdir") ($fcount files)"
+                local -a bfiles=()
+                while IFS= read -r bf; do bfiles+=("$(basename "$bf")"); done < <(find "$bdir" -type f 2>/dev/null)
+                echo -e "  ${GREEN}$((i+1)))${RESET} $(basename "$bdir") — ${#bfiles[@]} files: ${bfiles[*]}"
             done
+            echo ""
+            echo "Restoring a backup reverts your core markdown to exactly how it was"
+            echo "before Quaid was installed."
             echo ""
             echo -n "Restore from backup? Enter number (or 'n' to skip): "
             read -r choice
@@ -447,21 +463,12 @@ cmd_uninstall() {
                 info "Will restore from: $(basename "$RESTORE_FROM")"
             fi
         fi
+    else
+        warn "No backups found at ~/.quaid-backups/"
     fi
 
     echo ""
-    echo -e "${YELLOW}This will:${RESET}"
-    echo "  - Remove the Quaid plugin directory"
-    echo "  - Remove Quaid config (config/memory.json)"
-    echo "  - Remove Quaid project docs (projects/quaid/)"
-    if [[ -n "$RESTORE_FROM" ]]; then
-        echo -e "  - ${GREEN}Restore workspace files from backup${RESET}"
-    fi
-    echo ""
-    echo -e "  ${CYAN}Your memory database will NOT be deleted${RESET}"
-    echo -e "  To also delete: rm ${DATA_DIR}/memory.db"
-    echo ""
-    echo -en "${BOLD}Continue? [y/N]${RESET} "
+    echo -en "${BOLD}Proceed with uninstall? [y/N]${RESET} "
     read -r REPLY
     if [[ ! "$REPLY" =~ ^[Yy] ]]; then
         echo "Cancelled."
@@ -472,7 +479,7 @@ cmd_uninstall() {
 
     # --- Restore from backup ---
     if [[ -n "$RESTORE_FROM" ]]; then
-        info "Restoring files from backup..."
+        info "Restoring core markdown from backup..."
         local restored=0
         for f in "$RESTORE_FROM"/*; do
             [[ ! -f "$f" ]] && continue
@@ -497,29 +504,26 @@ cmd_uninstall() {
         info "Removed plugin directory"
     fi
 
-    # --- Remove config (unless restored) ---
+    # --- Remove config (unless restored from backup) ---
     if [[ -f "${CONFIG_DIR}/memory.json" ]] && [[ -z "$RESTORE_FROM" ]]; then
         rm -f "${CONFIG_DIR}/memory.json"
         info "Removed config/memory.json"
     fi
 
-    # --- Remove project docs ---
-    if [[ -d "${WORKSPACE_ROOT}/projects/quaid" ]]; then
-        rm -rf "${WORKSPACE_ROOT}/projects/quaid"
-        info "Removed projects/quaid/"
-    fi
-
     # --- Clean snippet files ---
     if [[ -d "${WORKSPACE_ROOT}/journal" ]]; then
         find "${WORKSPACE_ROOT}/journal" -name "*.snippets.md" -delete 2>/dev/null || true
-        info "Removed snippet files (journal entries preserved)"
+        info "Removed snippet files"
     fi
 
     echo ""
     info "Quaid has been uninstalled."
+    if [[ -n "$RESTORE_FROM" ]]; then
+        info "Core markdown reverted to pre-install state."
+    fi
     echo ""
-    info "Memory database: ${DATA_DIR}/memory.db"
-    info "Backups: ${BACKUP_DIR}"
+    echo -e "${DIM}Memory database kept at: ${DATA_DIR}/memory.db${RESET}"
+    echo -e "${DIM}Backups kept at: ${BACKUP_DIR}${RESET}"
     echo ""
     echo -e "To reinstall:"
     echo -e "  ${BOLD}curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash${RESET}"
