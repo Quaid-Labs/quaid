@@ -19,7 +19,18 @@
 
 set -euo pipefail
 
-WORKSPACE_ROOT="${CLAWDBOT_WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+WORKSPACE_ROOT="${CLAWDBOT_WORKSPACE:-}"
+if [[ -z "$WORKSPACE_ROOT" ]]; then
+    for dir in "$HOME/.openclaw/workspace" "$HOME/clawd" "$HOME/.config/openclaw"; do
+        if [[ -d "$dir" ]] && ( [[ -f "$dir/SOUL.md" ]] || [[ -d "$dir/plugins" ]] || [[ -f "$dir/IDENTITY.md" ]] ); then
+            WORKSPACE_ROOT="$dir"
+            break
+        fi
+    done
+fi
+if [[ -z "$WORKSPACE_ROOT" ]]; then
+    WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 PLUGIN_DIR="${WORKSPACE_ROOT}/plugins/quaid"
 CONFIG_DIR="${WORKSPACE_ROOT}/config"
 DATA_DIR="${WORKSPACE_ROOT}/data"
@@ -44,6 +55,9 @@ run_py() {
     )
 }
 
+# Escape single quotes for safe interpolation into Python single-quoted strings
+py_escape() { printf '%s' "$1" | sed "s/'/\\\\'/g"; }
+
 # --- Commands ---
 
 cmd_doctor() {
@@ -57,7 +71,7 @@ cmd_doctor() {
         local stats
         stats=$(run_py "
 import sqlite3, json
-conn = sqlite3.connect('${DATA_DIR}/memory.db')
+conn = sqlite3.connect('$(py_escape "$DATA_DIR")/memory.db')
 tables = conn.execute(\"SELECT COUNT(*) FROM sqlite_master WHERE type='table'\").fetchone()[0]
 nodes = conn.execute('SELECT COUNT(*) FROM nodes').fetchone()[0]
 edges = conn.execute('SELECT COUNT(*) FROM edges').fetchone()[0]
@@ -81,8 +95,8 @@ print(json.dumps({'tables': tables, 'nodes': nodes, 'edges': edges, 'pending': p
     # Config
     if [[ -f "${CONFIG_DIR}/memory.json" ]]; then
         local provider model
-        provider=$(python3 -c "import json; c=json.load(open('${CONFIG_DIR}/memory.json')); print(c.get('models',{}).get('provider','anthropic'))" 2>/dev/null || echo "?")
-        model=$(python3 -c "import json; c=json.load(open('${CONFIG_DIR}/memory.json')); print(c.get('models',{}).get('highReasoning','?'))" 2>/dev/null || echo "?")
+        provider=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('models',{}).get('provider','anthropic'))" 2>/dev/null || echo "?")
+        model=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('models',{}).get('highReasoning','?'))" 2>/dev/null || echo "?")
         echo -e "  ${GREEN}✓${RESET} Config       — OK (provider: ${provider}, model: ${model})"
     else
         echo -e "  ${RED}✗${RESET} Config       — NOT FOUND (${CONFIG_DIR}/memory.json)"
@@ -92,7 +106,7 @@ print(json.dumps({'tables': tables, 'nodes': nodes, 'edges': edges, 'pending': p
     # Ollama
     if curl -sf http://localhost:11434/api/tags &>/dev/null; then
         local embed_model
-        embed_model=$(python3 -c "import json; c=json.load(open('${CONFIG_DIR}/memory.json')); print(c.get('ollama',{}).get('embeddingModel','?'))" 2>/dev/null || echo "?")
+        embed_model=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('ollama',{}).get('embeddingModel','?'))" 2>/dev/null || echo "?")
         echo -e "  ${GREEN}✓${RESET} Ollama       — Running (embedding: ${embed_model})"
     else
         echo -e "  ${YELLOW}~${RESET} Ollama       — Not running (embeddings will fail)"
@@ -100,7 +114,7 @@ print(json.dumps({'tables': tables, 'nodes': nodes, 'edges': edges, 'pending': p
 
     # API key
     local api_key_env
-    api_key_env=$(python3 -c "import json; c=json.load(open('${CONFIG_DIR}/memory.json')); print(c.get('models',{}).get('apiKeyEnv','ANTHROPIC_API_KEY'))" 2>/dev/null || echo "ANTHROPIC_API_KEY")
+    api_key_env=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('models',{}).get('apiKeyEnv','ANTHROPIC_API_KEY'))" 2>/dev/null || echo "ANTHROPIC_API_KEY")
     if [[ -n "$api_key_env" ]] && [[ -n "${!api_key_env:-}" ]]; then
         echo -e "  ${GREEN}✓${RESET} API Key      — Found (${api_key_env})"
     elif [[ -n "$api_key_env" ]] && [[ -f "${WORKSPACE_ROOT}/.env" ]] && grep -q "^${api_key_env}=" "${WORKSPACE_ROOT}/.env" 2>/dev/null; then
@@ -137,7 +151,9 @@ print(json.dumps({'tables': tables, 'nodes': nodes, 'edges': edges, 'pending': p
             "$(npm root -g 2>/dev/null)/clawdbot" \
             "/opt/homebrew/lib/node_modules/openclaw" \
             "/opt/homebrew/lib/node_modules/clawdbot" \
-            "/usr/local/lib/node_modules/openclaw"
+            "/usr/local/lib/node_modules/openclaw" \
+            "/usr/lib/node_modules/openclaw" \
+            "/usr/lib/node_modules/clawdbot"
         do
             if [[ -d "$candidate" ]] && [[ -f "${candidate}/package.json" ]]; then
                 gw_path="$candidate"
@@ -156,7 +172,7 @@ print(json.dumps({'tables': tables, 'nodes': nodes, 'edges': edges, 'pending': p
             has_bootstrap=true
         fi
         local gw_ver
-        gw_ver=$(python3 -c "import json; print(json.load(open('${gw_path}/package.json')).get('version','?'))" 2>/dev/null || echo "?")
+        gw_ver=$(python3 -c "import json; print(json.load(open('$(py_escape "$gw_path")/package.json')).get('version','?'))" 2>/dev/null || echo "?")
 
         if $has_compaction && $has_bootstrap; then
             echo -e "  ${GREEN}✓${RESET} Gateway      — Hooks present (v${gw_ver})"
@@ -233,7 +249,7 @@ cmd_config() {
     echo ""
     python3 -c "
 import json
-with open('${CONFIG_DIR}/memory.json') as f:
+with open('$(py_escape "$CONFIG_DIR")/memory.json') as f:
     config = json.load(f)
 
 # Show key settings
@@ -270,7 +286,7 @@ cmd_search() {
     fi
     local query="$*"
     local owner
-    owner=$(python3 -c "import json; print(json.load(open('${CONFIG_DIR}/memory.json')).get('users',{}).get('defaultOwner','default'))" 2>/dev/null || echo "default")
+    owner=$(python3 -c "import json; print(json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')).get('users',{}).get('defaultOwner','default'))" 2>/dev/null || echo "default")
     (cd "$PLUGIN_DIR" && CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 memory_graph.py search "$query" --owner "$owner" --limit 10)
 }
 
@@ -279,7 +295,7 @@ cmd_export() {
     local output="${WORKSPACE_ROOT}/quaid-export-$(date +%Y%m%d-%H%M%S).json"
     run_py "
 import sqlite3, json
-conn = sqlite3.connect('${DATA_DIR}/memory.db')
+conn = sqlite3.connect('$(py_escape "$DATA_DIR")/memory.db')
 conn.row_factory = sqlite3.Row
 
 nodes = [dict(r) for r in conn.execute('SELECT id, name, category, status, confidence, owner, attributes, created_at, updated_at FROM nodes ORDER BY created_at').fetchall()]
@@ -294,16 +310,16 @@ for n in nodes:
         n['attributes'] = {}
 
 export = {
-    'version': '${QUAID_VERSION:-0.1.0}',
+    'version': '${QUAID_VERSION:-0.1.0-alpha}',
     'exported_at': __import__('datetime').datetime.now().isoformat(),
     'nodes': nodes,
     'edges': edges,
     'stats': {'total_nodes': len(nodes), 'total_edges': len(edges)}
 }
 
-with open('${output}', 'w') as f:
+with open('$(py_escape "$output")', 'w') as f:
     json.dump(export, f, indent=2, default=str)
-print(f'Exported {len(nodes)} nodes and {len(edges)} edges to ${output}')
+print(f'Exported {len(nodes)} nodes and {len(edges)} edges to $(py_escape "$output")')
 "
     info "Export saved to ${output}"
 }
@@ -315,7 +331,7 @@ cmd_migrate() {
     echo ""
 
     local owner
-    owner=$(python3 -c "import json; print(json.load(open('${CONFIG_DIR}/memory.json')).get('users',{}).get('defaultOwner','default'))" 2>/dev/null || echo "default")
+    owner=$(python3 -c "import json; print(json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')).get('users',{}).get('defaultOwner','default'))" 2>/dev/null || echo "default")
 
     run_py "
 import os, sys
@@ -324,7 +340,7 @@ from memory_graph import store
 from llm_clients import call_high_reasoning, parse_json_response
 
 files = [f for f in ['SOUL.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'AGENTS.md']
-         if os.path.exists(os.path.join('${WORKSPACE_ROOT}', f))]
+         if os.path.exists(os.path.join('$(py_escape "$WORKSPACE_ROOT")', f))]
 
 if not files:
     print('No markdown files found in workspace.')
@@ -332,7 +348,7 @@ if not files:
 
 total_facts = 0
 for fname in files:
-    fpath = os.path.join('${WORKSPACE_ROOT}', fname)
+    fpath = os.path.join('$(py_escape "$WORKSPACE_ROOT")', fname)
     with open(fpath) as f:
         content = f.read().strip()
     if len(content) < 50:
@@ -355,7 +371,7 @@ Document ({fname}):
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict) and 'fact' in item:
-                    store(item['fact'], owner='${owner}',
+                    store(item['fact'], owner_id='$(py_escape "$owner")',
                           category=item.get('category', 'fact'),
                           source='migration')
                     total_facts += 1
@@ -379,7 +395,7 @@ cmd_re_embed() {
     info "Clearing existing embeddings..."
     run_py "
 import sqlite3
-conn = sqlite3.connect('${DATA_DIR}/memory.db')
+conn = sqlite3.connect('$(py_escape "$DATA_DIR")/memory.db')
 conn.execute('UPDATE nodes SET embedding = NULL')
 conn.execute('DROP TABLE IF EXISTS vec_nodes')
 conn.execute('DELETE FROM embedding_cache')
@@ -511,22 +527,11 @@ cmd_uninstall() {
 }
 
 cmd_upgrade() {
-    info "Checking for updates..."
-    if [[ -d "$WORKSPACE_ROOT/.git" ]]; then
-        (cd "$WORKSPACE_ROOT" && git pull --ff-only 2>&1) || {
-            error "Git pull failed. Resolve conflicts manually."
-            exit 1
-        }
-        ok "Code updated"
-    else
-        warn "Not a git repository — download latest release manually"
-        exit 1
-    fi
-
-    # Re-run embedding backfill in case schema changed
-    info "Running post-upgrade tasks..."
-    (cd "$PLUGIN_DIR" && CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 janitor.py --task embeddings --apply)
-    ok "Upgrade complete"
+    info "To upgrade Quaid, re-run the installer:"
+    echo ""
+    echo "  curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash"
+    echo ""
+    info "The installer preserves your data and offers to back up existing files."
 }
 
 cmd_help() {

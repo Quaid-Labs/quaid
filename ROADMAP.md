@@ -147,6 +147,31 @@ Chunking strategy for doc indexing: instead of whole-file chunks, use
 overlapping sentence windows for finer-grained retrieval. Better recall
 on specific passages within large documents.
 
+### Private Mode
+
+A session-level toggle that pauses all memory operations. When engaged, no
+facts are extracted, no journal entries written, no snippets captured. The
+agent works normally but nothing persists. Useful for sensitive conversations,
+one-off tasks, or when users just want privacy. The UX needs to feel natural
+— probably a tool the agent can invoke ("go private") rather than a config
+flag nobody remembers.
+- Session-level memory pause (no extraction, no journal, no snippets)
+- Agent-invocable toggle ("go private" / "resume memory")
+- Visual indicator in agent status
+- Auto-resume on next session (private doesn't persist)
+
+### Soul Change Confirmation
+
+Some users don't want their SOUL.md, USER.md, or other core files modified
+without explicit approval. Add an optional confirmation gate before the
+janitor writes changes to core markdown files. The snippet review (FOLD/
+REWRITE/DISCARD) already curates changes, but this adds a human-in-the-loop
+step before any changes land.
+- Configurable per-file approval requirement
+- Pending changes queued for review (notification or CLI)
+- Approve/reject individual changes or in bulk
+- Default: off (current behavior, auto-apply)
+
 ### Privacy Controls
 
 PII detection and memory redaction:
