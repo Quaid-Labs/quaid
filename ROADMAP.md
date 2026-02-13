@@ -166,4 +166,4 @@ PII detection and memory redaction:
 
 ---
 
-*Have ideas? Open an issue at [github.com/rekall-inc/quaid](https://github.com/rekall-inc/quaid).*
+*Have ideas? Open an issue at [github.com/steadman-labs/quaid](https://github.com/steadman-labs/quaid).*

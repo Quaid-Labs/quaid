@@ -22,7 +22,7 @@ const __dirname = path.dirname(__filename);
 // --- Constants ---
 const VERSION = "0.1.0-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/pull/13287";
-const PROJECT_URL = "https://github.com/rekall-inc/quaid";
+const PROJECT_URL = "https://github.com/steadman-labs/quaid";
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE || process.cwd();
 const PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
 const CONFIG_DIR = path.join(WORKSPACE, "config");
@@ -888,7 +888,7 @@ async function step6_schedule(embeddings = {}) {
   if (hour === "skip") {
     log.warn("No schedule set.");
     log.warn("You MUST add a janitor entry to your HEARTBEAT.md manually.");
-    log.warn(C.dim("See: https://github.com/rekall-inc/quaid#janitor-scheduling"));
+    log.warn(C.dim("See: https://github.com/steadman-labs/quaid#janitor-scheduling"));
     return { hour: null, scheduled: false };
   }
 

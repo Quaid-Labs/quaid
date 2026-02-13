@@ -6,9 +6,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rekall-inc/quaid.git"
+    "url": "https://github.com/steadman-labs/quaid.git"
   },
-  "homepage": "https://github.com/rekall-inc/quaid",
+  "homepage": "https://github.com/steadman-labs/quaid",
   "keywords": [
     "memory",
     "llm",

@@ -2381,7 +2381,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
     import urllib.request
     import urllib.error
 
-    REPO = "rekall-inc/quaid"
+    REPO = "steadman-labs/quaid"
     RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 
     # Read current version
@@ -3222,7 +3222,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 update_info = _check_for_updates()
                 if update_info:
                     print(f"  ⚠️  UPDATE AVAILABLE: v{update_info['current']} → v{update_info['latest']}")
-                    print(f"  ⚠️  Update: curl -fsSL https://raw.githubusercontent.com/rekall-inc/quaid/main/install.sh | bash")
+                    print(f"  ⚠️  Update: curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash")
                     print(f"  ⚠️  Release: {update_info['url']}")
                     applied_changes["update_available"] = update_info
                 else:
