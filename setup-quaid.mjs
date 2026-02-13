@@ -324,7 +324,8 @@ async function step1_preflight() {
   }
 
   // --- Onboarding complete ---
-  const agentConfig = shell("clawdbot config get agents 2>/dev/null </dev/null | strings");
+  const agentConfig = shell("clawdbot config get agents 2>/dev/null </dev/null | strings") ||
+                      shell("openclaw config get agents 2>/dev/null </dev/null | strings");
   if (!agentConfig.includes('"id"')) {
     s.stop(C.red("Onboarding incomplete"), 2);
     note(
