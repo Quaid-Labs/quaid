@@ -42,7 +42,7 @@ OpenClaw ships with a built-in memory system that stores conversation history as
 
 Quaid replaces that with structured, LLM-curated memory. Instead of logging everything, it extracts the important parts — facts, relationships, preferences, personality insights — and stores them in a local SQLite graph database. A nightly janitor reviews, deduplicates, resolves contradictions, and decays stale memories so the graph stays clean. It also monitors your core markdown files for bloat and staleness, keeping them slim and laser-focused so you're not wasting tokens on dead weight every session.
 
-When your agent starts a new conversation, Quaid finds the right memories via hybrid search (vector + keyword + graph traversal) and injects only what's relevant. In benchmarks, Quaid achieves 94% of full-context performance while injecting ~200 tokens of retrieved facts per query — not thousands of tokens of raw conversation history.
+When your agent starts a new conversation, Quaid finds the right memories via hybrid search (vector + keyword + graph traversal) and injects only what's relevant. In benchmarks, Quaid achieves 94% of full-context performance while injecting about 200 tokens of retrieved facts per query — not thousands of tokens of raw conversation history.
 
 ---
 
@@ -52,14 +52,14 @@ Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (AC
 
 | System | Accuracy | Notes |
 |--------|----------|-------|
-| **Quaid** | **75.0%** | ~200 tokens of memory injected per query |
+| **Quaid** | **75.0%** | About 200 tokens of memory injected per query |
 | Mem0 (guided) | 68.9% | |
 | Mem0 | 66.9% | |
 | Zep | 66.0% | |
 | LangMem | 58.1% | |
 | OpenAI Memory | 52.9% | |
 
-**Token efficiency:** Quaid retrieves ~10 relevant facts per query, averaging **~200 tokens** of injected memory context. That's it. No raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a low-reasoning LLM reranker call (~$0.01).
+**Token efficiency:** Quaid retrieves about 10 relevant facts per query, averaging **about 200 tokens** of injected memory context. That's it. No raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a low-reasoning LLM reranker call (about $0.01).
 
 > Quaid result uses recommended settings (high-reasoning LLM + Ollama embeddings).
 > Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
@@ -121,11 +121,11 @@ Because the system leans heavily on LLM reasoning, Quaid naturally scales with A
 
 | Component | Cost |
 |-----------|------|
-| Fact extraction | ~$0.05–0.20 per compaction (high-reasoning LLM) |
-| Memory recall | ~$0.01 per query (low-reasoning LLM reranker) |
-| Nightly janitor | ~$1–5 per run |
+| Fact extraction | $0.05–0.20 per compaction (high-reasoning LLM) |
+| Memory recall | $0.01 per query (low-reasoning LLM reranker) |
+| Nightly janitor | $1–5 per run |
 | Embeddings | Free (Ollama, runs locally) |
-| **Typical monthly total** | **~$5–15 for active use** |
+| **Typical monthly total** | **$5–15 for active use** |
 
 ---
 
