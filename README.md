@@ -8,7 +8,7 @@
       ▀▀
 ```
 
-### Persistent long-term memory for [OpenClaw](https://github.com/openclaw/openclaw) agents
+### Memory and project management plugin for [OpenClaw](https://github.com/openclaw/openclaw)
 
 Quaid is a memory plugin built for the OpenClaw AI agent framework. It could be adapted to other platforms, but OpenClaw is the native environment and the only one we test against.
 
