@@ -1309,12 +1309,42 @@ print(total_docs)
       s.stop(C.green(`Registered ${existingDirs.length} project(s), ${regCount} doc(s) indexed`));
     }
 
-    // Always ensure a default project exists with PROJECT.md
-    const defaultProject = owner.id.toLowerCase().replace(/[^a-z0-9-]/g, "-") || "workspace";
-    const defaultProjDir = path.join(PROJECTS_DIR, defaultProject);
-    if (!existingDirs.includes(defaultProject)) {
-      s.start(`Creating default project: ${defaultProject}...`);
-      const createScript = `
+    log.info(C.dim("Your agent can discover more projects — ask it to \"set up projects\""));
+
+    // Install Quaid project reference docs (TOOLS.md, AGENTS.md, onboarding)
+    const quaidProjDir = path.join(PROJECTS_DIR, "quaid");
+    fs.mkdirSync(quaidProjDir, { recursive: true });
+    const quaidProjSrc = path.join(__dirname, "projects", "quaid");
+    for (const f of ["TOOLS.md", "AGENTS.md", "project_onboarding.md"]) {
+      const src = path.join(quaidProjSrc, f);
+      const dst = path.join(quaidProjDir, f);
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.copyFileSync(src, dst);
+      }
+    }
+    // Create PROJECT.md for Quaid itself
+    if (!fs.existsSync(path.join(quaidProjDir, "PROJECT.md"))) {
+      fs.writeFileSync(path.join(quaidProjDir, "PROJECT.md"), [
+        "# Quaid Memory System",
+        "",
+        "Persistent long-term memory plugin. Stores facts, relationships, and preferences",
+        "in a local SQLite graph database. Retrieved automatically via hybrid search.",
+        "",
+        "## Key Files",
+        "- `TOOLS.md` — CLI commands and agent tools reference",
+        "- `AGENTS.md` — Instructions for how the agent should use memory",
+        "- `project_onboarding.md` — Guide for discovering and registering projects",
+        "",
+        "## Systems",
+        "- **Memory** — Fact extraction, graph storage, hybrid recall",
+        "- **Journal** — Slow-path learning, personality evolution",
+        "- **Projects** — Documentation tracking, staleness detection, RAG search",
+        "- **Workspace** — Core markdown monitoring, nightly maintenance",
+        "",
+      ].join("\n"));
+    }
+    // Register Quaid as a project
+    const regQuaidScript = `
 import os, sys
 os.environ['CLAWDBOT_WORKSPACE'] = '${WORKSPACE}'
 os.environ['QUAID_QUIET'] = '1'
@@ -1322,30 +1352,15 @@ sys.path.insert(0, '.')
 from docs_registry import DocsRegistry
 reg = DocsRegistry()
 try:
-    reg.create_project(
-        '${defaultProject}',
-        label='${owner.display}\\'s Workspace',
-        description='Default project for ${owner.display}. The agent will discover and register sub-projects as you work.',
-    )
-    print('OK')
-except ValueError as e:
-    if 'already exists' in str(e):
-        print('EXISTS')
-    else:
-        raise
+    reg.create_project('quaid', label='Quaid Memory System', description='Memory plugin reference docs and agent instructions.')
+except ValueError:
+    pass  # already exists
+found = reg.auto_discover('quaid')
+print(len(found))
 `;
-      const createResult = spawnSync("python3", ["-c", createScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-      const status = (createResult.stdout || "").trim();
-      if (status === "OK") {
-        s.stop(C.green(`Default project created: projects/${defaultProject}/PROJECT.md`));
-      } else {
-        s.stop(C.green(`Default project: ${defaultProject} (already registered)`));
-      }
-    } else {
-      log.info(`Default project ${C.bcyan(defaultProject)} already exists`);
-    }
-
-    log.info(C.dim("Your agent can discover more projects — ask it to \"set up projects\""));
+    const regQuaidResult = spawnSync("python3", ["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    const quaidDocCount = (regQuaidResult.stdout || "").trim();
+    log.info(`Quaid project installed (${quaidDocCount} docs registered)`);
   }
 
   log.success("Installation complete!");
@@ -1669,7 +1684,7 @@ function writeConfig(owner, models, embeddings, systems) {
       projectsDir: "projects/",
       stagingDir: "projects/staging/",
       definitions: {},
-      defaultProject: "default",
+      defaultProject: "quaid",
     },
     users: {
       defaultOwner: owner.id,

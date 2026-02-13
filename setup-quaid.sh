@@ -1313,6 +1313,55 @@ except Exception as e:
     echo ""
     _check_migration
 
+    # Install Quaid project reference docs (TOOLS.md, AGENTS.md, onboarding)
+    if $SYS_PROJECTS; then
+        local quaid_proj_dir="${PROJECTS_DIR}/quaid"
+        mkdir -p "$quaid_proj_dir"
+        local quaid_proj_src="${SCRIPT_DIR}/projects/quaid"
+        for f in TOOLS.md AGENTS.md project_onboarding.md; do
+            if [[ -f "${quaid_proj_src}/${f}" ]] && [[ ! -f "${quaid_proj_dir}/${f}" ]]; then
+                cp "${quaid_proj_src}/${f}" "${quaid_proj_dir}/${f}"
+            fi
+        done
+        if [[ ! -f "${quaid_proj_dir}/PROJECT.md" ]]; then
+            cat > "${quaid_proj_dir}/PROJECT.md" << 'PROJEOF'
+# Quaid Memory System
+
+Persistent long-term memory plugin. Stores facts, relationships, and preferences
+in a local SQLite graph database. Retrieved automatically via hybrid search.
+
+## Key Files
+- `TOOLS.md` — CLI commands and agent tools reference
+- `AGENTS.md` — Instructions for how the agent should use memory
+- `project_onboarding.md` — Guide for discovering and registering projects
+
+## Systems
+- **Memory** — Fact extraction, graph storage, hybrid recall
+- **Journal** — Slow-path learning, personality evolution
+- **Projects** — Documentation tracking, staleness detection, RAG search
+- **Workspace** — Core markdown monitoring, nightly maintenance
+PROJEOF
+        fi
+        # Register Quaid project in the docs registry
+        (
+            cd "$PLUGIN_DIR"
+            python3 -c "
+import os, sys
+os.environ['CLAWDBOT_WORKSPACE'] = '${WORKSPACE_ROOT}'
+os.environ['QUAID_QUIET'] = '1'
+sys.path.insert(0, '.')
+from docs_registry import DocsRegistry
+reg = DocsRegistry()
+try:
+    reg.create_project('quaid', label='Quaid Memory System', description='Memory plugin reference docs and agent instructions.')
+except ValueError:
+    pass
+found = reg.auto_discover('quaid')
+print(f'[+] Quaid project registered ({len(found)} docs)')
+" 2>&1
+        ) || true
+    fi
+
     info "Installation complete!"
 }
 
@@ -1462,7 +1511,7 @@ _write_config() {
     "projectsDir": "projects/",
     "stagingDir": "projects/staging/",
     "definitions": {},
-    "defaultProject": "default"
+    "defaultProject": "quaid"
   },
   "users": {
     "defaultOwner": "${OWNER_NAME}",
