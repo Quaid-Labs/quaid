@@ -70,6 +70,8 @@ We're currently running a 19-variant ablation study to measure what each retriev
 >
 > Full methodology and per-category breakdowns: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
+LoCoMo evaluates personal fact recall — one of Quaid's three memory areas. The benchmark doesn't measure project documentation tracking, auto-doc refresh from git diffs, or workspace context management, which have no equivalent in Mem0, Zep, or the other systems tested.
+
 ---
 
 ## Three Memory Areas
