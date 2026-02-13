@@ -20,6 +20,13 @@ error() { echo -e "${RED}[quaid]${NC} $*" >&2; }
 cleanup() { rm -rf "$INSTALL_DIR" 2>/dev/null || true; }
 trap cleanup EXIT
 
+# --- Bootstrap PATH (curl|bash doesn't load shell profiles) ---
+if [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -x /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+fi
+
 # --- Pre-checks ---
 if ! command -v node &>/dev/null; then
     error "Node.js is required. Install it first:"
