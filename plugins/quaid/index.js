@@ -1105,7 +1105,7 @@ const quaidPlugin = {
                         const existingLog = JSON.parse(require('fs').readFileSync(injectionLogPath, 'utf8'));
                         previouslyInjected = existingLog.memoryTexts || existingLog.memoryIds || [];
                     }
-                    catch (err) { /* ignore parse errors */ }
+                    catch { /* ignore parse errors */ }
                 }
                 const candidates = visibleMemories.filter(memory => {
                     const memoryKey = memory.id || memory.text;
@@ -1259,7 +1259,7 @@ Respond with ONLY valid JSON, no other text.`,
                         // NAS logging is optional - silently continue
                     }
                 }
-                catch (err) {
+                catch {
                     // Injection logging failed - continue anyway
                 }
                 // Inject memories into system context via prependContext
@@ -1796,7 +1796,7 @@ notify_docs_search(data['query'], data['results'])
             });
             if (hasRestart) {
                 // Run recovery in background (don't await — don't block extraction)
-                checkForUnextractedSessions().catch(err => {
+                void checkForUnextractedSessions().catch(err => {
                     console.error('[quaid] Recovery scan error:', err);
                 });
             }

@@ -470,7 +470,7 @@ async function getQuickProjectSummary(messages: any[]): Promise<{project_name: s
         }
       } catch {}
     }
-  } catch (err) {
+  } catch (err: unknown) {
     console.error("[quaid] Quick project summary failed:", (err as Error).message);
   }
 
@@ -530,7 +530,7 @@ async function emitProjectEvent(messages: any[], trigger: string, sessionId?: st
     }
 
     console.log(`[quaid] Emitted project event: ${trigger} -> ${summary.project_name || "unknown"}`);
-  } catch (err) {
+  } catch (err: unknown) {
     console.error("[quaid] Failed to emit project event:", (err as Error).message);
   }
 }
@@ -632,7 +632,7 @@ async function updateDocsFromTranscript(messages: any[], label: string, sessionI
     } else {
       console.log(`[quaid] ${label}: no docs updated (${elapsed}s)`);
     }
-  } catch (err) {
+  } catch (err: unknown) {
     console.error(`[quaid] ${label} doc update failed:`, (err as Error).message);
     // Error already logged to console above
   } finally {
@@ -824,7 +824,7 @@ async function recall(
     // Don't slice here - Python already limits results, and we want to preserve graph results
     // which are added after direct results
     return results;
-  } catch (err) {
+  } catch (err: unknown) {
     console.error("[quaid] recall error:", (err as Error).message);
     return [];
   }
@@ -896,7 +896,7 @@ async function store(
     }
     
     return null;
-  } catch (err) {
+  } catch (err: unknown) {
     console.error("[quaid] store error:", (err as Error).message);
     return null;
   }
@@ -906,7 +906,7 @@ async function getStats(): Promise<object | null> {
   try {
     const output = await callPython("stats");
     return JSON.parse(output);
-  } catch (err) {
+  } catch (err: unknown) {
     console.error("[quaid] stats error:", (err as Error).message);
     return null;
   }
@@ -1100,7 +1100,7 @@ If nothing worth capturing, respond: {"facts": []}`;
         console.log(`[quaid] Skipped (duplicate): "${factText.slice(0, 40)}..."`);
       }
     }
-  } catch (err) {
+  } catch (err: unknown) {
     console.error("[quaid] classifyAndStore error:", (err as Error).message);
   }
 }
@@ -1134,7 +1134,7 @@ const quaidPlugin = {
           env: { ...process.env, MEMORY_DB_PATH: DB_PATH },
         });
         console.log("[quaid] Initial seed complete");
-      } catch (err) {
+      } catch (err: unknown) {
         console.error("[quaid] Seed failed:", (err as Error).message);
       }
     }
@@ -1193,7 +1193,7 @@ const quaidPlugin = {
             console.log(`[quaid] Full soul mode: injected ${journalFiles.length} journal files`);
           }
         }
-      } catch (err) {
+      } catch (err: unknown) {
         console.log(`[quaid] Journal injection failed (non-fatal): ${(err as Error).message}`);
       }
       } // end journal system gate
@@ -1264,7 +1264,7 @@ const quaidPlugin = {
           try {
             const existingLog = JSON.parse(require('fs').readFileSync(injectionLogPath, 'utf8'));
             previouslyInjected = existingLog.memoryTexts || existingLog.memoryIds || [];
-          } catch (err) { /* ignore parse errors */ }
+          } catch { /* ignore parse errors */ }
         }
         const candidates = visibleMemories.filter(memory => {
           const memoryKey = memory.id || memory.text;
@@ -1344,7 +1344,7 @@ Respond with ONLY valid JSON, no other text.`,
               console.log(`[quaid] Haiku reranker API error: ${rerankResponse.status}`);
               newMemories = candidates.slice(0, 5);
             }
-          } catch (err) {
+          } catch (err: unknown) {
             console.log(`[quaid] Haiku reranker error: ${(err as Error).message}`);
             newMemories = candidates.slice(0, 5);
           }
@@ -1425,7 +1425,7 @@ Respond with ONLY valid JSON, no other text.`,
           } catch (nasErr) {
             // NAS logging is optional - silently continue
           }
-        } catch (err) {
+        } catch {
           // Injection logging failed - continue anyway
         }
         
@@ -1640,7 +1640,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 graphCount: graphResults.length,
               },
             };
-          } catch (err) {
+          } catch (err: unknown) {
             console.error("[quaid] memory_recall error:", err);
             return {
               content: [{ type: "text", text: `Error recalling memories: ${String(err)}` }],
@@ -1676,7 +1676,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
               content: [{ type: "text", text: `Noted for memory extraction: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" — will be processed with full quality review at next compaction.` }],
               details: { action: "queued", sessionId },
             };
-          } catch (err) {
+          } catch (err: unknown) {
             console.error("[quaid] memory_store error:", err);
             return {
               content: [{ type: "text", text: `Error queuing memory note: ${String(err)}` }],
@@ -1719,7 +1719,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
               content: [{ type: "text", text: "Provide query or memoryId." }],
               details: { error: "missing_param" },
             };
-          } catch (err) {
+          } catch (err: unknown) {
             console.error("[quaid] memory_forget error:", err);
             return {
               content: [{ type: "text", text: `Error deleting memory: ${String(err)}` }],
@@ -1817,7 +1817,7 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text }],
               details: { query, limit },
             };
-          } catch (err) {
+          } catch (err: unknown) {
             console.error("[quaid] docs_search error:", err);
             return {
               content: [{ type: "text", text: `Error searching docs: ${String(err)}` }],
@@ -1844,7 +1844,7 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || "Document not found." }],
               details: { identifier },
             };
-          } catch (err) {
+          } catch (err: unknown) {
             return {
               content: [{ type: "text", text: `Error: ${String(err)}` }],
               details: { error: String(err) },
@@ -1873,7 +1873,7 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || "No documents found." }],
               details: { project: params?.project },
             };
-          } catch (err) {
+          } catch (err: unknown) {
             return {
               content: [{ type: "text", text: `Error: ${String(err)}` }],
               details: { error: String(err) },
@@ -1910,7 +1910,7 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || "Registered." }],
               details: { file_path: params.file_path },
             };
-          } catch (err) {
+          } catch (err: unknown) {
             return {
               content: [{ type: "text", text: `Error: ${String(err)}` }],
               details: { error: String(err) },
@@ -1942,7 +1942,7 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || `Project '${params.name}' created.` }],
               details: { name: params.name },
             };
-          } catch (err) {
+          } catch (err: unknown) {
             return {
               content: [{ type: "text", text: `Error: ${String(err)}` }],
               details: { error: String(err) },
@@ -1965,7 +1965,7 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || "No projects defined." }],
               details: {},
             };
-          } catch (err) {
+          } catch (err: unknown) {
             return {
               content: [{ type: "text", text: `Error: ${String(err)}` }],
               details: { error: String(err) },
@@ -2013,7 +2013,7 @@ notify_docs_search(data['query'], data['results'])
       });
       if (hasRestart) {
         // Run recovery in background (don't await — don't block extraction)
-        checkForUnextractedSessions().catch(err => {
+        void checkForUnextractedSessions().catch((err: unknown) => {
           console.error('[quaid] Recovery scan error:', err);
         });
       }
@@ -2651,7 +2651,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
           console.log(`[quaid] Recovering unextracted session ${sessionId} (${messages.length} messages)`);
           await extractMemoriesFromMessages(messages, 'Recovery', sessionId);
           recovered++;
-        } catch (err) {
+        } catch (err: unknown) {
           console.error(`[quaid] Recovery failed for session ${sessionId}:`, (err as Error).message);
         }
       }
@@ -2698,14 +2698,14 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
 
           try {
             await updateDocsFromTranscript(messages, "Compaction", uniqueSessionId);
-          } catch (err) {
+          } catch (err: unknown) {
             console.error("[quaid] Compaction doc update failed:", (err as Error).message);
           }
 
           // Emit project event for background processing (non-fatal)
           try {
             await emitProjectEvent(messages, "compact", uniqueSessionId);
-          } catch (err) {
+          } catch (err: unknown) {
             console.error("[quaid] Compaction project event failed:", (err as Error).message);
           }
 
@@ -2727,7 +2727,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
         extractionPromise = (extractionPromise || Promise.resolve())
           .catch(() => {}) // Don't let previous failure block the chain
           .then(() => doExtraction());
-      } catch (err) {
+      } catch (err: unknown) {
         console.error("[quaid] before_compaction hook failed:", err);
       }
     }, {
@@ -2769,14 +2769,14 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
 
           try {
             await updateDocsFromTranscript(messages, "Reset", uniqueSessionId);
-          } catch (err) {
+          } catch (err: unknown) {
             console.error("[quaid] Reset doc update failed:", (err as Error).message);
           }
 
           // Emit project event for background processing (non-fatal)
           try {
             await emitProjectEvent(messages, "reset", uniqueSessionId);
-          } catch (err) {
+          } catch (err: unknown) {
             console.error("[quaid] Reset project event failed:", (err as Error).message);
           }
         };
@@ -2785,7 +2785,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
         extractionPromise = (extractionPromise || Promise.resolve())
           .catch(() => {})
           .then(() => doExtraction());
-      } catch (err) {
+      } catch (err: unknown) {
         console.error("[quaid] before_reset hook failed:", err);
       }
     }, {
@@ -2819,7 +2819,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
             try {
               const content = fs.readFileSync(enhancedLogPath, 'utf8');
               logData = JSON.parse(content);
-            } catch (err) {
+            } catch (err: unknown) {
               console.error(`[quaid] Failed to read enhanced log: ${String(err)}`);
             }
           }
@@ -2829,7 +2829,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
             try {
               const content = fs.readFileSync(tempLogPath, 'utf8');
               logData = JSON.parse(content);
-            } catch (err) {
+            } catch (err: unknown) {
               console.error(`[quaid] Failed to read temp log: ${String(err)}`);
             }
           }
@@ -2858,7 +2858,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
             'Access-Control-Allow-Headers': 'Content-Type'
           });
           res.end(JSON.stringify(responseData, null, 2));
-        } catch (err) {
+        } catch (err: unknown) {
           console.error(`[quaid] HTTP endpoint error: ${String(err)}`);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: "Internal server error" }));
