@@ -1318,7 +1318,7 @@ except Exception as e:
         local quaid_proj_dir="${PROJECTS_DIR}/quaid"
         mkdir -p "$quaid_proj_dir"
         local quaid_proj_src="${SCRIPT_DIR}/projects/quaid"
-        for f in TOOLS.md AGENTS.md project_onboarding.md; do
+        for f in TOOLS.md AGENTS.md ARCHITECTURE.md project_onboarding.md; do
             if [[ -f "${quaid_proj_src}/${f}" ]] && [[ ! -f "${quaid_proj_dir}/${f}" ]]; then
                 cp "${quaid_proj_src}/${f}" "${quaid_proj_dir}/${f}"
             fi
@@ -1333,6 +1333,7 @@ in a local SQLite graph database. Retrieved automatically via hybrid search.
 ## Key Files
 - `TOOLS.md` — CLI commands and agent tools reference
 - `AGENTS.md` — Instructions for how the agent should use memory
+- `ARCHITECTURE.md` — Full system architecture and design
 - `project_onboarding.md` — Guide for discovering and registering projects
 
 ## Systems
