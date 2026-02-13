@@ -90,6 +90,8 @@ Query
 | `002_privacy_columns.sql` | Add privacy tier columns |
 | `003_add_doc_chunks.sql` | Add doc chunk support |
 
+> **Note:** Two migrations share the `002_` prefix (`002_add_session_fields.sql` and `002_privacy_columns.sql`). This is intentional -- migrations are applied by checking which have already run (tracked in the `metadata` table), not by sequential numbering. The numbering is a rough ordering hint, not a strict sequence.
+
 ---
 
 ## Database Schema
@@ -322,7 +324,7 @@ Merges are crash-safe, executed in single database transactions.
 | 1c | docs_cleanup | Clean bloated docs (churn-based) | ~$0.01-0.05 |
 | 1d | snippets | Soul snippets review (FOLD/REWRITE/DISCARD into core markdown) | ~$0.01-0.05 |
 | 1d | journal | Distill journal entries into core markdown | ~$0.05-0.10 |
-| 6 | (deprecated) | Edge extraction (now at capture time) | N/A |
+| 6 | edges | Edge extraction (deprecated, skipped -- moved to capture time) | N/A |
 | 7 | rag | Reindex docs for RAG + project discovery | Free (local) |
 | 8 | tests | Run pytest suite | Free |
 | 9 | cleanup | Prune old logs, orphaned embeddings | Free |
@@ -335,64 +337,43 @@ Merges are crash-safe, executed in single database transactions.
 
 These are hard-won lessons from 81+ bug fixes across 9 production rounds + 3 stress test rounds + 1 journal round + 6 benchmark analysis rounds. Read ALL of them before making changes.
 
-### Model IDs
-Short aliases only (`claude-opus-4-6`, `claude-haiku-4-5`). Dated IDs (e.g. `claude-opus-4-6-20260101`) return 404 errors.
+### Database
 
-### TS/JS Sync
-`index.ts` is source of truth, `index.js` must match manually. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
-
-### Config Gotcha
-The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The snake_case conversion in `config.py` would corrupt these to `"s_o_u_l.md"`. Fix: use `raw_config` directly for that section.
-
-### DB: update_node() vs add_node()
+#### DB: update_node() vs add_node()
 Use `update_node()` for existing nodes, `add_node()` only for new nodes (avoids CASCADE trigger issues).
 
-### Edge Normalization
-`_INVERSE_MAP` flips direction, `_SYNONYM_MAP` keeps same direction. `mother_of` is a SYNONYM, `child_of` is an INVERSE. Getting these confused breaks the graph.
-
-### FTS Owner Gap
-`search_fts()` does not filter by `owner_id`. This causes leakage at low similarity thresholds. Always apply owner filtering after FTS results.
-
-### node.attributes
+#### node.attributes
 Always assign as a dict, never `json.dumps()`. Serialization happens inside `add_node()` / `update_node()`. Passing a JSON string will result in double-serialization.
 
-### get_connection()
+#### get_connection()
 Is a `@contextmanager`. MUST use `with get_connection() as conn:`. Calling it without `with` will not properly manage the connection lifecycle.
 
-### Resolution Summaries
+#### Resolution Summaries
 After MERGE operations, use `status="archived"` on resolution summary nodes to prevent FTS recall leakage.
 
-### _ollama_healthy() Cache
-Has a 30-second cache. To force a re-check, clear `_ollama_healthy._cache`.
+#### KNN Index Perturbation
+Deleting/adding nodes from the sqlite-vec index reshuffles neighbor sets for ALL queries. 73% of dedup regressions were from this cascade effect, not direct merge replacement. Be cautious when deleting nodes from the vector index.
 
-### Stress Test Worktree
-Imports come from `CLAWDBOT_WORKSPACE` (worktree), not the prod repo. You must commit fixes before testing in the worktree, or they will not be picked up.
+#### update_node() Doesn't Update created_at
+The UPDATE SQL in `update_node()` deliberately excludes `created_at`. If you need to set `created_at`, use `store(..., created_at=...)` instead.
 
-### Review Batch Truncation (FIXED)
-`TokenBatchBuilder` now has an `output_tokens_per_item` param. The review task uses `models.max_output('high')` (16384) instead of `opusReview.maxTokens` (4000) to avoid output truncation.
+#### _switch_to_db()
+MUST explicitly pass `db_path` to the `MemoryGraph()` constructor. The `DB_PATH` default parameter is captured at import time, so changing the environment variable alone does not work.
 
-### create-edge --create-missing
-Without the `--create-missing` flag, the recovery wrapper silently fails on edges for entities not yet in the graph. Always include this flag when creating edges programmatically.
+### Configuration
 
-### Change Awareness Queries
-Must split into `old_keywords` / `new_keywords`. A single new fact can satisfy `found_count >= 2` alone, causing false positives.
+#### Model IDs
+Short aliases only (`claude-opus-4-6`, `claude-haiku-4-5`). Dated IDs (e.g. `claude-opus-4-6-20260101`) return 404 errors.
 
-### Week-gated Queries
-Evolution chain queries need a `required_week` field. Without it, queries for un-injected facts silently report as failures instead of being properly gated.
+#### Config Gotcha
+The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The snake_case conversion in `config.py` would corrupt these to `"s_o_u_l.md"`. Fix: use `raw_config` directly for that section.
 
-### recovery_wrapper.js storeFact
-Returns a node ID (parsed from stdout), not a boolean. This is needed for `source_fact_id` edge linkage. Treating the return value as boolean will break edge association.
+### TypeScript / Gateway
 
-### Journal apply_distillation
-Edits must flush to disk BEFORE additions. `insert_into_file()` re-reads from disk, and would overwrite in-memory edits that have not been flushed.
+#### TS/JS Sync
+`index.ts` is source of truth, `index.js` must match manually. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
 
-### Journal archive_entries()
-Takes a list of dicts (with `date`, `trigger`, `content` keys), NOT a list of date strings.
-
-### Journal TS Array Fallback
-The LLM may return arrays instead of strings for `journal_entries` values. The code handles both, but new callers must be aware of this.
-
-### Gateway Stale Process
+#### Gateway Stale Process
 `clawdbot gateway restart` does not reliably kill the old process. The reliable sequence is:
 ```bash
 clawdbot gateway stop
@@ -402,38 +383,91 @@ clawdbot gateway start
 clawdbot gateway install
 ```
 
-### Dual System is Intentional
-Snippets = fast path (continuous core markdown refinement). Journal = slow path (long-term reflective log). They are NOT replacing each other. Do not merge or remove either system.
+#### recovery_wrapper.js storeFact
+Returns a node ID (parsed from stdout), not a boolean. This is needed for `source_fact_id` edge linkage. Treating the return value as boolean will break edge association.
 
-### Merge Destructive Pattern (FIXED)
+### Janitor Pipeline
+
+#### Edge Normalization
+`_INVERSE_MAP` flips direction, `_SYNONYM_MAP` keeps same direction. `mother_of` is a SYNONYM, `child_of` is an INVERSE. Getting these confused breaks the graph.
+
+#### FTS Owner Gap
+`search_fts()` does not filter by `owner_id`. This causes leakage at low similarity thresholds. Always apply owner filtering after FTS results.
+
+#### _ollama_healthy() Cache
+Has a 30-second cache. To force a re-check, clear `_ollama_healthy._cache`.
+
+#### Review Batch Truncation (FIXED)
+`TokenBatchBuilder` now has an `output_tokens_per_item` param. The review task uses `models.max_output('high')` (16384) instead of `opusReview.maxTokens` (4000) to avoid output truncation.
+
+#### create-edge --create-missing
+Without the `--create-missing` flag, the recovery wrapper silently fails on edges for entities not yet in the graph. Always include this flag when creating edges programmatically.
+
+#### Merge Destructive Pattern (FIXED)
 All 3 merge paths (dedup/contradiction/review) previously had 5 bugs: confidence reset to default, `confirmation_count` reset, wrong status, edges deleted instead of migrated, hardcoded owner. Now fixed with the shared `_merge_nodes_into()` helper. 19 tests cover: confidence inheritance, confirmation_count sum, edge migration, status="active", owner from originals.
 
-### KNN Index Perturbation
-Deleting/adding nodes from the sqlite-vec index reshuffles neighbor sets for ALL queries. 73% of dedup regressions were from this cascade effect, not direct merge replacement. Be cautious when deleting nodes from the vector index.
-
-### update_node() Doesn't Update created_at
-The UPDATE SQL in `update_node()` deliberately excludes `created_at`. If you need to set `created_at`, use `store(..., created_at=...)` instead.
-
-### _switch_to_db()
-MUST explicitly pass `db_path` to the `MemoryGraph()` constructor. The `DB_PATH` default parameter is captured at import time, so changing the environment variable alone does not work.
-
-### Dedup Merge owner_id
+#### Dedup Merge owner_id
 `janitor.py` hardcodes the default `owner_id`. Benchmark reprocessing needs a post-janitor SQL fixup to correct the owner.
 
-### Contradiction Detection Scope
+#### Contradiction Detection Scope
 Only checks `pending` / `approved` facts. The ingest pipeline stores facts as `active`, making contradiction detection a no-op for benchmarks unless status is adjusted.
 
-### LongMemEval Judge Prompts
-Must end with "Answer yes or no only." Uses the paper's exact format: "Correct Answer:" (capital A), "Model Response:" (capital R), "Rubric:" (not "Desired response rubric:"). Reference implementation at `xiaowu0162/LongMemEval/src/evaluation/evaluate_qa.py`.
+#### Dual System is Intentional
+Snippets = fast path (continuous core markdown refinement). Journal = slow path (long-term reflective log). They are NOT replacing each other. Do not merge or remove either system.
 
-### Journal Archive After Distillation
+### Journal System
+
+#### Journal apply_distillation
+Edits must flush to disk BEFORE additions. `insert_into_file()` re-reads from disk, and would overwrite in-memory edits that have not been flushed.
+
+#### Journal archive_entries()
+Takes a list of dicts (with `date`, `trigger`, `content` keys), NOT a list of date strings.
+
+#### Journal TS Array Fallback
+The LLM may return arrays instead of strings for `journal_entries` values. The code handles both, but new callers must be aware of this.
+
+#### Journal Archive After Distillation
 After a full janitor run, journal entries get distilled into core markdown then archived to `journal/archive/*.md`. The main `*.journal.md` file is left empty (just a header). For A/B tests, you must load `journal/archive/*.md` too -- otherwise "with journal" is identical to "standard" (both empty).
 
-### Parallel Eval Output Collision
+### Benchmarks & Evaluation
+
+#### Stress Test Worktree
+Imports come from `CLAWDBOT_WORKSPACE` (worktree), not the prod repo. You must commit fixes before testing in the worktree, or they will not be picked up.
+
+#### Change Awareness Queries
+Must split into `old_keywords` / `new_keywords`. A single new fact can satisfy `found_count >= 2` alone, causing false positives.
+
+#### Week-gated Queries
+Evolution chain queries need a `required_week` field. Without it, queries for un-injected facts silently report as failures instead of being properly gated.
+
+#### LongMemEval Judge Prompts
+Must end with "Answer yes or no only." Uses the paper's exact format: "Correct Answer:" (capital A), "Model Response:" (capital R), "Rubric:" (not "Desired response rubric:"). Reference implementation at `xiaowu0162/LongMemEval/src/evaluation/evaluate_qa.py`.
+
+#### Parallel Eval Output Collision
 When running A/B evaluations in parallel, MUST use separate `--results-dir` values. Both write `evaluation_results.json` per conversation and `locomo_results.json`, silently overwriting each other.
 
-### Python stdout Buffering
+#### Python stdout Buffering
 When running eval scripts in background, use `PYTHONUNBUFFERED=1` and `python3 -u`. Otherwise output is fully buffered and monitoring shows nothing until the process exits.
+
+---
+
+## Critical Invariants
+
+Architectural constraints that must not be broken. Violating these causes data corruption, retrieval failures, or subtle bugs.
+
+**Edge normalization maps are authoritative.** `_INVERSE_MAP` (flip direction), `_SYNONYM_MAP` (same direction), and `_SYMMETRIC_RELATIONS` (alphabetical sort) define canonical edge forms. Adding an entry to the wrong map silently corrupts the graph. `mother_of` is a SYNONYM, `child_of` is an INVERSE.
+
+**Janitor task ordering is load-bearing.** Memory tasks (Phase 2) must run in order: embeddings before review, review before dedup, dedup before contradiction resolution, contradictions before decay. Reordering causes cascading failures (e.g., dedup without embeddings finds nothing).
+
+**`_merge_nodes_into()` is the only safe merge path.** All three merge operations (dedup, contradiction, review) must use this shared helper. It executes in a single transaction, preserves confidence (max), sums confirmation_count, migrates edges, and sets status=active. Direct node deletion or manual merging bypasses these guarantees.
+
+**FTS triggers must stay in sync.** `nodes_ai`, `nodes_ad`, `nodes_au` triggers keep `nodes_fts` synchronized with `nodes`. Any schema change to the `nodes` table must preserve or update these triggers, or FTS search silently returns stale results.
+
+**The dual snippet/journal system is intentionally separate.** Snippets (fast path, continuous core markdown updates) and journal (slow path, reflective synthesis) serve different cognitive functions. Merging them, removing either, or routing one's output through the other breaks the design. Both are independently triggered at compaction/reset and independently processed by the janitor.
+
+**Pending facts are visible to recall.** Facts with `status=pending` are returned by the retrieval pipeline. The janitor improves quality (review, dedup, contradiction resolution) but does not gate visibility. Any change that filters out pending facts from recall will cause newly extracted memories to be invisible until the next janitor run.
+
+**Content hash dedup happens before embedding.** `store()` checks `content_hash` (SHA256) first for exact dedup, then generates the embedding, then checks semantic similarity. Reordering these steps wastes embedding compute on exact duplicates.
 
 ---
 
@@ -569,7 +603,7 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file -> macOS Keyc
 
 ### Overview
 
-- ~1000 pytest tests + 163 vitest tests = ~1160+ total tests
+- ~1017 pytest tests + 163 vitest tests = ~1180 total tests
 - All tests passing as of Feb 2026
 
 ### Test Files (pytest)
@@ -578,8 +612,8 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file -> macOS Keyc
 |------|---------------|
 | `test_store_recall.py` | Store and recall pipeline |
 | `test_search.py` | Search functionality |
-| `test_memory_graph.py` | (if exists) Core graph operations |
-| `test_janitor.py` | (if exists) Janitor pipeline |
+| `test_memory_graph.py` | Core graph operations |
+| `test_janitor.py` | Janitor pipeline |
 | `test_edge_normalization.py` | Edge normalization (inverse, synonym, symmetric) |
 | `test_soul_snippets.py` | Snippet and journal systems |
 | `test_docs_registry.py` | Project/doc registry CRUD |
@@ -639,19 +673,19 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file -> macOS Keyc
 
 ## Benchmark Results (LoCoMo, Feb 2026)
 
-| Configuration | Accuracy | Notes |
-|---------------|----------|-------|
-| Quaid + Opus | 75.00% | Production config |
-| Quaid + Journal + Haiku | 74.48% +/- 0.05 | Best Haiku result, nearly matches Opus at ~46% cost |
-| Quaid + Haiku | 70.28% | Standard Haiku |
-| v2 Standard (full janitor) | 69.11% +/- 0.17 | Regression from dedup merge bug (since fixed) |
-| Mem0 (graphRAG) | 68.9% | Apr 2025 numbers |
-| Mem0 | 66.9% | Apr 2025 numbers |
-| Zep | 66.0% | Apr 2025 numbers |
-| LangMem | 58.1% | Apr 2025 numbers |
-| OpenAI | 52.9% | Apr 2025 numbers |
-| Full-context Haiku | 79.59% +/- 0.17 | Upper bound (no memory system) |
-| Full-context Opus | 86.62% +/- 0.09 | Upper bound (no memory system) |
+| Configuration | Accuracy | Answer Model | Notes |
+|---------------|----------|--------------|-------|
+| Quaid + Haiku | 70.28% | Haiku | Fair comparison tier |
+| Mem0 (graphRAG) | 68.9% | GPT-4o-mini | Apr 2025 numbers |
+| Mem0 | 66.9% | GPT-4o-mini | Apr 2025 numbers |
+| Zep | 66.0% | GPT-4o-mini | Apr 2025 numbers |
+| LangMem | 58.1% | GPT-4o-mini | Apr 2025 numbers |
+| OpenAI | 52.9% | GPT-4o-mini | Apr 2025 numbers |
+| Quaid + Journal + Haiku | 74.48% +/- 0.05 | Haiku | Best Haiku result, nearly matches Opus at ~46% cost |
+| **Quaid + Opus** | **75.00%** | **Opus** | **Production config** |
+| v2 Standard (full janitor) | 69.11% +/- 0.17 | Haiku | Regression from dedup merge bug (since fixed) |
+| Full-context Haiku | 79.59% +/- 0.17 | Haiku | Upper bound (no memory system) |
+| Full-context Opus | 86.62% +/- 0.09 | Opus | Upper bound (no memory system) |
 
 **Key insight:** Journal + Haiku (74.5%) nearly matches v1 Opus (75.0%) at roughly 46% of the cost. Journal helps most on temporal questions (+7.6pp) and single-hop questions (+6.8pp).
 
@@ -753,5 +787,7 @@ python3 janitor.py --task all --apply
 | Model routing | `projects/infrastructure/model-strategy.md` |
 | Claude Code hooks | `projects/infrastructure/claude-code-integration.md` |
 | Project onboarding | `plugins/quaid/prompts/project_onboarding.md` |
+
+> **Note:** These documentation paths reference internal workspace files and are not included in the public release repo. They are available in development environments where the full workspace is present.
 
 **RAG search for docs:** `python3 docs_rag.py search "query"`

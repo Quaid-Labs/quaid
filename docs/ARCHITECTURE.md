@@ -13,11 +13,10 @@ This document is for engineers who want to understand how the system works.
 3. [Retrieval Pipeline](#3-retrieval-pipeline)
 4. [Database](#4-database)
 5. [Janitor Pipeline](#5-janitor-pipeline)
-6. [Dual Learning System](#6-dual-learning-system)
-7. [Projects System](#7-projects-system)
-8. [Configuration](#8-configuration)
-9. [Multi-Provider LLM Support](#9-multi-provider-llm-support)
-10. [Notifications](#10-notifications)
+6. [Error Handling & Resilience](#6-error-handling--resilience)
+7. [Dual Learning System](#7-dual-learning-system)
+8. [Projects System](#8-projects-system)
+9. [Configuration](#9-configuration)
 
 ---
 
@@ -50,7 +49,7 @@ Quaid sits between the OpenClaw gateway and the AI agent. The gateway exposes li
 
 ### Three Main Loops
 
-**Extraction** -- Fires at context compaction or session reset. A high-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and await janitor review before graduating to `active`.
+**Extraction** -- Fires at context compaction or session reset. A high-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
 
 **Retrieval** -- Fires before each agent turn. The agent's query is classified by intent, expanded via HyDE, and searched across three channels (vector, FTS5, graph). Results are fused via RRF, reranked by a low-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
 
@@ -260,6 +259,8 @@ Starting from nodes found by vector/FTS search, the graph is traversed via edges
 
 ### RRF Fusion
 
+Entity-focused queries (WHO, WHERE, RELATION) weight FTS heavily because proper nouns and exact names need string matching, not semantic similarity. Meaning-focused queries (PREFERENCE, WHY) weight vectors heavily because the user's phrasing may differ significantly from how the fact was stored.
+
 Reciprocal Rank Fusion combines vector and FTS ranked lists. Weights are dynamic per intent:
 
 ```python
@@ -309,6 +310,8 @@ ss_increment = 0.05 * (1.0 + 3.0 * difficulty)
 
 This models the Bjork desirable difficulty principle: memories that are harder to retrieve get strengthened more, making them easier to find next time.
 
+The cognitive science behind this is Robert Bjork's research on desirable difficulties in learning: retrieval attempts that require more effort produce stronger and more durable memory traces. Without this mechanism, frequently-accessed 'easy' memories would dominate retrieval results while harder-to-find but equally important memories would gradually become unreachable. Storage strength acts as a counter-pressure to confidence decay -- even a memory that hasn't been accessed in months can maintain high retrievability if its past retrievals were effortful.
+
 ---
 
 ## 4. Database
@@ -321,12 +324,16 @@ Connection management is centralized in `lib/database.py`:
 ```python
 @contextmanager
 def get_connection(db_path=None):
-    """Returns a connection with Row factory, FK enforcement, and WAL mode."""
     conn = sqlite3.connect(db_path or get_db_path(), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    if mode.lower() != 'wal':
+        conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA cache_size = -64000")
+    conn.execute("PRAGMA temp_store = MEMORY")
     yield conn
     conn.close()
 ```
@@ -388,11 +395,17 @@ The `UNIQUE` constraint means a relationship triple can only exist once. `INSERT
 
 The schema maintains indexes on high-query-frequency columns: `owner_id + status` (compound, for owner-scoped queries), `content_hash` (exact dedup), `created_at` (temporal ordering), `accessed_at` (decay calculations), `session_id` (co-session lookups), and `source_fact_id` on edges (provenance joins).
 
+### Concurrency
+
+SQLite's WAL (Write-Ahead Logging) mode allows concurrent readers. Multiple recall queries can run simultaneously without blocking each other or blocking an in-progress extraction write. Writers still serialize -- only one write transaction at a time -- but the `busy_timeout` of 30 seconds means a blocked writer automatically retries rather than failing immediately.
+
+In practice, extraction (write) and retrieval (read) can run simultaneously. The janitor is the only source of sustained writes, and it runs nightly when retrieval volume is low. The 64MB page cache (`cache_size = -64000`) keeps frequently-accessed embeddings and FTS indexes in memory, reducing disk I/O during concurrent access.
+
 ---
 
 ## 5. Janitor Pipeline (Nightly Maintenance)
 
-The janitor (`janitor.py`) runs 16 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
+The janitor (`janitor.py`) runs 17 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
 
 ### Execution Order
 
@@ -433,6 +446,7 @@ The task numbering is historical -- tasks were added over time and the numbers r
 | rag | Reindex docs for RAG search + auto-discover new projects | No |
 | tests | Run pytest suite (dev/CI only, gated by `QUAID_DEV=1`) | No |
 | cleanup | Prune old logs, orphaned embeddings, stale lock files | No |
+| update_check | Check for Quaid updates (version comparison) | No |
 
 ### Fail-Fast Behavior
 
@@ -490,7 +504,38 @@ The half-life is extended by access frequency (`access_bonus_factor * access_cou
 
 ---
 
-## 6. Dual Learning System
+## 6. Error Handling & Resilience
+
+Quaid is designed to degrade gracefully rather than fail hard. The system encounters three main failure modes during operation.
+
+### Anthropic API Unavailable
+
+LLM calls in `llm_clients.py` use automatic retry with exponential backoff: 3 attempts with a 1-second base delay, doubling per retry. HTTP status codes 408, 429, 500, 502, 503, 504, and 529 trigger retries; other errors fail immediately. If all retries are exhausted, the function returns `(None, duration)` rather than raising -- callers check for `None` and skip LLM-dependent steps.
+
+During extraction, an API failure means no facts are extracted for that session. The conversation transcript is not lost (it remains in the gateway's session file), but memories from that session will be missing until the next compaction or reset.
+
+During the janitor, an API failure in any memory task (review, dedup, contradiction resolution) triggers the fail-fast mechanism: remaining memory tasks are skipped and fact graduation is blocked. Infrastructure tasks (workspace, docs, RAG) continue independently.
+
+### Ollama Unavailable (Embeddings)
+
+Before every embedding operation, `_ollama_healthy()` performs a 200ms health check against the Ollama API, cached for 30 seconds. If Ollama is unreachable:
+
+- **During extraction:** Facts are stored without embeddings. The janitor's `embeddings` task (Phase 1) backfills missing embeddings on its next run.
+- **During retrieval:** Vector search is skipped entirely. Retrieval falls back to FTS-only (keyword search), which still returns results but with lower recall quality. The fallback is transparent to the user.
+
+### SQLite Lock Contention
+
+WAL mode allows concurrent reads, but writes are serialized. The `busy_timeout` of 30 seconds means SQLite automatically retries a blocked write for up to 30 seconds before raising `OperationalError`. In practice, contention is rare -- the janitor (primary writer) runs nightly, and extraction writes are brief.
+
+If a write does fail after the timeout, `get_connection()` catches the exception, rolls back the transaction, and re-raises. The calling code (extraction or janitor) handles the error at the task level, logging the failure and continuing with the next operation.
+
+### General Strategy
+
+The system follows a "store what you can, skip what you can't" philosophy. A failed embedding doesn't prevent fact storage. A failed API call doesn't crash the gateway. A failed janitor task doesn't corrupt existing data. The worst case for any single failure is a temporary reduction in recall quality, which self-heals on the next successful run.
+
+---
+
+## 7. Dual Learning System
 
 Two complementary systems capture different types of learning from conversations, focused on three domains: understanding the **user**, developing the agent's own **self**-awareness, and tracking the **world** around it. They are intentionally separate -- snippets handle fast, tactical updates while journal handles slow, reflective synthesis.
 
@@ -562,7 +607,7 @@ Both systems dedup by date+trigger per file (at most one Compaction entry and on
 
 ---
 
-## 7. Projects System
+## 8. Projects System
 
 The projects system tracks documentation across the codebase and keeps it up to date automatically.
 
@@ -596,7 +641,7 @@ Projects are auto-discovered during RAG reindexing (janitor task 7).
 
 ---
 
-## 8. Configuration
+## 9. Configuration
 
 ### Central Config File
 
@@ -684,11 +729,9 @@ Config file search order:
 
 The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The `camelCase -> snake_case` conversion in the config loader would corrupt these to `"s_o_u_l.md"`. The loader uses `raw_config` directly for this section.
 
----
+### Multi-Provider LLM Support
 
-## 9. Multi-Provider LLM Support
-
-### Abstraction Layer
+#### Abstraction Layer
 
 `llm_clients.py` provides two functions that abstract over the underlying model:
 
@@ -704,7 +747,7 @@ def call_low_reasoning(prompt, max_tokens=500, timeout=30, system_prompt=None):
 
 Both return `(response_text, duration_seconds)`. Model selection is config-driven -- callers never reference specific model IDs.
 
-### Provider Support
+#### Provider Support
 
 ```python
 @dataclass
@@ -716,104 +759,28 @@ class ModelConfig:
     high_reasoning: str = "claude-opus-4-6"
 ```
 
-### API Key Resolution
+#### API Key Resolution
 
 Quaid uses pass-through API keys from the main system agent -- it does not manage keys directly. Keys are resolved in priority order:
 1. Environment variable (`ANTHROPIC_API_KEY`) -- typically set by the gateway or agent runtime
 2. `.env` file in workspace root (fallback for standalone CLI use)
 
-### Prompt Caching
+#### Prompt Caching
 
 Prompt caching is used for system prompts that repeat across calls (e.g. the janitor review prompt). This yields approximately 90% token savings on the cached portion of repeated prompts. Currently supported with Anthropic's API; other providers may benefit from similar caching mechanisms.
 
-### Token Usage Tracking
+#### Token Usage Tracking
 
 Every LLM call accumulates into per-run counters (`_usage_input_tokens`, `_usage_output_tokens`, `_usage_cache_read_tokens`). The janitor resets these at run start and reports total cost at the end. Pricing is maintained per model ID.
 
----
+### Notifications
 
-## 10. Notifications
-
-The notification system (`notify.py`) sends status updates to the user's last active communication channel.
-
-### Notification Types
-
-| Function | Trigger | Content |
-|----------|---------|---------|
-| `notify_memory_extraction()` | After extraction | Count of facts/edges extracted, janitor health check |
-| `notify_memory_recall()` | After retrieval | Recalled memories with similarity scores |
-| `notify_janitor_summary()` | After janitor run | Task results, token usage, cost breakdown |
-| `notify_daily_memories()` | On scheduled trigger | Daily memory digest |
-| `notify_doc_update()` | After doc auto-update | Which docs changed and why |
-| `notify_docs_search()` | After RAG search | Search results with scores |
-
-### Verbosity Levels
-
-Notifications use a hierarchical verbosity system:
-
-```python
-@dataclass
-class NotificationsConfig:
-    level: str = "normal"  # quiet, normal, verbose, debug
-
-    # Per-feature overrides:
-    janitor: FeatureNotificationConfig    # default: summary
-    extraction: FeatureNotificationConfig # default: off
-    retrieval: FeatureNotificationConfig  # default: summary
-```
-
-Level presets:
-
-| Level | Janitor | Extraction | Retrieval |
-|-------|---------|------------|-----------|
-| quiet | off | off | off |
-| normal | summary | off | summary |
-| verbose | summary | summary | summary |
-| debug | full | full | full |
-
-Per-feature overrides take precedence over the master level.
-
-To change the notification level, ask your agent ("change notification level to quiet") or edit `config/memory.json` directly.
-
-### Channel Routing
-
-Notifications are delivered to the user's last active channel by default. Each feature can override to a specific channel:
-
-```json
-{
-  "notifications": {
-    "level": "normal",
-    "janitor": { "verbosity": "summary", "channel": "telegram" },
-    "extraction": { "verbosity": "off" }
-  }
-}
-```
-
-### Janitor Health Check
-
-During extraction notifications, the system performs a lightweight DB check for the last successful janitor run. If the janitor hasn't run in 48+ hours, a warning is appended advising the user to check their heartbeat configuration.
+Quaid includes a notification system (`notify.py`) that sends status updates for extraction, retrieval, janitor runs, and documentation changes. Notifications support four verbosity levels (quiet, normal, verbose, debug) with per-feature overrides, and are routed to the user's last active communication channel. To change the notification level, ask your agent or edit `config/memory.json`. For full details on verbosity presets, channel routing, and per-feature configuration, see [AI-REFERENCE.md](AI-REFERENCE.md).
 
 ---
 
-## Appendix: File Map
+## Appendix: File Reference
 
-| File | Purpose |
-|------|---------|
-| `index.ts` | Plugin entry point: gateway hooks, tool registration, TypeScript |
-| `memory_graph.py` | Core graph operations: `store()`, `recall()`, `search_hybrid()`, `beam_search_graph()` |
-| `janitor.py` | Nightly maintenance pipeline: 17 tasks, `run_task_optimized()` |
-| `soul_snippets.py` | Dual snippet + journal system |
-| `config.py` | Configuration dataclasses and loader |
-| `llm_clients.py` | LLM abstraction: `call_high_reasoning()`, `call_low_reasoning()` |
-| `notify.py` | User notification builders and delivery |
-| `docs_registry.py` | Project/document CRUD and path resolution |
-| `docs_updater.py` | Git-diff-based doc staleness detection and updates |
-| `docs_rag.py` | RAG: chunking, embedding, semantic search over docs |
-| `project_updater.py` | Background project event processor |
-| `workspace_audit.py` | Core markdown bloat monitoring |
-| `schema.sql` | Database DDL (authoritative schema) |
-| `lib/config.py` | Path resolution, env overrides |
-| `lib/database.py` | SQLite connection factory |
-| `lib/embeddings.py` | Ollama embedding calls |
-| `lib/similarity.py` | Cosine similarity |
-| `lib/tokens.py` | Token counting, text comparison |
+The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). The TypeScript entry point (`index.ts` / `index.js`) registers gateway hooks and tools. Shared utilities live in `lib/`.
+
+For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

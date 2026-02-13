@@ -10,19 +10,19 @@ We evaluate Quaid using **Mem0's exact methodology** -- same judge model (GPT-4o
 
 ## Results
 
-| System | Accuracy | Notes |
-|--------|----------|-------|
-| **Quaid** | **75.0%** | Recommended settings (Opus reasoning + Ollama embeddings) |
-| Quaid (Haiku answers) | 70.3% +/- 0.06 | Low-reasoning LLM for answer generation |
-| Mem0 (graphRAG) | 68.9% | Apr 2025 |
-| Mem0 | 66.9% +/- 0.7 | Apr 2025, 10 trials |
-| Zep | 66.0% | Apr 2025 |
-| LangMem | 58.1% | Apr 2025 |
-| OpenAI Memory | 52.9% | Apr 2025 |
+| System | Accuracy | Answer Model | Notes |
+|--------|----------|-------------|-------|
+| Quaid (Haiku answers) | 70.3% +/- 0.06 | Haiku | Fair comparison tier |
+| Mem0 (graphRAG) | 68.9% | GPT-4o-mini | Apr 2025 |
+| Mem0 | 66.9% +/- 0.7 | GPT-4o-mini | Apr 2025, 10 trials |
+| Zep | 66.0% | GPT-4o-mini | Apr 2025 |
+| LangMem | 58.1% | GPT-4o-mini | Apr 2025 |
+| OpenAI Memory | 52.9% | GPT-4o-mini | Apr 2025 |
+| **Quaid (Opus answers)** | **75.0%** | **Opus** | **Recommended production config** |
 
 Full-context baselines (upper bound, no memory system): Haiku 79.6%, Opus 86.6%.
 
-The shipping configuration uses Opus for both extraction and answer generation. Quaid achieves 87% of full-context Opus performance while injecting only the relevant memories.
+The shipping configuration uses Opus for both extraction and answer generation. Quaid achieves 88.3% of full-context Haiku performance (fair comparison) and 86.6% of full-context Opus performance while injecting only the relevant memories.
 
 > Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
 
@@ -30,25 +30,27 @@ The shipping configuration uses Opus for both extraction and answer generation. 
 
 ## Per-Category Breakdown
 
-| Category | Questions | Quaid (Opus) | Quaid (Haiku) | Mem0 | Mem0^g | Zep |
-|----------|-----------|--------------|---------------|------|--------|-----|
+| Category | Questions | Quaid (Opus) | Quaid (Haiku) | Mem0 | Mem0 (gRAG) | Zep |
+|----------|-----------|--------------|---------------|------|-------------|-----|
 | Single-hop | 841 | **78.6%** | 73.0% | 67.1% | 65.7% | 61.7% |
 | Multi-hop | 282 | **75.1%** | 72.1% | 51.1% | 47.2% | 41.4% |
 | Temporal | 321 | **70.7%** | 65.1% | 55.5% | 58.1% | 49.3% |
 | Open-domain | 96 | 58.0% | 58.7% | **72.9%** | **75.7%** | **76.6%** |
 | **Overall** | **1540** | **75.0%** | **70.3%** | **66.9%** | **68.9%** | **66.0%** |
 
+All competitor systems use GPT-4o-mini for answer generation. Quaid (Haiku) is the fair comparison row; Quaid (Opus) reflects the recommended production config.
+
 ### Where Quaid Wins
 
-- **Multi-hop (+23pp vs Mem0):** Graph edges extracted at capture time enable traversal across related entities. When asked about a person's child's preferences, Quaid follows `person -> child_of -> preference` edges rather than relying solely on keyword matching.
+- **Multi-hop (+21pp vs Mem0):** Graph edges extracted at capture time enable traversal across related entities. When asked about a person's child's preferences, Quaid follows `person -> child_of -> preference` edges rather than relying solely on keyword matching.
 
-- **Temporal (+15pp vs Mem0):** Structured date-normalized facts and temporal resolution in the janitor pipeline preserve exact dates that raw keyword search would miss.
+- **Temporal (+10pp vs Mem0):** Structured date-normalized facts and temporal resolution in the janitor pipeline preserve exact dates that raw keyword search would miss.
 
-- **Single-hop (+11pp vs Mem0):** Hybrid retrieval (vector + FTS + graph) with LLM reranking consistently surfaces the right fact for direct lookup queries.
+- **Single-hop (+6pp vs Mem0):** Hybrid retrieval (vector + FTS + graph) with LLM reranking consistently surfaces the right fact for direct lookup queries.
 
 ### Where Mem0 Wins
 
-- **Open-domain (-15pp):** These questions require inference and reasoning from retrieved facts rather than direct lookup. This is the one category where Mem0 consistently outperforms Quaid.
+- **Open-domain (-14pp vs Mem0):** Open-domain questions require broader contextual inference rather than precision lookup -- asking what someone might think about a topic, or inferring personality traits from scattered facts. Quaid's retrieval pipeline is optimized for precision (exact facts, graph traversal, entity resolution), which excels at lookup queries but retrieves too narrowly for open-ended reasoning. Mem0 and Zep's chunk-based retrieval surfaces more contextual material, giving the answer model more to reason over. Our A/B testing confirms that wider context injection (via journal archives) improves open-domain by +14.6pp, and we're building intent-aware context expansion so open-domain queries automatically get a broader retrieval window.
 
 ---
 
@@ -64,11 +66,13 @@ Early data from an A/B test of the journal system, which injects archived journa
 
 Journal injection showed a +5.4pp improvement with Haiku answers, nearly matching Opus. However, the 2.7x token increase raises scalability concerns for long-running agents with large journal archives. We are actively working to make journal injection more cost-effective before recommending it as a default configuration.
 
+Notably, journal+Haiku achieves near-Opus accuracy (74.5% vs 75.0%) at roughly half the per-query cost, suggesting that richer context can partially substitute for a more capable answer model.
+
 ---
 
 ## Memory Efficiency
 
-How much of the full-context baseline performance does Quaid retain?
+Percentage of full-context baseline performance retained (higher is better):
 
 | Category | Quaid (Haiku) | Quaid (Opus) |
 |----------|---------------|--------------|
@@ -78,7 +82,7 @@ How much of the full-context baseline performance does Quaid retain?
 | Open-domain | 94.2% | 91.3% |
 | **Overall** | **86.8%** | **86.6%** |
 
-The recommended Opus configuration captures 87% of full-context performance while injecting only the relevant memories -- typically a few thousand tokens instead of the entire transcript.
+The recommended Opus configuration captures 86.6% of full-context performance while injecting only the relevant memories -- typically a few thousand tokens instead of the entire transcript.
 
 Values over 100% mean Quaid's structured memory **outperforms** having the full raw transcript (temporal queries benefit from date normalization).
 
@@ -95,7 +99,7 @@ All results are from 3 independent trials with Wilson Score 95% confidence inter
 | Full-context (Haiku) | 79.59% +/- 0.17 | [77.3%, 81.3%] |
 | Full-context (Opus) | 86.62% +/- 0.09 | [84.8%, 88.2%] |
 
-The 95% CI lower bound for Quaid+Opus (72.5%) exceeds Mem0's point estimate (66.9%) by 5.6pp.
+The 95% CI lower bound for Quaid+Opus (72.5%) exceeds Mem0's point estimate (66.9%) by 5.6pp. Note: Mem0's paper reports a single point estimate without full confidence intervals, so this comparison is against their reported mean.
 
 ---
 
@@ -167,21 +171,32 @@ Quaid processes **full conversation transcripts end-to-end** -- not pre-atomized
 | Category 5 excluded | Yes | Yes | Yes |
 | Overall score | Weighted mean | Weighted mean | Yes |
 | Multiple trials | 10 | 3 | Partial |
+| Answer model | GPT-4o-mini | Haiku (fair) / Opus (production) | Disclosed |
 
 Mem0 uses GPT-4o-mini for answer generation. We report both Haiku answers (similar tier, fair comparison) and Opus answers (recommended production config).
 
 ---
 
-## Context & Roadmap
+## Next Benchmarks
 
-These results are from early alpha testing (February 2026). We are actively:
+- **LongMemEval** (ICLR 2025): Code written and smoke-tested at `benchmark/longmemeval/`. 500 QA pairs across 7 question types and 19,195 sessions. Pending full evaluation run. Top reported scores: Emergence AI 86%, Supermemory 81.6%, Zep+GPT-4o 71.2%.
+- **Ablation study**: A 19-variant A/B test battery is in progress, measuring the contribution of individual retrieval components (HyDE, reranker, graph traversal, multi-pass, intent classification, entity aliases). Results will quantify what each component is worth.
+- **Purpose-built lifecycle benchmark**: A longer-term project to build a dataset that tests the full memory lifecycle -- multi-session accumulation, fact evolution, maintenance decisions, and project-level awareness. No existing benchmark covers this. See [ROADMAP.md](../ROADMAP.md).
 
-- **Testing and refining** extraction quality, retrieval parameters, and janitor decisions against LoCoMo
-- **Evaluating journal scalability** -- the journal A/B test shows promise but token costs need optimization for long-running agents
+---
 
-Quaid conserves context across restarts -- when the agent compacts or resets, memories are extracted before the context is cleared. A full crash before compaction can cause memory loss for that session.
+## Reproducing Results
 
-Because the system leans heavily on LLM reasoning for its decisions, results naturally improve as AI models improve -- without code changes.
+The benchmark suite lives in `benchmark/` (public repo) or `memory-stress-test/runner/locomo/` (development). To run the LoCoMo evaluation:
+
+```bash
+cd benchmark/locomo
+python3 run_locomo.py --config standard --answer-model haiku --trials 3
+python3 run_locomo.py --rejudge --results-dir data/results/  # Re-score cached predictions
+python3 run_locomo.py --full-context  # Full-context baseline (no memory system)
+```
+
+Requirements: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` (for GPT-4o-mini judge) environment variables. Ollama running locally for embeddings. A full evaluation run costs approximately $85 across all configurations.
 
 ---
 
