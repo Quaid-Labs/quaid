@@ -5,8 +5,8 @@ set -euo pipefail
 
 VERSION="${QUAID_VERSION:-latest}"
 REPO="steadman-labs/quaid"
-TMPDIR="${TMPDIR:-/tmp}"
-INSTALL_DIR="$TMPDIR/quaid-install-$$"
+_TMPDIR="${TMPDIR:-/tmp}"
+INSTALL_DIR="$_TMPDIR/quaid-install-$$"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -40,6 +40,13 @@ if ! command -v node &>/dev/null; then
     exit 1
 fi
 
+NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])" 2>/dev/null || echo "0")
+if [[ "$NODE_MAJOR" -lt 16 ]]; then
+    error "Node.js 16+ is required (found v$(node --version 2>/dev/null || echo 'unknown'))."
+    error "Update: https://nodejs.org"
+    exit 1
+fi
+
 if ! command -v clawdbot &>/dev/null && ! command -v openclaw &>/dev/null; then
     error "OpenClaw is required. Install it first:"
     error "  npm install -g openclaw"
@@ -63,6 +70,12 @@ elif command -v wget &>/dev/null; then
     wget -qO "$INSTALL_DIR/quaid.tar.gz" "$DOWNLOAD_URL"
 else
     error "curl or wget required"
+    exit 1
+fi
+
+if [[ ! -f "$INSTALL_DIR/quaid.tar.gz" ]]; then
+    error "Download failed. Check your internet connection."
+    error "URL: $DOWNLOAD_URL"
     exit 1
 fi
 
@@ -112,4 +125,4 @@ fi
 ok "Downloaded. Starting guided installer..."
 echo ""
 cd "$CLAWDBOT_WORKSPACE" 2>/dev/null || true
-exec node "$RELEASE_DIR/setup-quaid.mjs"
+node "$RELEASE_DIR/setup-quaid.mjs"
