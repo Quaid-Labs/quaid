@@ -1533,6 +1533,24 @@ graphDepth: Set to 2 when you need to infer relationships (e.g., nephew = siblin
             const { query, limit: requestedLimit, expandGraph = true, graphDepth = 1 } = params || {};
             const limit = Math.min(requestedLimit ?? configuredLimit, maxLimit);
             const depth = Math.min(Math.max(graphDepth, 1), 3); // Clamp between 1 and 3
+
+            // Wait for in-flight extraction to finish so freshly extracted facts are queryable
+            if (extractionPromise) {
+              console.log("[quaid] memory_recall: waiting for in-flight extraction to complete...");
+              let timer: ReturnType<typeof setTimeout> | undefined;
+              try {
+                await Promise.race([
+                  extractionPromise,
+                  new Promise<void>((_, reject) => {
+                    timer = setTimeout(() => reject(new Error("extraction timeout")), 60_000);
+                  }),
+                ]).finally(() => { if (timer) clearTimeout(timer); });
+                console.log("[quaid] memory_recall: extraction complete, proceeding with query");
+              } catch (waitErr) {
+                console.warn(`[quaid] memory_recall: extraction wait failed (${String(waitErr)}), proceeding anyway`);
+              }
+            }
+
             console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, configuredLimit=${configuredLimit}, maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}`);
             const results = await recall(query, limit, undefined, undefined, expandGraph, depth);
 
@@ -1956,6 +1974,30 @@ notify_docs_search(data['query'], data['results'])
         },
       })
     );
+
+    // Extraction promise gate — memory_recall waits on this before querying
+    // so that facts extracted from the just-compacted session are available.
+    let extractionPromise: Promise<void> | null = null;
+
+    // Read messages from a session JSONL file (same format as recovery scan)
+    function readMessagesFromSessionFile(sessionFile: string): any[] {
+      const content = fs.readFileSync(sessionFile, 'utf8');
+      const lines = content.trim().split('\n');
+      const messages: any[] = [];
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          // Session JSONL has entries like { type: "message", message: { role, content } }
+          // and also direct message objects { role, content }
+          if (entry.type === 'message' && entry.message) {
+            messages.push(entry.message);
+          } else if (entry.role) {
+            messages.push(entry);
+          }
+        } catch {} // Skip malformed lines
+      }
+      return messages;
+    }
 
     // Shared memory extraction logic — used by both compaction and reset hooks
     const extractMemoriesFromMessages = async (messages: any[], label: string, sessionId?: string) => {
@@ -2600,16 +2642,8 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
             if (extractedAt >= stat.mtimeMs) { continue; } // Already extracted
           }
 
-          // Read JSONL and build messages
-          const content = fs.readFileSync(filePath, 'utf8');
-          const lines = content.trim().split('\n');
-          const messages: any[] = [];
-          for (const line of lines) {
-            try {
-              const msg = JSON.parse(line);
-              if (msg.role) { messages.push(msg); }
-            } catch {} // Skip malformed lines
-          }
+          // Read JSONL and build messages (handles both direct {role} and {type:"message"} formats)
+          const messages = readMessagesFromSessionFile(filePath);
 
           // Skip short sessions
           if (messages.length < 4) { continue; }
@@ -2626,49 +2660,73 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
       fs.writeFileSync(flagPath, new Date().toISOString());
     }
 
-    // Register compaction hook — extract memories before session history is compacted
+    // Register compaction hook — extract memories in parallel with compaction LLM
+    // Uses sessionFile (JSONL on disk) when available (PR #13287), falls back to
+    // in-memory messages for backwards compatibility with older gateway versions.
     api.on("before_compaction", async (event: any, ctx: any) => {
       try {
-        const messages = event.messages || [];
+        // Prefer reading from sessionFile (all messages already on disk, runs in
+        // parallel with compaction). Fall back to in-memory messages array.
+        let messages: any[];
+        if (event.sessionFile) {
+          try {
+            messages = readMessagesFromSessionFile(event.sessionFile);
+            console.log(`[quaid] before_compaction: read ${messages.length} messages from sessionFile`);
+          } catch (readErr) {
+            console.warn(`[quaid] before_compaction: sessionFile read failed, falling back to messages array: ${String(readErr)}`);
+            messages = event.messages || [];
+          }
+        } else {
+          messages = event.messages || [];
+        }
         const sessionId = ctx?.sessionId;
         console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
 
-        // Memory extraction (gated by memory system)
-        if (isSystemEnabled("memory")) {
-          await extractMemoriesFromMessages(messages, "Compaction", sessionId);
-        } else {
-          console.log("[quaid] Compaction: memory extraction skipped — memory system disabled");
-        }
+        // Wrap extraction in a promise that memory_recall can gate on.
+        // This runs async (fire-and-forget from the hook's perspective) but
+        // memory_recall will await it so freshly extracted facts are queryable.
+        const doExtraction = async () => {
+          // Memory extraction (gated by memory system)
+          if (isSystemEnabled("memory")) {
+            await extractMemoriesFromMessages(messages, "Compaction", sessionId);
+          } else {
+            console.log("[quaid] Compaction: memory extraction skipped — memory system disabled");
+          }
 
-        // Auto-update docs from transcript (non-fatal)
-        // Use unique session ID for status tracking
-        const uniqueSessionId = extractSessionId(messages, ctx);
+          // Auto-update docs from transcript (non-fatal)
+          const uniqueSessionId = extractSessionId(messages, ctx);
 
-        try {
-          await updateDocsFromTranscript(messages, "Compaction", uniqueSessionId);
-        } catch (err) {
-          console.error("[quaid] Compaction doc update failed:", (err as Error).message);
-        }
+          try {
+            await updateDocsFromTranscript(messages, "Compaction", uniqueSessionId);
+          } catch (err) {
+            console.error("[quaid] Compaction doc update failed:", (err as Error).message);
+          }
 
-        // Emit project event for background processing (non-fatal)
-        try {
-          await emitProjectEvent(messages, "compact", uniqueSessionId);
-        } catch (err) {
-          console.error("[quaid] Compaction project event failed:", (err as Error).message);
-        }
+          // Emit project event for background processing (non-fatal)
+          try {
+            await emitProjectEvent(messages, "compact", uniqueSessionId);
+          } catch (err) {
+            console.error("[quaid] Compaction project event failed:", (err as Error).message);
+          }
 
-        // Record compaction timestamp and reset injection dedup list (memory system).
-        // The dedup list must be cleared because post-compaction the model's context
-        // no longer contains previously injected memories — they need to be re-injectable.
-        if (isSystemEnabled("memory") && uniqueSessionId) {
-          const logPath = `/tmp/memory-injection-${uniqueSessionId}.log`;
-          let logData: any = {};
-          try { logData = JSON.parse(require('fs').readFileSync(logPath, 'utf8')); } catch {}
-          logData.lastCompactionAt = new Date().toISOString();
-          logData.memoryTexts = [];  // Reset — all memories eligible for re-injection
-          require('fs').writeFileSync(logPath, JSON.stringify(logData, null, 2));
-          console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
-        }
+          // Record compaction timestamp and reset injection dedup list (memory system).
+          if (isSystemEnabled("memory") && uniqueSessionId) {
+            const logPath = `/tmp/memory-injection-${uniqueSessionId}.log`;
+            let logData: any = {};
+            try { logData = JSON.parse(require('fs').readFileSync(logPath, 'utf8')); } catch {}
+            logData.lastCompactionAt = new Date().toISOString();
+            logData.memoryTexts = [];  // Reset — all memories eligible for re-injection
+            require('fs').writeFileSync(logPath, JSON.stringify(logData, null, 2));
+            console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
+          }
+        };
+
+        // Chain onto any in-flight extraction to avoid overwrite race
+        // (if compaction and reset overlap, the .finally() from the first
+        // extraction would clear the promise while the second is still running)
+        extractionPromise = (extractionPromise || Promise.resolve())
+          .catch(() => {}) // Don't let previous failure block the chain
+          .then(() => doExtraction());
       } catch (err) {
         console.error("[quaid] before_compaction hook failed:", err);
       }
@@ -2678,35 +2736,55 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
     });
 
     // Register reset hook — extract memories before session is cleared by /new or /reset
+    // Uses sessionFile when available, falls back to in-memory messages.
     api.on("before_reset", async (event: any, ctx: any) => {
       try {
-        const messages = event.messages || [];
+        // Prefer sessionFile (complete transcript on disk), fall back to in-memory messages
+        let messages: any[];
+        if (event.sessionFile) {
+          try {
+            messages = readMessagesFromSessionFile(event.sessionFile);
+            console.log(`[quaid] before_reset: read ${messages.length} messages from sessionFile`);
+          } catch (readErr) {
+            console.warn(`[quaid] before_reset: sessionFile read failed, falling back to messages array: ${String(readErr)}`);
+            messages = event.messages || [];
+          }
+        } else {
+          messages = event.messages || [];
+        }
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
         console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
 
-        // Memory extraction (gated by memory system)
-        if (isSystemEnabled("memory")) {
-          await extractMemoriesFromMessages(messages, "Reset", sessionId);
-        } else {
-          console.log("[quaid] Reset: memory extraction skipped — memory system disabled");
-        }
+        const doExtraction = async () => {
+          // Memory extraction (gated by memory system)
+          if (isSystemEnabled("memory")) {
+            await extractMemoriesFromMessages(messages, "Reset", sessionId);
+          } else {
+            console.log("[quaid] Reset: memory extraction skipped — memory system disabled");
+          }
 
-        // Auto-update docs from transcript (non-fatal)
-        const uniqueSessionId = extractSessionId(messages, ctx);
+          // Auto-update docs from transcript (non-fatal)
+          const uniqueSessionId = extractSessionId(messages, ctx);
 
-        try {
-          await updateDocsFromTranscript(messages, "Reset", uniqueSessionId);
-        } catch (err) {
-          console.error("[quaid] Reset doc update failed:", (err as Error).message);
-        }
+          try {
+            await updateDocsFromTranscript(messages, "Reset", uniqueSessionId);
+          } catch (err) {
+            console.error("[quaid] Reset doc update failed:", (err as Error).message);
+          }
 
-        // Emit project event for background processing (non-fatal)
-        try {
-          await emitProjectEvent(messages, "reset", uniqueSessionId);
-        } catch (err) {
-          console.error("[quaid] Reset project event failed:", (err as Error).message);
-        }
+          // Emit project event for background processing (non-fatal)
+          try {
+            await emitProjectEvent(messages, "reset", uniqueSessionId);
+          } catch (err) {
+            console.error("[quaid] Reset project event failed:", (err as Error).message);
+          }
+        };
+
+        // Chain onto any in-flight extraction to avoid overwrite race
+        extractionPromise = (extractionPromise || Promise.resolve())
+          .catch(() => {})
+          .then(() => doExtraction());
       } catch (err) {
         console.error("[quaid] before_reset hook failed:", err);
       }
