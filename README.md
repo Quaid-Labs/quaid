@@ -37,9 +37,9 @@ node setup-quaid.mjs
 
 ## What is Quaid?
 
-OpenClaw ships with a built-in memory system that stores conversation history as chunked logs. It works, but it's basic -- keyword search over raw transcripts, no understanding of what's important, no maintenance over time. As conversations accumulate, recall quality degrades and token costs grow.
+OpenClaw ships with a built-in memory system that stores conversation history as chunked logs. It works, but it's basic -- keyword search over raw transcripts, no understanding of what's important, no maintenance over time. As conversations accumulate, recall quality degrades and token costs grow. The same problem hits markdown files -- SOUL.md, USER.md, and other core files bloat over time with redundant or outdated content, eating context window on every conversation.
 
-Quaid replaces that with structured, LLM-curated memory. Instead of logging everything, it extracts the important parts -- facts, relationships, preferences, personality insights -- and stores them in a local SQLite graph database. A nightly janitor reviews, deduplicates, resolves contradictions, and decays stale memories so the graph stays clean.
+Quaid replaces that with structured, LLM-curated memory. Instead of logging everything, it extracts the important parts -- facts, relationships, preferences, personality insights -- and stores them in a local SQLite graph database. A nightly janitor reviews, deduplicates, resolves contradictions, and decays stale memories so the graph stays clean. It also monitors your core markdown files for bloat and staleness, keeping them slim and laser-focused so you're not wasting tokens on dead weight every session.
 
 When your agent starts a new conversation, Quaid finds the right memories via hybrid search (vector + keyword + graph traversal) and injects only what's relevant. In benchmarks, Quaid achieves 87% of full-context performance while injecting typically a few thousand tokens instead of the entire conversation history.
 
