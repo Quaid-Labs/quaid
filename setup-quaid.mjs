@@ -1315,7 +1315,7 @@ print(total_docs)
     const quaidProjDir = path.join(PROJECTS_DIR, "quaid");
     fs.mkdirSync(quaidProjDir, { recursive: true });
     const quaidProjSrc = path.join(__dirname, "projects", "quaid");
-    for (const f of ["TOOLS.md", "AGENTS.md", "project_onboarding.md"]) {
+    for (const f of ["TOOLS.md", "AGENTS.md", "ARCHITECTURE.md", "project_onboarding.md"]) {
       const src = path.join(quaidProjSrc, f);
       const dst = path.join(quaidProjDir, f);
       if (fs.existsSync(src) && !fs.existsSync(dst)) {
@@ -1333,6 +1333,7 @@ print(total_docs)
         "## Key Files",
         "- `TOOLS.md` — CLI commands and agent tools reference",
         "- `AGENTS.md` — Instructions for how the agent should use memory",
+        "- `ARCHITECTURE.md` — Full system architecture and design",
         "- `project_onboarding.md` — Guide for discovering and registering projects",
         "",
         "## Systems",
