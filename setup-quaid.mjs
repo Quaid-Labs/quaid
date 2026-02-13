@@ -151,7 +151,7 @@ function shell(cmd, trim = true) {
 }
 
 function canRun(cmd) {
-  return spawnSync("which", [cmd], { stdio: "pipe" }).status === 0;
+  return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
 }
 
 function bail(msg) {
@@ -325,8 +325,8 @@ async function step1_preflight() {
 
   // --- Onboarding complete ---
   // Try both CLIs; pick whichever returns valid agent config (must contain "id")
-  const cbAgents = shell("clawdbot config get agents 2>/dev/null </dev/null | strings");
-  const ocAgents = shell("openclaw config get agents 2>/dev/null </dev/null | strings");
+  const cbAgents = shell("clawdbot config get agents 2>/dev/null </dev/null");
+  const ocAgents = shell("openclaw config get agents 2>/dev/null </dev/null");
   const agentConfig = (cbAgents.includes('"id"') ? cbAgents : null) ||
                       (ocAgents.includes('"id"') ? ocAgents : null) || "";
   if (!agentConfig.includes('"id"')) {
@@ -662,7 +662,7 @@ async function step4_embeddings() {
           execSync("brew install ollama", { stdio: "pipe" });
           execSync("brew services start ollama 2>/dev/null || true", { stdio: "pipe" });
         } else {
-          execSync("curl -fsSL https://ollama.ai/install.sh | sh", { stdio: "pipe" });
+          execSync("curl -fsSL https://ollama.ai/install.sh | sh", { stdio: "inherit" });
           execSync("ollama serve &>/dev/null &", { stdio: "pipe" });
         }
         await sleep(3000);
@@ -1049,8 +1049,9 @@ function installHeartbeatSchedule(hour) {
     let content = "";
     if (fs.existsSync(heartbeatPath)) {
       content = fs.readFileSync(heartbeatPath, "utf8");
-      // Remove any existing Quaid Janitor section
-      content = content.replace(/\n## Quaid Janitor[\s\S]*?(?=\n## |\n*$)/g, "");
+      // Remove any existing Quaid Janitor + Post-Janitor Review sections
+      content = content.replace(/\n## Quaid Janitor[^\n]*[\s\S]*?(?=\n## (?!Post-Janitor)|\s*$)/g, "");
+      content = content.replace(/\n## Post-Janitor Review[\s\S]*?(?=\n## |\s*$)/g, "");
     } else {
       content = "# HEARTBEAT.md\n\n# Periodic checks — the bot reads this on each heartbeat wake\n";
     }
@@ -1172,6 +1173,8 @@ conn.close()
 
   // Create owner Person node
   s.start("Creating owner node...");
+  const safeDisplay = owner.display.replace(/'/g, "\\'");
+  const safeId = owner.id.replace(/'/g, "\\'");
   const storeScript = `
 import os, sys
 os.environ['CLAWDBOT_WORKSPACE'] = '${WORKSPACE}'
@@ -1179,7 +1182,7 @@ os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from memory_graph import store
 try:
-    store('${owner.display}', owner_id='${owner.id}', category='person', source='installer')
+    store('${safeDisplay}', owner_id='${safeId}', category='person', source='installer')
 except Exception as e:
     print(f'warn: {e}', file=sys.stderr)
 `;
@@ -1220,7 +1223,7 @@ for fname in files:
         line = line.strip().lstrip('- ')
         if line and not line.startswith('#') and len(line) > 15:
             cat = 'preference' if any(w in line.lower() for w in ['prefer', 'like', 'enjoy', 'favorite']) else 'fact'
-            store(line, owner_id='${owner.id}', category=cat, source='migration')
+            store(line, owner_id='${safeId}', category=cat, source='migration')
             total += 1
 print(total)
 ` : `
@@ -1248,7 +1251,7 @@ Document ({fname}):\\n{content}"""
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict) and 'fact' in item:
-                    store(item['fact'], owner_id='${owner.id}', category=item.get('category', 'fact'), source='migration')
+                    store(item['fact'], owner_id='${safeId}', category=item.get('category', 'fact'), source='migration')
                     total += 1
 print(total)
 `;
@@ -1427,14 +1430,15 @@ async function step8_validate(owner, models, embeddings, systems) {
 
   // Smoke test
   s.start("Smoke test (store + recall)...");
+  const smokeSafeId = owner.id.replace(/'/g, "\\'");
   const smokeScript = `
 import os, sys
 os.environ['CLAWDBOT_WORKSPACE'] = '${WORKSPACE}'
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from memory_graph import store, recall
-node_id = store('Quaid installer smoke test fact', owner_id='${owner.id}', category='fact', source='installer-test')
-results = recall('installer smoke test', owner_id='${owner.id}', limit=1)
+node_id = store('Quaid installer smoke test fact', owner_id='${smokeSafeId}', category='fact', source='installer-test')
+results = recall('installer smoke test', owner_id='${smokeSafeId}', limit=1)
 if results:
     print('OK')
 else:
@@ -1517,6 +1521,9 @@ function findGateway() {
     "/opt/homebrew/lib/node_modules/openclaw",
     "/opt/homebrew/lib/node_modules/clawdbot",
     "/usr/local/lib/node_modules/openclaw",
+    "/usr/local/lib/node_modules/clawdbot",
+    "/usr/lib/node_modules/openclaw",
+    "/usr/lib/node_modules/clawdbot",
   ]) {
     if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
   }

@@ -153,7 +153,7 @@ After install:
 ```bash
 quaid doctor    # Verify everything is working
 quaid stats     # See your memory database
-quaid config    # Change settings anytime
+quaid config    # View current settings
 ```
 
 Quaid conserves context across restarts — when your agent compacts or resets, memories are extracted before the context is cleared. A full crash (kill -9, power loss) before compaction can cause memory loss for that session.
