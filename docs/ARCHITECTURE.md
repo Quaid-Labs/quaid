@@ -1,6 +1,6 @@
 # Quaid Architecture Guide
 
-Quaid is a memory system plugin for OpenClaw-compatible AI assistants. It extracts personal facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally — no cloud memory services, no external databases.
+Quaid is a memory system plugin for OpenClaw-compatible AI assistants. It extracts personal facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
 
 This document is for engineers who want to understand how the system works.
 
@@ -772,6 +772,8 @@ Level presets:
 | debug | full | full | full |
 
 Per-feature overrides take precedence over the master level.
+
+To change the notification level, ask your agent ("change notification level to quiet") or edit `config/memory.json` directly.
 
 ### Channel Routing
 
