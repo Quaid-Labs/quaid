@@ -475,7 +475,10 @@ async function step1_preflight() {
       if (_hasDb) { fs.copyFileSync(path.join(DATA_DIR, "memory.db"), path.join(backupDir, "memory.db")); count++; }
 
       note(
-        `${C.green(count + " files")} backed up to:\n${C.bcyan(backupDir)}`,
+        `${C.green(count + " files")} backed up to:\n${C.bcyan(backupDir)}\n\n` +
+        `To uninstall Quaid and restore this backup later:\n` +
+        `  curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/uninstall-quaid.sh | bash\n\n` +
+        `All backups are stored in ${C.bcyan("~/.quaid-backups/")}`,
         C.bmag("BACKUP COMPLETE")
       );
       await waitForKey();
@@ -1456,6 +1459,7 @@ else:
     `${C.bcyan("→")} Run ${C.bcyan("quaid stats")} to see your memory database grow`,
     "",
     C.dim(`Docs: ${PROJECT_URL}`),
+    C.dim(`Uninstall: curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/uninstall-quaid.sh | bash`),
   ].join("\n");
   note(nextSteps, C.bmag("NEXT STEPS"));
 
