@@ -32,7 +32,7 @@ feature stability before committing to a longer benchmark run.
 - Compare vs: Emergence AI (86%), Supermemory (81.6%), Zep+GPT-4o (71.2%)
 
 ### Purpose-Built Benchmark
-No existing benchmark fully evaluates long-running personal memory systems -- LoCoMo
+No existing benchmark fully evaluates long-running personal memory systems —LoCoMo
 comes closest, but the field needs a dataset that tests the full lifecycle: multi-session
 accumulation, fact evolution over time, maintenance decisions, and project-level awareness.
 Building one is a priority, but creating a rigorous, peer-reviewable dataset is costly and
