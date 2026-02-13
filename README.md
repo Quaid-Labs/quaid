@@ -59,7 +59,12 @@ Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (AC
 
 **Token efficiency:** Quaid retrieves ~10 relevant facts per query, averaging **~200 tokens** of injected memory context. That's it —no raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a low-reasoning LLM reranker call (~$0.01).
 
+> Quaid result uses recommended settings (high-reasoning LLM + Ollama embeddings).
 > Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
+> Full-context baselines: low-reasoning LLM 79.6%, high-reasoning LLM 86.6%.
+>
+> **Understanding the LLM split:** In this benchmark, the "high-reasoning" vs "low-reasoning" result reflects which LLM synthesizes the answer from retrieved facts. In production, there's no separate answer step —Quaid passes retrieved memories directly to whatever LLM the agent is already using. If your agent runs on a high-reasoning model (as most OpenClaw setups do), the 75.0% result is the relevant one. The low-reasoning result (70.3%) shows the lower bound when the answering model is weaker.
+>
 > Full methodology and per-category breakdowns: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
 ---
