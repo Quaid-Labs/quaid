@@ -50,22 +50,25 @@ When your agent starts a new conversation, Quaid finds the right memories via hy
 
 Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (ACL 2024) using Mem0's exact evaluation methodology — same judge model (GPT-4o-mini), same prompt, same scoring. 10 long conversations, 1,540 scored question-answer pairs testing memory extraction, temporal reasoning, and multi-hop recall.
 
+All systems use a comparable low-reasoning model for answer generation (Haiku for Quaid, GPT-4o-mini for others):
+
 | System | Accuracy | Notes |
 |--------|----------|-------|
-| **Quaid** | **75.0%** | About 200 tokens of memory injected per query |
+| **Quaid** | **70.3%** | About 200 tokens of memory injected per query |
 | Mem0 (guided) | 68.9% | |
 | Mem0 | 66.9% | |
 | Zep | 66.0% | |
 | LangMem | 58.1% | |
 | OpenAI Memory | 52.9% | |
 
+With a high-reasoning answer model (recommended production config): **Quaid 75.0%**.
+
 **Token efficiency:** Quaid retrieves about 10 relevant facts per query, averaging **about 200 tokens** of injected memory context. That's it. No raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a low-reasoning LLM reranker call (about $0.01).
 
-> Quaid result uses recommended settings (high-reasoning LLM + Ollama embeddings).
 > Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
 > Full-context baselines: low-reasoning LLM 79.6%, high-reasoning LLM 86.6%.
 >
-> **Understanding the LLM split:** In this benchmark, the "high-reasoning" vs "low-reasoning" result reflects which LLM synthesizes the answer from retrieved facts. In production, there's no separate answer step — Quaid passes retrieved memories directly to whatever LLM the agent is already using. If your agent runs on a high-reasoning model (as most OpenClaw setups do), the 75.0% result is the relevant one. The low-reasoning result (70.3%) shows the lower bound when the answering model is weaker.
+> **Understanding the results:** The table above uses a low-reasoning model (Haiku) for answer generation to match the model tier that other systems use (GPT-4o-mini). In production, there's no separate answer step — Quaid passes retrieved memories directly to whatever LLM the agent is already using. If your agent runs on a high-reasoning model (as most OpenClaw setups do), the 75.0% result is the relevant one.
 >
 > Full methodology and per-category breakdowns: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
