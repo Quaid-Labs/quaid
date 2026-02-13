@@ -158,6 +158,14 @@ quaid config    # Change settings anytime
 
 Quaid conserves context across restarts — when your agent compacts or resets, memories are extracted before the context is cleared. A full crash (kill -9, power loss) before compaction can cause memory loss for that session.
 
+### Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/uninstall-quaid.sh | bash
+```
+
+Restores workspace files from backup and removes the plugin. Your memory database is preserved by default.
+
 ---
 
 ## Early Alpha

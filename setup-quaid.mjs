@@ -464,7 +464,7 @@ async function step1_preflight() {
     const doBackup = handleCancel(await confirm({ message: "Create a backup now?" }));
     if (doBackup) {
       const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const backupDir = path.join(WORKSPACE, `.quaid-backup-${ts}`);
+      const backupDir = path.join(os.homedir(), ".quaid-backups", ts);
       fs.mkdirSync(backupDir, { recursive: true });
       let count = 0;
       for (const f of ["SOUL.md", "USER.md", "MEMORY.md", "TOOLS.md", "AGENTS.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md"]) {
