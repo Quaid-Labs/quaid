@@ -402,36 +402,112 @@ cmd_janitor() {
 }
 
 cmd_uninstall() {
+    local BACKUP_DIR="$HOME/.quaid-backups"
+
     echo -e "${BOLD}Quaid Uninstaller${RESET}"
     echo ""
-    warn "This will remove the Quaid plugin from your workspace."
-    echo "  Your memory database will be backed up before removal."
+
+    # --- List available backups ---
+    local RESTORE_FROM=""
+    if [[ -d "$BACKUP_DIR" ]]; then
+        local -a BACKUPS=()
+        while IFS= read -r d; do
+            [[ -d "$d" ]] && BACKUPS+=("$d")
+        done < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r)
+
+        if [[ ${#BACKUPS[@]} -gt 0 ]]; then
+            echo -e "${BOLD}Available backups:${RESET}"
+            for i in "${!BACKUPS[@]}"; do
+                local bdir="${BACKUPS[$i]}"
+                local fcount
+                fcount=$(find "$bdir" -type f | wc -l | tr -d ' ')
+                echo -e "  ${GREEN}$((i+1)))${RESET} $(basename "$bdir") ($fcount files)"
+            done
+            echo ""
+            echo -n "Restore from backup? Enter number (or 'n' to skip): "
+            read -r choice
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le ${#BACKUPS[@]} ]]; then
+                RESTORE_FROM="${BACKUPS[$((choice-1))]}"
+                info "Will restore from: $(basename "$RESTORE_FROM")"
+            fi
+        fi
+    fi
+
     echo ""
-    echo -en "${BOLD}Are you sure? [y/N]${RESET} "
+    echo -e "${YELLOW}This will:${RESET}"
+    echo "  - Remove the Quaid plugin directory"
+    echo "  - Remove Quaid config (config/memory.json)"
+    echo "  - Remove Quaid project docs (projects/quaid/)"
+    if [[ -n "$RESTORE_FROM" ]]; then
+        echo -e "  - ${GREEN}Restore workspace files from backup${RESET}"
+    fi
+    echo ""
+    echo -e "  ${CYAN}Your memory database will NOT be deleted${RESET}"
+    echo -e "  To also delete: rm ${DATA_DIR}/memory.db"
+    echo ""
+    echo -en "${BOLD}Continue? [y/N]${RESET} "
     read -r REPLY
     if [[ ! "$REPLY" =~ ^[Yy] ]]; then
-        echo "Aborted."
+        echo "Cancelled."
         exit 0
     fi
 
-    # Backup database
-    if [[ -f "${DATA_DIR}/memory.db" ]]; then
-        local backup="${DATA_DIR}/memory.db.uninstall-backup.$(date +%s)"
-        cp "${DATA_DIR}/memory.db" "$backup"
-        info "Database backed up to ${backup}"
+    echo ""
+
+    # --- Restore from backup ---
+    if [[ -n "$RESTORE_FROM" ]]; then
+        info "Restoring files from backup..."
+        local restored=0
+        for f in "$RESTORE_FROM"/*; do
+            [[ ! -f "$f" ]] && continue
+            local fname
+            fname=$(basename "$f")
+            case "$fname" in
+                memory.json)
+                    cp "$f" "${CONFIG_DIR}/memory.json" 2>/dev/null && ((restored++)) || true
+                    ;;
+                memory.db) ;; # Don't restore DB — it's not deleted
+                *)
+                    cp "$f" "${WORKSPACE_ROOT}/$fname" 2>/dev/null && ((restored++)) || true
+                    ;;
+            esac
+        done
+        info "Restored $restored files."
     fi
 
-    # Backup config
-    if [[ -f "${CONFIG_DIR}/memory.json" ]]; then
-        local cfg_backup="${CONFIG_DIR}/memory.json.uninstall-backup.$(date +%s)"
-        cp "${CONFIG_DIR}/memory.json" "$cfg_backup"
-        info "Config backed up to ${cfg_backup}"
+    # --- Remove plugin ---
+    if [[ -d "$PLUGIN_DIR" ]]; then
+        rm -rf "$PLUGIN_DIR"
+        info "Removed plugin directory"
     fi
 
-    info "Quaid data preserved in backups above."
-    info "To fully remove, delete: ${PLUGIN_DIR}/ and ${DATA_DIR}/memory.db"
-    warn "Plugin directory NOT removed (may contain customizations)."
-    warn "Run 'rm -rf ${PLUGIN_DIR}' to fully remove if desired."
+    # --- Remove config (unless restored) ---
+    if [[ -f "${CONFIG_DIR}/memory.json" ]] && [[ -z "$RESTORE_FROM" ]]; then
+        rm -f "${CONFIG_DIR}/memory.json"
+        info "Removed config/memory.json"
+    fi
+
+    # --- Remove project docs ---
+    if [[ -d "${WORKSPACE_ROOT}/projects/quaid" ]]; then
+        rm -rf "${WORKSPACE_ROOT}/projects/quaid"
+        info "Removed projects/quaid/"
+    fi
+
+    # --- Clean snippet files ---
+    if [[ -d "${WORKSPACE_ROOT}/journal" ]]; then
+        find "${WORKSPACE_ROOT}/journal" -name "*.snippets.md" -delete 2>/dev/null || true
+        info "Removed snippet files (journal entries preserved)"
+    fi
+
+    echo ""
+    info "Quaid has been uninstalled."
+    echo ""
+    info "Memory database: ${DATA_DIR}/memory.db"
+    info "Backups: ${BACKUP_DIR}"
+    echo ""
+    echo -e "To reinstall:"
+    echo -e "  ${BOLD}curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash${RESET}"
+    echo ""
 }
 
 cmd_upgrade() {

@@ -599,6 +599,7 @@ async function step3_models() {
     ],
   }));
   log.info(C.dim("Notifications are sent on whatever channel you use to talk to your bot."));
+  log.info(C.dim("You can ask your agent to change this anytime — just say \"change notification level\"."));
 
   return {
     provider,
