@@ -77,7 +77,7 @@ fi
 # --- Detect workspace ---
 # setup-quaid.mjs uses CLAWDBOT_WORKSPACE or cwd. Auto-detect if not set.
 if [[ -z "${CLAWDBOT_WORKSPACE:-}" ]]; then
-    for dir in "$HOME/clawd" "$HOME/.config/openclaw"; do
+    for dir in "$HOME/.openclaw/workspace" "$HOME/clawd" "$HOME/.config/openclaw"; do
         if [[ -d "$dir" ]] && ( [[ -f "$dir/SOUL.md" ]] || [[ -d "$dir/plugins" ]] || [[ -f "$dir/IDENTITY.md" ]] ); then
             export CLAWDBOT_WORKSPACE="$dir"
             info "Detected workspace: $dir"
