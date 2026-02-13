@@ -74,7 +74,35 @@ if [[ -z "$RELEASE_DIR" || ! -f "$RELEASE_DIR/setup-quaid.mjs" ]]; then
     exit 1
 fi
 
+# --- Detect workspace ---
+# setup-quaid.mjs uses CLAWDBOT_WORKSPACE or cwd. Auto-detect if not set.
+if [[ -z "${CLAWDBOT_WORKSPACE:-}" ]]; then
+    for dir in "$HOME/clawd" "$HOME/.config/openclaw"; do
+        if [[ -d "$dir" ]] && ( [[ -f "$dir/SOUL.md" ]] || [[ -d "$dir/plugins" ]] || [[ -f "$dir/IDENTITY.md" ]] ); then
+            export CLAWDBOT_WORKSPACE="$dir"
+            info "Detected workspace: $dir"
+            break
+        fi
+    done
+    # If still not found, check if clawdbot/openclaw can tell us
+    if [[ -z "${CLAWDBOT_WORKSPACE:-}" ]]; then
+        if command -v clawdbot &>/dev/null; then
+            WS=$(clawdbot config get workspace 2>/dev/null || true)
+            if [[ -n "$WS" && -d "$WS" ]]; then
+                export CLAWDBOT_WORKSPACE="$WS"
+                info "Detected workspace from gateway: $WS"
+            fi
+        fi
+    fi
+    # Last resort: default to ~/clawd
+    if [[ -z "${CLAWDBOT_WORKSPACE:-}" ]]; then
+        export CLAWDBOT_WORKSPACE="$HOME/clawd"
+        info "Using default workspace: $HOME/clawd"
+    fi
+fi
+
 # --- Run guided installer ---
 ok "Downloaded. Starting guided installer..."
 echo ""
+cd "$CLAWDBOT_WORKSPACE" 2>/dev/null || true
 exec node "$RELEASE_DIR/setup-quaid.mjs"
