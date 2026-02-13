@@ -182,4 +182,4 @@ We're actively testing and refining the system against benchmarks and welcome co
 
 ## License
 
-MIT -- see [LICENSE](LICENSE).
+Apache 2.0 -- see [LICENSE](LICENSE).
