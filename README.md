@@ -14,6 +14,10 @@ Quaid is a memory plugin built for the OpenClaw AI agent framework. It could be 
 
 ---
 
+## How to Install
+
+Paste this into a terminal. The guided installer walks you through setup in about two minutes.
+
 **Mac / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rekall-inc/quaid/main/install.sh | bash
