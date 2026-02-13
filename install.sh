@@ -63,8 +63,12 @@ fi
 info "Extracting..."
 tar xzf "$INSTALL_DIR/quaid.tar.gz" -C "$INSTALL_DIR"
 
-# Find the extracted directory (could be quaid-release or quaid-YYYYMMDD)
-RELEASE_DIR=$(find "$INSTALL_DIR" -maxdepth 1 -type d -name "quaid*" | head -1)
+# Find setup-quaid.mjs (could be flat or in a subdirectory)
+if [[ -f "$INSTALL_DIR/setup-quaid.mjs" ]]; then
+    RELEASE_DIR="$INSTALL_DIR"
+else
+    RELEASE_DIR=$(find "$INSTALL_DIR" -maxdepth 1 -type d -name "quaid*" | head -1)
+fi
 if [[ -z "$RELEASE_DIR" || ! -f "$RELEASE_DIR/setup-quaid.mjs" ]]; then
     error "Archive doesn't contain setup-quaid.mjs"
     exit 1
