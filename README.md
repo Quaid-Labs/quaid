@@ -57,7 +57,7 @@ Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (AC
 | LangMem | 58.1% | |
 | OpenAI Memory | 52.9% | |
 
-**Token efficiency:** Quaid retrieves ~10 relevant facts per query, averaging **~200 tokens** of injected memory context. That's it —no raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a low-reasoning LLM reranker call (~$0.01).
+**Token efficiency:** Quaid retrieves ~10 relevant facts per query, averaging **~200 tokens** of injected memory context. That's it. No raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a low-reasoning LLM reranker call (~$0.01).
 
 > Quaid result uses recommended settings (high-reasoning LLM + Ollama embeddings).
 > Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
