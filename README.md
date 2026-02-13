@@ -37,11 +37,11 @@ node setup-quaid.mjs
 
 ## What is Quaid?
 
-Quaid gives your AI agent persistent, long-term memory across conversations. Instead of losing everything when a session ends, Quaid extracts the important parts -- facts, relationships, preferences, personality insights -- and stores them locally in a SQLite graph database on your machine.
+OpenClaw ships with a built-in memory system that stores conversation history as chunked logs. It works, but it's basic -- keyword search over raw transcripts, no understanding of what's important, no maintenance over time. As conversations accumulate, recall quality degrades and token costs grow.
 
-When your agent starts a new conversation, Quaid finds the right memories and injects them automatically. Your agent remembers who you are, what you're working on, and how you like things done -- without re-explaining every time.
+Quaid replaces that with structured, LLM-curated memory. Instead of logging everything, it extracts the important parts -- facts, relationships, preferences, personality insights -- and stores them in a local SQLite graph database. A nightly janitor reviews, deduplicates, resolves contradictions, and decays stale memories so the graph stays clean.
 
-This dramatically reduces token use compared to stuffing full conversation history into context. In benchmarks, Quaid achieves 87% of full-context performance while injecting only the relevant memories -- typically a few thousand tokens instead of the entire transcript.
+When your agent starts a new conversation, Quaid finds the right memories via hybrid search (vector + keyword + graph traversal) and injects only what's relevant. In benchmarks, Quaid achieves 87% of full-context performance while injecting typically a few thousand tokens instead of the entire conversation history.
 
 ---
 
