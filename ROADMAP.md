@@ -40,7 +40,7 @@ showed +5.4pp but at 2.7x token cost. The fix is intent-aware context expansion:
 open-domain queries get a wider retrieval window (more results, lower similarity
 threshold, more graph hops), while lookup queries stay tight. The intent
 classification system is already in place.
-- Per-intent retrieval parameters (already prototyped in A/B test battery)
+- Per-intent retrieval parameters
 - Semantic cluster summaries for GENERAL and WHY intents
 - Routed retrieval: open-domain gets journal + synthesis prompt, others get standard
 

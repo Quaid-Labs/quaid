@@ -427,7 +427,7 @@ Takes a list of dicts (with `date`, `trigger`, `content` keys), NOT a list of da
 The LLM may return arrays instead of strings for `journal_entries` values. The code handles both, but new callers must be aware of this.
 
 #### Journal Archive After Distillation
-After a full janitor run, journal entries get distilled into core markdown then archived to `journal/archive/*.md`. The main `*.journal.md` file is left empty (just a header). For A/B tests, you must load `journal/archive/*.md` too -- otherwise "with journal" is identical to "standard" (both empty).
+After a full janitor run, journal entries get distilled into core markdown then archived to `journal/archive/*.md`. The main `*.journal.md` file is left empty (just a header). When evaluating the journal system, you must load `journal/archive/*.md` too -- otherwise "with journal" is identical to "standard" (both empty).
 
 ### Benchmarks & Evaluation
 
@@ -444,7 +444,7 @@ Evolution chain queries need a `required_week` field. Without it, queries for un
 Must end with "Answer yes or no only." Uses the paper's exact format: "Correct Answer:" (capital A), "Model Response:" (capital R), "Rubric:" (not "Desired response rubric:"). Reference implementation at `xiaowu0162/LongMemEval/src/evaluation/evaluate_qa.py`.
 
 #### Parallel Eval Output Collision
-When running A/B evaluations in parallel, MUST use separate `--results-dir` values. Both write `evaluation_results.json` per conversation and `locomo_results.json`, silently overwriting each other.
+When running evaluations in parallel, MUST use separate `--results-dir` values. Both write `evaluation_results.json` per conversation and `locomo_results.json`, silently overwriting each other.
 
 #### Python stdout Buffering
 When running eval scripts in background, use `PYTHONUNBUFFERED=1` and `python3 -u`. Otherwise output is fully buffered and monitoring shows nothing until the process exits.

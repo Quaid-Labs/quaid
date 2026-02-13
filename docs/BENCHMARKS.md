@@ -50,23 +50,7 @@ All competitor systems use GPT-4o-mini for answer generation. Quaid (Haiku) is t
 
 ### Where Mem0 Wins
 
-- **Open-domain (-14pp vs Mem0):** Open-domain questions require broader contextual inference rather than precision lookup -- asking what someone might think about a topic, or inferring personality traits from scattered facts. Quaid's retrieval pipeline is optimized for precision (exact facts, graph traversal, entity resolution), which excels at lookup queries but retrieves too narrowly for open-ended reasoning. Mem0 and Zep's chunk-based retrieval surfaces more contextual material, giving the answer model more to reason over. Our A/B testing confirms that wider context injection (via journal archives) improves open-domain by +14.6pp, and we're building intent-aware context expansion so open-domain queries automatically get a broader retrieval window.
-
----
-
-## Journal A/B Test
-
-Early data from an A/B test of the journal system, which injects archived journal entries (~40-50% more context) alongside distilled core markdown:
-
-| Config | Accuracy | Avg Tokens/Query | Relative Cost |
-|--------|----------|-------------------|---------------|
-| Standard (core markdown only) | 69.1% | ~3,725 | 1x |
-| Journal (core markdown + archives) | 74.5% | ~10,079 | 2.7x |
-| Recommended (Opus, no journal) | 75.0% | ~3,725 | ~5x |
-
-Journal injection showed a +5.4pp improvement with Haiku answers, nearly matching Opus. However, the 2.7x token increase raises scalability concerns for long-running agents with large journal archives. We are actively working to make journal injection more cost-effective before recommending it as a default configuration.
-
-Notably, journal+Haiku achieves near-Opus accuracy (74.5% vs 75.0%) at roughly half the per-query cost, suggesting that richer context can partially substitute for a more capable answer model.
+- **Open-domain (-14pp vs Mem0):** Open-domain questions require broader contextual inference rather than precision lookup -- asking what someone might think about a topic, or inferring personality traits from scattered facts. Quaid's retrieval pipeline is optimized for precision (exact facts, graph traversal, entity resolution), which excels at lookup queries but retrieves too narrowly for open-ended reasoning. Mem0 and Zep's chunk-based retrieval surfaces more contextual material, giving the answer model more to reason over. Early experiments with wider context injection (via journal archives) show promising open-domain improvements, and we're building intent-aware context expansion so open-domain queries automatically get a broader retrieval window.
 
 ---
 
@@ -180,7 +164,6 @@ Mem0 uses GPT-4o-mini for answer generation. We report both Haiku answers (simil
 ## Next Benchmarks
 
 - **LongMemEval** (ICLR 2025): Code written and smoke-tested at `benchmark/longmemeval/`. 500 QA pairs across 7 question types and 19,195 sessions. Pending full evaluation run. Top reported scores: Emergence AI 86%, Supermemory 81.6%, Zep+GPT-4o 71.2%.
-- **Ablation study**: A 19-variant A/B test battery is in progress, measuring the contribution of individual retrieval components (HyDE, reranker, graph traversal, multi-pass, intent classification, entity aliases). Results will quantify what each component is worth.
 - **Purpose-built lifecycle benchmark**: A longer-term project to build a dataset that tests the full memory lifecycle -- multi-session accumulation, fact evolution, maintenance decisions, and project-level awareness. No existing benchmark covers this. See [ROADMAP.md](../ROADMAP.md).
 
 ---
