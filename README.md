@@ -163,10 +163,10 @@ Quaid conserves context across restarts — when your agent compacts or resets, 
 ### Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/uninstall-quaid.sh | bash
+quaid uninstall
 ```
 
-Restores workspace files from backup and removes the plugin. Your memory database is preserved by default.
+Lists available backups, offers to restore, and removes the plugin. Your memory database is preserved by default.
 
 ---
 
