@@ -477,7 +477,7 @@ async function step1_preflight() {
       note(
         `${C.green(count + " files")} backed up to:\n${C.bcyan(backupDir)}\n\n` +
         `To uninstall Quaid and restore this backup later:\n` +
-        `  curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/uninstall-quaid.sh | bash\n\n` +
+        `  ${C.bcyan("quaid uninstall")}\n\n` +
         `All backups are stored in ${C.bcyan("~/.quaid-backups/")}`,
         C.bmag("BACKUP COMPLETE")
       );
@@ -1464,7 +1464,7 @@ else:
     `${C.bcyan("→")} Run ${C.bcyan("quaid stats")} to see your memory database grow`,
     "",
     C.dim(`Docs: ${PROJECT_URL}`),
-    C.dim(`Uninstall: curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/uninstall-quaid.sh | bash`),
+    C.dim(`Uninstall: quaid uninstall`),
   ].join("\n");
   note(nextSteps, C.bmag("NEXT STEPS"));
 
