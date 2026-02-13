@@ -10,11 +10,11 @@
 
 ### Memory and project management plugin for [OpenClaw](https://github.com/openclaw/openclaw)
 
-Quaid is a memory plugin built for the OpenClaw AI agent framework. It could be adapted to other platforms, but OpenClaw is the native environment and the only one we test against.
+> **Early alpha** — launched February 2026, active daily development.
 
 ---
 
-## How to Install
+## Install
 
 Paste this into a terminal. The guided installer walks you through setup in about two minutes.
 
@@ -34,15 +34,29 @@ git clone https://github.com/steadman-labs/quaid.git
 cd quaid && node setup-quaid.mjs
 ```
 
+After install:
+
+```bash
+quaid doctor    # Verify everything is working
+quaid stats     # See your memory database
+quaid config    # View current settings
+```
+
+Quaid conserves context across restarts — when your agent compacts or resets, memories are extracted before the context is cleared. A full crash (kill -9, power loss) before compaction can cause memory loss for that session.
+
+### Uninstall
+
+```bash
+quaid uninstall
+```
+
+Lists available backups, offers to restore your core markdown to its pre-install state, and removes the plugin. Your memory database is preserved by default.
+
 ---
 
 ## What is Quaid?
 
-OpenClaw ships with a built-in memory system that stores conversation history as chunked logs. It works, but it's basic — keyword search over raw transcripts, no understanding of what's important, no maintenance over time. As conversations accumulate, recall quality degrades and token costs grow. The same problem hits markdown files — SOUL.md, USER.md, and other core files bloat over time with redundant or outdated content, eating context window on every conversation.
-
-Quaid replaces that with structured, LLM-curated memory. Instead of logging everything, it extracts the important parts — facts, relationships, preferences, personality insights — and stores them in a local SQLite graph database. A nightly janitor reviews, deduplicates, resolves contradictions, and decays stale memories so the graph stays clean. It also monitors your core markdown files for bloat and staleness, keeping them slim and laser-focused so you're not wasting tokens on dead weight every session.
-
-When your agent starts a new conversation, Quaid finds the right memories via hybrid search (vector + keyword + graph traversal) and injects only what's relevant. In benchmarks, Quaid achieves 94% of full-context performance while injecting about 200 tokens of retrieved facts per query — not thousands of tokens of raw conversation history.
+Quaid extracts the important parts of conversations — facts, relationships, preferences, personality insights — and stores them in a local SQLite graph database. A nightly janitor reviews, deduplicates, resolves contradictions, and decays stale memories so the graph stays clean. It also monitors your core markdown files for bloat and staleness, and tracks project documentation so your agent has a complete, current picture of everything it works on. In benchmarks, Quaid achieves 88% of full-context performance while injecting about 200 tokens of retrieved facts per query.
 
 ---
 
@@ -50,16 +64,16 @@ When your agent starts a new conversation, Quaid finds the right memories via hy
 
 Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (ACL 2024) using Mem0's exact evaluation methodology — same judge model (GPT-4o-mini), same prompt, same scoring. 10 long conversations, 1,540 scored question-answer pairs testing memory extraction, temporal reasoning, and multi-hop recall.
 
-| System | Haiku / GPT-4o-mini | Opus | Notes |
-|--------|---------------------|------|-------|
-| **Quaid** | **70.3%** | **75.0%** | About 200 tokens of memory per query |
-| Mem0 (guided) | 68.9% | | |
-| Mem0 | 66.9% | | |
-| Zep | 66.0% | | |
-| LangMem | 58.1% | | |
-| OpenAI Memory | 52.9% | | |
+| System | Accuracy | Answer Model |
+|--------|----------|-------------|
+| **Quaid** | **70.3%** | Haiku |
+| Mem0 (graphRAG) | 68.9% | GPT-4o-mini |
+| Mem0 | 66.9% | GPT-4o-mini |
+| Zep | 66.0% | GPT-4o-mini |
+| LangMem | 58.1% | GPT-4o-mini |
+| OpenAI Memory | 52.9% | GPT-4o-mini |
 
-The Haiku column is the fair comparison — all systems use a comparable low-reasoning model for answer generation. The Opus column reflects the recommended production config, where Quaid passes retrieved memories to whatever LLM the agent is already using.
+With Opus answering (recommended production config): **75.0%**
 
 We're currently running a 19-variant ablation study to measure what each retrieval component contributes (HyDE, reranker, graph traversal, multi-pass, etc.). Results will be published in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) when complete.
 
@@ -70,53 +84,42 @@ We're currently running a 19-variant ablation study to measure what each retriev
 >
 > Full methodology and per-category breakdowns: [docs/BENCHMARKS.md](docs/BENCHMARKS.md)
 
-LoCoMo evaluates personal fact recall — one of Quaid's three memory areas. The benchmark doesn't measure project documentation tracking, auto-doc refresh from git diffs, or workspace context management, which have no equivalent in Mem0, Zep, or the other systems tested.
-
----
-
-## Three Memory Areas
-
-Quaid organizes knowledge into three distinct areas, each with different retrieval behavior:
-
-**Fact memory** — User facts, relationships, preferences, experiences. Retrieved via hybrid search with LLM reranking — only the most relevant facts are injected per query. This is your agent's long-term factual recall.
-
-**Core personality** — Deeper understanding of the user, the agent's own identity, and the world around it. Loaded as full context on every conversation — always available, always current. This is where your agent's personality, values, and operational knowledge live.
-
-**Project knowledge** — Documentation, project structure, tool APIs. Available via RAG search — full documents loaded when relevant. This keeps detailed system knowledge out of core context (where it would waste tokens every turn) while giving the LLM access to the complete reference when it needs it. Projects aren't just code — this covers any sustained effort: a codebase, an essay, a YouTube channel, a home renovation.
+LoCoMo evaluates personal fact recall — one of Quaid's three memory areas. The benchmark doesn't measure project documentation tracking, auto-doc refresh, or workspace context management, which have no equivalent in the other systems tested.
 
 ---
 
 ## How It Works
 
-Quaid is built around four systems:
+Quaid organizes knowledge into three areas, each with different retrieval behavior, and maintains them with four systems.
 
-**Memory** — The core fact store. Conversations are distilled into structured facts, relationships, and preferences stored in a SQLite graph database. Retrieval uses hybrid search (vector + keyword + graph traversal), LLM reranking, and intent-aware fusion to find the right memories at the right time.
+### Three memory areas
 
-**Journal & Personality** — A dual learning system. Fast-path *snippets* capture small observations and fold them into core personality files. Slow-path *journal entries* accumulate over time and get distilled into deeper insights. The journal fills the gap between explicit raw facts and the kind of perceived, inferred understanding that makes an agent feel like it actually knows you.
+**Fact memory** — User facts, relationships, preferences, experiences. Retrieved via hybrid search (vector + keyword + graph traversal) with LLM reranking — only the most relevant facts are injected per query.
 
-**Projects & Docs** — Tracks project documentation, auto-discovers project structure, and keeps docs current from git changes. Systems documentation needs to be comprehensive — partial or outdated docs are worse than no docs, because they mislead the LLM. The doc refresh system ensures your agent always has a complete, current picture of every project. This also keeps system-level knowledge out of the memory graph, where it would pollute fact retrieval with implementation details.
+**Core personality** — Deeper understanding of the user, the agent's own identity, and the world around it. Loaded as full context on every conversation — always available, always current.
 
-**Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where high-reasoning LLMs can curate memories economically. Instead of spending premium LLM calls on every fact as it arrives, the janitor reviews, deduplicates, resolves contradictions, decays stale memories, and monitors documentation health in bulk.
+**Project knowledge** — Documentation, project structure, tool APIs. Available via RAG search — full documents loaded when relevant. Projects aren't just code — this covers any sustained effort: a codebase, an essay, a YouTube channel, a home renovation.
 
----
+### Four systems
 
-## Features
+**Memory** — Conversations are distilled into structured facts, relationships, and preferences stored in a SQLite graph database. Retrieval uses hybrid search, LLM reranking, and intent-aware fusion to find the right memories at the right time.
 
-- **Automatic fact extraction** — Facts and relationships pulled from conversations at compaction, no manual tagging
-- **Semantic + keyword search** — Hybrid retrieval combining vector embeddings, full-text search, and graph traversal
-- **Nightly maintenance** — Janitor pipeline deduplicates, resolves contradictions, and decays stale memories using high-reasoning LLMs
-- **Personality evolution** — Journal and snippet systems let your agent develop and refine its understanding over time
-- **Project tracking** — Curates and refreshes documentation for AI ingestion, helping your agent remember all parts of a project — not just the files it recently touched
-- **Multi-provider** — Anthropic recommended. OpenAI-compatible APIs supported but experimental and not fully tested.
-- **Local embeddings** — Ollama runs on your machine for embedding generation. Fits on a 16GB Mac mini alongside the rest of the system.
+**Journal & Personality** — A dual learning system. Fast-path *snippets* capture small observations and fold them into core personality files. Slow-path *journal entries* accumulate over time and get distilled into deeper insights — the kind of perceived, inferred understanding that makes an agent feel like it actually knows you.
+
+**Projects & Docs** — Auto-discovers project structure, tracks documentation, and keeps docs current from git changes. Comprehensive docs beat partial docs — partial or outdated docs mislead the LLM. This also keeps system-level knowledge out of the memory graph, where it would pollute fact retrieval.
+
+**Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where high-reasoning LLMs can curate memories economically. Reviews, deduplicates, resolves contradictions, decays stale memories, and monitors documentation health in bulk.
 
 ---
 
-## LLM-First Methodology
+<details>
+<summary><strong>Design Philosophy: LLM-First</strong></summary>
 
 Almost every decision in Quaid is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. The system splits work between a **high-reasoning LLM** (fact review, contradiction resolution, journal distillation) and a **low-reasoning LLM** (reranking, dedup verification, query expansion) to balance quality against cost and speed. The low-reasoning model isn't just cheaper — it's fast. Memory recall needs to feel instant, not take three seconds waiting on a premium model to rerank results.
 
 Because the system leans heavily on LLM reasoning, Quaid naturally scales with AI models — as reasoning capabilities improve, every decision in the pipeline gets better without code changes.
+
+</details>
 
 ---
 
@@ -139,34 +142,6 @@ Because the system leans heavily on LLM reasoning, Quaid naturally scales with A
 - SQLite 3.35+
 - [Ollama](https://ollama.ai) (for local embeddings)
 - An LLM API key (Anthropic recommended)
-
----
-
-## Quick Start
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash
-```
-
-The guided installer walks you through setup: identity, model selection, embedding configuration, and system toggles. Takes about two minutes.
-
-After install:
-
-```bash
-quaid doctor    # Verify everything is working
-quaid stats     # See your memory database
-quaid config    # View current settings
-```
-
-Quaid conserves context across restarts — when your agent compacts or resets, memories are extracted before the context is cleared. A full crash (kill -9, power loss) before compaction can cause memory loss for that session.
-
-### Uninstall
-
-```bash
-quaid uninstall
-```
-
-Lists available backups, offers to restore, and removes the plugin. Your memory database is preserved by default.
 
 ---
 
