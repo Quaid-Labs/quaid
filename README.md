@@ -16,22 +16,21 @@ Quaid is a memory plugin built for the OpenClaw AI agent framework. It could be 
 
 ## How to Install
 
-Paste this into a terminal. The guided installer walks you through setup in about two minutes.
-
 **Mac / Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rekall-inc/quaid/main/install.sh | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/rekall-inc/quaid/main/install.ps1 | iex
-```
-
-**Manual (all platforms):**
-```bash
+git clone https://github.com/steadman-labs/quaid.git
+cd quaid
 node setup-quaid.mjs
 ```
+
+**Windows (experimental):**
+```powershell
+git clone https://github.com/steadman-labs/quaid.git
+cd quaid
+node setup-quaid.mjs
+```
+
+The guided installer walks you through setup in about two minutes.
 
 ---
 
@@ -141,11 +140,12 @@ Because the system leans heavily on LLM reasoning, Quaid naturally scales with A
 ## Quick Start
 
 ```bash
-# One-line install (Mac / Linux)
-curl -fsSL https://raw.githubusercontent.com/rekall-inc/quaid/main/install.sh | bash
+git clone https://github.com/steadman-labs/quaid.git
+cd quaid
+node setup-quaid.mjs
 ```
 
-The installer walks you through setup: identity, model selection, embedding configuration, and system toggles. Takes about two minutes.
+The guided installer walks you through setup: identity, model selection, embedding configuration, and system toggles. Takes about two minutes.
 
 After install:
 
