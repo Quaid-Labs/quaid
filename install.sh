@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Quaid Memory Plugin — One-Line Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/rekall-inc/quaid/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash
 set -euo pipefail
 
 VERSION="${QUAID_VERSION:-latest}"
-REPO="rekall-inc/quaid"
+REPO="steadman-labs/quaid"
 TMPDIR="${TMPDIR:-/tmp}"
 INSTALL_DIR="$TMPDIR/quaid-install-$$"
 

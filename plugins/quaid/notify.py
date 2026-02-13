@@ -605,7 +605,7 @@ def notify_janitor_summary(
         msg_parts.append(f"v{update_info['current']} → v{update_info['latest']}")
         msg_parts.append("")
         msg_parts.append("Update with:")
-        msg_parts.append("`curl -fsSL https://raw.githubusercontent.com/rekall-inc/quaid/main/install.sh | bash`")
+        msg_parts.append("`curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash`")
         msg_parts.append(f"Release notes: {update_info.get('url', '')}")
 
     message = "\n".join(msg_parts)
