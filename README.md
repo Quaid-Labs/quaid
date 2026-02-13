@@ -41,7 +41,7 @@ OpenClaw ships with a built-in memory system that stores conversation history as
 
 Quaid replaces that with structured, LLM-curated memory. Instead of logging everything, it extracts the important parts -- facts, relationships, preferences, personality insights -- and stores them in a local SQLite graph database. A nightly janitor reviews, deduplicates, resolves contradictions, and decays stale memories so the graph stays clean. It also monitors your core markdown files for bloat and staleness, keeping them slim and laser-focused so you're not wasting tokens on dead weight every session.
 
-When your agent starts a new conversation, Quaid finds the right memories via hybrid search (vector + keyword + graph traversal) and injects only what's relevant. In benchmarks, Quaid achieves 87% of full-context performance while injecting typically a few thousand tokens instead of the entire conversation history.
+When your agent starts a new conversation, Quaid finds the right memories via hybrid search (vector + keyword + graph traversal) and injects only what's relevant. In benchmarks, Quaid achieves 94% of full-context performance while injecting ~200 tokens of retrieved facts per query -- not thousands of tokens of raw conversation history.
 
 ---
 
@@ -49,14 +49,16 @@ When your agent starts a new conversation, Quaid finds the right memories via hy
 
 Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (ACL 2024) using Mem0's exact evaluation methodology -- same judge model (GPT-4o-mini), same prompt, same scoring. 10 long conversations, 1,540 scored question-answer pairs testing memory extraction, temporal reasoning, and multi-hop recall.
 
-| System | Accuracy |
-|--------|----------|
-| **Quaid** | **75.0%** |
-| Mem0 (guided) | 68.9% |
-| Mem0 | 66.9% |
-| Zep | 66.0% |
-| LangMem | 58.1% |
-| OpenAI Memory | 52.9% |
+| System | Accuracy | Notes |
+|--------|----------|-------|
+| **Quaid** | **75.0%** | ~200 tokens of memory injected per query |
+| Mem0 (guided) | 68.9% | |
+| Mem0 | 66.9% | |
+| Zep | 66.0% | |
+| LangMem | 58.1% | |
+| OpenAI Memory | 52.9% | |
+
+**Token efficiency:** Quaid retrieves ~10 relevant facts per query, averaging **~200 tokens** of injected memory context. That's it -- no raw transcript chunks, no bloated session logs. Embeddings are fully local (Ollama), so vector search has zero API cost. The only per-query API spend is a low-reasoning LLM reranker call (~$0.01).
 
 > Quaid result uses recommended settings (high-reasoning LLM + Ollama embeddings).
 > Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
