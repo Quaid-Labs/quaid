@@ -22,7 +22,7 @@ MIN_SQLITE_VERSION="3.35"
 # These features land in OpenClaw after version 2026.2.9
 MIN_GATEWAY_VERSION="2026.2.10"
 HOOKS_PR_URL="https://github.com/openclaw/openclaw/pull/13287"
-HOOKS_FORK_BRANCH="solstead/openclaw:plugin-memory-hooks"
+# Hooks merged into OpenClaw main via PR #13287 (Feb 2026)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="${CLAWDBOT_WORKSPACE:-$(pwd)}"
 PLUGIN_DIR="${WORKSPACE_ROOT}/plugins/quaid"
@@ -124,9 +124,8 @@ _try_brew_install() {
 # --- Gateway compatibility check ---
 # Quaid requires before_compaction/before_reset hooks (PR #13287).
 # If hooks are present: silently returns 0.
-# If hooks are missing: patches the gateway automatically, or exits.
+# If hooks are missing: tells user to update OpenClaw.
 GATEWAY_DIR=""  # Set by check_gateway_hooks if found
-PATCH_FILE="${SCRIPT_DIR}/gateway-hooks.patch"
 
 _find_gateway() {
     # Try resolving the clawdbot/openclaw CLI symlink to find the gateway root
@@ -192,16 +191,16 @@ check_gateway_hooks() {
     local gw_version=""
     gw_version=$(python3 -c "import json; print(json.load(open('${gw_path}/package.json')).get('version',''))" 2>/dev/null || true)
 
-    # If hooks are already present, we're done — no dialog, no output beyond the check line
+    # If hooks are already present, we're done
     if _gateway_has_hooks "$gw_path"; then
         info "Gateway OK — hooks present (v${gw_version:-unknown})"
         return 0
     fi
 
-    # --- Hooks missing — explain what's happening clearly ---
+    # --- Hooks missing — tell user to update ---
     echo ""
     echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-    echo -e "  ${BOLD}${YELLOW} Gateway Patch Required${RESET}"
+    echo -e "  ${BOLD}${YELLOW} Gateway Update Required${RESET}"
     echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     echo ""
     echo "  Your OpenClaw gateway is missing memory hooks that Quaid needs."
@@ -211,257 +210,13 @@ check_gateway_hooks() {
     if [[ -n "$gw_version" ]]; then
         echo -e "  Your version:     ${YELLOW}${gw_version}${RESET}"
     fi
-    echo -e "  Required version: ${GREEN}${MIN_GATEWAY_VERSION}+${RESET} (with PR #13287 features)"
-    echo -e "  PR details:       ${CYAN}${HOOKS_PR_URL}${RESET}"
+    echo -e "  Required version: ${GREEN}${MIN_GATEWAY_VERSION}+${RESET}"
     echo ""
-    echo "  The installer will now patch your gateway to add these hooks."
-    echo "  This modifies OpenClaw source files in:"
-    echo -e "    ${DIM}${gw_path}${RESET}"
-    echo ""
-
-    if ! confirm "Patch the gateway now?"; then
-        echo ""
-        echo "  No worries — Quaid can't work without these hooks though."
-        echo ""
-        echo -e "  ${BOLD}When you're ready, you have two options:${RESET}"
-        echo ""
-        echo "    Option A — Update OpenClaw (if PR #13287 has been merged):"
-        echo "      npm install -g openclaw@latest"
-        echo ""
-        echo "    Option B — Install from the hooks branch directly:"
-        echo "      npm install -g solstead/openclaw#plugin-memory-hooks"
-        echo ""
-        echo "  Then re-run this installer."
-        return 1
-    fi
-
-    # Strategy depends on whether this is a git checkout (has src/) or npm bundle (dist/ only)
-    local is_git=false
-    if [[ -d "${gw_path}/.git" ]] || git -C "$gw_path" rev-parse --git-dir &>/dev/null 2>&1; then
-        is_git=true
-    fi
-
-    echo ""
-
-    if $is_git; then
-        # ---- Git checkout: apply TS source patch, then rebuild ----
-        info "Detected git checkout at ${gw_path}"
-        echo "  Strategy: apply source patch → rebuild TypeScript"
-        echo ""
-
-        local patch_applied=false
-
-        # Try 1: bundled patch file (fastest, cleanest)
-        if [[ -f "$PATCH_FILE" ]] && [[ -d "${gw_path}/src" ]]; then
-            info "Attempt 1: Applying bundled patch file..."
-            echo -e "  ${DIM}(This adds 3 features: compaction hooks, reset hooks, bootstrap file globs)${RESET}"
-            local patch_output
-            if patch_output=$(cd "$gw_path" && git apply "$PATCH_FILE" 2>&1); then
-                info "Patch applied cleanly."
-                patch_applied=true
-            else
-                echo ""
-                warn "Bundled patch didn't apply cleanly (your gateway may have diverged)."
-                echo -e "  ${DIM}${patch_output}${RESET}"
-                echo ""
-            fi
-        fi
-
-        # Try 2: merge from fork
-        if ! $patch_applied; then
-            info "Attempt 2: Merging hooks from the Quaid fork branch..."
-            echo -e "  ${DIM}(Fetching solstead/openclaw → plugin-memory-hooks branch)${RESET}"
-            echo ""
-            if ! _patch_git_merge "$gw_path"; then
-                return 1
-            fi
-        fi
-
-        # Rebuild
-        echo ""
-        info "Rebuilding gateway from patched source..."
-        echo "  This compiles TypeScript → JavaScript. May take 30-60 seconds."
-        echo ""
-        local build_output
-        if build_output=$(cd "$gw_path" && pnpm build 2>&1) || build_output=$(cd "$gw_path" && npm run build 2>&1); then
-            info "Gateway rebuilt successfully."
-        else
-            echo ""
-            error "Gateway build failed after patching."
-            echo ""
-            echo "  The source patch was applied, but the TypeScript build didn't succeed."
-            echo "  This usually means a dependency mismatch or build tool issue."
-            echo ""
-            echo -e "  ${BOLD}How to fix:${RESET}"
-            echo "    cd ${gw_path}"
-            echo "    pnpm install        # reinstall dependencies"
-            echo "    pnpm build          # retry the build"
-            echo ""
-            echo "  Build output:"
-            echo -e "  ${DIM}${build_output}${RESET}"
-            echo ""
-            echo -e "  ${BOLD}Alternative — install pre-built from fork:${RESET}"
-            echo "    npm install -g solstead/openclaw#plugin-memory-hooks"
-            echo ""
-            echo "  Then re-run this installer."
-            echo ""
-            echo -e "  If you're stuck, open an issue:  ${CYAN}${HOOKS_PR_URL}${RESET}"
-            return 1
-        fi
-    else
-        # ---- npm bundle: reinstall from fork ----
-        info "Detected npm global install at ${gw_path}"
-        echo "  Pre-built bundles use hashed filenames — can't patch in-place."
-        echo "  Strategy: reinstall OpenClaw from the hooks branch."
-        echo ""
-        echo "  Running: npm install -g solstead/openclaw#plugin-memory-hooks"
-        echo ""
-        local install_output
-        if install_output=$(npm install -g "solstead/openclaw#plugin-memory-hooks" 2>&1); then
-            info "Gateway reinstalled with hooks."
-        else
-            echo ""
-            error "Gateway reinstall failed."
-            echo ""
-            echo "  npm couldn't install the hooks branch. Common causes:"
-            echo "    - Network issue (can't reach GitHub)"
-            echo "    - Permission denied (try with sudo or fix npm prefix)"
-            echo "    - Node.js version incompatibility"
-            echo ""
-            echo "  Install output:"
-            echo -e "  ${DIM}${install_output}${RESET}"
-            echo ""
-            echo -e "  ${BOLD}How to fix:${RESET}"
-            echo "    1. Check network:   curl -s https://github.com > /dev/null && echo OK"
-            echo "    2. Try with sudo:   sudo npm install -g solstead/openclaw#plugin-memory-hooks"
-            echo "    3. Or update npm:   npm install -g npm@latest"
-            echo ""
-            echo "  If PR #13287 has been merged into OpenClaw, you can also try:"
-            echo "    npm install -g openclaw@latest"
-            echo ""
-            echo "  Then re-run this installer."
-            echo ""
-            echo -e "  Need help? PR: ${CYAN}${HOOKS_PR_URL}${RESET}"
-            return 1
-        fi
-    fi
-
-    # Verify the patch worked
-    echo ""
-    info "Verifying hooks are present..."
-    if _gateway_has_hooks "$gw_path"; then
-        echo ""
-        echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo -e "  ${BOLD}${GREEN} Gateway patched successfully!${RESET}"
-        echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-        echo ""
-        echo "  Memory hooks (before_compaction, before_reset) are now active."
-        echo "  Extra bootstrap file loading (extraBootstrapFiles) is available."
-        echo ""
-        echo -e "  ${DIM}Note: When OpenClaw merges PR #13287, you can switch back to the${RESET}"
-        echo -e "  ${DIM}official release: npm install -g openclaw@latest${RESET}"
-        echo ""
-        return 0
-    else
-        echo ""
-        error "Patch appeared to succeed, but hooks were not detected afterward."
-        echo ""
-        echo "  This is unexpected — the patch or build may have partially failed."
-        echo ""
-        echo -e "  ${BOLD}What to try:${RESET}"
-        echo ""
-        echo "    Option A — Reinstall from the hooks branch:"
-        echo "      npm install -g solstead/openclaw#plugin-memory-hooks"
-        echo ""
-        echo "    Option B — If PR #13287 has been merged:"
-        echo "      npm install -g openclaw@latest"
-        echo ""
-        echo "    Option C — Manual inspection:"
-        echo "      Check if these exist in the gateway source:"
-        echo "        grep -r 'runBeforeCompaction' ${gw_path}/dist/"
-        echo "        grep -r 'extraBootstrapFiles' ${gw_path}/dist/"
-        echo ""
-        echo "  Then re-run this installer."
-        echo ""
-        echo -e "  Need help? PR: ${CYAN}${HOOKS_PR_URL}${RESET}"
-        return 1
-    fi
-}
-
-# Helper: merge hooks from fork into a git checkout
-_patch_git_merge() {
-    local gw_path="$1"
-    info "Adding Quaid fork as a git remote..."
-    (
-        cd "$gw_path"
-        git remote add quaid-hooks https://github.com/solstead/openclaw.git 2>/dev/null || true
-    )
-
-    info "Fetching the hooks branch..."
-    local fetch_output
-    if ! fetch_output=$(cd "$gw_path" && git fetch quaid-hooks plugin-memory-hooks 2>&1); then
-        echo ""
-        error "Couldn't fetch the hooks branch from GitHub."
-        echo ""
-        echo "  This usually means a network issue or the fork is unavailable."
-        echo ""
-        echo "  Fetch output:"
-        echo -e "  ${DIM}${fetch_output}${RESET}"
-        echo ""
-        echo -e "  ${BOLD}How to fix:${RESET}"
-        echo "    1. Check network: curl -s https://github.com > /dev/null && echo OK"
-        echo "    2. Try manually:  cd ${gw_path}"
-        echo "       git remote add quaid-hooks https://github.com/solstead/openclaw.git"
-        echo "       git fetch quaid-hooks plugin-memory-hooks"
-        echo "       git merge quaid-hooks/plugin-memory-hooks"
-        echo "       pnpm build"
-        echo ""
-        echo -e "  Need help? PR: ${CYAN}${HOOKS_PR_URL}${RESET}"
-        return 1
-    fi
-
-    info "Merging hooks into your gateway checkout..."
-    local merge_output
-    if merge_output=$(cd "$gw_path" && git merge quaid-hooks/plugin-memory-hooks --no-edit 2>&1); then
-        info "Merge successful — no conflicts."
-        return 0
-    fi
-
-    echo ""
-    warn "Merge had conflicts with your local changes."
-    echo -e "  ${DIM}${merge_output}${RESET}"
-    echo ""
-    (cd "$gw_path" && git merge --abort 2>/dev/null || true)
-
-    info "Trying cherry-pick instead (applies hook commits individually)..."
-    local pick_output
-    if pick_output=$(cd "$gw_path" && git cherry-pick quaid-hooks/plugin-memory-hooks~5..quaid-hooks/plugin-memory-hooks 2>&1); then
-        info "Cherry-pick successful."
-        return 0
-    fi
-
-    (cd "$gw_path" && git cherry-pick --abort 2>/dev/null || true)
-    echo ""
-    error "Automatic patching failed — your gateway has conflicting local changes."
-    echo ""
-    echo "  The installer tried two strategies:"
-    echo "    1. git merge  — had conflicts"
-    echo "    2. cherry-pick — also had conflicts"
-    echo ""
-    echo "  This usually means your gateway has custom modifications that overlap"
-    echo "  with the hook changes. You'll need to resolve conflicts manually."
-    echo ""
-    echo -e "  ${BOLD}Manual steps:${RESET}"
-    echo "    cd ${gw_path}"
-    echo "    git remote add quaid-hooks https://github.com/solstead/openclaw.git"
-    echo "    git fetch quaid-hooks plugin-memory-hooks"
-    echo "    git merge quaid-hooks/plugin-memory-hooks"
-    echo "    # Resolve any conflicts, then:"
-    echo "    pnpm build"
+    echo -e "  ${BOLD}Update your gateway:${RESET}"
+    echo "    npm install -g openclaw"
     echo ""
     echo "  Then re-run this installer."
     echo ""
-    echo -e "  Need help? PR: ${CYAN}${HOOKS_PR_URL}${RESET}"
     return 1
 }
 
@@ -494,7 +249,7 @@ step1_preflight() {
     echo "  ╔$(printf '═%.0s' $(seq 1 $bw))╗"
     echo "  ║${pad}║"
     printf "  ║   %-$((bw-3))s║\n" "Quaid v${QUAID_VERSION}"
-    printf "  ║   %-$((bw-3))s║\n" "\"If I'm not me, then who am I?\""
+    printf "  ║   %-$((bw-3))s║\n" "\"If I am not me, then who the hell am I?\""
     echo "  ║${pad}║"
     printf "  ║   %-$((bw-3))s║\n" "Long-term memory for your OpenClaw bot."
     echo "  ║${pad}║"

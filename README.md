@@ -1,12 +1,14 @@
 
 ```
-   ██████    ██    ██   ██████   ██  ██████
-  ██    ██   ██    ██  ██    ██  ██  ██   ██
-  ██    ██   ██    ██  ████████  ██  ██   ██
-  ██ ▄▄ ██   ██    ██  ██    ██  ██  ██   ██
-   ██████    ▀██████▀  ██    ██  ██  ██████
-      ▀▀
+ ██████  ██  ██  ██████  ██  ██████
+██    ██ ██  ██ ██    ██ ██  ██   ██
+██    ██ ██  ██ ████████ ██  ██   ██
+██ ▄▄ ██ ██  ██ ██    ██ ██  ██   ██
+ ██████  ▀████▀ ██    ██ ██  ██████
+    ▀▀
 ```
+
+*"If I am not me, then who the hell am I?"*
 
 ### Memory and project management plugin for [OpenClaw](https://github.com/openclaw/openclaw)
 
@@ -110,26 +112,27 @@ Quaid organizes knowledge into three areas, each with different retrieval behavi
 
 ---
 
-<details>
-<summary><strong>Design Philosophy: LLM-First</strong></summary>
+## Design Philosophy: LLM-First
 
 Almost every decision in Quaid is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. The system splits work between a **high-reasoning LLM** (fact review, contradiction resolution, journal distillation) and a **low-reasoning LLM** (reranking, dedup verification, query expansion) to balance quality against cost and speed. The low-reasoning model isn't just cheaper — it's fast. Memory recall needs to feel instant, not take three seconds waiting on a premium model to rerank results.
 
 Because the system leans heavily on LLM reasoning, Quaid naturally scales with AI models — as reasoning capabilities improve, every decision in the pipeline gets better without code changes.
 
-</details>
-
 ---
 
 ## Cost
 
-| Component | Cost |
-|-----------|------|
+Quaid is free and open source. These are typical API costs you pay directly to your LLM provider (Anthropic recommended):
+
+| Component | API Cost |
+|-----------|----------|
 | Fact extraction | $0.05–0.20 per compaction (high-reasoning LLM) |
 | Memory recall | $0.01 per query (low-reasoning LLM reranker) |
 | Nightly janitor | $1–5 per run |
 | Embeddings | Free (Ollama, runs locally) |
 | **Typical monthly total** | **$5–15 for active use** |
+
+We haven't yet fully evaluated the cost savings Quaid provides by reducing context window usage and improving retrieval precision, but they are estimated to be substantial. Quantifying this is a work in progress.
 
 ---
 

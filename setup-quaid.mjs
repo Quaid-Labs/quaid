@@ -21,7 +21,7 @@ const __dirname = path.dirname(__filename);
 
 // --- Constants ---
 const VERSION = "0.1.0-alpha";
-const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/pull/13287";
+const HOOKS_PR_URL = "https://github.com/openclaw/openclaw"; // Hooks merged in PR #13287
 const PROJECT_URL = "https://github.com/steadman-labs/quaid";
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE || process.cwd();
 const PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
@@ -423,14 +423,14 @@ async function step1_preflight() {
   if (!hasHooks) {
     s.stop(C.red("Memory hooks missing"), 2);
     note(
-      `Your gateway is missing the memory hooks from PR #13287.\n` +
-      `Quaid hooks into conversation events to extract memories.\n\n` +
-      `Install from the hooks branch:\n` +
-      `  npm install -g solstead/openclaw#plugin-memory-hooks\n\n` +
+      `Your gateway is missing the memory hooks Quaid needs.\n` +
+      `These were added to OpenClaw in PR #13287.\n\n` +
+      `Update your gateway to the latest version:\n` +
+      `  npm install -g openclaw\n\n` +
       `Or check: ${HOOKS_PR_URL}`,
-      "Gateway patch required"
+      "Gateway update required"
     );
-    bail("Gateway hooks required. Patch and re-run.");
+    bail("Gateway hooks required. Update OpenClaw and re-run.");
   }
   s.stop(C.green("Gateway hooks present"));
 
