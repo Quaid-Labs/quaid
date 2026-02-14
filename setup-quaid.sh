@@ -162,10 +162,9 @@ _find_gateway() {
 _gateway_has_hooks() {
     local gw_path="$1"
     # Check both dist/ (bundled) and src/ (source) for the hook features
+    # before_compaction is the critical hook — bootstrap-extra-files is optional
     { grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/dist/" 2>/dev/null || \
-      grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/src/" 2>/dev/null; } && \
-    { grep -rq "extraBootstrapFiles\|bootstrap-extra-files" "${gw_path}/dist/" 2>/dev/null || \
-      grep -rq "extraBootstrapFiles\|bootstrap-extra-files" "${gw_path}/src/" 2>/dev/null; }
+      grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/src/" 2>/dev/null; }
 }
 
 check_gateway_hooks() {
