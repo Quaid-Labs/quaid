@@ -164,8 +164,8 @@ _gateway_has_hooks() {
     # Check both dist/ (bundled) and src/ (source) for the hook features
     { grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/dist/" 2>/dev/null || \
       grep -rq "runBeforeCompaction\|before_compaction" "${gw_path}/src/" 2>/dev/null; } && \
-    { grep -rq "extraBootstrapFiles" "${gw_path}/dist/" 2>/dev/null || \
-      grep -rq "extraBootstrapFiles" "${gw_path}/src/" 2>/dev/null; }
+    { grep -rq "extraBootstrapFiles\|bootstrap-extra-files" "${gw_path}/dist/" 2>/dev/null || \
+      grep -rq "extraBootstrapFiles\|bootstrap-extra-files" "${gw_path}/src/" 2>/dev/null; }
 }
 
 check_gateway_hooks() {

@@ -1535,7 +1535,7 @@ function gatewayHasHooks(gwDir) {
     const dir = path.join(gwDir, sub);
     if (!fs.existsSync(dir)) continue;
     const out = shell(`grep -rl "runBeforeCompaction\\|before_compaction" "${dir}" 2>/dev/null | head -1`);
-    const out2 = shell(`grep -rl "extraBootstrapFiles" "${dir}" 2>/dev/null | head -1`);
+    const out2 = shell(`grep -rl "extraBootstrapFiles\\|bootstrap-extra-files" "${dir}" 2>/dev/null | head -1`);
     if (out && out2) return true;
   }
   return false;
