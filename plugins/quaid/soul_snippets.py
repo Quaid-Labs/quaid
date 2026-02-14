@@ -32,7 +32,7 @@ from config import get_config
 from workspace_audit import _strip_protected_regions
 
 # Configuration
-WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
 BACKUP_DIR = WORKSPACE_DIR / "backups" / "soul-snippets"
 
 logger = logging.getLogger(__name__)

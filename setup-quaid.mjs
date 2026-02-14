@@ -1089,6 +1089,22 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems) {
     log.info("Plugin source already in place");
   }
 
+  // Install Node dependencies (typebox etc.)
+  const pluginPkg = path.join(PLUGIN_DIR, "package.json");
+  const pluginNodeMods = path.join(PLUGIN_DIR, "node_modules");
+  if (fs.existsSync(pluginPkg) && !fs.existsSync(pluginNodeMods)) {
+    s.start("Installing plugin dependencies...");
+    const npmResult = spawnSync("npm", ["install", "--omit=dev", "--omit=peer", "--no-audit", "--no-fund"], {
+      cwd: PLUGIN_DIR, stdio: "pipe", timeout: 60000,
+    });
+    if (npmResult.status === 0) {
+      s.stop(C.green("Dependencies installed"));
+    } else {
+      s.stop(C.yellow("npm install failed — plugin may not load"));
+      log.warn("Try running manually: cd " + PLUGIN_DIR + " && npm install --omit=dev --omit=peer");
+    }
+  }
+
   // Initialize database
   s.start("Initializing database...");
   const dbPath = path.join(DATA_DIR, "memory.db");

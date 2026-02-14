@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import get_config
 from llm_clients import call_high_reasoning, call_low_reasoning
 
-WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
 CHANGELOG_PATH = WORKSPACE / "logs" / "docs-update-log.json"
 CLEANUP_STATE_PATH = WORKSPACE / "logs" / "docs-cleanup-state.json"
 

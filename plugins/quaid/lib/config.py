@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 # Workspace root for resolving relative paths
-_WORKSPACE_ROOT = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path.home() / "clawd")))
+_WORKSPACE_ROOT = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent.parent)))
 
 
 def _get_cfg():

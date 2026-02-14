@@ -15,7 +15,7 @@ import { registerPluginHttpRoute } from "openclaw/plugin-sdk";
 
 // Configuration
 const PLUGIN_DIR = __dirname;
-const WORKSPACE = process.env.CLAWDBOT_WORKSPACE || "${QUAID_WORKSPACE}";
+const WORKSPACE = process.env.CLAWDBOT_WORKSPACE || path.resolve(PLUGIN_DIR, "..", "..");
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/memory_graph.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 

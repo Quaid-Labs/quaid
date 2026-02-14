@@ -960,6 +960,17 @@ step6_install() {
         info "Plugin source already in place"
     fi
 
+    # Install Node dependencies (typebox etc.)
+    if [[ -f "${PLUGIN_DIR}/package.json" ]] && [[ ! -d "${PLUGIN_DIR}/node_modules" ]]; then
+        info "Installing plugin dependencies..."
+        if (cd "${PLUGIN_DIR}" && npm install --omit=dev --omit=peer --no-audit --no-fund >/dev/null 2>&1); then
+            success "Dependencies installed"
+        else
+            warn "npm install failed — plugin may not load"
+            warn "Try running manually: cd ${PLUGIN_DIR} && npm install --omit=dev --omit=peer"
+        fi
+    fi
+
     # Initialize database
     info "Initializing database..."
     if [[ -f "${DATA_DIR}/memory.db" ]]; then

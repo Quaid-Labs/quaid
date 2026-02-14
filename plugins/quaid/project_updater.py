@@ -25,7 +25,7 @@ from docs_registry import DocsRegistry
 from docs_updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
 
-WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
 
 
 def _resolve_path(relative: str) -> Path:

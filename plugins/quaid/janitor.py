@@ -63,7 +63,7 @@ from notify import notify_janitor_summary, notify_daily_memories
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
-WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
 
 # Load config values (with fallbacks for safety)
 def _get_config_value(getter, default):

@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from lib.config import get_db_path
 from lib.database import get_connection
 
-WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
 
 # Strict project name validation — prevents path traversal
 _PROJECT_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$')

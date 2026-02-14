@@ -23,7 +23,7 @@ from llm_clients import call_high_reasoning, parse_json_response
 from config import get_config
 
 # Configuration
-WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
 
 # Configure logging
 LOG_DIR = WORKSPACE_DIR / "logs"

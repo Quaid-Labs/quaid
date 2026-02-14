@@ -1,7 +1,7 @@
 """
 Configuration loader for Memory System
 
-Loads memory-specific settings from ${QUAID_WORKSPACE}/config/memory.json
+Loads memory-specific settings from WORKSPACE/config/memory.json
 Falls back to sensible defaults if config is missing.
 """
 
@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 # Workspace root for resolving config paths
-_WORKSPACE_ROOT = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path.home() / "clawd")))
+_WORKSPACE_ROOT = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
 
 # Config file paths (in priority order)
 CONFIG_PATHS = [
