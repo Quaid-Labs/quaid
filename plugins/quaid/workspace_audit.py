@@ -23,7 +23,7 @@ from llm_clients import call_high_reasoning, parse_json_response
 from config import get_config
 
 # Configuration
-WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
+WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", "~/<username>/clawd"))
 
 # Configure logging
 LOG_DIR = WORKSPACE_DIR / "logs"
@@ -115,78 +115,96 @@ def clear_pending_project_reviews() -> None:
     PENDING_PROJECT_REVIEW.unlink(missing_ok=True)
 
 
-def _strip_protected_regions(content: str) -> tuple:
-    """Strip <!-- protected --> ... <!-- /protected --> blocks from content.
+# Protected region helpers — canonical implementation in lib/markdown.py
+from lib.markdown import strip_protected_regions, is_position_protected, section_overlaps_protected
 
-    Returns:
-        (stripped_content, protected_ranges) where protected_ranges is a list of
-        (start, end) character positions of the protected blocks in the original content.
+# Backward-compat aliases (tests and soul_snippets.py import these names)
+_strip_protected_regions = strip_protected_regions
+_is_position_protected = is_position_protected
+_section_overlaps_protected = section_overlaps_protected
+
+
+def _get_gateway_bootstrap_globs() -> List[str]:
+    """Read bootstrap file glob patterns from the OpenClaw gateway config.
+
+    The gateway's bootstrap-extra-files hook defines which project-level
+    markdown files get injected every turn. We read these directly so the
+    janitor stays in sync without duplicating the patterns.
     """
-    pattern = re.compile(
-        r'<!--\s*protected\s*-->.*?<!--\s*/protected\s*-->',
-        re.DOTALL
-    )
-
-    protected_ranges = []
-    for match in pattern.finditer(content):
-        protected_ranges.append((match.start(), match.end()))
-
-    if not protected_ranges:
-        return content, []
-
-    # Build stripped content by removing protected regions
-    parts = []
-    prev_end = 0
-    for start, end in protected_ranges:
-        parts.append(content[prev_end:start])
-        prev_end = end
-    parts.append(content[prev_end:])
-    stripped = ''.join(parts)
-
-    return stripped, protected_ranges
+    gateway_config_path = Path.home() / ".openclaw" / "openclaw.json"
+    if not gateway_config_path.exists():
+        return []
+    try:
+        with open(gateway_config_path, "r") as f:
+            gw_cfg = json.load(f)
+        hook = (gw_cfg.get("hooks", {})
+                      .get("internal", {})
+                      .get("entries", {})
+                      .get("bootstrap-extra-files", {}))
+        if not hook.get("enabled", True):
+            return []
+        # Hook supports three config keys in priority order
+        return hook.get("paths") or hook.get("patterns") or hook.get("files") or []
+    except (json.JSONDecodeError, IOError, KeyError, UnicodeDecodeError):
+        return []
 
 
-def _is_position_protected(pos: int, protected_ranges: list) -> bool:
-    """Check if a character position falls within a protected region."""
-    for start, end in protected_ranges:
-        if start <= pos < end:
-            return True
-    return False
-
-
-def _section_overlaps_protected(section_start: int, section_end: int, protected_ranges: list) -> bool:
-    """Check if a section range overlaps with any protected region."""
-    for p_start, p_end in protected_ranges:
-        if p_start < section_end and p_end > section_start:
-            return True
-    return False
+# Default maxLines for bootstrap files (project-level TOOLS.md, AGENTS.md, etc.)
+_BOOTSTRAP_MAX_LINES = 100
 
 
 def get_monitored_files() -> Dict[str, Dict[str, Any]]:
     """
-    Get monitored files from coreMarkdown config.
-    Returns dict mapping filename to {purpose, maxLines}.
+    Get monitored files from coreMarkdown config + gateway bootstrap globs.
+    Returns dict mapping filename (or relative path) to {purpose, maxLines}.
+    Includes both static core files and dynamically discovered bootstrap files.
     """
+    import glob as globmod
+
+    files = {}
+
     try:
         cfg = get_config()
         if hasattr(cfg, 'docs') and hasattr(cfg.docs, 'core_markdown'):
             core_md = cfg.docs.core_markdown
             if hasattr(core_md, 'files') and core_md.files:
-                return core_md.files
+                files.update(core_md.files)
     except Exception as e:
         logger.warning(f"Could not load coreMarkdown config: {e}")
 
-    # Fallback to hardcoded list if config not available
-    return {
-        "AGENTS.md": {"purpose": "System operations, memory system, behavioral rules", "maxLines": 350},
-        "SOUL.md": {"purpose": "Personality, vibe, values, interaction style", "maxLines": 80},
-        "TOOLS.md": {"purpose": "API docs, tool definitions, credentials, configs", "maxLines": 350},
-        "USER.md": {"purpose": "Biography and soul of users", "maxLines": 150},
-        "MEMORY.md": {"purpose": "Core memories loaded every session", "maxLines": 100},
-        "IDENTITY.md": {"purpose": "Name, avatar, minimal identity", "maxLines": 20},
-        "HEARTBEAT.md": {"purpose": "Periodic task instructions", "maxLines": 50},
-        "TODO.md": {"purpose": "Planning and task list", "maxLines": 150},
-    }
+    # Discover bootstrap files from gateway config (single source of truth)
+    for glob_pattern in _get_gateway_bootstrap_globs():
+        # Reject absolute paths and traversal patterns to prevent escaping workspace
+        if glob_pattern.startswith("/") or ".." in glob_pattern:
+            logger.warning(f"Skipping unsafe bootstrap glob: {glob_pattern}")
+            continue
+        full_pattern = str(WORKSPACE_DIR / glob_pattern)
+        for match in sorted(globmod.glob(full_pattern)):
+            rel_path = os.path.relpath(match, WORKSPACE_DIR)
+            # Double-check: resolved path must be inside workspace
+            if rel_path.startswith(".."):
+                logger.warning(f"Skipping path outside workspace: {match}")
+                continue
+            if rel_path not in files:
+                files[rel_path] = {
+                    "purpose": f"Project bootstrap file ({Path(rel_path).name})",
+                    "maxLines": _BOOTSTRAP_MAX_LINES,
+                }
+
+    if not files:
+        # Fallback to hardcoded list if config not available
+        return {
+            "AGENTS.md": {"purpose": "System operations, memory system, behavioral rules", "maxLines": 350},
+            "SOUL.md": {"purpose": "Personality, vibe, values, interaction style", "maxLines": 80},
+            "TOOLS.md": {"purpose": "API docs, tool definitions, credentials, configs", "maxLines": 350},
+            "USER.md": {"purpose": "Biography and soul of users", "maxLines": 150},
+            "MEMORY.md": {"purpose": "Core memories loaded every session", "maxLines": 100},
+            "IDENTITY.md": {"purpose": "Name, avatar, minimal identity", "maxLines": 20},
+            "HEARTBEAT.md": {"purpose": "Periodic task instructions", "maxLines": 50},
+            "TODO.md": {"purpose": "Planning and task list", "maxLines": 150},
+        }
+
+    return files
 
 
 def build_review_prompt(files_config: Dict[str, Dict[str, Any]]) -> str:
@@ -287,7 +305,9 @@ def backup_workspace_files(files: Optional[List[str]] = None) -> Dict[str, str]:
     for filename in files_to_backup:
         source = WORKSPACE_DIR / filename
         if source.exists():
-            backup_name = f"{filename}.{timestamp}.bak"
+            # Flatten slashes for relative paths (e.g. projects/quaid/TOOLS.md → projects--quaid--TOOLS.md)
+            flat_name = filename.replace("/", "--")
+            backup_name = f"{flat_name}.{timestamp}.bak"
             backup_path = BACKUP_DIR / backup_name
             shutil.copy2(source, backup_path)
             backups[str(source)] = str(backup_path)
@@ -582,7 +602,7 @@ def apply_review_decisions(dry_run: bool = True,
                         try:
                             default_owner = cfg.users.default_owner
                         except Exception:
-                            default_owner = "default"
+                            default_owner = "solomon"
                         result = store_memory(
                             text=section_content[:2000],
                             category="fact",

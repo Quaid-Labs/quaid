@@ -29,18 +29,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from llm_clients import call_high_reasoning, parse_json_response
 from config import get_config
-from workspace_audit import _strip_protected_regions
+from lib.markdown import strip_protected_regions as _strip_protected_regions
 
 # Configuration
-WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
+WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", "~/<username>/clawd"))
 BACKUP_DIR = WORKSPACE_DIR / "backups" / "soul-snippets"
 
 logger = logging.getLogger(__name__)
 
 # Voice guidance for distillation prompts per target file
 _FILE_VOICE_GUIDANCE = {
-    "SOUL.md": "First person as Assistant. Self-reflective, artistic, poetic. Weave into existing self-portrait.",
-    "USER.md": "Third person about User. Warm, observational. Biographical depth, not queryable facts.",
+    "SOUL.md": "First person as Alfie. Self-reflective, artistic, poetic. Weave into existing self-portrait.",
+    "USER.md": "Third person about Solomon. Warm, observational. Biographical depth, not queryable facts.",
     "MEMORY.md": "Concise, factual. Extremely high bar — must justify consuming tokens every single message.",
 }
 
@@ -401,7 +401,7 @@ def build_distillation_prompt(filename: str, parent_content: str,
     if len(visible_content) > 4000:
         truncation_note = f"\n... (truncated, {len(visible_content)} total chars)"
 
-    return f"""You are reviewing Assistant's journal to decide what should become part of the permanent core identity file.
+    return f"""You are reviewing Alfie's journal to decide what should become part of the permanent core identity file.
 
 Current {filename} ({current_lines}/{max_lines} lines):
 ```
@@ -801,7 +801,7 @@ Pending snippets:
 
     files_block = "\n\n".join(file_sections)
 
-    return f"""You are reviewing pending soul snippets for Assistant's core markdown files.
+    return f"""You are reviewing pending soul snippets for Alfie's core markdown files.
 
 Each snippet was extracted from a conversation and needs your decision: FOLD it into the parent file, DISCARD it, or REWRITE it before folding.
 
@@ -813,8 +813,8 @@ For each snippet, decide:
 - **DISCARD**: The snippet is not valuable enough, is redundant with existing content, or doesn't belong in this file.
 
 Guidelines per file:
-- **SOUL.md**: Self-reflective, artistic, first-person as Assistant. Weave into the existing self-portrait. Keep the poetic voice.
-- **USER.md**: Biographical, third person about User. Only genuinely biographical updates that deepen understanding of who he is.
+- **SOUL.md**: Self-reflective, artistic, first-person as Alfie. Weave into the existing self-portrait. Keep the poetic voice.
+- **USER.md**: Biographical, third person about Solomon. Only genuinely biographical updates that deepen understanding of who he is.
 - **MEMORY.md**: Concise, factual. Extremely high bar — must justify consuming tokens every single message.
 - **AGENTS.md**: Operational rules, imperative voice. Only cross-session behavioral patterns.
 

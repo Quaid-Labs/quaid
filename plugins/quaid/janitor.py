@@ -47,11 +47,10 @@ from memory_graph import (get_graph, MemoryGraph, Node, Edge, store as store_mem
                          queue_for_decay_review, get_pending_decay_reviews, resolve_decay_review,
                          ensure_keywords_for_relation, get_edge_keywords,
                          delete_edges_by_source_fact, create_edge,
-                         _content_hash)
+                         content_hash, hard_delete_node)
 from lib.config import get_db_path
 from lib.tokens import extract_key_tokens as _lib_extract_key_tokens, STOPWORDS as _LIB_STOPWORDS, estimate_tokens
 from lib.archive import archive_node as _archive_node
-from memory_graph import hard_delete_node
 from logger import janitor_logger, rotate_logs
 from config import get_config
 from workspace_audit import run_workspace_check, backup_workspace_files
@@ -63,7 +62,7 @@ from notify import notify_janitor_summary, notify_daily_memories
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
-WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", str(Path(__file__).resolve().parent.parent.parent)))
+WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "~/<username>/clawd"))
 
 # Load config values (with fallbacks for safety)
 def _get_config_value(getter, default):
@@ -95,7 +94,7 @@ def _owner_display_name() -> str:
             return identity.person_node_name.split()[0]  # First name only
     except Exception:
         pass
-    return "User"
+    return "Solomon"
 
 
 def _owner_full_name() -> str:
@@ -107,7 +106,7 @@ def _owner_full_name() -> str:
             return identity.person_node_name
     except Exception:
         pass
-    return "Default User"
+    return "Solomon Steadman"
 
 # Stopwords — imported from shared lib (kept as alias for backward compat)
 _STOPWORDS = _LIB_STOPWORDS
@@ -118,7 +117,7 @@ def _default_owner_id() -> str:
     try:
         return _cfg.users.default_owner
     except Exception:
-        return "default"
+        return "solomon"
 
 
 def _merge_nodes_into(
@@ -135,7 +134,7 @@ def _merge_nodes_into(
     2. Sums confirmation_count from originals
     3. Uses status="active" (not "approved")
     4. Migrates edges to the merged node (not deleted)
-    5. Uses config-based owner_id (not hardcoded "default")
+    5. Uses config-based owner_id (not hardcoded "solomon")
     """
     if dry_run:
         return None
@@ -1105,7 +1104,7 @@ _SEED_RELATIONS = [
 
 # Inverse map: when Opus returns one of these, FLIP subject/object and use the canonical form.
 # Use for relations where the direction is REVERSED from canonical.
-# child_of(User, Lori) → parent_of(Lori, User) — child becomes object
+# child_of(Solomon, Wendy) → parent_of(Wendy, Solomon) — child becomes object
 _INVERSE_MAP = {
     "child_of": "parent_of",
     "son_of": "parent_of",
@@ -1113,9 +1112,9 @@ _INVERSE_MAP = {
     "owned_by": "owns",
     "managed_by": "manages",
     "founded_by": "founded",
-    "employs": "works_at",     # employs(Facebook, User) → works_at(User, Facebook)
+    "employs": "works_at",     # employs(Facebook, Solomon) → works_at(Solomon, Facebook)
     "employed_by": "works_at",
-    "pet_of": "has_pet",       # pet_of(Pixel, User) → has_pet(User, Pixel)
+    "pet_of": "has_pet",       # pet_of(Madu, Solomon) → has_pet(Solomon, Madu)
     "led_to": "caused_by",     # led_to(A, B) → caused_by(B, A) — A led to B
     "caused": "caused_by",     # caused(A, B) → caused_by(B, A) — A caused B
     "resulted_in": "caused_by",  # resulted_in(A, B) → caused_by(B, A)
@@ -1123,7 +1122,7 @@ _INVERSE_MAP = {
 }
 
 # Synonym map: rename to canonical form WITHOUT flipping subject/object.
-# mother_of(Lori, User) → parent_of(Lori, User) — same direction
+# mother_of(Wendy, Solomon) → parent_of(Wendy, Solomon) — same direction
 _SYNONYM_MAP = {
     "mother_of": "parent_of",
     "father_of": "parent_of",
@@ -1212,7 +1211,7 @@ def _resolve_entity_node(graph: MemoryGraph, name: str, node_type: str,
     if node:
         return node.id
 
-    # 2. Exact name match any type (e.g., "User" might be stored as "Default User")
+    # 2. Exact name match any type (e.g., "Solomon" might be stored as "Solomon Steadman")
     node = graph.find_node_by_name(name)
     if node and node.type in ("Person", "Place", "Concept", "Organization"):
         return node.id
@@ -1285,13 +1284,13 @@ EXISTING relation types (use one of these whenever possible):
 {relations_list}
 
 DIRECTION RULES — follow these strictly:
-- For family: the PARENT is always the subject. "User is Lori's son" → subject=Lori, relation=parent_of, object=User
-- For ownership/management: the OWNER/MANAGER is the subject. "The car is owned by User" → subject=User, relation=owns, object=car
-- For work: the PERSON is the subject, ORGANIZATION is the object. "User works at Facebook" → subject=User, relation=works_at, object=Facebook
+- For family: the PARENT is always the subject. "Solomon is Wendy's son" → subject=Wendy, relation=parent_of, object=Solomon
+- For ownership/management: the OWNER/MANAGER is the subject. "The car is owned by Solomon" → subject=Solomon, relation=owns, object=car
+- For work: the PERSON is the subject, ORGANIZATION is the object. "Solomon works at Facebook" → subject=Solomon, relation=works_at, object=Facebook
 - For symmetric relations (spouse_of, sibling_of, friend_of, etc.): put entity names in alphabetical order
 - NEVER use child_of, son_of, daughter_of, mother_of, father_of — use parent_of instead
 - NEVER use owned_by, managed_by — use owns, manages instead
-- Extract only the MOST SPECIFIC relationship. "Lori is User's mother" = parent_of, NOT family_of
+- Extract only the MOST SPECIFIC relationship. "Wendy is Solomon's mother" = parent_of, NOT family_of
 
 Only create a NEW relation type if absolutely none of the above fit. New types must be:
 - snake_case, specific and reusable
@@ -1305,10 +1304,10 @@ Use "has_edge": false if the fact has no clear relationship between two distinct
 
 Respond with a JSON array of {len(facts)} objects, one per fact in order:
 [
-  {{"fact": 1, "has_edge": true, "subject": "User", "subject_type": "Person", "relation": "lives_in", "object": "Bali", "object_type": "Place"}},
+  {{"fact": 1, "has_edge": true, "subject": "Solomon", "subject_type": "Person", "relation": "lives_in", "object": "Bali", "object_type": "Place"}},
   {{"fact": 2, "has_edge": false}},
-  {{"fact": 3, "has_edge": true, "subject": "Lori", "subject_type": "Person", "relation": "parent_of", "object": "User", "object_type": "Person"}},
-  {{"fact": 4, "has_edge": true, "subject": "User", "subject_type": "Person", "relation": "mentors", "object": "Alex", "object_type": "Person", "keywords": ["mentor", "mentee", "mentoring", "coached", "guidance"]}}
+  {{"fact": 3, "has_edge": true, "subject": "Wendy", "subject_type": "Person", "relation": "parent_of", "object": "Solomon", "object_type": "Person"}},
+  {{"fact": 4, "has_edge": true, "subject": "Solomon", "subject_type": "Person", "relation": "mentors", "object": "Alex", "object_type": "Person", "keywords": ["mentor", "mentee", "mentoring", "coached", "guidance"]}}
 ]
 
 JSON array only:"""
@@ -1854,7 +1853,7 @@ Respond with a JSON array only, no markdown fencing:
   {{"id": "uuid", "action": "KEEP"}},
   {{"id": "uuid", "action": "DELETE"}},
   {{"id": "uuid", "action": "FIX", "new_text": "corrected text"}},
-  {{"id": "uuid", "action": "FIX", "new_text": "Melina is {owner}'s sister", "edges": [{{"subject": "Melina", "relation": "sibling_of", "object": "{owner_full}"}}]}},
+  {{"id": "uuid", "action": "FIX", "new_text": "Amber is {owner}'s sister", "edges": [{{"subject": "Amber", "relation": "sibling_of", "object": "{owner_full}"}}]}},
   {{"action": "MERGE", "merge_ids": ["uuid1", "uuid2"], "merged_text": "consolidated"}}
 ]"""
 
@@ -2009,7 +2008,7 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                 # Update the fact text, embedding, and content_hash
                 from lib.embeddings import get_embedding as _get_emb_fix, pack_embedding as _pack_emb_fix
                 new_emb = _get_emb_fix(new_text)
-                new_hash = _content_hash(new_text)
+                new_hash = content_hash(new_text)
                 with graph._get_conn() as conn:
                     packed_emb = _pack_emb_fix(new_emb) if new_emb else None
                     conn.execute(
@@ -2188,7 +2187,7 @@ def resolve_temporal_references(graph: MemoryGraph, dry_run: bool = True,
         else:
             from lib.embeddings import get_embedding as _get_emb_temp, pack_embedding as _pack_emb_temp
             new_emb = _get_emb_temp(new_text)
-            new_hash = _content_hash(new_text)
+            new_hash = content_hash(new_text)
             packed_emb = _pack_emb_temp(new_emb) if new_emb else None
             with graph._get_conn() as conn:
                 conn.execute(
@@ -2381,7 +2380,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
     import urllib.request
     import urllib.error
 
-    REPO = "steadman-labs/quaid"
+    REPO = "rekall-inc/quaid"
     RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 
     # Read current version
@@ -2573,6 +2572,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     # Task execution with timing
     applied_changes = {
+        "backup_keychain": False,
         "backup_core": False,
         "duplicates_merged": 0,
         "edges_created": 0,
@@ -3167,7 +3167,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # --- Task 8: Unit Tests (subprocess) ---
         # Only run tests in dev mode: set QUAID_DEV=1 or janitor.run_tests=true in config
         _dev_mode = os.environ.get("QUAID_DEV", "").strip() in ("1", "true", "yes")
-        _run_tests_cfg = getattr(_cfg.janitor, "run_tests", False) or _dev_mode
+        _run_tests_cfg = getattr(cfg.janitor, "run_tests", False) or _dev_mode
         if task == "tests" or (task == "all" and _run_tests_cfg):
             if not _skip_if_over_budget("Task 8: Tests", 30):
                 print("[Task 8: Unit Tests]")
@@ -3222,7 +3222,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 update_info = _check_for_updates()
                 if update_info:
                     print(f"  ⚠️  UPDATE AVAILABLE: v{update_info['current']} → v{update_info['latest']}")
-                    print(f"  ⚠️  Update: curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash")
+                    print(f"  ⚠️  Update: curl -fsSL https://raw.githubusercontent.com/rekall-inc/quaid/main/install.sh | bash")
                     print(f"  ⚠️  Release: {update_info['url']}")
                     applied_changes["update_available"] = update_info
                 else:
