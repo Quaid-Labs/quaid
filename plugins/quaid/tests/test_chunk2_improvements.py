@@ -42,7 +42,7 @@ def _make_graph(tmp_path):
     return graph, db_file
 
 
-def _make_node(graph, name, owner_id="default", knowledge_type="fact", confidence=0.5, **kwargs):
+def _make_node(graph, name, owner_id="solomon", knowledge_type="fact", confidence=0.5, **kwargs):
     """Create and add a node to the graph with a fake embedding."""
     from memory_graph import Node
     node = Node.create(
@@ -83,13 +83,13 @@ class TestKnowledgeTypeNode:
     def test_node_create_with_preference(self):
         """Node can be created with knowledge_type='preference'."""
         from memory_graph import Node
-        node = Node.create(type="Preference", name="Quaid prefers dark coffee", knowledge_type="preference")
+        node = Node.create(type="Preference", name="Solomon prefers dark coffee", knowledge_type="preference")
         assert node.knowledge_type == "preference"
 
     def test_node_create_with_experience(self):
         """Node can be created with knowledge_type='experience'."""
         from memory_graph import Node
-        node = Node.create(type="Fact", name="Quaid visited Tokyo last year", knowledge_type="experience")
+        node = Node.create(type="Fact", name="Solomon visited Tokyo last year", knowledge_type="experience")
         assert node.knowledge_type == "experience"
 
     def test_schema_check_constraint_rejects_invalid(self, tmp_path):
@@ -153,7 +153,7 @@ class TestKnowledgeTypeNode:
     def test_row_to_node_maps_knowledge_type(self, tmp_path):
         """_row_to_node correctly maps knowledge_type from database row."""
         graph, _ = _make_graph(tmp_path)
-        node = _make_node(graph, "Quaid believes the future is bright", knowledge_type="belief")
+        node = _make_node(graph, "Solomon believes the future is bright", knowledge_type="belief")
         retrieved = graph.get_node(node.id)
         assert retrieved.knowledge_type == "belief"
 
@@ -161,7 +161,7 @@ class TestKnowledgeTypeNode:
         """_row_to_node defaults to 'fact' if knowledge_type column is missing."""
         graph, _ = _make_graph(tmp_path)
         # Add a node normally
-        node = _make_node(graph, "Quaid has a cat named Whiskers")
+        node = _make_node(graph, "Solomon has a cat named Madu")
         retrieved = graph.get_node(node.id)
         assert retrieved.knowledge_type == "fact"
 
@@ -259,8 +259,8 @@ class TestKnowledgeTypeStore:
         graph, _ = _make_graph(tmp_path)
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            result = store("Quaid believes in kindness and empathy",
-                           owner_id="default", skip_dedup=True, knowledge_type="belief")
+            result = store("Solomon believes in kindness and empathy",
+                           owner_id="solomon", skip_dedup=True, knowledge_type="belief")
             node = graph.get_node(result["id"])
             assert node.knowledge_type == "belief"
 
@@ -270,8 +270,8 @@ class TestKnowledgeTypeStore:
         graph, _ = _make_graph(tmp_path)
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            result = store("Quaid has a dog named Rex",
-                           owner_id="default", skip_dedup=True)
+            result = store("Solomon has a dog named Rex",
+                           owner_id="solomon", skip_dedup=True)
             node = graph.get_node(result["id"])
             assert node.knowledge_type == "fact"
 
@@ -281,8 +281,8 @@ class TestKnowledgeTypeStore:
         graph, _ = _make_graph(tmp_path)
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            result = store("Quaid prefers morning walks over evening runs",
-                           owner_id="default", skip_dedup=True, knowledge_type="preference")
+            result = store("Solomon prefers morning walks over evening runs",
+                           owner_id="solomon", skip_dedup=True, knowledge_type="preference")
             node = graph.get_node(result["id"])
             assert node.knowledge_type == "preference"
 
@@ -292,8 +292,8 @@ class TestKnowledgeTypeStore:
         graph, _ = _make_graph(tmp_path)
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            result = store("Quaid traveled through Southeast Asia in 2024",
-                           owner_id="default", skip_dedup=True, knowledge_type="experience")
+            result = store("Solomon traveled through Southeast Asia in 2024",
+                           owner_id="solomon", skip_dedup=True, knowledge_type="experience")
             node = graph.get_node(result["id"])
             assert node.knowledge_type == "experience"
 
@@ -309,31 +309,31 @@ class TestEntityAliasAdd:
     def test_add_alias_stores_correctly(self, tmp_path):
         """add_alias() stores alias->canonical mapping."""
         graph, _ = _make_graph(tmp_path)
-        alias_id = graph.add_alias("sol", "Quaid", owner_id="default")
+        alias_id = graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
         assert alias_id  # Returns a UUID
         uuid.UUID(alias_id)  # Should be valid UUID
 
     def test_add_alias_lowercases(self, tmp_path):
         """add_alias() lowercases the alias."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("Sol", "Quaid", owner_id="default")
-        aliases = graph.get_aliases(owner_id="default")
+        graph.add_alias("Sol", "Solomon Steadman", owner_id="solomon")
+        aliases = graph.get_aliases(owner_id="solomon")
         assert len(aliases) == 1
         assert aliases[0]["alias"] == "sol"
 
     def test_add_alias_strips_whitespace(self, tmp_path):
         """add_alias() strips whitespace from alias."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("  sol  ", "Quaid", owner_id="default")
-        aliases = graph.get_aliases(owner_id="default")
+        graph.add_alias("  sol  ", "Solomon Steadman", owner_id="solomon")
+        aliases = graph.get_aliases(owner_id="solomon")
         assert aliases[0]["alias"] == "sol"
 
     def test_add_alias_with_node_id(self, tmp_path):
         """add_alias() stores canonical_node_id when provided."""
         graph, _ = _make_graph(tmp_path)
-        node = _make_node(graph, "Quaid", type="Person")
-        alias_id = graph.add_alias("sol", "Quaid",
-                                   canonical_node_id=node.id, owner_id="default")
+        node = _make_node(graph, "Solomon Steadman", type="Person")
+        alias_id = graph.add_alias("sol", "Solomon Steadman",
+                                   canonical_node_id=node.id, owner_id="solomon")
         with graph._get_conn() as conn:
             row = conn.execute("SELECT * FROM entity_aliases WHERE id = ?",
                                (alias_id,)).fetchone()
@@ -342,19 +342,19 @@ class TestEntityAliasAdd:
     def test_unique_constraint_alias_owner(self, tmp_path):
         """UNIQUE constraint on (alias, owner_id) prevents duplicates."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
+        graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
         # INSERT OR REPLACE means second insert replaces (no error)
-        graph.add_alias("sol", "Quaid S.", owner_id="default")
-        aliases = graph.get_aliases(owner_id="default")
+        graph.add_alias("sol", "Solomon S.", owner_id="solomon")
+        aliases = graph.get_aliases(owner_id="solomon")
         # Should have exactly 1 alias (replaced, not duplicated)
         assert len(aliases) == 1
-        assert aliases[0]["canonical_name"] == "Quaid S."
+        assert aliases[0]["canonical_name"] == "Solomon S."
 
     def test_same_alias_different_owners(self, tmp_path):
         """Same alias for different owners is allowed."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("mom", "Melina Doe", owner_id="default")
-        graph.add_alias("mom", "Melina Doe", owner_id="jane")
+        graph.add_alias("mom", "Shannon Steadman", owner_id="solomon")
+        graph.add_alias("mom", "Jane Doe", owner_id="jane")
         with graph._get_conn() as conn:
             count = conn.execute("SELECT COUNT(*) FROM entity_aliases WHERE alias = 'mom'").fetchone()[0]
         assert count == 2
@@ -366,58 +366,58 @@ class TestEntityAliasResolve:
     def test_resolve_replaces_alias(self, tmp_path):
         """resolve_alias() replaces alias with canonical name."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
-        result = graph.resolve_alias("What does Sol like?", owner_id="default")
-        assert "Quaid" in result
+        graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
+        result = graph.resolve_alias("What does Sol like?", owner_id="solomon")
+        assert "Solomon Steadman" in result
         assert "sol" not in result.lower().split()  # Word boundary check
 
     def test_resolve_is_case_insensitive(self, tmp_path):
         """resolve_alias() matches case-insensitively."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
-        result = graph.resolve_alias("What does SOL like?", owner_id="default")
-        assert "Quaid" in result
+        graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
+        result = graph.resolve_alias("What does SOL like?", owner_id="solomon")
+        assert "Solomon Steadman" in result
 
     def test_resolve_handles_multiple_aliases(self, tmp_path):
         """resolve_alias() replaces multiple different aliases in one pass."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
-        graph.add_alias("mom", "Melina Doe", owner_id="default")
-        result = graph.resolve_alias("Does sol talk to mom often?", owner_id="default")
-        assert "Quaid" in result
-        assert "Melina Doe" in result
+        graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
+        graph.add_alias("mom", "Shannon Steadman", owner_id="solomon")
+        result = graph.resolve_alias("Does sol talk to mom often?", owner_id="solomon")
+        assert "Solomon Steadman" in result
+        assert "Shannon Steadman" in result
 
     def test_resolve_longest_match_first(self, tmp_path):
         """resolve_alias() resolves longest alias first to avoid partial matches."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
-        graph.add_alias("test u", "Quaid", owner_id="default")
-        result = graph.resolve_alias("Tell me about Quaid S and his hobbies", owner_id="default")
-        # "Quaid S" should match the longer alias first
-        assert "Quaid" in result
+        graph.add_alias("sol", "Solomon", owner_id="solomon")
+        graph.add_alias("solomon s", "Solomon Steadman", owner_id="solomon")
+        result = graph.resolve_alias("Tell me about Solomon S and his hobbies", owner_id="solomon")
+        # "Solomon S" should match the longer alias first
+        assert "Solomon Steadman" in result
 
     def test_resolve_no_aliases_returns_unchanged(self, tmp_path):
         """resolve_alias() returns text unchanged when no aliases exist."""
         graph, _ = _make_graph(tmp_path)
-        original = "What does Quaid like?"
-        result = graph.resolve_alias(original, owner_id="default")
+        original = "What does Solomon like?"
+        result = graph.resolve_alias(original, owner_id="solomon")
         assert result == original
 
     def test_resolve_with_owner_filter(self, tmp_path):
         """resolve_alias() filters by owner_id."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("mom", "Melina Doe", owner_id="default")
-        graph.add_alias("mom", "Melina Doe", owner_id="jane")
-        result = graph.resolve_alias("Tell me about mom", owner_id="default")
-        assert "Melina Doe" in result
-        assert "Melina Doe" not in result
+        graph.add_alias("mom", "Shannon Steadman", owner_id="solomon")
+        graph.add_alias("mom", "Jane Doe", owner_id="jane")
+        result = graph.resolve_alias("Tell me about mom", owner_id="solomon")
+        assert "Shannon Steadman" in result
+        assert "Jane Doe" not in result
 
     def test_resolve_word_boundary(self, tmp_path):
         """resolve_alias() respects word boundaries (no partial word matches)."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
+        graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
         # "solitude" should NOT be replaced
-        result = graph.resolve_alias("He enjoys solitude", owner_id="default")
+        result = graph.resolve_alias("He enjoys solitude", owner_id="solomon")
         assert result == "He enjoys solitude"
 
 
@@ -427,17 +427,17 @@ class TestEntityAliasGetDelete:
     def test_get_aliases_returns_all(self, tmp_path):
         """get_aliases() returns all aliases when no owner filter."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
-        graph.add_alias("mom", "Melina Doe", owner_id="default")
+        graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
+        graph.add_alias("mom", "Shannon Steadman", owner_id="solomon")
         aliases = graph.get_aliases()
         assert len(aliases) >= 2
 
     def test_get_aliases_with_owner_filter(self, tmp_path):
         """get_aliases() with owner_id returns only that owner's aliases."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
+        graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
         graph.add_alias("test", "Test Person", owner_id="other")
-        aliases = graph.get_aliases(owner_id="default")
+        aliases = graph.get_aliases(owner_id="solomon")
         alias_names = [a["alias"] for a in aliases]
         assert "sol" in alias_names
         # "test" may or may not appear since get_aliases includes owner_id IS NULL
@@ -446,10 +446,10 @@ class TestEntityAliasGetDelete:
     def test_delete_alias_removes_successfully(self, tmp_path):
         """delete_alias() removes an alias by ID."""
         graph, _ = _make_graph(tmp_path)
-        alias_id = graph.add_alias("sol", "Quaid", owner_id="default")
+        alias_id = graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
         result = graph.delete_alias(alias_id)
         assert result is True
-        aliases = graph.get_aliases(owner_id="default")
+        aliases = graph.get_aliases(owner_id="solomon")
         assert len(aliases) == 0
 
     def test_delete_alias_returns_false_for_nonexistent(self, tmp_path):
@@ -465,7 +465,7 @@ class TestEntityAliasInRecall:
     def test_recall_calls_resolve_alias(self, tmp_path):
         """recall() calls resolve_alias before searching."""
         graph, _ = _make_graph(tmp_path)
-        graph.add_alias("sol", "Quaid", owner_id="default")
+        graph.add_alias("sol", "Solomon Steadman", owner_id="solomon")
 
         # We verify resolve_alias is called by patching it and checking
         original_resolve = graph.resolve_alias
@@ -482,7 +482,7 @@ class TestEntityAliasInRecall:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
             # recall() will call resolve_alias as part of its pipeline
-            recall_fn("Tell me about sol", owner_id="default",
+            recall_fn("Tell me about sol", owner_id="solomon",
                       use_routing=False, min_similarity=0.01)
 
         # resolve_alias should have been called with the query
@@ -554,13 +554,13 @@ class TestCrossEncoderReranking:
         from memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
-        node = Node.create(type="Fact", name="Quaid lives on Mars")
+        node = Node.create(type="Fact", name="Solomon lives in Bali")
         results = [(node, 0.85)]
         config = RetrievalConfig(reranker_provider="ollama")
 
         # Mock urllib to raise connection error
         with patch("urllib.request.urlopen", side_effect=ConnectionError("no server")):
-            reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
+            reranked = _rerank_with_cross_encoder("where does Solomon live", results, config)
 
         # Should keep original score
         assert len(reranked) == 1
@@ -571,12 +571,12 @@ class TestCrossEncoderReranking:
         from memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
-        node = Node.create(type="Fact", name="Quaid lives on Mars")
+        node = Node.create(type="Fact", name="Solomon lives in Bali")
         results = [(node, 0.85)]
         config = RetrievalConfig(reranker_provider="anthropic")
 
         with patch("llm_clients.call_low_reasoning", side_effect=Exception("API error")):
-            reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
+            reranked = _rerank_with_cross_encoder("where does Solomon live", results, config)
 
         assert len(reranked) == 1
         assert reranked[0][1] == 0.85
@@ -645,7 +645,7 @@ class TestCrossEncoderReranking:
         from memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
-        node = Node.create(type="Fact", name="Quaid lives on Mars")
+        node = Node.create(type="Fact", name="Solomon lives in Bali")
         original_score = 0.7
         results = [(node, original_score)]
         config = RetrievalConfig(reranker_provider="ollama")
@@ -659,7 +659,7 @@ class TestCrossEncoderReranking:
         }).encode()
 
         with patch("urllib.request.urlopen", return_value=mock_response):
-            reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
+            reranked = _rerank_with_cross_encoder("where does Solomon live", results, config)
 
         # Config default reranker_blend is 0.5
         # Expected: 0.5 * 1.0 + 0.5 * 0.7 = 0.85
@@ -673,7 +673,7 @@ class TestCrossEncoderReranking:
         from memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
-        node = Node.create(type="Fact", name="Quaid plays guitar")
+        node = Node.create(type="Fact", name="Solomon plays guitar")
         original_score = 0.7
         results = [(node, original_score)]
         config = RetrievalConfig(reranker_provider="ollama")
@@ -687,7 +687,7 @@ class TestCrossEncoderReranking:
         }).encode()
 
         with patch("urllib.request.urlopen", return_value=mock_response):
-            reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
+            reranked = _rerank_with_cross_encoder("where does Solomon live", results, config)
 
         # Config default reranker_blend is 0.5
         # Expected: 0.5 * 0.3 + 0.5 * 0.7 = 0.50
@@ -772,7 +772,7 @@ class TestRerankerInRecall:
         """recall() skips reranker when reranker_enabled is False."""
         from config import RetrievalConfig
         graph, _ = _make_graph(tmp_path)
-        _make_node(graph, "Quaid has a cat named Whiskers")
+        _make_node(graph, "Solomon has a cat named Madu")
 
         config = RetrievalConfig(reranker_enabled=False, min_similarity=0.01)
         mock_cfg = MagicMock()
@@ -784,7 +784,7 @@ class TestRerankerInRecall:
              patch("config.get_config", return_value=mock_cfg):
             mock_rerank.return_value = []  # Should not be called
             recall_fn = __import__("memory_graph").recall
-            recall_fn("Quaid cat", owner_id="default",
+            recall_fn("Solomon cat", owner_id="solomon",
                       use_routing=False, min_similarity=0.01)
             mock_rerank.assert_not_called()
 
@@ -792,7 +792,7 @@ class TestRerankerInRecall:
         """recall() calls reranker when reranker_enabled is True."""
         from config import RetrievalConfig
         graph, _ = _make_graph(tmp_path)
-        _make_node(graph, "Quaid has a cat named Whiskers")
+        _make_node(graph, "Solomon has a cat named Madu")
 
         config = RetrievalConfig(reranker_enabled=True, min_similarity=0.01)
         mock_cfg = MagicMock()
@@ -803,7 +803,7 @@ class TestRerankerInRecall:
              patch("memory_graph._rerank_with_cross_encoder", wraps=lambda q, r, c=None: r) as mock_rerank, \
              patch("config.get_config", return_value=mock_cfg):
             recall_fn = __import__("memory_graph").recall
-            recall_fn("Quaid cat", owner_id="default",
+            recall_fn("Solomon cat", owner_id="solomon",
                       use_routing=False, min_similarity=0.01)
             mock_rerank.assert_called_once()
 
@@ -828,7 +828,7 @@ class TestMultiPassRetrieval:
     def test_multi_pass_triggers_when_top_low_and_under_limit(self, tmp_path):
         """Multi-pass triggers when top result < 0.70 and results < limit."""
         graph, _ = _make_graph(tmp_path)
-        _make_node(graph, "Quaid lives on Mars Indonesia")
+        _make_node(graph, "Solomon Steadman lives in Bali Indonesia")
 
         # Track if search_hybrid is called more than once (initial + multi-pass)
         original_search_hybrid = graph.search_hybrid
@@ -844,7 +844,7 @@ class TestMultiPassRetrieval:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
             # Use a query that will produce low-quality results
-            recall_fn("Where does Quaid live", owner_id="default",
+            recall_fn("Where does Solomon live", owner_id="solomon",
                       use_routing=False, min_similarity=0.01, limit=10)
 
         # search_hybrid should be called at least once; multi-pass may or may not
@@ -854,23 +854,23 @@ class TestMultiPassRetrieval:
     def test_multi_pass_extracts_entity_terms(self):
         """Multi-pass extracts capitalized words as entity terms."""
         # This tests the logic: entity_terms = [w for w in clean_query.split() if w[0:1].isupper() and len(w) > 2]
-        query = "Does Quaid talk to Melina often"
+        query = "Does Solomon talk to Shannon often"
         words = query.split()
         entity_terms = [w for w in words if w[0:1].isupper() and len(w) > 2]
-        assert "Quaid" in entity_terms
-        assert "Melina" in entity_terms
+        assert "Solomon" in entity_terms
+        assert "Shannon" in entity_terms
         assert "Does" in entity_terms  # First word is capitalized
         assert "to" not in entity_terms  # lowercase
 
     def test_multi_pass_does_not_add_duplicates(self, tmp_path):
         """Multi-pass doesn't add results that were already in the initial pass."""
         graph, _ = _make_graph(tmp_path)
-        node = _make_node(graph, "Quaid has a cat named Whiskers")
+        node = _make_node(graph, "Solomon Steadman has a cat named Madu")
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
-            results = recall_fn("Quaid cat Whiskers", owner_id="default",
+            results = recall_fn("Solomon cat Madu", owner_id="solomon",
                                 use_routing=False, min_similarity=0.01)
 
         # Check no duplicate IDs in results
@@ -883,13 +883,13 @@ class TestMultiPassRetrieval:
         # Create many nodes to increase chances of multi-pass triggering
         for i in range(5):
             _make_node(graph, f"Some tangentially related fact number {i}")
-        _make_node(graph, "Quaid lives on Mars Indonesia")
+        _make_node(graph, "Solomon lives in Bali Indonesia")
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
-            results = recall_fn("Where does Quaid live on Mars",
-                                owner_id="default",
+            results = recall_fn("Where does Solomon Steadman live in Bali",
+                                owner_id="solomon",
                                 use_routing=False, min_similarity=0.01,
                                 debug=True)
 
@@ -925,7 +925,7 @@ class TestMultiPassRetrieval:
     def test_multi_pass_is_best_effort(self, tmp_path):
         """Multi-pass is best-effort: errors are silently caught."""
         graph, _ = _make_graph(tmp_path)
-        _make_node(graph, "Quaid has a cat named Whiskers lives on Mars")
+        _make_node(graph, "Solomon has a cat named Madu lives in Bali")
 
         # Make search_hybrid raise on the second call (multi-pass)
         original_search_hybrid = graph.search_hybrid
@@ -943,8 +943,8 @@ class TestMultiPassRetrieval:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
             # Should not raise even if multi-pass search fails
-            results = recall_fn("Tell me about Quaid and Whiskers",
-                                owner_id="default",
+            results = recall_fn("Tell me about Solomon and Madu",
+                                owner_id="solomon",
                                 use_routing=False, min_similarity=0.01)
         # Should return whatever initial search found
         # (may or may not have results depending on fake embeddings)

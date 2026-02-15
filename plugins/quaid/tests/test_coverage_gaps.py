@@ -45,7 +45,7 @@ def _make_node(graph, name="Test fact", **kwargs):
     from memory_graph import Node
     defaults = dict(
         type="Fact", name=name, confidence=0.8,
-        owner_id="default", status="active",
+        owner_id="solomon", status="active",
     )
     defaults.update(kwargs)
     node = Node.create(**defaults)
@@ -236,7 +236,7 @@ class TestApplyDecayOptimizedReal:
             "storage_strength": storage_strength,
             "extraction_confidence": confidence,
             "verified": verified,
-            "owner_id": "default",
+            "owner_id": "solomon",
             "created_at": node.created_at,
             "speaker": None,
         }
@@ -519,11 +519,11 @@ class TestArchiveNode:
         node_dict = {
             "id": "node-123",
             "type": "Fact",
-            "name": "Quaid likes coffee",
+            "name": "Solomon likes coffee",
             "attributes": {"category": "preference"},
             "confidence": 0.75,
-            "speaker": "default",
-            "owner_id": "default",
+            "speaker": "solomon",
+            "owner_id": "solomon",
             "created_at": "2025-01-01T00:00:00",
             "accessed_at": "2025-06-01T00:00:00",
             "access_count": 5,
@@ -539,7 +539,7 @@ class TestArchiveNode:
         conn.close()
 
         assert row is not None
-        assert row["name"] == "Quaid likes coffee"
+        assert row["name"] == "Solomon likes coffee"
         assert row["archive_reason"] == "confidence_decay"
         assert row["confidence"] == 0.75
 
@@ -553,7 +553,7 @@ class TestArchiveNode:
             "type": "Fact",
             "text": "Fallback text field",
             "confidence": 0.5,
-            "owner_id": "default",
+            "owner_id": "solomon",
         }
 
         result = archive_node(node_dict, "test_reason", db_path=archive_db)
@@ -580,7 +580,7 @@ class TestArchiveNode:
         archive_db = tmp_path / "test_archive_idem.db"
 
         node_dict = {"id": "node-repeat", "type": "Fact", "name": "Repeat fact",
-                     "confidence": 0.5, "owner_id": "default"}
+                     "confidence": 0.5, "owner_id": "solomon"}
 
         assert archive_node(node_dict, "first", db_path=archive_db) is True
         assert archive_node(node_dict, "second", db_path=archive_db) is True
@@ -599,13 +599,13 @@ class TestSearchArchive:
     def _populate(self, archive_db):
         from lib.archive import archive_node
         facts = [
-            ("a1", "Quaid enjoys morning espresso"),
-            ("a2", "The cat Whiskers likes sleeping"),
-            ("a3", "Quaid's favorite color is blue"),
+            ("a1", "Solomon enjoys morning espresso"),
+            ("a2", "The cat Madu likes sleeping"),
+            ("a3", "Solomon's favorite color is blue"),
         ]
         for fid, text in facts:
             archive_node({"id": fid, "type": "Fact", "name": text,
-                          "confidence": 0.5, "owner_id": "default"},
+                          "confidence": 0.5, "owner_id": "solomon"},
                          "test", db_path=archive_db)
 
     def test_basic_search(self, tmp_path):
@@ -613,7 +613,7 @@ class TestSearchArchive:
         archive_db = tmp_path / "test_search.db"
         self._populate(archive_db)
 
-        results = search_archive("Quaid", db_path=archive_db)
+        results = search_archive("Solomon", db_path=archive_db)
         assert len(results) == 2
 
     def test_empty_results(self, tmp_path):
@@ -629,7 +629,7 @@ class TestSearchArchive:
         archive_db = tmp_path / "test_search_limit.db"
         self._populate(archive_db)
 
-        results = search_archive("Quaid", limit=1, db_path=archive_db)
+        results = search_archive("Solomon", limit=1, db_path=archive_db)
         assert len(results) == 1
 
     def test_special_chars_escaped(self, tmp_path):
@@ -638,11 +638,11 @@ class TestSearchArchive:
         archive_db = tmp_path / "test_search_special.db"
         archive_node({"id": "s1", "type": "Fact",
                       "name": "Value is 100% correct",
-                      "confidence": 0.5, "owner_id": "default"},
+                      "confidence": 0.5, "owner_id": "solomon"},
                      "test", db_path=archive_db)
         archive_node({"id": "s2", "type": "Fact",
                       "name": "Normal fact about things",
-                      "confidence": 0.5, "owner_id": "default"},
+                      "confidence": 0.5, "owner_id": "solomon"},
                      "test", db_path=archive_db)
 
         # Searching for "100%" should find only the first, not match everything

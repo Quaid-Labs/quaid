@@ -14,8 +14,8 @@ describe('Pinned Memories', () => {
 
   it('stores memories with pinned flag', async () => {
     const result = await memory.store(
-      'Core identity fact: Quaid is from Australia',
-      'default',
+      'Core identity fact: Solomon is from Australia',
+      'solomon',
       { pinned: true }
     )
     
@@ -23,10 +23,10 @@ describe('Pinned Memories', () => {
   })
 
   it('pinned memories appear in search results', async () => {
-    await memory.store('Regular fact about work', 'default')
-    await memory.store('Important pinned fact', 'default', { pinned: true })
+    await memory.store('Regular fact about work', 'solomon')
+    await memory.store('Important pinned fact', 'solomon', { pinned: true })
     
-    const results = await memory.search('fact', 'default')
+    const results = await memory.search('fact', 'solomon')
     
     expect(results.length).toBeGreaterThan(0)
     
@@ -37,10 +37,10 @@ describe('Pinned Memories', () => {
 
   it('pinned memories have higher priority in ranking', async () => {
     // Store regular fact first, then pinned fact with same content
-    await memory.store('Important information about coffee', 'default')
-    await memory.store('Important information about coffee preferences', 'default', { pinned: true })
+    await memory.store('Important information about coffee', 'solomon')
+    await memory.store('Important information about coffee preferences', 'solomon', { pinned: true })
     
-    const results = await memory.search('important information', 'default')
+    const results = await memory.search('important information', 'solomon')
     
     expect(results.length).toBeGreaterThan(0)
     
@@ -52,7 +52,7 @@ describe('Pinned Memories', () => {
   it('can retrieve raw pinned memory data', async () => {
     const stored = await memory.store(
       'Pinned core identity information',
-      'default',
+      'solomon',
       { pinned: true }
     )
     
@@ -65,9 +65,9 @@ describe('Pinned Memories', () => {
   })
 
   it('pinned flag persists through search operations', async () => {
-    await memory.store('This is a pinned memory', 'default', { pinned: true })
+    await memory.store('This is a pinned memory', 'solomon', { pinned: true })
     
-    const results = await memory.search('pinned', 'default')
+    const results = await memory.search('pinned', 'solomon')
     
     expect(results.length).toBeGreaterThan(0)
     const pinnedResult = results.find(r => 
@@ -79,7 +79,7 @@ describe('Pinned Memories', () => {
   it('supports both pinned and verified flags together', async () => {
     const result = await memory.store(
       'Critical verified and pinned fact',
-      'default',
+      'solomon',
       { pinned: true, verified: true }
     )
     
@@ -90,7 +90,7 @@ describe('Pinned Memories', () => {
   it('handles pinned flag with custom confidence', async () => {
     const result = await memory.store(
       'Pinned fact with custom confidence',
-      'default',
+      'solomon',
       { pinned: true, confidence: 0.9 }
     )
     
@@ -99,16 +99,16 @@ describe('Pinned Memories', () => {
   })
 
   it('pinned memories maintain owner isolation', async () => {
-    await memory.store('Quaid pinned secret', 'default', { pinned: true })
-    await memory.store('Lori pinned secret', 'yuni', { pinned: true })
+    await memory.store('Solomon pinned secret', 'solomon', { pinned: true })
+    await memory.store('Yuni pinned secret', 'yuni', { pinned: true })
     
-    const ownerResults = await memory.search('pinned secret', 'default')
+    const solomonResults = await memory.search('pinned secret', 'solomon')
     const yuniResults = await memory.search('pinned secret', 'yuni')
     
     // Each owner should only see their own pinned memories
-    for (const result of ownerResults) {
+    for (const result of solomonResults) {
       const owner = result.owner || result.owner_id
-      expect(owner).toBe('default')
+      expect(owner).toBe('solomon')
     }
     
     for (const result of yuniResults) {
@@ -118,10 +118,10 @@ describe('Pinned Memories', () => {
   })
 
   it('distinguishes between pinned and unpinned memories', async () => {
-    await memory.store('Regular memory about things', 'default', { skipDedup: true })
-    await memory.store('Pinned memory about things', 'default', { pinned: true, skipDedup: true })
+    await memory.store('Regular memory about things', 'solomon', { skipDedup: true })
+    await memory.store('Pinned memory about things', 'solomon', { pinned: true, skipDedup: true })
     
-    const results = await memory.search('memory', 'default')
+    const results = await memory.search('memory', 'solomon')
     
     const pinnedCount = results.filter(r => r.pinned === true).length
     const unpinnedCount = results.filter(r => r.pinned !== true).length

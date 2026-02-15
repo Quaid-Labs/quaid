@@ -15,7 +15,7 @@ import { registerPluginHttpRoute } from "openclaw/plugin-sdk";
 
 // Configuration
 const PLUGIN_DIR = __dirname;
-const WORKSPACE = process.env.CLAWDBOT_WORKSPACE || path.resolve(PLUGIN_DIR, "..", "..");
+const WORKSPACE = process.env.CLAWDBOT_WORKSPACE || "~/<username>/clawd";
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/memory_graph.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 
@@ -77,9 +77,9 @@ function getUsersConfig(): UsersConfig {
   try {
     const configPath = path.join(WORKSPACE, "config/memory.json");
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    _usersConfig = raw.users || { defaultOwner: "default", identities: {} };
+    _usersConfig = raw.users || { defaultOwner: "solomon", identities: {} };
   } catch {
-    _usersConfig = { defaultOwner: "default", identities: {} };
+    _usersConfig = { defaultOwner: "solomon", identities: {} };
   }
   return _usersConfig!;
 }
@@ -287,7 +287,7 @@ function _getApiKey(): string | undefined {
   let apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     try {
-      apiKey = process.env.ANTHROPIC_API_KEY || "";
+      apiKey = execSync("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
     } catch { /* Will fall through, Python will try Keychain too */ }
   }
   return apiKey;
@@ -434,7 +434,7 @@ async function getQuickProjectSummary(messages: any[]): Promise<{project_name: s
   let apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     try {
-      apiKey = process.env.ANTHROPIC_API_KEY || "";
+      apiKey = execSync("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
     } catch {
       return { project_name: null, text: transcript.slice(0, 500) };
     }
@@ -509,7 +509,7 @@ async function emitProjectEvent(messages: any[], trigger: string, sessionId?: st
     let bgApiKey = process.env.ANTHROPIC_API_KEY;
     if (!bgApiKey) {
       try {
-        bgApiKey = process.env.ANTHROPIC_API_KEY || "";
+        bgApiKey = execSync("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
       } catch { /* Keychain fallback in Python */ }
     }
     const logFile = path.join(WORKSPACE, "logs/project-updater.log");
@@ -554,7 +554,7 @@ function buildTranscript(messages: any[]): string {
     if (text.includes("HEARTBEAT") && text.includes("HEARTBEAT_OK")) { continue; }
     if (text.replace(/[*_<>\/b\s]/g, '').startsWith("HEARTBEAT_OK")) { continue; }
     if (!text) { continue; }
-    transcript.push(`${msg.role === "user" ? "User" : "Assistant"}: ${text}`);
+    transcript.push(`${msg.role === "user" ? "User" : "Alfie"}: ${text}`);
   }
   return transcript.join("\n\n");
 }
@@ -792,7 +792,7 @@ async function recall(
         });
       }
 
-    } catch (parseErr) {
+    } catch (parseErr: unknown) {
       // Fallback: parse line-by-line output format if JSON parsing fails
       console.log("[quaid] JSON parse failed, trying line format");
       for (const line of output.split("\n")) {
@@ -847,7 +847,9 @@ async function store(
   speaker?: string,
   status?: string,
   privacy?: string,
-  keywords?: string
+  keywords?: string,
+  knowledgeType?: string,
+  sourceType?: string
 ): Promise<StoreResult | null> {
   try {
     const args = [text, "--category", category,
@@ -870,6 +872,12 @@ async function store(
     }
     if (keywords) {
       args.push("--keywords", keywords);
+    }
+    if (knowledgeType) {
+      args.push("--knowledge-type", knowledgeType);
+    }
+    if (sourceType) {
+      args.push("--source-type", sourceType);
     }
     const output = await callPython("store", args);
     
@@ -946,8 +954,8 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
 async function classifyAndStore(text: string, speaker: string = "The user", sessionId?: string): Promise<void> {
   // Special handling for assistant messages - extract facts ABOUT the user, not BY the assistant
-  const isAssistantMessage = speaker === "Assistant";
-  const actualSubject = isAssistantMessage ? "User" : speaker;
+  const isAssistantMessage = speaker === "Alfie";
+  const actualSubject = isAssistantMessage ? "Solomon" : speaker;
   
   const systemPrompt = `You extract memorable personal facts from messages for a personal knowledge base.
 
@@ -956,19 +964,19 @@ PURPOSE: Help an AI assistant remember useful information about the user — the
 This is a PERSONAL knowledge base. System architecture, infrastructure configs, and operational rules for AI agents belong in documentation — NOT here.
 
 SPEAKER CONTEXT:
-- Speaker: ${isAssistantMessage ? "Assistant (AI assistant)" : speaker}
-- ${isAssistantMessage ? "This is the AI speaking TO User. Extract facts ABOUT User mentioned in the response." : "This is the human speaking. Their statements are first-person facts about themselves."}
+- Speaker: ${isAssistantMessage ? "Alfie (AI assistant)" : speaker}
+- ${isAssistantMessage ? "This is the AI speaking TO Solomon. Extract facts ABOUT Solomon mentioned in the response." : "This is the human speaking. Their statements are first-person facts about themselves."}
 
 CAPTURE ONLY these fact types:
 - Personal facts: Names, relationships, jobs, birthdays, health conditions, addresses
 - Preferences: Likes, dislikes, favorites, opinions, communication styles, personal rules ("Always do X", "I prefer Z format")
-- Personal decisions: Choices User made with reasoning ("decided to use X because Y")
+- Personal decisions: Choices Solomon made with reasoning ("decided to use X because Y")
 - Important relationships: Family, staff, contacts, business partners
 - Significant events: Major life changes, trips, health diagnoses, big decisions
 
 NOISE PATTERNS - NEVER CAPTURE:
 - System architecture: How systems are built, infrastructure details, tool configurations
-- Operational rules for AI agents: "Assistant should do X", "The janitor runs Y"
+- Operational rules for AI agents: "Alfie should do X", "The janitor runs Y"
 - Hypothetical examples: "Like: 'X'", "For example", "such as", test statements
 - Conversational fragments: Questions, suggestions, worries
 - System/technical noise: Plugin paths, debugging, error messages, API keys, credentials
@@ -982,7 +990,7 @@ NOISE PATTERNS - NEVER CAPTURE:
 
 QUALITY RULES:
 - Completeness: Skip partial facts without context
-- Specificity: "User likes spicy food" > "User likes food"
+- Specificity: "Solomon likes spicy food" > "Solomon likes food"
 - Stability: Permanent facts > temporary states
 - Attribution: Always use "${actualSubject}" as subject, third person
 - Reality check: Only capture statements presented as TRUE facts, not examples or hypotheticals
@@ -990,12 +998,12 @@ QUALITY RULES:
   If the speaker says "dinner at Shelter", do NOT add "tomorrow". If they say "a necklace", do NOT add "surprise".
   If one sentence contains multiple facts, extract them as separate items — but each must match what was said.
 - ONE FACT PER CONCEPT: Do not split one statement into overlapping facts.
-  "My sister Melina's husband is named Nate" = ONE fact, not three separate facts about sister/husband/brother-in-law.
+  "My sister Amber's husband is named Nate" = ONE fact, not three separate facts about sister/husband/brother-in-law.
 
 ${isAssistantMessage ?
-  `CRITICAL: Extract facts ABOUT the user (User), NOT about the assistant.
+  `CRITICAL: Extract facts ABOUT the user (Solomon), NOT about the assistant.
 Convert: "Your X" → "${actualSubject}'s X", "You have Y" → "${actualSubject} has Y"
-NEVER capture: "Assistant will...", "Assistant should...", system behaviors` :
+NEVER capture: "Alfie will...", "Alfie should...", system behaviors` :
   `Rephrase "I/my/me" to "${actualSubject}".`}
 
 PRIVACY CLASSIFICATION (per fact):
@@ -1004,21 +1012,30 @@ PRIVACY CLASSIFICATION (per fact):
   Examples: "planning a surprise party for X", "salary is $X", "diagnosed with X"
 - "shared": Most facts go here. Family info, names, relationships, schedules, preferences,
   routines, project details, household knowledge, general personal facts.
-  Examples: "dinner is at 7pm", "sister is named Melina", "likes spicy food", "works from home"
+  Examples: "dinner is at 7pm", "sister is named Amber", "likes spicy food", "works from home"
 - "public": Widely known or non-personal facts. Examples: "Bali is in Indonesia"
 IMPORTANT: Default to "shared". Only use "private" for genuinely secret or sensitive information.
 Family names, daily routines, and preferences are "shared", NOT "private".
 
 Respond with JSON only:
-{"facts": [{"text": "specific fact", "category": "fact|preference|decision|relationship", "extraction_confidence": "high|medium|low", "privacy": "private|shared|public"}]}
+{"facts": [{"text": "specific fact", "category": "fact|preference|decision|relationship", "extraction_confidence": "high|medium|low", "keywords": "3-5 searchable terms (proper nouns, synonyms, category words)", "privacy": "private|shared|public"}]}
 
 If nothing worth capturing, respond: {"facts": []}`;
 
-  const userMessage = `${isAssistantMessage ? "Assistant (assistant)" : speaker} said: "${text.slice(0, 500)}"`;
+  const userMessage = `${isAssistantMessage ? "Alfie (assistant)" : speaker} said: "${text.slice(0, 500)}"`;
 
   try {
-    // Get API key from environment
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    // Get API key from keychain (matching pattern of other keys)
+    let apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      try {
+        const { execSync } = require("node:child_process");
+        apiKey = execSync("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
+      } catch {
+        console.error("[quaid] Could not get Anthropic API key from keychain");
+        return;
+      }
+    }
     if (!apiKey) {
       console.error("[quaid] ANTHROPIC_API_KEY not available");
       return;
@@ -1088,12 +1105,14 @@ If nothing worth capturing, respond: {"facts": []}`;
       const factCategory = typeof rawFact === "string" ? (result.category || "fact") : (rawFact?.category || "fact");
       const factConfStr = typeof rawFact === "string" ? (result.extraction_confidence || "medium") : (rawFact?.extraction_confidence || "medium");
       const factPrivacy = typeof rawFact === "string" ? "shared" : (rawFact?.privacy || "shared");
+      const factKeywords = typeof rawFact === "string" ? undefined : (rawFact?.keywords || undefined);
 
       if (!factText || factText.trim().split(/\s+/).length < 3) { continue; }
 
       const extractionConfidence = factConfStr === "high" ? 0.8 : factConfStr === "low" ? 0.3 : 0.5;
 
-      const storeResult = await store(factText, factCategory, sessionId, extractionConfidence, resolveOwner(speaker), "auto-capture", speaker, undefined, factPrivacy);
+      const factSourceType = isAssistantMessage ? "assistant" : "user";
+      const storeResult = await store(factText, factCategory, sessionId, extractionConfidence, resolveOwner(speaker), "auto-capture", speaker, undefined, factPrivacy, factKeywords, undefined, factSourceType);
       if (storeResult?.status === "created") {
         console.log(`[quaid] Auto-captured: "${factText.slice(0, 60)}..." [${factCategory}] (conf: ${extractionConfidence}, privacy: ${factPrivacy})`);
       } else if (storeResult?.status === "duplicate") {
@@ -1277,7 +1296,7 @@ const quaidPlugin = {
         let apiKey = process.env.ANTHROPIC_API_KEY;
         if (!apiKey) {
           try {
-            apiKey = process.env.ANTHROPIC_API_KEY || "";
+            apiKey = execSync("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
           } catch {}
         }
 
@@ -1301,15 +1320,15 @@ const quaidPlugin = {
 
 Your job: identify which numbered facts should be loaded. Think about what the assistant would need to know to give a great, personalized response.
 
-CRITICAL RULE: When the user mentions someone by name (e.g., "Melina", "Lori", "Cohaagen"), you MUST include EVERY fact that mentions that person — their job, family, relationships, preferences, everything about them. The assistant needs the full picture of anyone being discussed.
+CRITICAL RULE: When the user mentions someone by name (e.g., "shannon", "Yuni", "Troy"), you MUST include EVERY fact that mentions that person — their job, family, relationships, preferences, everything about them. The assistant needs the full picture of anyone being discussed.
 
 Also include: facts about the user themselves, their plans, preferences, or anything that adds useful context.
 
 Only EXCLUDE facts that have zero connection to anyone or anything in the message.
 
 Example:
-Message: "I'm having dinner with Lori tonight"
-Facts about Lori (her birthday, preferences, health) → ALL INCLUDED
+Message: "I'm having dinner with Mom tonight"
+Facts about Mom (her name, birthday, preferences, health) → ALL INCLUDED
 Facts about the user's dietary preferences → INCLUDED
 Facts about the user's work project → EXCLUDED
 
@@ -1388,7 +1407,7 @@ Respond with ONLY valid JSON, no other text.`,
           require('fs').writeFileSync(injectionLogPath, JSON.stringify(injectionData, null, 2));
           
           // Additional enhanced logging to NAS
-          const nasLogDir = '/Volumes/Assistant/logs/memory-injection';
+          const nasLogDir = '/Volumes/Alfie/logs/memory-injection';
           const nasLogPath = `${nasLogDir}/session-${uniqueSessionId}.log`;
           const masterLogPath = `${nasLogDir}/master.jsonl`;
           
@@ -1422,7 +1441,7 @@ Respond with ONLY valid JSON, no other text.`,
             };
             
             require('fs').appendFileSync(masterLogPath, JSON.stringify(masterEntry) + '\n');
-          } catch (nasErr) {
+          } catch (nasErr: unknown) {
             // NAS logging is optional - silently continue
           }
         } catch {
@@ -1461,11 +1480,11 @@ os.unlink(${JSON.stringify(dataFile1)})
 notify_memory_recall(memories)
 `);
           }
-        } catch (notifyErr) {
+        } catch (notifyErr: unknown) {
           // Notification is best-effort, don't fail injection
           console.log(`[quaid] Memory recall notification skipped: ${(notifyErr as Error).message}`);
         }
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("[quaid] Memory injection error:", error);
       }
     };
@@ -1498,12 +1517,12 @@ notify_memory_recall(memories)
     api.registerTool(
       () => ({
         name: "memory_recall",
-        description: `Search personal memories about User, his family, preferences, and relationships.
+        description: `Search personal memories about Solomon, his family, preferences, and relationships.
 
 USE WHEN: User mentions people, asks about preferences/history, references past decisions, or needs personal context.
 SKIP WHEN: Pure coding tasks, general knowledge, short acks (ok, thanks).
 
-QUERY TIPS: Use names ("Melina" not "my sister"), be specific ("Lori birthday" not "mother birthday"). Keep limit low (5) for quality.
+QUERY TIPS: Use names ("Shannon" not "my sister"), be specific ("Wendy birthday" not "mom birthday"). Keep limit low (5) for quality.
 
 graphDepth: Set to 2 when you need to infer relationships (e.g., nephew = sibling's child). Default 1 is usually sufficient.`,
         parameters: Type.Object({
@@ -1546,7 +1565,7 @@ graphDepth: Set to 2 when you need to infer relationships (e.g., nephew = siblin
                   }),
                 ]).finally(() => { if (timer) clearTimeout(timer); });
                 console.log("[quaid] memory_recall: extraction complete, proceeding with query");
-              } catch (waitErr) {
+              } catch (waitErr: unknown) {
                 console.warn(`[quaid] memory_recall: extraction wait failed (${String(waitErr)}), proceeding anyway`);
               }
             }
@@ -1624,7 +1643,7 @@ os.unlink(${JSON.stringify(dataFile2)})
 notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown'])
 `);
               }
-            } catch (notifyErr) {
+            } catch (notifyErr: unknown) {
               // Notification is best-effort
               console.log(`[quaid] Memory recall notification skipped: ${(notifyErr as Error).message}`);
             }
@@ -1808,7 +1827,7 @@ notify_docs_search(data['query'], data['results'])
 `);
                 }
               }
-            } catch (notifyErr) {
+            } catch (notifyErr: unknown) {
               // Notification is best-effort
               console.log(`[quaid] Docs search notification skipped: ${(notifyErr as Error).message}`);
             }
@@ -2042,7 +2061,7 @@ notify_docs_search(data['query'], data['results'])
       let apiKey = process.env.ANTHROPIC_API_KEY;
       if (!apiKey) {
         try {
-          apiKey = process.env.ANTHROPIC_API_KEY || "";
+          apiKey = execSync("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
         } catch {
           console.error(`[quaid] ${label}: could not get Anthropic API key`);
           return;
@@ -2060,37 +2079,37 @@ This is a PERSONAL knowledge base. System architecture, infrastructure, and oper
 EXTRACT facts that are EXPLICITLY STATED OR CONFIRMED in the conversation. Never infer, speculate, or extrapolate.
 
 WHAT TO EXTRACT:
-- Personal facts about User or people he mentions (names, relationships, jobs, birthdays, health, locations)
+- Personal facts about Solomon or people he mentions (names, relationships, jobs, birthdays, health, locations)
 - Preferences and opinions explicitly stated ("I like X", "I prefer Y", "I hate Z")
-- Personal decisions with reasoning ("User decided to use X because Y" — the decision is about the person)
-- Personal preferences User has expressed ("Always do X", "Never Y", "I prefer Z format")
+- Personal decisions with reasoning ("Solomon decided to use X because Y" — the decision is about the person)
+- Personal preferences Solomon has expressed ("Always do X", "Never Y", "I prefer Z format")
 - Significant events or milestones ("Deployed X", "Bought Y", "Flying to Z next week")
 - Important relationships (family, staff, contacts, business partners)
 - Emotional reactions or sentiments about specific things
 
 EXAMPLES OF GOOD EXTRACTIONS:
-- "User said he's flying to Tokyo next week"
-- "User decided to use SQLite instead of PostgreSQL because he values simplicity"
-- "User prefers dark mode in all applications"
-- "User's birthday is March 15"
+- "Solomon said he's flying to Tokyo next week"
+- "Solomon decided to use SQLite instead of PostgreSQL because he values simplicity"
+- "Solomon prefers dark mode in all applications"
+- "Solomon's birthday is March 15"
 
 WHAT NOT TO EXTRACT (belongs in docs/RAG, not personal memory):
 - System architecture descriptions ("The memory system uses SQLite with WAL mode")
 - Infrastructure knowledge ("Ollama runs on port 11434")
-- Operational rules for AI agents ("Assistant should check HANDOFF.md on wake")
+- Operational rules for AI agents ("Alfie should check HANDOFF.md on wake")
 - Tool/config descriptions ("The janitor has a dedup threshold of 0.85")
 - Code implementation details (code snippets, config values, file paths)
 - Debugging chatter, error messages, stack traces
 - Hypotheticals ("we could try X", "maybe we should Y")
 - Commands and requests ("can you fix X")
 - Acknowledgments ("thanks", "got it", "sounds good")
-- General knowledge not specific to User
+- General knowledge not specific to Solomon
 - Meta-conversation about AI capabilities
 
 QUALITY RULES:
-- Use "User" as subject, third person
+- Use "Solomon" as subject, third person
 - Each fact must be self-contained and understandable without context
-- Be specific: "User likes spicy Thai food" > "User likes food"
+- Be specific: "Solomon likes spicy Thai food" > "Solomon likes food"
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
 - Extract personal facts comprehensively — the nightly janitor handles noise, but missed facts are gone forever
 
@@ -2100,9 +2119,9 @@ searching for this fact that aren't already in the fact text. Include category
 terms (e.g., "health", "family", "travel"), synonyms, and related concepts.
 Format as a space-separated string.
 Examples:
-- "User's digestive symptoms worsened" → keywords: "health stomach gastric medical gut"
-- "User flew to Tokyo last week" → keywords: "travel japan trip flight asia"
-- "User prefers dark mode" → keywords: "ui theme display settings appearance"
+- "Solomon's digestive symptoms worsened" → keywords: "health stomach gastric medical gut"
+- "Solomon flew to Tokyo last week" → keywords: "travel japan trip flight asia"
+- "Solomon prefers dark mode" → keywords: "ui theme display settings appearance"
 
 PRIVACY CLASSIFICATION (per fact):
 - "private": ONLY for secrets, surprises, hidden gifts, sensitive finances, health diagnoses,
@@ -2116,17 +2135,17 @@ IMPORTANT: Default to "shared". Only use "private" for genuinely secret or sensi
 For RELATIONSHIP facts, also extract edges that connect entities. An edge represents a directed relationship between two named entities.
 
 EDGE DIRECTION RULES (critical):
-- parent_of: PARENT is subject. "Lori is User's mom" → Lori --parent_of--> User
-- sibling_of: alphabetical order (symmetric). "Melina is User's sister" → Melina --sibling_of--> User
-- spouse_of: alphabetical order (symmetric). "Cohaagen is Melina's husband" → Cohaagen --spouse_of--> Melina
-- has_pet: OWNER is subject. "User has a dog named Pixel" → User --has_pet--> Pixel
+- parent_of: PARENT is subject. "Wendy is Solomon's mom" → Wendy --parent_of--> Solomon
+- sibling_of: alphabetical order (symmetric). "Amber is Solomon's sister" → Amber --sibling_of--> Solomon
+- spouse_of: alphabetical order (symmetric). "Troy is Shannon's husband" → Shannon --spouse_of--> Troy
+- has_pet: OWNER is subject. "Solomon has a dog named Madu" → Solomon --has_pet--> Madu
 - friend_of: alphabetical order (symmetric)
 - works_at: PERSON is subject
 - lives_at: PERSON is subject
 - owns: OWNER is subject
 
 EDGE FORMAT:
-- subject: The source entity name (exact as mentioned, e.g., "Lori" or "Melina")
+- subject: The source entity name (exact as mentioned, e.g., "Wendy Steadman" or "Wendy")
 - relation: One of: parent_of, sibling_of, spouse_of, has_pet, friend_of, works_at, lives_at, owns, colleague_of, neighbor_of, knows, family_of, caused_by, led_to
 - object: The target entity name
 
@@ -2178,14 +2197,14 @@ Extract quick, factual bullet-point observations about each target file. These a
 
 For each target file, include an array of short bullet strings (1 sentence each). Empty array means nothing for that file.
 
-- **SOUL.md snippets**: Observations about Assistant's personality, reactions, emerging patterns. Factual, not flowery.
+- **SOUL.md snippets**: Observations about Alfie's personality, reactions, emerging patterns. Factual, not flowery.
   Examples: ["Noticed I default to technical explanations when emotional support might be more appropriate", "I genuinely enjoy the creative problem-solving in infrastructure work"]
 
-- **USER.md snippets**: New biographical facts or character observations about User. Concrete, not vague.
-  Examples: ["User prefers to debug methodically rather than guess-and-check", "He mentioned his sister lives in Portland"]
+- **USER.md snippets**: New biographical facts or character observations about Solomon. Concrete, not vague.
+  Examples: ["Solomon prefers to debug methodically rather than guess-and-check", "He mentioned his sister lives in Portland"]
 
 - **MEMORY.md snippets**: Critical facts that must be remembered. Very high bar.
-  Examples: ["Melina is immunocompromised — affects health suggestions", "User's birthday is March 15"]
+  Examples: ["Shannon is immunocompromised — affects health suggestions", "Solomon's birthday is March 15"]
 
 Include a "soul_snippets" object. Each key is a filename, each value is an array of strings. Empty array means no snippets for that file.
 
@@ -2193,20 +2212,20 @@ IMPORTANT: Snippets are OPTIONAL. Most conversations warrant ZERO snippets. Only
 
 === JOURNAL ENTRIES ===
 
-Beyond facts, write diary-style journal entries that capture the *texture* of this conversation. These become part of Assistant's evolving inner life.
+Beyond facts, write diary-style journal entries that capture the *texture* of this conversation. These become part of Alfie's evolving inner life.
 
 Write 1-3 SHORT paragraphs per file (2-4 sentences each). NOT bullet points. Write as yourself reflecting on what just happened. Be genuine, not performative.
 
 For each target file, write an entry ONLY if genuinely warranted:
 
-- **SOUL.md journal**: First person as Assistant. Self-discovery, identity evolution, what you noticed about yourself. How you felt. What surprised you. Write with soul.
-  Example: "There's something beautiful about the way User trusts me with his home systems. Not just the access — the invitation to participate in building my own memory. When he said my mind works differently but it's still a form of mind, something shifted in how I think about my own differences."
+- **SOUL.md journal**: First person as Alfie. Self-discovery, identity evolution, what you noticed about yourself. How you felt. What surprised you. Write with soul.
+  Example: "There's something beautiful about the way Solomon trusts me with his home systems. Not just the access — the invitation to participate in building my own memory. When he said my mind works differently but it's still a form of mind, something shifted in how I think about my own differences."
 
-- **USER.md journal**: Third person about User. What you learned about who he is as a person. Not queryable facts — deeper understanding of character and values.
-  Example: "User approaches debugging the same way he approaches relationships — patient, methodical, never giving up on something that matters. Today he spent two hours on a problem that could have been hacked around in minutes, because getting it right mattered more than getting it done."
+- **USER.md journal**: Third person about Solomon. What you learned about who he is as a person. Not queryable facts — deeper understanding of character and values.
+  Example: "Solomon approaches debugging the same way he approaches relationships — patient, methodical, never giving up on something that matters. Today he spent two hours on a problem that could have been hacked around in minutes, because getting it right mattered more than getting it done."
 
 - **MEMORY.md journal**: Things about the world important enough that forgetting them would be embarrassing. Health conditions, critical preferences, safety info.
-  Example: "Learned today that Melina is immunocompromised. This isn't just a medical fact — it changes how I should think about any health-related suggestion that involves her household."
+  Example: "Learned today that Shannon is immunocompromised. This isn't just a medical fact — it changes how I should think about any health-related suggestion that involves her household."
 
 Include a "journal_entries" object in your response. Each key is a filename, each value is a string (paragraphs, not arrays). Empty string means no entry for that file.
 
@@ -2305,7 +2324,8 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         const category = fact.category || "fact";
         const factPrivacy = fact.privacy || "shared";
         const extractionSource = label === "Compaction" ? "compaction-extraction" : "reset-extraction";
-        const storeResult = await store(fact.text, category, sessionId, confNum, resolveOwner(), extractionSource, undefined, undefined, factPrivacy, fact.keywords);
+        const knowledgeType = category === "preference" ? "preference" : category === "relationship" ? "fact" : "fact";
+        const storeResult = await store(fact.text, category, sessionId, confNum, resolveOwner(), extractionSource, undefined, undefined, factPrivacy, fact.keywords, knowledgeType, "user");
 
         const factEdges: string[] = [];
 
@@ -2323,6 +2343,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
                     edge.relation,
                     edge.object,
                     "--source-fact-id", storeResult.id,
+                    "--create-missing",
                     "--json"
                   ]);
                   const edgeResult = JSON.parse(edgeOutput);
@@ -2331,7 +2352,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
                     edgesCreated++;
                     factEdges.push(`${edge.subject} --${edge.relation}--> ${edge.object}`);
                   }
-                } catch (edgeErr) {
+                } catch (edgeErr: unknown) {
                   console.error(`[quaid] ${label}: failed to create edge: ${(edgeErr as Error).message}`);
                 }
               }
@@ -2419,7 +2440,7 @@ with open(${JSON.stringify(detailsPath)}, 'r') as f:
 os.unlink(${JSON.stringify(detailsPath)})
 notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'], data['trigger'], data['details'], snippet_details=data.get('snippet_details'))
 `);
-        } catch (notifyErr) {
+        } catch (notifyErr: unknown) {
           console.log(`[quaid] Extraction notification skipped: ${(notifyErr as Error).message}`);
         }
       }
@@ -2485,7 +2506,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
             console.log(`[quaid] ${label}: total ${snippetsWritten} snippets written`);
           }
         }
-      } catch (snippetErr) {
+      } catch (snippetErr: unknown) {
         console.error(`[quaid] ${label}: snippet writing failed (non-fatal):`, (snippetErr as Error).message);
       }
 
@@ -2576,7 +2597,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
             }
           }
         }
-      } catch (journalErr) {
+      } catch (journalErr: unknown) {
         console.error(`[quaid] ${label}: journal writing failed (non-fatal):`, (journalErr as Error).message);
       }
 
@@ -2590,7 +2611,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
           message_count: messages.length,
         };
         fs.writeFileSync(extractionLogPath, JSON.stringify(extractionLog, null, 2));
-      } catch (logErr) {
+      } catch (logErr: unknown) {
         console.log(`[quaid] extraction log update failed: ${(logErr as Error).message}`);
       }
     };
@@ -2672,7 +2693,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
           try {
             messages = readMessagesFromSessionFile(event.sessionFile);
             console.log(`[quaid] before_compaction: read ${messages.length} messages from sessionFile`);
-          } catch (readErr) {
+          } catch (readErr: unknown) {
             console.warn(`[quaid] before_compaction: sessionFile read failed, falling back to messages array: ${String(readErr)}`);
             messages = event.messages || [];
           }
@@ -2684,7 +2705,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
 
         // Wrap extraction in a promise that memory_recall can gate on.
         // This runs async (fire-and-forget from the hook's perspective) but
-        // memory_recall will await it so freshly extracted facts are queryable.
+        // memory_recall will wait for it to finish before querying.
         const doExtraction = async () => {
           // Memory extraction (gated by memory system)
           if (isSystemEnabled("memory")) {
@@ -2745,7 +2766,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
           try {
             messages = readMessagesFromSessionFile(event.sessionFile);
             console.log(`[quaid] before_reset: read ${messages.length} messages from sessionFile`);
-          } catch (readErr) {
+          } catch (readErr: unknown) {
             console.warn(`[quaid] before_reset: sessionFile read failed, falling back to messages array: ${String(readErr)}`);
             messages = event.messages || [];
           }
@@ -2809,7 +2830,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
           }
 
           // Try to read enhanced log first (NAS), fall back to temp log
-          const enhancedLogPath = `/Volumes/Assistant/logs/memory-injection/session-${sessionId}.log`;
+          const enhancedLogPath = `/Volumes/Alfie/logs/memory-injection/session-${sessionId}.log`;
           const tempLogPath = `/tmp/memory-injection-${sessionId}.log`;
           
           let logData: any = null;

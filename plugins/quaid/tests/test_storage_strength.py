@@ -50,7 +50,7 @@ def _make_node(graph, name="Test fact", **kwargs):
     from memory_graph import Node
     defaults = dict(
         type="Fact", name=name, confidence=0.8,
-        owner_id="default", status="active",
+        owner_id="solomon", status="active",
     )
     defaults.update(kwargs)
     node = Node.create(**defaults)

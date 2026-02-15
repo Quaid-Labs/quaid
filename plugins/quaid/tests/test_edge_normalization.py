@@ -15,60 +15,60 @@ class TestInverseFlipping:
 
     def test_child_of_flips_to_parent_of(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "child_of", "Mary", "Person"
+            "Solomon", "Person", "child_of", "Wendy", "Person"
         )
         assert r == "parent_of"
-        assert s == "Mary"
-        assert o == "Quaid"
+        assert s == "Wendy"
+        assert o == "Solomon"
 
     def test_son_of_flips_to_parent_of(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "son_of", "Mary", "Person"
+            "Solomon", "Person", "son_of", "Wendy", "Person"
         )
         assert r == "parent_of"
-        assert s == "Mary"
-        assert o == "Quaid"
+        assert s == "Wendy"
+        assert o == "Solomon"
 
     def test_daughter_of_flips_to_parent_of(self):
         s, st, r, o, ot = _normalize_edge(
-            "Melina", "Person", "daughter_of", "Mary", "Person"
+            "Shannon", "Person", "daughter_of", "Wendy", "Person"
         )
         assert r == "parent_of"
-        assert s == "Mary"
-        assert o == "Melina"
+        assert s == "Wendy"
+        assert o == "Shannon"
 
     def test_owned_by_flips_to_owns(self):
         s, st, r, o, ot = _normalize_edge(
-            "Villa Atmata", "Place", "owned_by", "Quaid", "Person"
+            "Villa Atmata", "Place", "owned_by", "Solomon", "Person"
         )
         assert r == "owns"
-        assert s == "Quaid"
+        assert s == "Solomon"
         assert st == "Person"
         assert o == "Villa Atmata"
         assert ot == "Place"
 
     def test_pet_of_flips_to_has_pet(self):
         s, st, r, o, ot = _normalize_edge(
-            "Whiskers", "Concept", "pet_of", "Quaid", "Person"
+            "Madu", "Concept", "pet_of", "Solomon", "Person"
         )
         assert r == "has_pet"
-        assert s == "Quaid"
-        assert o == "Whiskers"
+        assert s == "Solomon"
+        assert o == "Madu"
 
     def test_employs_flips_to_works_at(self):
         s, st, r, o, ot = _normalize_edge(
-            "Facebook", "Organization", "employs", "Quaid", "Person"
+            "Facebook", "Organization", "employs", "Solomon", "Person"
         )
         assert r == "works_at"
-        assert s == "Quaid"
+        assert s == "Solomon"
         assert o == "Facebook"
 
     def test_managed_by_flips_to_manages(self):
         s, st, r, o, ot = _normalize_edge(
-            "Project", "Concept", "managed_by", "Quaid", "Person"
+            "Project", "Concept", "managed_by", "Solomon", "Person"
         )
         assert r == "manages"
-        assert s == "Quaid"
+        assert s == "Solomon"
         assert o == "Project"
 
 
@@ -76,66 +76,66 @@ class TestSynonymResolution:
     """Relations in _SYNONYM_MAP rename without flipping."""
 
     def test_mother_of_becomes_parent_of_same_direction(self):
-        # mother_of(Mary, Quaid) → parent_of(Mary, Quaid) — NO flip
+        # mother_of(Wendy, Solomon) → parent_of(Wendy, Solomon) — NO flip
         s, st, r, o, ot = _normalize_edge(
-            "Mary", "Person", "mother_of", "Quaid", "Person"
+            "Wendy", "Person", "mother_of", "Solomon", "Person"
         )
         assert r == "parent_of"
-        assert s == "Mary"
-        assert o == "Quaid"
+        assert s == "Wendy"
+        assert o == "Solomon"
 
     def test_father_of_becomes_parent_of_same_direction(self):
         s, st, r, o, ot = _normalize_edge(
-            "Kent", "Person", "father_of", "Quaid", "Person"
+            "Kent", "Person", "father_of", "Solomon", "Person"
         )
         assert r == "parent_of"
         assert s == "Kent"
-        assert o == "Quaid"
+        assert o == "Solomon"
 
     def test_married_to_becomes_spouse_of(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "married_to", "Lori", "Person"
+            "Solomon", "Person", "married_to", "Yuni", "Person"
         )
         assert r == "spouse_of"
-        assert s == "Quaid"
-        assert o == "Lori"
+        assert s == "Solomon"
+        assert o == "Yuni"
 
     def test_resides_in_becomes_lives_in(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "resides_in", "Mars", "Place"
+            "Solomon", "Person", "resides_in", "Bali", "Place"
         )
         assert r == "lives_in"
 
     def test_likes_becomes_prefers(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "likes", "Espresso", "Concept"
+            "Solomon", "Person", "likes", "Espresso", "Concept"
         )
         assert r == "prefers"
 
     def test_enjoys_becomes_prefers(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "enjoys", "Board Games", "Concept"
+            "Solomon", "Person", "enjoys", "Board Games", "Concept"
         )
         assert r == "prefers"
 
     def test_engaged_to_becomes_partner_of(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "engaged_to", "Lori", "Person"
+            "Solomon", "Person", "engaged_to", "Yuni", "Person"
         )
         assert r == "partner_of"
 
     def test_suffers_from_becomes_diagnosed_with(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "suffers_from", "Colitis", "Concept"
+            "Solomon", "Person", "suffers_from", "Colitis", "Concept"
         )
         assert r == "diagnosed_with"
 
     def test_works_for_becomes_works_at(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "works_for", "Facebook", "Organization"
+            "Solomon", "Person", "works_for", "Facebook", "Organization"
         )
         assert r == "works_at"
-        assert s == "Quaid"
+        assert s == "Solomon"
         assert o == "Facebook"
 
 
@@ -144,38 +144,38 @@ class TestSymmetricOrdering:
 
     def test_spouse_of_already_ordered(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "spouse_of", "Lori", "Person"
+            "Solomon", "Person", "spouse_of", "Yuni", "Person"
         )
-        assert s == "Quaid"
-        assert o == "Lori"
+        assert s == "Solomon"
+        assert o == "Yuni"
 
     def test_spouse_of_needs_flip(self):
         s, st, r, o, ot = _normalize_edge(
-            "Lori", "Person", "spouse_of", "Quaid", "Person"
+            "Yuni", "Person", "spouse_of", "Solomon", "Person"
         )
-        assert s == "Quaid"
-        assert o == "Lori"
+        assert s == "Solomon"
+        assert o == "Yuni"
 
     def test_friend_of_alphabetical(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "friend_of", "De Kai", "Person"
+            "Solomon", "Person", "friend_of", "De Kai", "Person"
         )
         assert s == "De Kai"
-        assert o == "Quaid"
+        assert o == "Solomon"
 
     def test_sibling_of_alphabetical(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "sibling_of", "Amber", "Person"
+            "Solomon", "Person", "sibling_of", "Amber", "Person"
         )
         assert s == "Amber"
-        assert o == "Quaid"
+        assert o == "Solomon"
 
     def test_knows_alphabetical(self):
         s, st, r, o, ot = _normalize_edge(
-            "Mary", "Person", "knows", "Amber", "Person"
+            "Wendy", "Person", "knows", "Amber", "Person"
         )
         assert s == "Amber"
-        assert o == "Mary"
+        assert o == "Wendy"
 
     def test_colleague_of_alphabetical(self):
         s, st, r, o, ot = _normalize_edge(
@@ -190,31 +190,31 @@ class TestNonSymmetricPreservesOrder:
 
     def test_lives_in(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "lives_in", "Mars", "Place"
+            "Solomon", "Person", "lives_in", "Bali", "Place"
         )
-        assert s == "Quaid"
-        assert o == "Mars"
+        assert s == "Solomon"
+        assert o == "Bali"
 
     def test_works_at(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "works_at", "Facebook", "Organization"
+            "Solomon", "Person", "works_at", "Facebook", "Organization"
         )
-        assert s == "Quaid"
+        assert s == "Solomon"
         assert o == "Facebook"
 
     def test_parent_of_not_symmetric(self):
         """parent_of is directional: parent is always subject."""
         s, st, r, o, ot = _normalize_edge(
-            "Mary", "Person", "parent_of", "Quaid", "Person"
+            "Wendy", "Person", "parent_of", "Solomon", "Person"
         )
-        assert s == "Mary"
-        assert o == "Quaid"
+        assert s == "Wendy"
+        assert o == "Solomon"
 
     def test_prefers_not_symmetric(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "prefers", "Espresso", "Concept"
+            "Solomon", "Person", "prefers", "Espresso", "Concept"
         )
-        assert s == "Quaid"
+        assert s == "Solomon"
         assert o == "Espresso"
 
 
@@ -223,10 +223,10 @@ class TestPassthrough:
 
     def test_custom_relation(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "custom_relation", "Something", "Concept"
+            "Solomon", "Person", "custom_relation", "Something", "Concept"
         )
         assert r == "custom_relation"
-        assert s == "Quaid"
+        assert s == "Solomon"
         assert o == "Something"
 
 
@@ -236,28 +236,28 @@ class TestCombinedTransforms:
     def test_inverse_to_non_symmetric(self):
         """child_of flips to parent_of, which is NOT symmetric."""
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "child_of", "Mary", "Person"
+            "Solomon", "Person", "child_of", "Wendy", "Person"
         )
         assert r == "parent_of"
-        assert s == "Mary"
-        assert o == "Quaid"
+        assert s == "Wendy"
+        assert o == "Solomon"
 
     def test_synonym_to_symmetric(self):
         """married_to → spouse_of (synonym), then alphabetical ordering (symmetric)."""
         s, st, r, o, ot = _normalize_edge(
-            "Lori", "Person", "married_to", "Quaid", "Person"
+            "Yuni", "Person", "married_to", "Solomon", "Person"
         )
         assert r == "spouse_of"
-        assert s == "Quaid"  # alphabetical
-        assert o == "Lori"
+        assert s == "Solomon"  # alphabetical
+        assert o == "Yuni"
 
     def test_synonym_to_symmetric_already_ordered(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "engaged_to", "Lori", "Person"
+            "Solomon", "Person", "engaged_to", "Yuni", "Person"
         )
         assert r == "partner_of"
-        assert s == "Quaid"
-        assert o == "Lori"
+        assert s == "Solomon"
+        assert o == "Yuni"
 
 
 class TestWhitespaceAndCase:
@@ -265,19 +265,19 @@ class TestWhitespaceAndCase:
 
     def test_whitespace_in_relation(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "  Lives In  ", "Mars", "Place"
+            "Solomon", "Person", "  Lives In  ", "Bali", "Place"
         )
         assert r == "lives_in"
 
     def test_spaces_become_underscores(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "works at", "Facebook", "Organization"
+            "Solomon", "Person", "works at", "Facebook", "Organization"
         )
         assert r == "works_at"
 
     def test_uppercase_normalized(self):
         s, st, r, o, ot = _normalize_edge(
-            "Quaid", "Person", "LIVES_IN", "Mars", "Place"
+            "Solomon", "Person", "LIVES_IN", "Bali", "Place"
         )
         assert r == "lives_in"
 

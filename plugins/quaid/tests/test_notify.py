@@ -58,8 +58,8 @@ class TestNotifyMemoryRecall:
     def test_direct_matches_formatted(self):
         """Direct matches include similarity percentage."""
         memories = [
-            {"text": "Quaid lives on Mars", "similarity": 85, "via": "vector"},
-            {"text": "Quaid has a cat named Whiskers", "similarity": 72, "via": "vector"},
+            {"text": "Solomon lives in Bali", "similarity": 85, "via": "vector"},
+            {"text": "Solomon has a cat named Madu", "similarity": 72, "via": "vector"},
         ]
         with _patch_notify_user() as mock_send:
             result = notify_memory_recall(memories, min_similarity=70, dry_run=False)
@@ -69,12 +69,12 @@ class TestNotifyMemoryRecall:
             assert "Direct Matches" in msg
             assert "[85%]" in msg
             assert "[72%]" in msg
-            assert "Quaid lives on Mars" in msg
+            assert "Solomon lives in Bali" in msg
 
     def test_low_similarity_filtered_out(self):
         """Memories below min_similarity are filtered."""
         memories = [
-            {"text": "Quaid lives on Mars", "similarity": 85, "via": "vector"},
+            {"text": "Solomon lives in Bali", "similarity": 85, "via": "vector"},
             {"text": "Unrelated low match", "similarity": 50, "via": "vector"},
         ]
         with _patch_notify_user() as mock_send:
@@ -97,20 +97,20 @@ class TestNotifyMemoryRecall:
     def test_graph_discoveries_shown_separately(self):
         """Graph discoveries get their own section."""
         memories = [
-            {"text": "Quaid lives on Mars", "similarity": 90, "via": "vector"},
-            {"text": "Whiskers is Quaid's cat", "similarity": 0, "via": "graph"},
+            {"text": "Solomon lives in Bali", "similarity": 90, "via": "vector"},
+            {"text": "Madu is Solomon's cat", "similarity": 0, "via": "graph"},
         ]
         with _patch_notify_user() as mock_send:
             notify_memory_recall(memories, min_similarity=70)
             msg = mock_send.call_args[0][0]
             assert "Direct Matches" in msg
             assert "Graph Discoveries" in msg
-            assert "Whiskers is Quaid's cat" in msg
+            assert "Madu is Solomon's cat" in msg
 
     def test_graph_only_no_direct_matches(self):
         """Graph discoveries shown even without direct matches."""
         memories = [
-            {"text": "Whiskers is Quaid's cat", "similarity": 0, "via": "graph"},
+            {"text": "Madu is Solomon's cat", "similarity": 0, "via": "graph"},
         ]
         with _patch_notify_user() as mock_send:
             result = notify_memory_recall(memories, min_similarity=70)
@@ -133,27 +133,27 @@ class TestNotifyMemoryRecall:
     def test_source_breakdown_included(self):
         """Source breakdown adds query and source counts."""
         memories = [
-            {"text": "Quaid lives on Mars", "similarity": 90, "via": "vector"},
+            {"text": "Solomon lives in Bali", "similarity": 90, "via": "vector"},
         ]
         breakdown = {
             "vector_count": 3,
             "graph_count": 1,
-            "query": "where does Quaid live",
+            "query": "where does Solomon live",
             "pronoun_resolved": True,
-            "owner_person": "Quaid",
+            "owner_person": "Solomon Steadman",
         }
         with _patch_notify_user() as mock_send:
             notify_memory_recall(memories, min_similarity=70, source_breakdown=breakdown)
             msg = mock_send.call_args[0][0]
             assert "3 vector" in msg
             assert "1 graph" in msg
-            assert "where does Quaid live" in msg
-            assert "Quaid" in msg
+            assert "where does Solomon live" in msg
+            assert "Solomon Steadman" in msg
 
     def test_source_breakdown_pronoun_no_person(self):
         """Pronoun resolved without explicit person shows checkmark."""
         memories = [
-            {"text": "Quaid lives on Mars", "similarity": 90, "via": "vector"},
+            {"text": "Solomon lives in Bali", "similarity": 90, "via": "vector"},
         ]
         breakdown = {
             "vector_count": 1,
@@ -214,17 +214,17 @@ class TestNotifyMemoryExtraction:
     def test_details_with_stored_fact(self):
         """Stored facts get checkmark emoji."""
         details = [
-            {"text": "Quaid prefers dark mode", "status": "stored"},
+            {"text": "Solomon prefers dark mode", "status": "stored"},
         ]
         with _patch_notify_user() as mock_send:
             notify_memory_extraction(1, 0, 0, details=details)
             msg = mock_send.call_args[0][0]
-            assert "Quaid prefers dark mode" in msg
+            assert "Solomon prefers dark mode" in msg
 
     def test_details_with_duplicate(self):
         """Duplicate facts show reason."""
         details = [
-            {"text": "Quaid lives on Mars", "status": "duplicate", "reason": "existing fact #42"},
+            {"text": "Solomon lives in Bali", "status": "duplicate", "reason": "existing fact #42"},
         ]
         with _patch_notify_user() as mock_send:
             notify_memory_extraction(0, 1, 0, details=details)
@@ -244,13 +244,13 @@ class TestNotifyMemoryExtraction:
     def test_details_with_edges(self):
         """Facts with edges show them indented."""
         details = [
-            {"text": "Mary is Quaid's mother", "status": "stored",
-             "edges": ["Mary parent_of Quaid"]},
+            {"text": "Wendy is Solomon's mother", "status": "stored",
+             "edges": ["Wendy parent_of Solomon"]},
         ]
         with _patch_notify_user() as mock_send:
             notify_memory_extraction(1, 0, 1, details=details)
             msg = mock_send.call_args[0][0]
-            assert "Mary parent_of Quaid" in msg
+            assert "Wendy parent_of Solomon" in msg
 
     def test_long_detail_text_truncated(self):
         """Fact text in details is truncated at 80 chars."""
@@ -457,7 +457,7 @@ class TestNotifyDailyMemories:
 
     def test_groups_by_category(self):
         memories = [
-            {"text": "Quaid lives on Mars", "category": "fact"},
+            {"text": "Solomon lives in Bali", "category": "fact"},
             {"text": "Prefers dark mode", "category": "preference"},
             {"text": "Another fact", "category": "fact"},
         ]

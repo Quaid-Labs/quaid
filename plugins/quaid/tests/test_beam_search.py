@@ -42,7 +42,7 @@ def graph(tmp_path):
 
 
 def _add_node(graph, name, node_type="Fact", confidence=0.8, verified=False,
-              storage_strength=5.0, status="active", owner_id="default"):
+              storage_strength=5.0, status="active", owner_id="solomon"):
     """Add a node without embeddings, return the node."""
     node = Node.create(
         type=node_type,
@@ -246,13 +246,13 @@ class TestBeamScoring:
 
     def test_intent_boost_affects_score(self, graph):
         """Person type boost for WHO intent raises score for Person nodes."""
-        person_node = _add_node(graph, "Quaid", node_type="Person", confidence=0.8)
+        person_node = _add_node(graph, "Solomon Steadman", node_type="Person", confidence=0.8)
         fact_node = _add_node(graph, "Some random fact", node_type="Fact", confidence=0.8)
 
         type_boosts = {"Person": 1.3, "Fact": 0.8}
 
         score_person = graph._beam_score_candidate(
-            query="Who is Quaid?",
+            query="Who is Solomon?",
             node=person_node,
             relation="knows",
             edge_weight=1.0,
@@ -264,7 +264,7 @@ class TestBeamScoring:
         )
 
         score_fact = graph._beam_score_candidate(
-            query="Who is Quaid?",
+            query="Who is Solomon?",
             node=fact_node,
             relation="knows",
             edge_weight=1.0,
@@ -524,7 +524,7 @@ class TestBeamEdgeCases:
 
     def test_beam_path_building(self, graph):
         """Paths correctly show the traversal chain."""
-        a = _add_node(graph, "Quaid")
+        a = _add_node(graph, "Solomon")
         b = _add_node(graph, "Emily")
         c = _add_node(graph, "Luna")
 
@@ -540,15 +540,15 @@ class TestBeamEdgeCases:
 
         by_name = {r[0].name: r for r in results}
 
-        # Emily at depth 1: path = [("Quaid", "parent_of")]
+        # Emily at depth 1: path = [("Solomon", "parent_of")]
         assert "Emily" in by_name
         emily_path = by_name["Emily"][4]  # path is at index 4
-        assert emily_path == [("Quaid", "parent_of")]
+        assert emily_path == [("Solomon", "parent_of")]
 
-        # Luna at depth 2: path = [("Quaid", "parent_of"), ("Emily", "has_pet")]
+        # Luna at depth 2: path = [("Solomon", "parent_of"), ("Emily", "has_pet")]
         assert "Luna" in by_name
         luna_path = by_name["Luna"][4]
-        assert luna_path == [("Quaid", "parent_of"), ("Emily", "has_pet")]
+        assert luna_path == [("Solomon", "parent_of"), ("Emily", "has_pet")]
 
     def test_beam_bidirectional(self, graph):
         """Traverses both outbound and inbound edges."""

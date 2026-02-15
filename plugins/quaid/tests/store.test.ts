@@ -13,16 +13,16 @@ describe('Memory Store', () => {
   })
 
   it('stores a memory with correct metadata', async () => {
-    const result = await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    const result = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
     
     expect(result.id).toBeDefined()
-    expect(result.content || result.name).toContain('Quaid')
-    expect(result.owner_id || result.owner).toBe('default')
+    expect(result.content || result.name).toContain('Solomon')
+    expect(result.owner_id || result.owner).toBe('solomon')
     expect(result.created_at).toBeDefined()
   })
 
   it('generates embedding of correct dimension', async () => {
-    const result = await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    const result = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
     
     // The embedding might be stored as binary or array depending on implementation
     if (result.embedding) {
@@ -36,15 +36,15 @@ describe('Memory Store', () => {
   })
 
   it('sets default confidence to 1.0 for manual stores', async () => {
-    const result = await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    const result = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
     
     expect(result.confidence).toBeGreaterThanOrEqual(0.5) // Should be high for manual stores
   })
 
   it('accepts verified flag', async () => {
     const result = await memory.store(
-      fixtures.defaultFact.content, 
-      fixtures.defaultFact.owner,
+      fixtures.solomonFact.content, 
+      fixtures.solomonFact.owner,
       { verified: true }
     )
     
@@ -53,8 +53,8 @@ describe('Memory Store', () => {
 
   it('accepts pinned flag', async () => {
     const result = await memory.store(
-      fixtures.defaultFact.content, 
-      fixtures.defaultFact.owner,
+      fixtures.solomonFact.content, 
+      fixtures.solomonFact.owner,
       { pinned: true }
     )
     
@@ -62,19 +62,19 @@ describe('Memory Store', () => {
   })
 
   it('rejects empty content', async () => {
-    await expect(memory.store('', 'default'))
+    await expect(memory.store('', 'solomon'))
       .rejects.toThrow()
   })
 
   it('rejects content with fewer than 3 words', async () => {
-    await expect(memory.store('Quaid', 'default'))
+    await expect(memory.store('Solomon', 'solomon'))
       .rejects.toThrow()
-    await expect(memory.store('Quaid', 'default'))
+    await expect(memory.store('Solomon Steadman', 'solomon'))
       .rejects.toThrow()
   })
 
   it('accepts content with exactly 3 words', async () => {
-    const result = await memory.store('Quaid is great', 'default')
+    const result = await memory.store('Solomon is great', 'solomon')
     expect(result.id).toBeDefined()
   })
 
@@ -85,7 +85,7 @@ describe('Memory Store', () => {
 
   it('handles special characters in content', async () => {
     const special = 'Test with émojis 🎉 and "quotes" and <tags>'
-    const result = await memory.store(special, 'default')
+    const result = await memory.store(special, 'solomon')
     
     expect(result.id).toBeDefined()
     // Content should be preserved (might be in name field for facts)
@@ -95,8 +95,8 @@ describe('Memory Store', () => {
 
   it('accepts custom confidence values', async () => {
     const result = await memory.store(
-      fixtures.defaultFact.content,
-      fixtures.defaultFact.owner,
+      fixtures.solomonFact.content,
+      fixtures.solomonFact.owner,
       { confidence: 0.8 }
     )
     
@@ -105,8 +105,8 @@ describe('Memory Store', () => {
 
   it('accepts category specification', async () => {
     const result = await memory.store(
-      'Quaid prefers dark coffee',
-      'default',
+      'Solomon prefers dark coffee',
+      'solomon',
       { category: 'preference' }
     )
     

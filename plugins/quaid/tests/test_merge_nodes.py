@@ -6,7 +6,7 @@ Validates the fix for the destructive merge pattern:
 3. Storage strength inheritance (max from originals)
 4. Status="active" (not "approved")
 5. Edge migration (repoint, not delete)
-6. Owner ID from originals (not hardcoded "default")
+6. Owner ID from originals (not hardcoded "solomon")
 7. Earliest created_at preserved
 """
 
@@ -44,7 +44,7 @@ def _make_graph(tmp_path):
     return graph, db_file
 
 
-def _make_node(graph, name, owner_id="default", confidence=0.8, status="active",
+def _make_node(graph, name, owner_id="solomon", confidence=0.8, status="active",
                confirmation_count=0, storage_strength=0.0, created_at=None):
     """Create and add a node directly."""
     from memory_graph import Node
@@ -65,7 +65,7 @@ def _make_node(graph, name, owner_id="default", confidence=0.8, status="active",
     return node
 
 
-def _store_and_get(graph, text, owner_id="default", confidence=0.8, status="active",
+def _store_and_get(graph, text, owner_id="solomon", confidence=0.8, status="active",
                    confirmation_count=0, storage_strength=0.0, created_at=None):
     """Store via store() and return the node with overrides applied."""
     from memory_graph import store
@@ -120,14 +120,14 @@ class TestMergeConfidenceInheritance:
     def test_inherits_max_confidence(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid likes morning coffee routines", confidence=0.7)
-        node_b = _store_and_get(graph, "Quaid enjoys morning coffee every day", confidence=0.95)
+        node_a = _store_and_get(graph, "Solomon likes morning coffee routines", confidence=0.7)
+        node_b = _store_and_get(graph, "Solomon enjoys morning coffee every day", confidence=0.95)
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid likes morning coffee every day",
+                graph, "Solomon likes morning coffee every day",
                 [node_a.id, node_b.id], source="dedup_merge"
             )
 
@@ -137,14 +137,14 @@ class TestMergeConfidenceInheritance:
     def test_does_not_hardcode_09(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid has a pet cat named Whiskers", confidence=0.3)
-        node_b = _store_and_get(graph, "Quaid owns a cat called Whiskers", confidence=0.4)
+        node_a = _store_and_get(graph, "Solomon has a pet cat named Madu", confidence=0.3)
+        node_b = _store_and_get(graph, "Solomon owns a cat called Madu", confidence=0.4)
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid has a pet cat named Whiskers",
+                graph, "Solomon has a pet cat named Madu",
                 [node_a.id, node_b.id]
             )
 
@@ -155,15 +155,15 @@ class TestMergeConfidenceInheritance:
     def test_three_way_merge_inherits_max(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid works from his home office", confidence=0.6)
-        node_b = _store_and_get(graph, "Quaid works remotely from home", confidence=0.85)
-        node_c = _store_and_get(graph, "Quaid is a remote worker at home", confidence=0.7)
+        node_a = _store_and_get(graph, "Solomon works from his home office", confidence=0.6)
+        node_b = _store_and_get(graph, "Solomon works remotely from home", confidence=0.85)
+        node_c = _store_and_get(graph, "Solomon is a remote worker at home", confidence=0.7)
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid works remotely from his home office",
+                graph, "Solomon works remotely from his home office",
                 [node_a.id, node_b.id, node_c.id]
             )
 
@@ -181,14 +181,14 @@ class TestMergeConfirmationCount:
     def test_sums_confirmation_counts(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid drinks espresso in morning", confirmation_count=3)
-        node_b = _store_and_get(graph, "Quaid has espresso every morning", confirmation_count=5)
+        node_a = _store_and_get(graph, "Solomon drinks espresso in morning", confirmation_count=3)
+        node_b = _store_and_get(graph, "Solomon has espresso every morning", confirmation_count=5)
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid drinks espresso every morning",
+                graph, "Solomon drinks espresso every morning",
                 [node_a.id, node_b.id]
             )
 
@@ -198,14 +198,14 @@ class TestMergeConfirmationCount:
     def test_does_not_reset_to_zero(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid lives in Portland Oregon", confirmation_count=7)
-        node_b = _store_and_get(graph, "Quaid resides in Portland Oregon", confirmation_count=0)
+        node_a = _store_and_get(graph, "Solomon lives in Portland Oregon", confirmation_count=7)
+        node_b = _store_and_get(graph, "Solomon resides in Portland Oregon", confirmation_count=0)
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid lives in Portland Oregon area",
+                graph, "Solomon lives in Portland Oregon area",
                 [node_a.id, node_b.id]
             )
 
@@ -223,14 +223,14 @@ class TestMergeStorageStrength:
     def test_inherits_max_storage_strength(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid uses FastAPI for backend work", storage_strength=0.15)
-        node_b = _store_and_get(graph, "Quaid builds backends with FastAPI", storage_strength=0.42)
+        node_a = _store_and_get(graph, "Solomon uses FastAPI for backend work", storage_strength=0.15)
+        node_b = _store_and_get(graph, "Solomon builds backends with FastAPI", storage_strength=0.42)
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid uses FastAPI for backend development",
+                graph, "Solomon uses FastAPI for backend development",
                 [node_a.id, node_b.id]
             )
 
@@ -248,14 +248,14 @@ class TestMergeStatus:
     def test_merged_status_is_active(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid prefers dark mode editors", status="active")
-        node_b = _store_and_get(graph, "Quaid likes dark mode in editors", status="active")
+        node_a = _store_and_get(graph, "Solomon prefers dark mode editors", status="active")
+        node_b = _store_and_get(graph, "Solomon likes dark mode in editors", status="active")
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid prefers dark mode in code editors",
+                graph, "Solomon prefers dark mode in code editors",
                 [node_a.id, node_b.id]
             )
 
@@ -265,14 +265,14 @@ class TestMergeStatus:
     def test_merged_status_not_approved(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid has a Mac mini M4", status="approved")
-        node_b = _store_and_get(graph, "Quaid uses Mac mini M4 computer", status="approved")
+        node_a = _store_and_get(graph, "Solomon has a Mac mini M4", status="approved")
+        node_b = _store_and_get(graph, "Solomon uses Mac mini M4 computer", status="approved")
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid has a Mac mini M4 computer",
+                graph, "Solomon has a Mac mini M4 computer",
                 [node_a.id, node_b.id]
             )
 
@@ -291,7 +291,7 @@ class TestMergeEdgeMigration:
     def test_source_edges_migrated(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid is a software developer engineer")
+        node_a = _store_and_get(graph, "Solomon is a software developer engineer")
         target_node = _make_node(graph, "Python")
         _create_edge_direct(graph, node_a.id, target_node.id, "knows")
 
@@ -299,7 +299,7 @@ class TestMergeEdgeMigration:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid is a professional software developer",
+                graph, "Solomon is a professional software developer",
                 [node_a.id]
             )
 
@@ -311,15 +311,15 @@ class TestMergeEdgeMigration:
     def test_target_edges_migrated(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Whiskers is Quaid pet cat friend")
-        source_node = _make_node(graph, "Quaid")
+        node_a = _store_and_get(graph, "Madu is Solomon pet cat friend")
+        source_node = _make_node(graph, "Solomon Steadman")
         _create_edge_direct(graph, source_node.id, node_a.id, "owns")
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Whiskers is Quaid beloved pet cat",
+                graph, "Madu is Solomon beloved pet cat",
                 [node_a.id]
             )
 
@@ -331,8 +331,8 @@ class TestMergeEdgeMigration:
     def test_source_fact_edges_migrated(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid likes hiking in the mountains")
-        entity1 = _make_node(graph, "Quaid")
+        node_a = _store_and_get(graph, "Solomon likes hiking in the mountains")
+        entity1 = _make_node(graph, "Solomon Steadman")
         entity2 = _make_node(graph, "Hiking")
         _create_edge_direct(graph, entity1.id, entity2.id, "enjoys", source_fact_id=node_a.id)
 
@@ -340,7 +340,7 @@ class TestMergeEdgeMigration:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid enjoys hiking in mountain trails",
+                graph, "Solomon enjoys hiking in mountain trails",
                 [node_a.id]
             )
 
@@ -356,8 +356,8 @@ class TestMergeEdgeMigration:
     def test_original_edges_cleaned_up(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid speaks English and Spanish")
-        node_b = _store_and_get(graph, "Quaid is bilingual English Spanish")
+        node_a = _store_and_get(graph, "Solomon speaks English and Spanish")
+        node_b = _store_and_get(graph, "Solomon is bilingual English Spanish")
         entity = _make_node(graph, "English Language")
         _create_edge_direct(graph, node_a.id, entity.id, "speaks")
         _create_edge_direct(graph, node_b.id, entity.id, "speaks")
@@ -366,7 +366,7 @@ class TestMergeEdgeMigration:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid speaks English and Spanish fluently",
+                graph, "Solomon speaks English and Spanish fluently",
                 [node_a.id, node_b.id]
             )
 
@@ -390,8 +390,8 @@ class TestMergeEdgeMigrationAdvanced:
         """Merging nodes with edges to each other must not create self-loops."""
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid mentors junior developers")
-        node_b = _store_and_get(graph, "Junior developers learn from Quaid")
+        node_a = _store_and_get(graph, "Solomon mentors junior developers")
+        node_b = _store_and_get(graph, "Junior developers learn from Solomon")
         _create_edge_direct(graph, node_a.id, node_b.id, "mentors")
         _create_edge_direct(graph, node_b.id, node_a.id, "learns_from")
 
@@ -399,7 +399,7 @@ class TestMergeEdgeMigrationAdvanced:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid mentors junior developers who learn from him",
+                graph, "Solomon mentors junior developers who learn from him",
                 [node_a.id, node_b.id]
             )
 
@@ -414,8 +414,8 @@ class TestMergeEdgeMigrationAdvanced:
         """Different relations from merged nodes to same target are all preserved."""
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid knows Python programming language")
-        node_b = _store_and_get(graph, "Quaid uses Python for daily work")
+        node_a = _store_and_get(graph, "Solomon knows Python programming language")
+        node_b = _store_and_get(graph, "Solomon uses Python for daily work")
         python_node = _make_node(graph, "Python")
         _create_edge_direct(graph, node_a.id, python_node.id, "knows")
         _create_edge_direct(graph, node_b.id, python_node.id, "uses")
@@ -424,7 +424,7 @@ class TestMergeEdgeMigrationAdvanced:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid knows and uses Python daily",
+                graph, "Solomon knows and uses Python daily",
                 [node_a.id, node_b.id]
             )
 
@@ -439,8 +439,8 @@ class TestMergeEdgeMigrationAdvanced:
         """Same relation from two originals to same target yields exactly one edge."""
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid knows how to use FastAPI")
-        node_b = _store_and_get(graph, "Quaid is skilled with FastAPI")
+        node_a = _store_and_get(graph, "Solomon knows how to use FastAPI")
+        node_b = _store_and_get(graph, "Solomon is skilled with FastAPI")
         fastapi_node = _make_node(graph, "FastAPI")
         _create_edge_direct(graph, node_a.id, fastapi_node.id, "knows")
         _create_edge_direct(graph, node_b.id, fastapi_node.id, "knows")
@@ -449,7 +449,7 @@ class TestMergeEdgeMigrationAdvanced:
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid is skilled with FastAPI framework",
+                graph, "Solomon is skilled with FastAPI framework",
                 [node_a.id, node_b.id]
             )
 
@@ -465,8 +465,8 @@ class TestMergeEdgeMigrationAdvanced:
         """Merge cleans up contradictions and decay_review_queue for originals."""
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid prefers tea over coffee")
-        node_b = _store_and_get(graph, "Quaid likes tea more than coffee")
+        node_a = _store_and_get(graph, "Solomon prefers tea over coffee")
+        node_b = _store_and_get(graph, "Solomon likes tea more than coffee")
 
         with graph._get_conn() as conn:
             conn.execute(
@@ -475,14 +475,14 @@ class TestMergeEdgeMigrationAdvanced:
             )
             conn.execute(
                 "INSERT INTO decay_review_queue (id, node_id, node_text, confidence_at_queue, status) VALUES (?, ?, ?, ?, ?)",
-                ("decay-test-1", node_a.id, "Quaid prefers tea", 0.3, "pending")
+                ("decay-test-1", node_a.id, "Solomon prefers tea", 0.3, "pending")
             )
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             _merge_nodes_into(
-                graph, "Quaid prefers tea over coffee always",
+                graph, "Solomon prefers tea over coffee always",
                 [node_a.id, node_b.id]
             )
 
@@ -542,7 +542,7 @@ class TestMergeOwnerInheritance:
         merged = graph.get_node(result["id"])
         assert merged.owner_id == "testuser"
 
-    def test_does_not_hardcode_owner(self, tmp_path):
+    def test_does_not_hardcode_solomon(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Alice prefers tea over coffee morning", owner_id="alice")
@@ -557,7 +557,7 @@ class TestMergeOwnerInheritance:
             )
 
         merged = graph.get_node(result["id"])
-        assert merged.owner_id != "default"
+        assert merged.owner_id != "solomon"
         assert merged.owner_id == "alice"
 
 
@@ -573,14 +573,14 @@ class TestMergeCreatedAt:
         graph, _ = _make_graph(tmp_path)
         early = "2025-01-15T10:00:00"
         late = "2026-02-10T14:00:00"
-        node_a = _store_and_get(graph, "Quaid started running in January", created_at=early)
-        node_b = _store_and_get(graph, "Quaid took up running recently", created_at=late)
+        node_a = _store_and_get(graph, "Solomon started running in January", created_at=early)
+        node_b = _store_and_get(graph, "Solomon took up running recently", created_at=late)
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid started running in January 2025",
+                graph, "Solomon started running in January 2025",
                 [node_a.id, node_b.id]
             )
 
@@ -598,15 +598,15 @@ class TestMergeOriginalsDeleted:
     def test_originals_deleted(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid has two cats at home")
-        node_b = _store_and_get(graph, "Quaid owns two pet cats at home")
+        node_a = _store_and_get(graph, "Solomon has two cats at home")
+        node_b = _store_and_get(graph, "Solomon owns two pet cats at home")
         count_before = _count_nodes(graph)
 
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
             result = _merge_nodes_into(
-                graph, "Quaid has two pet cats at his home",
+                graph, "Solomon has two pet cats at his home",
                 [node_a.id, node_b.id]
             )
 
@@ -627,12 +627,12 @@ class TestMergeDryRun:
     def test_dry_run_no_changes(self, tmp_path):
         from janitor import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
-        node_a = _store_and_get(graph, "Quaid reads science fiction books")
-        node_b = _store_and_get(graph, "Quaid enjoys reading sci-fi novels")
+        node_a = _store_and_get(graph, "Solomon reads science fiction books")
+        node_b = _store_and_get(graph, "Solomon enjoys reading sci-fi novels")
         count_before = _count_nodes(graph)
 
         result = _merge_nodes_into(
-            graph, "Quaid reads science fiction novels",
+            graph, "Solomon reads science fiction novels",
             [node_a.id, node_b.id], dry_run=True
         )
 
@@ -651,7 +651,7 @@ class TestDefaultOwnerId:
 
     def test_returns_config_value(self):
         from janitor import _default_owner_id
-        # Should return the config value (which is "default" in test env)
+        # Should return the config value (which is "solomon" in test env)
         result = _default_owner_id()
         assert isinstance(result, str)
         assert len(result) > 0
@@ -664,4 +664,4 @@ class TestDefaultOwnerId:
         mock_cfg.users = MagicMock(spec=[])  # spec=[] means no attributes
         with patch("janitor._cfg", mock_cfg):
             result = _default_owner_id()
-            assert result == "default"
+            assert result == "solomon"

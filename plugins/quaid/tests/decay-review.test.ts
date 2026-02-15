@@ -74,7 +74,7 @@ describe('Decay Review Queue', () => {
 
   it('pinned memories are never queued for decay', async () => {
     // Store a pinned memory
-    await memory.store('Core identity fact', 'default', { pinned: true })
+    await memory.store('Core identity fact', 'solomon', { pinned: true })
 
     // Run decay
     await memory.runDecay()
@@ -88,7 +88,7 @@ describe('Decay Review Queue', () => {
   })
 
   it('decay runs without errors when review queue is enabled', async () => {
-    await memory.store('Test memory for decay queue', 'default')
+    await memory.store('Test memory for decay queue', 'solomon')
 
     // Run decay multiple times - should not error
     await expect(memory.runDecay()).resolves.toBeUndefined()
@@ -96,11 +96,11 @@ describe('Decay Review Queue', () => {
   })
 
   it('memories remain searchable after decay with queue enabled', async () => {
-    const stored = await memory.store('Searchable after decay test', 'default')
+    const stored = await memory.store('Searchable after decay test', 'solomon')
 
     await memory.runDecay()
 
-    const results = await memory.search('searchable decay', 'default')
+    const results = await memory.search('searchable decay', 'solomon')
     expect(results.length).toBeGreaterThan(0)
     const found = results.some(r => r.id === stored.id)
     expect(found).toBe(true)

@@ -198,9 +198,9 @@ class TestMultiHopTraversal:
         from memory_graph import Node, Edge
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            a = Node.create(type="Person", name="Quaid test person", owner_id="default")
-            b = Node.create(type="Person", name="Lori test person", owner_id="default")
-            c = Node.create(type="Person", name="Levi test person", owner_id="default")
+            a = Node.create(type="Person", name="Solomon test person", owner_id="solomon")
+            b = Node.create(type="Person", name="Yuni test person", owner_id="solomon")
+            c = Node.create(type="Person", name="Levi test person", owner_id="solomon")
             graph.add_node(a)
             graph.add_node(b)
             graph.add_node(c)
@@ -216,9 +216,9 @@ class TestMultiHopTraversal:
         from memory_graph import Node, Edge
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            a = Node.create(type="Person", name="Quaid multi hop", owner_id="default")
-            b = Node.create(type="Person", name="Lori multi hop", owner_id="default")
-            c = Node.create(type="Person", name="Levi multi hop", owner_id="default")
+            a = Node.create(type="Person", name="Solomon multi hop", owner_id="solomon")
+            b = Node.create(type="Person", name="Yuni multi hop", owner_id="solomon")
+            c = Node.create(type="Person", name="Levi multi hop", owner_id="solomon")
             graph.add_node(a)
             graph.add_node(b)
             graph.add_node(c)
@@ -235,8 +235,8 @@ class TestMultiHopTraversal:
         from memory_graph import Node, Edge
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            a = Node.create(type="Person", name="Person A cycle test", owner_id="default")
-            b = Node.create(type="Person", name="Person B cycle test", owner_id="default")
+            a = Node.create(type="Person", name="Person A cycle test", owner_id="solomon")
+            b = Node.create(type="Person", name="Person B cycle test", owner_id="solomon")
             graph.add_node(a)
             graph.add_node(b)
             # Create a cycle: A -> B -> A
@@ -255,10 +255,10 @@ class TestMultiHopTraversal:
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             # Create a star graph: center -> 10 leaves
-            center = Node.create(type="Person", name="Center node star graph", owner_id="default")
+            center = Node.create(type="Person", name="Center node star graph", owner_id="solomon")
             graph.add_node(center)
             for i in range(10):
-                leaf = Node.create(type="Fact", name=f"Leaf fact number {i} for star graph", owner_id="default")
+                leaf = Node.create(type="Fact", name=f"Leaf fact number {i} for star graph", owner_id="solomon")
                 graph.add_node(leaf)
                 graph.add_edge(Edge.create(source_id=center.id, target_id=leaf.id, relation="related_to"))
 
@@ -270,10 +270,10 @@ class TestMultiHopTraversal:
         from memory_graph import Node, Edge
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            a = Node.create(type="Person", name="Root node depth test", owner_id="default")
-            b = Node.create(type="Person", name="Hop one depth test", owner_id="default")
-            c = Node.create(type="Person", name="Hop two depth test", owner_id="default")
-            d = Node.create(type="Person", name="Hop three depth test", owner_id="default")
+            a = Node.create(type="Person", name="Root node depth test", owner_id="solomon")
+            b = Node.create(type="Person", name="Hop one depth test", owner_id="solomon")
+            c = Node.create(type="Person", name="Hop two depth test", owner_id="solomon")
+            d = Node.create(type="Person", name="Hop three depth test", owner_id="solomon")
             graph.add_node(a)
             graph.add_node(b)
             graph.add_node(c)
@@ -293,8 +293,8 @@ class TestMultiHopTraversal:
         from memory_graph import Node, Edge
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            a = Node.create(type="Person", name="Target node inbound", owner_id="default")
-            b = Node.create(type="Person", name="Source node inbound", owner_id="default")
+            a = Node.create(type="Person", name="Target node inbound", owner_id="solomon")
+            b = Node.create(type="Person", name="Source node inbound", owner_id="solomon")
             graph.add_node(a)
             graph.add_node(b)
             # b -> a (only inbound edge to a)
@@ -320,7 +320,7 @@ class TestAccessTracking:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Test fact for access tracking", owner_id="default")
+            node = Node.create(type="Fact", name="Test fact for access tracking", owner_id="solomon")
             graph.add_node(node)
 
             # Initial state
@@ -339,7 +339,7 @@ class TestAccessTracking:
         import time as _time
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Timestamp tracking fact test", owner_id="default")
+            node = Node.create(type="Fact", name="Timestamp tracking fact test", owner_id="solomon")
             graph.add_node(node)
 
             old_accessed = graph.get_node(node.id).accessed_at
@@ -353,7 +353,7 @@ class TestAccessTracking:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Multi access test fact tracking", owner_id="default")
+            node = Node.create(type="Fact", name="Multi access test fact tracking", owner_id="solomon")
             graph.add_node(node)
 
             for _ in range(5):
@@ -375,7 +375,7 @@ class TestParallelSearch:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Quaid likes espresso coffee drink", owner_id="default", status="approved")
+            node = Node.create(type="Fact", name="Solomon likes espresso coffee drink", owner_id="solomon", status="approved")
             graph.add_node(node, embed=True)
 
             results = graph.search_hybrid("coffee", limit=5)
@@ -386,7 +386,7 @@ class TestParallelSearch:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Quaid likes espresso coffee beans dark", owner_id="default", status="approved")
+            node = Node.create(type="Fact", name="Solomon likes espresso coffee beans dark", owner_id="solomon", status="approved")
             graph.add_node(node, embed=True)
 
             # Patch get_embedding to fail during search (simulates Ollama down)
@@ -404,7 +404,7 @@ class TestParallelSearch:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Quaid likes espresso coffee strongly", owner_id="default", status="approved")
+            node = Node.create(type="Fact", name="Solomon likes espresso coffee strongly", owner_id="solomon", status="approved")
             graph.add_node(node, embed=True)
 
             # Patch search_fts to raise

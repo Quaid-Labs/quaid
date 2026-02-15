@@ -13,18 +13,18 @@ describe('Memory Delete', () => {
   })
 
   it('hard deletes memory from database', async () => {
-    const stored = await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    const stored = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
 
     await memory.delete(stored.id)
 
     // Should not appear in normal queries
-    const results = await memory.search('engaged', 'default')
+    const results = await memory.search('engaged', 'solomon')
     const foundDeleted = results.some(r => r.id === stored.id)
     expect(foundDeleted).toBe(false)
   })
 
   it('completely removes memory on delete', async () => {
-    const stored = await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    const stored = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
 
     await memory.delete(stored.id)
 
@@ -48,7 +48,7 @@ describe('Memory Delete', () => {
     const stored = await memory.store(fixtures.coffeePreference.content, fixtures.coffeePreference.owner)
     
     // Verify it's findable before deletion
-    const beforeResults = await memory.search('coffee', 'default')
+    const beforeResults = await memory.search('coffee', 'solomon')
     const foundBefore = beforeResults.some(r => r.id === stored.id)
     expect(foundBefore).toBe(true)
     
@@ -56,18 +56,18 @@ describe('Memory Delete', () => {
     await memory.delete(stored.id)
     
     // Verify it's not findable after deletion
-    const afterResults = await memory.search('coffee', 'default')
+    const afterResults = await memory.search('coffee', 'solomon')
     const foundAfter = afterResults.some(r => r.id === stored.id)
     expect(foundAfter).toBe(false)
   })
 
   it('supports forget operation for permanent deletion', async () => {
-    const stored = await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    const stored = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
     
     await memory.forget(stored.id)
     
     // Should not be findable
-    const results = await memory.search('engaged', 'default')
+    const results = await memory.search('engaged', 'solomon')
     const found = results.some(r => r.id === stored.id)
     expect(found).toBe(false)
     
@@ -81,17 +81,17 @@ describe('Memory Delete', () => {
   })
 
   it('handles empty reason gracefully', async () => {
-    const stored = await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    const stored = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
     
     await expect(memory.delete(stored.id, '')).resolves.toBeUndefined()
   })
 
   it('prevents deletion of other owner memories', async () => {
-    const ownerMemory = await memory.store(fixtures.defaultFact.content, 'default')
+    const solomonMemory = await memory.store(fixtures.solomonFact.content, 'solomon')
     
-    // Try to delete Quaid's memory as Lori
+    // Try to delete Solomon's memory as Yuni
     // This might succeed at the API level if not implemented, but let's test
-    await memory.delete(ownerMemory.id)
+    await memory.delete(solomonMemory.id)
     
     // The memory should still exist (assuming owner isolation is implemented)
     // If not implemented yet, this test will guide the implementation

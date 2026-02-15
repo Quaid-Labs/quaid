@@ -17,7 +17,7 @@ describe('Memory Query', () => {
   })
 
   it('returns semantically similar results', async () => {
-    const results = await memory.search('coffee preferences', 'default')
+    const results = await memory.search('coffee preferences', 'solomon')
     
     expect(results.length).toBeGreaterThan(0)
     const firstResult = results[0]
@@ -26,7 +26,7 @@ describe('Memory Query', () => {
   })
 
   it('ranks results by similarity', async () => {
-    const results = await memory.search('colitis', 'default', 3)
+    const results = await memory.search('colitis', 'solomon', 3)
     
     expect(results.length).toBeGreaterThan(0)
     const firstResult = results[0]
@@ -40,13 +40,13 @@ describe('Memory Query', () => {
   })
 
   it('respects limit parameter', async () => {
-    const results = await memory.search('default', 'default', 1)
+    const results = await memory.search('solomon', 'solomon', 1)
     
     expect(results.length).toBeLessThanOrEqual(1)
   })
 
   it('returns empty array for no matches', async () => {
-    const results = await memory.search('quantum physics advanced mathematics', 'default', 5, 0.95)
+    const results = await memory.search('quantum physics advanced mathematics', 'solomon', 5, 0.95)
 
     // With high similarity threshold, unrelated content should be filtered out
     expect(Array.isArray(results)).toBe(true)
@@ -55,26 +55,26 @@ describe('Memory Query', () => {
 
   it('only returns memories for the specified owner', async () => {
     // Store a memory for a different owner
-    await memory.store('Lori secret information', 'yuni')
+    await memory.store('Yuni secret information', 'yuni')
     
-    const results = await memory.search('secret', 'default')
+    const results = await memory.search('secret', 'solomon')
     
-    // Should not return Lori's secret
+    // Should not return Yuni's secret
     for (const result of results) {
-      expect(result.owner || result.owner_id).toBe('default')
+      expect(result.owner || result.owner_id).toBe('solomon')
     }
   })
 
   it('handles query with special characters', async () => {
-    await memory.store('Quaid likes café au lait', 'default')
+    await memory.store('Solomon likes café au lait', 'solomon')
     
-    const results = await memory.search('café', 'default')
+    const results = await memory.search('café', 'solomon')
     
     expect(results.length).toBeGreaterThan(0)
   })
 
   it('returns similarity scores', async () => {
-    const results = await memory.search('coffee', 'default')
+    const results = await memory.search('coffee', 'solomon')
     
     if (results.length > 0) {
       expect(results[0].similarity).toBeDefined()
@@ -84,7 +84,7 @@ describe('Memory Query', () => {
   })
 
   it('handles empty query gracefully', async () => {
-    await expect(memory.search('', 'default')).resolves.toBeDefined()
+    await expect(memory.search('', 'solomon')).resolves.toBeDefined()
   })
 
   it('handles non-existent owner', async () => {

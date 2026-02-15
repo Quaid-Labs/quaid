@@ -41,7 +41,7 @@ def _make_graph(tmp_path):
     return graph, db_file
 
 
-def _insert_test_node(graph, name, status="active", node_type="Fact", owner="default"):
+def _insert_test_node(graph, name, status="active", node_type="Fact", owner="solomon"):
     """Helper to insert a test node directly."""
     node = Node.create(type=node_type, name=name, privacy="private")
     node.owner_id = owner
@@ -177,7 +177,7 @@ class TestLifecycleInvariants:
     def test_content_hash_matches_text(self, tmp_path):
         """Content hash should match the SHA256 of the normalized node text."""
         graph, _ = _make_graph(tmp_path)
-        text = "Quaid likes coffee every morning"
+        text = "Solomon likes coffee every morning"
         node_id = _insert_test_node(graph, text)
         expected_hash = _content_hash(text)
 

@@ -235,7 +235,7 @@ class TestExtractKeyTokens:
 
     def test_numbers_excluded(self):
         """Tokens starting with digits are excluded by regex pattern."""
-        tokens = extract_key_tokens("Quaid is 35 years old")
+        tokens = extract_key_tokens("Solomon is 35 years old")
         assert "35" not in tokens
 
     def test_stopwords_in_frozenset(self):

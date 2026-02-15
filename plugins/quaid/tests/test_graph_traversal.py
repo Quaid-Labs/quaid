@@ -42,7 +42,7 @@ def graph(tmp_path):
 
 def _add_person(graph, name, node_id=None):
     """Add a Person node without embeddings, return the node."""
-    node = Node.create(type="Person", name=name, owner_id="default", status="approved")
+    node = Node.create(type="Person", name=name, owner_id="solomon", status="approved")
     if node_id:
         node.id = node_id
     with patch.object(graph, "get_embedding", return_value=None):
@@ -70,12 +70,12 @@ class TestBidirectionalBasic:
     """Basic get_related_bidirectional() behavior."""
 
     def test_returns_outbound_neighbors(self, graph):
-        """Outbound edges: Quaid --parent_of--> Child."""
-        user = _add_person(graph, "Quaid")
+        """Outbound edges: Solomon --parent_of--> Child."""
+        solomon = _add_person(graph, "Solomon")
         child = _add_person(graph, "Child")
-        _add_edge(graph, user.id, child.id, "parent_of")
+        _add_edge(graph, solomon.id, child.id, "parent_of")
 
-        results = graph.get_related_bidirectional(user.id)
+        results = graph.get_related_bidirectional(solomon.id)
         assert len(results) == 1
         node, relation, direction, depth, path = results[0]
         assert node.name == "Child"
@@ -84,36 +84,36 @@ class TestBidirectionalBasic:
         assert depth == 1
 
     def test_returns_inbound_neighbors(self, graph):
-        """Inbound edges: Parent --parent_of--> Quaid."""
-        user = _add_person(graph, "Quaid")
-        parent = _add_person(graph, "Mary")
-        _add_edge(graph, parent.id, user.id, "parent_of")
+        """Inbound edges: Parent --parent_of--> Solomon."""
+        solomon = _add_person(graph, "Solomon")
+        parent = _add_person(graph, "Wendy")
+        _add_edge(graph, parent.id, solomon.id, "parent_of")
 
-        results = graph.get_related_bidirectional(user.id)
+        results = graph.get_related_bidirectional(solomon.id)
         assert len(results) == 1
         node, relation, direction, depth, path = results[0]
-        assert node.name == "Mary"
+        assert node.name == "Wendy"
         assert relation == "parent_of"
         assert direction == "in"
         assert depth == 1
 
     def test_returns_both_directions(self, graph):
         """Node with both inbound and outbound edges returns all."""
-        user = _add_person(graph, "Quaid")
-        parent = _add_person(graph, "Mary")
+        solomon = _add_person(graph, "Solomon")
+        parent = _add_person(graph, "Wendy")
         child = _add_person(graph, "Baby")
 
-        _add_edge(graph, parent.id, user.id, "parent_of")
-        _add_edge(graph, user.id, child.id, "parent_of")
+        _add_edge(graph, parent.id, solomon.id, "parent_of")
+        _add_edge(graph, solomon.id, child.id, "parent_of")
 
-        results = graph.get_related_bidirectional(user.id)
+        results = graph.get_related_bidirectional(solomon.id)
         assert len(results) == 2
 
         names = {r[0].name for r in results}
-        assert names == {"Mary", "Baby"}
+        assert names == {"Wendy", "Baby"}
 
         directions = {r[0].name: r[2] for r in results}
-        assert directions["Mary"] == "in"
+        assert directions["Wendy"] == "in"
         assert directions["Baby"] == "out"
 
     def test_no_edges_returns_empty(self, graph):
@@ -137,55 +137,55 @@ class TestRelationFiltering:
 
     def test_filter_by_single_relation(self, graph):
         """Only return edges matching specified relation."""
-        user = _add_person(graph, "Quaid")
-        bali = _add_person(graph, "Mars")
-        madu = _add_person(graph, "Whiskers")
+        solomon = _add_person(graph, "Solomon")
+        bali = _add_person(graph, "Bali")
+        madu = _add_person(graph, "Madu")
 
-        _add_edge(graph, user.id, bali.id, "lives_at")
-        _add_edge(graph, user.id, madu.id, "has_pet")
+        _add_edge(graph, solomon.id, bali.id, "lives_at")
+        _add_edge(graph, solomon.id, madu.id, "has_pet")
 
-        results = graph.get_related_bidirectional(user.id, relations=["lives_at"])
+        results = graph.get_related_bidirectional(solomon.id, relations=["lives_at"])
         assert len(results) == 1
-        assert results[0][0].name == "Mars"
+        assert results[0][0].name == "Bali"
         assert results[0][1] == "lives_at"
 
     def test_filter_by_multiple_relations(self, graph):
         """Filter with multiple relation types."""
-        user = _add_person(graph, "Quaid")
-        bali = _add_person(graph, "Mars")
-        madu = _add_person(graph, "Whiskers")
+        solomon = _add_person(graph, "Solomon")
+        bali = _add_person(graph, "Bali")
+        madu = _add_person(graph, "Madu")
         friend = _add_person(graph, "Alice")
 
-        _add_edge(graph, user.id, bali.id, "lives_at")
-        _add_edge(graph, user.id, madu.id, "has_pet")
-        _add_edge(graph, user.id, friend.id, "friend_of")
+        _add_edge(graph, solomon.id, bali.id, "lives_at")
+        _add_edge(graph, solomon.id, madu.id, "has_pet")
+        _add_edge(graph, solomon.id, friend.id, "friend_of")
 
-        results = graph.get_related_bidirectional(user.id, relations=["lives_at", "has_pet"])
+        results = graph.get_related_bidirectional(solomon.id, relations=["lives_at", "has_pet"])
         assert len(results) == 2
         names = {r[0].name for r in results}
-        assert names == {"Mars", "Whiskers"}
+        assert names == {"Bali", "Madu"}
 
     def test_filter_excludes_unmatched(self, graph):
         """Relations not in filter are excluded."""
-        user = _add_person(graph, "Quaid")
+        solomon = _add_person(graph, "Solomon")
         friend = _add_person(graph, "Alice")
-        _add_edge(graph, user.id, friend.id, "friend_of")
+        _add_edge(graph, solomon.id, friend.id, "friend_of")
 
-        results = graph.get_related_bidirectional(user.id, relations=["parent_of"])
+        results = graph.get_related_bidirectional(solomon.id, relations=["parent_of"])
         assert results == []
 
     def test_filter_applies_to_inbound_too(self, graph):
         """Relation filter applies to inbound edges as well."""
-        user = _add_person(graph, "Quaid")
-        parent = _add_person(graph, "Mary")
+        solomon = _add_person(graph, "Solomon")
+        parent = _add_person(graph, "Wendy")
         employer = _add_person(graph, "Acme Corp")
 
-        _add_edge(graph, parent.id, user.id, "parent_of")
-        _add_edge(graph, employer.id, user.id, "employs")
+        _add_edge(graph, parent.id, solomon.id, "parent_of")
+        _add_edge(graph, employer.id, solomon.id, "employs")
 
-        results = graph.get_related_bidirectional(user.id, relations=["parent_of"])
+        results = graph.get_related_bidirectional(solomon.id, relations=["parent_of"])
         assert len(results) == 1
-        assert results[0][0].name == "Mary"
+        assert results[0][0].name == "Wendy"
 
 
 # ---------------------------------------------------------------------------
@@ -288,14 +288,14 @@ class TestComplexGraphs:
 
     def test_multiple_edges_same_pair(self, graph):
         """Two nodes with multiple relation types between them."""
-        user = _add_person(graph, "Quaid")
-        shannon = _add_person(graph, "Melina")
+        solomon = _add_person(graph, "Solomon")
+        shannon = _add_person(graph, "Shannon")
 
-        _add_edge(graph, user.id, shannon.id, "sibling_of")
-        _add_edge(graph, user.id, shannon.id, "friend_of")
+        _add_edge(graph, solomon.id, shannon.id, "sibling_of")
+        _add_edge(graph, solomon.id, shannon.id, "friend_of")
 
-        results = graph.get_related_bidirectional(user.id)
-        # Should see Melina twice — once for each relation
+        results = graph.get_related_bidirectional(solomon.id)
+        # Should see Shannon twice — once for each relation
         assert len(results) == 2
         relations = {r[1] for r in results}
         assert relations == {"sibling_of", "friend_of"}
@@ -316,21 +316,21 @@ class TestComplexGraphs:
 
     def test_bidirectional_edges(self, graph):
         """Two nodes pointing at each other with different relations."""
-        user = _add_person(graph, "Quaid")
-        bali = _add_person(graph, "Mars")
+        solomon = _add_person(graph, "Solomon")
+        bali = _add_person(graph, "Bali")
 
-        _add_edge(graph, user.id, bali.id, "lives_at")
-        _add_edge(graph, bali.id, user.id, "home_of")
+        _add_edge(graph, solomon.id, bali.id, "lives_at")
+        _add_edge(graph, bali.id, solomon.id, "home_of")
 
-        results = graph.get_related_bidirectional(user.id)
+        results = graph.get_related_bidirectional(solomon.id)
         # The visited set is checked per-node but both outbound and inbound
-        # edges are processed within the same iteration. Outbound finds Mars
-        # via lives_at first, then inbound also finds Mars via home_of — both
-        # within the same iteration before Mars is marked visited (it's only
-        # marked when popped from the queue). So Mars appears twice: once per
+        # edges are processed within the same iteration. Outbound finds Bali
+        # via lives_at first, then inbound also finds Bali via home_of — both
+        # within the same iteration before Bali is marked visited (it's only
+        # marked when popped from the queue). So Bali appears twice: once per
         # edge direction.
         assert len(results) == 2
-        assert all(r[0].name == "Mars" for r in results)
+        assert all(r[0].name == "Bali" for r in results)
         relations = {r[1] for r in results}
         assert relations == {"lives_at", "home_of"}
 
@@ -420,7 +420,7 @@ class TestEdgeDataPreservation:
         assert isinstance(node, Node)
         assert node.name == "B"
         assert node.type == "Person"
-        assert node.owner_id == "default"
+        assert node.owner_id == "solomon"
         assert node.id == b.id
 
 
@@ -433,29 +433,29 @@ class TestGraphPath:
 
     def test_depth_one_outbound_path(self, graph):
         """Depth-1 outbound: path shows single hop from start to target."""
-        user = _add_person(graph, "Quaid")
+        solomon = _add_person(graph, "Solomon")
         child = _add_person(graph, "Emily")
-        _add_edge(graph, user.id, child.id, "parent_of")
+        _add_edge(graph, solomon.id, child.id, "parent_of")
 
-        results = graph.get_related_bidirectional(user.id)
+        results = graph.get_related_bidirectional(solomon.id)
         assert len(results) == 1
         node, relation, direction, depth, path = results[0]
-        assert path == [("Quaid", "parent_of")]
+        assert path == [("Solomon", "parent_of")]
 
     def test_depth_one_inbound_path(self, graph):
         """Depth-1 inbound: path shows single hop."""
-        user = _add_person(graph, "Quaid")
-        parent = _add_person(graph, "Mary")
-        _add_edge(graph, parent.id, user.id, "parent_of")
+        solomon = _add_person(graph, "Solomon")
+        parent = _add_person(graph, "Wendy")
+        _add_edge(graph, parent.id, solomon.id, "parent_of")
 
-        results = graph.get_related_bidirectional(user.id)
+        results = graph.get_related_bidirectional(solomon.id)
         assert len(results) == 1
         node, relation, direction, depth, path = results[0]
-        assert path == [("Quaid", "parent_of")]
+        assert path == [("Solomon", "parent_of")]
 
     def test_depth_two_path_chain(self, graph):
         """Depth-2: path shows full two-hop chain."""
-        a = _add_person(graph, "Quaid")
+        a = _add_person(graph, "Solomon")
         b = _add_person(graph, "Emily")
         c = _add_person(graph, "Luna")
 
@@ -465,11 +465,11 @@ class TestGraphPath:
         results = graph.get_related_bidirectional(a.id, depth=2)
         by_name = {r[0].name: r for r in results}
 
-        # Emily (depth 1): path = [("Quaid", "parent_of")]
-        assert by_name["Emily"][4] == [("Quaid", "parent_of")]
+        # Emily (depth 1): path = [("Solomon", "parent_of")]
+        assert by_name["Emily"][4] == [("Solomon", "parent_of")]
 
-        # Luna (depth 2): path = [("Quaid", "parent_of"), ("Emily", "has_pet")]
-        assert by_name["Luna"][4] == [("Quaid", "parent_of"), ("Emily", "has_pet")]
+        # Luna (depth 2): path = [("Solomon", "parent_of"), ("Emily", "has_pet")]
+        assert by_name["Luna"][4] == [("Solomon", "parent_of"), ("Emily", "has_pet")]
 
     def test_depth_three_path_chain(self, graph):
         """Depth-3: path shows full three-hop chain."""
@@ -514,7 +514,7 @@ class TestGraphPath:
 
     def test_path_format_for_display(self, graph):
         """Verify path can be formatted into a readable string."""
-        a = _add_person(graph, "Quaid")
+        a = _add_person(graph, "Solomon")
         b = _add_person(graph, "Emily")
         c = _add_person(graph, "Luna")
 
@@ -532,7 +532,7 @@ class TestGraphPath:
             path_parts.append(f"{from_name} --{rel}-->")
         graph_path = " ".join(path_parts) + " " + rel_node.name
 
-        assert graph_path == "Quaid --parent_of--> Emily --has_pet--> Luna"
+        assert graph_path == "Solomon --parent_of--> Emily --has_pet--> Luna"
 
 
 # ---------------------------------------------------------------------------

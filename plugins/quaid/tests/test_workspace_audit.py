@@ -67,8 +67,9 @@ class TestGetMonitoredFiles:
             assert result["SOUL.md"]["purpose"] == "Personality"
 
     def test_fallback_when_config_missing(self):
-        """When config loading fails, falls back to hardcoded list."""
-        with patch("workspace_audit.get_config", side_effect=Exception("config not found")):
+        """When config loading fails and no gateway globs, falls back to hardcoded list."""
+        with patch("workspace_audit.get_config", side_effect=Exception("config not found")), \
+             patch("workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
             from workspace_audit import get_monitored_files
             result = get_monitored_files()
             # Fallback should have the standard files
@@ -82,18 +83,20 @@ class TestGetMonitoredFiles:
             assert "TODO.md" in result
 
     def test_fallback_when_files_empty(self):
-        """Empty files dict in config triggers fallback."""
+        """Empty files dict in config with no gateway globs triggers fallback."""
         cfg = _make_config_with_core_md(files={})
 
-        with patch("workspace_audit.get_config", return_value=cfg):
+        with patch("workspace_audit.get_config", return_value=cfg), \
+             patch("workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
             from workspace_audit import get_monitored_files
             result = get_monitored_files()
-            # Empty files → falls through to fallback
+            # Empty files + no bootstrap → falls through to fallback
             assert "AGENTS.md" in result
 
     def test_fallback_has_correct_max_lines(self):
         """Hardcoded fallback has sensible maxLines defaults."""
-        with patch("workspace_audit.get_config", side_effect=Exception("err")):
+        with patch("workspace_audit.get_config", side_effect=Exception("err")), \
+             patch("workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
             from workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert result["SOUL.md"]["maxLines"] == 80
@@ -107,10 +110,28 @@ class TestGetMonitoredFiles:
         cfg.docs = MagicMock(spec=[])  # spec=[] means no attributes
         del cfg.docs.core_markdown
 
-        with patch("workspace_audit.get_config", return_value=cfg):
+        with patch("workspace_audit.get_config", return_value=cfg), \
+             patch("workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
             from workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert "AGENTS.md" in result  # fallback
+
+    def test_bootstrap_globs_add_discovered_files(self):
+        """Bootstrap globs from gateway config add project-level files."""
+        cfg = _make_config_with_core_md(files={
+            "SOUL.md": {"purpose": "Personality", "maxLines": 80},
+        })
+
+        with patch("workspace_audit.get_config", return_value=cfg), \
+             patch("workspace_audit._get_gateway_bootstrap_globs",
+                   return_value=["projects/*/TOOLS.md"]):
+            from workspace_audit import get_monitored_files
+            result = get_monitored_files()
+            assert "SOUL.md" in result
+            # Should include any matching project TOOLS.md files
+            bootstrap_files = [k for k in result if k.startswith("projects/")]
+            for bf in bootstrap_files:
+                assert result[bf]["maxLines"] == 100  # _BOOTSTRAP_MAX_LINES
 
 
 # ---------------------------------------------------------------------------

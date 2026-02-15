@@ -14,7 +14,7 @@ describe('Deduplication', () => {
 
   it('handles similar content without exact duplication errors', async () => {
     // skipDedup: testing that similar content CAN be stored when dedup is bypassed
-    await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner, { skipDedup: true })
+    await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner, { skipDedup: true })
     
     // Store similar but not identical content
     const result = await memory.store(fixtures.similarFact.content, fixtures.similarFact.owner, { skipDedup: true })
@@ -24,19 +24,19 @@ describe('Deduplication', () => {
   })
 
   it('stores genuinely different content without issues', async () => {
-    await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
     await memory.store(fixtures.coffeePreference.content, fixtures.coffeePreference.owner)
     
     // Should have both memories searchable
-    const engagementResults = await memory.search('engaged', 'default')
-    const coffeeResults = await memory.search('coffee', 'default')
+    const engagementResults = await memory.search('engaged', 'solomon')
+    const coffeeResults = await memory.search('coffee', 'solomon')
     
     expect(engagementResults.length).toBeGreaterThan(0)
     expect(coffeeResults.length).toBeGreaterThan(0)
   })
 
   it('handles exact duplicate attempts gracefully', async () => {
-    await memory.store(fixtures.defaultFact.content, fixtures.defaultFact.owner)
+    await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
     
     // Attempt to store exact duplicate
     const duplicateAttempt = async () => {
@@ -56,21 +56,21 @@ describe('Deduplication', () => {
 
   it('maintains independence across different owners', async () => {
     // Same content for different owners should be allowed
-    await memory.store('I like coffee', 'default')
+    await memory.store('I like coffee', 'solomon')
     const yuniCoffee = await memory.store('I like coffee', 'yuni')
     
     expect(yuniCoffee.id).toBeDefined()
     
     // Both should be searchable by their respective owners
-    const ownerResults = await memory.search('coffee', 'default')
+    const solomonResults = await memory.search('coffee', 'solomon')
     const yuniResults = await memory.search('coffee', 'yuni')
     
-    expect(ownerResults.length).toBeGreaterThan(0)
+    expect(solomonResults.length).toBeGreaterThan(0)
     expect(yuniResults.length).toBeGreaterThan(0)
     
     // Verify owner isolation
-    for (const result of ownerResults) {
-      expect(result.owner || result.owner_id).toBe('default')
+    for (const result of solomonResults) {
+      expect(result.owner || result.owner_id).toBe('solomon')
     }
     for (const result of yuniResults) {
       expect(result.owner || result.owner_id).toBe('yuni')
@@ -79,32 +79,32 @@ describe('Deduplication', () => {
 
   it('handles near-duplicate content appropriately', async () => {
     // skipDedup: testing that near-duplicates CAN be stored when dedup is bypassed
-    await memory.store('Quaid is engaged to Lori', 'default', { skipDedup: true })
+    await memory.store('Solomon is engaged to Yuni', 'solomon', { skipDedup: true })
     
     // Store semantically very similar content
-    const nearDuplicate = await memory.store('Quaid and Lori are engaged', 'default', { skipDedup: true })
+    const nearDuplicate = await memory.store('Solomon and Yuni are engaged', 'solomon', { skipDedup: true })
     
     expect(nearDuplicate.id).toBeDefined()
     
     // Both should be findable when dedup is bypassed
-    const results = await memory.search('engaged', 'default')
+    const results = await memory.search('engaged', 'solomon')
     expect(results.length).toBeGreaterThanOrEqual(1) // At least one should be found
   })
 
   it('preserves content variations with different context', async () => {
-    await memory.store('Quaid drinks coffee in the morning', 'default')
-    await memory.store('Quaid drinks coffee after dinner', 'default')
+    await memory.store('Solomon drinks coffee in the morning', 'solomon')
+    await memory.store('Solomon drinks coffee after dinner', 'solomon')
     
-    const results = await memory.search('default coffee', 'default')
+    const results = await memory.search('solomon coffee', 'solomon')
     expect(results.length).toBeGreaterThanOrEqual(1)
   })
 
   it('handles punctuation and formatting differences', async () => {
-    await memory.store('Quaid is engaged to Lori.', 'default')
+    await memory.store('Solomon is engaged to Yuni.', 'solomon')
     // Identical content minus a period is correctly caught as a duplicate
     // The system should either reject it or update the existing entry
     try {
-      const withoutPunct = await memory.store('Quaid is engaged to Lori', 'default')
+      const withoutPunct = await memory.store('Solomon is engaged to Yuni', 'solomon')
       // If it stores, it should have an ID (updated existing)
       expect(withoutPunct.id).toBeDefined()
     } catch (error: any) {
@@ -115,9 +115,9 @@ describe('Deduplication', () => {
 
   it('allows different facts within single owner scope', async () => {
     // Store three genuinely different facts for same owner
-    const first = await memory.store('Unique fact about Quaid', 'default')
-    const second = await memory.store('Quaid works in technology', 'default')
-    const third = await memory.store('Quaid lives on Mars', 'default')
+    const first = await memory.store('Unique fact about Solomon', 'solomon')
+    const second = await memory.store('Solomon works in technology', 'solomon')
+    const third = await memory.store('Solomon lives in Bali', 'solomon')
     
     // All should succeed - they're semantically different
     expect(first.id).toBeDefined()
@@ -125,16 +125,16 @@ describe('Deduplication', () => {
     expect(third.id).toBeDefined()
     
     // Verify all three exist
-    const results = await memory.search('Quaid', 'default')
+    const results = await memory.search('Solomon', 'solomon')
     expect(results.length).toBeGreaterThanOrEqual(2)
   })
 
   it('handles case sensitivity appropriately', async () => {
-    await memory.store('default is engaged to yuni', 'default')
+    await memory.store('solomon is engaged to yuni', 'solomon')
     // Case-only differences may be detected as duplicates by high-quality embedding models
     // Either storing or dedup-rejecting is acceptable behavior
     try {
-      const capitalized = await memory.store('Quaid is engaged to Lori', 'default')
+      const capitalized = await memory.store('Solomon is engaged to Yuni', 'solomon')
       expect(capitalized.id).toBeDefined()
     } catch {
       // Duplicate detection is acceptable — model correctly identified same meaning
@@ -143,11 +143,11 @@ describe('Deduplication', () => {
 
   it('logs dedup rejections to dedup_log table', async () => {
     // Store original
-    await memory.store('Quaid is engaged to Lori', 'default')
+    await memory.store('Solomon is engaged to Yuni', 'solomon')
 
     // Attempt exact duplicate (should be rejected and logged)
     try {
-      await memory.store('Quaid is engaged to Lori', 'default')
+      await memory.store('Solomon is engaged to Yuni', 'solomon')
     } catch {
       // Expected - duplicate rejection
     }
@@ -164,16 +164,16 @@ describe('Deduplication', () => {
   it('allows storing semantically distinct memories without false positives', async () => {
     // These are all genuinely different facts - dedup should not block them
     const memories = [
-      'Quaid likes espresso',
-      'Lori prefers tea',
+      'Solomon likes espresso',
+      'Yuni prefers tea',
       'They both enjoy travel',
-      'Quaid works in tech',
-      'Lori is from Indonesia'
+      'Solomon works in tech',
+      'Yuni is from Indonesia'
     ]
     
     const stored = []
     for (const content of memories) {
-      const result = await memory.store(content, 'default')
+      const result = await memory.store(content, 'solomon')
       stored.push(result)
     }
     
@@ -184,7 +184,7 @@ describe('Deduplication', () => {
     }
     
     // Verify searchable
-    const results = await memory.search('default', 'default')
+    const results = await memory.search('solomon', 'solomon')
     expect(results.length).toBeGreaterThan(0)
   })
 })

@@ -320,33 +320,33 @@ export async function cleanupTestMemory(memory: TestMemoryInterface): Promise<vo
 
 // Test fixtures
 export const fixtures = {
-  defaultFact: {
-    content: 'Quaid is engaged to Lori',
-    owner: 'default'
+  solomonFact: {
+    content: 'Solomon is engaged to Yuni',
+    owner: 'solomon'
   },
   yuniFact: {
-    content: 'Lori is from Indonesia',
+    content: 'Yuni is from Indonesia',
     owner: 'yuni'
   },
   duplicateFact: {
-    content: 'Quaid is engaged to Lori',  // Exact duplicate
-    owner: 'default'
+    content: 'Solomon is engaged to Yuni',  // Exact duplicate
+    owner: 'solomon'
   },
   similarFact: {
-    content: 'Quaid and Lori are engaged',  // Semantically similar
-    owner: 'default'
+    content: 'Solomon and Yuni are engaged',  // Semantically similar
+    owner: 'solomon'
   },
   coffeePreference: {
-    content: 'Quaid enjoys espresso coffee',
-    owner: 'default'
+    content: 'Solomon enjoys espresso coffee',
+    owner: 'solomon'
   },
   healthFact: {
-    content: 'Quaid has eosinophilic colitis',
-    owner: 'default'
+    content: 'Solomon has eosinophilic colitis',
+    owner: 'solomon'
   },
   weatherFact: {
-    content: 'The weather on Mars is tropical',
-    owner: 'default'
+    content: 'The weather in Bali is tropical',
+    owner: 'solomon'
   }
 }
 

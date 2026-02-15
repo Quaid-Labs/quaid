@@ -52,46 +52,46 @@ def _fake_get_embedding(text):
 
 GOLDEN_FACTS = [
     # Personal facts
-    ("Quaid prefers espresso coffee, especially cortados", "Preference", "default"),
-    ("Quaid lives on Mars, Indonesia since January 2025", "Fact", "default"),
-    ("Quaid previously lived in Austin, Texas", "Fact", "default"),
-    ("Quaid has a cat named Luna who is a tabby", "Fact", "default"),
-    ("Quaid's mother is named Melina", "Fact", "default"),
-    ("Quaid is a software engineer who works remotely", "Fact", "default"),
-    ("Quaid enjoys surfing and swimming in the ocean", "Preference", "default"),
-    ("Quaid uses a Mac mini M4 as his main development machine", "Fact", "default"),
-    ("Quaid's birthday is September 15th", "Fact", "default"),
-    ("Quaid takes medication for ADHD", "Fact", "default"),
+    ("Solomon prefers espresso coffee, especially cortados", "Preference", "solomon"),
+    ("Solomon lives in Bali, Indonesia since January 2025", "Fact", "solomon"),
+    ("Solomon previously lived in Austin, Texas", "Fact", "solomon"),
+    ("Solomon has a cat named Luna who is a tabby", "Fact", "solomon"),
+    ("Solomon's mother is named Shannon", "Fact", "solomon"),
+    ("Solomon is a software engineer who works remotely", "Fact", "solomon"),
+    ("Solomon enjoys surfing and swimming in the ocean", "Preference", "solomon"),
+    ("Solomon uses a Mac mini M4 as his main development machine", "Fact", "solomon"),
+    ("Solomon's birthday is September 15th", "Fact", "solomon"),
+    ("Solomon takes medication for ADHD", "Fact", "solomon"),
 
     # Family
-    ("Melina lives in Portland, Oregon", "Fact", "default"),
-    ("Melina is Quaid's mother and they talk weekly", "Fact", "default"),
-    ("Quaid's sister Emily has two kids", "Fact", "default"),
-    ("Emily lives in Seattle with her family", "Fact", "default"),
+    ("Shannon lives in Portland, Oregon", "Fact", "solomon"),
+    ("Shannon is Solomon's mother and they talk weekly", "Fact", "solomon"),
+    ("Solomon's sister Emily has two kids", "Fact", "solomon"),
+    ("Emily lives in Seattle with her family", "Fact", "solomon"),
 
     # Technology
-    ("The Ollama server runs on localhost:11434 for embeddings", "Fact", "default"),
-    ("Quaid uses Claude Opus for complex reasoning tasks", "Fact", "default"),
-    ("The memory database uses SQLite with WAL mode", "Fact", "default"),
-    ("Quaid prefers Vim keybindings in his editors", "Preference", "default"),
+    ("The Ollama server runs on localhost:11434 for embeddings", "Fact", "solomon"),
+    ("Solomon uses Claude Opus for complex reasoning tasks", "Fact", "solomon"),
+    ("The memory database uses SQLite with WAL mode", "Fact", "solomon"),
+    ("Solomon prefers Vim keybindings in his editors", "Preference", "solomon"),
 
     # Hobbies & preferences
-    ("Quaid likes Thai food, especially pad see ew", "Preference", "default"),
-    ("Quaid reads science fiction, favorite author is Ted Chiang", "Preference", "default"),
-    ("Quaid practices yoga three times a week", "Fact", "default"),
-    ("Quaid prefers morning workouts before 8am", "Preference", "default"),
+    ("Solomon likes Thai food, especially pad see ew", "Preference", "solomon"),
+    ("Solomon reads science fiction, favorite author is Ted Chiang", "Preference", "solomon"),
+    ("Solomon practices yoga three times a week", "Fact", "solomon"),
+    ("Solomon prefers morning workouts before 8am", "Preference", "solomon"),
 
     # Plans & events
-    ("Quaid is planning to visit Japan in spring 2026", "Fact", "default"),
-    ("Quaid has a dentist appointment on February 20th", "Fact", "default"),
-    ("Quaid is thinking about getting a second cat", "Fact", "default"),
+    ("Solomon is planning to visit Japan in spring 2026", "Fact", "solomon"),
+    ("Solomon has a dentist appointment on February 20th", "Fact", "solomon"),
+    ("Solomon is thinking about getting a second cat", "Fact", "solomon"),
 
     # Work
-    ("Quaid's current project is building an AI assistant named Hauser", "Fact", "default"),
-    ("The Assistant project uses TypeScript for the gateway and Python for plugins", "Fact", "default"),
-    ("Quaid pays about $50/day for Opus API usage", "Fact", "default"),
-    ("Quaid wants to set up NVIDIA Spark agents for edge computing", "Fact", "default"),
-    ("Quaid uses Git for version control and hosts on GitHub", "Fact", "default"),
+    ("Solomon's current project is building an AI assistant named Alfie", "Fact", "solomon"),
+    ("The Alfie project uses TypeScript for the gateway and Python for plugins", "Fact", "solomon"),
+    ("Solomon pays about $50/day for Opus API usage", "Fact", "solomon"),
+    ("Solomon wants to set up NVIDIA Spark agents for edge computing", "Fact", "solomon"),
+    ("Solomon uses Git for version control and hosts on GitHub", "Fact", "solomon"),
 ]
 
 
@@ -129,26 +129,26 @@ GOLDEN_QUERIES = [
     # still testing realistic recall patterns.
 
     # Queries with strong word overlap (should reliably hit)
-    ("Quaid espresso coffee", ["espresso", "cortado", "coffee"], "Coffee preference"),
-    ("Quaid lives Mars Indonesia", ["bali", "indonesia"], "Current location"),
-    ("Quaid cat named Luna tabby", ["luna", "cat", "tabby"], "Pets"),
-    ("Quaid mother Melina", ["shannon", "mother"], "Family relationship"),
-    ("Quaid software engineer works remotely", ["software engineer", "remote"], "Occupation"),
-    ("Quaid medication ADHD", ["adhd", "medication"], "Health"),
-    ("Quaid Thai food pad see ew", ["thai", "pad see ew"], "Food preferences"),
-    ("Quaid reads science fiction Ted Chiang", ["science fiction", "ted chiang"], "Reading preferences"),
-    ("Quaid birthday September 15th", ["september", "15"], "Birthday"),
-    ("Quaid Mac mini M4 development machine", ["mac mini", "m4"], "Hardware"),
-    ("Quaid previously lived Austin Texas", ["austin", "texas"], "Previous location"),
-    ("Quaid yoga morning workouts", ["yoga", "morning"], "Exercise"),
-    ("Quaid visit Japan spring 2026", ["japan", "spring"], "Upcoming travel"),
-    ("Quaid project Assistant AI assistant", ["assistant", "ai assistant"], "Current project"),
-    ("Quaid sister Emily has two kids", ["emily", "kids", "sister"], "Sister info"),
-    ("Quaid Opus API $50 usage", ["$50", "opus"], "Spending"),
-    ("Quaid Vim keybindings editors", ["vim", "keybindings"], "Tool preferences"),
-    ("Quaid surfing swimming ocean", ["surfing", "swimming", "ocean"], "Water hobbies"),
-    ("Quaid NVIDIA Spark agents edge computing", ["nvidia", "spark", "edge"], "Hardware plans"),
-    ("Melina lives Portland Oregon", ["portland", "oregon"], "Family location"),
+    ("Solomon espresso coffee", ["espresso", "cortado", "coffee"], "Coffee preference"),
+    ("Solomon lives Bali Indonesia", ["bali", "indonesia"], "Current location"),
+    ("Solomon cat named Luna tabby", ["luna", "cat", "tabby"], "Pets"),
+    ("Solomon mother Shannon", ["shannon", "mother"], "Family relationship"),
+    ("Solomon software engineer works remotely", ["software engineer", "remote"], "Occupation"),
+    ("Solomon medication ADHD", ["adhd", "medication"], "Health"),
+    ("Solomon Thai food pad see ew", ["thai", "pad see ew"], "Food preferences"),
+    ("Solomon reads science fiction Ted Chiang", ["science fiction", "ted chiang"], "Reading preferences"),
+    ("Solomon birthday September 15th", ["september", "15"], "Birthday"),
+    ("Solomon Mac mini M4 development machine", ["mac mini", "m4"], "Hardware"),
+    ("Solomon previously lived Austin Texas", ["austin", "texas"], "Previous location"),
+    ("Solomon yoga morning workouts", ["yoga", "morning"], "Exercise"),
+    ("Solomon visit Japan spring 2026", ["japan", "spring"], "Upcoming travel"),
+    ("Solomon project Alfie AI assistant", ["alfie", "ai assistant"], "Current project"),
+    ("Solomon sister Emily has two kids", ["emily", "kids", "sister"], "Sister info"),
+    ("Solomon Opus API $50 usage", ["$50", "opus"], "Spending"),
+    ("Solomon Vim keybindings editors", ["vim", "keybindings"], "Tool preferences"),
+    ("Solomon surfing swimming ocean", ["surfing", "swimming", "ocean"], "Water hobbies"),
+    ("Solomon NVIDIA Spark agents edge computing", ["nvidia", "spark", "edge"], "Hardware plans"),
+    ("Shannon lives Portland Oregon", ["portland", "oregon"], "Family location"),
 ]
 
 
@@ -164,7 +164,7 @@ def _run_recall(graph, query, limit=5):
         return recall(
             query,
             limit=limit,
-            owner_id="default",
+            owner_id="solomon",
             use_routing=False,
             min_similarity=0.0,
         )
@@ -194,19 +194,19 @@ class TestGoldenRecall:
     def test_recall_returns_results(self, golden_graph):
         """Sanity check: recall returns non-empty results for any query."""
         graph, db_file = golden_graph
-        results = _run_recall(graph, "Quaid")
-        assert len(results) > 0, "recall() returned no results for 'Quaid'"
+        results = _run_recall(graph, "Solomon")
+        assert len(results) > 0, "recall() returned no results for 'Solomon'"
 
     def test_recall_respects_limit(self, golden_graph):
         """Recall should not exceed the requested limit."""
         graph, db_file = golden_graph
-        results = _run_recall(graph, "Quaid coffee", limit=3)
+        results = _run_recall(graph, "Solomon coffee", limit=3)
         assert len(results) <= 3
 
     def test_recall_has_expected_keys(self, golden_graph):
         """Each result dict should contain the standard keys."""
         graph, db_file = golden_graph
-        results = _run_recall(graph, "Quaid coffee")
+        results = _run_recall(graph, "Solomon coffee")
         if results:
             r = results[0]
             for key in ("text", "category", "similarity", "id"):
@@ -219,16 +219,16 @@ class TestGoldenRecall:
              patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph.route_query", side_effect=lambda q: q):
             results = recall(
-                "Quaid coffee",
+                "Solomon coffee",
                 limit=5,
                 owner_id="nonexistent_user",
                 use_routing=False,
                 min_similarity=0.0,
             )
         # Non-existent owner should get no results (or only shared/public)
-        owner_results = _run_recall(graph, "Quaid coffee")
-        # At minimum, the wrong-owner results should be no more than default user's
-        assert len(results) <= len(owner_results)
+        solomon_results = _run_recall(graph, "Solomon coffee")
+        # At minimum, the wrong-owner results should be no more than solomon's
+        assert len(results) <= len(solomon_results)
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ ADVERSARIAL_QUERIES = [
     # (query, possible_keywords, description, difficulty)
     # These test robustness, not perfection. Expected pass rate is lower.
 
-    ("What does Java mean to Quaid?",
+    ("What does Java mean to Solomon?",
      ["software", "engineer", "remote"],
      "Ambiguous entity (island vs programming)", "hard"),
 
@@ -313,35 +313,35 @@ ADVERSARIAL_QUERIES = [
      [],
      "Pronoun confusion (no explicit referent)", "hard"),
 
-    ("What are Quaid's health problems?",
+    ("What are Solomon's health problems?",
      ["adhd", "medication"],
      "Synonym mismatch (stored as 'medication for ADHD')", "medium"),
 
-    ("What doesn't Quaid like?",
+    ("What doesn't Solomon like?",
      [],
      "Negation query (hard for embeddings)", "hard"),
 
-    ("Where did Quaid go recently?",
+    ("Where did Solomon go recently?",
      ["bali", "indonesia", "japan"],
      "Temporal ambiguity (relative time)", "medium"),
 
-    ("Tell me about Quaid's family and pets",
+    ("Tell me about Solomon's family and pets",
      ["shannon", "mother", "emily", "sister", "luna", "cat"],
      "Compound multi-topic query", "medium"),
 
-    ("What's going on with Quaid?",
+    ("What's going on with Solomon?",
      [],
      "Maximally vague query", "hard"),
 
     ("What about Sol's mom?",
      ["shannon", "mother", "portland"],
-     "Alias + relation (Sol = Quaid)", "medium"),
+     "Alias + relation (Sol = Solomon)", "medium"),
 
-    ("Quaid coffee tea preferences morning",
+    ("Solomon coffee tea preferences morning",
      ["espresso", "cortado", "coffee"],
      "Keyword stuffing query", "easy"),
 
-    ("stuff Quaid bought or wants to buy",
+    ("stuff Solomon bought or wants to buy",
      ["cat", "mac mini", "nvidia", "spark"],
      "Colloquial phrasing with implicit intent", "hard"),
 ]
@@ -412,7 +412,7 @@ class TestAdversarialRecall:
     def test_compound_query_finds_multiple_topics(self, golden_graph):
         """Compound query should find results from multiple topic areas."""
         graph, db_file = golden_graph
-        results = _run_recall(graph, "Tell me about Quaid's family and pets", limit=10)
+        results = _run_recall(graph, "Tell me about Solomon's family and pets", limit=10)
         result_text = " ".join(r["text"].lower() for r in results)
 
         # With fake embeddings and word overlap, we should find at least one topic
@@ -431,7 +431,7 @@ class TestAdversarialRecall:
         """Synonym queries should return results even if keywords don't match exactly."""
         graph, db_file = golden_graph
         # "health problems" vs stored "medication for ADHD"
-        results = _run_recall(graph, "What are Quaid's health problems?")
+        results = _run_recall(graph, "What are Solomon's health problems?")
         # With word-hash embeddings, "health" and "problems" may not overlap much
-        # but "Quaid" should still match many results
+        # but "Solomon" should still match many results
         assert len(results) > 0, "Synonym query returned no results at all"

@@ -35,13 +35,13 @@ def _make_graph_with_data(tmp_path, items=None):
 
         if items is None:
             items = [
-                ("Quaid likes espresso coffee", "Fact", "default"),
-                ("Quaid lives on Mars Indonesia", "Fact", "default"),
-                ("Lori is Quaid's wife partner", "Fact", "default"),
-                ("Melina is Quaid's sister sibling", "Fact", "default"),
-                ("Whiskers is a pet cat animal", "Fact", "default"),
-                ("Quaid works at Anthropic company", "Fact", "default"),
-                ("Quaid prefers dark roast beans", "Preference", "default"),
+                ("Solomon likes espresso coffee", "Fact", "solomon"),
+                ("Solomon lives in Bali Indonesia", "Fact", "solomon"),
+                ("Yuni is Solomon's wife partner", "Fact", "solomon"),
+                ("Shannon is Solomon's sister sibling", "Fact", "solomon"),
+                ("Madu is a pet cat animal", "Fact", "solomon"),
+                ("Solomon works at Anthropic company", "Fact", "solomon"),
+                ("Solomon prefers dark roast beans", "Preference", "solomon"),
             ]
 
         for text, node_type, owner in items:
@@ -67,11 +67,11 @@ class TestSearchFTS:
         """BM25-ranked results include matching nodes with rank positions."""
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            results = graph.search_fts("Quaid", limit=10)
+            results = graph.search_fts("Solomon", limit=10)
             assert len(results) > 0
-            # All results should mention Quaid and have rank positions
+            # All results should mention Solomon and have rank positions
             for node, rank in results:
-                assert "Quaid" in node.name or "default" in node.name.lower()
+                assert "Solomon" in node.name or "solomon" in node.name.lower()
                 assert rank >= 1  # 1-based rank position
 
     def test_empty_query_returns_empty(self, tmp_path):
@@ -99,21 +99,21 @@ class TestSearchFTS:
     def test_limit_respected(self, tmp_path):
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            results = graph.search_fts("Quaid", limit=2)
+            results = graph.search_fts("Solomon", limit=2)
             assert len(results) <= 2
 
     def test_owner_id_filter(self, tmp_path):
         """FTS with owner_id only returns that owner's nodes."""
         items = [
             ("Alice likes tea and crumpets", "Fact", "alice"),
-            ("Quaid likes espresso coffee strongly", "Fact", "default"),
+            ("Solomon likes espresso coffee strongly", "Fact", "solomon"),
         ]
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path, items=items)
-            results = graph.search_fts("likes", owner_id="default")
-            # Should only return default user's node
+            results = graph.search_fts("likes", owner_id="solomon")
+            # Should only return solomon's node
             for node, _ in results:
-                assert node.owner_id == "default" or node.owner_id is None
+                assert node.owner_id == "solomon" or node.owner_id is None
 
     def test_short_words_filtered(self, tmp_path):
         """Words under 3 chars are filtered out."""
@@ -143,7 +143,7 @@ class TestSearchSemantic:
     def test_returns_results_sorted_by_similarity(self, tmp_path):
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            results = graph.search_semantic("Quaid coffee", limit=5, min_similarity=0.0)
+            results = graph.search_semantic("Solomon coffee", limit=5, min_similarity=0.0)
             if len(results) >= 2:
                 sims = [sim for _, sim in results]
                 assert sims == sorted(sims, reverse=True)
@@ -151,7 +151,7 @@ class TestSearchSemantic:
     def test_min_similarity_filters(self, tmp_path):
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            results = graph.search_semantic("Quaid coffee", min_similarity=0.999)
+            results = graph.search_semantic("Solomon coffee", min_similarity=0.999)
             # Very high threshold should filter most results
             for _, sim in results:
                 assert sim >= 0.999
@@ -161,7 +161,7 @@ class TestSearchSemantic:
         from memory_graph import Node
         items_raw = [
             ("Bob enjoys tennis sport games", "Fact", "bob", "private"),
-            ("Quaid enjoys surfing water sport", "Fact", "default", "shared"),
+            ("Solomon enjoys surfing water sport", "Fact", "solomon", "shared"),
         ]
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             from memory_graph import MemoryGraph
@@ -172,12 +172,12 @@ class TestSearchSemantic:
                                    owner_id=owner, status="approved", privacy=priv)
                 graph.add_node(node, embed=True)
 
-            results = graph.search_semantic("sport", owner_id="default",
+            results = graph.search_semantic("sport", owner_id="solomon",
                                             min_similarity=0.0)
-            # Bob's private node should be excluded; default user's shared node should be included
+            # Bob's private node should be excluded; solomon's shared node should be included
             result_owners = [n.owner_id for n, _ in results]
-            assert "default" in result_owners
-            # Bob's node is private so it should NOT appear when filtering for default user
+            assert "solomon" in result_owners
+            # Bob's node is private so it should NOT appear when filtering for solomon
             for node, _ in results:
                 if node.owner_id == "bob":
                     assert node.privacy in ("shared", "public")
@@ -185,7 +185,7 @@ class TestSearchSemantic:
     def test_limit_respected(self, tmp_path):
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            results = graph.search_semantic("Quaid", limit=2, min_similarity=0.0)
+            results = graph.search_semantic("Solomon", limit=2, min_similarity=0.0)
             assert len(results) <= 2
 
 
@@ -199,7 +199,7 @@ class TestSearchHybrid:
     def test_returns_results(self, tmp_path):
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            results = graph.search_hybrid("Quaid coffee", limit=5)
+            results = graph.search_hybrid("Solomon coffee", limit=5)
             # Should return some results (combining semantic + FTS)
             assert isinstance(results, list)
 
@@ -207,14 +207,14 @@ class TestSearchHybrid:
         """Hybrid should return at least as many as either individual search."""
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            hybrid = graph.search_hybrid("Quaid coffee", limit=10)
+            hybrid = graph.search_hybrid("Solomon coffee", limit=10)
             # Just verify it runs and returns a list
             assert isinstance(hybrid, list)
 
     def test_limit_respected(self, tmp_path):
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            results = graph.search_hybrid("Quaid", limit=3)
+            results = graph.search_hybrid("Solomon", limit=3)
             # search_hybrid returns up to limit*2 for downstream MMR/filtering
             assert len(results) <= 6
 
@@ -222,7 +222,7 @@ class TestSearchHybrid:
         """Results should carry quality scores (cosine similarity) for threshold filtering."""
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
-            results = graph.search_hybrid("Quaid coffee", limit=10)
+            results = graph.search_hybrid("Solomon coffee", limit=10)
             if len(results) >= 1:
                 # All quality scores should be in valid range
                 for node, score in results:

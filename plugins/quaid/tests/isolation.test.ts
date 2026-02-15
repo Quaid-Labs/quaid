@@ -6,9 +6,9 @@ describe('Owner Isolation', () => {
 
   beforeEach(async () => {
     memory = await createTestMemory()
-    await memory.store('Quaid secret fact', 'default')
-    await memory.store('Lori secret fact', 'yuni')
-    await memory.store('Shared public information', 'default')
+    await memory.store('Solomon secret fact', 'solomon')
+    await memory.store('Yuni secret fact', 'yuni')
+    await memory.store('Shared public information', 'solomon')
   })
 
   afterEach(async () => {
@@ -16,17 +16,17 @@ describe('Owner Isolation', () => {
   })
 
   it('does not return other owner memories in searches', async () => {
-    const ownerResults = await memory.search('secret', 'default')
+    const solomonResults = await memory.search('secret', 'solomon')
     const yuniResults = await memory.search('secret', 'yuni')
     
-    // Quaid should only see his own secret
-    expect(ownerResults.length).toBeGreaterThan(0)
-    for (const result of ownerResults) {
+    // Solomon should only see his own secret
+    expect(solomonResults.length).toBeGreaterThan(0)
+    for (const result of solomonResults) {
       const owner = result.owner || result.owner_id
-      expect(owner).toBe('default')
+      expect(owner).toBe('solomon')
     }
     
-    // Lori should only see her own secret
+    // Yuni should only see her own secret
     expect(yuniResults.length).toBeGreaterThan(0)
     for (const result of yuniResults) {
       const owner = result.owner || result.owner_id
@@ -35,16 +35,16 @@ describe('Owner Isolation', () => {
   })
 
   it('maintains isolation with similar content', async () => {
-    await memory.store('I like coffee', 'default')
+    await memory.store('I like coffee', 'solomon')
     await memory.store('I like coffee too', 'yuni')
     
-    const ownerResults = await memory.search('coffee', 'default')
+    const solomonResults = await memory.search('coffee', 'solomon')
     const yuniResults = await memory.search('coffee', 'yuni')
     
     // Each owner should only see their own coffee preference
-    for (const result of ownerResults) {
+    for (const result of solomonResults) {
       const owner = result.owner || result.owner_id
-      expect(owner).toBe('default')
+      expect(owner).toBe('solomon')
     }
     
     for (const result of yuniResults) {
@@ -55,19 +55,19 @@ describe('Owner Isolation', () => {
 
   it('handles owner-specific queries correctly', async () => {
     // Store private memories for each owner — private memories should NOT cross owners
-    await memory.store('Quaid enjoys hiking', 'default', { category: 'preference' })
-    await memory.store('Lori enjoys cooking', 'yuni', { category: 'preference' })
+    await memory.store('Solomon enjoys hiking', 'solomon', { category: 'preference' })
+    await memory.store('Yuni enjoys cooking', 'yuni', { category: 'preference' })
 
-    // Quaid searches for activities — sees own + shared/public, but both are shared by default
+    // Solomon searches for activities — sees own + shared/public, but both are shared by default
     // so both appear. This is correct: shared memories are visible across owners.
-    const ownerResults = await memory.search('enjoys', 'default')
-    expect(ownerResults.some(r =>
+    const solomonResults = await memory.search('enjoys', 'solomon')
+    expect(solomonResults.some(r =>
       (r.text || r.content || r.name).includes('hiking')
     )).toBe(true)
     // Shared memories from other owners are visible (this is the privacy system working correctly)
-    expect(ownerResults.length).toBeGreaterThanOrEqual(1)
+    expect(solomonResults.length).toBeGreaterThanOrEqual(1)
 
-    // Lori searches for activities
+    // Yuni searches for activities
     const yuniResults = await memory.search('enjoys', 'yuni')
     expect(yuniResults.some(r =>
       (r.text || r.content || r.name).includes('cooking')
@@ -76,15 +76,15 @@ describe('Owner Isolation', () => {
   })
 
   it('prevents cross-owner memory access by ID', async () => {
-    const ownerMemory = await memory.store('Quaid private data', 'default')
+    const solomonMemory = await memory.store('Solomon private data', 'solomon')
     
     try {
-      // Try to access Quaid's memory raw data as different user
+      // Try to access Solomon's memory raw data as different user
       // This depends on implementation - getRaw might not have owner checks
-      const raw = await memory.getRaw(ownerMemory.id)
+      const raw = await memory.getRaw(solomonMemory.id)
       if (raw) {
-        // If we can access it, it should at least be marked as Quaid's
-        expect(raw.owner_id || raw.owner).toBe('default')
+        // If we can access it, it should at least be marked as Solomon's
+        expect(raw.owner_id || raw.owner).toBe('solomon')
       }
     } catch {
       // Throwing is also acceptable for cross-owner access
@@ -100,9 +100,9 @@ describe('Owner Isolation', () => {
   })
 
   it('preserves owner information in returned results', async () => {
-    await memory.store('Quaid test fact', 'default')
+    await memory.store('Solomon test fact', 'solomon')
     
-    const results = await memory.search('test', 'default')
+    const results = await memory.search('test', 'solomon')
     
     expect(results.length).toBeGreaterThan(0)
     for (const result of results) {

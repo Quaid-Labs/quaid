@@ -48,7 +48,7 @@ def _add_edge(graph, source_id, target_id, relation):
     return edge
 
 
-def _setup_entity_with_facts(graph, entity_name="Melina", entity_type="Person", owner="default"):
+def _setup_entity_with_facts(graph, entity_name="Shannon", entity_type="Person", owner="solomon"):
     """Create a Person/Place/Concept entity with some connected facts."""
     from memory_graph import Node
 
@@ -153,7 +153,7 @@ class TestGenerateEntitySummaryNoLLM:
         with patch("memory_graph.get_graph", return_value=graph):
             result = generate_entity_summary(entity.id, use_llm=False)
             assert result is not None
-            assert "Melina" in result
+            assert "Shannon" in result
             # Should contain content from the facts
             for fn in fact_nodes:
                 assert fn.name in result
@@ -285,7 +285,7 @@ class TestGenerateEntitySummaryWithLLM:
         from memory_graph import generate_entity_summary
         graph, _ = _make_graph(tmp_path)
         entity, _ = _setup_entity_with_facts(graph)
-        mock_response = "Melina is a software engineer who loves hiking and has a golden retriever named Max."
+        mock_response = "Shannon is a software engineer who loves hiking and has a golden retriever named Max."
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._HAS_LLM_CLIENTS", True), \
              patch("memory_graph.call_low_reasoning", return_value=(mock_response, {"usage": {}})):
@@ -302,7 +302,7 @@ class TestGenerateEntitySummaryWithLLM:
             result = generate_entity_summary(entity.id, use_llm=True)
             # Should still get a concatenation-based summary
             assert result is not None
-            assert "Melina" in result
+            assert "Shannon" in result
 
     def test_falls_back_when_llm_not_available(self, tmp_path):
         from memory_graph import generate_entity_summary
@@ -313,13 +313,13 @@ class TestGenerateEntitySummaryWithLLM:
             result = generate_entity_summary(entity.id, use_llm=True)
             # Should get concatenation fallback
             assert result is not None
-            assert "Melina" in result
+            assert "Shannon" in result
 
     def test_llm_summary_stored_in_attributes(self, tmp_path):
         from memory_graph import generate_entity_summary
         graph, _ = _make_graph(tmp_path)
         entity, _ = _setup_entity_with_facts(graph)
-        mock_response = "Melina is a software engineer."
+        mock_response = "Shannon is a software engineer."
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._HAS_LLM_CLIENTS", True), \
              patch("memory_graph.call_low_reasoning", return_value=(mock_response, {"usage": {}})):
@@ -339,7 +339,7 @@ class TestGenerateEntitySummaryWithLLM:
             result = generate_entity_summary(entity.id, use_llm=True)
             # Empty response should fall through to concatenation
             assert result is not None
-            assert "Melina" in result
+            assert "Shannon" in result
 
 
 # ---------------------------------------------------------------------------
@@ -354,15 +354,15 @@ class TestSummarizeAllEntities:
         graph, _ = _make_graph(tmp_path)
         # Create one of each type
         for name, typ in [("Alice", "Person"), ("Portland", "Place"), ("AI", "Concept")]:
-            entity = Node.create(type=typ, name=name, owner_id="default")
+            entity = Node.create(type=typ, name=name, owner_id="solomon")
             entity.embedding = _fake_get_embedding(name)
             graph.add_node(entity)
-            fact = Node.create(type="Fact", name=f"{name} is interesting", owner_id="default")
+            fact = Node.create(type="Fact", name=f"{name} is interesting", owner_id="solomon")
             fact.embedding = _fake_get_embedding(f"{name} fact")
             graph.add_node(fact)
             _add_edge(graph, entity.id, fact.id, "has_fact")
         with patch("memory_graph.get_graph", return_value=graph):
-            stats = summarize_all_entities(owner_id="default", use_llm=False)
+            stats = summarize_all_entities(owner_id="solomon", use_llm=False)
             assert stats["total"] == 3
             assert stats["generated"] == 3
             assert stats["skipped"] == 0
@@ -371,7 +371,7 @@ class TestSummarizeAllEntities:
         from memory_graph import summarize_all_entities, Node
         graph, _ = _make_graph(tmp_path)
         # Create entities for different owners
-        for owner in ["default", "other"]:
+        for owner in ["solomon", "other"]:
             entity = Node.create(type="Person", name=f"Person_{owner}", owner_id=owner)
             entity.embedding = _fake_get_embedding(f"Person_{owner}")
             graph.add_node(entity)
@@ -380,7 +380,7 @@ class TestSummarizeAllEntities:
             graph.add_node(fact)
             _add_edge(graph, entity.id, fact.id, "has_fact")
         with patch("memory_graph.get_graph", return_value=graph):
-            stats = summarize_all_entities(owner_id="default", use_llm=False)
+            stats = summarize_all_entities(owner_id="solomon", use_llm=False)
             assert stats["total"] == 1
             assert stats["generated"] == 1
 

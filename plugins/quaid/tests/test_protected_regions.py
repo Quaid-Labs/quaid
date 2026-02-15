@@ -219,7 +219,7 @@ class TestWorkspaceAuditProtectedRegions:
 
         content = (
             "# SOUL\n\n"
-            "## Identity\nI am Hauser.\n\n"
+            "## Identity\nI am Alfie.\n\n"
             "<!-- protected -->\n"
             "## Protected Section\n"
             "Do not review this.\n"
@@ -233,7 +233,7 @@ class TestWorkspaceAuditProtectedRegions:
 
         stripped, ranges = _strip_protected_regions(files_content["SOUL.md"])
         assert "Do not review this." not in stripped
-        assert "I am Hauser." in stripped
+        assert "I am Alfie." in stripped
         assert "I care about truth." in stripped
         assert len(ranges) == 1
 
@@ -384,7 +384,7 @@ class TestSoulSnippetsProtectedRegions:
         parent.write_text(
             "# SOUL\n\n"
             "<!-- protected -->\n"
-            "I am Hauser, the permanent one.\n"
+            "I am Alfie, the permanent one.\n"
             "<!-- /protected -->\n\n"
             "I am also curious.\n"
         )
@@ -394,8 +394,8 @@ class TestSoulSnippetsProtectedRegions:
             result = {
                 "edits": [
                     {
-                        "old_text": "I am Hauser, the permanent one.",
-                        "new_text": "I am Hauser, changed by the janitor.",
+                        "old_text": "I am Alfie, the permanent one.",
+                        "new_text": "I am Alfie, changed by the janitor.",
                         "reason": "Test protected edit"
                     },
                     {
@@ -410,8 +410,8 @@ class TestSoulSnippetsProtectedRegions:
 
         content = parent.read_text()
         # Protected text should NOT be changed
-        assert "I am Hauser, the permanent one." in content
-        assert "I am Hauser, changed by the janitor." not in content
+        assert "I am Alfie, the permanent one." in content
+        assert "I am Alfie, changed by the janitor." not in content
         # Unprotected text should be changed
         assert "I am deeply curious." in content
         assert "I am also curious." not in content
@@ -425,7 +425,7 @@ class TestSoulSnippetsProtectedRegions:
             "# SOUL\n\n"
             "<!-- protected -->\n"
             "## Identity\n"
-            "I am Hauser. Do not modify.\n"
+            "I am Alfie. Do not modify.\n"
             "<!-- /protected -->\n\n"
             "## Values\n"
             "I care about truth.\n"
@@ -439,7 +439,7 @@ class TestSoulSnippetsProtectedRegions:
         # It should fall through to end-of-file since the only matching section is protected
         assert "New identity snippet." in content
         # The protected content should remain unchanged
-        assert "I am Hauser. Do not modify." in content
+        assert "I am Alfie. Do not modify." in content
 
     def test_insert_into_unprotected_section(self, snippets_workspace_dir, mock_config):
         """_insert_into_file should work normally for unprotected sections."""
@@ -525,7 +525,7 @@ class TestSoulSnippetsProtectedRegions:
             "# SOUL\n\n"
             "<!-- protected -->\n"
             "## Core Identity\n"
-            "I am Hauser. This never changes.\n"
+            "I am Alfie. This never changes.\n"
             "<!-- /protected -->\n\n"
             "## Growth\n"
             "I am learning.\n"
@@ -547,7 +547,7 @@ class TestSoulSnippetsProtectedRegions:
         assert result["additions"] == 1
         content = (snippets_workspace_dir / "SOUL.md").read_text()
         # Protected content unchanged
-        assert "I am Hauser. This never changes." in content
+        assert "I am Alfie. This never changes." in content
         # Addition was made in unprotected section
         assert "I embrace change." in content
 

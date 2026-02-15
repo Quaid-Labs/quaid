@@ -135,13 +135,13 @@ class TestConfirmationOnDuplicateStore:
     def test_hash_exact_dedup_increments_confirmation(self, tmp_path):
         from memory_graph import store
         graph, _ = _make_graph(tmp_path)
-        text = "Quaid has a pet cat named Whiskers"
+        text = "Solomon has a pet cat named Madu"
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
-            r1 = store(text, owner_id="default")
+            r1 = store(text, owner_id="solomon")
             assert r1["status"] == "created"
-            r2 = store(text, owner_id="default")
+            r2 = store(text, owner_id="solomon")
             assert r2["status"] == "duplicate"
             assert r2.get("confirmation_count", 0) == 1
             # Bjork: storage_strength incremented by 0.03 on re-encounter
@@ -151,12 +151,12 @@ class TestConfirmationOnDuplicateStore:
     def test_hash_exact_dedup_boosts_confidence(self, tmp_path):
         from memory_graph import store
         graph, _ = _make_graph(tmp_path)
-        text = "Quaid enjoys morning espresso coffee"
+        text = "Solomon enjoys morning espresso coffee"
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
-            r1 = store(text, owner_id="default", confidence=0.5)
-            r2 = store(text, owner_id="default")
+            r1 = store(text, owner_id="solomon", confidence=0.5)
+            r2 = store(text, owner_id="solomon")
             # Confidence should be boosted by 0.02 (from 0.5 to 0.52)
             node = graph.get_node(r1["id"])
             assert node.confidence == pytest.approx(0.52, abs=0.01)
@@ -164,14 +164,14 @@ class TestConfirmationOnDuplicateStore:
     def test_confirmation_confidence_capped_at_095(self, tmp_path):
         from memory_graph import store
         graph, _ = _make_graph(tmp_path)
-        text = "Quaid is a software developer engineer"
+        text = "Solomon is a software developer engineer"
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph._HAS_CONFIG", False):
-            store(text, owner_id="default", confidence=0.94)
+            store(text, owner_id="solomon", confidence=0.94)
             # Re-store triggers +0.02, but should cap at 0.95
-            store(text, owner_id="default")
-            node_id = store(text, owner_id="default")["id"]
+            store(text, owner_id="solomon")
+            node_id = store(text, owner_id="solomon")["id"]
             node = graph.get_node(node_id)
             assert node.confidence <= 0.95
 
@@ -188,7 +188,7 @@ class TestWhenTemporalBoost:
         # Use same node, compare GENERAL vs WHEN to isolate the temporal_data_bonus
         # (temporal_penalty is independent of intent, so it cancels out)
         # valid_from in past, valid_until in future -> no temporal_penalty
-        node = Node.create(type="Fact", name="Quaid likes coffee a lot")
+        node = Node.create(type="Fact", name="Solomon likes coffee a lot")
         node.valid_from = "2026-01-01"
         node.valid_until = "2027-12-31"
         score_general = _compute_composite_score(node, 0.8, intent="GENERAL")
@@ -198,7 +198,7 @@ class TestWhenTemporalBoost:
 
     def test_when_intent_no_temporal_metadata_no_bonus(self):
         from memory_graph import Node, _compute_composite_score
-        node = Node.create(type="Fact", name="Quaid likes coffee a lot")
+        node = Node.create(type="Fact", name="Solomon likes coffee a lot")
         # No valid_from, no valid_until, no created_at
         node.valid_from = None
         node.valid_until = None
@@ -210,13 +210,13 @@ class TestWhenTemporalBoost:
 
     def test_when_intent_valid_from_only_adds_005(self):
         from memory_graph import Node, _compute_composite_score
-        node = Node.create(type="Fact", name="Quaid started working in January")
+        node = Node.create(type="Fact", name="Solomon started working in January")
         node.valid_from = "2025-01-15"
         node.valid_until = None
         node.created_at = None
         score_when = _compute_composite_score(node, 0.8, intent="WHEN")
 
-        node2 = Node.create(type="Fact", name="Quaid started working in January")
+        node2 = Node.create(type="Fact", name="Solomon started working in January")
         node2.valid_from = None
         node2.valid_until = None
         node2.created_at = None
@@ -227,13 +227,13 @@ class TestWhenTemporalBoost:
     def test_when_intent_valid_until_only_adds_005(self):
         from memory_graph import Node, _compute_composite_score
         # Use future valid_until to avoid temporal_penalty for expired facts
-        node = Node.create(type="Fact", name="Quaid finished the project December")
+        node = Node.create(type="Fact", name="Solomon finished the project December")
         node.valid_from = None
         node.valid_until = "2027-12-31"
         node.created_at = None
         score_when = _compute_composite_score(node, 0.8, intent="WHEN")
 
-        node2 = Node.create(type="Fact", name="Quaid finished the project December")
+        node2 = Node.create(type="Fact", name="Solomon finished the project December")
         node2.valid_from = None
         node2.valid_until = None
         node2.created_at = None
@@ -244,13 +244,13 @@ class TestWhenTemporalBoost:
     def test_when_intent_both_valid_from_and_until_adds_010(self):
         from memory_graph import Node, _compute_composite_score
         # valid_from in past, valid_until in future -> no temporal_penalty
-        node = Node.create(type="Fact", name="Quaid is on Mars now for a while")
+        node = Node.create(type="Fact", name="Solomon is in Bali now for a while")
         node.valid_from = "2026-01-01"
         node.valid_until = "2027-12-31"
         node.created_at = None
         score_when = _compute_composite_score(node, 0.8, intent="WHEN")
 
-        node2 = Node.create(type="Fact", name="Quaid is on Mars now for a while")
+        node2 = Node.create(type="Fact", name="Solomon is in Bali now for a while")
         node2.valid_from = None
         node2.valid_until = None
         node2.created_at = None
@@ -260,13 +260,13 @@ class TestWhenTemporalBoost:
 
     def test_when_intent_created_at_only_adds_005(self):
         from memory_graph import Node, _compute_composite_score
-        node = Node.create(type="Fact", name="Quaid mentioned something today")
+        node = Node.create(type="Fact", name="Solomon mentioned something today")
         node.valid_from = None
         node.valid_until = None
         node.created_at = "2026-02-08T10:00:00"
         score_when = _compute_composite_score(node, 0.8, intent="WHEN")
 
-        node2 = Node.create(type="Fact", name="Quaid mentioned something today")
+        node2 = Node.create(type="Fact", name="Solomon mentioned something today")
         node2.valid_from = None
         node2.valid_until = None
         node2.created_at = None
@@ -278,13 +278,13 @@ class TestWhenTemporalBoost:
         from memory_graph import Node, _compute_composite_score
         # Both valid_from and valid_until -> 0.10, not stacked 0.05+0.05
         # Use valid_from in past, valid_until in future to avoid temporal penalty
-        node = Node.create(type="Fact", name="Quaid is on Mars for a period")
+        node = Node.create(type="Fact", name="Solomon is in Bali for a period")
         node.valid_from = "2026-01-01"
         node.valid_until = "2027-12-31"
         node.created_at = "2026-01-15T10:00:00"
         score_when = _compute_composite_score(node, 0.8, intent="WHEN")
 
-        node2 = Node.create(type="Fact", name="Quaid is on Mars for a period")
+        node2 = Node.create(type="Fact", name="Solomon is in Bali for a period")
         node2.valid_from = None
         node2.valid_until = None
         node2.created_at = None
@@ -325,10 +325,10 @@ class TestDebugFlag:
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph.route_query", side_effect=lambda q: q):
-            store("Quaid likes espresso coffee beverages",
-                  owner_id="default", skip_dedup=True)
-            results = recall("Quaid likes espresso coffee beverages",
-                             owner_id="default", use_routing=False,
+            store("Solomon likes espresso coffee beverages",
+                  owner_id="solomon", skip_dedup=True)
+            results = recall("Solomon likes espresso coffee beverages",
+                             owner_id="solomon", use_routing=False,
                              min_similarity=0.0, debug=False)
             for r in results:
                 assert "_debug" not in r
@@ -339,10 +339,10 @@ class TestDebugFlag:
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph.route_query", side_effect=lambda q: q):
-            store("Quaid likes espresso coffee beverages",
-                  owner_id="default", skip_dedup=True)
-            results = recall("Quaid likes espresso coffee beverages",
-                             owner_id="default", use_routing=False,
+            store("Solomon likes espresso coffee beverages",
+                  owner_id="solomon", skip_dedup=True)
+            results = recall("Solomon likes espresso coffee beverages",
+                             owner_id="solomon", use_routing=False,
                              min_similarity=0.0, debug=True)
             assert len(results) > 0
             # Direct matches (not graph-traversed) should have _debug
@@ -355,10 +355,10 @@ class TestDebugFlag:
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph.route_query", side_effect=lambda q: q):
-            store("Quaid likes espresso coffee beverages",
-                  owner_id="default", skip_dedup=True)
-            results = recall("Quaid likes espresso coffee beverages",
-                             owner_id="default", use_routing=False,
+            store("Solomon likes espresso coffee beverages",
+                  owner_id="solomon", skip_dedup=True)
+            results = recall("Solomon likes espresso coffee beverages",
+                             owner_id="solomon", use_routing=False,
                              min_similarity=0.0, debug=True)
             direct_results = [r for r in results if "_debug" in r]
             assert len(direct_results) > 0
@@ -376,10 +376,10 @@ class TestDebugFlag:
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph.route_query", side_effect=lambda q: q):
-            store("Quaid likes espresso coffee beverages",
-                  owner_id="default", skip_dedup=True)
-            results = recall("Quaid likes espresso coffee beverages",
-                             owner_id="default", use_routing=False,
+            store("Solomon likes espresso coffee beverages",
+                  owner_id="solomon", skip_dedup=True)
+            results = recall("Solomon likes espresso coffee beverages",
+                             owner_id="solomon", use_routing=False,
                              min_similarity=0.0, debug=True)
             direct_results = [r for r in results if "_debug" in r]
             assert len(direct_results) > 0
@@ -400,11 +400,11 @@ class TestDebugFlag:
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph.route_query", side_effect=lambda q: q):
-            store("Quaid likes espresso coffee beverages",
-                  owner_id="default", skip_dedup=True)
+            store("Solomon likes espresso coffee beverages",
+                  owner_id="solomon", skip_dedup=True)
             # Call without debug parameter
-            results = recall("Quaid likes espresso coffee beverages",
-                             owner_id="default", use_routing=False,
+            results = recall("Solomon likes espresso coffee beverages",
+                             owner_id="solomon", use_routing=False,
                              min_similarity=0.0)
             for r in results:
                 assert "_debug" not in r
@@ -416,10 +416,10 @@ class TestDebugFlag:
         with patch("memory_graph.get_graph", return_value=graph), \
              patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("memory_graph.route_query", side_effect=lambda q: q):
-            store("Quaid likes espresso coffee beverages",
-                  owner_id="default", skip_dedup=True)
-            results = recall("Quaid likes espresso coffee beverages",
-                             owner_id="default", use_routing=False,
+            store("Solomon likes espresso coffee beverages",
+                  owner_id="solomon", skip_dedup=True)
+            results = recall("Solomon likes espresso coffee beverages",
+                             owner_id="solomon", use_routing=False,
                              min_similarity=0.0, debug=True)
             direct_results = [r for r in results if "_debug" in r]
             for r in direct_results:
@@ -442,11 +442,11 @@ class TestTemporalContradictionCandidates:
         metrics = JanitorMetrics()
 
         # Create two facts: one with negation, one without, at moderate similarity
-        node_a = Node.create(type="Fact", name="Quaid does not drink alcohol",
-                             owner_id="default", status="pending",
+        node_a = Node.create(type="Fact", name="Solomon does not drink alcohol",
+                             owner_id="solomon", status="pending",
                              valid_from="2024-01-01", valid_until="2024-12-31")
-        node_b = Node.create(type="Fact", name="Quaid drinks alcohol daily",
-                             owner_id="default", status="approved",
+        node_b = Node.create(type="Fact", name="Solomon drinks alcohol daily",
+                             owner_id="solomon", status="approved",
                              valid_from="2023-01-01", valid_until="2023-06-30")
 
         # We need to mock the recall candidates flow, so test the dict shape instead
@@ -476,8 +476,8 @@ class TestTemporalContradictionCandidates:
         from janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
-            "id_a": "a1", "text_a": "Quaid lives in Austin",
-            "id_b": "b1", "text_b": "Quaid does not live in Austin",
+            "id_a": "a1", "text_a": "Solomon lives in Austin",
+            "id_b": "b1", "text_b": "Solomon does not live in Austin",
             "created_a": "2024-06-01T10:00:00", "created_b": "2025-01-15T10:00:00",
             "valid_from_a": "2024-01-01", "valid_until_a": "2024-12-31",
             "valid_from_b": "2025-01-01", "valid_until_b": None,
@@ -505,8 +505,8 @@ class TestTemporalContradictionCandidates:
         from janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
-            "id_a": "a1", "text_a": "Quaid lives in Austin TX",
-            "id_b": "b1", "text_b": "Quaid does not live in Austin",
+            "id_a": "a1", "text_a": "Solomon lives in Austin TX",
+            "id_b": "b1", "text_b": "Solomon does not live in Austin",
             "created_a": "2024-06-01T10:00:00", "created_b": "2025-01-15T10:00:00",
             "similarity": 0.75,
         }]
@@ -528,8 +528,8 @@ class TestTemporalContradictionCandidates:
         from janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
-            "id_a": "a1", "text_a": "Quaid weighs 180 pounds",
-            "id_b": "b1", "text_b": "Quaid does not weigh 180 pounds",
+            "id_a": "a1", "text_a": "Solomon weighs 180 pounds",
+            "id_b": "b1", "text_b": "Solomon does not weigh 180 pounds",
             "created_a": "2024-03-15T10:00:00", "created_b": "2025-01-01T10:00:00",
             "similarity": 0.75,
         }]
@@ -552,8 +552,8 @@ class TestTemporalContradictionCandidates:
         from janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
-            "id_a": "a1", "text_a": "Quaid has a cat pet",
-            "id_b": "b1", "text_b": "Quaid does not have a cat",
+            "id_a": "a1", "text_a": "Solomon has a cat pet",
+            "id_b": "b1", "text_b": "Solomon does not have a cat",
             "similarity": 0.75,
         }]
 
@@ -574,8 +574,8 @@ class TestTemporalContradictionCandidates:
         from janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
-            "id_a": "a1", "text_a": "Quaid eats meat regularly",
-            "id_b": "b1", "text_b": "Quaid does not eat meat",
+            "id_a": "a1", "text_a": "Solomon eats meat regularly",
+            "id_b": "b1", "text_b": "Solomon does not eat meat",
             "created_a": "2025-01-01T10:00:00", "created_b": "2025-06-01T10:00:00",
             "similarity": 0.75,
         }]

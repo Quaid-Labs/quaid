@@ -170,6 +170,33 @@ def get_api_key(env_var_name: str = None) -> str:
                     _api_key_cache = key
                     return key
 
+    # Keychain fallback (Anthropic only, macOS only)
+    if env_var_name == "ANTHROPIC_API_KEY":
+        try:
+            result = subprocess.run(
+                ["security", "find-generic-password", "-a", "alfie", "-s", "anthropic-api-key", "-w"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                _api_key_failed = True
+                _api_key_failed_at = time.time()
+                raise RuntimeError(f"Keychain lookup failed (exit {result.returncode}): {result.stderr.strip()}")
+            key = result.stdout.strip()
+            if not key:
+                _api_key_failed = True
+                _api_key_failed_at = time.time()
+                raise RuntimeError("Keychain returned empty API key")
+            _api_key_cache = key
+            return key
+        except subprocess.TimeoutExpired:
+            _api_key_failed = True
+            _api_key_failed_at = time.time()
+            raise RuntimeError("Keychain lookup timed out")
+        except FileNotFoundError:
+            _api_key_failed = True
+            _api_key_failed_at = time.time()
+            raise RuntimeError("'security' command not found (not on macOS?)")
+
     _api_key_failed = True
     _api_key_failed_at = time.time()
     raise RuntimeError(f"API key not found: set {env_var_name} env var or add it to .env file")

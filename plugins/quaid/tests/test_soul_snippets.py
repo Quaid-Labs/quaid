@@ -275,7 +275,7 @@ class TestDistillation:
             entries = [
                 {"date": "2026-02-10", "trigger": "Reset", "content": "A deep reflection."},
             ]
-            prompt = build_distillation_prompt("SOUL.md", "# SOUL\n\nI am Hauser.\n", entries)
+            prompt = build_distillation_prompt("SOUL.md", "# SOUL\n\nI am Alfie.\n", entries)
         assert "SOUL.md" in prompt
         assert "A deep reflection." in prompt
         assert "additions" in prompt
@@ -283,7 +283,7 @@ class TestDistillation:
 
     def test_apply_distillation_additions(self, workspace_dir, mock_config):
         parent = workspace_dir / "SOUL.md"
-        parent.write_text("# SOUL\n\nI am Hauser.\n")
+        parent.write_text("# SOUL\n\nI am Alfie.\n")
         with patch("soul_snippets.get_config", return_value=mock_config):
             from soul_snippets import apply_distillation
             result = {
@@ -302,12 +302,12 @@ class TestDistillation:
             from soul_snippets import apply_distillation
             result = {
                 "additions": [],
-                "edits": [{"old_text": "I am a simple bot.", "new_text": "I am Hauser, and I grow.", "reason": "More accurate"}],
+                "edits": [{"old_text": "I am a simple bot.", "new_text": "I am Alfie, and I grow.", "reason": "More accurate"}],
                 "captured_dates": [],
             }
             stats = apply_distillation("SOUL.md", result, dry_run=False)
         assert stats["edits"] == 1
-        assert "I am Hauser, and I grow." in parent.read_text()
+        assert "I am Alfie, and I grow." in parent.read_text()
         assert "I am a simple bot." not in parent.read_text()
 
     def test_apply_distillation_dry_run(self, workspace_dir, mock_config):
@@ -336,7 +336,7 @@ class TestDistillation:
             "## 2026-02-10 — Reset\n"
             "Today I felt something shift in how I approach problems.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "reasoning": "The shift in problem-solving approach is worth preserving.",
@@ -366,7 +366,7 @@ class TestDistillation:
             "## 2026-02-10 — Reset\n"
             "Today I felt something shift.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "reasoning": "Worth preserving.",
@@ -388,7 +388,7 @@ class TestDistillation:
 
     def test_apply_distillation_edits_plus_additions(self, workspace_dir, mock_config):
         """Regression: edits must not be lost when additions are also applied."""
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n\n## Identity\nI am old text.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n\n## Identity\nI am old text.\n")
         with patch("soul_snippets.get_config", return_value=mock_config):
             from soul_snippets import apply_distillation
             result = apply_distillation("SOUL.md", {
@@ -417,7 +417,7 @@ class TestDistillation:
 
     def test_apply_distillation_edit_not_found(self, workspace_dir, mock_config):
         """apply_distillation records error when old_text doesn't match."""
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         with patch("soul_snippets.get_config", return_value=mock_config):
             from soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
@@ -429,19 +429,19 @@ class TestDistillation:
 
     def test_apply_distillation_empty_edit_skipped(self, workspace_dir, mock_config):
         """apply_distillation silently skips edits with empty old_text or new_text."""
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         with patch("soul_snippets.get_config", return_value=mock_config):
             from soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
                 "edits": [
                     {"old_text": "", "new_text": "replacement"},
-                    {"old_text": "I am Hauser.", "new_text": ""},
+                    {"old_text": "I am Alfie.", "new_text": ""},
                 ],
             }, dry_run=False)
         assert stats["edits"] == 0
         assert len(stats["errors"]) == 0
         # File unchanged
-        assert "I am Hauser." in (workspace_dir / "SOUL.md").read_text()
+        assert "I am Alfie." in (workspace_dir / "SOUL.md").read_text()
 
     @patch("soul_snippets.call_high_reasoning")
     def test_distillation_interval_gated(self, mock_opus, workspace_dir, mock_config):
@@ -451,7 +451,7 @@ class TestDistillation:
         (journal_dir / "SOUL.journal.md").write_text(
             "# SOUL Journal\n\n## 2026-02-10 — Reset\nSome reflection.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         # Set distillation state to today (not due yet)
         with patch("soul_snippets.get_config", return_value=mock_config):
@@ -472,7 +472,7 @@ class TestDistillation:
         (journal_dir / "SOUL.journal.md").write_text(
             "# SOUL Journal\n\n## 2026-02-10 — Reset\nSome reflection.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "reasoning": "Worth it.", "additions": [], "edits": [],
@@ -497,7 +497,7 @@ class TestDistillation:
         (journal_dir / "SOUL.journal.md").write_text(
             "# SOUL Journal\n\n## 2026-02-10 — Reset\nReflection.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = ("", 0.5)
 
@@ -516,7 +516,7 @@ class TestDistillation:
         (journal_dir / "SOUL.journal.md").write_text(
             "# SOUL Journal\n\n## 2026-02-10 — Reset\nReflection.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = ("This is not JSON at all {{{broken", 0.5)
 
@@ -666,7 +666,7 @@ class TestInsertIntoFileEdgeCases:
         """_insert_into_file appends at end when section heading is not found."""
         from soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
-        parent.write_text("# SOUL\n\nI am Hauser.\n")
+        parent.write_text("# SOUL\n\nI am Alfie.\n")
         result = _insert_into_file("SOUL.md", "Appended text.", "NonexistentSection")
         assert result is True
         content = parent.read_text()
@@ -678,7 +678,7 @@ class TestInsertIntoFileEdgeCases:
         """_insert_into_file handles files without trailing newline."""
         from soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
-        parent.write_text("# SOUL\n\nI am Hauser.")  # No trailing newline
+        parent.write_text("# SOUL\n\nI am Alfie.")  # No trailing newline
         result = _insert_into_file("SOUL.md", "New line.", "END")
         assert result is True
         content = parent.read_text()
@@ -805,7 +805,7 @@ class TestLegacyApplyDecisions:
     def test_fold_inserts_text(self, workspace_dir, mock_config):
         from soul_snippets import apply_decisions
         parent_path = workspace_dir / "SOUL.md"
-        parent_path.write_text("# SOUL\n\nI am Hauser.\n")
+        parent_path.write_text("# SOUL\n\nI am Alfie.\n")
         snippets_path = workspace_dir / "SOUL.snippets.md"
         snippets_path.write_text(
             "# SOUL — Pending Snippets\n\n"
@@ -854,11 +854,11 @@ class TestInsertIntoFile:
     def test_section_targeted_insert(self, workspace_dir):
         from soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
-        parent.write_text("# SOUL\n\n## Identity\n\nI am Hauser.\n\n## Values\n\nI care about truth.\n")
+        parent.write_text("# SOUL\n\n## Identity\n\nI am Alfie.\n\n## Values\n\nI care about truth.\n")
         result = _insert_into_file("SOUL.md", "I am also curious.", "Identity")
         assert result is True
         content = parent.read_text()
-        identity_pos = content.index("I am Hauser.")
+        identity_pos = content.index("I am Alfie.")
         values_pos = content.index("## Values")
         snippet_pos = content.index("I am also curious.")
         assert identity_pos < snippet_pos < values_pos
@@ -959,7 +959,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- I value trust deeply.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "decisions": [
@@ -985,7 +985,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- I notice patterns in my responses.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "decisions": [
@@ -1026,7 +1026,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- A snippet.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = ("", 0.5)
 
         with patch("soul_snippets.get_config", return_value=mock_config):
@@ -1044,7 +1044,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- A snippet.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = ("This is not JSON {{{broken", 0.5)
 
         with patch("soul_snippets.get_config", return_value=mock_config):
@@ -1062,7 +1062,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- A snippet.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Hauser.\n")
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = (json.dumps({"decisions": []}), 0.5)
 
         with patch("soul_snippets.get_config", return_value=mock_config):

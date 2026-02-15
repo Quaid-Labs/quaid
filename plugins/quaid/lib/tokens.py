@@ -55,8 +55,8 @@ def texts_are_near_identical(a: str, b: str) -> bool:
     """Check if two texts are near-identical strings (not just similar embeddings).
 
     Catches two embedding blind spots:
-    1. Different proper nouns in identical structure ("sister is Melina" vs
-       "sister is Lori") -- caught by word-set comparison.
+    1. Different proper nouns in identical structure ("sister is Amber" vs
+       "sister is Shannon") -- caught by word-set comparison.
     2. Word order reversals that change meaning ("A gave B ring" vs "B gave A
        ring") -- caught by word-order comparison.
 
@@ -86,7 +86,7 @@ def texts_are_near_identical(a: str, b: str) -> bool:
         return True
 
     # If content words are reordered, check if the entity positions changed.
-    # "User gave Melina ring" vs "Melina gave User ring" -- proper nouns swapped.
+    # "Solomon gave Yuni ring" vs "Yuni gave Solomon ring" -- proper nouns swapped.
     # Find words that appear in both but at different relative positions.
     if len(content_a) == len(content_b) and set(content_a) == set(content_b):
         # Same content words, different order -- check if proper nouns moved

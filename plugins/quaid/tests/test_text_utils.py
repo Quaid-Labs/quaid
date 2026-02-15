@@ -15,26 +15,26 @@ class TestTextsAreNearIdentical:
 
     def test_identical_strings(self):
         assert texts_are_near_identical(
-            "Quaid likes coffee",
-            "Quaid likes coffee"
+            "Solomon likes coffee",
+            "Solomon likes coffee"
         ) is True
 
     def test_punctuation_only_difference(self):
         assert texts_are_near_identical(
-            "Quaid likes coffee.",
-            "Quaid likes coffee"
+            "Solomon likes coffee.",
+            "Solomon likes coffee"
         ) is True
 
     def test_different_proper_noun(self):
         assert texts_are_near_identical(
-            "Quaid's sister is Amber",
-            "Quaid's sister is Melina"
+            "Solomon's sister is Amber",
+            "Solomon's sister is Shannon"
         ) is False
 
     def test_subject_object_swap(self):
         assert texts_are_near_identical(
-            "Quaid gave Lori a ring",
-            "Lori gave Quaid a ring"
+            "Solomon gave Yuni a ring",
+            "Yuni gave Solomon a ring"
         ) is False
 
     def test_trivial_word_difference(self):
@@ -48,14 +48,14 @@ class TestTextsAreNearIdentical:
 
     def test_completely_different(self):
         assert texts_are_near_identical(
-            "Quaid likes coffee",
+            "Solomon likes coffee",
             "The weather is tropical"
         ) is False
 
     def test_different_number(self):
         assert texts_are_near_identical(
-            "Quaid is 35",
-            "Quaid is 36"
+            "Solomon is 35",
+            "Solomon is 36"
         ) is False
 
 
@@ -63,8 +63,8 @@ class TestExtractKeyTokens:
     """Basic tests for extract_key_tokens()."""
 
     def test_extracts_meaningful_words(self):
-        tokens = extract_key_tokens("Quaid likes coffee in the morning")
-        assert "default" in tokens
+        tokens = extract_key_tokens("Solomon likes coffee in the morning")
+        assert "solomon" in tokens
         assert "coffee" in tokens
         assert "morning" in tokens
 

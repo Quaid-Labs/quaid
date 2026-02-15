@@ -143,14 +143,14 @@ describe('Session Isolation', () => {
       
       // Build knowledge across sessions
       process.env.TEST_SESSION_ID = session1
-      await memory.store('Quaid likes coffee', 'testuser')
+      await memory.store('Solomon likes coffee', 'testuser')
       
       process.env.TEST_SESSION_ID = session2
       const coffeeResults = await memory.search('coffee', 'testuser')
       expect(coffeeResults.length).toBeGreaterThanOrEqual(1)
       
       // Add related memory in session 2
-      await memory.store('Quaid drinks espresso daily', 'testuser')
+      await memory.store('Solomon drinks espresso daily', 'testuser')
       
       process.env.TEST_SESSION_ID = session3
       const espressoResults = await memory.search('espresso', 'testuser')

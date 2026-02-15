@@ -63,7 +63,7 @@ class TestContentHash:
 
     def test_different_texts_different_hashes(self):
         from memory_graph import _content_hash
-        assert _content_hash("default likes coffee") != _content_hash("default likes tea")
+        assert _content_hash("solomon likes coffee") != _content_hash("solomon likes tea")
 
     def test_returns_sha256_hex(self):
         from memory_graph import _content_hash
@@ -83,24 +83,24 @@ class TestContentHashOnInsert:
         from memory_graph import Node, _content_hash
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Quaid likes coffee", owner_id="default")
+            node = Node.create(type="Fact", name="Solomon likes coffee", owner_id="solomon")
             graph.add_node(node)
             retrieved = graph.get_node(node.id)
             assert retrieved.content_hash is not None
-            assert retrieved.content_hash == _content_hash("Quaid likes coffee")
+            assert retrieved.content_hash == _content_hash("Solomon likes coffee")
 
     def test_update_node_sets_content_hash(self, tmp_path):
         from memory_graph import Node, _content_hash
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Quaid likes coffee", owner_id="default")
+            node = Node.create(type="Fact", name="Solomon likes coffee", owner_id="solomon")
             graph.add_node(node)
             # Update with new name
-            node.name = "Quaid loves espresso"
+            node.name = "Solomon loves espresso"
             node.content_hash = None  # Force recompute
             graph.update_node(node)
             retrieved = graph.get_node(node.id)
-            assert retrieved.content_hash == _content_hash("Quaid loves espresso")
+            assert retrieved.content_hash == _content_hash("Solomon loves espresso")
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +119,10 @@ class TestContentHashDedup:
                 graph = MemoryGraph(db_path=db_file)
                 mock_get.return_value = graph
                 # Store first
-                r1 = store("Quaid enjoys espresso coffee", owner_id="default", status="approved")
+                r1 = store("Solomon enjoys espresso coffee", owner_id="solomon", status="approved")
                 assert r1["status"] == "created"
                 # Store exact same text — should be caught by hash
-                r2 = store("Quaid enjoys espresso coffee", owner_id="default", status="approved")
+                r2 = store("Solomon enjoys espresso coffee", owner_id="solomon", status="approved")
                 assert r2["status"] == "duplicate"
                 assert r2["similarity"] == 1.0
 
@@ -134,9 +134,9 @@ class TestContentHashDedup:
             with patch("memory_graph.get_graph") as mock_get:
                 graph = MemoryGraph(db_path=db_file)
                 mock_get.return_value = graph
-                r1 = store("Quaid enjoys espresso coffee", owner_id="default", status="approved")
+                r1 = store("Solomon enjoys espresso coffee", owner_id="solomon", status="approved")
                 assert r1["status"] == "created"
-                r2 = store("default enjoys espresso coffee", owner_id="default", status="approved")
+                r2 = store("solomon enjoys espresso coffee", owner_id="solomon", status="approved")
                 assert r2["status"] == "duplicate"
 
 
@@ -215,8 +215,8 @@ class TestFactVersioning:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            old = Node.create(type="Fact", name="Quaid lives in Texas", owner_id="default")
-            new = Node.create(type="Fact", name="Quaid lives on Mars", owner_id="default")
+            old = Node.create(type="Fact", name="Solomon lives in Texas", owner_id="solomon")
+            new = Node.create(type="Fact", name="Solomon lives in Bali", owner_id="solomon")
             graph.add_node(old)
             graph.add_node(new)
 
@@ -232,14 +232,14 @@ class TestFactVersioning:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            old = Node.create(type="Fact", name="Quaid lives in Texas state", owner_id="default", status="approved")
-            new = Node.create(type="Fact", name="Quaid lives on Mars Indonesia", owner_id="default", status="approved")
+            old = Node.create(type="Fact", name="Solomon lives in Texas state", owner_id="solomon", status="approved")
+            new = Node.create(type="Fact", name="Solomon lives in Bali Indonesia", owner_id="solomon", status="approved")
             graph.add_node(old)
             graph.add_node(new)
             graph.supersede_node(old.id, new.id)
 
             # FTS search should not return superseded node
-            results = graph.search_fts("Quaid lives", limit=10)
+            results = graph.search_fts("Solomon lives", limit=10)
             result_ids = [n.id for n, _ in results]
             assert old.id not in result_ids
             assert new.id in result_ids
@@ -248,7 +248,7 @@ class TestFactVersioning:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Quaid likes coffee", owner_id="default")
+            node = Node.create(type="Fact", name="Solomon likes coffee", owner_id="solomon")
             graph.add_node(node)
             history = graph.get_fact_history(node.id)
             assert len(history) == 1
@@ -258,9 +258,9 @@ class TestFactVersioning:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            v1 = Node.create(type="Fact", name="Quaid lives in Austin", owner_id="default")
-            v2 = Node.create(type="Fact", name="Quaid lives on Mars", owner_id="default")
-            v3 = Node.create(type="Fact", name="Quaid lives in Ubud Mars", owner_id="default")
+            v1 = Node.create(type="Fact", name="Solomon lives in Austin", owner_id="solomon")
+            v2 = Node.create(type="Fact", name="Solomon lives in Bali", owner_id="solomon")
+            v3 = Node.create(type="Fact", name="Solomon lives in Ubud Bali", owner_id="solomon")
             graph.add_node(v1)
             graph.add_node(v2)
             graph.add_node(v3)
@@ -278,9 +278,9 @@ class TestFactVersioning:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            old = Node.create(type="Fact", name="Quaid lives in Texas", owner_id="default")
-            new1 = Node.create(type="Fact", name="Quaid lives on Mars", owner_id="default")
-            new2 = Node.create(type="Fact", name="Quaid lives in Japan", owner_id="default")
+            old = Node.create(type="Fact", name="Solomon lives in Texas", owner_id="solomon")
+            new1 = Node.create(type="Fact", name="Solomon lives in Bali", owner_id="solomon")
+            new2 = Node.create(type="Fact", name="Solomon lives in Japan", owner_id="solomon")
             graph.add_node(old)
             graph.add_node(new1)
             graph.add_node(new2)
@@ -322,9 +322,9 @@ class TestHealthMetrics:
         from memory_graph import Node, Edge
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            n1 = Node.create(type="Fact", name="Quaid likes coffee drinks", owner_id="default", status="approved")
-            n2 = Node.create(type="Fact", name="Quaid lives on Mars Indonesia", owner_id="default", status="approved")
-            n3 = Node.create(type="Fact", name="Lori is Quaid wife partner", owner_id="default", status="pending")
+            n1 = Node.create(type="Fact", name="Solomon likes coffee drinks", owner_id="solomon", status="approved")
+            n2 = Node.create(type="Fact", name="Solomon lives in Bali Indonesia", owner_id="solomon", status="approved")
+            n3 = Node.create(type="Fact", name="Yuni is Solomon wife partner", owner_id="solomon", status="pending")
             graph.add_node(n1)
             graph.add_node(n2)
             graph.add_node(n3)
@@ -345,8 +345,8 @@ class TestHealthMetrics:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            old = Node.create(type="Fact", name="Quaid lives in Texas state", owner_id="default")
-            new = Node.create(type="Fact", name="Quaid lives on Mars Indonesia", owner_id="default")
+            old = Node.create(type="Fact", name="Solomon lives in Texas state", owner_id="solomon")
+            new = Node.create(type="Fact", name="Solomon lives in Bali Indonesia", owner_id="solomon")
             graph.add_node(old)
             graph.add_node(new)
             graph.supersede_node(old.id, new.id)
@@ -357,7 +357,7 @@ class TestHealthMetrics:
         from memory_graph import Node
         with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
-            node = Node.create(type="Fact", name="Quaid likes coffee espresso", owner_id="default")
+            node = Node.create(type="Fact", name="Solomon likes coffee espresso", owner_id="solomon")
             graph.add_node(node)
             metrics = graph.get_health_metrics()
             # Node was just created, so it should be in 0-7d bucket
