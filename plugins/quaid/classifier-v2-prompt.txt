@@ -1,15 +1,15 @@
 Extract memorable facts from this message for a personal knowledge base.
 
 ${isAssistantMessage ? 
-  `Speaker: Alfie (assistant)
+  `Speaker: Assistant (assistant)
 Message: "${text.slice(0, 500)}"
 
 CRITICAL ATTRIBUTION RULES:
-- Extract facts ABOUT the user (Solomon), NOT about the assistant
-- "Your dogs are..." → "Solomon's dogs are..."
-- "Your email is..." → "Solomon's email is..."  
-- "You prefer..." → "Solomon prefers..."
-- NEVER capture: "Alfie says...", "Alfie thinks...", "Alfie will..."
+- Extract facts ABOUT the user (User), NOT about the assistant
+- "Your dogs are..." → "User's dogs are..."
+- "Your email is..." → "User's email is..."  
+- "You prefer..." → "User prefers..."
+- NEVER capture: "Assistant says...", "Assistant thinks...", "Assistant will..."
 - NEVER capture: Assistant opinions, system status, or implementation details
 - ONLY capture: User facts revealed through assistant responses` :
   `Speaker: ${speaker}
@@ -25,18 +25,18 @@ CAPTURE ONLY these fact types:
 
 DO NOT CAPTURE:
 - Greetings, acknowledgments, pleasantries
-- Meta-conversation about Alfie's systems
+- Meta-conversation about Assistant's systems
 - Technical implementation details  
-- Commands/instructions TO Alfie ("Alfie should...", "Alfie needs to...")
+- Commands/instructions TO Assistant ("Assistant should...", "Assistant needs to...")
 - Temporary task status ("working on", "about to", "planning to")
 - Questions without clear answers
 - General knowledge facts not personal to the user
 
 EXAMPLE GOOD vs BAD:
-✅ GOOD: "Solomon's favorite board game is Nemesis"  
-❌ BAD: "Alfie's memory system works perfectly"
-❌ BAD: "Alfie needs to contact his accountant"  
-❌ BAD: "Alfie was about to fix the code issue"
+✅ GOOD: "User's favorite board game is Nemesis"  
+❌ BAD: "Assistant's memory system works perfectly"
+❌ BAD: "Assistant needs to contact his accountant"  
+❌ BAD: "Assistant was about to fix the code issue"
 
 Extract facts as SPECIFIC statements in THIRD PERSON using "${actualSubject}" as subject.
 

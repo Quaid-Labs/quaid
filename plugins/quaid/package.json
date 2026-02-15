@@ -12,7 +12,7 @@
     "sqlite",
     "ollama"
   ],
-  "author": "Alfie",
+  "author": "Assistant",
   "license": "MIT",
   "scripts": {
     "test": "node test-runner.js",

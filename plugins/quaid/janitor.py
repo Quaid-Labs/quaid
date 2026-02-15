@@ -62,7 +62,7 @@ from notify import notify_janitor_summary, notify_daily_memories
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
-WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "~/<username>/clawd"))
+WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
 
 # Load config values (with fallbacks for safety)
 def _get_config_value(getter, default):
@@ -94,7 +94,7 @@ def _owner_display_name() -> str:
             return identity.person_node_name.split()[0]  # First name only
     except Exception:
         pass
-    return "Solomon"
+    return "User"
 
 
 def _owner_full_name() -> str:
@@ -106,7 +106,7 @@ def _owner_full_name() -> str:
             return identity.person_node_name
     except Exception:
         pass
-    return "Solomon Steadman"
+    return "Default User"
 
 # Stopwords — imported from shared lib (kept as alias for backward compat)
 _STOPWORDS = _LIB_STOPWORDS
@@ -117,7 +117,7 @@ def _default_owner_id() -> str:
     try:
         return _cfg.users.default_owner
     except Exception:
-        return "solomon"
+        return "default"
 
 
 def _merge_nodes_into(
@@ -134,7 +134,7 @@ def _merge_nodes_into(
     2. Sums confirmation_count from originals
     3. Uses status="active" (not "approved")
     4. Migrates edges to the merged node (not deleted)
-    5. Uses config-based owner_id (not hardcoded "solomon")
+    5. Uses config-based owner_id (not hardcoded "default")
     """
     if dry_run:
         return None
@@ -1104,7 +1104,7 @@ _SEED_RELATIONS = [
 
 # Inverse map: when Opus returns one of these, FLIP subject/object and use the canonical form.
 # Use for relations where the direction is REVERSED from canonical.
-# child_of(Solomon, Wendy) → parent_of(Wendy, Solomon) — child becomes object
+# child_of(User, Wendy) → parent_of(Wendy, User) — child becomes object
 _INVERSE_MAP = {
     "child_of": "parent_of",
     "son_of": "parent_of",
@@ -1112,9 +1112,9 @@ _INVERSE_MAP = {
     "owned_by": "owns",
     "managed_by": "manages",
     "founded_by": "founded",
-    "employs": "works_at",     # employs(Facebook, Solomon) → works_at(Solomon, Facebook)
+    "employs": "works_at",     # employs(Facebook, User) → works_at(User, Facebook)
     "employed_by": "works_at",
-    "pet_of": "has_pet",       # pet_of(Madu, Solomon) → has_pet(Solomon, Madu)
+    "pet_of": "has_pet",       # pet_of(Madu, User) → has_pet(User, Madu)
     "led_to": "caused_by",     # led_to(A, B) → caused_by(B, A) — A led to B
     "caused": "caused_by",     # caused(A, B) → caused_by(B, A) — A caused B
     "resulted_in": "caused_by",  # resulted_in(A, B) → caused_by(B, A)
@@ -1122,7 +1122,7 @@ _INVERSE_MAP = {
 }
 
 # Synonym map: rename to canonical form WITHOUT flipping subject/object.
-# mother_of(Wendy, Solomon) → parent_of(Wendy, Solomon) — same direction
+# mother_of(Wendy, User) → parent_of(Wendy, User) — same direction
 _SYNONYM_MAP = {
     "mother_of": "parent_of",
     "father_of": "parent_of",
@@ -1211,7 +1211,7 @@ def _resolve_entity_node(graph: MemoryGraph, name: str, node_type: str,
     if node:
         return node.id
 
-    # 2. Exact name match any type (e.g., "Solomon" might be stored as "Solomon Steadman")
+    # 2. Exact name match any type (e.g., "User" might be stored as "Default User")
     node = graph.find_node_by_name(name)
     if node and node.type in ("Person", "Place", "Concept", "Organization"):
         return node.id
@@ -1284,13 +1284,13 @@ EXISTING relation types (use one of these whenever possible):
 {relations_list}
 
 DIRECTION RULES — follow these strictly:
-- For family: the PARENT is always the subject. "Solomon is Wendy's son" → subject=Wendy, relation=parent_of, object=Solomon
-- For ownership/management: the OWNER/MANAGER is the subject. "The car is owned by Solomon" → subject=Solomon, relation=owns, object=car
-- For work: the PERSON is the subject, ORGANIZATION is the object. "Solomon works at Facebook" → subject=Solomon, relation=works_at, object=Facebook
+- For family: the PARENT is always the subject. "User is Wendy's son" → subject=Wendy, relation=parent_of, object=User
+- For ownership/management: the OWNER/MANAGER is the subject. "The car is owned by User" → subject=User, relation=owns, object=car
+- For work: the PERSON is the subject, ORGANIZATION is the object. "User works at Facebook" → subject=User, relation=works_at, object=Facebook
 - For symmetric relations (spouse_of, sibling_of, friend_of, etc.): put entity names in alphabetical order
 - NEVER use child_of, son_of, daughter_of, mother_of, father_of — use parent_of instead
 - NEVER use owned_by, managed_by — use owns, manages instead
-- Extract only the MOST SPECIFIC relationship. "Wendy is Solomon's mother" = parent_of, NOT family_of
+- Extract only the MOST SPECIFIC relationship. "Wendy is User's mother" = parent_of, NOT family_of
 
 Only create a NEW relation type if absolutely none of the above fit. New types must be:
 - snake_case, specific and reusable
@@ -1304,10 +1304,10 @@ Use "has_edge": false if the fact has no clear relationship between two distinct
 
 Respond with a JSON array of {len(facts)} objects, one per fact in order:
 [
-  {{"fact": 1, "has_edge": true, "subject": "Solomon", "subject_type": "Person", "relation": "lives_in", "object": "Bali", "object_type": "Place"}},
+  {{"fact": 1, "has_edge": true, "subject": "User", "subject_type": "Person", "relation": "lives_in", "object": "Bali", "object_type": "Place"}},
   {{"fact": 2, "has_edge": false}},
-  {{"fact": 3, "has_edge": true, "subject": "Wendy", "subject_type": "Person", "relation": "parent_of", "object": "Solomon", "object_type": "Person"}},
-  {{"fact": 4, "has_edge": true, "subject": "Solomon", "subject_type": "Person", "relation": "mentors", "object": "Alex", "object_type": "Person", "keywords": ["mentor", "mentee", "mentoring", "coached", "guidance"]}}
+  {{"fact": 3, "has_edge": true, "subject": "Wendy", "subject_type": "Person", "relation": "parent_of", "object": "User", "object_type": "Person"}},
+  {{"fact": 4, "has_edge": true, "subject": "User", "subject_type": "Person", "relation": "mentors", "object": "Alex", "object_type": "Person", "keywords": ["mentor", "mentee", "mentoring", "coached", "guidance"]}}
 ]
 
 JSON array only:"""

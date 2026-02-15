@@ -86,7 +86,7 @@ def texts_are_near_identical(a: str, b: str) -> bool:
         return True
 
     # If content words are reordered, check if the entity positions changed.
-    # "Solomon gave Yuni ring" vs "Yuni gave Solomon ring" -- proper nouns swapped.
+    # "User gave Yuni ring" vs "Yuni gave User ring" -- proper nouns swapped.
     # Find words that appear in both but at different relative positions.
     if len(content_a) == len(content_b) and set(content_a) == set(content_b):
         # Same content words, different order -- check if proper nouns moved

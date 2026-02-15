@@ -7,7 +7,7 @@ and updates docs using git diffs or conversation transcripts as context.
 Also handles cleanup of bloated docs based on churn heuristics.
 
 Update paths:
-1. Compact/Reset: Alfie has full context → update from transcript
+1. Compact/Reset: Assistant has full context → update from transcript
 2. On-demand: Staleness detected when pulling docs → warn + offer rebuild
 3. Janitor Task 1b: Nightly cache priming from git diffs
 
@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import get_config
 from llm_clients import call_high_reasoning, call_low_reasoning
 
-WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "~/<username>/clawd"))
+WORKSPACE = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
 CHANGELOG_PATH = WORKSPACE / "logs" / "docs-update-log.json"
 CLEANUP_STATE_PATH = WORKSPACE / "logs" / "docs-cleanup-state.json"
 
@@ -868,7 +868,7 @@ def update_doc_from_transcript(
 ) -> bool:
     """Update a doc using conversation transcript as context.
 
-    Used at compact/reset when Alfie has full context about what changed.
+    Used at compact/reset when Assistant has full context about what changed.
     Returns True on success.
     """
     doc_abs = _resolve_path(doc_path)

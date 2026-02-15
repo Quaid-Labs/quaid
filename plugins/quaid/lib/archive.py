@@ -15,7 +15,7 @@ def _default_archive_path() -> Path:
         return get_archive_db_path()
     except Exception:
         import os
-        workspace = Path(os.environ.get("CLAWDBOT_WORKSPACE", "~/<username>/clawd"))
+        workspace = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
         return workspace / "data" / "memory_archive.db"
 
 
