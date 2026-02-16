@@ -3167,7 +3167,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # --- Task 8: Unit Tests (subprocess) ---
         # Only run tests in dev mode: set QUAID_DEV=1 or janitor.run_tests=true in config
         _dev_mode = os.environ.get("QUAID_DEV", "").strip() in ("1", "true", "yes")
-        _run_tests_cfg = getattr(cfg.janitor, "run_tests", False) or _dev_mode
+        _run_tests_cfg = getattr(_cfg.janitor, "run_tests", False) or _dev_mode
         if task == "tests" or (task == "all" and _run_tests_cfg):
             if not _skip_if_over_budget("Task 8: Tests", 30):
                 print("[Task 8: Unit Tests]")

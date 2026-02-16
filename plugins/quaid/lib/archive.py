@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import sys
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -93,7 +94,7 @@ def archive_node(node_dict: Dict[str, Any], reason: str,
             ))
         return True
     except Exception as e:
-        print(f"Archive error: {e}")
+        print(f"Archive error: {e}", file=sys.stderr)
         return False
 
 

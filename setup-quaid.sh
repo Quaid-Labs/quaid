@@ -219,7 +219,40 @@ check_gateway_hooks() {
     return 1
 }
 
+# --- Ollama URL resolution ---
+# Priority: OLLAMA_URL env > existing config > localhost default
+# This allows reusing a host Ollama from a VM (see RUNBOOK.md Ollama Sharing)
+_resolve_ollama_url() {
+    # 1. Environment variable (highest priority)
+    if [[ -n "${OLLAMA_URL:-}" ]]; then
+        echo "$OLLAMA_URL"
+        return
+    fi
+    # 2. Existing config file
+    if [[ -f "${CONFIG_DIR}/memory.json" ]]; then
+        local cfg_url
+        cfg_url=$(python3 -c "import json; print(json.load(open('${CONFIG_DIR}/memory.json')).get('ollama',{}).get('url',''))" 2>/dev/null || true)
+        if [[ -n "$cfg_url" ]] && [[ "$cfg_url" != "null" ]]; then
+            echo "$cfg_url"
+            return
+        fi
+    fi
+    # 3. Default
+    echo "http://localhost:11434"
+}
+
+_ollama_reachable() {
+    local url="$1"
+    curl -sf "${url}/api/tags" &>/dev/null
+}
+
+_ollama_is_local() {
+    local url="$1"
+    [[ "$url" == *"localhost"* ]] || [[ "$url" == *"127.0.0.1"* ]] || [[ "$url" == *"0.0.0.0"* ]]
+}
+
 # --- Collected config values (populated during steps) ---
+OLLAMA_RESOLVED_URL=""
 OWNER_NAME=""
 OWNER_DISPLAY=""
 PROVIDER=""
@@ -686,74 +719,102 @@ step4_embeddings() {
     echo "  so Quaid can find relevant memories by meaning, not just keywords."
     echo ""
 
-    # Check if Ollama is installed and running
+    # Resolve Ollama URL: OLLAMA_URL env > existing config > localhost
+    OLLAMA_RESOLVED_URL="$(_resolve_ollama_url)"
     local ollama_running=false
-    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        ollama_running=true
-        info "Ollama is running"
-    elif command -v ollama &>/dev/null; then
-        # Installed but not running — try to start it
-        warn "Ollama is installed but not running."
-        if confirm "Start Ollama now?"; then
-            info "Starting Ollama..."
-            ollama serve &>/dev/null &
-            sleep 2
-            if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-                ollama_running=true
-                info "Ollama started"
-            else
-                warn "Ollama didn't start in time. Trying 'brew services start ollama'..."
-                brew services start ollama 2>/dev/null || true
-                sleep 3
-                if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-                    ollama_running=true
-                    info "Ollama started via Homebrew services"
-                else
-                    warn "Could not start Ollama. You can start it manually later: ollama serve"
-                fi
-            fi
-        fi
-    else
-        # Not installed at all
-        warn "Ollama not found."
-        echo ""
-        echo "  Ollama runs embedding models locally — free, fast, and private."
-        echo "  Without it, Quaid falls back to cloud embeddings (OpenAI API)."
-        echo ""
-        if confirm "Install Ollama now?"; then
-            if command -v brew &>/dev/null; then
-                info "Installing Ollama via Homebrew..."
-                if brew install ollama 2>&1 | tail -3; then
-                    info "Ollama installed"
-                    info "Starting Ollama..."
-                    brew services start ollama 2>/dev/null || ollama serve &>/dev/null &
-                    sleep 3
-                    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-                        ollama_running=true
-                        info "Ollama is running"
-                    else
-                        warn "Ollama installed but not yet responding. It may need a moment."
-                    fi
-                else
-                    warn "Homebrew install failed. Trying direct install..."
-                fi
-            fi
 
-            if ! $ollama_running && ! command -v ollama &>/dev/null; then
-                info "Installing Ollama via official installer..."
-                curl -fsSL https://ollama.ai/install.sh | sh
+    # Check if Ollama is already reachable (local or remote)
+    if _ollama_reachable "$OLLAMA_RESOLVED_URL"; then
+        ollama_running=true
+        if _ollama_is_local "$OLLAMA_RESOLVED_URL"; then
+            info "Ollama is running (${OLLAMA_RESOLVED_URL})"
+        else
+            info "Using existing Ollama at ${OLLAMA_RESOLVED_URL}"
+            echo -e "  ${DIM}(Detected from ${OLLAMA_URL:+OLLAMA_URL env}${OLLAMA_URL:-config/memory.json})${RESET}"
+        fi
+    elif [[ "$OLLAMA_RESOLVED_URL" != "http://localhost:11434" ]]; then
+        # Non-localhost URL was configured but isn't reachable — try localhost too
+        warn "Configured Ollama at ${OLLAMA_RESOLVED_URL} is not reachable."
+        if _ollama_reachable "http://localhost:11434"; then
+            OLLAMA_RESOLVED_URL="http://localhost:11434"
+            ollama_running=true
+            info "Found Ollama running locally instead"
+        fi
+    fi
+
+    # If not running anywhere, try to start/install locally
+    if ! $ollama_running; then
+        if command -v ollama &>/dev/null; then
+            # Installed but not running — try to start it
+            warn "Ollama is installed but not running."
+            if confirm "Start Ollama now?"; then
+                info "Starting Ollama..."
+                ollama serve &>/dev/null &
                 sleep 2
-                if command -v ollama &>/dev/null; then
-                    info "Ollama installed"
-                    ollama serve &>/dev/null &
-                    sleep 3
-                    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-                        ollama_running=true
-                        info "Ollama is running"
-                    fi
+                if _ollama_reachable "http://localhost:11434"; then
+                    OLLAMA_RESOLVED_URL="http://localhost:11434"
+                    ollama_running=true
+                    info "Ollama started"
                 else
-                    warn "Ollama install may have succeeded but 'ollama' is not on PATH."
-                    echo "  Close and reopen your terminal, then re-run this installer."
+                    warn "Ollama didn't start in time. Trying 'brew services start ollama'..."
+                    brew services start ollama 2>/dev/null || true
+                    sleep 3
+                    if _ollama_reachable "http://localhost:11434"; then
+                        OLLAMA_RESOLVED_URL="http://localhost:11434"
+                        ollama_running=true
+                        info "Ollama started via Homebrew services"
+                    else
+                        warn "Could not start Ollama. You can start it manually later: ollama serve"
+                    fi
+                fi
+            fi
+        else
+            # Not installed at all
+            warn "Ollama not found."
+            echo ""
+            echo "  Ollama runs embedding models locally — free, fast, and private."
+            echo "  Without it, Quaid falls back to cloud embeddings (OpenAI API)."
+            echo ""
+            echo -e "  ${DIM}If you have Ollama running on another machine, set OLLAMA_URL first:${RESET}"
+            echo -e "  ${DIM}  OLLAMA_URL=http://192.168.x.x:11434 bash setup-quaid.sh${RESET}"
+            echo ""
+            if confirm "Install Ollama locally?"; then
+                if command -v brew &>/dev/null; then
+                    info "Installing Ollama via Homebrew..."
+                    if brew install ollama 2>&1 | tail -3; then
+                        info "Ollama installed"
+                        info "Starting Ollama..."
+                        brew services start ollama 2>/dev/null || ollama serve &>/dev/null &
+                        sleep 3
+                        if _ollama_reachable "http://localhost:11434"; then
+                            OLLAMA_RESOLVED_URL="http://localhost:11434"
+                            ollama_running=true
+                            info "Ollama is running"
+                        else
+                            warn "Ollama installed but not yet responding. It may need a moment."
+                        fi
+                    else
+                        warn "Homebrew install failed. Trying direct install..."
+                    fi
+                fi
+
+                if ! $ollama_running && ! command -v ollama &>/dev/null; then
+                    info "Installing Ollama via official installer..."
+                    curl -fsSL https://ollama.ai/install.sh | sh
+                    sleep 2
+                    if command -v ollama &>/dev/null; then
+                        info "Ollama installed"
+                        ollama serve &>/dev/null &
+                        sleep 3
+                        if _ollama_reachable "http://localhost:11434"; then
+                            OLLAMA_RESOLVED_URL="http://localhost:11434"
+                            ollama_running=true
+                            info "Ollama is running"
+                        fi
+                    else
+                        warn "Ollama install may have succeeded but 'ollama' is not on PATH."
+                        echo "  Close and reopen your terminal, then re-run this installer."
+                    fi
                 fi
             fi
         fi
@@ -852,7 +913,7 @@ step4_embeddings() {
         esac
 
         # Check if model is already pulled, if not pull it
-        if curl -sf http://localhost:11434/api/tags | python3 -c "
+        if curl -sf "${OLLAMA_RESOLVED_URL}/api/tags" | python3 -c "
 import sys, json
 tags = json.load(sys.stdin).get('models', [])
 names = [m.get('name','') for m in tags]
@@ -861,12 +922,17 @@ exit(0 if any(model in n for n in names) else 1)
 " 2>/dev/null; then
             info "${EMBED_MODEL} already available"
         else
-            echo ""
-            info "Downloading ${EMBED_MODEL}... (this may take a few minutes)"
-            if ollama pull "$EMBED_MODEL"; then
-                info "${EMBED_MODEL} ready"
+            if _ollama_is_local "$OLLAMA_RESOLVED_URL"; then
+                echo ""
+                info "Downloading ${EMBED_MODEL}... (this may take a few minutes)"
+                if ollama pull "$EMBED_MODEL"; then
+                    info "${EMBED_MODEL} ready"
+                else
+                    warn "Download failed. Run 'ollama pull ${EMBED_MODEL}' manually before using memory."
+                fi
             else
-                warn "Download failed. Run 'ollama pull ${EMBED_MODEL}' manually before using memory."
+                warn "${EMBED_MODEL} not found on remote Ollama at ${OLLAMA_RESOLVED_URL}"
+                echo "  Pull it on the host machine: ollama pull ${EMBED_MODEL}"
             fi
         fi
     else
@@ -1295,7 +1361,7 @@ _write_config() {
     "walMode": true
   },
   "ollama": {
-    "url": "http://localhost:11434",
+    "url": "${OLLAMA_RESOLVED_URL}",
     "embeddingModel": "${EMBED_MODEL}",
     "embeddingDim": ${EMBED_DIM}
   },
@@ -1427,8 +1493,8 @@ conn.close()
     fi
 
     # Check embeddings
-    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        echo -e "  ${GREEN}✓${RESET} Embeddings   — OK (${EMBED_MODEL}, dim=${EMBED_DIM})"
+    if _ollama_reachable "$OLLAMA_RESOLVED_URL"; then
+        echo -e "  ${GREEN}✓${RESET} Embeddings   — OK (${EMBED_MODEL}, dim=${EMBED_DIM} via ${OLLAMA_RESOLVED_URL})"
     else
         if [[ "$EMBED_MODEL" == "text-embedding-3-small" ]]; then
             echo -e "  ${YELLOW}~${RESET} Embeddings   — Cloud (${EMBED_MODEL}, requires API key)"

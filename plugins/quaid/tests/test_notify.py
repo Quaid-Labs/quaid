@@ -119,7 +119,8 @@ class TestNotifyMemoryRecall:
             assert "Graph Discoveries" in msg
             assert "Direct Matches" not in msg
 
-    def test_long_text_truncated(self):
+    @patch("notify._notify_full_text", return_value=False)
+    def test_long_text_truncated(self, _mock_ft):
         """Memory text longer than 120 chars is truncated."""
         long_text = "A" * 200
         memories = [{"text": long_text, "similarity": 90, "via": "vector"}]
@@ -252,7 +253,8 @@ class TestNotifyMemoryExtraction:
             msg = mock_send.call_args[0][0]
             assert "Wendy parent_of Solomon" in msg
 
-    def test_long_detail_text_truncated(self):
+    @patch("notify._notify_full_text", return_value=False)
+    def test_long_detail_text_truncated(self, _mock_ft):
         """Fact text in details is truncated at 80 chars."""
         details = [
             {"text": "X" * 100, "status": "stored"},
@@ -388,7 +390,8 @@ class TestNotifyDocUpdate:
             msg = mock_send.call_args[0][0]
             assert "Added new section" in msg
 
-    def test_summary_truncated(self):
+    @patch("notify._notify_full_text", return_value=False)
+    def test_summary_truncated(self, _mock_ft):
         """Long summary is truncated to 200 chars."""
         long_summary = "A" * 300
         with _patch_notify_user() as mock_send:

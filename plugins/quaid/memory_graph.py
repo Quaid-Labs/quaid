@@ -1737,7 +1737,7 @@ def _store_edge_keywords(relation: str, keywords: List[str], description: str = 
             _invalidate_edge_keywords_cache()
             return True
         except Exception as e:
-            print(f"[edge_keywords] Failed to store keywords for {relation}: {e}")
+            print(f"[edge_keywords] Failed to store keywords for {relation}: {e}", file=sys.stderr)
             return False
 
 
@@ -1778,7 +1778,7 @@ Example output: ["keyword1", "keyword2", "keyword3"]"""
             return [str(kw).lower().strip() for kw in parsed if kw]
         return None
     except Exception as e:
-        print(f"[edge_keywords] LLM generation failed for {relation}: {e}")
+        print(f"[edge_keywords] LLM generation failed for {relation}: {e}", file=sys.stderr)
         return None
 
 
@@ -1800,7 +1800,7 @@ def _ensure_keywords_for_relation(relation: str) -> bool:
     keywords = _generate_keywords_for_relation(relation)
     if keywords:
         _store_edge_keywords(relation, keywords, f"Auto-generated for {relation}")
-        print(f"[edge_keywords] Generated keywords for '{relation}': {keywords}")
+        print(f"[edge_keywords] Generated keywords for '{relation}': {keywords}", file=sys.stderr)
         return True
 
     return False

@@ -331,7 +331,7 @@ class DocsRAG:
         """
         query_embedding = _lib_get_embedding(query)
         if not query_embedding:
-            print("Failed to get embedding for query")
+            print("Failed to get embedding for query", file=sys.stderr)
             return []
 
         # Build project filter — use SQL-level filtering to avoid full scan

@@ -68,6 +68,9 @@ def setup_env(tmp_path, monkeypatch):
 
     yield tmp_path
 
+    # Reset config cache so it doesn't pollute subsequent test files
+    config_mod._config = None
+
 
 def _get_registry(tmp_path=None):
     from docs_registry import DocsRegistry

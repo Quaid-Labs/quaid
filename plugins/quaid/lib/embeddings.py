@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import struct
+import sys
 import urllib.request
 import urllib.error
 from typing import List, Optional
@@ -57,7 +58,7 @@ def get_embedding(text: str) -> Optional[List[float]]:
             if embeddings:
                 return embeddings[0]
     except Exception as e:
-        print(f"Embedding error: {e}")
+        print(f"Embedding error: {e}", file=sys.stderr)
     return None
 
 

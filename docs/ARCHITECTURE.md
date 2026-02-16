@@ -1,6 +1,8 @@
 # Quaid Architecture Guide
 
-Quaid is a memory system plugin for OpenClaw-compatible AI assistants. It extracts personal facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
+Quaid is a persistent memory system for AI agents. It extracts personal facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
+
+Quaid works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw) for the deepest integration.
 
 This document is for engineers who want to understand how the system works.
 
@@ -17,29 +19,35 @@ This document is for engineers who want to understand how the system works.
 7. [Dual Learning System](#7-dual-learning-system)
 8. [Projects System](#8-projects-system)
 9. [Configuration](#9-configuration)
+10. [MCP Server](#10-mcp-server)
 
 ---
 
 ## 1. System Overview
 
-Quaid sits between the OpenClaw gateway and the AI agent. The gateway exposes lifecycle hooks (compaction, reset, agent turn) that Quaid uses to inject and extract memories transparently.
+Quaid exposes its memory system through three interfaces: an **MCP server** (works with any MCP-compatible client), a **CLI** (standalone, no gateway needed), and an **OpenClaw plugin** (deepest integration with automatic lifecycle hooks).
 
 ### High-Level Architecture
 
 ```
-                          OpenClaw Gateway
-                               |
-               +---------------+---------------+
-               |                               |
-        before_compaction                 before_agent_start
-        before_reset                      (inject recalled memories)
-               |                               |
-        +------v------+                +-------v-------+
-        |  Extraction  |                |   Retrieval   |
-        |  Pipeline    |                |   Pipeline    |
-        +--------------+                +---------------+
-               |                               |
-               +---------- SQLite DB ----------+
+     MCP Client             CLI               OpenClaw Gateway
+    (Claude Desktop,    (quaid extract,          |
+     Cursor, etc.)      quaid search, ...)   Lifecycle hooks
+          |                  |               (compaction, reset,
+          v                  v                agent turn)
+    +----------+      +----------+               |
+    |MCP Server|      | extract  |       +-------+-------+
+    | (stdio)  |      | .py CLI  |       |   index.ts    |
+    +----+-----+      +----+-----+       | (TS plugin)   |
+         |                 |             +-------+-------+
+         +--------+--------+--------------------+
+                  |
+           +------v------+           +----------+
+           |  Python API  |           | Retrieval|
+           | (api.py)     |           | Pipeline |
+           +--------------+           +----------+
+                  |                        |
+                  +------ SQLite DB -------+
                                |
                         +------v------+
                         |   Janitor   |
@@ -49,9 +57,9 @@ Quaid sits between the OpenClaw gateway and the AI agent. The gateway exposes li
 
 ### Three Main Loops
 
-**Extraction** -- Fires at context compaction or session reset. A high-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
+**Extraction** -- Triggered by context compaction, session reset, direct CLI invocation (`quaid extract`), or MCP tool call (`memory_extract`). A high-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
 
-**Retrieval** -- Fires before each agent turn. The agent's query is classified by intent, expanded via HyDE, and searched across three channels (vector, FTS5, graph). Results are fused via RRF, reranked by a low-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
+**Retrieval** -- Fires before each agent turn (OpenClaw), on `memory_recall` MCP tool call, or via `quaid search` CLI. The agent's query is classified by intent, expanded via HyDE, and searched across three channels (vector, FTS5, graph). Results are fused via RRF, reranked by a low-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
 
 **Maintenance** -- A nightly janitor pipeline reviews pending facts, deduplicates near-identical memories, resolves contradictions, decays stale memories, updates documentation, and runs structural health checks.
 
@@ -89,16 +97,17 @@ Conversation messages
 
 ### Trigger Points
 
-Extraction is triggered by two gateway hooks registered in `index.ts`:
+Extraction can be triggered from any of Quaid's three interfaces:
 
-- **`before_compaction`** -- When the agent's context is being compacted (too many tokens). The full message history is available before it gets summarized.
-- **`before_reset`** -- When a session ends or the user starts a new conversation.
+- **OpenClaw plugin** (`index.ts`): Two gateway hooks -- `before_compaction` (context being compacted) and `before_reset` (session ending). Both call `extractMemoriesFromMessages()`.
+- **MCP server** (`mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
+- **CLI** (`extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
 
-Both hooks call the same `extractMemoriesFromMessages()` function.
+All three paths converge on the same extraction logic and produce identical results.
 
 ### Extraction Steps
 
-1. **Message collection** -- The gateway provides the full message array. Any queued memory notes (from the `memory_note` tool) are prepended to the transcript.
+1. **Transcript preparation** -- The input is normalized to a human-readable transcript. JSONL session files are parsed (handling both wrapped `{"type": "message", "message": {...}}` and direct `{"role": ..., "content": ...}` formats). Plain text is passed through as-is. In the OpenClaw path, queued memory notes (from the `memory_note` tool) are prepended.
 
 2. **LLM extraction** -- A single high-reasoning LLM call processes the transcript and produces:
    - **Facts**: Structured observations with name, category, confidence, speaker, knowledge_type
@@ -779,8 +788,57 @@ Quaid includes a notification system (`notify.py`) that sends status updates for
 
 ---
 
+## 10. MCP Server
+
+The MCP server (`mcp_server.py`) exposes Quaid's memory system as tools over the [Model Context Protocol](https://modelcontextprotocol.io) stdio transport. This is the primary integration path for clients that support MCP (Claude Desktop, Claude Code, Cursor, Windsurf, etc.).
+
+### Architecture
+
+```
+MCP Client (Claude Desktop, Cursor, etc.)
+    |
+    | JSON-RPC over stdio
+    |
+    v
+mcp_server.py (FastMCP)
+    |
+    +-- memory_extract  -> extract.py -> llm_clients + memory_graph
+    +-- memory_store    -> api.store()
+    +-- memory_recall   -> api.recall()
+    +-- memory_search   -> api.search()
+    +-- memory_get      -> api.get_memory()
+    +-- memory_forget   -> api.forget()
+    +-- memory_create_edge -> api.create_edge()
+    +-- memory_stats    -> api.get_graph().stats()
+    +-- docs_search     -> docs_rag.search()
+```
+
+### Tools
+
+| Tool | Purpose | API Cost |
+|------|---------|----------|
+| `memory_extract` | Full Opus-powered extraction from transcript | ~$0.05-0.20 |
+| `memory_store` | Store a single fact | Free (local embedding only) |
+| `memory_recall` | Full retrieval pipeline (HyDE + reranking) | ~$0.01 (reranker) |
+| `memory_search` | Fast keyword search (no reranking) | Free |
+| `memory_get` | Fetch a memory by ID | Free |
+| `memory_forget` | Delete a memory | Free |
+| `memory_create_edge` | Create a relationship edge | Free |
+| `memory_stats` | Database statistics | Free |
+| `docs_search` | Search project documentation via RAG | Free |
+
+### Stdout Isolation
+
+MCP uses stdout for JSON-RPC communication. The server redirects Python's `sys.stdout` to `sys.stderr` at startup to prevent stray print statements from corrupting the protocol stream. This is critical because several modules (`memory_graph.py`, `lib/embeddings.py`) print status messages during normal operation.
+
+### Owner Identity
+
+The `QUAID_OWNER` environment variable sets the owner identity for all operations. This maps to the `owner_id` field in the database, enabling multi-user setups where each user's memories are namespaced.
+
+---
+
 ## Appendix: File Reference
 
-The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). The TypeScript entry point (`index.ts` / `index.js`) registers gateway hooks and tools. Shared utilities live in `lib/`.
+The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). The TypeScript entry point (`index.ts` / `index.js`) registers OpenClaw gateway hooks and tools. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

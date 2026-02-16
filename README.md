@@ -10,15 +10,40 @@
 
 *"If I am not me, then who the hell am I?"*
 
-### Memory and project management plugin for [OpenClaw](https://github.com/openclaw/openclaw)
+### Long-term memory for AI agents
 
 > **Early alpha** — launched February 2026, active daily development.
+
+Quaid gives any AI agent persistent memory across sessions. It works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw).
 
 ---
 
 ## Install
 
-Paste this into a terminal. The guided installer walks you through setup in about two minutes.
+### Any MCP-compatible client
+
+Add Quaid as an MCP server in your client's config:
+
+```json
+{
+  "mcpServers": {
+    "quaid": {
+      "command": "python3",
+      "args": ["/path/to/quaid/plugins/quaid/mcp_server.py"],
+      "env": {
+        "QUAID_OWNER": "your-name",
+        "ANTHROPIC_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+This gives your agent 9 memory tools: `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_extract`, `memory_stats`, and `docs_search`.
+
+### OpenClaw (full integration)
+
+The guided installer sets up Quaid as an OpenClaw plugin with automatic extraction at compaction/reset, a nightly janitor pipeline, and project documentation tracking.
 
 **Mac / Linux:**
 ```bash
@@ -44,7 +69,21 @@ quaid stats     # See your memory database
 quaid config    # View current settings
 ```
 
-Quaid conserves context across restarts — when your agent compacts or resets, memories are extracted before the context is cleared. A full crash (kill -9, power loss) before compaction can cause memory loss for that session.
+### CLI
+
+The `quaid` CLI works standalone — no gateway needed:
+
+```bash
+quaid extract session.jsonl      # Extract memories from a transcript
+quaid extract transcript.txt     # Plain text works too
+quaid store "User likes Python"  # Store a single fact
+quaid search "hobbies"           # Full recall pipeline
+quaid find "Python"              # Quick keyword search
+quaid get <id>                   # Fetch a memory by ID
+quaid forget "old preference"    # Delete a memory
+quaid edge "Alice" "spouse_of" "Bob"  # Create a relationship
+quaid docs "architecture"        # Search project documentation
+```
 
 ### Uninstall
 
@@ -110,6 +149,14 @@ Quaid organizes knowledge into three areas, each with different retrieval behavi
 
 **Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where high-reasoning LLMs can curate memories economically. Reviews, deduplicates, resolves contradictions, decays stale memories, and monitors documentation health in bulk.
 
+### Three interfaces
+
+**MCP Server** — 9 tools over stdio transport. Works with any MCP-compatible client (Claude Desktop, Claude Code, Cursor, Windsurf). Includes `memory_extract` for full Opus-powered extraction from conversation transcripts.
+
+**CLI** — `quaid extract`, `quaid store`, `quaid search`, `quaid find`, `quaid forget`, `quaid edge`, `quaid docs`, and more. Works standalone — no gateway needed.
+
+**OpenClaw Plugin** — Automatic extraction at compaction/reset, memory injection before each agent turn, nightly janitor triggered by heartbeat. This is the deepest integration: Quaid hooks into the full agent lifecycle.
+
 ---
 
 ## Design Philosophy: LLM-First
@@ -138,11 +185,11 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 
 ## Requirements
 
-- [OpenClaw](https://github.com/openclaw/openclaw) gateway
 - Python 3.10+
 - SQLite 3.35+
 - [Ollama](https://ollama.ai) (for local embeddings)
 - An LLM API key (Anthropic recommended)
+- For OpenClaw integration: [OpenClaw](https://github.com/openclaw/openclaw) gateway
 
 ---
 
@@ -150,7 +197,7 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 
 Quaid is in early alpha. The recommended configuration is **Anthropic** (Claude) for reasoning + **Ollama** for local embeddings. Other providers (OpenAI-compatible APIs, OpenRouter, Together) are supported but experimental and not fully tested.
 
-The system is backed by over 1,000 unit tests (Python + TypeScript), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md) and [LongMemEval](https://github.com/xiaowu0162/LongMemEval).
+The system is backed by over 1,100 unit tests (Python + TypeScript), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md) and [LongMemEval](https://github.com/xiaowu0162/LongMemEval).
 
 We're actively testing and refining the system against benchmarks and welcome collaboration. If you're interested in contributing, testing, or just have ideas — open an issue or reach out.
 

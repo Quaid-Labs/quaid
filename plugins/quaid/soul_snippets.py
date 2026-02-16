@@ -303,6 +303,72 @@ def _archive_oldest_entries(filename: str, entries_to_archive: List[Dict[str, An
         logger.info(f"Archived {len(month_entries)} entries to {archive_path.name}")
 
 
+def write_snippet_entry(filename: str, snippets: List[str],
+                        trigger: str = "Compaction",
+                        date_str: Optional[str] = None,
+                        time_str: Optional[str] = None) -> bool:
+    """Write snippet bullet points to the appropriate .snippets.md file.
+
+    Args:
+        filename: Target core file (e.g. "SOUL.md")
+        snippets: List of bullet-point strings
+        trigger: What triggered this entry ("Compaction", "Reset", "CLI")
+        date_str: Date string (YYYY-MM-DD), defaults to today
+        time_str: Time string (HH:MM:SS), defaults to now
+
+    Returns True if written, False if skipped (dedup, empty, or disabled).
+    """
+    if not snippets:
+        return False
+
+    valid = [s.strip() for s in snippets if isinstance(s, str) and s.strip()]
+    if not valid:
+        return False
+
+    if not _is_snippets_enabled():
+        return False
+
+    target_files = _get_target_files()
+    if filename not in target_files:
+        return False
+
+    base_name = filename.removesuffix('.md')
+    snippets_path = WORKSPACE_DIR / f"{base_name}.snippets.md"
+
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    if time_str is None:
+        time_str = datetime.now().strftime("%H:%M:%S")
+
+    # Read existing content
+    existing = ""
+    if snippets_path.exists():
+        existing = snippets_path.read_text(encoding='utf-8')
+
+    # Dedup: skip if this date+trigger already exists
+    dedup_header = f"## {trigger} \u2014 {date_str}"
+    if dedup_header in existing:
+        logger.info(f"Skipping duplicate snippet section for {base_name} ({date_str})")
+        return False
+
+    # Build new section
+    header = f"## {trigger} \u2014 {date_str} {time_str}"
+    bullets = "\n".join(f"- {s}" for s in valid)
+    new_section = f"\n{header}\n{bullets}\n"
+
+    # Prepend title if file is new
+    if not existing.strip():
+        updated = f"# {base_name} — Pending Snippets\n{new_section}"
+    else:
+        # Insert after the first heading line (newest at top)
+        header_end = existing.index('\n') if '\n' in existing else len(existing)
+        updated = existing[:header_end + 1] + new_section + existing[header_end + 1:]
+
+    snippets_path.write_text(updated, encoding='utf-8')
+    logger.info(f"Wrote {len(valid)} snippets to {base_name}.snippets.md ({date_str} — {trigger})")
+    return True
+
+
 def archive_entries(filename: str, entries_to_archive: List[Dict[str, Any]]) -> None:
     """Public API for archiving entries. Removes them from active journal."""
     if not entries_to_archive:

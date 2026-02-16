@@ -6,6 +6,9 @@
 
 What ships today:
 
+- **MCP server**: 9 tools over stdio transport — works with Claude Desktop, Claude Code, Cursor, Windsurf, and any MCP-compatible client
+- **Standalone CLI**: `quaid extract`, `quaid store`, `quaid search`, `quaid find`, `quaid forget`, `quaid edge`, `quaid docs`, and more — no gateway needed
+- **Extraction as first-class interface**: Full Opus-powered extraction from any transcript via CLI (`quaid extract`) or MCP (`memory_extract`)
 - Hybrid retrieval: sqlite-vec ANN + FTS5 + graph traversal, fused with RRF
 - LLM extraction at compaction/reset (facts + edges in one pass)
 - 17-task nightly janitor (review, dedup, contradiction, decay, doc updates)
@@ -13,22 +16,9 @@ What ships today:
 - Projects system with auto-discovery and doc tracking
 - Local embeddings via Ollama
 - Multi-provider LLM support (Anthropic recommended, OpenAI-compatible experimental)
+- OpenClaw plugin integration (deepest: automatic extraction, memory injection, janitor scheduling)
 
 ## Next (v0.2)
-
-### MCP Server
-
-Expose Quaid as a [Model Context Protocol](https://modelcontextprotocol.io)
-server. This is the highest-leverage change on the roadmap: it decouples Quaid
-from OpenClaw and lets anyone with Claude Desktop, Cursor, Windsurf, or any
-MCP-compatible client store and recall memories. The core Python API (`store()`,
-`recall()`, `search()`) is already a clean interface — wrapping it in MCP tools
-is a relatively small lift that transforms Quaid from "an OpenClaw plugin" to
-"an agent memory system that works everywhere."
-- `memory_store`, `memory_recall`, `memory_search` tools
-- Stateless server, SQLite backend
-- Works with Claude Desktop, Cursor, Windsurf, etc.
-- OpenClaw plugin remains the primary integration (hooks, extraction, janitor)
 
 ### Close the Open-Domain Gap
 

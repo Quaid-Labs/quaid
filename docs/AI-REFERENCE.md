@@ -6,11 +6,11 @@ This document is designed for AI agents (Claude, GPT, etc.) working on or with t
 
 ## System Overview
 
-Quaid is a graph-based personal memory system for AI assistants. It runs as an OpenClaw plugin (TypeScript entry point, Python core) backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
+Quaid is a graph-based persistent memory system for AI agents. It works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a deep integration for [OpenClaw](https://github.com/openclaw/openclaw). Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
 
 **Architecture stack:**
-- **Frontend:** TypeScript OpenClaw plugin (index.ts / index.js) registers hooks and tools with the gateway
-- **Backend:** Python modules for graph operations, retrieval, maintenance, docs, and project tracking
+- **Interfaces:** MCP server (stdio, any MCP client), CLI (`quaid` commands), OpenClaw plugin (TypeScript hooks)
+- **Backend:** Python modules for graph operations, extraction, retrieval, maintenance, docs, and project tracking
 - **Storage:** SQLite database with WAL mode, sqlite-vec ANN index, FTS5 full-text index
 - **Embeddings:** Ollama local server (qwen3-embedding:8b, 4096 dimensions)
 - **LLM calls:** Anthropic API (Opus for high-reasoning, Haiku for low-reasoning / reranking)
@@ -47,6 +47,8 @@ Query
 | `workspace_audit.py` | Core markdown monitoring and bloat detection | `run_workspace_check()`, `check_bloat()`, Opus review of changed files |
 | `notify.py` | User notifications via gateway | `notify_user()`, `notify_memory_extraction()`, `notify_memory_recall()`, `_check_janitor_health()` |
 | `project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
+| `extract.py` | Extraction module — transcript to memories | `extract_from_transcript()`, `parse_session_jsonl()`, `build_transcript()`, `_load_extraction_prompt()`, CLI (argparse at bottom) |
+| `mcp_server.py` | MCP server — 9 memory tools over stdio | `memory_extract`, `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `docs_search` |
 | `api.py` | Public API with simplified signatures | `store()`, `recall()`, `search()`, `create_edge()`, `forget()`, `get_memory()`, `get_graph()`, `Node`, `Edge` |
 | `logger.py` | Structured JSONL logger with rotation | `log()`, `Logger` class, `rotate_logs()`, `clean_old_archives()`, `get_log_path()`, module-level `memory_logger`, `janitor_logger` |
 | `semantic_clustering.py` | Groups memories by domain for O(n) contradiction checking | `classify_node_semantic_cluster()`, `get_memory_clusters()`, `get_contradiction_pairs_by_cluster()` |
@@ -63,6 +65,7 @@ Query
 | `config.py` | Path resolution, env overrides for tests | `get_db_path()`, `get_ollama_url()`, `get_embedding_model()`, `get_archive_db_path()` |
 | `database.py` | SQLite connection factory | `get_connection()` -- @contextmanager, enables WAL mode, FK ON, busy_timeout=30000 |
 | `embeddings.py` | Ollama embedding calls | `get_embedding()`, `pack_embedding()`, `unpack_embedding()` |
+| `markdown.py` | Protected region helpers for core markdown | `strip_protected_regions()`, `check_overlap()`, `find_protected_positions()` |
 | `similarity.py` | Cosine similarity calculations | `cosine_similarity()` |
 | `tokens.py` | Token counting and text comparison | `TokenBatchBuilder` (with `output_tokens_per_item` param), `count_tokens()` |
 | `archive.py` | Archive database for decayed memories | `archive_node()`, `search_archive()`, `_get_archive_conn()` |
@@ -79,6 +82,7 @@ Query
 
 | File | Purpose |
 |------|---------|
+| `extraction.txt` | Extraction system prompt for Opus (~160 lines, used by `extract.py`) |
 | `project_onboarding.md` | Agent instructions for project discovery and registration workflow |
 
 ### Database Migrations (`migrations/`)
@@ -473,93 +477,81 @@ Architectural constraints that must not be broken. Violating these causes data c
 
 ## CLI Reference
 
-All commands run from the `plugins/quaid/` directory.
+### `quaid` CLI (Primary Interface)
 
-### Memory Operations
+The `quaid` CLI works standalone -- no gateway needed.
 
 ```bash
-# Store a fact
-python3 memory_graph.py store "Quaid prefers dark mode" --owner default --category preference
+# Extract & Store
+quaid extract <file>          # Extract memories from transcript (JSONL or text, or - for stdin)
+                              #   --dry-run, --no-snippets, --no-journal, --json, --owner, --label
+quaid store <text>            # Store a single memory (--category, --pinned)
 
-# Search memories (hybrid retrieval)
-python3 memory_graph.py search "dark mode preferences" --owner default --limit 10
+# Search & Retrieve
+quaid search <query>          # Search memories (full recall pipeline)
+quaid find <query>            # Quick search, no reranking (--limit N)
+quaid get <id>                # Get a memory by ID
+quaid docs <query>            # Search project documentation (--limit N)
 
-# Search memories + docs (combined)
-python3 memory_graph.py search-all "dark mode"
+# Manage
+quaid forget [query]          # Delete a memory (--id <id>, --yes)
+quaid edge <s> <r> <o>        # Create a relationship edge
 
-# Full recall pipeline (with HyDE, reranking, multi-pass)
-# (Used by the memory_recall tool, not typically called directly)
-
-# Get database statistics
-python3 memory_graph.py stats
-
-# Get edges for a node
-python3 memory_graph.py get-edges <node_id>
+# Admin
+quaid doctor                  # Health check (DB, embeddings, API key, gateway)
+quaid config                  # Show current configuration
+quaid stats                   # Database statistics
+quaid export                  # Export all facts as JSON
+quaid migrate                 # Import facts from existing markdown files
+quaid re-embed                # Re-embed all facts (after changing embedding model)
+quaid janitor [opts]          # Run janitor pipeline (--dry-run, --task <name>)
+quaid mcp-server              # Start MCP server (stdio transport)
+quaid upgrade                 # Show upgrade instructions
+quaid uninstall               # Clean removal (preserves DB, offers backup restore)
 ```
 
-### Janitor Pipeline
+### Python Module CLIs (Advanced)
+
+All commands run from the `plugins/quaid/` directory.
 
 ```bash
-# Full pipeline preview (no changes)
-python3 janitor.py --task all --dry-run
+# Memory operations
+python3 memory_graph.py store "fact text" --owner default --category preference
+python3 memory_graph.py search "query" --owner default --limit 10
+python3 memory_graph.py search-all "query"     # Memory + docs combined
+python3 memory_graph.py stats
+python3 memory_graph.py get-edges <node_id>
 
-# Run specific tasks
-python3 janitor.py --task review --apply          # Opus review of pending facts
-python3 janitor.py --task workspace               # Core markdown audit
+# Extraction
+python3 extract.py transcript.txt --owner solomon
+python3 extract.py session.jsonl --dry-run --json
+echo "User: hi" | python3 extract.py - --owner solomon
+
+# Janitor pipeline
+python3 janitor.py --task all --dry-run           # Preview (no changes)
+python3 janitor.py --task review --apply           # Opus review of pending facts
 python3 janitor.py --task snippets --apply         # FOLD/REWRITE/DISCARD snippet review
-python3 janitor.py --task snippets --dry-run       # Preview snippet review
 python3 janitor.py --task journal --apply          # Journal distillation
-python3 janitor.py --task journal --apply --force-distill  # Force distillation
 python3 janitor.py --task embeddings               # Backfill missing embeddings
 python3 janitor.py --task decay --apply            # Run Ebbinghaus decay
 python3 janitor.py --task duplicates --apply       # Dedup pass
-python3 janitor.py --task tests                    # Run pytest suite
 python3 janitor.py --task cleanup                  # Prune old logs
-```
 
-### Documentation System
+# Documentation
+python3 docs_updater.py check                      # Check doc staleness (free)
+python3 docs_updater.py update-stale --apply       # Fix stale docs (Opus calls)
+python3 docs_rag.py search "query text"            # RAG search (free, local)
 
-```bash
-# Check doc staleness (free, no LLM calls)
-python3 docs_updater.py check
-
-# View update history
-python3 docs_updater.py changelog
-
-# Fix stale docs (Opus calls)
-python3 docs_updater.py update-stale --apply
-
-# RAG search (free, local embeddings only)
-python3 docs_rag.py search "query text"
-```
-
-### Projects System
-
-```bash
-# List registered docs for a project
+# Projects
 python3 docs_registry.py list --project quaid
-
-# Find which project a file belongs to
 python3 docs_registry.py find-project <file_path>
-
-# Create a new project
 python3 docs_registry.py create-project <name> --label "Human Name"
-
-# Auto-discover docs for a project
 python3 docs_registry.py discover --project <name>
+python3 docs_registry.py gc                        # Garbage collect
 
-# Garbage collect orphaned entries
-python3 docs_registry.py gc
-```
-
-### Workspace Audit
-
-```bash
-# Check line counts vs limits
-python3 workspace_audit.py --bloat
-
-# Check only changed files
-python3 workspace_audit.py --check-only
+# Workspace audit
+python3 workspace_audit.py --bloat                 # Line counts vs limits
+python3 workspace_audit.py --check-only            # Changed files
 ```
 
 ### Testing
@@ -569,14 +561,10 @@ python3 workspace_audit.py --check-only
 python3 -m pytest tests/ -v
 
 # Run specific test file
-python3 -m pytest tests/test_memory_graph.py -v
+python3 -m pytest tests/test_extract.py -v
 
 # Run specific test
 python3 -m pytest tests/test_invariants.py::test_name -v
-
-# Manual recall test harness
-python3 test_recall.py
-python3 test_recall.py --query "custom query" --verbose
 ```
 
 ---
@@ -585,6 +573,7 @@ python3 test_recall.py --query "custom query" --verbose
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
+| `QUAID_OWNER` | Owner identity for MCP server and CLI | `"default"` |
 | `CLAWDBOT_WORKSPACE` | Workspace root directory | Auto-detected from gateway |
 | `MEMORY_DB_PATH` | Override database file path | `<workspace>/data/memory.db` |
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
@@ -603,7 +592,7 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file -> macOS Keyc
 
 ### Overview
 
-- ~1017 pytest tests + 163 vitest tests = ~1180 total tests
+- 1127 pytest tests + 163 vitest tests = ~1290 total tests
 - All tests passing as of Feb 2026
 
 ### Test Files (pytest)
@@ -636,6 +625,10 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file -> macOS Keyc
 | `test_storage_strength.py` | Bjork storage strength model |
 | `test_beam_search.py` | BEAM graph search algorithm |
 | `test_coverage_gaps.py` | Coverage gap identification |
+| `test_extract.py` | Extraction module (transcript parsing, pipeline, dry-run) |
+| `test_mcp_server.py` | MCP server tool definitions and responses |
+| `test_mcp_integration.py` | MCP store-recall round-trip integration tests |
+| `test_integration.py` | Cross-module integration tests |
 | `test_protected_regions.py` | Protected region handling |
 | `test_batch2_data_quality.py` | Data quality checks |
 | `test_batch3_smart_retrieval.py` | Smart retrieval features |
@@ -759,8 +752,8 @@ python3 janitor.py --task all --apply
 - Started as inline memory extraction in an OpenClaw plugin
 - Evolved: sqlite-vec vectors, FTS5, graph traversal, janitor pipeline
 - 81+ bugs fixed across 9 production rounds + 3 stress test rounds + 1 journal round + 6 benchmark analysis rounds
-- Key architectural milestones: crash-safe merges, dual learning system, RRF fusion, BEAM graph search, prompt caching, output-aware batching
-- ~37K lines of code: 17K Python, 12K tests, 5K TS/JS, 3.1K vitest
+- Key architectural milestones: crash-safe merges, dual learning system, RRF fusion, BEAM graph search, prompt caching, output-aware batching, MCP server, standalone CLI
+- ~39K lines of code: 18K Python, 13K tests, 5K TS/JS, 3.1K vitest
 
 ---
 

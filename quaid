@@ -5,15 +5,19 @@
 # Thin wrapper that delegates to existing Python functions in plugins/quaid/.
 #
 # Usage:
+#   quaid extract <file>  Extract memories from conversation transcript
+#   quaid store <text>    Store a single memory
+#   quaid search <query>  Search memories (full recall pipeline)
+#   quaid find <query>    Quick search (no reranking)
+#   quaid get <id>        Get a memory by ID
+#   quaid forget [query]  Delete a memory
+#   quaid edge <s> <r> <o> Create a relationship edge
+#   quaid docs <query>    Search project documentation
 #   quaid doctor          Health check (DB, embeddings, API key, gateway)
 #   quaid config          Show current configuration
 #   quaid stats           Show database statistics
-#   quaid search <query>  Search memory for a query
 #   quaid export          Export all facts as JSON (data portability)
-#   quaid migrate         Import facts from existing markdown files
-#   quaid re-embed        Re-embed all facts (after changing embedding model)
 #   quaid janitor [opts]  Run janitor pipeline (--dry-run, --task <name>)
-#   quaid uninstall       Clean removal (preserves DB backup)
 #   quaid help            Show this help
 # =============================================================================
 
@@ -57,6 +61,28 @@ run_py() {
 
 # Escape single quotes for safe interpolation into Python single-quoted strings
 py_escape() { printf '%s' "$1" | sed "s/'/\\\\'/g"; }
+
+# Resolve owner ID from config
+get_owner() {
+    python3 -c "import json; print(json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')).get('users',{}).get('defaultOwner','default'))" 2>/dev/null || echo "default"
+}
+
+# Resolve Ollama URL: OLLAMA_URL env > config > localhost
+get_ollama_url() {
+    if [[ -n "${OLLAMA_URL:-}" ]]; then
+        echo "$OLLAMA_URL"
+    elif [[ -f "${CONFIG_DIR}/memory.json" ]]; then
+        local url
+        url=$(python3 -c "import json; print(json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')).get('ollama',{}).get('url',''))" 2>/dev/null || true)
+        if [[ -n "$url" ]] && [[ "$url" != "null" ]]; then
+            echo "$url"
+        else
+            echo "http://localhost:11434"
+        fi
+    else
+        echo "http://localhost:11434"
+    fi
+}
 
 # --- Commands ---
 
@@ -104,12 +130,18 @@ print(json.dumps({'tables': tables, 'nodes': nodes, 'edges': edges, 'pending': p
     fi
 
     # Ollama
-    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    local ollama_url
+    ollama_url=$(get_ollama_url)
+    if curl -sf "${ollama_url}/api/tags" &>/dev/null; then
         local embed_model
         embed_model=$(python3 -c "import json; c=json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')); print(c.get('ollama',{}).get('embeddingModel','?'))" 2>/dev/null || echo "?")
-        echo -e "  ${GREEN}✓${RESET} Ollama       — Running (embedding: ${embed_model})"
+        if [[ "$ollama_url" == *"localhost"* ]] || [[ "$ollama_url" == *"127.0.0.1"* ]]; then
+            echo -e "  ${GREEN}✓${RESET} Ollama       — Running (embedding: ${embed_model})"
+        else
+            echo -e "  ${GREEN}✓${RESET} Ollama       — Remote at ${ollama_url} (embedding: ${embed_model})"
+        fi
     else
-        echo -e "  ${YELLOW}~${RESET} Ollama       — Not running (embeddings will fail)"
+        echo -e "  ${YELLOW}~${RESET} Ollama       — Not reachable at ${ollama_url} (embeddings will fail)"
     fi
 
     # API key
@@ -279,6 +311,201 @@ cmd_stats() {
     (cd "$PLUGIN_DIR" && CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 memory_graph.py stats)
 }
 
+cmd_extract() {
+    local file="" dry_run="" no_snippets="" no_journal="" json_out="" extra_args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run)      dry_run="--dry-run"; shift ;;
+            --no-snippets)  no_snippets="--no-snippets"; shift ;;
+            --no-journal)   no_journal="--no-journal"; shift ;;
+            --json)         json_out="--json"; shift ;;
+            --owner)        extra_args+=(--owner "$2"); shift 2 ;;
+            --label)        extra_args+=(--label "$2"); shift 2 ;;
+            -*)             error "Unknown option: $1"; exit 1 ;;
+            *)              file="$1"; shift ;;
+        esac
+    done
+    if [[ -z "$file" ]]; then
+        error "Usage: quaid extract <file> [--dry-run] [--no-snippets] [--no-journal] [--json]"
+        echo ""
+        echo "  <file>  Path to transcript file (JSONL or text), or - for stdin"
+        exit 1
+    fi
+    (cd "$PLUGIN_DIR" && CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 extract.py "$file" \
+        ${dry_run:+"$dry_run"} ${no_snippets:+"$no_snippets"} ${no_journal:+"$no_journal"} \
+        ${json_out:+"$json_out"} "${extra_args[@]+"${extra_args[@]}"}")
+}
+
+cmd_store() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid store <text> [--category <cat>] [--pinned]"
+        exit 1
+    fi
+    local text="" category="fact" pinned=""
+    local -a positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --category) category="$2"; shift 2 ;;
+            --pinned)   pinned="--pinned"; shift ;;
+            *)          positional+=("$1"); shift ;;
+        esac
+    done
+    text="${positional[*]}"
+    if [[ -z "$text" ]]; then
+        error "Usage: quaid store <text>"
+        exit 1
+    fi
+    local owner
+    owner=$(get_owner)
+    local cmd="store '$(py_escape "$text")' --owner '$owner' --category '$category' --source cli"
+    if [[ -n "$pinned" ]]; then
+        cmd="$cmd --pinned"
+    fi
+    (cd "$PLUGIN_DIR" && CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 memory_graph.py $cmd)
+}
+
+cmd_get() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid get <id>"
+        exit 1
+    fi
+    local node_id="$1"
+    run_py "
+import json, sys
+sys.path.insert(0, '.')
+from api import get_memory
+result = get_memory('$(py_escape "$node_id")')
+if result is None:
+    print('Memory not found: $(py_escape "$node_id")', file=sys.stderr)
+    sys.exit(1)
+print(json.dumps(result, indent=2, default=str))
+"
+}
+
+cmd_forget() {
+    local node_id="" query="" yes=false
+    local -a positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --id)   node_id="$2"; shift 2 ;;
+            --yes|-y) yes=true; shift ;;
+            *)      positional+=("$1"); shift ;;
+        esac
+    done
+
+    if [[ -z "$node_id" ]] && [[ ${#positional[@]} -gt 0 ]]; then
+        query="${positional[*]}"
+    fi
+
+    if [[ -z "$node_id" ]] && [[ -z "$query" ]]; then
+        error "Usage: quaid forget [--id <id>] [query...] [--yes]"
+        exit 1
+    fi
+
+    # If deleting by query and not --yes, show the match and confirm
+    if [[ -n "$query" ]] && ! $yes; then
+        echo "Searching for: $query"
+        local owner
+        owner=$(get_owner)
+        run_py "
+import sys
+sys.path.insert(0, '.')
+from api import search
+results = search('$(py_escape "$query")', owner_id='$(py_escape "$owner")', limit=1)
+if not results:
+    print('No matching memory found.', file=sys.stderr)
+    sys.exit(1)
+r = results[0]
+print(f'  Match: {r[\"text\"][:100]}')
+print(f'  ID:    {r[\"id\"]}')
+print(f'  Score: {r[\"similarity\"]}')
+"
+        echo ""
+        echo -en "${BOLD}Delete this memory? [y/N]${RESET} "
+        read -r REPLY
+        if [[ ! "$REPLY" =~ ^[Yy] ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+    fi
+
+    run_py "
+import sys
+sys.path.insert(0, '.')
+from api import forget
+node_id = '$(py_escape "$node_id")' or None
+query = '$(py_escape "$query")' or None
+deleted = forget(node_id=node_id, query=query)
+if deleted:
+    print('Memory deleted.')
+else:
+    print('No memory found to delete.', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+cmd_find() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid find <query> [--limit N]"
+        exit 1
+    fi
+    local limit=10
+    local -a positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit) limit="$2"; shift 2 ;;
+            *)       positional+=("$1"); shift ;;
+        esac
+    done
+    local query="${positional[*]}"
+    local owner
+    owner=$(get_owner)
+    run_py "
+import json, sys
+sys.path.insert(0, '.')
+from api import search
+results = search('$(py_escape "$query")', owner_id='$(py_escape "$owner")', limit=$limit)
+if not results:
+    print('No results found.')
+    sys.exit(0)
+for i, r in enumerate(results, 1):
+    sim = r.get('similarity', 0)
+    conf = r.get('confidence', 0)
+    print(f'  {i}. [{sim:.3f}] {r[\"text\"][:100]}')
+    print(f'     id={r[\"id\"]} cat={r[\"category\"]} conf={conf:.2f}')
+print(f'\\n{len(results)} result(s)')
+"
+}
+
+cmd_edge() {
+    if [[ $# -lt 3 ]]; then
+        error "Usage: quaid edge <subject> <relation> <object>"
+        exit 1
+    fi
+    local subject="$1" relation="$2" object="$3"
+    local owner
+    owner=$(get_owner)
+    (cd "$PLUGIN_DIR" && CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 memory_graph.py create-edge \
+        "$subject" "$relation" "$object" --create-missing --json)
+}
+
+cmd_docs() {
+    if [[ $# -eq 0 ]]; then
+        error "Usage: quaid docs <query> [--limit N]"
+        exit 1
+    fi
+    local limit=5
+    local -a positional=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit) limit="$2"; shift 2 ;;
+            *)       positional+=("$1"); shift ;;
+        esac
+    done
+    local query="${positional[*]}"
+    (cd "$PLUGIN_DIR" && CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 docs_rag.py search "$query" --limit "$limit")
+}
+
 cmd_search() {
     if [[ $# -eq 0 ]]; then
         error "Usage: quaid search <query>"
@@ -286,7 +513,7 @@ cmd_search() {
     fi
     local query="$*"
     local owner
-    owner=$(python3 -c "import json; print(json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')).get('users',{}).get('defaultOwner','default'))" 2>/dev/null || echo "default")
+    owner=$(get_owner)
     (cd "$PLUGIN_DIR" && CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 memory_graph.py search "$query" --owner "$owner" --limit 10)
 }
 
@@ -331,7 +558,7 @@ cmd_migrate() {
     echo ""
 
     local owner
-    owner=$(python3 -c "import json; print(json.load(open('$(py_escape "$CONFIG_DIR")/memory.json')).get('users',{}).get('defaultOwner','default'))" 2>/dev/null || echo "default")
+    owner=$(get_owner)
 
     run_py "
 import os, sys
@@ -543,30 +770,53 @@ cmd_help() {
     echo ""
     echo "Usage: quaid <command> [options]"
     echo ""
-    echo "Commands:"
-    echo "  doctor          Health check (DB, embeddings, API key)"
-    echo "  config          Show current configuration"
-    echo "  stats           Show database statistics"
-    echo "  search <query>  Search memory"
-    echo "  export          Export all facts as JSON"
-    echo "  migrate         Import facts from existing markdown files"
-    echo "  re-embed        Re-embed all facts (after changing embedding model)"
-    echo "  janitor [opts]  Run janitor pipeline (--dry-run, --task <name>)"
-    echo "  upgrade         Pull latest version and run migrations"
-    echo "  uninstall       Clean removal (preserves DB backup)"
-    echo "  help            Show this help"
+    echo -e "${BOLD}Extract & Store:${RESET}"
+    echo "  extract <file>       Extract memories from conversation transcript"
+    echo "                         --dry-run, --no-snippets, --no-journal, --json"
+    echo "  store <text>         Store a single memory (--category, --pinned)"
+    echo ""
+    echo -e "${BOLD}Search & Retrieve:${RESET}"
+    echo "  search <query>       Search memories (full recall pipeline)"
+    echo "  find <query>         Quick search (no reranking) (--limit N)"
+    echo "  get <id>             Get a memory by ID"
+    echo "  docs <query>         Search project documentation (--limit N)"
+    echo ""
+    echo -e "${BOLD}Manage:${RESET}"
+    echo "  forget [query]       Delete a memory (--id <id>, --yes)"
+    echo "  edge <s> <r> <o>     Create a relationship edge"
+    echo "  stats                Database statistics"
+    echo ""
+    echo -e "${BOLD}Admin:${RESET}"
+    echo "  doctor               Health check"
+    echo "  config               Show configuration"
+    echo "  export               Export all facts as JSON"
+    echo "  migrate              Import facts from existing markdown files"
+    echo "  re-embed             Re-embed all facts (after changing embedding model)"
+    echo "  janitor [opts]       Run janitor pipeline (--dry-run, --task <name>)"
+    echo "  mcp-server           Start MCP server (stdio transport)"
+    echo "  upgrade              Show upgrade instructions"
+    echo "  uninstall            Clean removal (preserves DB backup)"
+    echo "  help                 Show this help"
 }
 
 # --- Dispatch ---
 case "${1:-help}" in
+    extract)    shift; cmd_extract "$@" ;;
+    store)      shift; cmd_store "$@" ;;
+    get)        shift; cmd_get "$@" ;;
+    forget)     shift; cmd_forget "$@" ;;
+    find)       shift; cmd_find "$@" ;;
+    edge)       shift; cmd_edge "$@" ;;
+    docs)       shift; cmd_docs "$@" ;;
+    search|recall) shift; cmd_search "$@" ;;
     doctor)     cmd_doctor ;;
     config)     cmd_config ;;
     stats)      cmd_stats ;;
-    search)     shift; cmd_search "$@" ;;
     export)     cmd_export ;;
     migrate)    cmd_migrate ;;
     re-embed)   cmd_re_embed ;;
     janitor)    shift; cmd_janitor "$@" ;;
+    mcp-server|mcp) shift; exec env CLAWDBOT_WORKSPACE="$WORKSPACE_ROOT" python3 "$PLUGIN_DIR/mcp_server.py" "$@" ;;
     upgrade)    cmd_upgrade ;;
     uninstall)  cmd_uninstall ;;
     help|--help|-h) cmd_help ;;
