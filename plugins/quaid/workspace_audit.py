@@ -23,7 +23,7 @@ from llm_clients import call_high_reasoning, parse_json_response
 from config import get_config
 
 # Configuration
-WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", "${QUAID_WORKSPACE}"))
+WORKSPACE_DIR = Path(os.environ.get("CLAWDBOT_WORKSPACE", "~/<username>/clawd"))
 
 # Configure logging
 LOG_DIR = WORKSPACE_DIR / "logs"
@@ -602,7 +602,7 @@ def apply_review_decisions(dry_run: bool = True,
                         try:
                             default_owner = cfg.users.default_owner
                         except Exception:
-                            default_owner = "default"
+                            default_owner = "solomon"
                         result = store_memory(
                             text=section_content[:2000],
                             category="fact",

@@ -104,6 +104,17 @@ a rigorous, peer-reviewable dataset is costly and time-intensive.
 - Multi-session context accumulation
 - Adversarial queries (plausible but wrong)
 
+### Deeper OpenClaw Integration
+
+Plugins can currently hook into compaction and reset, but can't initiate them.
+The next gateway PR adds plugin-level control over the full session lifecycle:
+- `api.session.compact()` — plugin-triggered compaction (extract memories on demand)
+- `api.session.new()` — plugin-triggered new session (clean slate without user action)
+- `api.session.reset()` — plugin-triggered reset (extract + clear context)
+- `override_compaction` hook — replace default summarization with memory-graph-aware summary
+- `override_session_history` hook — plugin provides condensed session context instead of raw JSONL replay
+- `api.workspace.getBootstrapFiles()` — expose loaded bootstrap files through plugin API
+
 ### Claude Code Project Integration
 
 Bidirectional project awareness between Claude Code and the OpenClaw agent.

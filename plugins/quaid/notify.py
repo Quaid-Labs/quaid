@@ -95,7 +95,7 @@ SESSIONS_FILE = Path.home() / ".clawdbot" / "agents" / "main" / "sessions" / "se
 # Alternative path for openclaw branding
 SESSIONS_FILE_ALT = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
 
-# Main session key (Assistant's primary session)
+# Main session key (Alfie's primary session)
 MAIN_SESSION_KEY = "agent:main:main"
 
 
@@ -122,7 +122,7 @@ def get_last_channel(session_key: str = MAIN_SESSION_KEY) -> Optional[ChannelInf
     Get the user's last active channel from session state.
 
     Args:
-        session_key: Session to look up (default: main Assistant session)
+        session_key: Session to look up (default: main Alfie session)
 
     Returns:
         ChannelInfo if found, None otherwise

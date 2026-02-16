@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     fact_type TEXT DEFAULT 'unknown',       -- Subcategory (e.g. financial, health, family)
     knowledge_type TEXT DEFAULT 'fact' CHECK(knowledge_type IN ('fact', 'belief', 'preference', 'experience')),
     extraction_confidence REAL DEFAULT 0.5, -- 0-1: how confident the classifier was
-    speaker TEXT,                           -- Who stated this fact (e.g. "User", "Shannon")
+    speaker TEXT,                           -- Who stated this fact (e.g. "Solomon", "Shannon")
 
     -- Temporal validity
     valid_from TEXT,                        -- ISO8601 datetime
@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 CREATE TABLE IF NOT EXISTS entity_aliases (
     id TEXT PRIMARY KEY,
     alias TEXT NOT NULL,           -- The alternate name (e.g., "Sol", "Mom")
-    canonical_name TEXT NOT NULL,  -- The canonical name (e.g., "Default User")
+    canonical_name TEXT NOT NULL,  -- The canonical name (e.g., "Solomon Steadman")
     canonical_node_id TEXT,        -- Optional: link to the Person/entity node
     owner_id TEXT,                 -- Owner who defined this alias
     created_at TEXT DEFAULT (datetime('now')),

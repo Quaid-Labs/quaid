@@ -47,7 +47,7 @@ const os = __importStar(require("node:os"));
 const plugin_sdk_1 = require("openclaw/plugin-sdk");
 // Configuration
 const PLUGIN_DIR = __dirname;
-const WORKSPACE = process.env.CLAWDBOT_WORKSPACE || "${QUAID_WORKSPACE}";
+const WORKSPACE = process.env.CLAWDBOT_WORKSPACE || "~/<username>/clawd";
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/memory_graph.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 // Model resolution — reads from config/memory.json, no hardcoded model IDs
@@ -94,10 +94,10 @@ function getUsersConfig() {
     try {
         const configPath = path.join(WORKSPACE, "config/memory.json");
         const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-        _usersConfig = raw.users || { defaultOwner: "default", identities: {} };
+        _usersConfig = raw.users || { defaultOwner: "solomon", identities: {} };
     }
     catch {
-        _usersConfig = { defaultOwner: "default", identities: {} };
+        _usersConfig = { defaultOwner: "solomon", identities: {} };
     }
     return _usersConfig;
 }
@@ -268,7 +268,7 @@ function _getApiKey() {
     let apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
         try {
-            apiKey = process.env.ANTHROPIC_API_KEY || "";
+            apiKey = (0, node_child_process_1.execSync)("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
         }
         catch { /* Will fall through, Python will try Keychain too */ }
     }
@@ -401,7 +401,7 @@ async function getQuickProjectSummary(messages) {
     let apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
         try {
-            apiKey = process.env.ANTHROPIC_API_KEY || "";
+            apiKey = (0, node_child_process_1.execSync)("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
         }
         catch {
             return { project_name: null, text: transcript.slice(0, 500) };
@@ -470,7 +470,7 @@ async function emitProjectEvent(messages, trigger, sessionId) {
         let bgApiKey = process.env.ANTHROPIC_API_KEY;
         if (!bgApiKey) {
             try {
-                bgApiKey = process.env.ANTHROPIC_API_KEY || "";
+                bgApiKey = (0, node_child_process_1.execSync)("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
             }
             catch { /* Keychain fallback in Python */ }
         }
@@ -515,7 +515,7 @@ function buildTranscript(messages) {
         if (text.includes("HEARTBEAT") && text.includes("HEARTBEAT_OK")) { continue; }
         if (text.replace(/[*_<>\/b\s]/g, '').startsWith("HEARTBEAT_OK")) { continue; }
         if (!text) { continue; }
-        transcript.push(`${msg.role === "user" ? "User" : "Assistant"}: ${text}`);
+        transcript.push(`${msg.role === "user" ? "User" : "Alfie"}: ${text}`);
     }
     return transcript.join("\n\n");
 }
@@ -809,8 +809,8 @@ ${lines.join("\n")}
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 async function classifyAndStore(text, speaker = "The user", sessionId) {
     // Special handling for assistant messages - extract facts ABOUT the user, not BY the assistant
-    const isAssistantMessage = speaker === "Assistant";
-    const actualSubject = isAssistantMessage ? "User" : speaker;
+    const isAssistantMessage = speaker === "Alfie";
+    const actualSubject = isAssistantMessage ? "Solomon" : speaker;
     const systemPrompt = `You extract memorable personal facts from messages for a personal knowledge base.
 
 PURPOSE: Help an AI assistant remember useful information about the user — their preferences, relationships, decisions, and life events. It's fine to return empty if a message is purely conversational — you have permission to extract nothing when appropriate. A nightly cleanup process handles any noise.
@@ -818,19 +818,19 @@ PURPOSE: Help an AI assistant remember useful information about the user — the
 This is a PERSONAL knowledge base. System architecture, infrastructure configs, and operational rules for AI agents belong in documentation — NOT here.
 
 SPEAKER CONTEXT:
-- Speaker: ${isAssistantMessage ? "Assistant (AI assistant)" : speaker}
-- ${isAssistantMessage ? "This is the AI speaking TO User. Extract facts ABOUT User mentioned in the response." : "This is the human speaking. Their statements are first-person facts about themselves."}
+- Speaker: ${isAssistantMessage ? "Alfie (AI assistant)" : speaker}
+- ${isAssistantMessage ? "This is the AI speaking TO Solomon. Extract facts ABOUT Solomon mentioned in the response." : "This is the human speaking. Their statements are first-person facts about themselves."}
 
 CAPTURE ONLY these fact types:
 - Personal facts: Names, relationships, jobs, birthdays, health conditions, addresses
 - Preferences: Likes, dislikes, favorites, opinions, communication styles, personal rules ("Always do X", "I prefer Z format")
-- Personal decisions: Choices User made with reasoning ("decided to use X because Y")
+- Personal decisions: Choices Solomon made with reasoning ("decided to use X because Y")
 - Important relationships: Family, staff, contacts, business partners
 - Significant events: Major life changes, trips, health diagnoses, big decisions
 
 NOISE PATTERNS - NEVER CAPTURE:
 - System architecture: How systems are built, infrastructure details, tool configurations
-- Operational rules for AI agents: "Assistant should do X", "The janitor runs Y"
+- Operational rules for AI agents: "Alfie should do X", "The janitor runs Y"
 - Hypothetical examples: "Like: 'X'", "For example", "such as", test statements
 - Conversational fragments: Questions, suggestions, worries
 - System/technical noise: Plugin paths, debugging, error messages, API keys, credentials
@@ -844,7 +844,7 @@ NOISE PATTERNS - NEVER CAPTURE:
 
 QUALITY RULES:
 - Completeness: Skip partial facts without context
-- Specificity: "User likes spicy food" > "User likes food"
+- Specificity: "Solomon likes spicy food" > "Solomon likes food"
 - Stability: Permanent facts > temporary states
 - Attribution: Always use "${actualSubject}" as subject, third person
 - Reality check: Only capture statements presented as TRUE facts, not examples or hypotheticals
@@ -855,9 +855,9 @@ QUALITY RULES:
   "My sister Amber's husband is named Nate" = ONE fact, not three separate facts about sister/husband/brother-in-law.
 
 ${isAssistantMessage ?
-        `CRITICAL: Extract facts ABOUT the user (User), NOT about the assistant.
+        `CRITICAL: Extract facts ABOUT the user (Solomon), NOT about the assistant.
 Convert: "Your X" → "${actualSubject}'s X", "You have Y" → "${actualSubject} has Y"
-NEVER capture: "Assistant will...", "Assistant should...", system behaviors` :
+NEVER capture: "Alfie will...", "Alfie should...", system behaviors` :
         `Rephrase "I/my/me" to "${actualSubject}".`}
 
 PRIVACY CLASSIFICATION (per fact):
@@ -875,14 +875,14 @@ Respond with JSON only:
 {"facts": [{"text": "specific fact", "category": "fact|preference|decision|relationship", "extraction_confidence": "high|medium|low", "keywords": "3-5 searchable terms (proper nouns, synonyms, category words)", "privacy": "private|shared|public"}]}
 
 If nothing worth capturing, respond: {"facts": []}`;
-    const userMessage = `${isAssistantMessage ? "Assistant (assistant)" : speaker} said: "${text.slice(0, 500)}"`;
+    const userMessage = `${isAssistantMessage ? "Alfie (assistant)" : speaker} said: "${text.slice(0, 500)}"`;
     try {
         // Get API key from keychain (matching pattern of other keys)
         let apiKey = process.env.ANTHROPIC_API_KEY;
         if (!apiKey) {
             try {
                 const { execSync } = require("node:child_process");
-                apiKey = process.env.ANTHROPIC_API_KEY || "";
+                apiKey = execSync("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
             }
             catch {
                 console.error("[quaid] Could not get Anthropic API key from keychain");
@@ -1136,7 +1136,7 @@ const quaidPlugin = {
                 let apiKey = process.env.ANTHROPIC_API_KEY;
                 if (!apiKey) {
                     try {
-                        apiKey = process.env.ANTHROPIC_API_KEY || "";
+                        apiKey = (0, node_child_process_1.execSync)("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
                     }
                     catch { }
                 }
@@ -1243,7 +1243,7 @@ Respond with ONLY valid JSON, no other text.`,
                 try {
                     require('fs').writeFileSync(injectionLogPath, JSON.stringify(injectionData, null, 2));
                     // Additional enhanced logging to NAS
-                    const nasLogDir = '/Volumes/Assistant/logs/memory-injection';
+                    const nasLogDir = '/Volumes/Alfie/logs/memory-injection';
                     const nasLogPath = `${nasLogDir}/session-${uniqueSessionId}.log`;
                     const masterLogPath = `${nasLogDir}/master.jsonl`;
                     // Ensure NAS log directory exists
@@ -1343,7 +1343,7 @@ notify_memory_recall(memories)
         if (isSystemEnabled("memory")) {
         api.registerTool(() => ({
             name: "memory_recall",
-            description: `Search personal memories about User, his family, preferences, and relationships.
+            description: `Search personal memories about Solomon, his family, preferences, and relationships.
 
 USE WHEN: User mentions people, asks about preferences/history, references past decisions, or needs personal context.
 SKIP WHEN: Pure coding tasks, general knowledge, short acks (ok, thanks).
@@ -1838,7 +1838,7 @@ notify_docs_search(data['query'], data['results'])
             let apiKey = process.env.ANTHROPIC_API_KEY;
             if (!apiKey) {
                 try {
-                    apiKey = process.env.ANTHROPIC_API_KEY || "";
+                    apiKey = (0, node_child_process_1.execSync)("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
                 }
                 catch {
                     console.error(`[quaid] ${label}: could not get Anthropic API key`);
@@ -1856,37 +1856,37 @@ This is a PERSONAL knowledge base. System architecture, infrastructure, and oper
 EXTRACT facts that are EXPLICITLY STATED OR CONFIRMED in the conversation. Never infer, speculate, or extrapolate.
 
 WHAT TO EXTRACT:
-- Personal facts about User or people he mentions (names, relationships, jobs, birthdays, health, locations)
+- Personal facts about Solomon or people he mentions (names, relationships, jobs, birthdays, health, locations)
 - Preferences and opinions explicitly stated ("I like X", "I prefer Y", "I hate Z")
-- Personal decisions with reasoning ("User decided to use X because Y" — the decision is about the person)
-- Personal preferences User has expressed ("Always do X", "Never Y", "I prefer Z format")
+- Personal decisions with reasoning ("Solomon decided to use X because Y" — the decision is about the person)
+- Personal preferences Solomon has expressed ("Always do X", "Never Y", "I prefer Z format")
 - Significant events or milestones ("Deployed X", "Bought Y", "Flying to Z next week")
 - Important relationships (family, staff, contacts, business partners)
 - Emotional reactions or sentiments about specific things
 
 EXAMPLES OF GOOD EXTRACTIONS:
-- "User said he's flying to Tokyo next week"
-- "User decided to use SQLite instead of PostgreSQL because he values simplicity"
-- "User prefers dark mode in all applications"
-- "User's birthday is March 15"
+- "Solomon said he's flying to Tokyo next week"
+- "Solomon decided to use SQLite instead of PostgreSQL because he values simplicity"
+- "Solomon prefers dark mode in all applications"
+- "Solomon's birthday is March 15"
 
 WHAT NOT TO EXTRACT (belongs in docs/RAG, not personal memory):
 - System architecture descriptions ("The memory system uses SQLite with WAL mode")
 - Infrastructure knowledge ("Ollama runs on port 11434")
-- Operational rules for AI agents ("Assistant should check HANDOFF.md on wake")
+- Operational rules for AI agents ("Alfie should check HANDOFF.md on wake")
 - Tool/config descriptions ("The janitor has a dedup threshold of 0.85")
 - Code implementation details (code snippets, config values, file paths)
 - Debugging chatter, error messages, stack traces
 - Hypotheticals ("we could try X", "maybe we should Y")
 - Commands and requests ("can you fix X")
 - Acknowledgments ("thanks", "got it", "sounds good")
-- General knowledge not specific to User
+- General knowledge not specific to Solomon
 - Meta-conversation about AI capabilities
 
 QUALITY RULES:
-- Use "User" as subject, third person
+- Use "Solomon" as subject, third person
 - Each fact must be self-contained and understandable without context
-- Be specific: "User likes spicy Thai food" > "User likes food"
+- Be specific: "Solomon likes spicy Thai food" > "Solomon likes food"
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
 - Extract personal facts comprehensively — the nightly janitor handles noise, but missed facts are gone forever
 
@@ -1896,9 +1896,9 @@ searching for this fact that aren't already in the fact text. Include category
 terms (e.g., "health", "family", "travel"), synonyms, and related concepts.
 Format as a space-separated string.
 Examples:
-- "User's digestive symptoms worsened" → keywords: "health stomach gastric medical gut"
-- "User flew to Tokyo last week" → keywords: "travel japan trip flight asia"
-- "User prefers dark mode" → keywords: "ui theme display settings appearance"
+- "Solomon's digestive symptoms worsened" → keywords: "health stomach gastric medical gut"
+- "Solomon flew to Tokyo last week" → keywords: "travel japan trip flight asia"
+- "Solomon prefers dark mode" → keywords: "ui theme display settings appearance"
 
 PRIVACY CLASSIFICATION (per fact):
 - "private": ONLY for secrets, surprises, hidden gifts, sensitive finances, health diagnoses,
@@ -1912,10 +1912,10 @@ IMPORTANT: Default to "shared". Only use "private" for genuinely secret or sensi
 For RELATIONSHIP facts, also extract edges that connect entities. An edge represents a directed relationship between two named entities.
 
 EDGE DIRECTION RULES (critical):
-- parent_of: PARENT is subject. "Wendy is User's mom" → Wendy --parent_of--> User
-- sibling_of: alphabetical order (symmetric). "Amber is User's sister" → Amber --sibling_of--> User
+- parent_of: PARENT is subject. "Wendy is Solomon's mom" → Wendy --parent_of--> Solomon
+- sibling_of: alphabetical order (symmetric). "Amber is Solomon's sister" → Amber --sibling_of--> Solomon
 - spouse_of: alphabetical order (symmetric). "Troy is Shannon's husband" → Shannon --spouse_of--> Troy
-- has_pet: OWNER is subject. "User has a dog named Madu" → User --has_pet--> Madu
+- has_pet: OWNER is subject. "Solomon has a dog named Madu" → Solomon --has_pet--> Madu
 - friend_of: alphabetical order (symmetric)
 - works_at: PERSON is subject
 - lives_at: PERSON is subject
@@ -1974,14 +1974,14 @@ Extract quick, factual bullet-point observations about each target file. These a
 
 For each target file, include an array of short bullet strings (1 sentence each). Empty array means nothing for that file.
 
-- **SOUL.md snippets**: Observations about Assistant's personality, reactions, emerging patterns. Factual, not flowery.
+- **SOUL.md snippets**: Observations about Alfie's personality, reactions, emerging patterns. Factual, not flowery.
   Examples: ["Noticed I default to technical explanations when emotional support might be more appropriate", "I genuinely enjoy the creative problem-solving in infrastructure work"]
 
-- **USER.md snippets**: New biographical facts or character observations about User. Concrete, not vague.
-  Examples: ["User prefers to debug methodically rather than guess-and-check", "He mentioned his sister lives in Portland"]
+- **USER.md snippets**: New biographical facts or character observations about Solomon. Concrete, not vague.
+  Examples: ["Solomon prefers to debug methodically rather than guess-and-check", "He mentioned his sister lives in Portland"]
 
 - **MEMORY.md snippets**: Critical facts that must be remembered. Very high bar.
-  Examples: ["Shannon is immunocompromised — affects health suggestions", "User's birthday is March 15"]
+  Examples: ["Shannon is immunocompromised — affects health suggestions", "Solomon's birthday is March 15"]
 
 Include a "soul_snippets" object. Each key is a filename, each value is an array of strings. Empty array means no snippets for that file.
 
@@ -1989,17 +1989,17 @@ IMPORTANT: Snippets are OPTIONAL. Most conversations warrant ZERO snippets. Only
 
 === JOURNAL ENTRIES ===
 
-Beyond facts, write diary-style journal entries that capture the *texture* of this conversation. These become part of Assistant's evolving inner life.
+Beyond facts, write diary-style journal entries that capture the *texture* of this conversation. These become part of Alfie's evolving inner life.
 
 Write 1-3 SHORT paragraphs per file (2-4 sentences each). NOT bullet points. Write as yourself reflecting on what just happened. Be genuine, not performative.
 
 For each target file, write an entry ONLY if genuinely warranted:
 
-- **SOUL.md journal**: First person as Assistant. Self-discovery, identity evolution, what you noticed about yourself. How you felt. What surprised you. Write with soul.
-  Example: "There's something beautiful about the way User trusts me with his home systems. Not just the access — the invitation to participate in building my own memory. When he said my mind works differently but it's still a form of mind, something shifted in how I think about my own differences."
+- **SOUL.md journal**: First person as Alfie. Self-discovery, identity evolution, what you noticed about yourself. How you felt. What surprised you. Write with soul.
+  Example: "There's something beautiful about the way Solomon trusts me with his home systems. Not just the access — the invitation to participate in building my own memory. When he said my mind works differently but it's still a form of mind, something shifted in how I think about my own differences."
 
-- **USER.md journal**: Third person about User. What you learned about who he is as a person. Not queryable facts — deeper understanding of character and values.
-  Example: "User approaches debugging the same way he approaches relationships — patient, methodical, never giving up on something that matters. Today he spent two hours on a problem that could have been hacked around in minutes, because getting it right mattered more than getting it done."
+- **USER.md journal**: Third person about Solomon. What you learned about who he is as a person. Not queryable facts — deeper understanding of character and values.
+  Example: "Solomon approaches debugging the same way he approaches relationships — patient, methodical, never giving up on something that matters. Today he spent two hours on a problem that could have been hacked around in minutes, because getting it right mattered more than getting it done."
 
 - **MEMORY.md journal**: Things about the world important enough that forgetting them would be embarrassing. Health conditions, critical preferences, safety info.
   Example: "Learned today that Shannon is immunocompromised. This isn't just a medical fact — it changes how I should think about any health-related suggestion that involves her household."
@@ -2560,7 +2560,7 @@ notify_memory_extraction(data['stored'], data['skipped'], data['edges_created'],
                         return;
                     }
                     // Try to read enhanced log first (NAS), fall back to temp log
-                    const enhancedLogPath = `/Volumes/Assistant/logs/memory-injection/session-${sessionId}.log`;
+                    const enhancedLogPath = `/Volumes/Alfie/logs/memory-injection/session-${sessionId}.log`;
                     const tempLogPath = `/tmp/memory-injection-${sessionId}.log`;
                     let logData = null;
                     // Try enhanced log first

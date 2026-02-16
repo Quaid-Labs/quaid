@@ -122,7 +122,7 @@ class Node:
     knowledge_type: str = "fact"  # fact, belief, preference, experience
     extraction_confidence: float = 0.5  # How confident the classifier was
     status: str = "pending"  # pending, approved, active
-    speaker: Optional[str] = None  # Who stated this fact (e.g., "User", "Shannon")
+    speaker: Optional[str] = None  # Who stated this fact (e.g., "Solomon", "Shannon")
     content_hash: Optional[str] = None  # SHA256 of name text (fast dedup pre-filter)
     superseded_by: Optional[str] = None  # ID of node that replaced this one (fact versioning)
     keywords: Optional[str] = None  # Space-separated derived search terms
@@ -1120,8 +1120,8 @@ class MemoryGraph:
             direction is "out" or "in" indicating edge direction from start node.
             path is a list of (node_name, relation) tuples showing the traversal
             chain from the start node to this result. For example, a depth-2
-            result might have path=[("User", "parent_of"), ("Emily", "has_pet")]
-            meaning User --parent_of--> Emily --has_pet--> [result_node].
+            result might have path=[("Solomon", "parent_of"), ("Emily", "has_pet")]
+            meaning Solomon --parent_of--> Emily --has_pet--> [result_node].
         """
         visited = set()
         results = []
@@ -1874,7 +1874,7 @@ def _resolve_owner_person(owner_id: str) -> Optional[Node]:
     """Map owner_id to their Person node using config mapping.
 
     Args:
-        owner_id: The owner identifier (e.g., "default")
+        owner_id: The owner identifier (e.g., "solomon")
 
     Returns:
         The Person node for that owner, or None if not found.
@@ -1900,7 +1900,7 @@ def _get_owner_names() -> set:
         names = set()
         for identity in cfg.users.identities.values():
             if identity.person_node_name:
-                # Add full name and each part: "Default User" -> {"default", "steadman", "default steadman"}
+                # Add full name and each part: "Solomon Steadman" -> {"solomon", "steadman", "solomon steadman"}
                 full = identity.person_node_name.lower()
                 names.add(full)
                 names.update(full.split())
@@ -1977,7 +1977,7 @@ def _extract_entities_from_text(text: str) -> List[Node]:
 
 def _graph_aware_recall(
     query: str,
-    owner_id: str = "default",
+    owner_id: str = "solomon",
     limit: int = 5,
     min_similarity: float = 0.60,
     graph_depth: int = 1
@@ -3479,7 +3479,7 @@ def create_edge(
     Args:
         subject_name: Name of the source entity (e.g., "Wendy Steadman")
         relation: Relationship type (e.g., "parent_of")
-        object_name: Name of the target entity (e.g., "Default User")
+        object_name: Name of the target entity (e.g., "Solomon Steadman")
         source_fact_id: Optional ID of the fact that created this edge
         create_missing_entities: If True, create Person nodes for missing entities
         owner_id: Owner ID for newly created entity nodes
@@ -3495,8 +3495,8 @@ def create_edge(
         Resolution order:
         1. Exact name match (any type)
         2. Case-insensitive exact match on Person/Place/Pet
-        3. Prefix match: "User" → "Default User" (shortest match wins)
-        4. Suffix match: "Steadman" → "Default User" (shortest match wins)
+        3. Prefix match: "Solomon" → "Solomon Steadman" (shortest match wins)
+        4. Suffix match: "Steadman" → "Solomon Steadman" (shortest match wins)
 
         Note: SQL pattern matching used instead of embedding similarity because
         entity nodes (Person/Place/Pet) have short names where pattern matching
@@ -3513,14 +3513,14 @@ def create_edge(
             ).fetchone()
             if row:
                 return graph._row_to_node(row)
-            # Prefix match: "User" → "Default User"
+            # Prefix match: "Solomon" → "Solomon Steadman"
             row = conn.execute(
                 "SELECT * FROM nodes WHERE name LIKE ? AND type IN ('Person', 'Place', 'Pet') ORDER BY LENGTH(name) LIMIT 1",
                 (name + "%",)
             ).fetchone()
             if row:
                 return graph._row_to_node(row)
-            # Suffix match: "Steadman" → "Default User"
+            # Suffix match: "Steadman" → "Solomon Steadman"
             row = conn.execute(
                 "SELECT * FROM nodes WHERE name LIKE ? AND type IN ('Person', 'Place', 'Pet') ORDER BY LENGTH(name) LIMIT 1",
                 ("%" + name,)
@@ -3762,7 +3762,7 @@ def _haiku_dedup_check(new_text: str, existing_text: str) -> Optional[Dict[str, 
         "different information?\n\n"
         "IMPORTANT: Statements with negation (doesn't, not, never, no longer) "
         "vs their positive form are DIFFERENT facts. "
-        "'User likes coffee' and 'User doesn't like coffee' are DIFFERENT.\n\n"
+        "'Solomon likes coffee' and 'Solomon doesn't like coffee' are DIFFERENT.\n\n"
         f'Statement A: "{new_text}"\n'
         f'Statement B: "{existing_text}"\n\n'
         'Respond with JSON only: {"is_same": true/false, "reasoning": "brief reason"}'
@@ -4116,7 +4116,7 @@ if __name__ == "__main__":
         # --- search-graph-aware ---
         search_ga_p = subparsers.add_parser("search-graph-aware", help="Graph-aware search: vector + pronoun resolution + bidirectional expansion")
         search_ga_p.add_argument("query", nargs="+", help="Search query")
-        search_ga_p.add_argument("--owner", default="default", help="Owner ID (default: default)")
+        search_ga_p.add_argument("--owner", default="solomon", help="Owner ID (default: solomon)")
         search_ga_p.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
         search_ga_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
         search_ga_p.add_argument("--json", action="store_true", help="JSON output")
@@ -4187,7 +4187,7 @@ if __name__ == "__main__":
         # --- recall ---
         recall_p = subparsers.add_parser("recall", help="Recall memories (same as search)")
         recall_p.add_argument("query", nargs="+", help="Search query")
-        recall_p.add_argument("--owner", default="default", help="Owner ID (default: default)")
+        recall_p.add_argument("--owner", default="solomon", help="Owner ID (default: solomon)")
         recall_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
         recall_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
@@ -4215,7 +4215,7 @@ if __name__ == "__main__":
         # --- add-alias ---
         add_alias_p = subparsers.add_parser("add-alias", help="Add an entity alias")
         add_alias_p.add_argument("alias", help="The alias name (e.g., 'Sol')")
-        add_alias_p.add_argument("canonical", help="The canonical name (e.g., 'Default User')")
+        add_alias_p.add_argument("canonical", help="The canonical name (e.g., 'Solomon Steadman')")
         add_alias_p.add_argument("--node-id", default=None, help="Optional canonical node ID")
         add_alias_p.add_argument("--owner", default=None, help="Owner ID")
 

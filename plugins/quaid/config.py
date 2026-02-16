@@ -1,7 +1,7 @@
 """
 Configuration loader for Memory System
 
-Loads memory-specific settings from ${QUAID_WORKSPACE}/config/memory.json
+Loads memory-specific settings from ~/clawd/config/memory.json
 Falls back to sensible defaults if config is missing.
 """
 
@@ -263,7 +263,7 @@ class UserIdentity:
 
 @dataclass
 class UsersConfig:
-    default_owner: str = "default"
+    default_owner: str = "solomon"
     identities: Dict[str, UserIdentity] = field(default_factory=dict)
 
 
@@ -671,7 +671,7 @@ def _load_config_inner() -> MemoryConfig:
             person_node_name=identity_data.get('person_node_name', '')
         )
     users = UsersConfig(
-        default_owner=users_data.get('default_owner', 'default'),
+        default_owner=users_data.get('default_owner', 'solomon'),
         identities=identities
     )
 
