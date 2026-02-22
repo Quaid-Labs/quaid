@@ -543,6 +543,25 @@ def notify_janitor_summary(
     if not has_changes:
         msg_parts.append("• No changes applied")
 
+    # Contradiction decisions are always shown in full detail, regardless of verbosity.
+    contradiction_findings = applied_changes.get("contradiction_findings") or []
+    contradiction_decisions = applied_changes.get("contradiction_decisions") or []
+    if contradiction_findings or contradiction_decisions:
+        msg_parts.append("")
+        msg_parts.append("**Contradiction Details (full):**")
+        for f in contradiction_findings[:10]:
+            if not isinstance(f, dict):
+                continue
+            msg_parts.append(f"• Found: \"{f.get('text_a', '')}\" ↔ \"{f.get('text_b', '')}\"")
+            msg_parts.append(f"  Reason: {f.get('reason', '')}")
+        for d in contradiction_decisions[:15]:
+            if not isinstance(d, dict):
+                continue
+            msg_parts.append(f"• Decision: {d.get('action', 'UNKNOWN')}")
+            msg_parts.append(f"  A: {d.get('text_a', '')}")
+            msg_parts.append(f"  B: {d.get('text_b', '')}")
+            msg_parts.append(f"  Why: {d.get('reason', '')}")
+
     # Update alert — super visible at the end
     update_info = applied_changes.get("update_available")
     if isinstance(update_info, dict) and update_info.get("latest"):

@@ -225,6 +225,32 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_loads_janitor_apply_mode_from_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({"janitor": {"applyMode": "ask"}}))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.janitor.apply_mode == "ask"
+        finally:
+            config._config = old_config
+
+    def test_loads_janitor_run_tests_from_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({"janitor": {"runTests": True}}))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.janitor.run_tests is True
+        finally:
+            config._config = old_config
+
     def test_invalid_json_uses_defaults(self, tmp_path):
         """Invalid JSON in config file falls back to defaults."""
         import config

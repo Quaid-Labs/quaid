@@ -205,6 +205,11 @@ function compactSummary(cfgPath, cfg) {
   const janitorVerb = String(getPath(cfg, "notifications.janitor.verbosity", "inherit"));
   const extractionVerb = String(getPath(cfg, "notifications.extraction.verbosity", "inherit"));
   const retrievalVerb = String(getPath(cfg, "notifications.retrieval.verbosity", "inherit"));
+  const janitorApplyMode = String(getPath(cfg, "janitor.applyMode", "auto"));
+  const corePolicy = String(getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask"));
+  const projectPolicy = String(getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask"));
+  const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask"));
+  const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
 
   const lines = [
     `${C.bold("Config")}: ${cfgPath}`,
@@ -216,6 +221,8 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Fast")}: ${fast} ${C.dim(`(${fastDesc})`)}`,
     `${C.bold("Embeddings")}: ${configuredEmbProvider} ${C.dim(`(default -> ${ep} / ${epModel})`)}`,
     `${C.bold("Notifications")}: ${notifyLevel} ${C.dim(`(janitor:${janitorVerb} extraction:${extractionVerb} retrieval:${retrievalVerb})`)}`,
+    `${C.bold("Janitor Apply")}: ${janitorApplyMode} ${C.dim("(legacy master policy)")}`,
+    `${C.bold("Janitor Policies")}: core=${corePolicy} project=${projectPolicy} workspace=${workspacePolicy} destructive=${destructivePolicy}`,
     `${C.bold("Timeout")}: ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`,
   ];
   note(lines.join("\n"), "Current");
@@ -305,6 +312,21 @@ function notificationOptions() {
   ];
 }
 
+function janitorApplyOptions() {
+  return [
+    { value: "auto", label: "auto", hint: "janitor applies changes when run with --apply" },
+    { value: "ask", label: "ask", hint: "requires explicit --approve for apply runs" },
+    { value: "dry_run", label: "dry_run", hint: "always dry-run, never mutates files/db" },
+  ];
+}
+
+function janitorScopePolicyOptions() {
+  return [
+    { value: "ask", label: "ask", hint: "queue request, ask user before applying" },
+    { value: "auto", label: "auto", hint: "apply immediately when janitor runs" },
+  ];
+}
+
 function systemRows(cfg) {
   return [
     { key: "memory", desc: "fact extraction + recall tools" },
@@ -357,6 +379,11 @@ async function runEdit() {
         { value: "emb_provider", label: "Embeddings provider", hint: "vector model host" },
         { value: "emb_model", label: "Embeddings model", hint: "semantic retrieval vectors" },
         { value: "notify", label: "Notification level", hint: "master level; feature verbosities may override" },
+        { value: "janitor_policy_core", label: "Janitor: core markdown policy", hint: "root markdown writes (SOUL/USER/MEMORY/TOOLS)" },
+        { value: "janitor_policy_project", label: "Janitor: project docs policy", hint: "project docs outside projects/quaid" },
+        { value: "janitor_policy_workspace", label: "Janitor: workspace move/delete policy", hint: "workspace audit file moves/deletes" },
+        { value: "janitor_policy_destructive", label: "Janitor: destructive memory policy", hint: "merges/supersedes/deletes in memory DB" },
+        { value: "janitor_apply", label: "Janitor apply mode (legacy)", hint: "master fallback: auto/ask/dry-run-only" },
         { value: "timeout", label: "Inactivity timeout", hint: "minutes before timeout extraction" },
         { value: "systems", label: "Systems on/off", hint: "feature gates" },
         { value: "save", label: "Save and exit" },
@@ -425,6 +452,41 @@ async function runEdit() {
         options: notificationOptions(),
       }));
       setPath(cfg, "notifications.level", next);
+    } else if (menu === "janitor_policy_core") {
+      const next = handleCancel(await select({
+        message: "janitor.approvalPolicies.coreMarkdownWrites",
+        initialValue: getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask"),
+        options: janitorScopePolicyOptions(),
+      }));
+      setPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", next);
+    } else if (menu === "janitor_policy_project") {
+      const next = handleCancel(await select({
+        message: "janitor.approvalPolicies.projectDocsWrites",
+        initialValue: getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask"),
+        options: janitorScopePolicyOptions(),
+      }));
+      setPath(cfg, "janitor.approvalPolicies.projectDocsWrites", next);
+    } else if (menu === "janitor_policy_workspace") {
+      const next = handleCancel(await select({
+        message: "janitor.approvalPolicies.workspaceFileMovesDeletes",
+        initialValue: getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask"),
+        options: janitorScopePolicyOptions(),
+      }));
+      setPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", next);
+    } else if (menu === "janitor_policy_destructive") {
+      const next = handleCancel(await select({
+        message: "janitor.approvalPolicies.destructiveMemoryOps",
+        initialValue: getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"),
+        options: janitorScopePolicyOptions(),
+      }));
+      setPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", next);
+    } else if (menu === "janitor_apply") {
+      const next = handleCancel(await select({
+        message: "janitor.applyMode",
+        initialValue: getPath(cfg, "janitor.applyMode", "auto"),
+        options: janitorApplyOptions(),
+      }));
+      setPath(cfg, "janitor.applyMode", next);
     } else if (menu === "timeout") {
       const next = handleCancel(await text({
         message: "capture.inactivityTimeoutMinutes",
@@ -470,6 +532,8 @@ function showConfig() {
   console.log(`embeddings:       ${getPath(cfg, "models.embeddingsProvider", "ollama")} (default -> ${effectiveEmb})`);
   console.log(`embeddings model: ${effectiveEmbModel}`);
   console.log(`notify level:     ${getPath(cfg, "notifications.level", "normal")} (janitor:${getPath(cfg, "notifications.janitor.verbosity", "inherit")} extraction:${getPath(cfg, "notifications.extraction.verbosity", "inherit")} retrieval:${getPath(cfg, "notifications.retrieval.verbosity", "inherit")})`);
+  console.log(`janitor apply:    ${getPath(cfg, "janitor.applyMode", "auto")}`);
+  console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} workspace=${getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
   console.log(`idle timeout:     ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`);
   console.log("\nsystems:");
   for (const row of systemRows(cfg)) {

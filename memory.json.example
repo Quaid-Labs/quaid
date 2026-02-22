@@ -65,6 +65,13 @@
   "janitor": {
     "enabled": true,
     "dryRun": false,
+    "applyMode": "auto",
+    "approvalPolicies": {
+      "coreMarkdownWrites": "ask",
+      "projectDocsWrites": "ask",
+      "workspaceFileMovesDeletes": "ask",
+      "destructiveMemoryOps": "auto"
+    },
     "taskTimeoutMinutes": 60,
     "opusReview": {
       "enabled": true,
@@ -84,7 +91,7 @@
       "minSimilarity": 0.6,
       "maxSimilarity": 0.85
     },
-    "_notes": "Nightly maintenance pipeline. opusReview: LLM reviews pending facts. dedup: similarity thresholds for duplicate detection. contradiction: detect conflicting facts."
+    "_notes": "Nightly maintenance pipeline. approvalPolicies lets you set ask/auto per sensitive scope. Root markdown writes are usually ask; projects/quaid markdown is auto-managed by janitor. applyMode is a legacy master fallback (auto/ask/dry_run). opusReview: LLM reviews pending facts. dedup: similarity thresholds for duplicate detection. contradiction: detect conflicting facts."
   },
 
   "retrieval": {

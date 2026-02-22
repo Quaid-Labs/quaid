@@ -998,7 +998,36 @@ async function step6_schedule(embeddings = {}) {
     initialValue: true,
   }));
 
-  return { hour: scheduleHour, scheduled };
+  const approvalPolicies = {
+    coreMarkdownWrites: "ask",
+    projectDocsWrites: "ask",
+    workspaceFileMovesDeletes: "ask",
+    destructiveMemoryOps: "auto",
+  };
+
+  log.message("");
+  log.info(C.bold("Janitor Approval Policies"));
+  log.info(C.dim("Choose where janitor should ask before applying changes."));
+
+  for (const row of [
+    ["coreMarkdownWrites", "Root core markdown writes (SOUL/USER/MEMORY/TOOLS)"],
+    ["projectDocsWrites", "Project docs writes outside projects/quaid"],
+    ["workspaceFileMovesDeletes", "Workspace file moves/deletes"],
+    ["destructiveMemoryOps", "Destructive memory DB ops (merges/supersedes/deletes)"],
+  ]) {
+    const [key, label] = row;
+    const mode = handleCancel(await select({
+      message: `${label}:`,
+      initialValue: approvalPolicies[key],
+      options: [
+        { value: "ask", label: "ask", hint: "queue for approval, notify user" },
+        { value: "auto", label: "auto", hint: "apply automatically during janitor run" },
+      ],
+    }));
+    approvalPolicies[key] = mode;
+  }
+
+  return { hour: scheduleHour, scheduled, approvalPolicies };
 }
 
 function getExistingScheduledTasks() {
@@ -1101,7 +1130,7 @@ function installHeartbeatSchedule(hour) {
 // =============================================================================
 // Step 7: Install & Migrate
 // =============================================================================
-async function step7_install(pluginSrc, owner, models, embeddings, systems) {
+async function step7_install(pluginSrc, owner, models, embeddings, systems, janitorPolicies = null) {
   stepHeader(7, 8, "INSTALL", STEP_QUOTES.install);
 
   const s = spinner();
@@ -1167,7 +1196,7 @@ conn.close()
 
   // Write config
   s.start("Writing configuration...");
-  writeConfig(owner, models, embeddings, systems);
+  writeConfig(owner, models, embeddings, systems, janitorPolicies);
   s.stop(C.green("Config written"));
 
   // Create workspace files
@@ -1439,6 +1468,19 @@ print(len(found))
 
   log.success("Installation complete!");
   log.message("");
+  try {
+    const markerDir = path.join(LOGS_DIR, "janitor");
+    fs.mkdirSync(markerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(markerDir, "pending-install-migration.json"),
+      JSON.stringify({
+        createdAt: new Date().toISOString(),
+        status: "pending",
+        prompt: "Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?"
+      }, null, 2) + "\n",
+      "utf8"
+    );
+  } catch {}
   await waitForKey("Press any key to run validation...");
 }
 
@@ -1646,7 +1688,13 @@ async function tryBrewInstall(pkg, label) {
   }
 }
 
-function writeConfig(owner, models, embeddings, systems) {
+function writeConfig(owner, models, embeddings, systems, janitorPolicies = null) {
+  const policies = janitorPolicies || {
+    coreMarkdownWrites: "ask",
+    projectDocsWrites: "ask",
+    workspaceFileMovesDeletes: "ask",
+    destructiveMemoryOps: "auto",
+  };
   const config = {
     adapter: { type: IS_OPENCLAW ? "openclaw" : "standalone" },
     systems,
@@ -1682,6 +1730,8 @@ function writeConfig(owner, models, embeddings, systems) {
     janitor: {
       enabled: true,
       dryRun: false,
+      applyMode: "auto",
+      approvalPolicies: policies,
       taskTimeoutMinutes: 60,
       opusReview: { enabled: true, batchSize: 50, maxTokens: 4000 },
       dedup: {
@@ -1827,7 +1877,7 @@ async function main() {
     const embeddings = await step4_embeddings();
     const systems = await step5_systems();
     const schedule = await step6_schedule(embeddings);
-    await step7_install(pluginSrc, owner, models, embeddings, systems);
+    await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
     await step8_validate(owner, models, embeddings, systems);
 
     // In test mode, write results for the test runner to verify

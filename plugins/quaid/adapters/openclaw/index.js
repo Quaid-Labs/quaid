@@ -78,6 +78,11 @@ const QUAID_NOTES_DIR = path.join(QUAID_RUNTIME_DIR, "notes");
 const QUAID_INJECTION_LOG_DIR = path.join(QUAID_RUNTIME_DIR, "injection");
 const QUAID_NOTIFY_DIR = path.join(QUAID_RUNTIME_DIR, "notify");
 const QUAID_LOGS_DIR = path.join(WORKSPACE, "logs");
+const QUAID_JANITOR_DIR = path.join(QUAID_LOGS_DIR, "janitor");
+const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-install-migration.json");
+const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
+const DELAYED_NOTIFICATIONS_PATH = path.join(QUAID_JANITOR_DIR, "delayed-notifications.json");
+const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
     try {
         fs.mkdirSync(p, { recursive: true });
@@ -962,6 +967,86 @@ function spawnNotifyScript(scriptBody) {
     fs.closeSync(notifyLogFd);
     proc.unref();
 }
+function _loadJanitorNudgeState() {
+    try {
+        if (fs.existsSync(JANITOR_NUDGE_STATE_PATH)) {
+            return JSON.parse(fs.readFileSync(JANITOR_NUDGE_STATE_PATH, "utf8")) || {};
+        }
+    }
+    catch { }
+    return {};
+}
+function _saveJanitorNudgeState(state) {
+    try {
+        fs.writeFileSync(JANITOR_NUDGE_STATE_PATH, JSON.stringify(state, null, 2), { mode: 0o600 });
+    }
+    catch { }
+}
+function maybeSendJanitorNudges() {
+    // Adapter-owned reminders: the janitor queues requests; heartbeat/adapter asks users.
+    const now = Date.now();
+    const state = _loadJanitorNudgeState();
+    const lastInstallNudge = Number(state.lastInstallNudgeAt || 0);
+    const lastApprovalNudge = Number(state.lastApprovalNudgeAt || 0);
+    const NUDGE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+    try {
+        if (fs.existsSync(PENDING_INSTALL_MIGRATION_PATH) && now - lastInstallNudge > NUDGE_COOLDOWN_MS) {
+            const raw = JSON.parse(fs.readFileSync(PENDING_INSTALL_MIGRATION_PATH, "utf8"));
+            if ((raw === null || raw === void 0 ? void 0 : raw.status) === "pending") {
+                spawnNotifyScript(`
+from notify import notify_user
+notify_user("Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?")
+`);
+                state.lastInstallNudgeAt = now;
+            }
+        }
+    }
+    catch { }
+    try {
+        if (fs.existsSync(PENDING_APPROVAL_REQUESTS_PATH) && now - lastApprovalNudge > NUDGE_COOLDOWN_MS) {
+            const raw = JSON.parse(fs.readFileSync(PENDING_APPROVAL_REQUESTS_PATH, "utf8"));
+            const requests = Array.isArray(raw === null || raw === void 0 ? void 0 : raw.requests) ? raw.requests : [];
+            const pendingCount = requests.filter((r) => (r === null || r === void 0 ? void 0 : r.status) === "pending").length;
+            if (pendingCount > 0) {
+                state.lastApprovalNudgeAt = now;
+            }
+        }
+    }
+    catch { }
+    _saveJanitorNudgeState(state);
+}
+function flushDelayedNotifications(maxItems = 5) {
+    try {
+        if (!fs.existsSync(DELAYED_NOTIFICATIONS_PATH))
+            return;
+        const raw = JSON.parse(fs.readFileSync(DELAYED_NOTIFICATIONS_PATH, "utf8"));
+        const items = Array.isArray(raw === null || raw === void 0 ? void 0 : raw.items) ? raw.items : [];
+        if (!items.length)
+            return;
+        let sent = 0;
+        for (const item of items) {
+            if (sent >= maxItems)
+                break;
+            if (!item || item.status !== "pending" || !item.message)
+                continue;
+            const message = String(item.message);
+            spawnNotifyScript(`
+from notify import notify_user
+notify_user(${JSON.stringify(message)})
+`);
+            item.status = "sent";
+            item.sent_at = new Date().toISOString();
+            sent += 1;
+        }
+        fs.writeFileSync(DELAYED_NOTIFICATIONS_PATH, JSON.stringify(raw, null, 2), { mode: 0o600 });
+        if (sent > 0) {
+            console.log(`[quaid] Flushed ${sent} delayed notification(s)`);
+        }
+    }
+    catch (err) {
+        console.warn(`[quaid] Failed to flush delayed notifications: ${String(err === null || err === void 0 ? void 0 : err.message) || String(err)}`);
+    }
+}
 // ============================================================================
 // Project Event Emitter (compact/reset → background processor)
 // ============================================================================
@@ -1665,6 +1750,14 @@ const quaidPlugin = {
             if (isInternalQuaidSession(ctx?.sessionId)) {
                 return;
             }
+            try {
+                maybeSendJanitorNudges();
+            }
+            catch { }
+            try {
+                flushDelayedNotifications(5);
+            }
+            catch { }
             // Cancel inactivity timer — agent is active again
             timeoutManager.onAgentStart();
             // Journal injection (full soul mode) — gated by journal system

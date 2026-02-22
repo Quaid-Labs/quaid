@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { writeFile, appendFile } from 'node:fs/promises'
+import { writeFile, appendFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 
@@ -145,6 +145,7 @@ async function logResults(results) {
   }) + '\n'
   
   try {
+    await mkdir(LOGS_DIR, { recursive: true })
     // Append to JSONL file
     await appendFile(LOG_FILE, logEntry)
   } catch (error) {

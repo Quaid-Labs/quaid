@@ -121,6 +121,13 @@ class OpusReviewConfig:
 class JanitorConfig:
     enabled: bool = True
     dry_run: bool = False
+    apply_mode: str = "auto"  # Legacy master mode: auto | ask | dry_run
+    approval_policies: Dict[str, str] = field(default_factory=lambda: {
+        "core_markdown_writes": "ask",
+        "project_docs_writes": "ask",
+        "workspace_file_moves_deletes": "ask",
+        "destructive_memory_ops": "auto",
+    })
     task_timeout_minutes: int = 60
     run_tests: bool = False  # Only enable in dev (or set QUAID_DEV=1)
     opus_review: OpusReviewConfig = field(default_factory=OpusReviewConfig)
@@ -570,7 +577,29 @@ def _load_config_inner() -> MemoryConfig:
     janitor = JanitorConfig(
         enabled=config_data.get('janitor', {}).get('enabled', True),
         dry_run=config_data.get('janitor', {}).get('dry_run', False),
+        apply_mode=config_data.get('janitor', {}).get('apply_mode',
+                    config_data.get('janitor', {}).get('applyMode', 'auto')),
+        approval_policies={
+            "core_markdown_writes": str(config_data.get('janitor', {}).get('approval_policies', {})
+                                        .get('core_markdown_writes',
+                                        config_data.get('janitor', {}).get('approvalPolicies', {})
+                                        .get('coreMarkdownWrites', 'ask'))),
+            "project_docs_writes": str(config_data.get('janitor', {}).get('approval_policies', {})
+                                       .get('project_docs_writes',
+                                       config_data.get('janitor', {}).get('approvalPolicies', {})
+                                       .get('projectDocsWrites', 'ask'))),
+            "workspace_file_moves_deletes": str(config_data.get('janitor', {}).get('approval_policies', {})
+                                                .get('workspace_file_moves_deletes',
+                                                config_data.get('janitor', {}).get('approvalPolicies', {})
+                                                .get('workspaceFileMovesDeletes', 'ask'))),
+            "destructive_memory_ops": str(config_data.get('janitor', {}).get('approval_policies', {})
+                                          .get('destructive_memory_ops',
+                                          config_data.get('janitor', {}).get('approvalPolicies', {})
+                                          .get('destructiveMemoryOps', 'auto'))),
+        },
         task_timeout_minutes=config_data.get('janitor', {}).get('task_timeout_minutes', 60),
+        run_tests=config_data.get('janitor', {}).get('run_tests',
+                  config_data.get('janitor', {}).get('runTests', False)),
         opus_review=opus_review,
         dedup=dedup,
         contradiction=contradiction

@@ -58,7 +58,6 @@ from docs_rag import DocsRAG
 from llm_clients import (call_fast_reasoning, call_deep_reasoning, call_llm,
                          parse_json_response, reset_token_usage, get_token_usage,
                          estimate_cost, DEEP_REASONING_TIMEOUT, FAST_REASONING_TIMEOUT)
-from notify import notify_janitor_summary, notify_daily_memories
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
@@ -878,7 +877,7 @@ def resolve_contradictions_with_opus(graph: MemoryGraph, metrics: JanitorMetrics
                                      dry_run: bool = True) -> Dict[str, int]:
     """Resolve pending contradictions using Opus for deep-reasoning decisions."""
     metrics.start_task("contradiction_resolution")
-    results = {"resolved": 0, "false_positive": 0, "merged": 0}
+    results = {"resolved": 0, "false_positive": 0, "merged": 0, "decisions": []}
 
     pending = get_pending_contradictions(limit=50)
     if not pending:
@@ -961,6 +960,14 @@ JSON array only:"""
             c = batch[idx - 1]
             action = item.get("action", "").upper()
             reason = resolution_prompt_tag + item.get("reason", "")
+            decision_row = {
+                "id": c["id"],
+                "action": action,
+                "text_a": c["text_a"],
+                "text_b": c["text_b"],
+                "reason": reason,
+                "dry_run": dry_run,
+            }
 
             if action == "KEEP_A":
                 if dry_run:
@@ -970,6 +977,8 @@ JSON array only:"""
                     resolve_contradiction(c["id"], "keep_a", reason)
                 results["resolved"] += 1
                 batch_resolved += 1
+                results["decisions"].append(decision_row)
+                _append_decision_log("contradiction_resolution", decision_row)
 
             elif action == "KEEP_B":
                 if dry_run:
@@ -979,6 +988,8 @@ JSON array only:"""
                     resolve_contradiction(c["id"], "keep_b", reason)
                 results["resolved"] += 1
                 batch_resolved += 1
+                results["decisions"].append(decision_row)
+                _append_decision_log("contradiction_resolution", decision_row)
 
             elif action == "KEEP_BOTH":
                 if dry_run:
@@ -987,6 +998,8 @@ JSON array only:"""
                     mark_contradiction_false_positive(c["id"], reason)
                 results["false_positive"] += 1
                 batch_resolved += 1
+                results["decisions"].append(decision_row)
+                _append_decision_log("contradiction_resolution", decision_row)
 
             elif action == "MERGE":
                 merged_text = item.get("merged_text", "")
@@ -1031,6 +1044,8 @@ JSON array only:"""
                             pass  # Resolution summary is best-effort
                     results["merged"] += 1
                     batch_resolved += 1
+                    results["decisions"].append(decision_row)
+                    _append_decision_log("contradiction_resolution", decision_row)
 
         print(f"    Batch {batch_num}/{total_batches}: {batch_resolved} resolved ({duration:.1f}s)")
 
@@ -2523,7 +2538,8 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
 
 
 def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True,
-                       time_budget: int = 0, force_distill: bool = False):
+                       time_budget: int = 0, force_distill: bool = False,
+                       user_approved: bool = False):
     """Run optimized janitor task with comprehensive reporting.
 
     Args:
@@ -2539,13 +2555,168 @@ def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True
         return {"error": "janitor_already_running", "success": False, "applied_changes": {}, "metrics": {}}
 
     try:
-        return _run_task_optimized_inner(task, dry_run, incremental, time_budget, force_distill)
+        return _run_task_optimized_inner(task, dry_run, incremental, time_budget, force_distill, user_approved)
     finally:
         _release_lock()
 
 
+def _resolve_apply_mode(args_apply: bool, args_approve: bool) -> tuple[bool, Optional[str]]:
+    """Resolve final dry-run state from CLI flags + janitor.apply_mode config.
+
+    Returns (dry_run, warning_message). warning_message is user-facing guidance
+    when an apply request is downgraded to dry-run by policy.
+    """
+    if not args_apply:
+        return True, None
+
+    mode = str(getattr(_cfg.janitor, "apply_mode", "auto") or "auto").strip().lower()
+    if mode == "auto":
+        return False, None
+    if mode == "dry_run":
+        return True, (
+            "apply blocked by janitor.applyMode=dry_run; running dry-run only."
+        )
+    if mode == "ask":
+        if args_approve:
+            return False, None
+        return True, (
+            "approval required by janitor.applyMode=ask. "
+            "Re-run with --approve to apply changes."
+        )
+    return True, f"unknown janitor.applyMode={mode}; running dry-run for safety."
+
+
+def _decision_log_path() -> Path:
+    p = _logs_dir() / "janitor" / "decision-log.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _append_decision_log(kind: str, payload: Dict[str, Any]) -> None:
+    """Append janitor decision events for audit/debug."""
+    try:
+        row = {
+            "ts": datetime.now().isoformat(),
+            "kind": kind,
+            **payload,
+        }
+        with _decision_log_path().open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+
+def _pending_approvals_json_path() -> Path:
+    p = _logs_dir() / "janitor" / "pending-approval-requests.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _pending_approvals_md_path() -> Path:
+    p = _logs_dir() / "janitor" / "pending-approval-requests.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _delayed_notifications_path() -> Path:
+    p = _logs_dir() / "janitor" / "delayed-notifications.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _queue_delayed_notification(message: str, kind: str = "janitor", priority: str = "normal") -> None:
+    """Queue notification for adapter-delayed delivery (next active user session)."""
+    if not message:
+        return
+    path = _delayed_notifications_path()
+    payload: Dict[str, Any] = {"version": 1, "items": []}
+    try:
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                payload = {"version": 1, "items": []}
+    except Exception:
+        payload = {"version": 1, "items": []}
+
+    items = payload.get("items", [])
+    if not isinstance(items, list):
+        items = []
+
+    item = {
+        "id": hashlib.sha256(f"{kind}|{message}".encode()).hexdigest()[:12],
+        "created_at": datetime.now().isoformat(),
+        "kind": kind,
+        "priority": priority,
+        "message": message,
+        "status": "pending",
+    }
+    if not any(isinstance(x, dict) and x.get("id") == item["id"] and x.get("status") == "pending" for x in items):
+        items.append(item)
+    payload["items"] = items
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    _append_decision_log("delayed_notification_queued", {"id": item["id"], "kind": kind, "priority": priority})
+
+
+def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
+    """Queue a pending approval request for heartbeat + user follow-up."""
+    entry = {
+        "id": hashlib.sha256(f"{scope}|{task_name}|{summary}".encode()).hexdigest()[:12],
+        "created_at": datetime.now().isoformat(),
+        "scope": scope,
+        "task": task_name,
+        "summary": summary,
+        "status": "pending",
+    }
+    path = _pending_approvals_json_path()
+    data: Dict[str, Any] = {"version": 1, "requests": []}
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {"version": 1, "requests": []}
+    except Exception:
+        data = {"version": 1, "requests": []}
+
+    reqs = data.get("requests", [])
+    if not isinstance(reqs, list):
+        reqs = []
+
+    # De-dup same request id.
+    is_new = not any(isinstance(r, dict) and r.get("id") == entry["id"] for r in reqs)
+    if is_new:
+        reqs.append(entry)
+    data["requests"] = reqs
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    md = _pending_approvals_md_path()
+    lines = [
+        "# Janitor Pending Approval Requests",
+        "",
+        "These changes were held because policy is set to `ask`.",
+        "Run with `--approve` once reviewed, or switch scope to `auto` in `quaid config edit`.",
+        "",
+    ]
+    for r in reqs:
+        if not isinstance(r, dict):
+            continue
+        lines.append(f"- [{r.get('status', 'pending')}] `{r.get('scope', 'unknown')}` "
+                     f"({r.get('created_at', '?')}): {r.get('summary', '')}")
+    md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _append_decision_log("approval_queued", entry)
+    if is_new:
+        _queue_delayed_notification(
+            f"[Quaid] ⚠️ Janitor held `{scope}` change: {summary}\n"
+            f"Review logs/janitor/pending-approval-requests.md.\n"
+            f"Run `quaid janitor --apply --task {task_name} --approve` to apply,\n"
+            f"or switch this scope to auto via `quaid config edit`.",
+            kind="approval_request",
+            priority="high",
+        )
+
+
 def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool = True,
-                              time_budget: int = 0, force_distill: bool = False):
+                              time_budget: int = 0, force_distill: bool = False,
+                              user_approved: bool = False):
     """Inner implementation of run_task_optimized (with lock held)."""
     # Rotate logs at start of janitor run
     rotate_logs()
@@ -2573,6 +2744,32 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     if last_run:
         print(f"Last run: {last_run.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*80}\n")
+
+    def _scope_policy(scope: str) -> str:
+        try:
+            policy = str(_cfg.janitor.approval_policies.get(scope, "auto")).strip().lower()
+            return policy if policy in ("auto", "ask", "dry_run") else "auto"
+        except Exception:
+            return "auto"
+
+    def _can_apply_scope(scope: str, summary: str) -> bool:
+        if dry_run:
+            return False
+        mode = _scope_policy(scope)
+        if mode == "auto":
+            return True
+        if mode == "ask":
+            if user_approved:
+                return True
+            _queue_approval_request(scope, task, summary)
+            print(f"[policy] {scope}=ask, holding apply: {summary}")
+            print("[policy] Re-run with --approve, or set this scope to auto in `quaid config edit`.")
+            return False
+        # dry_run policy
+        _queue_approval_request(scope, task, summary + " (policy dry_run)")
+        print(f"[policy] {scope}=dry_run, holding apply: {summary}")
+        print("[policy] Switch scope to auto/ask in `quaid config edit` when ready.")
+        return False
 
     # ⚠️ LLM PROVIDER CHECK — janitor needs a working LLM provider for most tasks.
     # The adapter layer handles provider selection and authentication.
@@ -2792,6 +2989,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
                 merges_applied = 0
                 merged_ids = set()  # Track already-merged node IDs
+                dedup_apply_allowed = _can_apply_scope(
+                    "destructive_memory_ops",
+                    "dedup merge operations"
+                )
                 for dup in dups:
                     # Skip pairs where either node was already merged this run
                     if dup["id_a"] in merged_ids or dup["id_b"] in merged_ids:
@@ -2805,7 +3006,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     if suggestion.get("action") == "merge":
                         merged_text = suggestion.get("merged_text", "")
                         print(f"    -> MERGE: {merged_text[:70]}...")
-                        if not dry_run and merged_text:
+                        if (not dry_run) and dedup_apply_allowed and merged_text:
                             try:
                                 id_a, id_b = dup["id_a"], dup["id_b"]
                                 _merge_nodes_into(
@@ -2813,6 +3014,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                                     [id_a, id_b],
                                     source="dedup_merge",
                                 )
+                                _append_decision_log("dedup_merge", {
+                                    "id_a": id_a,
+                                    "id_b": id_b,
+                                    "merged_text": merged_text[:400],
+                                })
                                 merged_ids.add(id_a)
                                 merged_ids.add(id_b)
                                 merges_applied += 1
@@ -2836,6 +3042,15 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 contradictions = find_contradictions_from_pairs(contradiction_candidates, metrics, dry_run=dry_run)
 
                 applied_changes["contradictions_found"] = len(contradictions)
+                if contradictions:
+                    applied_changes["contradiction_findings"] = [
+                        {
+                            "text_a": c.get("text_a", ""),
+                            "text_b": c.get("text_b", ""),
+                            "reason": c.get("explanation", ""),
+                        }
+                        for c in contradictions[:25]
+                    ]
 
                 for contradiction in contradictions:
                     print(f"  CONTRADICTION FOUND:")
@@ -2843,6 +3058,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     print(f"    B: {contradiction['text_b'][:60]}...")
                     print(f"    Reason: {contradiction.get('explanation', '')[:50]}...")
                     print()
+                    _append_decision_log("contradiction_found", {
+                        "text_a": contradiction.get("text_a", ""),
+                        "text_b": contradiction.get("text_b", ""),
+                        "reason": contradiction.get("explanation", ""),
+                    })
 
                 # Check if batch functions added errors
                 if len(metrics.errors) > _errors_before:
@@ -2855,11 +3075,21 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     print("[Task 4b: Resolve Contradictions] SKIPPED — pipeline aborted\n")
                 else:
                     print("[Task 4b: Resolve Contradictions]")
+                    contradiction_apply_allowed = _can_apply_scope(
+                        "destructive_memory_ops",
+                        "contradiction resolution operations"
+                    )
                     try:
-                        resolution_result = resolve_contradictions_with_opus(graph, metrics, dry_run=dry_run)
+                        resolution_result = resolve_contradictions_with_opus(
+                            graph,
+                            metrics,
+                            dry_run=(dry_run or (not contradiction_apply_allowed))
+                        )
                         applied_changes["contradictions_resolved"] = resolution_result["resolved"]
                         applied_changes["contradictions_false_positive"] = resolution_result["false_positive"]
                         applied_changes["contradictions_merged"] = resolution_result["merged"]
+                        if resolution_result.get("decisions"):
+                            applied_changes["contradiction_decisions"] = resolution_result["decisions"][:50]
                         print(f"  Resolved: {resolution_result['resolved']}, "
                               f"False positives: {resolution_result['false_positive']}, "
                               f"Merged: {resolution_result['merged']}")
@@ -2878,15 +3108,20 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 print("[Task 5: Confidence Decay]")
                 stale = find_stale_memories_optimized(graph, metrics)
                 print(f"Found {len(stale)} stale memories (>{CONFIDENCE_DECAY_DAYS} days unused)\n")
+                decay_apply_allowed = _can_apply_scope(
+                    "destructive_memory_ops",
+                    "confidence decay updates/deletes"
+                )
+                decay_dry_run = dry_run or (not decay_apply_allowed)
 
                 if stale:
-                    decay_result = apply_decay_optimized(stale, graph, metrics, dry_run=dry_run)
+                    decay_result = apply_decay_optimized(stale, graph, metrics, dry_run=decay_dry_run)
                     applied_changes["memories_decayed"] = decay_result["decayed"]
                     applied_changes["memories_deleted_by_decay"] = decay_result["deleted"]
                     applied_changes["decay_queued"] = decay_result.get("queued", 0)
 
                     total_updated = decay_result["decayed"] + decay_result["deleted"] + decay_result.get("queued", 0)
-                    print(f"\n{'Would update' if dry_run else 'Updated'} {total_updated} memories:")
+                    print(f"\n{'Would update' if decay_dry_run else 'Updated'} {total_updated} memories:")
                     print(f"  Decayed: {decay_result['decayed']}")
                     print(f"  Deleted: {decay_result['deleted']}")
                     print(f"  Queued for review: {decay_result.get('queued', 0)}")
@@ -2901,9 +3136,14 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 print("[Task 5b: Review Decayed Memories] SKIPPED — pipeline aborted\n")
             else:
                 print("[Task 5b: Review Decayed Memories - Opus API]")
+                decay_review_apply_allowed = _can_apply_scope(
+                    "destructive_memory_ops",
+                    "decay review decisions"
+                )
+                decay_review_dry_run = dry_run or (not decay_review_apply_allowed)
 
                 try:
-                    decay_review_result = review_decayed_memories(graph, metrics, dry_run=dry_run)
+                    decay_review_result = review_decayed_memories(graph, metrics, dry_run=decay_review_dry_run)
 
                     applied_changes["decay_reviewed"] = decay_review_result["reviewed"]
                     applied_changes["decay_review_deleted"] = decay_review_result["deleted"]
@@ -2927,9 +3167,14 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("workspace", "all") and _system_enabled_or_skip("workspace", "Task 1: Workspace Audit") and not _skip_if_over_budget("Task 1: Workspace Audit", 30):
             print("[Task 1: Workspace Audit - Single-Pass Opus Review]")
             metrics.start_task("workspace_audit")
+            workspace_apply_allowed = _can_apply_scope(
+                "workspace_file_moves_deletes",
+                "workspace file moves/deletes"
+            )
+            workspace_dry_run = dry_run or (not workspace_apply_allowed)
 
             try:
-                audit_result = run_workspace_check(dry_run=dry_run)
+                audit_result = run_workspace_check(dry_run=workspace_dry_run)
 
                 phase = audit_result.get("phase", "unknown")
                 applied_changes["workspace_phase"] = phase
@@ -2950,7 +3195,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     applied_changes["workspace_trimmed"] = audit_result.get("trimmed", 0)
                     applied_changes["workspace_bloat_warnings"] = audit_result.get("bloat_warnings", 0)
                     applied_changes["workspace_project_detected"] = audit_result.get("project_detected", 0)
-                    print(f"\n{'Would apply' if dry_run else 'Applied'} review decisions:")
+                    print(f"\n{'Would apply' if workspace_dry_run else 'Applied'} review decisions:")
                     print(f"   Moved to docs: {audit_result.get('moved_to_docs', 0)}")
                     print(f"   Moved to memory: {audit_result.get('moved_to_memory', 0)}")
                     print(f"   Trimmed: {audit_result.get('trimmed', 0)}")
@@ -2987,7 +3232,22 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         print(f"    {doc_path} ({info.gap_hours:.1f}h behind)")
                         for src in info.stale_sources:
                             print(f"      <- {src}")
-                        if not dry_run:
+                        doc_p = Path(doc_path)
+                        is_root_md = len(doc_p.parts) == 1 and doc_p.suffix.lower() == ".md"
+                        is_quaid_project_md = (
+                            len(doc_p.parts) >= 2 and doc_p.parts[0] == "projects" and doc_p.parts[1] == "quaid"
+                            and doc_p.suffix.lower() == ".md"
+                        )
+                        allow_apply = not dry_run
+                        if is_root_md:
+                            allow_apply = allow_apply and _can_apply_scope(
+                                "core_markdown_writes", f"docs staleness update: {doc_path}"
+                            )
+                        elif not is_quaid_project_md:
+                            allow_apply = allow_apply and _can_apply_scope(
+                                "project_docs_writes", f"project docs staleness update: {doc_path}"
+                            )
+                        if allow_apply:
                             ok = update_doc_from_diffs(
                                 doc_path, purposes.get(doc_path, ""),
                                 info.stale_sources, dry_run=False
@@ -3020,7 +3280,22 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                             "both": f"{info.updates_since_cleanup} updates + {info.growth_ratio:.1f}x growth",
                         }[info.reason]
                         print(f"    {doc_path} ({reason_str})")
-                        if not dry_run:
+                        doc_p = Path(doc_path)
+                        is_root_md = len(doc_p.parts) == 1 and doc_p.suffix.lower() == ".md"
+                        is_quaid_project_md = (
+                            len(doc_p.parts) >= 2 and doc_p.parts[0] == "projects" and doc_p.parts[1] == "quaid"
+                            and doc_p.suffix.lower() == ".md"
+                        )
+                        allow_apply = not dry_run
+                        if is_root_md:
+                            allow_apply = allow_apply and _can_apply_scope(
+                                "core_markdown_writes", f"docs cleanup: {doc_path}"
+                            )
+                        elif not is_quaid_project_md:
+                            allow_apply = allow_apply and _can_apply_scope(
+                                "project_docs_writes", f"project docs cleanup: {doc_path}"
+                            )
+                        if allow_apply:
                             ok = cleanup_doc(doc_path, purposes.get(doc_path, ""), dry_run=False)
                             if ok:
                                 applied_changes["docs_cleaned"] = \
@@ -3035,9 +3310,14 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("snippets", "soul_snippets", "all") and _system_enabled_or_skip("snippets", "Task 1d-snippets: Snippets") and not _skip_if_over_budget("Task 1d-snippets: Snippets", 30):
             print("[Task 1d-snippets: Soul Snippets Review]")
             metrics.start_task("snippets")
+            snippets_apply_allowed = _can_apply_scope(
+                "core_markdown_writes",
+                "snippets fold into root core markdown"
+            )
+            snippets_dry_run = dry_run or (not snippets_apply_allowed)
             try:
                 from soul_snippets import run_soul_snippets_review
-                snippets_result = run_soul_snippets_review(dry_run=dry_run)
+                snippets_result = run_soul_snippets_review(dry_run=snippets_dry_run)
                 applied_changes["snippets_folded"] = snippets_result.get("folded", 0)
                 applied_changes["snippets_rewritten"] = snippets_result.get("rewritten", 0)
                 applied_changes["snippets_discarded"] = snippets_result.get("discarded", 0)
@@ -3051,9 +3331,14 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("journal", "all") and _system_enabled_or_skip("journal", "Task 1d-journal: Journal") and not _skip_if_over_budget("Task 1d-journal: Journal", 30):
             print("[Task 1d-journal: Journal Distillation]")
             metrics.start_task("journal")
+            journal_apply_allowed = _can_apply_scope(
+                "core_markdown_writes",
+                "journal distillation updates root core markdown"
+            )
+            journal_dry_run = dry_run or (not journal_apply_allowed)
             try:
                 from soul_snippets import run_journal_distillation
-                journal_result = run_journal_distillation(dry_run=dry_run, force_distill=force_distill)
+                journal_result = run_journal_distillation(dry_run=journal_dry_run, force_distill=force_distill)
                 applied_changes["journal_additions"] = journal_result.get("additions", 0)
                 applied_changes["journal_edits"] = journal_result.get("edits", 0)
                 applied_changes["journal_entries_distilled"] = journal_result.get("total_entries", 0)
@@ -3459,41 +3744,75 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         except Exception as e:
             print(f"  Warning: Failed to record janitor run: {e}")
 
-    # Send user notifications (only for full runs, not dry-run)
+    # Queue user notifications for adapter-delayed delivery (only for full runs, not dry-run)
     if task == "all" and not dry_run:
         try:
-            # Honor notifications config (feature: janitor).
+            duration = final_metrics.get("total_duration_seconds", 0)
+            duration_label = f"{duration/60:.1f}min" if duration >= 60 else f"{duration:.0f}s"
+            summary_lines = [
+                "[Quaid] 🧹 Nightly Janitor Complete",
+                f"Duration: {duration_label}",
+                f"LLM calls: {final_metrics.get('llm_calls', 0)}",
+                f"Errors: {final_metrics.get('errors', 0)}",
+                "",
+                "Changes:",
+                f"- reviewed: {applied_changes.get('memories_reviewed', 0)}",
+                f"- merged: {applied_changes.get('duplicates_merged', 0)}",
+                f"- contradictions found: {applied_changes.get('contradictions_found', 0)}",
+                f"- contradictions resolved: {applied_changes.get('contradictions_resolved', 0)}",
+                f"- decayed: {applied_changes.get('memories_decayed', 0)}",
+                f"- deleted_by_decay: {applied_changes.get('memories_deleted_by_decay', 0)}",
+            ]
+            # Always include full contradiction decision details.
+            contradiction_findings = applied_changes.get("contradiction_findings") or []
+            contradiction_decisions = applied_changes.get("contradiction_decisions") or []
+            if contradiction_findings or contradiction_decisions:
+                summary_lines.append("")
+                summary_lines.append("Contradiction Details (full):")
+                for f in contradiction_findings[:10]:
+                    if isinstance(f, dict):
+                        summary_lines.append(f"- Found: \"{f.get('text_a', '')}\" ↔ \"{f.get('text_b', '')}\"")
+                        summary_lines.append(f"  Reason: {f.get('reason', '')}")
+                for d in contradiction_decisions[:15]:
+                    if isinstance(d, dict):
+                        summary_lines.append(f"- Decision: {d.get('action', 'UNKNOWN')}")
+                        summary_lines.append(f"  A: {d.get('text_a', '')}")
+                        summary_lines.append(f"  B: {d.get('text_b', '')}")
+                        summary_lines.append(f"  Why: {d.get('reason', '')}")
+
             if _cfg.notifications.should_notify("janitor", detail="summary"):
-                # 1. Summary of janitor operations
-                notify_janitor_summary(final_metrics, applied_changes)
-                print("[notify] Sent janitor summary to user")
+                _queue_delayed_notification("\n".join(summary_lines), kind="janitor_summary", priority="normal")
+                print("[notify] Queued janitor summary for delayed adapter delivery")
             else:
                 print("[notify] Janitor summary suppressed by notifications config")
 
-            # 2. Today's new memories
-            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-            with graph._get_conn() as conn:
-                rows = conn.execute("""
-                    SELECT name as text, type as category, created_at
-                    FROM nodes
-                    WHERE type = 'Fact'
-                      AND created_at >= ?
-                      AND status IN ('pending', 'approved', 'active')
-                    ORDER BY created_at DESC
-                """, (today_start,)).fetchall()
-                today_memories = [dict(row) for row in rows]
-
-            if today_memories and _cfg.notifications.should_notify("janitor", detail="summary"):
-                notify_daily_memories(today_memories)
-                print(f"[notify] Sent {len(today_memories)} daily memories to user")
-            else:
+            # Queue daily memory digest if enabled.
+            if _cfg.notifications.should_notify("janitor", detail="summary"):
+                today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+                with graph._get_conn() as conn:
+                    rows = conn.execute("""
+                        SELECT name as text
+                        FROM nodes
+                        WHERE type = 'Fact'
+                          AND created_at >= ?
+                          AND status IN ('pending', 'approved', 'active')
+                        ORDER BY created_at DESC
+                        LIMIT 25
+                    """, (today_start,)).fetchall()
+                today_memories = [str(r["text"]) for r in rows]
                 if today_memories:
-                    print("[notify] Daily digest suppressed by notifications config")
+                    digest_lines = ["[Quaid] 📚 Today's New Memories", f"Count: {len(today_memories)}", ""]
+                    for text in today_memories[:10]:
+                        digest_lines.append(f"- {text}")
+                    if len(today_memories) > 10:
+                        digest_lines.append(f"- ...and {len(today_memories)-10} more")
+                    _queue_delayed_notification("\n".join(digest_lines), kind="janitor_daily_digest", priority="low")
+                    print(f"[notify] Queued daily digest ({len(today_memories)} memories)")
                 else:
                     print("[notify] No new memories today, skipping daily digest")
 
         except Exception as e:
-            print(f"[notify] Failed to send notifications: {e}")
+            print(f"[notify] Failed to queue delayed notifications: {e}")
 
     # Return metrics for programmatic use
     # WAL checkpoint at end of run to reclaim WAL file space
@@ -3517,6 +3836,8 @@ if __name__ == "__main__":
     parser.add_argument("--task", choices=["embeddings", "workspace", "docs_staleness", "docs_cleanup", "snippets", "soul_snippets", "journal", "review", "dedup_review", "duplicates", "contradictions", "decay", "decay_review", "edges", "rag", "tests", "cleanup", "update_check", "all"],
                         default="all", help="Task to run")
     parser.add_argument("--apply", action="store_true", help="Apply changes (default: dry-run)")
+    parser.add_argument("--approve", action="store_true",
+                        help="Confirm apply when janitor.applyMode is set to 'ask'")
     parser.add_argument("--dry-run", action="store_true", help="Report only, no changes (default)")
     parser.add_argument("--full-scan", action="store_true", help="Force full scan instead of incremental")
     parser.add_argument("--force-distill", action="store_true",
@@ -3526,13 +3847,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # dry_run is True unless --apply is specified
-    dry_run = not args.apply
+    # dry_run is derived from apply flags and janitor apply policy.
+    dry_run, apply_policy_warning = _resolve_apply_mode(args.apply, args.approve)
+    if apply_policy_warning:
+        print(f"[policy] {apply_policy_warning}")
     incremental = not args.full_scan
 
     result = run_task_optimized(args.task, dry_run=dry_run, incremental=incremental,
                                 time_budget=args.time_budget,
-                                force_distill=args.force_distill)
+                                force_distill=args.force_distill,
+                                user_approved=args.approve)
     
     # Write stats to file for dashboard consumption
     stats_file = _logs_dir() / "janitor-stats.json"
