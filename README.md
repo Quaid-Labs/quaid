@@ -155,6 +155,8 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
 - [Benchmark Results](docs/BENCHMARKS.md) — Full LoCoMo evaluation with per-category breakdowns
+- [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
+- [v0.20.0-alpha Notes](docs/releases/v0.20.0-alpha.md) — Release highlights and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 
 ---

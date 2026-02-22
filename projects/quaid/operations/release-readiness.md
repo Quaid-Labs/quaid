@@ -26,6 +26,16 @@ Recommended framing:
 - Session targeting edge cases in parallel conversations for reset/new extraction triggers.
 - Some runtime/gateway restore flows can require a restart retry.
 - Janitor scope currently includes workspace editing unless explicitly constrained.
+- Non-OpenClaw adapter coverage is still early compared to the OpenClaw path.
+
+## Notification Posture (Alpha)
+
+- Keep recommended default as `normal`:
+  - `janitor: summary`
+  - `extraction: summary`
+  - `retrieval: off`
+- Use feature-level overrides for power users instead of a single global toggle.
+- Route asynchronous actionable janitor health requests through adapter-managed delayed request queues.
 
 ## Immediate Post-Alpha Priorities
 

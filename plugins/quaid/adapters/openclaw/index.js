@@ -46,6 +46,7 @@ const fs = __importStar(require("node:fs"));
 const os = __importStar(require("node:os"));
 const session_timeout_js_1 = require("../../core/session-timeout.js");
 const command_signals_js_1 = require("./command-signals.js");
+const delayed_requests_js_1 = require("./delayed-requests.js");
 
 // Configuration
 const PLUGIN_DIR = __dirname;
@@ -1011,41 +1012,7 @@ function _saveJanitorNudgeState(state) {
     catch { }
 }
 function queueDelayedLlmRequest(message, kind = "janitor", priority = "normal") {
-    try {
-        if (!message || !String(message).trim())
-            return false;
-        let payload = { version: 1, requests: [] };
-        if (fs.existsSync(DELAYED_LLM_REQUESTS_PATH)) {
-            try {
-                payload = JSON.parse(fs.readFileSync(DELAYED_LLM_REQUESTS_PATH, "utf8"));
-            }
-            catch {
-                payload = { version: 1, requests: [] };
-            }
-        }
-        if (!payload || typeof payload !== "object")
-            payload = { version: 1, requests: [] };
-        const requests = Array.isArray(payload.requests) ? payload.requests : [];
-        const id = `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
-        if (requests.some((r) => r && String(r.id || "") === id && r.status === "pending")) {
-            return false;
-        }
-        requests.push({
-            id,
-            created_at: new Date().toISOString(),
-            source: "quaid_adapter",
-            kind,
-            priority,
-            status: "pending",
-            message: String(message),
-        });
-        payload.requests = requests;
-        fs.writeFileSync(DELAYED_LLM_REQUESTS_PATH, JSON.stringify(payload, null, 2), { mode: 0o600 });
-        return true;
-    }
-    catch {
-        return false;
-    }
+    return (0, delayed_requests_js_1.queueDelayedRequest)(DELAYED_LLM_REQUESTS_PATH, message, kind, priority, "quaid_adapter");
 }
 function getJanitorHealthIssue() {
     try {
@@ -1122,35 +1089,15 @@ notify_user("Hey, I see you just installed Quaid. Want me to help migrate import
 }
 function flushDelayedNotifications(maxItems = 5) {
     try {
-        if (!fs.existsSync(DELAYED_NOTIFICATIONS_PATH))
-            return;
-        const raw = JSON.parse(fs.readFileSync(DELAYED_NOTIFICATIONS_PATH, "utf8"));
-        const items = Array.isArray(raw === null || raw === void 0 ? void 0 : raw.items) ? raw.items : [];
-        if (!items.length)
-            return;
-        let sent = 0;
-        let queuedLlmRequests = 0;
-        for (const item of items) {
-            if (sent >= maxItems)
-                break;
-            if (!item || item.status !== "pending" || !item.message)
-                continue;
-            const message = String(item.message);
-            if (queueDelayedLlmRequest(message, String(item.kind || "janitor"), String(item.priority || "normal"))) {
-                queuedLlmRequests += 1;
-            }
-            item.status = "sent";
-            item.sent_at = new Date().toISOString();
-            item.delivery = "llm_request_queue";
-            sent += 1;
+        const result = (0, delayed_requests_js_1.flushDelayedNotificationsToRequestQueue)(DELAYED_NOTIFICATIONS_PATH, DELAYED_LLM_REQUESTS_PATH, maxItems);
+        if (result.delivered > 0) {
+            console.log(`[quaid] Flushed ${result.delivered} delayed notification(s), queued ${result.queuedLlmRequests} llm request(s)`);
         }
-        fs.writeFileSync(DELAYED_NOTIFICATIONS_PATH, JSON.stringify(raw, null, 2), { mode: 0o600 });
-        if (sent > 0) {
-            console.log(`[quaid] Flushed ${sent} delayed notification(s), queued ${queuedLlmRequests} llm request(s)`);
-        }
+        return result;
     }
     catch (err) {
         console.warn(`[quaid] Failed to flush delayed notifications: ${String(err === null || err === void 0 ? void 0 : err.message) || String(err)}`);
+        return { delivered: 0, queuedLlmRequests: 0 };
     }
 }
 // ============================================================================

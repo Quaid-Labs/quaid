@@ -2,7 +2,7 @@
 
 Quaid is a persistent memory system for AI agents. It extracts personal facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
 
-Quaid works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and uses an adapter layer so host integrations remain isolated from core memory logic. It currently ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw), which is the most mature integration path.
+Quaid works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw) for the deepest integration.
 
 This document is for engineers who want to understand how the system works.
 
@@ -101,7 +101,7 @@ Conversation messages
 
 Extraction can be triggered from any of Quaid's three interfaces:
 
-- **OpenClaw plugin** (`adapters/openclaw/index.ts`): Signal-driven extraction via command and lifecycle events. `before_compaction`/`before_reset` queue extraction signals, `command` maps slash commands (`/compact`, `/new`, `/reset`, `/restart`) to signals, and `agent_end` provides a fallback signal path when teardown timing races.
+- **OpenClaw plugin** (`adapters/openclaw/index.ts`): Two gateway hooks -- `before_compaction` (context being compacted) and `before_reset` (session ending). Both call `extractMemoriesFromMessages()`.
 - **MCP server** (`mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
 - **CLI** (`extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
 
@@ -663,7 +663,7 @@ All configuration lives in `config/memory.json` and is loaded into a hierarchy o
 ```
 MemoryConfig (root)
   +-- systems: SystemsConfig         # 4 toggleable system gates
-  +-- models: ModelsConfig           # deep/fast model tiers + provider model-class mappings
+  +-- models: ModelConfig            # LLM provider, model IDs, context windows
   +-- capture: CaptureConfig         # Extraction settings
   +-- decay: DecayConfig             # Ebbinghaus decay parameters
   +-- janitor: JanitorConfig
@@ -711,8 +711,7 @@ These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and 
 | `OLLAMA_URL` | Override Ollama endpoint |
 | `QUAID_DEV` | Enable dev-only features (e.g. test task in janitor) |
 | `QUAID_QUIET` | Suppress config loading messages |
-| Gateway auth/provider config | Primary LLM auth source in OpenClaw mode (OAuth or API key, provider-specific) |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Optional direct env vars (standalone/testing paths) |
+| `ANTHROPIC_API_KEY` | LLM API key (primary) |
 
 ### Config Loading
 
@@ -762,24 +761,24 @@ def call_fast_reasoning(prompt, max_tokens=500, timeout=30, system_prompt=None):
 
 Both return `(response_text, duration_seconds)`. Model selection is config-driven -- callers never reference specific model IDs.
 
-#### Provider and Model-Class Support
+#### Provider Support
 
 ```python
 @dataclass
-class ModelsConfig:
-    llm_provider: str = "default"   # gateway active provider, or explicit provider id
-    deep_reasoning: str = "default"
-    fast_reasoning: str = "default"
-    deep_reasoning_model_classes: Dict[str, str] = {...}
-    fast_reasoning_model_classes: Dict[str, str] = {...}
+class ModelConfig:
+    provider: str = "anthropic"     # "anthropic" or "openai" (OpenAI-compatible APIs)
+    api_key_env: str = "ANTHROPIC_API_KEY"
+    base_url: Optional[str] = None  # Custom endpoint (e.g. OpenRouter, local server)
+    fast_reasoning: str = "claude-haiku-4-5"
+    deep_reasoning: str = "claude-opus-4-6"
 ```
 
 #### API Key Resolution
 
-Quaid routes LLM calls through its adapter/provider abstraction:
-1. In OpenClaw mode, the adapter resolves provider + model tier and routes via gateway provider auth/state.
-2. In standalone/testing flows, environment variables and local config can be used directly.
-3. Callers outside the adapter/provider layer remain provider-agnostic and only request deep/fast reasoning tiers.
+Quaid uses pass-through API keys from the main system agent -- it does not manage keys directly. Keys are resolved via the platform adapter in priority order:
+1. Environment variable (`ANTHROPIC_API_KEY`) -- typically set by the gateway or agent runtime
+2. `.env` file in `QUAID_HOME` (fallback for standalone CLI use)
+3. macOS Keychain (OpenClaw adapter only -- service lookup by agent name)
 
 #### Prompt Caching
 

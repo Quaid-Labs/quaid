@@ -7,14 +7,13 @@ This document is designed for AI agents (Claude, GPT, etc.) working on or with t
 ## System Overview
 
 Quaid is a graph-based persistent memory system for AI agents. It works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a deep integration for [OpenClaw](https://github.com/openclaw/openclaw). Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
-Core logic is host-agnostic; adapter/provider modules handle host runtime and auth specifics (OpenClaw today, additional systems planned).
 
 **Architecture stack:**
 - **Interfaces:** MCP server (stdio, any MCP client), CLI (`quaid` commands), OpenClaw plugin (TypeScript hooks)
 - **Backend:** Python modules for graph operations, extraction, retrieval, maintenance, docs, and project tracking
 - **Storage:** SQLite database with WAL mode, sqlite-vec ANN index, FTS5 full-text index
 - **Embeddings:** Ollama local server (qwen3-embedding:8b, 4096 dimensions)
-- **LLM calls:** Adapter/provider-routed deep/fast reasoning tiers (gateway-configured provider + model classes)
+- **LLM calls:** Anthropic API (Opus for deep-reasoning, Haiku for fast-reasoning / reranking)
 - **Config:** JSON config file at `config/memory.json`
 
 **Retrieval pipeline:**
@@ -41,7 +40,7 @@ Query
 | `janitor.py` | 17-task nightly maintenance pipeline | `run_task_optimized()`, `_merge_nodes_into()`, `_normalize_edge()`, `run_tests()`, task functions for backup/embeddings/review/temporal/dedup/contradictions/decay/workspace/docs/snippets/journal/rag/tests/cleanup |
 | `soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()`, `archive_entries()`, `insert_into_file()`, `apply_distillation()`, snippet/journal I/O helpers |
 | `config.py` | Typed config from memory.json | `get_config()`, `reload_config()`, `load_config()`, `MemoryConfig`, `CoreMarkdownConfig`, `NotificationsConfig`, `ModelsConfig`, `DecayConfig`, `JanitorConfig`, `DocsConfig`, `RetrievalConfig`, `CaptureConfig` |
-| `llm_clients.py` | High/low LLM facade via adapter/provider abstraction | `call_deep_reasoning()`, `call_fast_reasoning()`, `get_api_key()`, `parse_json_response()`, usage tracking |
+| `llm_clients.py` | Anthropic API wrapper with prompt caching | `call_deep_reasoning()`, `call_fast_reasoning()`, `get_api_key()`, `parse_json_response()`, prompt caching (~90% savings on repeated prompts) |
 | `docs_rag.py` | RAG indexing and search over project docs | `search()`, `index_docs()`, chunk management |
 | `docs_updater.py` | Auto-update docs from git diffs | `check_staleness()`, `update_doc_from_diffs()`, changelog, Haiku pre-filter gate (skips trivial diffs) |
 | `docs_registry.py` | Project/doc registry, CRUD, path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()`, `gc()`, `DocsRegistry`, `ensure_table()` |
@@ -77,8 +76,8 @@ Query
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `adapters/openclaw/index.ts` | Plugin entry point (SOURCE OF TRUTH) | Hook registration (`before_agent_start`, `agent_end`, `command`, `before_compaction`, `before_reset`), tool definitions, extraction signal routing |
-| `adapters/openclaw/index.js` | Runtime JS artifact | Keep in sync with `.ts` in this repo. Runtime loading behavior can vary by OpenClaw build, so patch both and restart gateway after plugin changes. |
+| `adapters/openclaw/index.ts` | Plugin entry point (SOURCE OF TRUTH) | Hook registration (before_agent_start, before_compaction, before_reset), tool definitions (memory_recall, memory_store), extraction trigger |
+| `adapters/openclaw/index.js` | Compiled JS -- gateway loads this | Must be kept in sync with .ts manually. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes. |
 
 ### Prompt Templates (`prompts/`)
 
@@ -497,11 +496,8 @@ quaid forget [query]          # Delete a memory (--id <id>, --yes)
 quaid edge <s> <r> <o>        # Create a relationship edge
 
 # Admin
-quaid doctor                  # Health check (alias of `quaid health`)
+quaid doctor                  # Health check (DB, embeddings, API key, gateway)
 quaid config                  # Show current configuration
-quaid config edit             # Interactive config menu
-quaid config path             # Show active memory.json path
-quaid config set <k> <v>      # Set dotted config key
 quaid stats                   # Database statistics
 quaid export                  # Export all facts as JSON
 quaid migrate                 # Import facts from existing markdown files
@@ -581,15 +577,14 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `CLAWDBOT_WORKSPACE` | Workspace root hint (for OpenClaw paths) | Optional |
 | `MEMORY_DB_PATH` | Override database file path | `<quaid_home>/data/memory.db` |
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
-| Gateway auth/provider config | Primary LLM auth in OpenClaw mode | Managed by OpenClaw provider login/config |
-| `ANTHROPIC_API_KEY` | Optional direct key for standalone/testing | Optional |
-| `OPENAI_API_KEY` | OpenAI key (benchmark judging and standalone/testing) | Optional for benchmark judge path |
-| `OPENROUTER_API_KEY` | OpenRouter key (alternative standalone routing) | Optional |
+| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from `.env` file or macOS Keychain |
+| `OPENAI_API_KEY` | OpenAI API key (for benchmark judging) | Must be set explicitly |
+| `OPENROUTER_API_KEY` | OpenRouter API key (alternative LLM routing) | Must be set explicitly |
 | `QUAID_DEV` | Enable dev mode (unit tests in janitor, verbose output) | Not set |
 | `QUAID_QUIET` | Suppress informational config messages | Not set |
 | `MOCK_EMBEDDINGS` | Use deterministic fake embeddings (for testing) | Not set |
 
-In OpenClaw mode, Quaid should use gateway-resolved provider auth. Direct env/API-key fallbacks are intended for standalone/testing flows.
+API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOME` -> macOS Keychain (OpenClaw adapter only).
 
 ---
 

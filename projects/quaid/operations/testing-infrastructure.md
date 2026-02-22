@@ -28,6 +28,7 @@ This document defines the current test stack, execution commands, and pass/fail 
 
 ### 4) TypeScript Integration (blocking)
 - Deterministic integration suite run via `npm run test:integration`.
+- Includes delayed-request lifecycle coverage (queue -> flush/surface -> resolve/clear) for adapter-managed janitor escalation flow.
 
 ### 4b) Adapter-Specific Partition (OpenClaw, expandable)
 - Purpose: keep provider/host adapter tests isolated from core-memory tests.
