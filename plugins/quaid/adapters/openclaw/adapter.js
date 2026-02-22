@@ -1610,12 +1610,12 @@ const knowledgeEngine = (0, orchestrator_js_1.createKnowledgeEngine)({
             .map((r) => ({ ...r, via: "graph" }));
     },
 });
-function normalizeKnowledgeStores(stores, expandGraph) {
-    return knowledgeEngine.normalizeKnowledgeStores(stores, expandGraph);
+function normalizeKnowledgeDatastores(datastores, expandGraph) {
+    return knowledgeEngine.normalizeKnowledgeDatastores(datastores, expandGraph);
 }
-const recallStoreGuidance = knowledgeEngine.renderKnowledgeStoreGuidanceForAgents();
-async function routeKnowledgeStores(query, expandGraph) {
-    return knowledgeEngine.routeKnowledgeStores(query, expandGraph);
+const recallStoreGuidance = knowledgeEngine.renderKnowledgeDatastoreGuidanceForAgents();
+async function routeKnowledgeDatastores(query, expandGraph) {
+    return knowledgeEngine.routeKnowledgeDatastores(query, expandGraph);
 }
 async function totalRecall(query, limit, opts) {
     return knowledgeEngine.totalRecall(query, limit, opts);
@@ -2018,7 +2018,7 @@ const quaidPlugin = {
                     return;
                 }
                 // Auto-inject can either use total_recall (fast planning pass) or plain
-                // direct stores (vector_basic + graph) without the planning pass.
+                // direct datastores (vector_basic + graph) without the planning pass.
                 // Dynamic K: 2 * log2(nodeCount) — scales with graph size
                 const autoInjectK = computeDynamicK();
                 const useTotalRecallForInject = isPreInjectionPassEnabled();
@@ -2026,7 +2026,7 @@ const quaidPlugin = {
                     query,
                     limit: autoInjectK,
                     expandGraph: true,
-                    stores: useTotalRecallForInject ? undefined : ["vector_basic", "graph"],
+                    datastores: useTotalRecallForInject ? undefined : ["vector_basic", "graph"],
                     routeStores: useTotalRecallForInject,
                     technicalScope: "personal",
                     waitForExtraction: false,
@@ -2211,14 +2211,14 @@ ${recallStoreGuidance}`,
                     query: typebox_1.Type.String({ description: "Search query - use entity names and specific topics" }),
                     options: typebox_1.Type.Optional(typebox_1.Type.Object({
                         limit: typebox_1.Type.Optional(typebox_1.Type.Number({ description: "Max results to return. Default reads from config." })),
-                        stores: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Union([
+                        datastores: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Union([
                             typebox_1.Type.Literal("vector"),
                             typebox_1.Type.Literal("vector_basic"),
                             typebox_1.Type.Literal("vector_technical"),
                             typebox_1.Type.Literal("graph"),
                             typebox_1.Type.Literal("journal"),
                             typebox_1.Type.Literal("project"),
-                        ]), { description: "Knowledge stores to query." })),
+                        ]), { description: "Knowledge datastores to query." })),
                         graph: typebox_1.Type.Optional(typebox_1.Type.Object({
                             expand: typebox_1.Type.Optional(typebox_1.Type.Boolean({ description: "Traverse relationship graph - use for people/family queries (default: true)." })),
                             depth: typebox_1.Type.Optional(typebox_1.Type.Number({ description: "Graph traversal depth (default: 1). Use 2 for extended relationships." })),
@@ -2255,7 +2255,7 @@ ${recallStoreGuidance}`,
                                 import: typebox_1.Type.Optional(typebox_1.Type.Number()),
                             })),
                         })),
-                        storeOptions: typebox_1.Type.Optional(typebox_1.Type.Object({
+                        datastoreOptions: typebox_1.Type.Optional(typebox_1.Type.Object({
                             vector: typebox_1.Type.Optional(typebox_1.Type.Object({
                                 technicalScope: typebox_1.Type.Optional(typebox_1.Type.Union([
                                     typebox_1.Type.Literal("personal"),
@@ -2296,7 +2296,7 @@ ${recallStoreGuidance}`,
                         const requestedLimit = options.limit;
                         const expandGraph = options.graph?.expand ?? true;
                         const graphDepth = options.graph?.depth ?? 1;
-                        const stores = options.stores;
+                        const datastores = options.datastores;
                         const routeStores = options.routing?.enabled;
                         const reasoning = options.routing?.reasoning ?? "fast";
                         const intent = options.routing?.intent ?? "general";
@@ -2305,7 +2305,7 @@ ${recallStoreGuidance}`,
                         const dateTo = options.filters?.dateTo;
                         const docs = options.filters?.docs;
                         const ranking = options.ranking;
-                        const storeOptions = options.storeOptions;
+                        const datastoreOptions = options.datastoreOptions;
                         if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
                             return {
                                 content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
@@ -2314,12 +2314,12 @@ ${recallStoreGuidance}`,
                         }
                         const limit = Math.min(requestedLimit ?? dynamicK, maxLimit);
                         const depth = Math.min(Math.max(graphDepth, 1), 3); // Clamp between 1 and 3
-                        const shouldRouteStores = routeStores ?? !Array.isArray(stores);
-                        const selectedStores = normalizeKnowledgeStores(stores, expandGraph);
-                        console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedStores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, technicalScope=${technicalScope}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
+                        const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
+                        const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
+                        console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, technicalScope=${technicalScope}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
                         const results = await recallMemories({
-                            query, limit, expandGraph, graphDepth: depth, stores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, technicalScope,
-                            storeOptions, dateFrom, dateTo, docs, waitForExtraction: true, sourceTag: "tool"
+                            query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, technicalScope,
+                            datastoreOptions, dateFrom, dateTo, docs, waitForExtraction: true, sourceTag: "tool"
                         });
                         if (results.length === 0) {
                             return {
@@ -2884,9 +2884,9 @@ notify_docs_search(data['query'], data['results'])
         });
         // Shared recall abstraction — used by both memory_recall tool and auto-inject
         async function recallMemories(opts) {
-            const { query, limit = 10, expandGraph = false, graphDepth = 1, technicalScope = "any", stores, routeStores = false, reasoning = "fast", intent = "general", ranking, dateFrom, dateTo, docs, storeOptions, waitForExtraction = false, sourceTag = "unknown" } = opts;
-            const selectedStores = normalizeKnowledgeStores(stores, expandGraph);
-            console.log(`[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} stores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} technicalScope=${technicalScope} waitForExtraction=${waitForExtraction}`);
+            const { query, limit = 10, expandGraph = false, graphDepth = 1, technicalScope = "any", datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown" } = opts;
+            const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
+            console.log(`[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} technicalScope=${technicalScope} waitForExtraction=${waitForExtraction}`);
             // Wait for in-flight extraction if requested
             if (waitForExtraction && extractionPromise) {
                 let raceTimer;
@@ -2901,7 +2901,7 @@ notify_docs_search(data['query'], data['results'])
             }
             if (routeStores) {
                 return total_recall(query, limit, {
-                    stores: selectedStores,
+                    datastores: selectedStores,
                     expandGraph,
                     graphDepth,
                     reasoning,
@@ -2911,11 +2911,11 @@ notify_docs_search(data['query'], data['results'])
                     dateFrom,
                     dateTo,
                     docs,
-                    storeOptions,
+                    datastoreOptions,
                 });
             }
             return totalRecall(query, limit, {
-                stores: selectedStores,
+                datastores: selectedStores,
                 expandGraph,
                 graphDepth,
                 intent,
@@ -2924,7 +2924,7 @@ notify_docs_search(data['query'], data['results'])
                 dateFrom,
                 dateTo,
                 docs,
-                storeOptions,
+                datastoreOptions,
             });
         }
         // Read messages from a session JSONL file (same format as recovery scan)
@@ -3317,7 +3317,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
                     skipped++;
                     factDetail = { text: fact.text, status: "failed" };
                 }
-                // Create edges for ALL successful stores (created, updated, duplicate with ID)
+                // Create edges for ALL successful store operations (created, updated, duplicate with ID)
                 const factId = storeResult?.id;
                 if (factId && fact.edges && fact.edges.length > 0) {
                     for (const edge of fact.edges) {

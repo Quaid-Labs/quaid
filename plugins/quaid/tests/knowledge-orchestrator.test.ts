@@ -24,13 +24,13 @@ describe("knowledge orchestrator", () => {
       recallGraph: vi.fn(async () => []),
     });
 
-    expect(engine.normalizeKnowledgeStores(undefined, true)).toEqual([
+    expect(engine.normalizeKnowledgeDatastores(undefined, true)).toEqual([
       "vector_basic",
       "graph",
       "journal",
       "project",
     ]);
-    expect(engine.normalizeKnowledgeStores(["vector_basic", "nope", "graph"], false)).toEqual([
+    expect(engine.normalizeKnowledgeDatastores(["vector_basic", "nope", "graph"], false)).toEqual([
       "vector_basic",
       "graph",
     ]);
@@ -51,12 +51,12 @@ describe("knowledge orchestrator", () => {
       recallGraph: vi.fn(async () => []),
     });
 
-    const stores = await engine.routeKnowledgeStores("Tell me about family relationships", true);
-    expect(stores).toContain("vector_basic");
-    expect(stores).toContain("graph");
+    const datastores = await engine.routeKnowledgeDatastores("Tell me about family relationships", true);
+    expect(datastores).toContain("vector_basic");
+    expect(datastores).toContain("graph");
   });
 
-  it("aggregates and deduplicates across stores", async () => {
+  it("aggregates and deduplicates across datastores", async () => {
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       path: {
@@ -69,7 +69,7 @@ describe("knowledge orchestrator", () => {
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: () => false,
       callDocsRag: vi.fn(async () => ""),
-      callFastRouter: vi.fn(async () => '{"stores":["vector_basic"]}'),
+      callFastRouter: vi.fn(async () => '{"datastores":["vector_basic"]}'),
       recallVector: vi.fn(async () => [
         { id: "a", text: "Alpha", category: "fact", similarity: 0.7, via: "vector" },
         { id: "a", text: "Alpha", category: "fact", similarity: 0.9, via: "vector" },
@@ -80,7 +80,7 @@ describe("knowledge orchestrator", () => {
     });
 
     const results = await engine.totalRecall("alpha", 10, {
-      stores: ["vector_basic", "graph"],
+      datastores: ["vector_basic", "graph"],
       expandGraph: true,
       graphDepth: 1,
       technicalScope: "personal",
@@ -105,13 +105,13 @@ describe("knowledge orchestrator", () => {
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
       callDocsRag,
-      callFastRouter: vi.fn(async () => '{"stores":["project"]}'),
+      callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
       recallVector: vi.fn(async () => []),
       recallGraph: vi.fn(async () => []),
     });
 
     const results = await engine.totalRecall("architecture", 5, {
-      stores: ["project"],
+      datastores: ["project"],
       expandGraph: false,
       graphDepth: 1,
       technicalScope: "any",
@@ -132,7 +132,7 @@ describe("knowledge orchestrator", () => {
     expect(results[0].category).toBe("project");
   });
 
-  it("applies storeOptions override for project store scope", async () => {
+  it("applies datastoreOptions override for project store scope", async () => {
     const callDocsRag = vi.fn(async () => "1. ~/projects/quaid/PROJECT.md > Overview (similarity: 0.88)");
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
@@ -141,19 +141,19 @@ describe("knowledge orchestrator", () => {
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
       callDocsRag,
-      callFastRouter: vi.fn(async () => '{"stores":["project"]}'),
+      callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
       recallVector: vi.fn(async () => []),
       recallGraph: vi.fn(async () => []),
     });
 
     await engine.totalRecall("architecture", 5, {
-      stores: ["project"],
+      datastores: ["project"],
       expandGraph: false,
       graphDepth: 1,
       technicalScope: "any",
       project: "wrong-default",
       docs: ["wrong.md"],
-      storeOptions: {
+      datastoreOptions: {
         project: {
           project: "quaid",
           docs: ["PROJECT.md"],
@@ -172,7 +172,7 @@ describe("knowledge orchestrator", () => {
     ]);
   });
 
-  it("applies storeOptions override for vector technical scope", async () => {
+  it("applies datastoreOptions override for vector technical scope", async () => {
     const recallVector = vi.fn(async () => []);
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
@@ -181,17 +181,17 @@ describe("knowledge orchestrator", () => {
       getMemoryConfig: () => ({}),
       isSystemEnabled: () => false,
       callDocsRag: vi.fn(async () => ""),
-      callFastRouter: vi.fn(async () => '{"stores":["vector"]}'),
+      callFastRouter: vi.fn(async () => '{"datastores":["vector"]}'),
       recallVector,
       recallGraph: vi.fn(async () => []),
     });
 
     await engine.totalRecall("api limits", 3, {
-      stores: ["vector"],
+      datastores: ["vector"],
       expandGraph: false,
       graphDepth: 1,
       technicalScope: "personal",
-      storeOptions: {
+      datastoreOptions: {
         vector: { technicalScope: "technical" },
       },
     });
@@ -200,10 +200,10 @@ describe("knowledge orchestrator", () => {
   });
 
   it("uses deep router for total_recall when reasoning=deep and accepts known project", async () => {
-    const callFastRouter = vi.fn(async () => '{"stores":["vector_basic"]}');
+    const callFastRouter = vi.fn(async () => '{"datastores":["vector_basic"]}');
     const callDeepRouter = vi.fn(async () => JSON.stringify({
       query: "quaid architecture docs",
-      stores: ["project"],
+      datastores: ["project"],
       project: "quaid",
     }));
     const callDocsRag = vi.fn(async () => "1. ~/projects/quaid/PROJECT.md > Overview (similarity: 0.9)");
@@ -223,7 +223,7 @@ describe("knowledge orchestrator", () => {
     });
 
     const results = await engine.total_recall("tell me about quaid architecture", 5, {
-      stores: [],
+      datastores: [],
       expandGraph: false,
       graphDepth: 1,
       technicalScope: "any",
@@ -252,7 +252,7 @@ describe("knowledge orchestrator", () => {
       callDocsRag: vi.fn(async () => ""),
       callFastRouter: vi.fn(async () => JSON.stringify({
         query: "x",
-        stores: ["project"],
+        datastores: ["project"],
         project: "not-a-known-project",
       })),
       getProjectCatalog: () => [{ name: "quaid", description: "Main project" }],
@@ -262,7 +262,7 @@ describe("knowledge orchestrator", () => {
 
     const plan = await engine.routeRecallPlan("x", false, "fast");
     expect(plan.project).toBeUndefined();
-    expect(plan.stores).toEqual(["project"]);
+    expect(plan.datastores).toEqual(["project"]);
   });
 
   it("applies source-type boosts for agent_actions intent", async () => {
@@ -273,7 +273,7 @@ describe("knowledge orchestrator", () => {
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: () => false,
       callDocsRag: vi.fn(async () => ""),
-      callFastRouter: vi.fn(async () => '{"stores":["vector_basic"]}'),
+      callFastRouter: vi.fn(async () => '{"datastores":["vector_basic"]}'),
       recallVector: vi.fn(async () => [
         { text: "User mentioned snacks", category: "fact", similarity: 0.82, sourceType: "user", via: "vector" },
         { text: "Agent suggested a split test", category: "fact", similarity: 0.79, sourceType: "assistant", via: "vector" },
@@ -282,7 +282,7 @@ describe("knowledge orchestrator", () => {
     });
 
     const results = await engine.totalRecall("what did the assistant suggest", 5, {
-      stores: ["vector_basic"],
+      datastores: ["vector_basic"],
       expandGraph: false,
       graphDepth: 1,
       technicalScope: "any",
@@ -293,7 +293,7 @@ describe("knowledge orchestrator", () => {
   });
 
   it("passes intent facet into routeRecallPlan prompt", async () => {
-    const callFastRouter = vi.fn(async () => '{"query":"x","stores":["vector_basic"]}');
+    const callFastRouter = vi.fn(async () => '{"query":"x","datastores":["vector_basic"]}');
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       path: {} as any,
@@ -324,10 +324,10 @@ describe("knowledge orchestrator", () => {
       recallGraph: vi.fn(async () => []),
     });
 
-    const stores = engine.getKnowledgeStoreRegistry();
-    expect(stores.some((s) => s.key === "vector_basic")).toBe(true);
-    expect(stores.some((s) => s.key === "project")).toBe(true);
-    const graph = stores.find((s) => s.key === "graph");
+    const datastores = engine.getKnowledgeDatastoreRegistry();
+    expect(datastores.some((s) => s.key === "vector_basic")).toBe(true);
+    expect(datastores.some((s) => s.key === "project")).toBe(true);
+    const graph = datastores.find((s) => s.key === "graph");
     expect(graph?.options.some((o) => o.key === "depth")).toBe(true);
   });
 
@@ -344,8 +344,8 @@ describe("knowledge orchestrator", () => {
       recallGraph: vi.fn(async () => []),
     });
 
-    const text = engine.renderKnowledgeStoreGuidanceForAgents();
-    expect(text).toContain("Knowledge stores:");
+    const text = engine.renderKnowledgeDatastoreGuidanceForAgents();
+    expect(text).toContain("Knowledge datastores:");
     expect(text).toContain("vector_basic");
     expect(text).toContain("project");
     expect(text).toContain("depth");

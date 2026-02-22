@@ -1,24 +1,24 @@
-export type KnowledgeStore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
+export type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
 export type TechnicalScope = "personal" | "technical" | "any";
 export type SourceType = "user" | "assistant" | "both" | "tool" | "import";
 export type RecallIntent = "general" | "agent_actions" | "relationship" | "technical";
 
-export type KnowledgeStoreOption = {
+export type KnowledgeDatastoreOption = {
   key: string;
   description: string;
   valueType: "string" | "number" | "boolean" | "string_array" | "enum";
   enumValues?: string[];
 };
 
-export type KnowledgeStoreSpec = {
-  key: KnowledgeStore;
+export type KnowledgeDatastoreSpec = {
+  key: KnowledgeDatastore;
   description: string;
   defaultWhenExpandGraph: boolean;
   defaultWhenFlatRecall: boolean;
-  options: KnowledgeStoreOption[];
+  options: KnowledgeDatastoreOption[];
 };
 
-const STORE_REGISTRY: KnowledgeStoreSpec[] = [
+const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
   {
     key: "vector",
     description: "Combined vector recall (basic + technical) with optional technical-scope override.",
@@ -93,33 +93,33 @@ const STORE_REGISTRY: KnowledgeStoreSpec[] = [
   },
 ];
 
-export function getKnowledgeStoreRegistry(): KnowledgeStoreSpec[] {
+export function getKnowledgeDatastoreRegistry(): KnowledgeDatastoreSpec[] {
   return STORE_REGISTRY.map((store) => ({
     ...store,
     options: store.options.map((opt) => ({ ...opt, enumValues: opt.enumValues ? [...opt.enumValues] : undefined })),
   }));
 }
 
-export function getKnowledgeStoreKeys(): KnowledgeStore[] {
+export function getKnowledgeDatastoreKeys(): KnowledgeDatastore[] {
   return STORE_REGISTRY.map((s) => s.key);
 }
 
-export function getRoutableStoreKeys(): KnowledgeStore[] {
-  // "vector" is an aggregate compatibility store; planner should route to concrete stores.
+export function getRoutableDatastoreKeys(): KnowledgeDatastore[] {
+  // "vector" is an aggregate compatibility store; planner should route to concrete datastores.
   return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector");
 }
 
-export function normalizeKnowledgeStores(stores: unknown, expandGraph: boolean): KnowledgeStore[] {
-  const allowed = new Set(getKnowledgeStoreKeys());
+export function normalizeKnowledgeDatastores(datastores: unknown, expandGraph: boolean): KnowledgeDatastore[] {
+  const allowed = new Set(getKnowledgeDatastoreKeys());
   const defaults = STORE_REGISTRY
     .filter((s) => (expandGraph ? s.defaultWhenExpandGraph : s.defaultWhenFlatRecall))
     .map((s) => s.key);
 
-  if (!Array.isArray(stores) || stores.length === 0) return defaults;
+  if (!Array.isArray(datastores) || datastores.length === 0) return defaults;
 
-  const normalized: KnowledgeStore[] = [];
-  for (const raw of stores) {
-    const value = String(raw || "").trim().toLowerCase() as KnowledgeStore;
+  const normalized: KnowledgeDatastore[] = [];
+  for (const raw of datastores) {
+    const value = String(raw || "").trim().toLowerCase() as KnowledgeDatastore;
     if (!allowed.has(value) || normalized.includes(value)) continue;
     normalized.push(value);
   }
@@ -127,8 +127,8 @@ export function normalizeKnowledgeStores(stores: unknown, expandGraph: boolean):
   return normalized.length ? normalized : defaults;
 }
 
-export function renderKnowledgeStoreGuidanceForAgents(): string {
-  const lines: string[] = ["Knowledge stores:"];
+export function renderKnowledgeDatastoreGuidanceForAgents(): string {
+  const lines: string[] = ["Knowledge datastores:"];
   for (const store of STORE_REGISTRY) {
     const optionSummary = store.options.length
       ? ` Options: ${store.options.map((o) => {

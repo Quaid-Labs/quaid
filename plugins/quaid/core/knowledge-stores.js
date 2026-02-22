@@ -73,31 +73,31 @@ const STORE_REGISTRY = [
   },
 ];
 
-export function getKnowledgeStoreRegistry() {
+export function getKnowledgeDatastoreRegistry() {
   return STORE_REGISTRY.map((store) => ({
     ...store,
     options: store.options.map((opt) => ({ ...opt, enumValues: opt.enumValues ? [...opt.enumValues] : undefined })),
   }));
 }
 
-export function getKnowledgeStoreKeys() {
+export function getKnowledgeDatastoreKeys() {
   return STORE_REGISTRY.map((s) => s.key);
 }
 
-export function getRoutableStoreKeys() {
+export function getRoutableDatastoreKeys() {
   return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector");
 }
 
-export function normalizeKnowledgeStores(stores, expandGraph) {
-  const allowed = new Set(getKnowledgeStoreKeys());
+export function normalizeKnowledgeDatastores(datastores, expandGraph) {
+  const allowed = new Set(getKnowledgeDatastoreKeys());
   const defaults = STORE_REGISTRY
     .filter((s) => (expandGraph ? s.defaultWhenExpandGraph : s.defaultWhenFlatRecall))
     .map((s) => s.key);
 
-  if (!Array.isArray(stores) || stores.length === 0) return defaults;
+  if (!Array.isArray(datastores) || datastores.length === 0) return defaults;
 
   const normalized = [];
-  for (const raw of stores) {
+  for (const raw of datastores) {
     const value = String(raw || "").trim().toLowerCase();
     if (!allowed.has(value) || normalized.includes(value)) continue;
     normalized.push(value);
@@ -106,8 +106,8 @@ export function normalizeKnowledgeStores(stores, expandGraph) {
   return normalized.length ? normalized : defaults;
 }
 
-export function renderKnowledgeStoreGuidanceForAgents() {
-  const lines = ["Knowledge stores:"];
+export function renderKnowledgeDatastoreGuidanceForAgents() {
+  const lines = ["Knowledge datastores:"];
   for (const store of STORE_REGISTRY) {
     const optionSummary = store.options.length
       ? ` Options: ${store.options.map((o) => {

@@ -4,11 +4,11 @@ exports.createKnowledgeEngine = createKnowledgeEngine;
 const knowledge_stores_js_1 = require("../../../core/knowledge-stores.js");
 function createKnowledgeEngine(deps) {
     function storeOption(opts, store, key) {
-        return opts.storeOptions?.[store]?.[key];
+        return opts.datastoreOptions?.[store]?.[key];
     }
-    const normalizeKnowledgeStores = knowledge_stores_js_1.normalizeKnowledgeStores;
-    async function routeKnowledgeStores(query, expandGraph) {
-        const allowed = (0, knowledge_stores_js_1.getRoutableStoreKeys)();
+    const normalizeKnowledgeDatastores = knowledge_stores_js_1.normalizeKnowledgeDatastores;
+    async function routeKnowledgeDatastores(query, expandGraph) {
+        const allowed = (0, knowledge_stores_js_1.getRoutableDatastoreKeys)();
         const heuristic = (() => {
             const q = String(query || "").toLowerCase();
             const out = new Set();
@@ -30,7 +30,7 @@ function createKnowledgeEngine(deps) {
                 out.add("vector_basic");
             return Array.from(out);
         })();
-        const systemPrompt = `You route a recall query to knowledge stores.
+        const systemPrompt = `You route a recall query to knowledge datastores.
 Choose the MINIMAL useful set.
 Stores:
 - vector_basic: personal/user facts
@@ -38,7 +38,7 @@ Stores:
 - graph: relationship traversal
 - journal: reflective journal context
 - project: project docs and architecture notes
-Return JSON only: {"stores":["vector_basic","graph"]}`;
+Return JSON only: {"datastores":["vector_basic","graph"]}`;
         const userPrompt = `Query: "${query}"\nexpandGraphAllowed: ${expandGraph ? "true" : "false"}`;
         try {
             const text = await deps.callFastRouter(systemPrompt, userPrompt);
@@ -55,17 +55,17 @@ Return JSON only: {"stores":["vector_basic","graph"]}`;
                     catch { }
                 }
             }
-            const stores = normalizeKnowledgeStores(payload?.stores, expandGraph).filter((s) => allowed.includes(s));
-            if (stores.length)
-                return stores;
+            const datastores = normalizeKnowledgeDatastores(payload?.datastores, expandGraph).filter((s) => allowed.includes(s));
+            if (datastores.length)
+                return datastores;
         }
         catch { }
-        return normalizeKnowledgeStores(heuristic, expandGraph);
+        return normalizeKnowledgeDatastores(heuristic, expandGraph);
     }
     async function routeRecallPlan(query, expandGraph, reasoning = "fast", intent = "general") {
-        const allowed = (0, knowledge_stores_js_1.getRoutableStoreKeys)();
+        const allowed = (0, knowledge_stores_js_1.getRoutableDatastoreKeys)();
         const original = String(query || "").trim();
-        const fallbackStores = await routeKnowledgeStores(original, expandGraph);
+        const fallbackStores = await routeKnowledgeDatastores(original, expandGraph);
         const projectCatalog = (deps.getProjectCatalog ? deps.getProjectCatalog() : [])
             .slice(0, 40);
         const projectHints = projectCatalog.length
@@ -76,12 +76,12 @@ Return JSON only: {"stores":["vector_basic","graph"]}`;
 Return JSON only with:
 {
   "query": "cleaned query for retrieval",
-  "stores": ["vector_basic","graph"],
+  "datastores": ["vector_basic","graph"],
   "project": "project_name_or_null"
 }
 Rules:
 - Keep the same user intent; do NOT add new facts.
-- Use minimal stores needed.
+- Use minimal datastores needed.
 - Stores allowed: vector_basic, vector_technical, graph, journal, project.
 - Set project only when the query clearly maps to one known project.
 - intent facet:
@@ -112,19 +112,19 @@ ${projectHints}
                 }
             }
             const cleaned = String(payload?.query || "").trim() || original;
-            const stores = normalizeKnowledgeStores(payload?.stores, expandGraph).filter((s) => allowed.includes(s));
+            const datastores = normalizeKnowledgeDatastores(payload?.datastores, expandGraph).filter((s) => allowed.includes(s));
             const routedProjectRaw = String(payload?.project || "").trim();
             const routedProject = routedProjectRaw && allowedProjectNames.has(routedProjectRaw)
                 ? routedProjectRaw
                 : undefined;
             return {
                 query: cleaned,
-                stores: stores.length ? stores : fallbackStores,
+                datastores: datastores.length ? datastores : fallbackStores,
                 project: routedProject,
             };
         }
         catch {
-            return { query: original, stores: fallbackStores };
+            return { query: original, datastores: fallbackStores };
         }
     }
     function normalizeSourceType(value) {
@@ -264,7 +264,7 @@ ${projectHints}
         }
     }
     async function totalRecall(query, limit, opts) {
-        const stores = normalizeKnowledgeStores(opts.stores, opts.expandGraph);
+        const datastores = normalizeKnowledgeDatastores(opts.datastores, opts.expandGraph);
         const all = [];
         const descriptors = {
             vector: {
@@ -316,7 +316,7 @@ ${projectHints}
                 },
             },
         };
-        for (const store of stores) {
+        for (const store of datastores) {
             const descriptor = descriptors[store];
             if (!descriptor)
                 continue;
@@ -340,15 +340,15 @@ ${projectHints}
         const plan = await routeRecallPlan(query, opts.expandGraph, opts.reasoning || "fast", opts.intent || "general");
         return totalRecall(plan.query, limit, {
             ...opts,
-            stores: plan.stores,
+            datastores: plan.datastores,
             project: plan.project,
         });
     }
     return {
-        normalizeKnowledgeStores,
-        getKnowledgeStoreRegistry: knowledge_stores_js_1.getKnowledgeStoreRegistry,
-        renderKnowledgeStoreGuidanceForAgents: knowledge_stores_js_1.renderKnowledgeStoreGuidanceForAgents,
-        routeKnowledgeStores,
+        normalizeKnowledgeDatastores,
+        getKnowledgeDatastoreRegistry: knowledge_stores_js_1.getKnowledgeDatastoreRegistry,
+        renderKnowledgeDatastoreGuidanceForAgents: knowledge_stores_js_1.renderKnowledgeDatastoreGuidanceForAgents,
+        routeKnowledgeDatastores,
         routeRecallPlan,
         totalRecall,
         total_recall,

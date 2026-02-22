@@ -59,7 +59,7 @@ memory_recall query="Hauser birthday" options={graph:{expand:true}}
 - Use **names** not pronouns ("Hauser" not "my sister")
 - Add **context** ("Lori gift ideas" not "mom")
 - Set `expandGraph: true` for relationship queries
-- Prefer explicit `stores` when you know the target source:
+- Prefer explicit `datastores` when you know the target source:
   - `vector_basic` for personal/life facts
   - `vector_technical` for technical/project facts
   - `graph` for relationship traversal
@@ -67,11 +67,11 @@ memory_recall query="Hauser birthday" options={graph:{expand:true}}
   - `project` for docs-derived project knowledge
 - Use catch-all routing (`options.routing.enabled: true`) only when uncertain.
   - `total_recall` triggers an extra fast-LLM planning pass (better recall plan, higher cost/latency).
-  - If the query is obvious, explicit `stores` via plain recall is cheaper and usually faster.
+  - If the query is obvious, explicit `datastores` via plain recall is cheaper and usually faster.
   - Optional: `options.routing.reasoning: "deep"` for a higher-quality routing pass when you can afford extra cost/latency.
   - Optional: `options.routing.intent: "agent_actions"` when asking what the assistant/agent did or suggested.
   - Optional: `options.filters.docs: [...]` to constrain project-doc recall to specific docs.
-  - Optional: `options.storeOptions.<store>` for store-local controls (for example, project-specific doc scope in `options.storeOptions.project`).
+  - Optional: `options.datastoreOptions.<store>` for store-local controls (for example, project-specific doc scope in `options.datastoreOptions.project`).
 
 **Injector confidence policy:**
 - Auto-injected memories are hints.
@@ -91,7 +91,7 @@ memory_recall query="Hauser birthday" options={graph:{expand:true}}
   - optional project filter
   - prepends matching `PROJECT.md` when project is known
   - includes staleness warnings
-- `memory_recall` with `options.stores: ["project"]` is lighter:
+- `memory_recall` with `options.datastores: ["project"]` is lighter:
   - project-store recall only
   - no project bootstrap preface
   - no staleness report
