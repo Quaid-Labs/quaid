@@ -8,9 +8,9 @@
 
 > **Early alpha** — launched February 2026, active daily development.
 
-Your agent forgets everything between sessions. The standard fix — stuffing the full conversation history into context — works, but you're paying for thousands of tokens of old dialogue every single turn. Quaid replaces that with an **active knowledge layer**: 89% of full-context accuracy using ~8x fewer tokens. Your agent keeps the right knowledge in reach without re-reading entire transcript histories.
+Most agents still treat long-term context as replay: re-inject old chat and hope retrieval lands. Quaid is not another memory plugin; it is an **active knowledge layer**. It continuously captures, structures, and maintains knowledge, then serves only what matters at query time. Result: 89% of full-context accuracy using ~8x fewer tokens.
 
-Every session starts ready to work — project docs, architecture decisions, tool configs, and codebase context are tracked and kept current automatically. No ramp-up, no "remind me what we're working on." And through a dual journaling system, your agent evolves with use — it doesn't just store facts, it develops deeper understanding of your preferences, your communication style, and your projects over time. The longer you use it, the more specialized it becomes.
+Every session starts ready to work. Project docs, architecture decisions, tool guidance, and codebase context are tracked and kept current automatically. Through dual snippet/journal learning, the layer evolves with use: it doesn't just retain facts, it builds durable understanding of users, workflows, and projects over time.
 
 **What it remembers:**
 - **Facts** — names, relationships, preferences, decisions, life events
@@ -138,7 +138,7 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 
 Quaid is in early alpha. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
 
-Known limitations for **v0.20.0-alpha**:
+Known limitations for **v0.2.0-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows support exists but has less operational coverage than macOS/Linux.
@@ -156,7 +156,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
 - [Benchmark Results](docs/BENCHMARKS.md) — Full LoCoMo evaluation with per-category breakdowns
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
-- [v0.20.0-alpha Notes](docs/releases/v0.20.0-alpha.md) — Release highlights and known limitations
+- [v0.2.0-alpha Notes](docs/releases/v0.2.0-alpha.md) — Release highlights and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 
 ---
