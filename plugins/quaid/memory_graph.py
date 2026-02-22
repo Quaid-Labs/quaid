@@ -2738,8 +2738,6 @@ def recall(
         _use_hyde = use_routing
         if not _HAS_LLM_CLIENTS:
             _use_hyde = False
-        if config_retrieval and not getattr(config_retrieval, 'use_hyde', True):
-            _use_hyde = False
         search_query = _route_query(clean_query) if _use_hyde else clean_query
         results = graph.search_hybrid(search_query, limit=search_limit, privacy=privacy, owner_id=owner_id, current_session_id=current_session_id, compaction_time=compaction_time, intent=intent)
     else:
@@ -2914,6 +2912,7 @@ def recall(
             "owner_id": node.owner_id,
             "_multi_pass": node.id in _multi_pass_ids,
             "is_technical": _attrs.get("is_technical", False),
+            "source_type": _attrs.get("source_type"),
             "project": _attrs.get("project"),
         }
         if debug and debug_info and node.id in debug_info:
@@ -2965,6 +2964,7 @@ def recall(
                                     "via_relation": "co_session",
                                     "hop_depth": 0,
                                     "is_technical": _co_attrs.get("is_technical", False),
+                                    "source_type": _co_attrs.get("source_type"),
                                     "project": _co_attrs.get("project"),
                                 })
             except Exception:
@@ -4296,7 +4296,7 @@ if __name__ == "__main__":
         store_p.add_argument("--speaker", default=None, help="Speaker name")
         store_p.add_argument("--skip-dedup", action="store_true", help="Skip deduplication check")
         store_p.add_argument("--knowledge-type", default="fact", choices=["fact", "belief", "preference", "experience"], help="Knowledge type (default: fact)")
-        store_p.add_argument("--source-type", default=None, choices=["user", "assistant", "tool", "import"], help="Source type (user, assistant, tool, import)")
+        store_p.add_argument("--source-type", default=None, choices=["user", "assistant", "both", "tool", "import"], help="Source type (user, assistant, both, tool, import)")
         store_p.add_argument("--keywords", default=None, help="Space-separated derived search keywords")
         store_p.add_argument("--created-at", default=None, help="Override created_at timestamp (ISO format)")
         store_p.add_argument("--accessed-at", default=None, help="Override accessed_at timestamp (ISO format)")
@@ -4512,7 +4512,8 @@ if __name__ == "__main__":
                     owner = r.get('owner_id', '')
                     valid_from = r.get('valid_from', '')
                     valid_until = r.get('valid_until', '')
-                    print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner}")
+                    source_type = r.get('source_type', '') or ''
+                    print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner}|ST:{source_type}")
                     if r.get('_debug'):
                         d = r['_debug']
                         print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")

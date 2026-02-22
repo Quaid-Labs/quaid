@@ -168,6 +168,7 @@ def _run_recall(graph, query, limit=5):
             limit=limit,
             owner_id="quaid",
             use_routing=False,
+            use_reranker=False,
             min_similarity=0.0,
         )
 
@@ -225,6 +226,7 @@ class TestGoldenRecall:
                 limit=5,
                 owner_id="nonexistent_user",
                 use_routing=False,
+                use_reranker=False,
                 min_similarity=0.0,
             )
         # Non-existent owner should get no results (or only shared/public)

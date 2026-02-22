@@ -251,10 +251,10 @@ OpenClaw plugin (Total Recall / quaid) that:
 - `personNodeName` field maps user to their Person node in the graph
 
 **Tools registered:**
-- `memory_recall` — search memories with **dynamic retrieval limit K** (see below), uses graph-aware search. **Waits for in-flight extraction** (up to 60s timeout) before querying, ensuring freshly extracted facts from compaction/reset are immediately queryable. Supports `dateFrom`/`dateTo` parameters for date-range filtering. Results include dates showing when each fact was recorded, and `[superseded]` markers for facts with `validUntil` set.
+- `memory_recall` — search memories with **dynamic retrieval limit K** (see below), uses graph-aware search. **Waits for in-flight extraction** (up to 60s timeout) before querying, ensuring freshly extracted facts from compaction/reset are immediately queryable. Uses a strict `query + options` contract (`options.graph`, `options.routing`, `options.filters`, `options.ranking`) including date filtering via `options.filters.dateFrom`/`options.filters.dateTo`. Results include dates showing when each fact was recorded, and `[superseded]` markers for facts with `validUntil` set.
 - `memory_store` — save new memory (stored as `status: approved`, `confidence: 0.8`)
 - `memory_forget` — delete by query or ID
-- `docs_search` — RAG search with optional `project` filter + staleness warnings
+- `projects_search` — RAG search with optional `project` filter + staleness warnings
 - `docs_list` — list docs by project/type via registry
 - `docs_read` — read doc by path or title
 - `docs_register` — register doc to project
@@ -294,15 +294,15 @@ where `N` is the total node count. The result is clamped to a configured range (
 1. Agent sees user message mentioning people/relationships/preferences
 2. Agent decides to call `memory_recall` with a crafted query
 3. Agent uses specific names and topics for queries
-4. Graph expansion via `expandGraph: true` for relationship queries
-5. Date range filtering via `dateFrom`/`dateTo` for time-scoped queries
+4. Graph expansion via `options.graph.expand: true` for relationship queries
+5. Date range filtering via `options.filters.dateFrom`/`options.filters.dateTo` for time-scoped queries
 6. User gets notification showing what was retrieved
 
 **Tool guidance in description:**
 - USE WHEN: User mentions people, asks about preferences/history, references past events
 - SKIP WHEN: Pure coding tasks, general knowledge, short acks
-- QUERY TIPS: Use entity names, add context, be specific. For project technical details, memory_recall can help; use docs_search for architecture/reference docs.
-- `dateFrom`/`dateTo`: Use YYYY-MM-DD format to filter memories by date range
+- QUERY TIPS: Use entity names, add context, be specific. For project technical details, memory_recall can help; use projects_search for architecture/reference docs.
+- `options.filters.dateFrom`/`options.filters.dateTo`: Use YYYY-MM-DD format to filter memories by date range
 
 **Result quality signals:**
 - Similarity % for each match

@@ -89,7 +89,7 @@ EXPECTED_TOOLS = {
     "memory_create_edge",
     "memory_stats",
     "memory_provider",
-    "docs_search",
+    "projects_search",
     "session_recall",
 }
 
@@ -328,13 +328,13 @@ class TestMemoryStats:
 
 
 # ---------------------------------------------------------------------------
-# Tests — docs_search
+# Tests — projects_search
 # ---------------------------------------------------------------------------
 
 class TestDocsSearch:
     def test_docs_search_basic(self, server):
         mod, _, _, mock_rag = server
-        result = mod.docs_search("architecture")
+        result = mod.projects_search("architecture")
         mock_rag.search_docs.assert_called_once_with(
             query="architecture",
             limit=5,
@@ -346,17 +346,17 @@ class TestDocsSearch:
 
     def test_docs_search_with_project(self, server):
         mod, _, _, mock_rag = server
-        mod.docs_search("setup", project="quaid")
+        mod.projects_search("setup", project="quaid")
         assert mock_rag.search_docs.call_args.kwargs["project"] == "quaid"
 
     def test_docs_search_limit_capped(self, server):
         mod, _, _, mock_rag = server
-        mod.docs_search("test", limit=100)
+        mod.projects_search("test", limit=100)
         assert mock_rag.search_docs.call_args.kwargs["limit"] == 20
 
     def test_docs_search_empty_project_becomes_none(self, server):
         mod, _, _, mock_rag = server
-        mod.docs_search("test", project="")
+        mod.projects_search("test", project="")
         assert mock_rag.search_docs.call_args.kwargs["project"] is None
 
 

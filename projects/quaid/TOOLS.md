@@ -5,8 +5,49 @@
 - **Search:** Hybrid (FTS + semantic in parallel), RRF fusion, intent-aware query classification
 - **Scoring:** Composite (60% relevance + 20% recency + 15% frequency + confidence/bonuses), MMR diversity
 - **Graph:** Multi-hop traversal (depth=2) for relationship queries via `expandGraph: true`
-- **Default:** Searches memory only (use `docs_search` for docs/RAG)
+- **Store-aware recall:** `options.stores` + `options.routing.enabled` let you query specific knowledge stores or use a routed catch-all plan
+- **API shape:** `memory_recall(query, options)` where `options` contains `stores`, `graph`, `routing`, `filters`, `ranking`
 - **Note:** Full gateway restart required after plugin changes (SIGUSR1 doesn't reload TS source)
+
+### Knowledge Stores
+
+- `vector_basic`: personal/life facts, preferences, relationships
+- `vector_technical`: technical/project-state facts (tests, versions, architecture decisions, bugs/fixes)
+- `graph`: relationship traversal and connected entity edges
+- `journal`: distilled reflective signal from journal files
+- `project`: project documentation recall from docs RAG index
+
+### Project Description Contract
+
+- Each project `TOOLS.md` should include a one-line top-level description:
+  - `Project Description: <one sentence>`
+- This short line is used by `total_recall` routing context.
+- Keep `PROJECT.md` as long-form overview/reference (not token-capped runtime context).
+
+### total_recall Guidance
+
+- Think of `total_recall` as the catch-all recall path.
+- `total_recall` always runs one fast reasoning planning pass (query cleanup + store routing).
+- This improves hit quality, but it adds one extra fast-LLM call.
+- If you already know the target stores, use plain recall with explicit stores (no planner pass).
+
+### Practical Call Patterns
+
+- Known relationship question:
+  - `options: { stores: ["vector_basic","graph"], routing: { enabled: false } }`
+- Known technical question:
+  - `options: { stores: ["vector_technical","project"], routing: { enabled: false } }`
+- Ambiguous question:
+  - use `total_recall` (planner enabled by design)
+  - `options: { routing: { enabled: true, reasoning: "fast" } }`
+- Agent-action question:
+  - `options: { routing: { enabled: true, intent: "agent_actions" } }`
+
+### Injector Policy
+
+- Auto-injected context is a hint layer.
+- If not a direct/high-confidence hit, run explicit `memory_recall` before answering with specifics.
+- Prefer explicit recall for names, dates, relationships, and agent-action attribution.
 
 ## CLI Commands
 
@@ -93,4 +134,22 @@ Expected behavior:
 | `projects/quaid/reference/memory-deduplication-system.md` | Dedup pipeline: thresholds, Haiku verification |
 | `projects/quaid/reference/memory-operations-guide.md` | User-facing operations guide |
 
-Use `docs_search` tool with `project` filter for project-scoped searches.
+Use `projects_search` tool with `project` filter for project-scoped searches.
+
+## projects_search vs recall(store=project)
+
+- `projects_search` (current behavior):
+  - runs `docs_rag.py search` (optional `project` filter)
+  - if `project` is provided, prepends that project's `PROJECT.md` (when configured)
+  - appends docs staleness warnings from `docs_updater.py check --json`
+  - returns a human-readable block optimized for agent use
+
+- `memory_recall` with `options.stores: ["project"]`:
+  - uses project store recall path only (RAG matches)
+  - supports `docs` filter (doc name/path fragments) for explicit scope
+  - does not prepend `PROJECT.md`
+  - does not include docs staleness warnings
+
+- Conclusion:
+  - They overlap, but are not equivalent today.
+  - Keep `projects_search` as the richer docs workflow until project-store recall is upgraded to include project bootstrap + staleness metadata.

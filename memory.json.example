@@ -119,7 +119,7 @@
     "mmrLambda": 0.7,
     "coSessionDecay": 0.6,
     "recencyDecayDays": 90,
-    "useHyde": true,
+    "preInjectionPass": true,
     "traversal": {
       "useBeam": true,
       "beamWidth": 5,

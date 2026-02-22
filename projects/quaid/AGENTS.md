@@ -1,4 +1,4 @@
-# Memory System — Operational Guide
+# Knowledge Layer — Operational Guide
 
 ## Three Layers
 
@@ -47,14 +47,47 @@ Nightly janitor -> Review -> Dedup -> Decay -> Graduate to 'active'
 - Needs personal context to answer well
 
 **How to search:**
-```
-memory_recall query="Hauser birthday" expandGraph=true
+```text
+memory_recall query="Hauser birthday" options={graph:{expand:true}}
 ```
 - Use **names** not pronouns ("Hauser" not "my sister")
 - Add **context** ("Lori gift ideas" not "mom")
 - Set `expandGraph: true` for relationship queries
+- Prefer explicit `stores` when you know the target source:
+  - `vector_basic` for personal/life facts
+  - `vector_technical` for technical/project facts
+  - `graph` for relationship traversal
+  - `journal` for reflective context
+  - `project` for docs-derived project knowledge
+- Use catch-all routing (`options.routing.enabled: true`) only when uncertain.
+  - `total_recall` triggers an extra fast-LLM planning pass (better recall plan, higher cost/latency).
+  - If the query is obvious, explicit `stores` via plain recall is cheaper and usually faster.
+  - Optional: `options.routing.reasoning: "deep"` for a higher-quality routing pass when you can afford extra cost/latency.
+  - Optional: `options.routing.intent: "agent_actions"` when asking what the assistant/agent did or suggested.
+  - Optional: `options.filters.docs: [...]` to constrain project-doc recall to specific docs.
+
+**Injector confidence policy:**
+- Auto-injected memories are hints.
+- If retrieval is not a clear high-confidence match, call `memory_recall` before committing to specifics.
+- Do not treat injected context as final authority for names, dates, or relationship facts unless it is a direct/high-confidence hit.
+
+- Project metadata for routing:
+  - Put a one-line `Project Description: ...` at the top of each project `TOOLS.md`.
+  - Keep deep details in `PROJECT.md` (long-form, not meant for always-loaded context).
 
 **When to skip:** Pure coding tasks, general knowledge, short acks.
+
+## Docs Retrieval Behavior (Current)
+
+- `projects_search` is still the richest docs path:
+  - RAG search over project docs
+  - optional project filter
+  - prepends matching `PROJECT.md` when project is known
+  - includes staleness warnings
+- `memory_recall` with `options.stores: ["project"]` is lighter:
+  - project-store recall only
+  - no project bootstrap preface
+  - no staleness report
 
 ## Dual Extraction: Snippets + Journal
 

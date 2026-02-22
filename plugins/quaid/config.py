@@ -166,7 +166,7 @@ class RetrievalConfig:
     mmr_lambda: float = 0.7  # MMR diversity parameter
     co_session_decay: float = 0.6  # Score fraction for co-session facts
     recency_decay_days: int = 90  # Days over which recency decays to 0
-    use_hyde: bool = False  # Enable HyDE query expansion
+    pre_injection_pass: bool = True  # Auto-inject: use total_recall planning pass
     auto_inject: bool = False  # Auto-inject memories into context (Mem0-style)
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
 
@@ -635,7 +635,7 @@ def _load_config_inner() -> MemoryConfig:
         mmr_lambda=retrieval_data.get('mmr_lambda', 0.7),
         co_session_decay=retrieval_data.get('co_session_decay', 0.6),
         recency_decay_days=retrieval_data.get('recency_decay_days', 90),
-        use_hyde=retrieval_data.get('use_hyde', False),
+        pre_injection_pass=retrieval_data.get('pre_injection_pass', retrieval_data.get('preInjectionPass', True)),
         auto_inject=retrieval_data.get('auto_inject', False),
         traversal=traversal,
     )

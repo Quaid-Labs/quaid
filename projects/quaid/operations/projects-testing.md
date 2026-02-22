@@ -23,12 +23,12 @@ Run these in a Telegram conversation with Alfie.
 
 ## Test 2: Project-filtered search
 
-**What it tests:** `docs_search` with `project` parameter
+**What it tests:** `projects_search` with `project` parameter
 
 **Say to Alfie:**
 > "Search for 'deduplication' but only in the quaid project"
 
-**Expected:** Alfie uses `docs_search` with `query: "deduplication"` and `project: "quaid"`. Results should include memory-deduplication-system.md and possibly janitor-reference.md. Should NOT include any spark/infrastructure/integrations docs.
+**Expected:** Alfie uses `projects_search` with `query: "deduplication"` and `project: "quaid"`. Results should include memory-deduplication-system.md and possibly janitor-reference.md. Should NOT include any spark/infrastructure/integrations docs.
 
 **Then say:**
 > "Search for 'voice' in the integrations project"
@@ -110,7 +110,7 @@ ls -la projects/staging/failed/ 2>/dev/null  # Should be empty/nonexistent
 
 ## Test 7: Staleness detection
 
-**What it tests:** Mtime-based staleness check via docs_search
+**What it tests:** Mtime-based staleness check via projects_search
 
 **Setup (CLI):**
 ```bash

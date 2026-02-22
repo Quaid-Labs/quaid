@@ -224,6 +224,7 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Janitor Apply")}: ${janitorApplyMode} ${C.dim("(legacy master policy)")}`,
     `${C.bold("Janitor Policies")}: core=${corePolicy} project=${projectPolicy} workspace=${workspacePolicy} destructive=${destructivePolicy}`,
     `${C.bold("Timeout")}: ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`,
+    `${C.bold("Pre-injection Pass")}: ${getPath(cfg, "retrieval.preInjectionPass", true) ? "on" : "off"} ${C.dim("(auto-inject total_recall planner)")}`,
   ];
   note(lines.join("\n"), "Current");
 }
@@ -391,6 +392,7 @@ async function runEdit() {
         { value: "notify_janitor", label: "Notifications: janitor", hint: "off/summary/full" },
         { value: "notify_extraction", label: "Notifications: extraction", hint: "off/summary/full" },
         { value: "notify_retrieval", label: "Notifications: retrieval", hint: "off/summary/full" },
+        { value: "pre_injection_pass", label: "Recall: pre-injection pass", hint: "auto-inject uses total_recall planner (recommended on)" },
         { value: "janitor_policy_core", label: "Janitor: core markdown policy", hint: "root markdown writes (SOUL/USER/MEMORY/TOOLS)" },
         { value: "janitor_policy_project", label: "Janitor: project docs policy", hint: "project docs outside projects/quaid" },
         { value: "janitor_policy_workspace", label: "Janitor: workspace move/delete policy", hint: "workspace audit file moves/deletes" },
@@ -490,6 +492,17 @@ async function runEdit() {
         options: notificationVerbosityOptions(),
       }));
       setPath(cfg, "notifications.retrieval.verbosity", next);
+    } else if (menu === "pre_injection_pass") {
+      const current = !!getPath(cfg, "retrieval.preInjectionPass", true);
+      const next = handleCancel(await select({
+        message: "retrieval.preInjectionPass",
+        initialValue: current ? "on" : "off",
+        options: [
+          { value: "on", label: "on", hint: "auto-inject uses total_recall (fast planner + routed stores)" },
+          { value: "off", label: "off", hint: "auto-inject uses plain recall on vector_basic + graph" },
+        ],
+      }));
+      setPath(cfg, "retrieval.preInjectionPass", next === "on");
     } else if (menu === "janitor_policy_core") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.coreMarkdownWrites",

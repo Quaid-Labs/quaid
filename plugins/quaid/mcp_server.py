@@ -41,7 +41,7 @@ mcp = FastMCP("quaid", instructions=(
     "from conversation transcripts, memory_store to save individual facts, "
     "memory_recall to retrieve relevant memories, memory_search for fast lookups, "
     "memory_create_edge to link entities, memory_forget to delete memories, "
-    "memory_get to fetch by ID, memory_stats for database info, and docs_search "
+    "memory_get to fetch by ID, memory_stats for database info, and projects_search "
     "to search project documentation. Memories persist across sessions."
 ))
 
@@ -226,7 +226,7 @@ def memory_stats() -> dict:
 
 
 @mcp.tool()
-def docs_search(query: str, limit: int = 5, project: str = "") -> dict:
+def projects_search(query: str, limit: int = 5, project: str = "") -> dict:
     """Search project documentation using semantic RAG search.
 
     When a project is specified, the full PROJECT.md is included alongside

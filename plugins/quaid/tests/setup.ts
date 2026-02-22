@@ -1,12 +1,28 @@
 import { beforeEach, afterEach } from 'vitest'
 import { unlink } from 'fs/promises'
 import { spawn } from 'node:child_process'
+import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/memory_graph.py")
+
+function ensureAdapterConfig(): void {
+  const payload = JSON.stringify({ adapter: { type: "standalone" } }, null, 2)
+  const cfgPath = path.join(WORKSPACE, "config", "memory.json")
+  try {
+    if (!fs.existsSync(cfgPath)) {
+      fs.mkdirSync(path.dirname(cfgPath), { recursive: true })
+      fs.writeFileSync(cfgPath, payload, { encoding: "utf-8" })
+    }
+  } catch {
+    // Best effort: tests still pass when env hints are sufficient.
+  }
+}
+
+ensureAdapterConfig()
 
 function createUniqueTestDbPath(): string {
   const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`

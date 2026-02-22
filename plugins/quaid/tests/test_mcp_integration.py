@@ -274,7 +274,7 @@ class TestMcpDedup:
 
 
 class TestMcpDocsSearch:
-    """Verify docs_search works with real DocsRAG (empty index)."""
+    """Verify projects_search works with real DocsRAG (empty index)."""
 
     def test_docs_search_returns_dict(self, tmp_path):
         graph, db_file = _make_graph(tmp_path)
@@ -282,7 +282,7 @@ class TestMcpDocsSearch:
         with _integration_patches(graph), \
              patch("docs_rag.DB_PATH", db_file):
             # No docs indexed, should return dict with empty chunks list
-            results = mod.docs_search("anything")
+            results = mod.projects_search("anything")
             assert isinstance(results, dict)
             assert isinstance(results["chunks"], list)
             assert len(results["chunks"]) == 0
@@ -476,7 +476,7 @@ class TestMcpProtocol:
             assert "memory_forget" in tool_names
             assert "memory_create_edge" in tool_names
             assert "memory_stats" in tool_names
-            assert "docs_search" in tool_names
+            assert "projects_search" in tool_names
         finally:
             proc.stdin.close()
             proc.wait(timeout=5)

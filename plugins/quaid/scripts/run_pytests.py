@@ -91,7 +91,15 @@ def run_one(file_path: Path, timeout_s: int, marker_expr: str | None = None) -> 
         status = "PASS" if proc.returncode == 0 else "FAIL"
         return Result(file_path, proc.returncode, time.time() - t0, status, out)
     except subprocess.TimeoutExpired as e:
-        out = (e.stdout or "") + ("\n" + (e.stderr or ""))
+        def _to_text(v):
+            if v is None:
+                return ""
+            if isinstance(v, bytes):
+                return v.decode("utf-8", errors="replace")
+            return str(v)
+        out_stdout = _to_text(e.stdout)
+        out_stderr = _to_text(e.stderr)
+        out = out_stdout + (("\n" + out_stderr) if out_stderr else "")
         return Result(file_path, 124, time.time() - t0, "TIMEOUT", out)
 
 

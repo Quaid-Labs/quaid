@@ -325,13 +325,35 @@ class DocsRAG:
         print(f"Indexing complete: {indexed_files} files indexed, {skipped_files} skipped, {total_chunks} total chunks")
         return result
 
+    def _normalize_docs_filter(self, docs: Optional[List[str]]) -> List[str]:
+        if not docs:
+            return []
+        out: List[str] = []
+        for raw in docs:
+            if raw is None:
+                continue
+            val = str(raw).strip()
+            if not val:
+                continue
+            out.append(val)
+        # De-duplicate while preserving order
+        seen = set()
+        uniq: List[str] = []
+        for item in out:
+            if item in seen:
+                continue
+            seen.add(item)
+            uniq.append(item)
+        return uniq[:64]
+
     def search_docs(self, query: str, limit: int = 5, min_similarity: float = 0.3,
-                    project: Optional[str] = None) -> List[Dict]:
+                    project: Optional[str] = None, docs: Optional[List[str]] = None) -> List[Dict]:
         """Semantic search of document chunks.
 
         Args:
             project: If set, only return results from files belonging to this project.
                      Uses doc_registry + project homeDir for filtering.
+            docs: Optional list of doc filters (basename, relative path, or path fragment).
         """
         query_embedding = _lib_get_embedding(query)
         if not query_embedding:
@@ -352,11 +374,14 @@ class DocsRAG:
             except Exception:
                 pass
 
+        doc_filters = self._normalize_docs_filter(docs)
+
         results = []
         with _lib_get_connection(self.db_path) as conn:
             # Filter at SQL level when project is specified (avoids loading all chunks)
+            like_clauses = []
+            params = []
             if project and (project_paths or registry_paths):
-                like_clauses = []
                 params = []
                 if project_paths and project_paths["home_dir"]:
                     like_clauses.append("source_file LIKE ?")
@@ -370,10 +395,24 @@ class DocsRAG:
                     like_clauses.append("source_file LIKE ?")
                     params.append(rp + "%")
                 if like_clauses:
-                    where = " OR ".join(like_clauses)
-                    rows = conn.execute(f"SELECT * FROM doc_chunks WHERE ({where})", params).fetchall()
+                    like_clauses = [f"({ ' OR '.join(like_clauses) })"]
                 else:
                     rows = []  # No matching paths for this project
+                    if not doc_filters:
+                        return rows
+
+            # Optional explicit doc filter set
+            if doc_filters:
+                doc_like = []
+                for df in doc_filters:
+                    doc_like.append("source_file LIKE ?")
+                    params.append(f"%{df}%")
+                if doc_like:
+                    like_clauses.append(f"({ ' OR '.join(doc_like) })")
+
+            if like_clauses:
+                where = " AND ".join(like_clauses)
+                rows = conn.execute(f"SELECT * FROM doc_chunks WHERE {where}", params).fetchall()
             else:
                 rows = conn.execute("SELECT * FROM doc_chunks").fetchall()
 
@@ -460,6 +499,7 @@ def main():
     search_parser.add_argument('--limit', type=int, default=_default_limit, help='Max results')
     search_parser.add_argument('--min-similarity', type=float, default=_default_min_sim, help='Minimum similarity threshold')
     search_parser.add_argument('--project', help='Filter results by project name')
+    search_parser.add_argument('--docs', help='Comma-separated doc path/name filters')
     
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show indexing statistics')
@@ -498,8 +538,16 @@ def main():
         print(f"\nTotal: {docs_result['indexed_files'] + workspace_indexed} files, {docs_result['total_chunks'] + workspace_chunks} chunks")
     
     elif args.command == 'search':
-        results = rag.search_docs(args.query, limit=args.limit, min_similarity=args.min_similarity,
-                                   project=getattr(args, 'project', None))
+        docs_filter = []
+        if getattr(args, "docs", None):
+            docs_filter = [d.strip() for d in str(args.docs).split(",") if d.strip()]
+        results = rag.search_docs(
+            args.query,
+            limit=args.limit,
+            min_similarity=args.min_similarity,
+            project=getattr(args, 'project', None),
+            docs=docs_filter,
+        )
         
         if not results:
             print("No results found")

@@ -5,6 +5,7 @@ type Result = {
   text: string;
   category: string;
   similarity: number;
+  sourceType?: string;
   id?: string;
   via?: string;
 };
@@ -195,5 +196,51 @@ describe("knowledge orchestrator", () => {
     const plan = await engine.routeRecallPlan("x", false, "fast");
     expect(plan.project).toBeUndefined();
     expect(plan.stores).toEqual(["project"]);
+  });
+
+  it("applies source-type boosts for agent_actions intent", async () => {
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: { join: (...parts: string[]) => parts.join("/") } as any,
+      fs: { readdirSync: vi.fn(() => []), readFileSync: vi.fn(() => "") } as any,
+      getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter: vi.fn(async () => '{"stores":["vector_basic"]}'),
+      recallVector: vi.fn(async () => [
+        { text: "User mentioned snacks", category: "fact", similarity: 0.82, sourceType: "user", via: "vector" },
+        { text: "Agent suggested a split test", category: "fact", similarity: 0.79, sourceType: "assistant", via: "vector" },
+      ]),
+      recallGraph: vi.fn(async () => []),
+    });
+
+    const results = await engine.totalRecall("what did the assistant suggest", 5, {
+      stores: ["vector_basic"],
+      expandGraph: false,
+      graphDepth: 1,
+      technicalScope: "any",
+      intent: "agent_actions",
+    });
+
+    expect(results[0].text).toContain("Agent suggested");
+  });
+
+  it("passes intent facet into routeRecallPlan prompt", async () => {
+    const callFastRouter = vi.fn(async () => '{"query":"x","stores":["vector_basic"]}');
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter,
+      recallVector: vi.fn(async () => []),
+      recallGraph: vi.fn(async () => []),
+    });
+
+    await engine.routeRecallPlan("what did the assistant do", true, "fast", "agent_actions");
+    const prompts = callFastRouter.mock.calls.map((c) => String(c?.[1] || ""));
+    expect(prompts.some((p) => p.includes("intent: agent_actions"))).toBe(true);
   });
 });

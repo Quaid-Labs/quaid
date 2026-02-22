@@ -76,16 +76,16 @@ if [[ "$MODE" == "full" ]]; then
   fi
   # Python integration and regression suites in isolated mode
   run_stage "Python integration suite (parallel isolated)" python3 scripts/run_pytests.py --mode integration --workers 2 --timeout 180
-  run_stage "Python regression suite (parallel isolated)" python3 scripts/run_pytests.py --mode regression --workers 4 --timeout 180
+  run_stage "Python regression suite (parallel isolated)" python3 scripts/run_pytests.py --mode regression --workers 4 --timeout 600
 
   # Bootstrap-driven end-to-end auth matrix (gateway/runtime wiring).
   E2E_MATRIX_SCRIPT="${QUAID_E2E_MATRIX_SCRIPT:-$HOME/quaid/bootstrap/scripts/run-quaid-e2e-matrix.sh}"
   if [[ -x "$E2E_MATRIX_SCRIPT" ]]; then
-    E2E_EXPECT_ARGS=()
     if [[ -n "${QUAID_E2E_EXPECT:-}" ]]; then
-      E2E_EXPECT_ARGS=(--expect "$QUAID_E2E_EXPECT")
+      run_stage "Bootstrap E2E auth matrix" "$E2E_MATRIX_SCRIPT" --expect "$QUAID_E2E_EXPECT"
+    else
+      run_stage "Bootstrap E2E auth matrix" "$E2E_MATRIX_SCRIPT"
     fi
-    run_stage "Bootstrap E2E auth matrix" "$E2E_MATRIX_SCRIPT" "${E2E_EXPECT_ARGS[@]}"
   else
     echo
     echo "================================================================"

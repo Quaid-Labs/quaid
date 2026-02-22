@@ -20,6 +20,18 @@ What ships today:
 
 ## Next (v0.2)
 
+### Knowledge Store Registry (Extensible Recall Contract)
+
+`memory_recall` now uses `query + options`, but extensibility still lives in
+central code paths. Before wider adoption, move recall extensibility into a
+registry model where each knowledge store owns:
+- store ID + description + handler
+- store-local option schema/defaults
+- option validation + normalization
+- optional ranking hooks
+
+This lets new stores plug in without expanding a monolithic recall switchboard.
+
 ### Close the Open-Domain Gap
 
 Quaid wins by 11-23pp on single-hop, multi-hop, and temporal queries, but

@@ -14,7 +14,7 @@ and the systems you operate. Without it, every conversation starts from zero.
    and operational context, loaded every turn. This is "who you are."
 
 2. **Docs/RAG** (searched on demand): `docs/<project>/` docs with detailed reference docs.
-   Searched semantically via the `docs_search` tool or `docs_rag.py`. This is
+   Searched semantically via the `projects_search` tool or `docs_rag.py`. This is
    "how systems work internally" — architecture, schemas, pipelines.
 
 3. **Memory DB** (semantic recall per message): SQLite graph of personal facts about
@@ -39,7 +39,7 @@ Docs stay current through three paths:
 
 1. **Compact/Reset** — When you modify source files and the session compacts, the plugin
    detects which monitored files changed and auto-updates affected docs using the transcript
-2. **On-demand** — When `docs_search` finds stale docs, it warns you with which sources changed
+2. **On-demand** — When `projects_search` finds stale docs, it warns you with which sources changed
 3. **Nightly janitor** (Task 1b) — Compares source mtimes to doc mtimes, updates stale docs
    from git diffs
 
@@ -53,7 +53,7 @@ Source-to-doc mappings live in `config/memory.json → docs.sourceMapping`.
 | `memory_recall` | Semantic search (tool-driven; auto-injection optional) |
 | `memory_store` | Manual storage with dedup |
 | `memory_forget` | Delete by ID or query |
-| `docs_search` | Search docs via RAG + staleness warnings |
+| `projects_search` | Search docs via RAG + staleness warnings |
 
 **CLI:**
 ```bash
