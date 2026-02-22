@@ -10,7 +10,7 @@ This file is the canonical entry point for all docs in `projects/quaid`.
 | File | Summary |
 |---|---|
 | `projects/quaid/AGENTS.md` | Runtime operating guide for the agent: three-layer memory model, when to use memory tools, and extraction behavior. |
-| `projects/quaid/TOOLS.md` | Tooling and config reference used during runtime: memory tools, CLI commands, provider-switch validation, and doc pointers. |
+| `projects/quaid/TOOLS.md` | Runtime tool-usage guide: what to call, when to call it, and practical recall patterns for agents/operators. |
 | `projects/quaid/CONSTITUTION.md` | Philosophical and architectural constitution for Quaid’s core files and evolution model. |
 | `projects/quaid/SOUL.md` | Guidance for what belongs in SOUL journaling and how entries should be written. |
 | `projects/quaid/USER.md` | Guidance for user-understanding journaling (patterns, sensitivity, tone boundaries). |

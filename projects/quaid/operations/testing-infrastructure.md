@@ -141,6 +141,17 @@ npm run test:all:full
 ~/quaid/bootstrap/scripts/run-quaid-e2e-matrix.sh --providers openai,anthropic -- --skip-janitor
 ```
 
+Default full-suite matrix lanes intentionally exclude `anthropic-oauth` (known unstable refresh behavior).
+Current default lanes in `run-all-tests.sh`:
+- `openai-oauth`
+- `openai-api`
+- `anthropic-api`
+
+Override with:
+```bash
+QUAID_E2E_PATHS="openai-oauth,openai-api,anthropic-api" npm run test:all:full
+```
+
 ## Pass/Fail Rubric
 
 ### Blocking pass criteria

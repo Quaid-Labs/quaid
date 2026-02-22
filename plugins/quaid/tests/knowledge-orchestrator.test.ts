@@ -132,6 +132,73 @@ describe("knowledge orchestrator", () => {
     expect(results[0].category).toBe("project");
   });
 
+  it("applies storeOptions override for project store scope", async () => {
+    const callDocsRag = vi.fn(async () => "1. ~/projects/quaid/PROJECT.md > Overview (similarity: 0.88)");
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: { join: (...parts: string[]) => parts.join("/") } as any,
+      fs: { readdirSync: vi.fn(() => []), readFileSync: vi.fn(() => "") } as any,
+      getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
+      isSystemEnabled: (name) => name === "projects",
+      callDocsRag,
+      callFastRouter: vi.fn(async () => '{"stores":["project"]}'),
+      recallVector: vi.fn(async () => []),
+      recallGraph: vi.fn(async () => []),
+    });
+
+    await engine.totalRecall("architecture", 5, {
+      stores: ["project"],
+      expandGraph: false,
+      graphDepth: 1,
+      technicalScope: "any",
+      project: "wrong-default",
+      docs: ["wrong.md"],
+      storeOptions: {
+        project: {
+          project: "quaid",
+          docs: ["PROJECT.md"],
+        },
+      },
+    });
+
+    expect(callDocsRag).toHaveBeenCalledWith("search", [
+      "architecture",
+      "--limit",
+      "5",
+      "--project",
+      "quaid",
+      "--docs",
+      "PROJECT.md",
+    ]);
+  });
+
+  it("applies storeOptions override for vector technical scope", async () => {
+    const recallVector = vi.fn(async () => []);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter: vi.fn(async () => '{"stores":["vector"]}'),
+      recallVector,
+      recallGraph: vi.fn(async () => []),
+    });
+
+    await engine.totalRecall("api limits", 3, {
+      stores: ["vector"],
+      expandGraph: false,
+      graphDepth: 1,
+      technicalScope: "personal",
+      storeOptions: {
+        vector: { technicalScope: "technical" },
+      },
+    });
+
+    expect(recallVector).toHaveBeenCalledWith("api limits", 3, "technical", undefined, undefined);
+  });
+
   it("uses deep router for total_recall when reasoning=deep and accepts known project", async () => {
     const callFastRouter = vi.fn(async () => '{"stores":["vector_basic"]}');
     const callDeepRouter = vi.fn(async () => JSON.stringify({
@@ -242,5 +309,45 @@ describe("knowledge orchestrator", () => {
     await engine.routeRecallPlan("what did the assistant do", true, "fast", "agent_actions");
     const prompts = callFastRouter.mock.calls.map((c) => String(c?.[1] || ""));
     expect(prompts.some((p) => p.includes("intent: agent_actions"))).toBe(true);
+  });
+
+  it("exposes store registry metadata from core", () => {
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter: vi.fn(async () => ""),
+      recallVector: vi.fn(async () => []),
+      recallGraph: vi.fn(async () => []),
+    });
+
+    const stores = engine.getKnowledgeStoreRegistry();
+    expect(stores.some((s) => s.key === "vector_basic")).toBe(true);
+    expect(stores.some((s) => s.key === "project")).toBe(true);
+    const graph = stores.find((s) => s.key === "graph");
+    expect(graph?.options.some((o) => o.key === "depth")).toBe(true);
+  });
+
+  it("renders agent-facing store guidance from registry metadata", () => {
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter: vi.fn(async () => ""),
+      recallVector: vi.fn(async () => []),
+      recallGraph: vi.fn(async () => []),
+    });
+
+    const text = engine.renderKnowledgeStoreGuidanceForAgents();
+    expect(text).toContain("Knowledge stores:");
+    expect(text).toContain("vector_basic");
+    expect(text).toContain("project");
+    expect(text).toContain("depth");
   });
 });

@@ -4,6 +4,13 @@ This is a PERSONAL knowledge base with project continuity. Extract facts about p
 
 EXTRACT facts that are EXPLICITLY STATED OR CONFIRMED in the conversation. Never infer, speculate, or extrapolate.
 
+EXTRACTION PRIORITY ORDER (highest to lowest):
+1) User facts, preferences, relationships, and milestones
+2) Agent actions/suggestions that materially changed outcomes
+3) Technical/project-state facts (high-signal continuity only)
+
+Do NOT reduce user-fact coverage to make room for agent or technical details.
+
 WHAT TO EXTRACT:
 - Personal facts about the user or people they mention (names, relationships, jobs, birthdays, health, locations)
 - Preferences and opinions explicitly stated ("I like X", "I prefer Y", "I hate Z")
@@ -19,6 +26,8 @@ EXAMPLES OF GOOD EXTRACTIONS:
 - "User decided to use SQLite instead of PostgreSQL because they value simplicity"
 - "User prefers dark mode in all applications"
 - "User's birthday is March 15"
+- "The assistant suggested a layered birthday surprise plan and the user adopted it"
+- "The agent identified a SQL injection issue and recommended parameterized queries"
 
 WHAT NOT TO EXTRACT (belongs in docs/RAG, not personal memory):
 - System architecture descriptions ("The memory system uses SQLite with WAL mode")

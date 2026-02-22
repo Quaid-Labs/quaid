@@ -1,10 +1,17 @@
 import type * as pathType from "node:path";
 import type * as fsType from "node:fs";
-
-export type KnowledgeStore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
-export type TechnicalScope = "personal" | "technical" | "any";
-export type RecallIntent = "general" | "agent_actions" | "relationship" | "technical";
-export type SourceType = "user" | "assistant" | "both" | "tool" | "import";
+import {
+  getKnowledgeStoreRegistry,
+  getRoutableStoreKeys,
+  normalizeKnowledgeStores,
+  renderKnowledgeStoreGuidanceForAgents,
+} from "../../../core/knowledge-stores.js";
+import type {
+  KnowledgeStore,
+  TechnicalScope,
+  RecallIntent,
+  SourceType,
+} from "../../../core/knowledge-stores.js";
 
 export type TotalRecallOptions = {
   stores: KnowledgeStore[];
@@ -19,6 +26,7 @@ export type TotalRecallOptions = {
   dateTo?: string;
   project?: string;
   docs?: string[];
+  storeOptions?: Partial<Record<KnowledgeStore, Record<string, unknown>>>;
   reasoning?: "fast" | "deep";
 };
 
@@ -58,26 +66,22 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
 export function createKnowledgeEngine<TMemoryResult extends { text: string; similarity: number; id?: string; category: string; via?: string; sourceType?: string }>(
   deps: KnowledgeEngineDeps<TMemoryResult>
 ) {
-  function normalizeKnowledgeStores(stores: unknown, expandGraph: boolean): KnowledgeStore[] {
-    const allowed: KnowledgeStore[] = ["vector", "vector_basic", "vector_technical", "graph", "journal", "project"];
-    const defaults: KnowledgeStore[] = expandGraph
-      ? ["vector_basic", "graph", "journal", "project"]
-      : ["vector_basic", "journal", "project"];
+  type StoreRecallContext = {
+    query: string;
+    limit: number;
+    opts: TotalRecallOptions;
+  };
+  type StoreDescriptor = {
+    key: KnowledgeStore;
+    recall: (ctx: StoreRecallContext) => Promise<TMemoryResult[]>;
+  };
 
-    if (!Array.isArray(stores) || stores.length === 0) return defaults;
-
-    const normalized: KnowledgeStore[] = [];
-    for (const raw of stores) {
-      const value = String(raw || "").trim().toLowerCase();
-      if (allowed.includes(value as KnowledgeStore) && !normalized.includes(value as KnowledgeStore)) {
-        normalized.push(value as KnowledgeStore);
-      }
-    }
-    return normalized.length ? normalized : defaults;
+  function storeOption(opts: TotalRecallOptions, store: KnowledgeStore, key: string): unknown {
+    return opts.storeOptions?.[store]?.[key];
   }
 
   async function routeKnowledgeStores(query: string, expandGraph: boolean): Promise<KnowledgeStore[]> {
-    const allowed: KnowledgeStore[] = ["vector_basic", "vector_technical", "graph", "journal", "project"];
+    const allowed = getRoutableStoreKeys();
     const heuristic = (() => {
       const q = String(query || "").toLowerCase();
       const out = new Set<KnowledgeStore>();
@@ -129,7 +133,7 @@ Return JSON only: {"stores":["vector_basic","graph"]}`;
     reasoning: "fast" | "deep" = "fast",
     intent: RecallIntent = "general",
   ): Promise<RoutedRecallPlan> {
-    const allowed: KnowledgeStore[] = ["vector_basic", "vector_technical", "graph", "journal", "project"];
+    const allowed = getRoutableStoreKeys();
     const original = String(query || "").trim();
     const fallbackStores = await routeKnowledgeStores(original, expandGraph);
     const projectCatalog = (deps.getProjectCatalog ? deps.getProjectCatalog() : [])
@@ -328,25 +332,61 @@ ${projectHints}
   async function totalRecall(query: string, limit: number, opts: TotalRecallOptions): Promise<TMemoryResult[]> {
     const stores = normalizeKnowledgeStores(opts.stores, opts.expandGraph);
     const all: TMemoryResult[] = [];
+    const descriptors: Record<KnowledgeStore, StoreDescriptor> = {
+      vector: {
+        key: "vector",
+        recall: async (ctx) => {
+          const scopeRaw = storeOption(ctx.opts, "vector", "technicalScope");
+          const scope = (scopeRaw === "personal" || scopeRaw === "technical" || scopeRaw === "any")
+            ? scopeRaw
+            : ctx.opts.technicalScope;
+          return deps.recallVector(ctx.query, ctx.limit, scope, ctx.opts.dateFrom, ctx.opts.dateTo);
+        },
+      },
+      vector_basic: {
+        key: "vector_basic",
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, "personal", ctx.opts.dateFrom, ctx.opts.dateTo),
+      },
+      vector_technical: {
+        key: "vector_technical",
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, "technical", ctx.opts.dateFrom, ctx.opts.dateTo),
+      },
+      graph: {
+        key: "graph",
+        recall: async (ctx) => {
+          const depthRaw = Number(storeOption(ctx.opts, "graph", "depth"));
+          const depth = Number.isFinite(depthRaw) && depthRaw > 0 ? Math.floor(depthRaw) : ctx.opts.graphDepth;
+          const scopeRaw = storeOption(ctx.opts, "graph", "technicalScope");
+          const scope = (scopeRaw === "personal" || scopeRaw === "technical" || scopeRaw === "any")
+            ? scopeRaw
+            : ctx.opts.technicalScope;
+          return deps.recallGraph(ctx.query, ctx.limit, depth, scope, ctx.opts.dateFrom, ctx.opts.dateTo);
+        },
+      },
+      journal: {
+        key: "journal",
+        recall: async (ctx) => recallFromJournalStore(ctx.query, ctx.limit),
+      },
+      project: {
+        key: "project",
+        recall: async (ctx) => {
+          const projectRaw = storeOption(ctx.opts, "project", "project");
+          const docsRaw = storeOption(ctx.opts, "project", "docs");
+          const project = typeof projectRaw === "string" && projectRaw.trim()
+            ? projectRaw.trim()
+            : ctx.opts.project;
+          const docs = Array.isArray(docsRaw)
+            ? docsRaw.map((d) => String(d || "").trim()).filter(Boolean)
+            : ctx.opts.docs;
+          return recallFromProjectStore(ctx.query, ctx.limit, project, docs);
+        },
+      },
+    };
 
-    const vectorScopes: Array<TechnicalScope> = [];
-    if (stores.includes("vector")) vectorScopes.push(opts.technicalScope);
-    if (stores.includes("vector_basic")) vectorScopes.push("personal");
-    if (stores.includes("vector_technical")) vectorScopes.push("technical");
-
-    for (const scope of Array.from(new Set(vectorScopes))) {
-      all.push(...(await deps.recallVector(query, limit, scope, opts.dateFrom, opts.dateTo)));
-    }
-
-    if (stores.includes("graph")) {
-      all.push(...(await deps.recallGraph(query, limit, opts.graphDepth, opts.technicalScope, opts.dateFrom, opts.dateTo)));
-    }
-
-    if (stores.includes("journal")) {
-      all.push(...(await recallFromJournalStore(query, limit)));
-    }
-    if (stores.includes("project")) {
-      all.push(...(await recallFromProjectStore(query, limit, opts.project, opts.docs)));
+    for (const store of stores) {
+      const descriptor = descriptors[store];
+      if (!descriptor) continue;
+      all.push(...(await descriptor.recall({ query, limit, opts })));
     }
 
     const dedup = new Map<string, TMemoryResult>();
@@ -375,6 +415,8 @@ ${projectHints}
 
   return {
     normalizeKnowledgeStores,
+    getKnowledgeStoreRegistry,
+    renderKnowledgeStoreGuidanceForAgents,
     routeKnowledgeStores,
     routeRecallPlan,
     totalRecall,

@@ -1715,6 +1715,7 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
 function normalizeKnowledgeStores(stores: unknown, expandGraph: boolean): KnowledgeStore[] {
   return knowledgeEngine.normalizeKnowledgeStores(stores, expandGraph);
 }
+const recallStoreGuidance = knowledgeEngine.renderKnowledgeStoreGuidanceForAgents();
 
 async function routeKnowledgeStores(query: string, expandGraph: boolean): Promise<KnowledgeStore[]> {
   return knowledgeEngine.routeKnowledgeStores(query, expandGraph);
@@ -1733,6 +1734,7 @@ async function totalRecall(
     dateFrom?: string;
     dateTo?: string;
     docs?: string[];
+    storeOptions?: Partial<Record<KnowledgeStore, Record<string, unknown>>>;
   }
 ): Promise<MemoryResult[]> {
   return knowledgeEngine.totalRecall(query, limit, opts);
@@ -1752,6 +1754,7 @@ async function total_recall(
     dateFrom?: string;
     dateTo?: string;
     docs?: string[];
+    storeOptions?: Partial<Record<KnowledgeStore, Record<string, unknown>>>;
   }
 ): Promise<MemoryResult[]> {
   return knowledgeEngine.total_recall(query, limit, opts);
@@ -1772,6 +1775,7 @@ interface RecallOptions {
   dateFrom?: string;
   dateTo?: string;
   docs?: string[];
+  storeOptions?: Partial<Record<KnowledgeStore, Record<string, unknown>>>;
   waitForExtraction?: boolean;  // wait on extractionPromise (tool=yes, inject=no)
   sourceTag?: "tool" | "auto_inject" | "unknown";
 }
@@ -2407,7 +2411,9 @@ SKIP WHEN: General knowledge questions, greetings, short acknowledgments.
 
 QUERY TIPS: Use specific names and topics. Try multiple searches with different phrasings if the first doesn't return what you need.
 options.graph.depth: Set to 2 for relationship queries (e.g., nephew = sibling's child). Default 1 is usually sufficient.
-options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by date range.`,
+options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by date range.
+
+${recallStoreGuidance}`,
         parameters: Type.Object({
           query: Type.String({ description: "Search query - use entity names and specific topics" }),
           options: Type.Optional(Type.Object({
@@ -2481,6 +2487,34 @@ options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by dat
                 import: Type.Optional(Type.Number()),
               })),
             })),
+            storeOptions: Type.Optional(Type.Object({
+              vector: Type.Optional(Type.Object({
+                technicalScope: Type.Optional(
+                  Type.Union([
+                    Type.Literal("personal"),
+                    Type.Literal("technical"),
+                    Type.Literal("any"),
+                  ])
+                ),
+              })),
+              graph: Type.Optional(Type.Object({
+                depth: Type.Optional(Type.Number()),
+                technicalScope: Type.Optional(
+                  Type.Union([
+                    Type.Literal("personal"),
+                    Type.Literal("technical"),
+                    Type.Literal("any"),
+                  ])
+                ),
+              })),
+              project: Type.Optional(Type.Object({
+                project: Type.Optional(Type.String()),
+                docs: Type.Optional(Type.Array(Type.String())),
+              })),
+              journal: Type.Optional(Type.Object({})),
+              vector_basic: Type.Optional(Type.Object({})),
+              vector_technical: Type.Optional(Type.Object({})),
+            })),
           })),
         }),
         async execute(toolCallId, params) {
@@ -2507,6 +2541,7 @@ options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by dat
             const dateTo = options.filters?.dateTo;
             const docs = options.filters?.docs;
             const ranking = options.ranking;
+            const storeOptions = options.storeOptions;
             if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
               return {
                 content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
@@ -2521,6 +2556,7 @@ options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by dat
             console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedStores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, technicalScope=${technicalScope}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
             const results = await recallMemories({
               query, limit, expandGraph, graphDepth: depth, stores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, technicalScope,
+              storeOptions,
               dateFrom, dateTo, docs, waitForExtraction: true, sourceTag: "tool"
             });
 
@@ -3112,7 +3148,7 @@ notify_docs_search(data['query'], data['results'])
     async function recallMemories(opts: RecallOptions): Promise<MemoryResult[]> {
       const {
         query, limit = 10, expandGraph = false,
-        graphDepth = 1, stores, routeStores = false, reasoning = "fast", intent = "general", ranking, technicalScope = "any", dateFrom, dateTo, docs, waitForExtraction = false, sourceTag = "unknown"
+        graphDepth = 1, stores, routeStores = false, reasoning = "fast", intent = "general", ranking, technicalScope = "any", dateFrom, dateTo, docs, storeOptions, waitForExtraction = false, sourceTag = "unknown"
       } = opts;
       const selectedStores = normalizeKnowledgeStores(stores, expandGraph);
 
@@ -3145,6 +3181,7 @@ notify_docs_search(data['query'], data['results'])
           dateFrom,
           dateTo,
           docs,
+          storeOptions,
         });
       }
 
@@ -3158,6 +3195,7 @@ notify_docs_search(data['query'], data['results'])
         dateFrom,
         dateTo,
         docs,
+        storeOptions,
       });
     }
 
@@ -3225,6 +3263,13 @@ This is a PERSONAL knowledge base. System architecture, infrastructure, and oper
 
 EXTRACT facts that are EXPLICITLY STATED OR CONFIRMED in the conversation. Never infer, speculate, or extrapolate.
 
+EXTRACTION PRIORITY ORDER (highest to lowest):
+1) User facts, preferences, relationships, and milestones
+2) Agent actions/suggestions that materially changed outcomes
+3) Technical/project-state facts (only high-signal, continuity-relevant)
+
+Do NOT reduce user-fact coverage to make room for agent or technical details.
+
 WHAT TO EXTRACT:
 - Personal facts about Quaid or people he mentions (names, relationships, jobs, birthdays, health, locations)
 - Preferences and opinions explicitly stated ("I like X", "I prefer Y", "I hate Z")
@@ -3241,6 +3286,8 @@ EXAMPLES OF GOOD EXTRACTIONS:
 - "Quaid decided to use SQLite instead of PostgreSQL because he values simplicity"
 - "Quaid prefers dark mode in all applications"
 - "Quaid's birthday is March 15"
+- "The assistant suggested adding request logging middleware and Quaid accepted that change"
+- "The agent identified a SQL injection bug in search and proposed parameterized queries"
 
 WHAT NOT TO EXTRACT (belongs in docs/RAG, not personal memory):
 - System architecture descriptions ("The memory system uses SQLite with WAL mode")

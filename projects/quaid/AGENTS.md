@@ -38,6 +38,12 @@ Nightly janitor -> Review -> Dedup -> Decay -> Graduate to 'active'
 - **Edges:** Created at extraction time, linked to source facts
 - **Janitor:** Runs 4:30 AM — reviews pending facts, merges duplicates, decays stale memories (Ebbinghaus), monitors core files
 
+**Extraction priority invariant:**
+- User facts are first priority.
+- Agent-action memories are second priority.
+- Technical/project-state facts are third priority.
+- Agent/technical extraction must never reduce baseline user-memory coverage.
+
 ## Using Memory
 
 **When to search memory:**
@@ -65,6 +71,7 @@ memory_recall query="Hauser birthday" options={graph:{expand:true}}
   - Optional: `options.routing.reasoning: "deep"` for a higher-quality routing pass when you can afford extra cost/latency.
   - Optional: `options.routing.intent: "agent_actions"` when asking what the assistant/agent did or suggested.
   - Optional: `options.filters.docs: [...]` to constrain project-doc recall to specific docs.
+  - Optional: `options.storeOptions.<store>` for store-local controls (for example, project-specific doc scope in `options.storeOptions.project`).
 
 **Injector confidence policy:**
 - Auto-injected memories are hints.

@@ -251,13 +251,25 @@ OpenClaw plugin (Total Recall / quaid) that:
 - `personNodeName` field maps user to their Person node in the graph
 
 **Tools registered:**
-- `memory_recall` — search memories with **dynamic retrieval limit K** (see below), uses graph-aware search. **Waits for in-flight extraction** (up to 60s timeout) before querying, ensuring freshly extracted facts from compaction/reset are immediately queryable. Uses a strict `query + options` contract (`options.graph`, `options.routing`, `options.filters`, `options.ranking`) including date filtering via `options.filters.dateFrom`/`options.filters.dateTo`. Results include dates showing when each fact was recorded, and `[superseded]` markers for facts with `validUntil` set.
+- `memory_recall` — search memories with **dynamic retrieval limit K** (see below), uses graph-aware search. **Waits for in-flight extraction** (up to 60s timeout) before querying, ensuring freshly extracted facts from compaction/reset are immediately queryable. Uses a strict `query + options` contract (`options.graph`, `options.routing`, `options.filters`, `options.ranking`, `options.storeOptions`) including date filtering via `options.filters.dateFrom`/`options.filters.dateTo`. Results include dates showing when each fact was recorded, and `[superseded]` markers for facts with `validUntil` set.
 - `memory_store` — save new memory (stored as `status: approved`, `confidence: 0.8`)
 - `memory_forget` — delete by query or ID
 - `projects_search` — RAG search with optional `project` filter + staleness warnings
 - `docs_list` — list docs by project/type via registry
 - `docs_read` — read doc by path or title
 - `docs_register` — register doc to project
+
+**Knowledge-store registry (core-owned):**
+- Store metadata and default selection now live in `core/knowledge-stores.ts` (`.js` runtime pair).
+- Orchestrator consumes that registry for normalization/routing defaults instead of hardcoded store lists.
+- Adapter consumes registry-rendered guidance text for `memory_recall` tool instructions so store docs stay aligned with runtime behavior.
+
+**Extraction prioritization (bug-bash update):**
+- Prompt now enforces explicit priority order:
+  1. user facts
+  2. agent actions/suggestions
+  3. technical/project-state facts
+- Guardrail: agent/technical extraction must not reduce user-fact coverage.
 - `project_create` — scaffold new project with PROJECT.md
 
 **Dynamic retrieval limit K:**
