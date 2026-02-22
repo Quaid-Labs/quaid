@@ -645,8 +645,8 @@ docs_registry.py discover --project myproject    # Auto-discover docs in project
 
 Each project directory under `projects/` can contain:
 - `PROJECT.md` -- Generated project documentation (scaffolded by `create-project`)
-- `TOOLS.md` -- API docs and credentials (loaded into agent context via gateway glob)
-- `AGENTS.md` -- Operational guide (loaded into agent context via gateway glob)
+- `TOOLS.md` -- Tool usage guidance (what to call, when, and why; loaded into agent context)
+- `AGENTS.md` -- Project behavior and operating rules (loaded into agent context)
 
 Projects are auto-discovered during RAG reindexing (janitor task 7).
 

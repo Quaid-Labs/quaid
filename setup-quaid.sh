@@ -1227,8 +1227,8 @@ Persistent long-term knowledge layer. Stores facts, relationships, and preferenc
 in a local SQLite graph database. Retrieved automatically via hybrid search.
 
 ## Key Files
-- `TOOLS.md` — CLI commands and agent tools reference
-- `AGENTS.md` — Instructions for how the agent should use the knowledge layer
+- `TOOLS.md` — How to use project tools and recall paths effectively
+- `AGENTS.md` — Project behavior rules and operating guidance
 - `USER.md` — Journaling guidance for user-understanding entries
 - `SOUL.md` — Journaling guidance for agent self-reflection entries
 - `MEMORY.md` — Journaling guidance for shared-moment entries
