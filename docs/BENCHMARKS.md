@@ -2,7 +2,7 @@
 
 ## LoCoMo (ACL 2024)
 
-[LoCoMo](https://github.com/snap-research/locomo) is an industry-standard benchmark for conversational memory systems. It consists of 10 long conversations (5,882 turns) with 1,540 scored question-answer pairs across four categories: single-hop lookup, multi-hop reasoning, temporal reasoning, and open-domain inference.
+[LoCoMo](https://github.com/snap-research/locomo) is an industry-standard benchmark for conversational memory and knowledge systems. It consists of 10 long conversations (5,882 turns) with 1,540 scored question-answer pairs across four categories: single-hop lookup, multi-hop reasoning, temporal reasoning, and open-domain inference.
 
 We evaluate Quaid using **Mem0's exact methodology** -- same judge model (GPT-4o-mini), same prompt, same temperature (0.0), same JSON response format, same scoring. This makes the comparison peer-review valid.
 
@@ -20,7 +20,7 @@ We evaluate Quaid using **Mem0's exact methodology** -- same judge model (GPT-4o
 | OpenAI Memory | 52.9% | GPT-4o-mini | Apr 2025 |
 | **Quaid (Opus answers)** | **75.0%** | **Opus** | **Recommended production config** |
 
-Full-context baselines (upper bound, no memory system): Haiku 79.6%, Opus 86.6%.
+Full-context baselines (upper bound, no knowledge layer): Haiku 79.6%, Opus 86.6%.
 
 The shipping configuration uses Opus for both extraction and answer generation. Quaid achieves 88.3% of full-context Haiku performance (fair comparison) and 86.6% of full-context Opus performance while injecting only the relevant memories.
 
@@ -176,7 +176,7 @@ The benchmark suite lives in `benchmark/` (public repo) or `memory-stress-test/r
 cd benchmark/locomo
 python3 run_locomo.py --config standard --answer-model haiku --trials 3
 python3 run_locomo.py --rejudge --results-dir data/results/  # Re-score cached predictions
-python3 run_locomo.py --full-context  # Full-context baseline (no memory system)
+python3 run_locomo.py --full-context  # Full-context baseline (no knowledge layer)
 ```
 
 Requirements: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` (for GPT-4o-mini judge) environment variables. Ollama running locally for embeddings. A full evaluation run costs approximately $85 across all configurations.

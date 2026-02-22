@@ -89,7 +89,7 @@ python3 docs_registry.py register projects/infrastructure/clawdbot-wishlist.md -
 
 **What it tests:** Event emission on `/compact`
 
-**Setup:** Have a conversation with Alfie about the memory system — discuss something specific like "I think we should add a decay visualization to the dashboard."
+**Setup:** Have a conversation with Alfie about the knowledge layer — discuss something specific like "I think we should add a decay visualization to the dashboard."
 
 **Then say:**
 > /compact

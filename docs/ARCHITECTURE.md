@@ -1,6 +1,6 @@
 # Quaid Architecture Guide
 
-Quaid is a persistent memory system for AI agents. It extracts personal facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
+Quaid is a persistent knowledge layer for AI agents. It extracts personal facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
 
 Quaid works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw) for the deepest integration.
 
@@ -25,7 +25,7 @@ This document is for engineers who want to understand how the system works.
 
 ## 1. System Overview
 
-Quaid exposes its memory system through three interfaces: an **MCP server** (works with any MCP-compatible client), a **CLI** (standalone, no gateway needed), and an **OpenClaw plugin** (deepest integration with automatic lifecycle hooks).
+Quaid exposes its knowledge layer through three interfaces: an **MCP server** (works with any MCP-compatible client), a **CLI** (standalone, no gateway needed), and an **OpenClaw plugin** (deepest integration with automatic lifecycle hooks).
 
 ### High-Level Architecture
 
@@ -796,7 +796,7 @@ Quaid includes a notification system (`notify.py`) that sends status updates for
 
 ## 10. MCP Server
 
-The MCP server (`mcp_server.py`) exposes Quaid's memory system as tools over the [Model Context Protocol](https://modelcontextprotocol.io) stdio transport. This is the primary integration path for clients that support MCP (Claude Desktop, Claude Code, Cursor, Windsurf, etc.).
+The MCP server (`mcp_server.py`) exposes Quaid's knowledge layer as tools over the [Model Context Protocol](https://modelcontextprotocol.io) stdio transport. This is the primary integration path for clients that support MCP (Claude Desktop, Claude Code, Cursor, Windsurf, etc.).
 
 ### Architecture
 

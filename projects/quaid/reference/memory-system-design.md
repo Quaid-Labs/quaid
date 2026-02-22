@@ -8,7 +8,7 @@
 
 ## Overview
 
-The memory system is a graph-based personal knowledge base using SQLite + Ollama embeddings, fully local for storage and search. LLM calls are provider-agnostic at core level and are resolved through the adapter/provider layer (gateway + config-driven deep/fast model tiers). Ollama is used for embeddings only.
+The knowledge layer is a graph-based personal knowledge base using SQLite + Ollama embeddings, fully local for storage and search. LLM calls are provider-agnostic at core level and are resolved through the adapter/provider layer (gateway + config-driven deep/fast model tiers). Ollama is used for embeddings only.
 
 **Key design decisions:**
 - Local-first: Ollama for embeddings only (`qwen3-embedding:8b`, 4096-dim), SQLite for storage
@@ -27,7 +27,7 @@ The system uses three tiers with distinct purposes:
 | Layer | Storage | Loaded When | Purpose | Examples |
 |-------|---------|-------------|---------|----------|
 | **Markdown** | SOUL.md, USER.md, TOOLS.md, HEARTBEAT.md | Every context (always injected) | Core instructions, identity, system pointers | "Alfie's personality", "Quaid's core facts", "System tool locations" |
-| **RAG** | `docs/<project>/` docs | Searched when topically relevant | Reference documentation, system architecture | "Memory system design", "Janitor pipeline reference", "Spark agent planning" |
+| **RAG** | `docs/<project>/` docs | Searched when topically relevant | Reference documentation, system architecture | "Knowledge layer design", "Janitor pipeline reference", "Spark agent planning" |
 | **Memory DB** | `data/memory.db` | Searched per-message via recall pipeline | Personal facts from conversations | "Quaid prefers dark mode", "Melina's birthday is Oct 12", "Quaid chose SQLite for simplicity" |
 
 **What belongs in Memory (the DB):**
@@ -38,7 +38,7 @@ The system uses three tiers with distinct purposes:
 - Relationships: family, friends, colleagues, pets
 
 **What does NOT belong in Memory:**
-- System architecture ("The memory system uses SQLite with WAL mode") → RAG docs (`docs/<project>/`)
+- System architecture ("The knowledge layer uses SQLite with WAL mode") → RAG docs (`docs/<project>/`)
 - Infrastructure knowledge ("Ollama runs on port 11434") → RAG docs (`docs/<project>/`)
 - Operational rules for AI agents ("Alfie should check HANDOFF.md on wake") → SOUL.md/HEARTBEAT.md
 - Tool/config descriptions ("The janitor has a dedup threshold of 0.85") → RAG docs (`docs/<project>/`)

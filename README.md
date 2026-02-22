@@ -4,11 +4,11 @@
   <em>"If I am not me, then who the hell am I?"</em>
 </p>
 
-### A smarter agent that costs less to run
+### A Knowledge Layer for Agentic Systems
 
 > **Early alpha** — launched February 2026, active daily development.
 
-Your agent forgets everything between sessions. The standard fix — stuffing the full conversation history into context — works, but you're paying for thousands of tokens of old dialogue every single turn. Quaid replaces that with **structured memory**: 89% of full-context accuracy using ~8x fewer tokens. Your agent remembers what matters and you stop paying to re-read what it already knows.
+Your agent forgets everything between sessions. The standard fix — stuffing the full conversation history into context — works, but you're paying for thousands of tokens of old dialogue every single turn. Quaid replaces that with an **active knowledge layer**: 89% of full-context accuracy using ~8x fewer tokens. Your agent keeps the right knowledge in reach without re-reading entire transcript histories.
 
 Every session starts ready to work — project docs, architecture decisions, tool configs, and codebase context are tracked and kept current automatically. No ramp-up, no "remind me what we're working on." And through a dual journaling system, your agent evolves with use — it doesn't just store facts, it develops deeper understanding of your preferences, your communication style, and your projects over time. The longer you use it, the more specialized it becomes.
 
@@ -23,7 +23,7 @@ Every session starts ready to work — project docs, architecture decisions, too
 - Runs a nightly janitor that reviews, deduplicates, resolves contradictions, and decays stale memories
 - Keeps project docs and personality files current without manual maintenance
 
-Quaid is agentic-system independent by design, with adapters handling host-specific runtime details. Today, the most mature integration is [OpenClaw](https://github.com/openclaw/openclaw); standalone MCP/CLI flows are also supported, with additional host adapters planned.
+Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integration is [OpenClaw](https://github.com/openclaw/openclaw); standalone MCP/CLI flows are also supported, with additional host adapters planned.
 
 ---
 
@@ -79,9 +79,9 @@ LoCoMo evaluates personal fact recall — one of Quaid's three memory areas. The
 
 Quaid organizes knowledge into three areas, each with different retrieval behavior, and maintains them with four systems.
 
-### Three memory areas
+### Three knowledge areas
 
-**Fact memory** — User facts, relationships, preferences, experiences. Retrieved via hybrid search (vector + keyword + graph traversal) with LLM reranking — only the most relevant facts are injected per query.
+**Fact knowledge** — User facts, relationships, preferences, experiences. Retrieved via hybrid search (vector + keyword + graph traversal) with LLM reranking — only the most relevant facts are injected per query.
 
 **Core personality** — Deeper understanding of the user, the agent's own identity, and the world around it. Loaded as full context on every conversation — always available, always current.
 
@@ -89,13 +89,13 @@ Quaid organizes knowledge into three areas, each with different retrieval behavi
 
 ### Four systems
 
-**Memory** — Conversations are distilled into structured facts, relationships, and preferences stored in a SQLite graph database. Retrieval uses hybrid search, LLM reranking, and intent-aware fusion to find the right memories at the right time.
+**Knowledge Capture & Recall** — Conversations are distilled into structured facts, relationships, and preferences stored in a SQLite graph database. Retrieval uses hybrid search, LLM reranking, and intent-aware fusion to find the right knowledge at the right time.
 
 **Journal & Personality** — A dual learning system. Fast-path *snippets* capture small observations and fold them into core personality files. Slow-path *journal entries* accumulate over time and get distilled into deeper insights — the kind of perceived, inferred understanding that makes an agent feel like it actually knows you.
 
 **Projects & Docs** — Auto-discovers project structure, tracks documentation, and keeps docs current from git changes. Comprehensive docs beat partial docs — partial or outdated docs mislead the LLM. This also keeps system-level knowledge out of the memory graph, where it would pollute fact retrieval.
 
-**Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where deep-reasoning LLMs can curate memories economically. Reviews, deduplicates, resolves contradictions, decays stale memories, and monitors documentation health in bulk.
+**Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where deep-reasoning LLMs can curate knowledge economically. Reviews, deduplicates, resolves contradictions, decays stale facts, and monitors documentation health in bulk.
 
 ---
 
@@ -114,7 +114,7 @@ Quaid is free and open source. These are typical API costs you pay directly to y
 | Component | API Cost |
 |-----------|----------|
 | Fact extraction | $0.05–0.20 per compaction (deep-reasoning LLM) |
-| Memory recall | $0.01 per query (fast-reasoning LLM reranker) |
+| Knowledge recall | $0.01 per query (fast-reasoning LLM reranker) |
 | Nightly janitor | $1–5 per run |
 | Embeddings | Free (Ollama, runs locally) |
 | **Typical monthly total** | **$5–15 for active use** |

@@ -1,7 +1,7 @@
 # Project: Quaid
 
 ## Purpose
-Quaid is the memory and documentation system plugin for OpenClaw. It captures personal facts, recalls them with hybrid search, and keeps documentation current through project-aware indexing and janitor maintenance.
+Quaid is the knowledge layer and documentation system plugin for OpenClaw. It captures personal facts, recalls them with hybrid search, and keeps documentation current through project-aware indexing and janitor maintenance.
 
 This file is the canonical entry point for all docs in `projects/quaid`.
 

@@ -191,7 +191,7 @@ Rule-based emotional boundaries (v9, 86.7%) outperform understanding-based appro
 
 ### Key Finding: Memory Accuracy vs Emotional Intelligence
 
-Memory system accuracy and emotional intelligence are inversely correlated without explicit sensitivity modeling. Systems that extract more facts perform worse on emotional boundary tasks unless the system develops genuine understanding of why information is sensitive, not just rules about when to withhold it.
+Knowledge-layer accuracy and emotional intelligence are inversely correlated without explicit sensitivity modeling. Systems that extract more facts perform worse on emotional boundary tasks unless the system develops genuine understanding of why information is sensitive, not just rules about when to withhold it.
 
 ### Key Finding: Scale Predictions
 

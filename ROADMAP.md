@@ -139,7 +139,7 @@ and can run on a smaller subset for PRs with full runs on merge to main.
 
 ### Purpose-Built Benchmark
 
-No existing benchmark fully evaluates long-running personal memory systems.
+No existing benchmark fully evaluates long-running personal knowledge-layer systems.
 LoCoMo comes closest, but the field needs a dataset that tests the full
 lifecycle: multi-session accumulation, fact evolution over time, maintenance
 decisions, and project-level awareness. Building one is a priority, but creating

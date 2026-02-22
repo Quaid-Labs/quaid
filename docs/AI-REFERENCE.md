@@ -1,12 +1,12 @@
 # Quaid AI Agent Reference
 
-This document is designed for AI agents (Claude, GPT, etc.) working on or with the Quaid memory system. It provides a complete index of files, functions, patterns, and known issues. Treat this as your primary orientation guide before making any changes.
+This document is designed for AI agents (Claude, GPT, etc.) working on or with the Quaid knowledge layer. It provides a complete index of files, functions, patterns, and known issues. Treat this as your primary orientation guide before making any changes.
 
 ---
 
 ## System Overview
 
-Quaid is a graph-based persistent memory system for AI agents. It works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a deep integration for [OpenClaw](https://github.com/openclaw/openclaw). Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
+Quaid is a graph-based persistent knowledge layer for AI agents. It works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a deep integration for [OpenClaw](https://github.com/openclaw/openclaw). Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
 
 **Architecture stack:**
 - **Interfaces:** MCP server (stdio, any MCP client), CLI (`quaid` commands), OpenClaw plugin (TypeScript hooks)
@@ -678,8 +678,8 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOM
 | Quaid + Journal + Haiku | 74.48% +/- 0.05 | Haiku | Best Haiku result, nearly matches Opus at ~46% cost |
 | **Quaid + Opus** | **75.00%** | **Opus** | **Production config** |
 | v2 Standard (full janitor) | 69.11% +/- 0.17 | Haiku | Regression from dedup merge bug (since fixed) |
-| Full-context Haiku | 79.59% +/- 0.17 | Haiku | Upper bound (no memory system) |
-| Full-context Opus | 86.62% +/- 0.09 | Opus | Upper bound (no memory system) |
+| Full-context Haiku | 79.59% +/- 0.17 | Haiku | Upper bound (no knowledge layer) |
+| Full-context Opus | 86.62% +/- 0.09 | Opus | Upper bound (no knowledge layer) |
 
 **Key insight:** Journal + Haiku (74.5%) nearly matches v1 Opus (75.0%) at roughly 46% of the cost. Journal helps most on temporal questions (+7.6pp) and single-hop questions (+6.8pp).
 
