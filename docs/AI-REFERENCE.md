@@ -16,15 +16,14 @@ Quaid is a graph-based persistent knowledge layer for AI agents. It works with a
 - **LLM calls:** Anthropic API (Opus for deep-reasoning, Haiku for fast-reasoning / reranking)
 - **Config:** JSON config file at `config/memory.json`
 
-**Retrieval pipeline:**
+**Retrieval pipeline (current):**
 ```
 Query
+  -> (Optional) total_recall planning pass (query cleanup + datastore routing)
   -> Intent classification (WHO/WHEN/WHERE/WHAT/WHY/PREFERENCE/RELATION)
-  -> HyDE query expansion (hypothetical answer embedding)
-  -> Parallel: sqlite-vec ANN + FTS5 BM25 + Graph traversal
+  -> Parallel datastore search (vector_basic/vector_technical/graph/journal/projects)
   -> Reciprocal Rank Fusion (dynamic weights per intent)
   -> Optional: Haiku LLM reranker (0-5 graded scale)
-  -> Optional: Multi-pass second retrieval (confidence-gated)
   -> Read-time injection filtering (_sanitize_for_context)
 ```
 
@@ -48,7 +47,7 @@ Query
 | `notify.py` | User notifications via gateway | `notify_user()`, `notify_memory_extraction()`, `notify_memory_recall()`, `_check_janitor_health()` |
 | `project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
 | `extract.py` | Extraction module — transcript to memories | `extract_from_transcript()`, `parse_session_jsonl()`, `build_transcript()`, `_load_extraction_prompt()`, CLI (argparse at bottom) |
-| `mcp_server.py` | MCP server — 9 memory tools over stdio | `memory_extract`, `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `docs_search` |
+| `mcp_server.py` | MCP server — memory tools over stdio | `memory_extract`, `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `projects_search`, `session_recall` |
 | `api.py` | Public API with simplified signatures | `store()`, `recall()`, `search()`, `create_edge()`, `forget()`, `get_memory()`, `get_graph()`, `Node`, `Edge` |
 | `logger.py` | Structured JSONL logger with rotation | `log()`, `Logger` class, `rotate_logs()`, `clean_old_archives()`, `get_log_path()`, module-level `memory_logger`, `janitor_logger` |
 | `semantic_clustering.py` | Groups memories by domain for O(n) contradiction checking | `classify_node_semantic_cluster()`, `get_memory_clusters()`, `get_contradiction_pairs_by_cluster()` |
@@ -76,8 +75,10 @@ Query
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `adapters/openclaw/index.ts` | Plugin entry point (SOURCE OF TRUTH) | Hook registration (before_agent_start, before_compaction, before_reset), tool definitions (memory_recall, memory_store), extraction trigger |
-| `adapters/openclaw/index.js` | Compiled JS -- gateway loads this | Must be kept in sync with .ts manually. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes. |
+| `adapters/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
+| `adapters/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
+| `adapters/openclaw/knowledge/orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
+| `adapters/openclaw/index.js` / `adapter.js` / `knowledge/orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
 
 ### Prompt Templates (`prompts/`)
 

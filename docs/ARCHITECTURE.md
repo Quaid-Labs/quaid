@@ -1,6 +1,6 @@
 # Quaid Architecture Guide
 
-Quaid is a persistent knowledge layer for AI agents. It extracts personal facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
+Quaid is a persistent knowledge layer for AI agents. It extracts personal and project-relevant facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
 
 Quaid works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw) for the deepest integration.
 
@@ -61,7 +61,7 @@ Quaid exposes its knowledge layer through three interfaces: an **MCP server** (w
 
 **Extraction** -- Triggered by context compaction, session reset, direct CLI invocation (`quaid extract`), or MCP tool call (`memory_extract`). A deep-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
 
-**Retrieval** -- Fires before each agent turn (OpenClaw), on `memory_recall` MCP tool call, or via `quaid search` CLI. The agent's query is classified by intent, expanded via HyDE, and searched across three channels (vector, FTS5, graph). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
+**Retrieval** -- Fires before each agent turn (OpenClaw), on `memory_recall` MCP tool call, or via `quaid search` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
 
 **Maintenance** -- A nightly janitor pipeline reviews pending facts, deduplicates near-identical memories, resolves contradictions, decays stale memories, updates documentation, and runs structural health checks.
 
@@ -87,7 +87,7 @@ Conversation messages
         +---> snippets folded into SOUL.md / USER.md
         +---> journal distilled into core markdown
         |
-  [Retrieval]  Per-turn: query -> search -> rerank -> inject
+  [Retrieval]  Per-turn: query -> route datastores -> search -> rerank -> inject
         |
         +---> [MEMORY] tagged messages in agent context
         +---> access_count++, storage_strength updated (Bjork model)
@@ -816,7 +816,7 @@ mcp_server.py (FastMCP)
     +-- memory_forget   -> api.forget()
     +-- memory_create_edge -> api.create_edge()
     +-- memory_stats    -> api.get_graph().stats()
-    +-- docs_search     -> docs_rag.search()
+    +-- projects_search -> docs_rag.search()
 ```
 
 ### Tools
@@ -831,7 +831,7 @@ mcp_server.py (FastMCP)
 | `memory_forget` | Delete a memory | Free |
 | `memory_create_edge` | Create a relationship edge | Free |
 | `memory_stats` | Database statistics | Free |
-| `docs_search` | Search project documentation via RAG | Free |
+| `projects_search` | Search project documentation via RAG | Free |
 
 ### Stdout Isolation
 
@@ -845,6 +845,6 @@ The `QUAID_OWNER` environment variable sets the owner identity for all operation
 
 ## Appendix: File Reference
 
-The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). The OpenClaw TypeScript entry point (`adapters/openclaw/index.ts` / `adapters/openclaw/index.js`) registers gateway hooks and tools. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
+The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). In OpenClaw integration, `adapters/openclaw/index.ts` is a lightweight entry shim, while `adapters/openclaw/adapter.ts` + `adapters/openclaw/knowledge/orchestrator.ts` hold the runtime tool/hook logic and recall orchestration. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).
