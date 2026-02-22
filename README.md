@@ -146,6 +146,8 @@ Known limitations for **v0.2.0-alpha**:
 
 The system is backed by over 1,100 unit tests (Python + TypeScript), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md) and [LongMemEval](https://github.com/xiaowu0162/LongMemEval).
 
+GitHub Actions CI runs automated checks on pushes/PRs (runtime pair sync, docs/release consistency, TypeScript integration, and isolated Python unit suites).
+
 We're actively testing and refining the system against benchmarks and welcome collaboration. If you're interested in contributing, testing, or just have ideas — open an issue or reach out.
 
 ---

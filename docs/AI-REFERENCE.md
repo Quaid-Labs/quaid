@@ -80,6 +80,16 @@ Query
 | `adapters/openclaw/knowledge/orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
 | `adapters/openclaw/index.js` / `adapter.js` / `knowledge/orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
 
+### CI / Release Guard Scripts
+
+| File | Purpose |
+|------|---------|
+| `plugins/quaid/scripts/check-runtime-pairs.mjs` | Enforces TS/JS runtime pair sync (`--strict` checks HEAD commit too) |
+| `plugins/quaid/scripts/run-all-tests.sh` | Orchestrated quick/full test launcher with syntax, integration, and Python isolated suites |
+| `plugins/quaid/scripts/run-quaid-e2e-matrix.sh` | Bootstrap/runtime auth-path matrix runner with failure classification + JSON summary |
+| `scripts/check-docs-consistency.mjs` | GitHub-facing docs drift gate (README/ARCHITECTURE/AI-REFERENCE invariants) |
+| `scripts/release-verify.mjs` | Release/version consistency gate (package/setup/README/release-note alignment) |
+
 ### Prompt Templates (`prompts/`)
 
 | File | Purpose |

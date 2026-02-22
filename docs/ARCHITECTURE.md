@@ -761,6 +761,16 @@ def call_fast_reasoning(prompt, max_tokens=500, timeout=30, system_prompt=None):
 
 Both return `(response_text, duration_seconds)`. Model selection is config-driven -- callers never reference specific model IDs.
 
+#### Startup Fail-Fast Preflight
+
+On OpenClaw plugin boot, Quaid now runs a strict startup preflight before registering hooks/tools:
+
+- Resolves both `deep` and `fast` reasoning model/provider pairs from config + gateway defaults
+- Validates key runtime config values (for example `retrieval.maxResults > 0`)
+- Verifies required runtime files exist (`janitor.py`, `memory_graph.py`)
+
+If preflight fails, plugin initialization aborts with explicit error details instead of degrading silently during later calls.
+
 #### Provider Support
 
 ```python

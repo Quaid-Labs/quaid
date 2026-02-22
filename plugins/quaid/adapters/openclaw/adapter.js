@@ -315,6 +315,47 @@ function resolveTierModel(tier) {
         model: mappedModel,
     };
 }
+function runStartupSelfCheck() {
+    const errors = [];
+    try {
+        const deep = resolveTierModel("deep");
+        console.log(`[quaid][startup] deep model resolved: provider=${deep.provider} model=${deep.model}`);
+    }
+    catch (err) {
+        errors.push(`deep reasoning model resolution failed: ${String(err?.message || err)}`);
+    }
+    try {
+        const fast = resolveTierModel("fast");
+        console.log(`[quaid][startup] fast model resolved: provider=${fast.provider} model=${fast.model}`);
+    }
+    catch (err) {
+        errors.push(`fast reasoning model resolution failed: ${String(err?.message || err)}`);
+    }
+    try {
+        const cfg = getMemoryConfig();
+        const maxResults = Number(cfg?.retrieval?.maxResults ?? 0);
+        if (!Number.isFinite(maxResults) || maxResults <= 0) {
+            errors.push(`invalid retrieval.maxResults=${String(cfg?.retrieval?.maxResults)}`);
+        }
+    }
+    catch (err) {
+        errors.push(`config load failed: ${String(err?.message || err)}`);
+    }
+    const requiredFiles = [
+        path.join(WORKSPACE, "plugins", "quaid", "janitor.py"),
+        path.join(WORKSPACE, "plugins", "quaid", "memory_graph.py"),
+    ];
+    for (const file of requiredFiles) {
+        if (!fs.existsSync(file)) {
+            errors.push(`required runtime file missing: ${file}`);
+        }
+    }
+    if (errors.length > 0) {
+        const msg = `[quaid][startup] preflight failed:\n- ${errors.join("\n- ")}`;
+        console.error(msg);
+        throw new Error(msg);
+    }
+}
 function resolveExtractionTrigger(label) {
     const normalized = String(label || "").trim().toLowerCase();
     if (!normalized) {
@@ -1880,6 +1921,8 @@ const quaidPlugin = {
     configSchema,
     register(api) {
         console.log("[quaid] Registering local graph memory plugin");
+        // Fail fast on model/provider/config mismatches so runtime doesn't degrade silently.
+        runStartupSelfCheck();
         // Ensure database exists
         const dataDir = path.dirname(DB_PATH);
         if (!fs.existsSync(dataDir)) {

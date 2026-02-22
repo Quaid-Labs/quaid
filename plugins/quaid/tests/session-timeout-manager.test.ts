@@ -9,6 +9,35 @@ function makeWorkspace(prefix: string): string {
 }
 
 describe('SessionTimeoutManager scheduling', () => {
+  it('allows only one timeout worker leader per workspace', () => {
+    const workspace = makeWorkspace('quaid-timeout-leader-')
+    const managerA = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    const managerB = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    const first = managerA.startWorker(30)
+    const second = managerB.startWorker(30)
+
+    expect(first).toBe(true)
+    expect(second).toBe(false)
+
+    managerA.stopWorker()
+    const afterRelease = managerB.startWorker(30)
+    expect(afterRelease).toBe(true)
+    managerB.stopWorker()
+  })
+
   it('coalesces duplicate extraction signals per session', () => {
     const workspace = makeWorkspace('quaid-timeout-signal-')
     const manager = new SessionTimeoutManager({

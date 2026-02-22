@@ -56,6 +56,36 @@ describe("knowledge orchestrator", () => {
     expect(datastores).toContain("graph");
   });
 
+  it("skips router when datastores are explicitly supplied to totalRecall", async () => {
+    const callFastRouter = vi.fn(async () => '{"datastores":["graph"]}');
+    const recallVector = vi.fn(async () => [
+      { text: "alpha", category: "fact", similarity: 0.8, via: "vector" },
+    ]);
+
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter,
+      recallVector,
+      recallGraph: vi.fn(async () => []),
+    });
+
+    const out = await engine.totalRecall("alpha", 3, {
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      graphDepth: 1,
+      technicalScope: "personal",
+    });
+
+    expect(callFastRouter).not.toHaveBeenCalled();
+    expect(recallVector).toHaveBeenCalledTimes(1);
+    expect(out.length).toBe(1);
+  });
+
   it("aggregates and deduplicates across datastores", async () => {
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
@@ -197,6 +227,33 @@ describe("knowledge orchestrator", () => {
     });
 
     expect(recallVector).toHaveBeenCalledWith("api limits", 3, "technical", undefined, undefined);
+  });
+
+  it("handles total_recall planning within latency budget for mocked dependencies", async () => {
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter: vi.fn(async () => '{"query":"alpha","datastores":["vector_basic","graph"]}'),
+      recallVector: vi.fn(async () => [{ text: "alpha", category: "fact", similarity: 0.8, via: "vector" }]),
+      recallGraph: vi.fn(async () => [{ text: "alpha->beta", category: "graph", similarity: 0.7, via: "graph" }]),
+    });
+
+    const started = Date.now();
+    const out = await engine.total_recall("alpha", 5, {
+      datastores: [],
+      expandGraph: true,
+      graphDepth: 1,
+      technicalScope: "any",
+      reasoning: "fast",
+    });
+    const elapsedMs = Date.now() - started;
+
+    expect(out.length).toBeGreaterThan(0);
+    expect(elapsedMs).toBeLessThan(2000);
   });
 
   it("uses deep router for total_recall when reasoning=deep and accepts known project", async () => {

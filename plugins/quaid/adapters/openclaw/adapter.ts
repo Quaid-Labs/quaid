@@ -291,6 +291,50 @@ function resolveTierModel(tier: ModelTier): { provider: string; model: string } 
   };
 }
 
+function runStartupSelfCheck(): void {
+  const errors: string[] = [];
+
+  try {
+    const deep = resolveTierModel("deep");
+    console.log(`[quaid][startup] deep model resolved: provider=${deep.provider} model=${deep.model}`);
+  } catch (err: unknown) {
+    errors.push(`deep reasoning model resolution failed: ${String((err as Error)?.message || err)}`);
+  }
+
+  try {
+    const fast = resolveTierModel("fast");
+    console.log(`[quaid][startup] fast model resolved: provider=${fast.provider} model=${fast.model}`);
+  } catch (err: unknown) {
+    errors.push(`fast reasoning model resolution failed: ${String((err as Error)?.message || err)}`);
+  }
+
+  try {
+    const cfg = getMemoryConfig();
+    const maxResults = Number(cfg?.retrieval?.maxResults ?? 0);
+    if (!Number.isFinite(maxResults) || maxResults <= 0) {
+      errors.push(`invalid retrieval.maxResults=${String(cfg?.retrieval?.maxResults)}`);
+    }
+  } catch (err: unknown) {
+    errors.push(`config load failed: ${String((err as Error)?.message || err)}`);
+  }
+
+  const requiredFiles = [
+    path.join(WORKSPACE, "plugins", "quaid", "janitor.py"),
+    path.join(WORKSPACE, "plugins", "quaid", "memory_graph.py"),
+  ];
+  for (const file of requiredFiles) {
+    if (!fs.existsSync(file)) {
+      errors.push(`required runtime file missing: ${file}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    const msg = `[quaid][startup] preflight failed:\n- ${errors.join("\n- ")}`;
+    console.error(msg);
+    throw new Error(msg);
+  }
+}
+
 function resolveExtractionTrigger(label: string): ExtractionTrigger {
   const normalized = String(label || "").trim().toLowerCase();
   if (!normalized) { return "unknown"; }
@@ -2089,6 +2133,9 @@ const quaidPlugin = {
 
   register(api: ClawdbotPluginApi<PluginConfig>) {
     console.log("[quaid] Registering local graph memory plugin");
+
+    // Fail fast on model/provider/config mismatches so runtime doesn't degrade silently.
+    runStartupSelfCheck();
 
     // Ensure database exists
     const dataDir = path.dirname(DB_PATH);
