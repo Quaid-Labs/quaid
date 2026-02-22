@@ -3865,14 +3865,28 @@ def _log_dedup_decision(
 ) -> str:
     """Log a dedup decision to dedup_log table. Returns log entry ID."""
     log_id = str(uuid.uuid4())
-    with graph._get_conn() as conn:
-        conn.execute("""
-            INSERT INTO dedup_log
-            (id, new_text, existing_node_id, existing_text, similarity,
-             decision, llm_reasoning, owner_id, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (log_id, new_text, existing_node_id, existing_text,
-              similarity, decision, llm_reasoning, owner_id, source))
+    try:
+        with graph._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO dedup_log
+                (id, new_text, existing_node_id, existing_text, similarity,
+                 decision, llm_reasoning, owner_id, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (log_id, new_text, existing_node_id, existing_text,
+                  similarity, decision, llm_reasoning, owner_id, source))
+    except sqlite3.IntegrityError:
+        # FK constraint can fail if the candidate node was hard-deleted between
+        # the FTS search and this insert (WAL snapshot mismatch). Fall back to
+        # NULL existing_node_id — the audit trail is preserved without the link.
+        print(f"[dedup_log] WARNING: FK constraint for node {existing_node_id}, inserting with NULL reference", file=sys.stderr)
+        with graph._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO dedup_log
+                (id, new_text, existing_node_id, existing_text, similarity,
+                 decision, llm_reasoning, owner_id, source)
+                VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+            """, (log_id, new_text, existing_text,
+                  similarity, decision, llm_reasoning, owner_id, source))
     return log_id
 
 
@@ -5077,5 +5091,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
+        import traceback
         print(f"Error: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)

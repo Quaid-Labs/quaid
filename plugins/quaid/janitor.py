@@ -562,10 +562,9 @@ def recall_similar_pairs(graph: MemoryGraph, metrics: JanitorMetrics,
     Returns {"duplicates": [...], "contradictions": [...]} where each entry
     is a pair dict with id_a, text_a, id_b, text_b, similarity, etc.
     Dedup range: DUPLICATE_MIN_SIM..DUPLICATE_MAX_SIM
-    Contradiction range: CONTRADICTION_MIN_SIM..CONTRADICTION_MAX_SIM (Facts only, negation heuristic)
+    Contradiction range: CONTRADICTION_MIN_SIM..CONTRADICTION_MAX_SIM (Facts only — let LLM decide)
     """
     metrics.start_task("recall_pass")
-    negation_words = {"not", "never", "doesn't", "don't", "won't", "can't", "isn't", "aren't", "no"}
 
     new_nodes = get_nodes_since(graph, since) if since else get_nodes_since(graph, None)
     print(f"  Recall pass: {len(new_nodes)} {'new' if since else 'all'} nodes")
@@ -582,9 +581,6 @@ def recall_similar_pairs(graph: MemoryGraph, metrics: JanitorMetrics,
 
         candidates = recall_candidates(graph, new_node.name, new_node.id)
         total_recalled += len(candidates)
-
-        new_lower = new_node.name.lower()
-        new_has_neg = bool(negation_words & set(new_lower.split()))
 
         for cand in candidates:
             if not cand.embedding:
@@ -609,26 +605,22 @@ def recall_similar_pairs(graph: MemoryGraph, metrics: JanitorMetrics,
                     "type_b": cand.type,
                 })
 
-            # Contradiction range (Facts only, not-yet-active status, negation heuristic)
+            # Contradiction range (Facts only — let LLM decide, no negation heuristic)
             if (CONTRADICTION_MIN_SIM <= sim < CONTRADICTION_MAX_SIM
-                    and new_node.type == 'Fact' and cand.type == 'Fact'
-                    and new_node.status in ('pending', 'approved')):
-                cand_lower = cand.name.lower()
-                cand_has_neg = bool(negation_words & set(cand_lower.split()))
-                if new_has_neg != cand_has_neg:
-                    contradiction_candidates.append({
-                        "id_a": new_node.id,
-                        "text_a": new_node.name,
-                        "created_a": new_node.created_at,
-                        "valid_from_a": new_node.valid_from,
-                        "valid_until_a": new_node.valid_until,
-                        "id_b": cand.id,
-                        "text_b": cand.name,
-                        "created_b": cand.created_at,
-                        "valid_from_b": cand.valid_from,
-                        "valid_until_b": cand.valid_until,
-                        "similarity": round(sim, 3),
-                    })
+                    and new_node.type == 'Fact' and cand.type == 'Fact'):
+                contradiction_candidates.append({
+                    "id_a": new_node.id,
+                    "text_a": new_node.name,
+                    "created_a": new_node.created_at,
+                    "valid_from_a": new_node.valid_from,
+                    "valid_until_a": new_node.valid_until,
+                    "id_b": cand.id,
+                    "text_b": cand.name,
+                    "created_b": cand.created_at,
+                    "valid_from_b": cand.valid_from,
+                    "valid_until_b": cand.valid_until,
+                    "similarity": round(sim, 3),
+                })
 
     print(f"  Token recall: {total_recalled} candidates, {vector_comparisons} vector checks")
     print(f"  Buckets: {len(dup_candidates)} dedup, {len(contradiction_candidates)} contradiction")
