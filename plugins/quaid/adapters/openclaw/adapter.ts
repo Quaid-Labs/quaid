@@ -155,6 +155,13 @@ function normalizeProvider(provider: string): string {
   return String(provider || "").trim().toLowerCase();
 }
 
+function providerClassLookupKey(provider: string): string {
+  const normalized = normalizeProvider(provider);
+  if (normalized === "openai-codex") return "openai";
+  if (normalized === "anthropic-claude-code") return "anthropic";
+  return normalized;
+}
+
 function getConfiguredTierValue(tier: ModelTier): string {
   const key = tier === "fast" ? "fastReasoning" : "deepReasoning";
   const configured = getMemoryConfig().models?.[key];
@@ -181,7 +188,7 @@ function parseTierModelClassMap(tier: ModelTier): Record<string, string> {
     return out;
   }
   for (const [provider, model] of Object.entries(raw)) {
-    const key = normalizeProvider(String(provider || "").trim());
+    const key = providerClassLookupKey(String(provider || "").trim());
     const value = String(model || "").trim();
     if (key && value) {
       out[key] = value;
@@ -250,7 +257,10 @@ function resolveTierModel(tier: ModelTier): { provider: string; model: string } 
     if (rawTierValue.includes("/")) {
       const [provider, ...modelParts] = rawTierValue.split("/");
       const normalizedProvider = normalizeProvider(provider);
-      if (configuredTierProvider !== "default" && normalizedProvider !== configuredTierProvider) {
+      if (
+        configuredTierProvider !== "default"
+        && providerClassLookupKey(normalizedProvider) !== providerClassLookupKey(configuredTierProvider)
+      ) {
         throw new Error(
           `models.${tier === "fast" ? "fastReasoning" : "deepReasoning"} provider "${normalizedProvider}" does not match models.${tier === "fast" ? "fastReasoningProvider" : "deepReasoningProvider"}="${configuredTierProvider}"`
         );
@@ -271,7 +281,7 @@ function resolveTierModel(tier: ModelTier): { provider: string; model: string } 
   }
 
   const classMap = parseTierModelClassMap(tier);
-  const mappedModel = classMap[effectiveTierProvider];
+  const mappedModel = classMap[providerClassLookupKey(effectiveTierProvider)];
   if (!mappedModel) {
     throw new Error(`No ${tier}ReasoningModelClasses entry for provider "${effectiveTierProvider}" while using default ${tier} reasoning model`);
   }

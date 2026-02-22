@@ -53,10 +53,13 @@ This document defines the current test stack, execution commands, and pass/fail 
 ### 6) E2E Runtime (smoke)
 - Purpose: validate real bootstrap/gateway/runtime orchestration and janitor path.
 - Scripts:
-  - `~/quaid/bootstrap/scripts/run-quaid-e2e.sh`
-  - `~/quaid/bootstrap/scripts/run-quaid-e2e-matrix.sh`
+  - `plugins/quaid/scripts/run-quaid-e2e.sh`
+  - `plugins/quaid/scripts/run-quaid-e2e-matrix.sh`
 - Scope:
   - Gateway stop/start, e2e workspace bootstrap, integration tests, janitor run, restore to `~/quaid/test`.
+- Bootstrap coupling:
+  - E2E runners live in `plugins/quaid/scripts` and call bootstrap scripts via `QUAID_BOOTSTRAP_ROOT` (default `~/quaid/bootstrap`).
+  - Optional local env file: `plugins/quaid/.env.e2e` (template: `plugins/quaid/scripts/e2e.env.example`).
 - Notification safety:
   - E2E should run with Quaid notifications set to `quiet` to prevent Telegram/DM spam during automation.
   - Raise notification level only when explicitly testing notification UX.
@@ -128,17 +131,20 @@ npm run test:all:full
 
 ### E2E single provider
 ```bash
-~/quaid/bootstrap/scripts/run-quaid-e2e.sh --auth-provider openai
+cd ~/quaid/test/plugins/quaid
+./scripts/run-quaid-e2e.sh --auth-path openai-oauth
 ```
 
 ### E2E with explicit notification level
 ```bash
-~/quaid/bootstrap/scripts/run-quaid-e2e.sh --auth-provider openai --notify-level quiet
+cd ~/quaid/test/plugins/quaid
+./scripts/run-quaid-e2e.sh --auth-path openai-oauth --notify-level quiet
 ```
 
 ### E2E provider matrix
 ```bash
-~/quaid/bootstrap/scripts/run-quaid-e2e-matrix.sh --providers openai,anthropic -- --skip-janitor
+cd ~/quaid/test/plugins/quaid
+./scripts/run-quaid-e2e-matrix.sh --paths openai-oauth,openai-api,anthropic-api -- --skip-janitor
 ```
 
 Default full-suite matrix lanes intentionally exclude `anthropic-oauth` (known unstable refresh behavior).
@@ -187,5 +193,6 @@ QUAID_E2E_PATHS="openai-oauth,openai-api,anthropic-api" npm run test:all:full
 - Python coverage runs in an isolated venv (`scripts/run-python-coverage.sh`) and reports source-only coverage (`--omit='tests/*'`).
 
 ## Bootstrap Ownership
-- Runtime/bootstrap automation is maintained in `~/quaid/bootstrap` (machine-local operational repo).
-- `~/quaid/dev` should document bootstrap contracts and expected behavior, but should not store local secrets or host-specific credential material.
+- Runtime/bootstrap orchestration remains in `~/quaid/bootstrap` (machine-local operational repo).
+- Quaid now keeps E2E entrypoints in `plugins/quaid/scripts` so full test runs can execute from dev/test directly.
+- `~/quaid/dev` must not store local secrets or host-specific credential material.
