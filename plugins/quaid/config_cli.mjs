@@ -306,9 +306,17 @@ function tierProviderOptions(cfg, tier) {
 function notificationOptions() {
   return [
     { value: "quiet", label: "quiet", hint: "errors only" },
-    { value: "normal", label: "normal", hint: "extraction + janitor summaries" },
-    { value: "verbose", label: "verbose", hint: "more detail, still summarized" },
+    { value: "normal", label: "normal", hint: "janitor summary + extraction summary; retrieval off" },
+    { value: "verbose", label: "verbose", hint: "janitor full + extraction/retrieval summary" },
     { value: "debug", label: "debug", hint: "full detail + diagnostics" },
+  ];
+}
+
+function notificationVerbosityOptions() {
+  return [
+    { value: "off", label: "off", hint: "disable this notification type" },
+    { value: "summary", label: "summary", hint: "short operational messages" },
+    { value: "full", label: "full", hint: "full detail (debug-heavy)" },
   ];
 }
 
@@ -379,6 +387,10 @@ async function runEdit() {
         { value: "emb_provider", label: "Embeddings provider", hint: "vector model host" },
         { value: "emb_model", label: "Embeddings model", hint: "semantic retrieval vectors" },
         { value: "notify", label: "Notification level", hint: "master level; feature verbosities may override" },
+        { value: "notify_recommended", label: "Notifications: apply recommended", hint: "janitor=summary extraction=summary retrieval=off" },
+        { value: "notify_janitor", label: "Notifications: janitor", hint: "off/summary/full" },
+        { value: "notify_extraction", label: "Notifications: extraction", hint: "off/summary/full" },
+        { value: "notify_retrieval", label: "Notifications: retrieval", hint: "off/summary/full" },
         { value: "janitor_policy_core", label: "Janitor: core markdown policy", hint: "root markdown writes (SOUL/USER/MEMORY/TOOLS)" },
         { value: "janitor_policy_project", label: "Janitor: project docs policy", hint: "project docs outside projects/quaid" },
         { value: "janitor_policy_workspace", label: "Janitor: workspace move/delete policy", hint: "workspace audit file moves/deletes" },
@@ -452,6 +464,32 @@ async function runEdit() {
         options: notificationOptions(),
       }));
       setPath(cfg, "notifications.level", next);
+    } else if (menu === "notify_recommended") {
+      setPath(cfg, "notifications.level", "normal");
+      setPath(cfg, "notifications.janitor.verbosity", "summary");
+      setPath(cfg, "notifications.extraction.verbosity", "summary");
+      setPath(cfg, "notifications.retrieval.verbosity", "off");
+    } else if (menu === "notify_janitor") {
+      const next = handleCancel(await select({
+        message: "notifications.janitor.verbosity",
+        initialValue: getPath(cfg, "notifications.janitor.verbosity", "summary"),
+        options: notificationVerbosityOptions(),
+      }));
+      setPath(cfg, "notifications.janitor.verbosity", next);
+    } else if (menu === "notify_extraction") {
+      const next = handleCancel(await select({
+        message: "notifications.extraction.verbosity",
+        initialValue: getPath(cfg, "notifications.extraction.verbosity", "summary"),
+        options: notificationVerbosityOptions(),
+      }));
+      setPath(cfg, "notifications.extraction.verbosity", next);
+    } else if (menu === "notify_retrieval") {
+      const next = handleCancel(await select({
+        message: "notifications.retrieval.verbosity",
+        initialValue: getPath(cfg, "notifications.retrieval.verbosity", "off"),
+        options: notificationVerbosityOptions(),
+      }));
+      setPath(cfg, "notifications.retrieval.verbosity", next);
     } else if (menu === "janitor_policy_core") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.coreMarkdownWrites",

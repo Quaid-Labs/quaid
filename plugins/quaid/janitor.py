@@ -2624,7 +2624,11 @@ def _delayed_notifications_path() -> Path:
     return p
 
 
-def _queue_delayed_notification(message: str, kind: str = "janitor", priority: str = "normal") -> None:
+def _queue_delayed_notification(
+    message: str,
+    kind: str = "janitor",
+    priority: str = "normal",
+) -> None:
     """Queue notification for adapter-delayed delivery (next active user session)."""
     if not message:
         return
@@ -2654,7 +2658,14 @@ def _queue_delayed_notification(message: str, kind: str = "janitor", priority: s
         items.append(item)
     payload["items"] = items
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    _append_decision_log("delayed_notification_queued", {"id": item["id"], "kind": kind, "priority": priority})
+    _append_decision_log(
+        "delayed_notification_queued",
+        {
+            "id": item["id"],
+            "kind": kind,
+            "priority": priority,
+        },
+    )
 
 
 def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:

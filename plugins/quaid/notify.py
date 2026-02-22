@@ -373,21 +373,43 @@ def notify_memory_extraction(
         True if notification sent
     """
     has_snippets = snippet_details and any(v for v in snippet_details.values())
+    try:
+        from config import get_config
+        extraction_level = get_config().notifications.effective_level("extraction")
+    except Exception:
+        extraction_level = "summary"
+    show_trigger = extraction_level == "full"
+    no_results = (facts_stored == 0 and facts_skipped == 0 and edges_created == 0 and not details and not has_snippets)
     if not always_notify and not details and facts_stored == 0 and edges_created == 0 and not has_snippets:
         return False  # Nothing to report
+
+    if always_notify and no_results:
+        if show_trigger:
+            trigger_label = {
+                "compaction": "compaction",
+                "reset": "reset",
+                "timeout": "timeout",
+                "extraction": "extraction",
+                "new": "new",
+            }.get(trigger, trigger)
+            message = f"{QUAID_HEADER} 💾 Memory Extraction ({trigger_label}): No facts found."
+        else:
+            message = f"{QUAID_HEADER} 💾 Memory Extraction: No facts found."
+        return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("extraction"))
 
     full_text = _notify_full_text()
     msg_parts = [f"{QUAID_HEADER} 💾 **Memory Extraction:**", ""]
 
-    # Trigger info
-    trigger_label = {
-        "compaction": "Context compacted",
-        "reset": "Session reset (/new)",
-        "timeout": "Inactivity timeout",
-        "extraction": "Extraction complete"
-    }.get(trigger, trigger)
-    msg_parts.append(f"_Trigger: {trigger_label}_")
-    msg_parts.append("")
+    # Trigger info (full verbosity only)
+    if show_trigger:
+        trigger_label = {
+            "compaction": "Context compacted",
+            "reset": "Session reset (/new)",
+            "timeout": "Inactivity timeout",
+            "extraction": "Extraction complete"
+        }.get(trigger, trigger)
+        msg_parts.append(f"_Trigger: {trigger_label}_")
+        msg_parts.append("")
 
     # Summary stats
     msg_parts.append(f"**Summary:** {facts_stored} stored, {facts_skipped} skipped, {edges_created} edges")
@@ -444,12 +466,6 @@ def notify_memory_extraction(
                     display = s if full_text else (s[:120] + "..." if len(s) > 120 else s)
                     msg_parts.append(f"  📝 {display}")
                 msg_parts.append("")
-
-    # Janitor health check — warn if janitor hasn't run recently
-    janitor_warning = _check_janitor_health()
-    if janitor_warning:
-        msg_parts.append("")
-        msg_parts.append(janitor_warning)
 
     message = "\n".join(msg_parts)
     channel = _resolve_channel("extraction")

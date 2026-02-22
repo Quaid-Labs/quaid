@@ -568,16 +568,38 @@ async function step3_models() {
   log.info(C.dim("Quaid uses two LLM tiers: deep reasoning (extraction, review)"));
   log.info(C.dim("and fast reasoning (reranking, classification)."));
 
-  const provider = handleCancel(await select({
-    message: "LLM provider",
-    options: [
-      { value: "anthropic",  label: "Anthropic (Claude)", hint: "Recommended" },
-      { value: "openai",     label: "OpenAI",             hint: "Experimental" },
-      { value: "openrouter", label: "OpenRouter",         hint: "Experimental — multi-provider gateway" },
-      { value: "together",   label: "Together AI",        hint: "Experimental" },
-      { value: "ollama",     label: "Ollama (local)",     hint: "Experimental — quality depends on model size" },
-    ],
+  const janitorAskFirst = handleCancel(await confirm({
+    message: "Sometimes Quaid changes files and memory records to organize them. Should it ask first before applying those changes?",
+    initialValue: true,
   }));
+
+  const advancedSetup = handleCancel(await confirm({
+    message: "Advanced setup? (recommended keeps sane defaults)",
+    initialValue: false,
+  }));
+
+  let provider = "anthropic";
+  let adapterType = IS_OPENCLAW ? "openclaw" : "standalone";
+  if (advancedSetup) {
+    adapterType = handleCancel(await select({
+      message: "Agent system adapter",
+      initialValue: adapterType,
+      options: [
+        { value: "openclaw", label: "openclaw", hint: "gateway-integrated runtime" },
+        { value: "standalone", label: "standalone", hint: "local-only runtime" },
+      ],
+    }));
+    provider = handleCancel(await select({
+      message: "LLM provider",
+      options: [
+        { value: "anthropic",  label: "Anthropic (Claude)", hint: "Recommended" },
+        { value: "openai",     label: "OpenAI",             hint: "Experimental" },
+        { value: "openrouter", label: "OpenRouter",         hint: "Experimental — multi-provider gateway" },
+        { value: "together",   label: "Together AI",        hint: "Experimental" },
+        { value: "ollama",     label: "Ollama (local)",     hint: "Experimental — quality depends on model size" },
+      ],
+    }));
+  }
 
   if (provider !== "anthropic") {
     log.warn(C.bold("Non-Anthropic providers are experimental. Prompts are tuned for Claude."));
@@ -590,12 +612,19 @@ async function step3_models() {
   if (provider === "anthropic") {
     highModel = "claude-opus-4-6";
     lowModel = "claude-haiku-4-5";
-    log.info(`Deep reasoning: ${C.bcyan(highModel)}  |  Fast reasoning: ${C.bcyan(lowModel)}`);
   } else if (provider === "ollama") {
+    highModel = "llama3.1:70b";
+    lowModel = "llama3.1:8b";
+  } else {
+    highModel = "gpt-4o";
+    lowModel = lowModelFor(highModel);
+  }
+
+  if (advancedSetup) {
     highModel = handleCancel(await text({
       message: "Deep reasoning model:",
-      placeholder: "llama3.1:70b",
-      initialValue: "llama3.1:70b",
+      placeholder: highModel,
+      initialValue: highModel,
     }));
     const defaultLow = lowModelFor(highModel);
     lowModel = handleCancel(await text({
@@ -604,17 +633,7 @@ async function step3_models() {
       initialValue: defaultLow,
     }));
   } else {
-    highModel = handleCancel(await text({
-      message: "Deep reasoning model:",
-      placeholder: "gpt-4o",
-      initialValue: "gpt-4o",
-    }));
-    const defaultLow = lowModelFor(highModel);
-    lowModel = handleCancel(await text({
-      message: "Fast reasoning model:",
-      placeholder: defaultLow,
-      initialValue: defaultLow,
-    }));
+    log.info(`Deep reasoning: ${C.bcyan(highModel)}  |  Fast reasoning: ${C.bcyan(lowModel)}`);
   }
 
   // API key — the bot passes its key to Quaid at runtime.
@@ -622,18 +641,53 @@ async function step3_models() {
   const keyEnv = keyEnvFor(provider);
 
   // Notifications
-  const notifLevel = handleCancel(await select({
-    message: "Notification verbosity",
-    initialValue: "normal",
-    options: [
-      { value: "quiet",   label: "Quiet",   hint: "Errors only" },
-      { value: "normal",  label: "Normal",  hint: "Extraction + janitor summaries" },
-      { value: "verbose", label: "Verbose", hint: "Also shows memory recall" },
-      { value: "debug",   label: "Debug",   hint: "Full details on everything" },
-    ],
-  }));
+  let notifLevel = "normal";
+  if (advancedSetup) {
+    notifLevel = handleCancel(await select({
+      message: "Notification verbosity",
+      initialValue: "normal",
+      options: [
+        { value: "quiet",   label: "Quiet",   hint: "Errors only" },
+        { value: "normal",  label: "Normal",  hint: "Recommended: janitor/extraction summaries, retrieval off" },
+        { value: "verbose", label: "Verbose", hint: "Janitor full + extraction/retrieval summaries" },
+        { value: "debug",   label: "Debug",   hint: "Full details on everything" },
+      ],
+    }));
+  } else {
+    log.info(C.dim("Notifications: normal (recommended)"));
+  }
   log.info(C.dim("Notifications are sent on whatever channel you use to talk to your bot."));
   log.info(C.dim("You can ask your agent to change this anytime — just say \"change notification level\"."));
+
+  const preset = (() => {
+    if (notifLevel === "quiet") return { janitor: "off", extraction: "off", retrieval: "off" };
+    if (notifLevel === "verbose") return { janitor: "full", extraction: "summary", retrieval: "summary" };
+    if (notifLevel === "debug") return { janitor: "full", extraction: "full", retrieval: "full" };
+    return { janitor: "summary", extraction: "summary", retrieval: "off" };
+  })();
+
+  const advancedNotif = advancedSetup && handleCancel(await confirm({
+    message: "Advanced notification config?",
+    initialValue: false,
+  }));
+
+  let notifConfig = { ...preset };
+  if (advancedNotif) {
+    const pickVerb = async (message, initialValue) => handleCancel(await select({
+      message,
+      initialValue,
+      options: [
+        { value: "off", label: "off", hint: "disable this notification type" },
+        { value: "summary", label: "summary", hint: "short operational messages" },
+        { value: "full", label: "full", hint: "full detail (debug-heavy)" },
+      ],
+    }));
+    notifConfig = {
+      janitor: await pickVerb("Janitor notifications", preset.janitor),
+      extraction: await pickVerb("Extraction notifications", preset.extraction),
+      retrieval: await pickVerb("Retrieval notifications", preset.retrieval),
+    };
+  }
 
   return {
     provider,
@@ -643,6 +697,10 @@ async function step3_models() {
     apiKeyEnv: keyEnv,
     baseUrl: baseUrlFor(provider),
     notifLevel,
+    notifConfig,
+    advancedSetup,
+    adapterType,
+    janitorAskFirst,
   };
 }
 
@@ -829,7 +887,7 @@ async function step4_embeddings() {
 // =============================================================================
 // Step 5: Systems Configuration
 // =============================================================================
-async function step5_systems() {
+async function step5_systems(advancedSetup = false) {
   stepHeader(5, 8, "SYSTEMS", STEP_QUOTES.systems);
 
   const sysInfo = {
@@ -865,14 +923,18 @@ async function step5_systems() {
 
   log.info(C.bold("All 4 systems are recommended. Only disable if you know there's a conflict"));
   log.info(C.bold("with another tool or workflow that manages the same files."));
+  const systems = { memory: true, journal: true, projects: true, workspace: true };
+  if (!advancedSetup) {
+    log.success(`Enabled: ${C.bcyan("memory, journal, projects, workspace")} ${C.dim("(recommended)")}`);
+    return systems;
+  }
+
   log.message("");
 
   const keepAll = handleCancel(await confirm({
     message: "Keep all systems enabled? (Recommended)",
     initialValue: true,
   }));
-
-  const systems = { memory: true, journal: true, projects: true, workspace: true };
 
   if (!keepAll) {
     for (const [key, info] of Object.entries(sysInfo)) {
@@ -894,7 +956,7 @@ async function step5_systems() {
 // =============================================================================
 // Step 6: Janitor Schedule
 // =============================================================================
-async function step6_schedule(embeddings = {}) {
+async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAskFirst = true) {
   stepHeader(6, 8, "JANITOR", STEP_QUOTES.janitor);
 
   log.info(C.dim("The janitor runs nightly: reviewing new facts, deduplication,"));
@@ -998,33 +1060,42 @@ async function step6_schedule(embeddings = {}) {
     initialValue: true,
   }));
 
-  const approvalPolicies = {
-    coreMarkdownWrites: "ask",
-    projectDocsWrites: "ask",
-    workspaceFileMovesDeletes: "ask",
-    destructiveMemoryOps: "auto",
-  };
+  const approvalPolicies = janitorAskFirst
+    ? {
+        coreMarkdownWrites: "ask",
+        projectDocsWrites: "ask",
+        workspaceFileMovesDeletes: "ask",
+        destructiveMemoryOps: "auto",
+      }
+    : {
+        coreMarkdownWrites: "auto",
+        projectDocsWrites: "auto",
+        workspaceFileMovesDeletes: "auto",
+        destructiveMemoryOps: "auto",
+      };
 
-  log.message("");
-  log.info(C.bold("Janitor Approval Policies"));
-  log.info(C.dim("Choose where janitor should ask before applying changes."));
+  if (advancedSetup) {
+    log.message("");
+    log.info(C.bold("Janitor Approval Policies"));
+    log.info(C.dim("Choose where janitor should ask before applying changes."));
 
-  for (const row of [
-    ["coreMarkdownWrites", "Root core markdown writes (SOUL/USER/MEMORY/TOOLS)"],
-    ["projectDocsWrites", "Project docs writes outside projects/quaid"],
-    ["workspaceFileMovesDeletes", "Workspace file moves/deletes"],
-    ["destructiveMemoryOps", "Destructive memory DB ops (merges/supersedes/deletes)"],
-  ]) {
-    const [key, label] = row;
-    const mode = handleCancel(await select({
-      message: `${label}:`,
-      initialValue: approvalPolicies[key],
-      options: [
-        { value: "ask", label: "ask", hint: "queue for approval, notify user" },
-        { value: "auto", label: "auto", hint: "apply automatically during janitor run" },
-      ],
-    }));
-    approvalPolicies[key] = mode;
+    for (const row of [
+      ["coreMarkdownWrites", "Root core markdown writes (SOUL/USER/MEMORY/TOOLS)"],
+      ["projectDocsWrites", "Project docs writes outside projects/quaid"],
+      ["workspaceFileMovesDeletes", "Workspace file moves/deletes"],
+      ["destructiveMemoryOps", "Destructive memory DB ops (merges/supersedes/deletes)"],
+    ]) {
+      const [key, label] = row;
+      const mode = handleCancel(await select({
+        message: `${label}:`,
+        initialValue: approvalPolicies[key],
+        options: [
+          { value: "ask", label: "ask", hint: "queue for approval, notify user" },
+          { value: "auto", label: "auto", hint: "apply automatically during janitor run" },
+        ],
+      }));
+      approvalPolicies[key] = mode;
+    }
   }
 
   return { hour: scheduleHour, scheduled, approvalPolicies };
@@ -1106,6 +1177,14 @@ function installHeartbeatSchedule(hour) {
     "the user through each finding using `projects/quaid/project_onboarding.md`.",
     "Only clear the file after the user has reviewed everything.",
     "",
+    "## Quaid Delayed Requests",
+    "",
+    "If `.quaid/runtime/notes/delayed-llm-requests.json` exists:",
+    "- Read all `pending` items when conversation timing is appropriate.",
+    "- Surface the important ones to the user, resolve them together, and take action.",
+    "- After resolution, mark those items `done` (or remove them).",
+    "- Keep unresolved items as `pending` for later follow-up.",
+    "",
   ].join("\n");
 
   try {
@@ -1115,6 +1194,7 @@ function installHeartbeatSchedule(hour) {
       // Remove any existing Quaid Janitor + Post-Janitor Review sections
       content = content.replace(/\n## Quaid Janitor[^\n]*[\s\S]*?(?=\n## (?!Post-Janitor)|\s*$)/g, "");
       content = content.replace(/\n## Post-Janitor Review[\s\S]*?(?=\n## |\s*$)/g, "");
+      content = content.replace(/\n## Quaid Delayed Requests[\s\S]*?(?=\n## |\s*$)/g, "");
     } else {
       content = "# HEARTBEAT.md\n\n# Periodic checks — the bot reads this on each heartbeat wake\n";
     }
@@ -1566,6 +1646,7 @@ else:
     `   findings on your next conversation and help organize them.`,
     `${C.bcyan("→")} Run ${C.bcyan("quaid doctor")} anytime to check system health`,
     `${C.bcyan("→")} Run ${C.bcyan("quaid stats")} to see your memory database grow`,
+    `${C.bcyan("→")} Run ${C.bcyan("quaid config edit")} to customize advanced settings anytime`,
     "",
     C.dim(`Docs: ${PROJECT_URL}`),
     C.dim(`Uninstall: quaid uninstall`),
@@ -1751,7 +1832,6 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       boostRecent: true,
       boostFrequent: true,
       maxTokens: 2000,
-      notifyOnRecall: true,
       reranker: { enabled: true, provider: "llm", topK: 20 },
       rrfK: 60,
       rerankerBlend: 0.5,
@@ -1773,9 +1853,9 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     },
     notifications: {
       level: models.notifLevel,
-      janitor: { verbosity: null, channel: "last_used" },
-      extraction: { verbosity: null, channel: "last_used" },
-      retrieval: { verbosity: null, channel: "last_used" },
+      janitor: { verbosity: models.notifConfig?.janitor ?? "summary", channel: "last_used" },
+      extraction: { verbosity: models.notifConfig?.extraction ?? "summary", channel: "last_used" },
+      retrieval: { verbosity: models.notifConfig?.retrieval ?? "off", channel: "last_used" },
       fullText: true,
       showProcessingStart: true,
     },
@@ -1875,8 +1955,8 @@ async function main() {
     const owner = await step2_owner();
     const models = await step3_models();
     const embeddings = await step4_embeddings();
-    const systems = await step5_systems();
-    const schedule = await step6_schedule(embeddings);
+    const systems = await step5_systems(models.advancedSetup);
+    const schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
     await step8_validate(owner, models, embeddings, systems);
 

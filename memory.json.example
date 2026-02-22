@@ -102,7 +102,6 @@
     "boostRecent": true,
     "boostFrequent": true,
     "maxTokens": 2000,
-    "notifyOnRecall": true,
     "reranker": {
       "enabled": true,
       "provider": "llm",
@@ -139,9 +138,9 @@
 
   "notifications": {
     "level": "normal",
-    "janitor": { "verbosity": null, "channel": "last_used" },
-    "extraction": { "verbosity": null, "channel": "last_used" },
-    "retrieval": { "verbosity": null, "channel": "last_used" },
+    "janitor": { "verbosity": "summary", "channel": "last_used" },
+    "extraction": { "verbosity": "summary", "channel": "last_used" },
+    "retrieval": { "verbosity": "off", "channel": "last_used" },
     "fullText": true,
     "showProcessingStart": true,
     "_notes_level": "Master verbosity: 'quiet' (errors only), 'normal' (summaries), 'verbose' (more detail), 'debug' (everything). Default: normal.",

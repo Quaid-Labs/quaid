@@ -463,7 +463,7 @@ Resolution rules:
     "boostRecent": true,
     "boostFrequent": true,
     "maxTokens": 2000,
-    "notifyOnRecall": true,
+    "_note": "Recall notifications follow notifications.level / notifications.retrieval.verbosity",
     "dynamicK": {
       "enabled": true,
       "formula": "11.5 * ln(N) - 61.7",

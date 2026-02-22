@@ -280,6 +280,9 @@ SYS_JOURNAL=true
 SYS_PROJECTS=true
 SYS_WORKSPACE=true
 NOTIFICATION_LEVEL="normal"
+NOTIF_JANITOR="summary"
+NOTIF_EXTRACTION="summary"
+NOTIF_RETRIEVAL="off"
 
 # =============================================================================
 # Step 1: Welcome & Pre-flight
@@ -727,6 +730,46 @@ step3_models() {
         4) NOTIFICATION_LEVEL="debug";   info "Notifications: debug" ;;
         *) NOTIFICATION_LEVEL="normal";  info "Notifications: normal" ;;
     esac
+
+    # Apply recommended per-feature defaults from selected level
+    case "${NOTIFICATION_LEVEL}" in
+        quiet)
+            NOTIF_JANITOR="off"; NOTIF_EXTRACTION="off"; NOTIF_RETRIEVAL="off" ;;
+        verbose)
+            NOTIF_JANITOR="full"; NOTIF_EXTRACTION="summary"; NOTIF_RETRIEVAL="summary" ;;
+        debug)
+            NOTIF_JANITOR="full"; NOTIF_EXTRACTION="full"; NOTIF_RETRIEVAL="full" ;;
+        *)
+            NOTIF_JANITOR="summary"; NOTIF_EXTRACTION="summary"; NOTIF_RETRIEVAL="off" ;;
+    esac
+
+    if confirm "Advanced notification config? [y/N]"; then
+        echo ""
+        echo -e "  ${BOLD}Janitor notifications${RESET}"
+        echo "    1) off    2) summary  3) full"
+        ask "Choice [2]:"
+        case "${REPLY:-2}" in
+            1) NOTIF_JANITOR="off" ;;
+            3) NOTIF_JANITOR="full" ;;
+            *) NOTIF_JANITOR="summary" ;;
+        esac
+        echo -e "  ${BOLD}Extraction notifications${RESET}"
+        echo "    1) off    2) summary  3) full"
+        ask "Choice [2]:"
+        case "${REPLY:-2}" in
+            1) NOTIF_EXTRACTION="off" ;;
+            3) NOTIF_EXTRACTION="full" ;;
+            *) NOTIF_EXTRACTION="summary" ;;
+        esac
+        echo -e "  ${BOLD}Retrieval notifications${RESET}"
+        echo "    1) off    2) summary  3) full"
+        ask "Choice [1]:"
+        case "${REPLY:-1}" in
+            2) NOTIF_RETRIEVAL="summary" ;;
+            3) NOTIF_RETRIEVAL="full" ;;
+            *) NOTIF_RETRIEVAL="off" ;;
+        esac
+    fi
 }
 
 # =============================================================================
@@ -1305,7 +1348,6 @@ _write_config() {
     "boostRecent": true,
     "boostFrequent": true,
     "maxTokens": 2000,
-    "notifyOnRecall": true,
     "reranker": {
       "enabled": true,
       "provider": "llm",
@@ -1336,9 +1378,9 @@ _write_config() {
   },
   "notifications": {
     "level": "${NOTIFICATION_LEVEL}",
-    "janitor": { "verbosity": null, "channel": "last_used" },
-    "extraction": { "verbosity": null, "channel": "last_used" },
-    "retrieval": { "verbosity": null, "channel": "last_used" },
+    "janitor": { "verbosity": "${NOTIF_JANITOR}", "channel": "last_used" },
+    "extraction": { "verbosity": "${NOTIF_EXTRACTION}", "channel": "last_used" },
+    "retrieval": { "verbosity": "${NOTIF_RETRIEVAL}", "channel": "last_used" },
     "fullText": true,
     "showProcessingStart": true
   },

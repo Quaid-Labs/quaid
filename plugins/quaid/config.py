@@ -153,7 +153,6 @@ class RetrievalConfig:
     boost_recent: bool = True
     boost_frequent: bool = True
     max_tokens: int = 2000
-    notify_on_recall: bool = True  # Notify user when memories are injected
     reranker_enabled: bool = True
     reranker_top_k: int = 20
     reranker_instruction: str = "Given a personal memory query, determine if this memory is relevant to the query"
@@ -334,13 +333,13 @@ class NotificationsConfig:
 
     # Level presets:
     #   quiet:   janitor=off, extraction=off, retrieval=off
-    #   normal:  janitor=summary, extraction=off, retrieval=summary
-    #   verbose: janitor=summary, extraction=summary, retrieval=summary
+    #   normal:  janitor=summary, extraction=summary, retrieval=off
+    #   verbose: janitor=full, extraction=summary, retrieval=summary
     #   debug:   janitor=full, extraction=full, retrieval=full
     _LEVEL_DEFAULTS: dict = field(default_factory=lambda: {
         "quiet":   {"janitor": "off",     "extraction": "off",     "retrieval": "off"},
-        "normal":  {"janitor": "summary", "extraction": "off",     "retrieval": "summary"},
-        "verbose": {"janitor": "summary", "extraction": "summary", "retrieval": "summary"},
+        "normal":  {"janitor": "summary", "extraction": "summary", "retrieval": "off"},
+        "verbose": {"janitor": "full",    "extraction": "summary", "retrieval": "summary"},
         "debug":   {"janitor": "full",    "extraction": "full",    "retrieval": "full"},
     }, repr=False)
 
@@ -624,7 +623,6 @@ def _load_config_inner() -> MemoryConfig:
         boost_recent=retrieval_data.get('boost_recent', True),
         boost_frequent=retrieval_data.get('boost_frequent', True),
         max_tokens=retrieval_data.get('max_tokens', 2000),
-        notify_on_recall=retrieval_data.get('notify_on_recall', True),
         reranker_enabled=reranker_data.get('enabled', True),
         reranker_top_k=reranker_data.get('top_k', 20),
         reranker_instruction=reranker_data.get('instruction', 'Given a personal memory query, determine if this memory is relevant to the query'),

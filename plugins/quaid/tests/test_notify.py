@@ -198,19 +198,28 @@ class TestNotifyMemoryExtraction:
             assert "5 stored" in msg
             assert "2 skipped" in msg
             assert "3 edges" in msg
-            assert "Context compacted" in msg
 
-    def test_trigger_labels(self):
-        """Trigger names map to human-readable labels."""
+    def test_trigger_labels_full_only(self):
+        """Trigger names are shown only when extraction verbosity is full."""
         for trigger, expected in [
             ("compaction", "Context compacted"),
             ("reset", "Session reset (/new)"),
             ("extraction", "Extraction complete"),
         ]:
-            with _patch_notify_user() as mock_send:
+            with _patch_notify_user() as mock_send, patch("config.get_config") as mock_cfg:
+                mock_cfg.return_value.notifications.effective_level.return_value = "full"
                 notify_memory_extraction(1, 0, 0, trigger=trigger)
                 msg = mock_send.call_args[0][0]
                 assert expected in msg
+
+    def test_no_facts_summary_is_one_line(self):
+        """Zero-result always-notify path is concise in summary mode."""
+        with _patch_notify_user() as mock_send, patch("config.get_config") as mock_cfg:
+            mock_cfg.return_value.notifications.effective_level.return_value = "summary"
+            notify_memory_extraction(0, 0, 0, trigger="timeout", details=None, always_notify=True)
+            msg = mock_send.call_args[0][0]
+            assert "No facts found" in msg
+            assert "Trigger:" not in msg
 
     def test_details_with_stored_fact(self):
         """Stored facts get checkmark emoji."""

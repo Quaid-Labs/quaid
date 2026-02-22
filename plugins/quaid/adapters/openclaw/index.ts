@@ -51,6 +51,7 @@ const QUAID_JANITOR_DIR = path.join(QUAID_LOGS_DIR, "janitor");
 const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-install-migration.json");
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
 const DELAYED_NOTIFICATIONS_PATH = path.join(QUAID_JANITOR_DIR, "delayed-notifications.json");
+const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
@@ -123,8 +124,8 @@ function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retriev
   const level = String(notifications.level || "normal").trim().toLowerCase();
   const defaults: Record<string, Record<string, string>> = {
     quiet: { janitor: "off", extraction: "off", retrieval: "off" },
-    normal: { janitor: "summary", extraction: "off", retrieval: "summary" },
-    verbose: { janitor: "summary", extraction: "summary", retrieval: "summary" },
+    normal: { janitor: "summary", extraction: "summary", retrieval: "off" },
+    verbose: { janitor: "full", extraction: "summary", retrieval: "summary" },
     debug: { janitor: "full", extraction: "full", retrieval: "full" },
   };
   const levelDefaults = defaults[level] || defaults.normal;
@@ -997,6 +998,80 @@ function _saveJanitorNudgeState(state: Record<string, any>): void {
   } catch {}
 }
 
+function queueDelayedLlmRequest(message: string, kind: string = "janitor", priority: string = "normal"): boolean {
+  try {
+    if (!message || !String(message).trim()) return false;
+    let payload: any = { version: 1, requests: [] };
+    if (fs.existsSync(DELAYED_LLM_REQUESTS_PATH)) {
+      try {
+        payload = JSON.parse(fs.readFileSync(DELAYED_LLM_REQUESTS_PATH, "utf8"));
+      } catch {
+        payload = { version: 1, requests: [] };
+      }
+    }
+    if (!payload || typeof payload !== "object") payload = { version: 1, requests: [] };
+    const requests = Array.isArray(payload.requests) ? payload.requests : [];
+    const id = `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
+    if (requests.some((r: any) => r && String(r.id || "") === id && r.status === "pending")) {
+      return false;
+    }
+    requests.push({
+      id,
+      created_at: new Date().toISOString(),
+      source: "quaid_adapter",
+      kind,
+      priority,
+      status: "pending",
+      message: String(message),
+    });
+    payload.requests = requests;
+    fs.writeFileSync(DELAYED_LLM_REQUESTS_PATH, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getJanitorHealthIssue(): string | null {
+  try {
+    if (!fs.existsSync(DB_PATH)) return null;
+    const out = execSync(
+      `sqlite3 "${DB_PATH}" "SELECT MAX(completed_at) FROM janitor_runs WHERE status='completed'"`,
+      { encoding: "utf-8", timeout: 4000 }
+    ).trim();
+    if (!out) {
+      return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
+    }
+    const ts = Date.parse(out);
+    if (Number.isNaN(ts)) return null;
+    const hours = (Date.now() - ts) / (1000 * 60 * 60);
+    if (hours > 72) {
+      return `[Quaid] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
+    }
+    if (hours > 48) {
+      return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function maybeQueueJanitorHealthAlert(): void {
+  const issue = getJanitorHealthIssue();
+  if (!issue) return;
+  const now = Date.now();
+  const state = _loadJanitorNudgeState();
+  const lastAt = Number(state.lastJanitorHealthAlertAt || 0);
+  const cooldown = 6 * 60 * 60 * 1000;
+  if (now - lastAt < cooldown && String(state.lastJanitorHealthIssue || "") === issue) return;
+  if (queueDelayedLlmRequest(issue, "janitor_health", "high")) {
+    state.lastJanitorHealthAlertAt = now;
+    state.lastJanitorHealthIssue = issue;
+    _saveJanitorNudgeState(state);
+  }
+}
+
 function maybeSendJanitorNudges(): void {
   // Adapter-owned reminders: do not rely on HEARTBEAT for cross-platform behavior.
   const now = Date.now();
@@ -1032,33 +1107,35 @@ notify_user("Hey, I see you just installed Quaid. Want me to help migrate import
   _saveJanitorNudgeState(state);
 }
 
-function flushDelayedNotifications(maxItems: number = 5): void {
+function flushDelayedNotifications(maxItems: number = 5): { delivered: number; queuedLlmRequests: number } {
+  let queuedLlmRequests = 0;
   try {
-    if (!fs.existsSync(DELAYED_NOTIFICATIONS_PATH)) return;
+    if (!fs.existsSync(DELAYED_NOTIFICATIONS_PATH)) return { delivered: 0, queuedLlmRequests };
     const raw = JSON.parse(fs.readFileSync(DELAYED_NOTIFICATIONS_PATH, "utf8"));
     const items = Array.isArray(raw?.items) ? raw.items : [];
-    if (!items.length) return;
+    if (!items.length) return { delivered: 0, queuedLlmRequests };
 
     let sent = 0;
     for (const item of items) {
       if (sent >= maxItems) break;
       if (!item || item.status !== "pending" || !item.message) continue;
       const message = String(item.message);
-      spawnNotifyScript(`
-from notify import notify_user
-notify_user(${JSON.stringify(message)})
-`);
+      if (queueDelayedLlmRequest(message, String(item.kind || "janitor"), String(item.priority || "normal"))) {
+        queuedLlmRequests += 1;
+      }
       item.status = "sent";
       item.sent_at = new Date().toISOString();
+      item.delivery = "llm_request_queue";
       sent += 1;
     }
-
     fs.writeFileSync(DELAYED_NOTIFICATIONS_PATH, JSON.stringify(raw, null, 2), { mode: 0o600 });
     if (sent > 0) {
-      console.log(`[quaid] Flushed ${sent} delayed notification(s)`);
+      console.log(`[quaid] Flushed ${sent} delayed notification(s), queued ${queuedLlmRequests} llm request(s)`);
     }
+    return { delivered: sent, queuedLlmRequests };
   } catch (err: unknown) {
     console.warn(`[quaid] Failed to flush delayed notifications: ${String((err as Error)?.message || err)}`);
+    return { delivered: 0, queuedLlmRequests: 0 };
   }
 }
 
@@ -1924,6 +2001,7 @@ const quaidPlugin = {
       }
       try { maybeSendJanitorNudges(); } catch {}
       try { flushDelayedNotifications(5); } catch {}
+      try { maybeQueueJanitorHealthAlert(); } catch {}
       // Cancel inactivity timer — agent is active again
       timeoutManager.onAgentStart();
 
@@ -2049,11 +2127,9 @@ const quaidPlugin = {
 
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
 
-        // Best-effort user notification for auto-injected recalls (debug visibility).
+        // Best-effort user notification for auto-injected recalls.
         try {
-          const configData = getMemoryConfig();
-          const notifyOnRecall = configData?.retrieval?.notifyOnRecall ?? false;
-          if (notifyOnRecall) {
+          if (shouldNotifyFeature("retrieval", "summary")) {
             const vectorInjected = toInject.filter((m) => m.via === "vector" || (!m.via && m.category !== "graph"));
             const graphInjected = toInject.filter((m) => m.via === "graph" || m.category === "graph");
             const dataFile = path.join(QUAID_TMP_DIR, `auto-inject-recall-${Date.now()}.json`);
@@ -2294,11 +2370,7 @@ dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by date range.`,
 
             // Notify user about what memories were retrieved (if enabled)
             try {
-              const configPath = path.join(WORKSPACE, "config/memory.json");
-              const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-              const notifyOnRecall = configData?.retrieval?.notifyOnRecall ?? false;
-
-              if (notifyOnRecall && results.length > 0) {
+              if (shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
                 const memoryData = results.map(m => ({
                   text: m.text,
                   similarity: Math.round((m.similarity || 0) * 100),
@@ -2494,11 +2566,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
 
             // Notify user about what docs were searched (if enabled)
             try {
-              const configPath = path.join(WORKSPACE, "config/memory.json");
-              const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-              const notifyOnRecall = configData?.retrieval?.notifyOnRecall ?? false;
-
-              if (notifyOnRecall && results) {
+              if (shouldNotifyFeature("retrieval", "summary") && results) {
                 // Parse results to extract doc names and scores
                 const docResults: Array<{doc: string, section: string, score: number}> = [];
                 const lines = results.split('\n');
@@ -3329,7 +3397,8 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const triggerType = resolveExtractionTrigger(label);
       const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
         && shouldNotifyFeature("extraction", "summary");
-      if (facts.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) {
+      if ((facts.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
+        && shouldNotifyFeature("extraction", "summary")) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
           // Merge snippet and journal details for notification
