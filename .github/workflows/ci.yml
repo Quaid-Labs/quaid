@@ -1,0 +1,94 @@
+name: Quaid CI
+
+on:
+  push:
+    branches: [main, release-squash-20260222]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: quaid-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: plugins/quaid/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python test deps
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Install plugin deps
+        working-directory: plugins/quaid
+        run: npm ci
+
+      - name: Docs consistency check
+        run: node scripts/check-docs-consistency.mjs
+
+      - name: Release consistency check
+        run: node scripts/release-verify.mjs
+
+      - name: Runtime TS/JS pair check (strict)
+        working-directory: plugins/quaid
+        run: node scripts/check-runtime-pairs.mjs --strict
+
+      - name: Python compile check
+        working-directory: plugins/quaid
+        run: python -m compileall -q .
+
+      - name: TypeScript integration tests
+        working-directory: plugins/quaid
+        run: npm run test:integration
+
+      - name: Python unit tests (isolated parallel)
+        working-directory: plugins/quaid
+        run: python scripts/run_pytests.py --mode unit --workers 4 --timeout 120
+
+  full-suite:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: plugins/quaid/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python test deps
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Install plugin deps
+        working-directory: plugins/quaid
+        run: npm ci
+
+      - name: Full suite (without bootstrap e2e lane)
+        working-directory: plugins/quaid
+        env:
+          QUAID_E2E_MATRIX_SCRIPT: /nonexistent
+        run: bash scripts/run-all-tests.sh --full
