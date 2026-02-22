@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
 
 MODE="quick"
 
@@ -35,17 +36,27 @@ run_stage() {
   "$@"
 }
 
+run_optional_repo_checks() {
+  if [[ -f "${REPO_ROOT}/scripts/check-docs-consistency.mjs" ]]; then
+    run_stage "Docs consistency check" node "${REPO_ROOT}/scripts/check-docs-consistency.mjs"
+  fi
+  if [[ -f "${REPO_ROOT}/scripts/release-verify.mjs" ]]; then
+    run_stage "Release consistency check" node "${REPO_ROOT}/scripts/release-verify.mjs"
+  fi
+}
+
 # Best-effort TS dependency probe for clean dev workspaces.
 has_vitest() {
   node -e "require.resolve('vitest/package.json')" >/dev/null 2>&1
 }
 
 # 1) Build/syntax checks
-run_stage "Runtime TS/JS pair sync check" npm run check:runtime-pairs
+run_stage "Runtime TS/JS pair sync check (strict)" npm run check:runtime-pairs:strict
 run_stage "Python compile check" python3 -m compileall -q .
 run_stage "JavaScript syntax check" node --check adapters/openclaw/index.js
 run_stage "JavaScript syntax check (command signals)" node --check adapters/openclaw/command-signals.js
 run_stage "JavaScript syntax check (timeout manager)" node --check core/session-timeout.js
+run_optional_repo_checks
 
 # 2) Deterministic TypeScript integration coverage
 if has_vitest; then

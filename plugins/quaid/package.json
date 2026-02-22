@@ -19,6 +19,7 @@
     "test:all": "bash scripts/run-all-tests.sh --quick",
     "test:all:full": "bash scripts/run-all-tests.sh --full",
     "check:runtime-pairs": "node scripts/check-runtime-pairs.mjs",
+    "check:runtime-pairs:strict": "node scripts/check-runtime-pairs.mjs --strict",
     "test:integration": "node test-runner.js tests/command-signals.integration.test.ts tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts tests/delayed-requests.integration.test.ts",
     "test:adapter:openclaw:ts": "node test-runner.js tests/command-signals.integration.test.ts tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts tests/delayed-requests.integration.test.ts",
     "test:adapter:openclaw:py": "python3 scripts/run_pytests.py --mode adapter_openclaw --workers 4 --timeout 120",
