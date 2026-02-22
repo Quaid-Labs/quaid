@@ -29,13 +29,23 @@ Quaid is agentic-system independent by design, with adapters handling host-speci
 
 ## Install
 
-This repository is the core Quaid source tree:
+The guided installer sets up Quaid with memory extraction, janitor scheduling, and host integration.
 
-- Runtime plugin: `plugins/quaid`
-- Agent/project docs: `projects/quaid`
-- Public architecture and benchmark docs: `docs`
+**Mac / Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash
+```
 
-Quaid is adapter-driven and embedded by the host runtime. OpenClaw is currently the most mature integration path.
+**Windows:**
+```powershell
+irm https://raw.githubusercontent.com/steadman-labs/quaid/main/install.ps1 | iex
+```
+
+**Manual (all platforms):**
+```bash
+git clone https://github.com/steadman-labs/quaid.git
+cd quaid && node setup-quaid.mjs
+```
 
 ---
 
