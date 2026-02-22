@@ -1,4 +1,4 @@
-# Memory System — Tools & Config
+# Knowledge Layer — Tools & Config
 
 ## memory_recall Tool
 

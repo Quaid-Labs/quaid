@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Quaid Memory Plugin — Guided Installer
+# Quaid Knowledge Layer Plugin — Guided Installer
 # =============================================================================
-# 7-step interactive installer for the Quaid memory system.
+# 7-step interactive installer for the Quaid knowledge layer.
 # Run: bash setup-quaid.sh
 #
 # Modes:
@@ -21,7 +21,7 @@ set -euo pipefail
 QUAID_VERSION="0.1.5-alpha"
 MIN_PYTHON_VERSION="3.10"
 MIN_SQLITE_VERSION="3.35"
-# Gateway PR #13287 — required hooks for memory extraction
+# Gateway PR #13287 — required hooks for knowledge extraction
 # These features land in OpenClaw after version 2026.2.9
 MIN_GATEWAY_VERSION="2026.2.10"
 HOOKS_PR_URL="https://github.com/openclaw/openclaw/pull/13287"
@@ -1221,14 +1221,14 @@ except Exception as e:
         done
         if [[ ! -f "${quaid_proj_dir}/PROJECT.md" ]]; then
             cat > "${quaid_proj_dir}/PROJECT.md" << 'PROJEOF'
-# Quaid Memory System
+# Quaid Knowledge Layer
 
-Persistent long-term memory plugin. Stores facts, relationships, and preferences
+Persistent long-term knowledge layer. Stores facts, relationships, and preferences
 in a local SQLite graph database. Retrieved automatically via hybrid search.
 
 ## Key Files
 - `TOOLS.md` — CLI commands and agent tools reference
-- `AGENTS.md` — Instructions for how the agent should use memory
+- `AGENTS.md` — Instructions for how the agent should use the knowledge layer
 - `USER.md` — Journaling guidance for user-understanding entries
 - `SOUL.md` — Journaling guidance for agent self-reflection entries
 - `MEMORY.md` — Journaling guidance for shared-moment entries
@@ -1236,7 +1236,7 @@ in a local SQLite graph database. Retrieved automatically via hybrid search.
 - `project_onboarding.md` — Guide for discovering and registering projects
 
 ## Systems
-- **Memory** — Fact extraction, graph storage, hybrid recall
+- **Knowledge** — Fact extraction, graph storage, hybrid recall
 - **Journal** — Slow-path learning, personality evolution
 - **Projects** — Documentation tracking, staleness detection, RAG search
 - **Workspace** — Core markdown monitoring, nightly maintenance
@@ -1254,7 +1254,7 @@ sys.path.insert(0, '.')
 from docs_registry import DocsRegistry
 reg = DocsRegistry()
 try:
-    reg.create_project('quaid', label='Quaid Memory System', description='Memory plugin reference docs and agent instructions.')
+    reg.create_project('quaid', label='Quaid Knowledge Layer', description='Knowledge layer reference docs and agent instructions.')
 except ValueError:
     pass
 found = reg.auto_discover('quaid')

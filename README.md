@@ -29,7 +29,7 @@ Quaid is an agentic-system independent knowledge layer by design, with adapters 
 
 ## Install
 
-The guided installer sets up Quaid with memory extraction, janitor scheduling, and host integration.
+The guided installer sets up Quaid with knowledge capture, janitor scheduling, and host integration.
 
 **Mac / Linux:**
 ```bash
@@ -51,7 +51,7 @@ cd quaid && node setup-quaid.mjs
 
 ## Benchmarks
 
-Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (ACL 2024) using Mem0's exact evaluation methodology — same judge model (GPT-4o-mini), same prompt, same scoring. 10 long conversations, 1,540 scored question-answer pairs testing memory extraction, temporal reasoning, and multi-hop recall.
+Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (ACL 2024) using Mem0's exact evaluation methodology — same judge model (GPT-4o-mini), same prompt, same scoring. 10 long conversations, 1,540 scored question-answer pairs testing knowledge capture quality, temporal reasoning, and multi-hop recall.
 
 | System | Accuracy | Answer Model |
 |--------|----------|-------------|

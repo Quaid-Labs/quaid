@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // =============================================================================
-// Quaid Memory Plugin — Guided Installer
+// Quaid Knowledge Layer Plugin — Guided Installer
 // =============================================================================
 // Interactive installer using @clack/prompts (resolved from OpenClaw).
 // Supports two modes:
@@ -1504,14 +1504,14 @@ print(total_docs)
     // Create PROJECT.md for Quaid itself
     if (!fs.existsSync(path.join(quaidProjDir, "PROJECT.md"))) {
       fs.writeFileSync(path.join(quaidProjDir, "PROJECT.md"), [
-        "# Quaid Memory System",
+        "# Quaid Knowledge Layer",
         "",
-        "Persistent long-term memory plugin. Stores facts, relationships, and preferences",
+        "Persistent long-term knowledge layer. Stores facts, relationships, and preferences",
         "in a local SQLite graph database. Retrieved automatically via hybrid search.",
         "",
         "## Key Files",
         "- `TOOLS.md` — CLI commands and agent tools reference",
-        "- `AGENTS.md` — Instructions for how the agent should use memory",
+        "- `AGENTS.md` — Instructions for how the agent should use the knowledge layer",
         "- `USER.md` — Journaling guidance for user-understanding entries",
         "- `SOUL.md` — Journaling guidance for agent self-reflection entries",
         "- `MEMORY.md` — Journaling guidance for shared-moment entries",
@@ -1519,7 +1519,7 @@ print(total_docs)
         "- `project_onboarding.md` — Guide for discovering and registering projects",
         "",
         "## Systems",
-        "- **Memory** — Fact extraction, graph storage, hybrid recall",
+        "- **Knowledge** — Fact extraction, graph storage, hybrid recall",
         "- **Journal** — Slow-path learning, personality evolution",
         "- **Projects** — Documentation tracking, staleness detection, RAG search",
         "- **Workspace** — Core markdown monitoring, nightly maintenance",
@@ -1535,7 +1535,7 @@ sys.path.insert(0, '.')
 from docs_registry import DocsRegistry
 reg = DocsRegistry()
 try:
-    reg.create_project('quaid', label='Quaid Memory System', description='Memory plugin reference docs and agent instructions.')
+    reg.create_project('quaid', label='Quaid Knowledge Layer', description='Knowledge layer reference docs and agent instructions.')
 except ValueError:
     pass  # already exists
 found = reg.auto_discover('quaid')
