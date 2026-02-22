@@ -1,0 +1,28 @@
+{
+  "id": "quaid",
+  "kind": "memory",
+  "uiHints": {
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically extract and store information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "autoCapture": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoRecall": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}

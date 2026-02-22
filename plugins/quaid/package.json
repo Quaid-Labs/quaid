@@ -1,0 +1,55 @@
+{
+  "name": "quaid",
+  "version": "0.1.5-alpha",
+  "description": "Total Recall memory system — graph-based memory plugin using SQLite + Ollama",
+  "main": "adapters/openclaw/index.js",
+  "type": "module",
+  "keywords": [
+    "clawdbot",
+    "plugin",
+    "memory",
+    "local",
+    "sqlite",
+    "ollama"
+  ],
+  "author": "Steadman Labs",
+  "license": "MIT",
+  "scripts": {
+    "test": "node test-runner.js",
+    "test:all": "bash scripts/run-all-tests.sh --quick",
+    "test:all:full": "bash scripts/run-all-tests.sh --full",
+    "check:runtime-pairs": "node scripts/check-runtime-pairs.mjs",
+    "test:integration": "node test-runner.js tests/command-signals.integration.test.ts tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts",
+    "test:adapter:openclaw:ts": "node test-runner.js tests/command-signals.integration.test.ts tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts",
+    "test:adapter:openclaw:py": "python3 scripts/run_pytests.py --mode adapter_openclaw --workers 4 --timeout 120",
+    "test:adapter:openclaw": "npm run test:adapter:openclaw:ts && npm run test:adapter:openclaw:py",
+    "test:raw": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:py": "bash scripts/run-python-coverage.sh --fast --fail-under 45",
+    "test:coverage:py:full": "bash scripts/run-python-coverage.sh --full --fail-under 45",
+    "test:coverage:all": "npm run test:coverage && npm run test:coverage:py",
+    "test:watch": "vitest"
+  },
+  "clawdbot": {
+    "extensions": [
+      "adapters/openclaw/index.js"
+    ]
+  },
+  "openclaw": {
+    "extensions": [
+      "adapters/openclaw/index.js"
+    ]
+  },
+  "peerDependencies": {
+    "clawdbot": "*"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.32.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.0.18",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

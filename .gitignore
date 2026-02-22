@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+data/*.db
+data/*.db-*
+# Credentials and secrets
+**/credentials/
+*.key
+*.pem
+.env
+.env.*
+# Logs
+*.log
+logs/
+# OS files
+.DS_Store
+Thumbs.db
+# Build artifacts
+dist/
+build/
+*.js.map
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+# Temporary files
+*.tmp
+*.bak
+*.backup*
+/tmp/
+# Local test files (untracked scratch space)
+/tests/
+# Dynamic data (regenerated)
+spend.json
+data/
+# Review/working files
+*-review.tsv
+*-review.jsonl
+*-decisions.jsonl
+# Soul snippets (legacy, replaced by journal system)
+*.snippets.md
+# Journal archives (preserved on disk, not tracked in git)
+journal/archive/
+# Journal state tracking
+journal/.distillation-state.json
+# Workspace runtime state
+.openclaw/
+.clawdbot/
+plugins/quaid/.state/
+backups/
+voice-calls/
+dashboard/server/data/
+.clawdhub/
+.clawhub/
+skills/**/.clawdhub/
