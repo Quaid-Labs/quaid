@@ -3235,7 +3235,7 @@ def store(
 
     text = text.strip()
     word_count = len(text.split())
-    if word_count < 3:
+    if word_count < 3 and category not in _LOW_INFO_ENTITY_CATEGORIES:
         raise ValueError(f"Facts must be at least 3 words (got {word_count}: '{text}'). A fact needs a subject, verb, and object (e.g., 'X is Y').")
 
     if not owner_id:

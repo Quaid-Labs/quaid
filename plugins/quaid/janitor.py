@@ -166,11 +166,13 @@ def _merge_nodes_into(
     earliest_created = min(created_dates) if created_dates else None
     # Inherit owner from first original
     owner = originals[0].owner_id if originals else _default_owner_id()
+    # Inherit category from first original (not hardcoded "fact")
+    category = originals[0].category if originals else "fact"
 
     # Store merged version with inherited signals
     result = store_memory(
         text=merged_text,
-        category="fact",
+        category=category,
         source=source,
         owner_id=owner,
         verified=True,
@@ -695,6 +697,7 @@ For each pair, decide:
 - keep_both: genuinely different information.
 
 When merging, the merged_text should be the MORE SPECIFIC/DETAILED version. If Fact B says "Maya has a dog" and Fact A says "Maya has a dog named Biscuit", merge and keep "Maya has a dog named Biscuit".
+For facts, the merged_text MUST be at least 3 words (subject + verb + object). Never produce a bare noun phrase like "Montrose, Houston" for a fact — instead write "Maya lives in Montrose, Houston". Entity names (people, places) can be 1-2 words.
 
 IMPORTANT: Negation flips meaning. "likes X" vs "doesn't like X" = keep_both.
 
@@ -914,6 +917,7 @@ For each contradiction pair, decide:
 
 Consider: recency, confidence, access frequency, source reliability,
 whether the contradiction is temporal (facts changed over time).
+If using MERGE, merged_text for facts MUST be at least 3 words (subject + verb + object). Entity names (people, places) can be 1-2 words.
 
 {chr(10).join(numbered)}
 
@@ -1927,6 +1931,8 @@ EDGE DIRECTION RULES:
 
 Only include edges when the fact describes a relationship between named entities.
 Do not include edges for facts that don't describe relationships (preferences, events, etc.).
+
+Any merged_text or new_text for facts MUST be at least 3 words (subject + verb + object). Entity names (people, places) can be 1-2 words.
 
 Respond with a JSON array only, no markdown fencing:
 [
