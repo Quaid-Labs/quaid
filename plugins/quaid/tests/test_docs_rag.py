@@ -2,6 +2,7 @@
 
 import os
 import sys
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -165,3 +166,72 @@ class TestRagEstimateTokens:
         rag = _make_rag(tmp_path)
         text = "a" * 400
         assert rag.estimate_tokens(text) == 100
+
+
+# ---------------------------------------------------------------------------
+# docs filtering + search behavior
+# ---------------------------------------------------------------------------
+
+class TestDocsSearchFiltering:
+    """Tests for doc filters and SQL-level search filtering."""
+
+    def test_normalize_docs_filter_trims_dedupes_and_caps(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        raw = ["  alpha.md ", "beta.md", "alpha.md", "", "   ", None]
+        normalized = rag._normalize_docs_filter(raw)
+        assert normalized == ["alpha.md", "beta.md"]
+
+    @patch("docs_rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("docs_rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("docs_rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_filters_by_docs_arg(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("a:0", "/tmp/docs/alpha.md", 0, "alpha content", "# Alpha", b"e"),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("b:0", "/tmp/docs/beta.md", 0, "beta content", "# Beta", b"e"),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        results = rag.search_docs("alpha", limit=10, docs=["alpha.md"])
+        assert len(results) == 1
+        assert results[0]["source"].endswith("alpha.md")
+
+    @patch("docs_rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("docs_rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("docs_rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_filters_by_project_and_docs(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("p:0", "/tmp/workspace/projects/quaid/reference/memory.md", 0, "quaid docs", "# Q", b"e"),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("o:0", "/tmp/workspace/projects/other/reference/memory.md", 0, "other docs", "# O", b"e"),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        with patch.object(
+            rag,
+            "_get_project_paths",
+            return_value={
+                "home_dir": "/tmp/workspace/projects/quaid",
+                "source_roots": [],
+            },
+        ):
+            results = rag.search_docs("memory", limit=10, project="quaid", docs=["memory.md"])
+
+        assert len(results) == 1
+        assert "/projects/quaid/" in results[0]["source"]
