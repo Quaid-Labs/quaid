@@ -8,6 +8,7 @@ PROFILE_PATH="${QUAID_E2E_PROFILE_PATH:-${BOOTSTRAP_ROOT}/profiles/runtime-profi
 
 PATHS=("openai-oauth" "openai-api" "anthropic-oauth" "anthropic-api")
 EXPECT_SPEC=""
+JSON_OUT=""
 EXTRA_ARGS=()
 
 usage() {
@@ -17,6 +18,7 @@ Usage: $(basename "$0") [options]
 Options:
   --paths <csv>       Auth paths to test (default: openai-oauth,openai-api,anthropic-oauth,anthropic-api)
   --expect <spec>     Expected results map, e.g. "openai-oauth=pass,openai-api=fail"
+  --json-out <path>   Write matrix summary JSON (default: /tmp/quaid-e2e-matrix-<timestamp>.json)
   --                 Forward remaining args to run-quaid-e2e.sh
   -h, --help         Show help
 USAGE
@@ -30,6 +32,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --expect)
       EXPECT_SPEC="$2"
+      shift 2
+      ;;
+    --json-out)
+      JSON_OUT="$2"
       shift 2
       ;;
     --)
@@ -110,8 +116,16 @@ classify_failure_reason() {
     echo "gateway-auth-denied"
     return 0
   fi
+  if rg -n "LLM smoke failed: timed out|timeout" "$log_file" >/dev/null 2>&1; then
+    echo "provider-timeout"
+    return 0
+  fi
   if rg -n "LLM smoke HTTP 5[0-9]{2}|internal error|api_error" "$log_file" >/dev/null 2>&1; then
     echo "provider-runtime-error"
+    return 0
+  fi
+  if rg -n "GatewayRestart|No provider plugins found|failed to load plugin|Plugin loaded" "$log_file" >/dev/null 2>&1; then
+    echo "gateway-plugin-runtime"
     return 0
   fi
   if rg -n "Missing required integration test file|Test Files .*failed|Tests .*failed" "$log_file" >/dev/null 2>&1; then
@@ -237,9 +251,65 @@ for pair in "${EXCEPTION_FILES[@]-}"; do
   rm -f "${pair#*=}" || true
 done
 
+if [[ -z "$JSON_OUT" ]]; then
+  JSON_OUT="/tmp/quaid-e2e-matrix-$(date +%Y%m%d-%H%M%S).json"
+fi
+
+python3 - "$JSON_OUT" "${PATHS[*]}" "${RESULTS[*]-}" "${REASONS[*]-}" "${EXPECTED[*]-}" "${bundle_file}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out_path = Path(sys.argv[1])
+paths = [p.strip() for p in sys.argv[2].split() if p.strip()]
+results = [r.strip() for r in (sys.argv[3] if len(sys.argv) > 3 else "").split() if r.strip()]
+reasons = [r.strip() for r in (sys.argv[4] if len(sys.argv) > 4 else "").split() if r.strip()]
+expected = [e.strip() for e in (sys.argv[5] if len(sys.argv) > 5 else "").split() if e.strip()]
+exceptions_path = Path(sys.argv[6]) if len(sys.argv) > 6 else None
+
+def to_map(items):
+  m = {}
+  for item in items:
+    if "=" in item:
+      k, v = item.split("=", 1)
+      m[k] = v
+  return m
+
+result_map = to_map(results)
+reason_map = to_map(reasons)
+expected_map = to_map(expected)
+exceptions = {}
+if exceptions_path and exceptions_path.exists():
+  try:
+    exceptions = json.loads(exceptions_path.read_text(encoding="utf-8")).get("paths", {})
+  except Exception:
+    exceptions = {}
+
+summary = {"paths": {}, "failed": False}
+for p in paths:
+  status = result_map.get(p, "skipped")
+  reason = reason_map.get(p, "-")
+  expect = expected_map.get(p, "pass")
+  ok = status == expect
+  if not ok:
+    summary["failed"] = True
+  summary["paths"][p] = {
+    "status": status,
+    "expected": expect,
+    "ok": ok,
+    "reason": reason,
+    "exceptions": exceptions.get(p, {}).get("exceptions", []),
+    "exception_count": exceptions.get(p, {}).get("exception_count", 0),
+  }
+
+out_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+print(out_path)
+PY
+
 echo
 echo "[matrix] Results:"
 echo "[matrix] Exception bundle: ${bundle_file}"
+echo "[matrix] Summary JSON: ${JSON_OUT}"
 for auth_path in "${PATHS[@]}"; do
   auth_path="$(echo "$auth_path" | xargs)"
   [[ -z "$auth_path" ]] && continue
