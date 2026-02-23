@@ -7,13 +7,13 @@ Run once to upgrade the database for concurrent access.
 import os
 import sqlite3
 from pathlib import Path
+from lib.runtime_context import get_data_dir
 
 def _default_db_path() -> Path:
     env_path = os.environ.get("MEMORY_DB_PATH")
     if env_path:
         return Path(env_path)
-    from lib.adapter import get_adapter
-    return get_adapter().data_dir() / "memory.db"
+    return get_data_dir() / "memory.db"
 
 DB_PATH = None  # Lazy — resolved in enable_wal_mode()
 

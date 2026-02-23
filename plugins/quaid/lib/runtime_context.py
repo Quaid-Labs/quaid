@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 from lib.adapter import get_adapter
 
 if TYPE_CHECKING:
-    from lib.adapter import QuaidAdapter
+    from lib.adapter import ChannelInfo, QuaidAdapter
     from lib.providers import LLMProvider
 
 
@@ -58,3 +58,19 @@ def parse_session_jsonl(path: Path) -> str:
 def build_transcript(messages: List[Dict]) -> str:
     return get_adapter().build_transcript(messages)
 
+
+def get_sessions_dir() -> Optional[Path]:
+    return get_adapter().get_sessions_dir()
+
+
+def get_last_channel(session_key: str = "") -> Optional["ChannelInfo"]:
+    return get_adapter().get_last_channel(session_key)
+
+
+def send_notification(
+    message: str,
+    *,
+    channel_override: Optional[str] = None,
+    dry_run: bool = False,
+) -> bool:
+    return get_adapter().notify(message, channel_override=channel_override, dry_run=dry_run)

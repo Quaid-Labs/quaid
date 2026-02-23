@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from lib.adapter import get_adapter
+from lib.runtime_context import get_workspace_dir
 
 Event = Dict[str, Any]
 EventHandler = Callable[[Event], Dict[str, Any]]
@@ -100,7 +100,7 @@ def _ensure_parent(path: Path) -> None:
 
 
 def _event_paths() -> Dict[str, Path]:
-    root = get_adapter().quaid_home()
+    root = get_workspace_dir()
     runtime = root / ".quaid" / "runtime"
     events_dir = runtime / "events"
     notes_dir = runtime / "notes"

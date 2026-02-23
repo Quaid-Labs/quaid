@@ -1,7 +1,7 @@
 # 012: Deep Boundary Pass (Post-Refactor)
 
 Date: 2026-02-23
-Status: Accepted (phase 3 applied; phase 4 queued)
+Status: Accepted (phase 4 applied)
 
 ## Scope
 Deep audit of boundary ownership after the orchestrator split and janitor lifecycle extraction.
@@ -44,6 +44,13 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `workspace_audit.py`
   - `memory_graph.py`
   - `extract.py`
+  - `config.py`
+  - `docs_updater.py`
+  - `enable_wal.py`
+  - `events.py`
+  - `logger.py`
+  - `mcp_server.py`
+  - `notify.py`
 
 4. Datastore modules resolve runtime home paths via adapter
 - Resolved via `lib/runtime_context.py` in the modules listed above.
@@ -73,12 +80,12 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 
 ## Boundary Scan Snapshot (post-pass)
 - `adapter.ts`: only one `callPython(...)` remains (bridge implementation); no direct call sites in handlers.
-- Remaining direct `get_adapter()` imports are concentrated in adapter-facing infrastructure modules:
-  - `mcp_server.py` (host RPC entrypoint)
-  - `notify.py`, `events.py`, `logger.py` (transport/runtime wiring)
-  - `config.py`, `enable_wal.py`, `docs_updater.py` (runtime path/config helpers)
-  - `lib/*` internals including `runtime_context.py` (intentional boundary root)
-These are currently expected and not lifecycle/datastore boundary violations.
+- No remaining direct `get_adapter()` usage outside `plugins/quaid/lib/*`.
+- Direct `get_adapter()` imports now live only in boundary-root internals:
+  - `lib/runtime_context.py` (intended adapter access port)
+  - `lib/adapter.py` (adapter implementation)
+  - `lib/config.py`, `lib/archive.py`, `lib/embeddings.py`, `lib/providers.py` (adapter-proximate library internals)
+These are expected and not lifecycle/datastore boundary leaks.
 
 ## Next Actions
 1. Convert adapter-triggered docs ingest into lifecycle event dispatch + handler.

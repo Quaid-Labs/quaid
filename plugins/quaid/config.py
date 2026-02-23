@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
+from lib.runtime_context import get_workspace_dir
 
 
 def _default_deep_reasoning_model_classes() -> Dict[str, str]:
@@ -21,9 +22,8 @@ def _default_fast_reasoning_model_classes() -> Dict[str, str]:
     return {}
 
 def _workspace_root() -> Path:
-    """Get workspace root from adapter (lazy to avoid circular import at module load)."""
-    from lib.adapter import get_adapter
-    return get_adapter().quaid_home()
+    """Get workspace root from runtime context."""
+    return get_workspace_dir()
 
 
 def _config_paths() -> list:

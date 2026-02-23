@@ -33,6 +33,12 @@ from mcp.server.fastmcp import FastMCP
 
 from api import store, recall, search, create_edge, forget, get_memory, get_graph
 from docs_rag import DocsRAG
+from lib.runtime_context import (
+    get_adapter_instance,
+    get_llm_provider,
+    get_sessions_dir,
+    get_workspace_dir,
+)
 
 OWNER_ID = os.environ.get("QUAID_OWNER", "default")
 
@@ -368,8 +374,7 @@ def projects_search(query: str, limit: int = 5, project: str = "") -> dict:
             cfg = _get_config()
             defn = cfg.projects.definitions.get(project)
             if defn and defn.home_dir:
-                from lib.adapter import get_adapter as _ga
-                md_path = _ga().quaid_home() / defn.home_dir / "PROJECT.md"
+                md_path = get_workspace_dir() / defn.home_dir / "PROJECT.md"
                 if md_path.exists():
                     result["project_md"] = md_path.read_text(encoding="utf-8")
         except Exception:
@@ -392,8 +397,7 @@ def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -
     import json as _json
     from pathlib import Path as _Path
 
-    from lib.adapter import get_adapter as _ga2
-    _ws = _ga2().quaid_home()
+    _ws = get_workspace_dir()
     log_path = _ws / "data" / "extraction-log.json"
 
     extraction_log: dict = {}
@@ -426,14 +430,13 @@ def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -
         import re as _re
         if not _re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', session_id):
             return {"error": "Invalid session_id format"}
-        from lib.adapter import get_adapter as _ga3
-        sessions_dir = _ga3().get_sessions_dir()
+        sessions_dir = get_sessions_dir()
         if not sessions_dir:
             return {"session_id": session_id, "fallback": True, "message": "Sessions directory not available."}
         sessions_dir = _Path(sessions_dir)
         session_path = sessions_dir / f"{session_id}.jsonl"
         if session_path.exists():
-            transcript = _ga3().parse_session_jsonl(session_path)
+            transcript = get_adapter_instance().parse_session_jsonl(session_path)
             # Return last 10k chars
             truncated = transcript[-10000:] if len(transcript) > 10000 else transcript
             return {"session_id": session_id, "transcript": truncated, "truncated": len(transcript) > 10000}
@@ -452,11 +455,10 @@ def memory_provider() -> str:
         model profiles, and embedding dimensions.
     """
     import json as _json
-    from lib.adapter import get_adapter as _ga4
     from lib.embeddings import get_embeddings_provider as _gep
-    adapter = _ga4()
+    adapter = get_adapter_instance()
     try:
-        llm = adapter.get_llm_provider()
+        llm = get_llm_provider()
         llm_name = type(llm).__name__
         profiles = llm.get_profiles()
     except Exception as e:

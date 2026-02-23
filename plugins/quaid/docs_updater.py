@@ -41,10 +41,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config import get_config
 from llm_clients import call_deep_reasoning, call_fast_reasoning
+from lib.runtime_context import get_workspace_dir
 
 def _workspace() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().quaid_home()
+    return get_workspace_dir()
 
 def _changelog_path() -> Path:
     return _workspace() / "logs" / "docs-update-log.json"

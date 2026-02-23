@@ -23,7 +23,12 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from lib.adapter import get_adapter, ChannelInfo
+from lib.adapter import ChannelInfo
+from lib.runtime_context import (
+    get_install_url,
+    get_last_channel as _ctx_get_last_channel,
+    send_notification as _ctx_send_notification,
+)
 
 # Branding prefix for all notifications
 QUAID_HEADER = "**[Quaid]**"
@@ -92,7 +97,7 @@ def _check_janitor_health() -> Optional[str]:
 
 def get_last_channel(session_key: str = "") -> Optional[ChannelInfo]:
     """Get the user's last active channel from session state (delegates to adapter)."""
-    return get_adapter().get_last_channel(session_key)
+    return _ctx_get_last_channel(session_key)
 
 
 def _resolve_channel(feature: Optional[str] = None) -> Optional[str]:
@@ -127,7 +132,7 @@ def notify_user(
     Returns:
         True if message sent successfully, False otherwise
     """
-    return get_adapter().notify(message, channel_override=channel_override, dry_run=dry_run)
+    return _ctx_send_notification(message, channel_override=channel_override, dry_run=dry_run)
 
 
 def notify_doc_update(
@@ -586,7 +591,7 @@ def notify_janitor_summary(
         msg_parts.append(f"v{update_info['current']} → v{update_info['latest']}")
         msg_parts.append("")
         msg_parts.append("Update with:")
-        msg_parts.append(f"`curl -fsSL {get_adapter().get_install_url()} | bash`")
+        msg_parts.append(f"`curl -fsSL {get_install_url()} | bash`")
         msg_parts.append(f"Release notes: {update_info.get('url', '')}")
 
     message = "\n".join(msg_parts)

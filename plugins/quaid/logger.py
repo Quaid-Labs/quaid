@@ -14,10 +14,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
+from lib.runtime_context import get_logs_dir
 
 def _log_dir() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().logs_dir()
+    return get_logs_dir()
 
 def _archive_dir() -> Path:
     return _log_dir() / "archive"
