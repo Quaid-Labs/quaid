@@ -156,6 +156,9 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - ingestor/clustering modules now route datastore graph access through the facade:
     - `plugins/quaid/extract.py`
     - `plugins/quaid/semantic_clustering.py`
+  - ingestor write path in `plugins/quaid/extract.py` now uses datastore facade writes
+    (`store_memory`/`create_edge`) instead of importing API write wrappers, removing
+    ingestor -> api coupling and the api <-> extract cycle
   - API search now routes through datastore interface function `memory_graph.search(...)`
     instead of `api.py` calling `get_graph().search_hybrid(...)`
 - Core project catalog no longer shells to python:
@@ -187,6 +190,7 @@ These are expected and not lifecycle/datastore boundary leaks.
 - No direct `memory_graph` recall/stats bypass in MCP server.
 - No direct ingestor import in MCP server extract path (API boundary now enforced).
 - No direct graph-object `search_hybrid(...)` call in API layer.
+- No ingestor datastore writes routed through API wrappers (`extract.py` now uses datastore facade directly).
 - No direct delayed-notification file writes from janitor.
 - No docs/events command ownership in `memory_graph.py` CLI.
 
