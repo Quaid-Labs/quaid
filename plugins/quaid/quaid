@@ -49,7 +49,7 @@ fi
 case "$CMD" in
   # Janitor commands
   janitor)
-    exec python3 "$SCRIPT_DIR/janitor.py" "$@"
+    exec python3 "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
     ;;
 
   # MCP server
@@ -62,22 +62,22 @@ case "$CMD" in
     SUBCMD="${1:-help}"
     shift 2>/dev/null || true
     case "$SUBCMD" in
-      search)  exec python3 "$SCRIPT_DIR/docs_rag.py" search "$@" ;;
-      check)   exec python3 "$SCRIPT_DIR/docs_updater.py" check "$@" ;;
-      update)  exec python3 "$SCRIPT_DIR/docs_updater.py" update-stale "$@" ;;
-      changelog) exec python3 "$SCRIPT_DIR/docs_updater.py" changelog "$@" ;;
+      search)  exec python3 "$SCRIPT_DIR/core/docs/rag.py" search "$@" ;;
+      check)   exec python3 "$SCRIPT_DIR/core/docs/updater.py" check "$@" ;;
+      update)  exec python3 "$SCRIPT_DIR/core/docs/updater.py" update-stale "$@" ;;
+      changelog) exec python3 "$SCRIPT_DIR/core/docs/updater.py" changelog "$@" ;;
       *)       echo "Usage: quaid docs {search|check|update|changelog} [args...]"; exit 1 ;;
     esac
     ;;
 
   # Registry/projects subsystem
   registry|project|projects)
-    exec python3 "$SCRIPT_DIR/docs_registry.py" "$@"
+    exec python3 "$SCRIPT_DIR/core/docs/registry.py" "$@"
     ;;
 
   # Project updater
   updater)
-    exec python3 "$SCRIPT_DIR/project_updater.py" "$@"
+    exec python3 "$SCRIPT_DIR/core/docs/project_updater.py" "$@"
     ;;
 
   # Everything else goes to memory_graph.py

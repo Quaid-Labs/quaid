@@ -14,7 +14,7 @@ Usage:
 
 from typing import Optional, List, Dict, Any
 
-from docs_rag import DocsRAG
+from core.docs.rag import DocsRAG
 from lib.runtime_context import get_workspace_dir
 
 from memory_graph import (
@@ -257,7 +257,7 @@ def extract_transcript(
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Run transcript extraction through the ingestor interface."""
-    from extract import extract_from_transcript
+    from ingest.extract import extract_from_transcript
 
     return extract_from_transcript(
         transcript=transcript,

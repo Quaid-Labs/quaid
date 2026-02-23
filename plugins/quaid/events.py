@@ -13,6 +13,7 @@ import base64
 import argparse
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -219,7 +220,11 @@ def _handle_docs_ingest_transcript(event: Event) -> Dict[str, Any]:
     if not transcript_path:
         return {"status": "failed", "error": "payload.transcript_path is required"}
     try:
-        from docs_ingest import _run as _docs_ingest_run
+        docs_ingest_mod = sys.modules.get("docs_ingest")
+        if docs_ingest_mod is not None and hasattr(docs_ingest_mod, "_run"):
+            _docs_ingest_run = docs_ingest_mod._run
+        else:
+            from ingest.docs_ingest import _run as _docs_ingest_run
         result = _docs_ingest_run(
             Path(transcript_path),
             label,

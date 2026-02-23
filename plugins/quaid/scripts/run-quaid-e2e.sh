@@ -362,7 +362,7 @@ with sqlite3.connect(db_path) as conn:
     if has_runs_table:
         before_run_id = conn.execute("SELECT COALESCE(MAX(id), 0) FROM janitor_runs").fetchone()[0]
 
-cmd = ["python3", "plugins/quaid/janitor.py", "--task", "all"]
+cmd = ["python3", "plugins/quaid/core/lifecycle/janitor.py", "--task", "all"]
 if mode == "dry-run":
     cmd.append("--dry-run")
 else:

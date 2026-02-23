@@ -45,7 +45,7 @@ function _resolveWorkspace(): string {
 }
 const WORKSPACE = _resolveWorkspace();
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/memory_graph.py");
-const EXTRACT_SCRIPT = path.join(WORKSPACE, "plugins/quaid/extract.py");
+const EXTRACT_SCRIPT = path.join(WORKSPACE, "plugins/quaid/ingest/extract.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
@@ -341,7 +341,7 @@ function runStartupSelfCheck(): void {
   }
 
   const requiredFiles = [
-    path.join(WORKSPACE, "plugins", "quaid", "janitor.py"),
+    path.join(WORKSPACE, "plugins", "quaid", "core", "lifecycle", "janitor.py"),
     path.join(WORKSPACE, "plugins", "quaid", "memory_graph.py"),
   ];
   for (const file of requiredFiles) {
@@ -694,10 +694,10 @@ function maybeForceCompactionAfterTimeout(sessionId?: string): void {
 // Python Bridges (docs_updater, docs_rag)
 // ============================================================================
 
-const DOCS_UPDATER = path.join(WORKSPACE, "plugins/quaid/docs_updater.py");
-const DOCS_RAG = path.join(WORKSPACE, "plugins/quaid/docs_rag.py");
-const DOCS_REGISTRY = path.join(WORKSPACE, "plugins/quaid/docs_registry.py");
-const PROJECT_UPDATER = path.join(WORKSPACE, "plugins/quaid/project_updater.py");
+const DOCS_UPDATER = path.join(WORKSPACE, "plugins/quaid/core/docs/updater.py");
+const DOCS_RAG = path.join(WORKSPACE, "plugins/quaid/core/docs/rag.py");
+const DOCS_REGISTRY = path.join(WORKSPACE, "plugins/quaid/core/docs/registry.py");
+const PROJECT_UPDATER = path.join(WORKSPACE, "plugins/quaid/core/docs/project_updater.py");
 const EVENTS_SCRIPT = path.join(WORKSPACE, "plugins/quaid/events.py");
 
 function _getGatewayCredential(providers: string[]): string | undefined {
