@@ -37,12 +37,15 @@ from docs_rag import DocsRAG
 OWNER_ID = os.environ.get("QUAID_OWNER", "default")
 
 mcp = FastMCP("quaid", instructions=(
-    "Quaid is a persistent memory system. Use memory_extract to extract memories "
-    "from conversation transcripts, memory_store to save individual facts, "
+    "Quaid is a persistent knowledge layer. Use memory_extract to extract memories "
+    "from conversation transcripts, memory_write to perform canonical datastore writes, "
+    "memory_store to save individual facts, "
     "memory_recall to retrieve relevant memories, memory_search for fast lookups, "
     "memory_create_edge to link entities, memory_forget to delete memories, "
-    "memory_get to fetch by ID, memory_stats for database info, and projects_search "
-    "to search project documentation. Memories persist across sessions."
+    "memory_get to fetch by ID, memory_stats for database info, memory_capabilities "
+    "for runtime capability discovery, projects_search "
+    "to search project documentation, and memory_event_* tools for event bus actions. "
+    "Memories persist across sessions."
 ))
 
 
@@ -114,7 +117,20 @@ def memory_store(
 
 
 @mcp.tool()
-def memory_recall(query: str, limit: int = 5, technical_scope: str = "any") -> list:
+def memory_recall(
+    query: str,
+    limit: int = 5,
+    technical_scope: str = "any",
+    min_similarity: float = 0.0,
+    debug: bool = False,
+    use_routing: bool = True,
+    use_aliases: bool = True,
+    use_intent: bool = True,
+    use_multi_pass: bool = True,
+    use_reranker: bool = True,
+    date_from: str = "",
+    date_to: str = "",
+) -> list:
     """Recall memories matching a natural language query.
 
     Uses hybrid retrieval: vector similarity + full-text search + graph traversal,
@@ -124,6 +140,14 @@ def memory_recall(query: str, limit: int = 5, technical_scope: str = "any") -> l
         query: Natural language query (e.g. "What are the user's hobbies?").
         limit: Maximum number of results (1-20).
         technical_scope: "personal", "technical", or "any".
+        min_similarity: Optional floor (0.0 uses config/default behavior).
+        debug: Include scoring breakdown payloads.
+        use_routing: Enable intent/routing search heuristics.
+        use_aliases: Resolve entity aliases before search.
+        use_intent: Enable intent classifier branch.
+        use_multi_pass: Allow second-pass retrieval.
+        use_reranker: Enable LLM reranker.
+        date_from/date_to: Optional YYYY-MM-DD range filter on created_at.
 
     Returns:
         List of memory dicts with text, category, similarity score, and related graph paths.
@@ -132,7 +156,95 @@ def memory_recall(query: str, limit: int = 5, technical_scope: str = "any") -> l
     technical_scope = (technical_scope or "any").strip().lower()
     if technical_scope not in {"personal", "technical", "any"}:
         technical_scope = "any"
-    return recall(query=query, owner_id=OWNER_ID, limit=limit, technical_scope=technical_scope)
+    has_advanced = (
+        bool(debug)
+        or (min_similarity is not None and float(min_similarity) > 0)
+        or not bool(use_routing)
+        or not bool(use_aliases)
+        or not bool(use_intent)
+        or not bool(use_multi_pass)
+        or not bool(use_reranker)
+        or bool(date_from.strip() if date_from else "")
+        or bool(date_to.strip() if date_to else "")
+    )
+
+    # Fast path for common/default usage: stay on the stable API wrapper.
+    if not has_advanced:
+        return recall(query=query, owner_id=OWNER_ID, limit=limit, technical_scope=technical_scope)
+
+    # Advanced path: expose full retrieval controls.
+    from memory_graph import recall as _raw_recall
+    return _raw_recall(
+        query=query,
+        owner_id=OWNER_ID,
+        limit=limit,
+        technical_scope=technical_scope,
+        min_similarity=(min_similarity if min_similarity and min_similarity > 0 else None),
+        debug=bool(debug),
+        use_routing=bool(use_routing),
+        use_aliases=bool(use_aliases),
+        use_intent=bool(use_intent),
+        use_multi_pass=bool(use_multi_pass),
+        use_reranker=bool(use_reranker),
+        date_from=(date_from.strip() if date_from else None),
+        date_to=(date_to.strip() if date_to else None),
+    )
+
+
+@mcp.tool()
+def memory_write(
+    datastore: str,
+    action: str,
+    payload_json: str,
+) -> dict:
+    """Canonical datastore write interface (adapter-friendly).
+
+    Supported now:
+      - datastore="vector", action="store_fact"
+      - datastore="graph", action="create_edge"
+    """
+    import json as _json_w
+
+    ds = str(datastore or "").strip().lower()
+    act = str(action or "").strip().lower()
+    try:
+        payload = _json_w.loads(payload_json or "{}")
+        if not isinstance(payload, dict):
+            raise ValueError("payload_json must decode to a JSON object")
+    except Exception as e:
+        return {"error": f"invalid payload_json: {e}"}
+
+    if ds == "vector" and act == "store_fact":
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return {"error": "payload.text is required for vector/store_fact"}
+        return store(
+            text=text,
+            owner_id=OWNER_ID,
+            category=str(payload.get("category") or "fact"),
+            confidence=float(payload.get("confidence") or payload.get("extraction_confidence") or 0.5),
+            knowledge_type=str(payload.get("knowledge_type") or "fact"),
+            source=str(payload.get("source") or "mcp"),
+            source_type=str(payload.get("source_type") or "import"),
+            pinned=bool(payload.get("pinned") or False),
+            is_technical=bool(payload.get("is_technical") or False),
+        )
+
+    if ds == "graph" and act == "create_edge":
+        subject_name = str(payload.get("subject_name") or "").strip()
+        relation = str(payload.get("relation") or "").strip()
+        object_name = str(payload.get("object_name") or "").strip()
+        if not subject_name or not relation or not object_name:
+            return {"error": "payload.subject_name, payload.relation, payload.object_name are required"}
+        return create_edge(
+            subject_name=subject_name,
+            relation=relation,
+            object_name=object_name,
+            owner_id=OWNER_ID,
+            source_fact_id=str(payload.get("source_fact_id") or "").strip() or None,
+        )
+
+    return {"error": f"unsupported datastore/action: {ds}/{act}"}
 
 
 @mcp.tool()
@@ -359,6 +471,135 @@ def memory_provider() -> str:
         "embeddings_model": embed.model_name,
         "embeddings_dim": embed.dimension(),
     }, indent=2)
+
+
+@mcp.tool()
+def memory_capabilities() -> dict:
+    """Return read/write/event capabilities for runtime orchestration."""
+    from events import get_event_registry
+    return {
+        "owner_id": OWNER_ID,
+        "recall": {
+            "technical_scope": ["personal", "technical", "any"],
+            "supports": [
+                "min_similarity", "debug", "use_routing", "use_aliases",
+                "use_intent", "use_multi_pass", "use_reranker", "date_from", "date_to",
+            ],
+        },
+        "writes": [
+            {
+                "datastore": "vector",
+                "action": "store_fact",
+                "payload_keys": [
+                    "text", "category", "confidence", "knowledge_type",
+                    "source", "source_type", "pinned", "is_technical",
+                ],
+            },
+            {
+                "datastore": "graph",
+                "action": "create_edge",
+                "payload_keys": ["subject_name", "relation", "object_name", "source_fact_id"],
+            },
+        ],
+        "events": get_event_registry(),
+    }
+
+
+@mcp.tool()
+def memory_event_emit(
+    name: str,
+    payload_json: str = "{}",
+    source: str = "mcp",
+    session_id: str = "",
+    priority: str = "normal",
+    dispatch: str = "auto",
+) -> dict:
+    """Emit a runtime event into Quaid's queue.
+
+    Args:
+        name: Event name (e.g. "session.reset", "notification.delayed").
+        payload_json: JSON object string payload.
+        source: Event source label.
+        session_id: Optional session id.
+        priority: low|normal|high.
+        dispatch: auto|immediate|queued. In auto mode, active events are processed
+            immediately while passive events stay queued for async handling.
+    """
+    from events import emit_event, process_events, get_event_capability
+    import json as _json2
+
+    try:
+        payload = _json2.loads(payload_json) if payload_json else {}
+        if not isinstance(payload, dict):
+            raise ValueError("payload_json must decode to an object")
+    except Exception as e:
+        return {"error": f"invalid payload_json: {e}"}
+
+    mode = str(dispatch or "auto").strip().lower()
+    if mode not in {"auto", "immediate", "queued"}:
+        mode = "auto"
+
+    capability = get_event_capability(name) or {}
+    delivery_mode = str(capability.get("delivery_mode") or "active").strip().lower()
+
+    event = emit_event(
+        name=name,
+        payload=payload,
+        source=source,
+        session_id=session_id or None,
+        owner_id=OWNER_ID,
+        priority=priority,
+    )
+
+    should_process = (
+        mode == "immediate" or
+        (mode == "auto" and delivery_mode == "active")
+    )
+    processed = None
+    if should_process:
+        processed = process_events(limit=1, names=[str(name)])
+
+    return {
+        "event": event,
+        "delivery_mode": delivery_mode,
+        "dispatch": mode,
+        "processed": processed,
+    }
+
+
+@mcp.tool()
+def memory_event_list(status: str = "pending", limit: int = 20) -> dict:
+    """List queued runtime events.
+
+    Args:
+        status: pending|processed|failed|all.
+        limit: Max events to return.
+    """
+    from events import list_events
+    return {"events": list_events(status=status, limit=max(1, min(limit, 200)))}
+
+
+@mcp.tool()
+def memory_event_process(limit: int = 20, names_csv: str = "") -> dict:
+    """Process pending events with registered handlers.
+
+    Args:
+        limit: Max events to process.
+        names_csv: Optional comma-separated event names to process.
+    """
+    from events import process_events
+    names = [x.strip() for x in (names_csv or "").split(",") if x.strip()]
+    return process_events(limit=max(1, min(limit, 200)), names=names)
+
+
+@mcp.tool()
+def memory_event_capabilities() -> dict:
+    """List event capabilities this runtime can emit/process/listen to.
+
+    Includes per-event delivery_mode (active|passive) for orchestration.
+    """
+    from events import get_event_registry
+    return {"events": get_event_registry()}
 
 
 # ---------------------------------------------------------------------------

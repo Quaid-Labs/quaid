@@ -48,6 +48,7 @@ const session_timeout_js_1 = require("../../core/session-timeout.js");
 const command_signals_js_1 = require("./command-signals.js");
 const delayed_requests_js_1 = require("./delayed-requests.js");
 const orchestrator_js_1 = require("./knowledge/orchestrator.js");
+const data_writers_js_1 = require("../../core/data-writers.js");
 
 // Configuration
 const PLUGIN_DIR = __dirname;
@@ -488,6 +489,21 @@ async function callPython(command, args = []) {
             clearTimeout(timer);
             reject(err);
         });
+    });
+}
+function emitRuntimeEvent(name, payload = {}, sessionId, priority = "normal") {
+    const args = [
+        "emit",
+        "--name", name,
+        "--payload", JSON.stringify(payload || {}),
+        "--source", "openclaw-adapter",
+        "--priority", priority,
+    ];
+    if (sessionId) {
+        args.push("--session-id", sessionId);
+    }
+    void callPython("event", args).catch((err) => {
+        console.log(`[quaid] event emit skipped (${name}): ${String((err === null || err === void 0 ? void 0 : err.message) || err)}`);
     });
 }
 // ============================================================================
@@ -1664,75 +1680,180 @@ async function totalRecall(query, limit, opts) {
 async function total_recall(query, limit, opts) {
     return knowledgeEngine.total_recall(query, limit, opts);
 }
+function parseStoreOutput(output) {
+    const storedMatch = output.match(/Stored: (.+)/);
+    if (storedMatch) {
+        return { id: storedMatch[1], status: "created" };
+    }
+    const dupMatchNew = output.match(/Duplicate \(similarity: ([\d.]+)\) \[([^\]]+)\]: (.+)/);
+    if (dupMatchNew) {
+        return {
+            id: dupMatchNew[2],
+            status: "duplicate",
+            similarity: parseFloat(dupMatchNew[1]),
+            existingText: dupMatchNew[3],
+        };
+    }
+    const dupMatch = output.match(/Duplicate \(similarity: ([\d.]+)\): (.+)/);
+    if (dupMatch) {
+        return {
+            status: "duplicate",
+            similarity: parseFloat(dupMatch[1]),
+            existingText: dupMatch[2],
+        };
+    }
+    const updatedMatch = output.match(/Updated existing: (.+)/);
+    if (updatedMatch) {
+        return { id: updatedMatch[1], status: "updated" };
+    }
+    return null;
+}
+const dataWriteEngine = (0, data_writers_js_1.createDataWriteEngine)({
+    writers: [
+        {
+            spec: {
+                datastore: "vector",
+                description: "Fact and preference writes to memory_graph store()",
+                actions: [{ key: "store_fact", description: "Store or deduplicate a fact node" }],
+            },
+            write: async (envelope) => {
+                const payload = envelope.payload;
+                if (!payload?.text || !String(payload.text).trim()) {
+                    return { status: "failed", error: "Vector writer requires non-empty text payload" };
+                }
+                const args = [
+                    payload.text,
+                    "--category", payload.category || "fact",
+                    "--owner", payload.owner || resolveOwner(),
+                    "--confidence", String(payload.extractionConfidence ?? 0.5),
+                    "--extraction-confidence", String(payload.extractionConfidence ?? 0.5),
+                ];
+                if (payload.sessionId)
+                    args.push("--session-id", payload.sessionId);
+                if (payload.source)
+                    args.push("--source", payload.source);
+                if (payload.speaker)
+                    args.push("--speaker", payload.speaker);
+                if (payload.status)
+                    args.push("--status", payload.status);
+                if (payload.privacy)
+                    args.push("--privacy", payload.privacy);
+                if (payload.keywords)
+                    args.push("--keywords", payload.keywords);
+                if (payload.knowledgeType)
+                    args.push("--knowledge-type", payload.knowledgeType);
+                if (payload.sourceType)
+                    args.push("--source-type", payload.sourceType);
+                if (payload.isTechnical)
+                    args.push("--is-technical");
+                const output = await callPython("store", args);
+                const parsed = parseStoreOutput(output);
+                if (!parsed) {
+                    return { status: "failed", error: "Unrecognized store output", details: { output: output.slice(0, 200) } };
+                }
+                return { status: parsed.status, id: parsed.id, details: parsed };
+            },
+        },
+        {
+            spec: {
+                datastore: "graph",
+                description: "Relationship edge writes to memory graph",
+                actions: [{ key: "create_edge", description: "Create relationship edge between subject and object" }],
+            },
+            write: async (envelope) => {
+                const payload = envelope.payload;
+                if (!payload?.subject || !payload?.relation || !payload?.object || !payload?.sourceFactId) {
+                    return { status: "failed", error: "Graph writer requires subject/relation/object/sourceFactId" };
+                }
+                const args = [
+                    payload.subject,
+                    payload.relation,
+                    payload.object,
+                    "--source-fact-id", payload.sourceFactId,
+                    "--owner", payload.owner || resolveOwner(),
+                    "--json",
+                ];
+                if (payload.createMissing !== false) {
+                    args.push("--create-missing");
+                }
+                const output = await callPython("create-edge", args);
+                const parsed = JSON.parse(output || "{}");
+                const status = String(parsed?.status || "").toLowerCase();
+                if (status === "created") {
+                    return { status: "created", details: parsed };
+                }
+                if (status === "duplicate" || status === "exists") {
+                    return { status: "duplicate", details: parsed };
+                }
+                if (status) {
+                    return { status: "skipped", details: parsed };
+                }
+                return { status: "failed", error: "Unrecognized create-edge output", details: { output: output.slice(0, 200) } };
+            },
+        },
+    ],
+});
 async function store(text, category = "fact", sessionId, extractionConfidence = 0.5, owner = resolveOwner(), source, speaker, status, privacy, keywords, knowledgeType, sourceType, isTechnical) {
     try {
-        const args = [text, "--category", category,
-            "--owner", owner,
-            "--confidence", extractionConfidence.toString(),
-            "--extraction-confidence", extractionConfidence.toString()];
-        if (sessionId) {
-            args.push("--session-id", sessionId);
+        const writeResult = await dataWriteEngine.writeData({
+            datastore: "vector",
+            action: "store_fact",
+            payload: {
+                text,
+                category,
+                sessionId,
+                extractionConfidence,
+                owner,
+                source,
+                speaker,
+                status,
+                privacy,
+                keywords,
+                knowledgeType,
+                sourceType,
+                isTechnical,
+            },
+        });
+        if (writeResult.status === "failed") {
+            console.error("[quaid] store error:", writeResult.error || "unknown writer failure");
+            return null;
         }
-        if (source) {
-            args.push("--source", source);
-        }
-        if (speaker) {
-            args.push("--speaker", speaker);
-        }
-        if (status) {
-            args.push("--status", status);
-        }
-        if (privacy) {
-            args.push("--privacy", privacy);
-        }
-        if (keywords) {
-            args.push("--keywords", keywords);
-        }
-        if (knowledgeType) {
-            args.push("--knowledge-type", knowledgeType);
-        }
-        if (sourceType) {
-            args.push("--source-type", sourceType);
-        }
-        if (isTechnical) {
-            args.push("--is-technical");
-        }
-        const output = await callPython("store", args);
-        // Check for "Stored: {id}" (created)
-        const storedMatch = output.match(/Stored: (.+)/);
-        if (storedMatch) {
-            return { id: storedMatch[1], status: "created" };
-        }
-        // Check for "Duplicate (similarity: X) [ID]: {text}" (new format with ID)
-        const dupMatchNew = output.match(/Duplicate \(similarity: ([\d.]+)\) \[([^\]]+)\]: (.+)/);
-        if (dupMatchNew) {
-            return {
-                id: dupMatchNew[2],
-                status: "duplicate",
-                similarity: parseFloat(dupMatchNew[1]),
-                existingText: dupMatchNew[3]
-            };
-        }
-        // Fallback: old format without ID
-        const dupMatch = output.match(/Duplicate \(similarity: ([\d.]+)\): (.+)/);
-        if (dupMatch) {
-            return {
-                status: "duplicate",
-                similarity: parseFloat(dupMatch[1]),
-                existingText: dupMatch[2]
-            };
-        }
-        // Check for "Updated existing: {id}" (updated)
-        const updatedMatch = output.match(/Updated existing: (.+)/);
-        if (updatedMatch) {
-            return { id: updatedMatch[1], status: "updated" };
-        }
-        return null;
+        const details = writeResult.details || {};
+        return {
+            id: writeResult.id || details.id,
+            status: writeResult.status,
+            similarity: details.similarity,
+            existingText: details.existingText,
+        };
     }
     catch (err) {
         console.error("[quaid] store error:", err.message);
         return null;
     }
+}
+async function createGraphEdge(subject, relation, object, sourceFactId, owner = resolveOwner()) {
+    const result = await dataWriteEngine.writeData({
+        datastore: "graph",
+        action: "create_edge",
+        payload: {
+            subject,
+            relation,
+            object,
+            sourceFactId,
+            owner,
+            createMissing: true,
+        },
+    });
+    if (result.status === "failed") {
+        return { status: "failed", error: result.error || "Graph edge write failed" };
+    }
+    if (result.status === "created") {
+        return { status: "created" };
+    }
+    if (result.status === "duplicate") {
+        return { status: "duplicate" };
+    }
+    return { status: "skipped" };
 }
 async function getStats() {
     try {
@@ -1978,6 +2099,9 @@ const quaidPlugin = {
         catch { }
         // Cancel inactivity timer — agent is active again
         timeoutManager.onAgentStart();
+        emitRuntimeEvent("session.agent_start", {
+            trigger: "before_agent_start",
+        }, String((ctx === null || ctx === void 0 ? void 0 : ctx.sessionId) || "").trim() || undefined);
             // Journal injection (full soul mode) — gated by journal system
             if (!isSystemEnabled("journal")) {
                 // Skip journal injection entirely
@@ -2174,6 +2298,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             timeoutManager.setTimeoutMinutes(getMemoryConfig().capture?.inactivityTimeoutMinutes ?? 120);
             // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
             timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
+            emitRuntimeEvent("session.agent_end", {
+                trigger: "agent_end",
+                message_count: conversationMessages.length,
+            }, timeoutSessionId || undefined);
             // /new and /reset often produce a bootstrap-only first turn in a new session.
             // In that case, queue extraction against the last active conversation session.
             if (isResetBootstrapOnlyConversation(conversationMessages)) {
@@ -2203,6 +2331,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 const label = resetLikeCommand === "new" ? "NewSignal" : "ResetSignal";
                 console.log(`[quaid][agent_end] detected /${resetLikeCommand} session=${resetTargetSessionId} -> queue ${label}`);
                 timeoutManager.queueExtractionSignal(resetTargetSessionId, label);
+                emitRuntimeEvent(resetLikeCommand === "new" ? "session.new" : "session.reset", { trigger: "agent_end_command_fallback", signal: label }, resetTargetSessionId, "high");
             }
         };
         // Register agent_end hook using api.on() for typed hooks
@@ -2225,6 +2354,15 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                     return;
                 console.log(`[quaid][command] /${command} session=${commandSessionId} -> queue ${label}`);
                 timeoutManager.queueExtractionSignal(commandSessionId, label);
+                if (command === "compact") {
+                    emitRuntimeEvent("session.compaction", { trigger: "command_hook", signal: label }, commandSessionId, "high");
+                }
+                else if (command === "new") {
+                    emitRuntimeEvent("session.new", { trigger: "command_hook", signal: label }, commandSessionId, "high");
+                }
+                else if (command === "reset") {
+                    emitRuntimeEvent("session.reset", { trigger: "command_hook", signal: label }, commandSessionId, "high");
+                }
             }, {
                 name: "command-memory-signal",
                 priority: 10
@@ -2910,6 +3048,63 @@ notify_docs_search(data['query'], data['results'])
                 }
             },
         }));
+        api.registerTool(() => ({
+            name: "memory_event_capabilities",
+            description: "List runtime event capabilities (including delivery_mode active|passive) so orchestration can adapt direct vs async event handling.",
+            parameters: typebox_1.Type.Object({}),
+            async execute() {
+                try {
+                    const output = await callPython("event", ["capabilities"]);
+                    return {
+                        content: [{ type: "text", text: output || '{"events":[]}' }],
+                        details: {},
+                    };
+                }
+                catch (err) {
+                    return {
+                        content: [{ type: "text", text: `Error: ${String(err)}` }],
+                        details: { error: String(err) },
+                    };
+                }
+            },
+        }));
+        api.registerTool(() => ({
+            name: "memory_event_emit",
+            description: "Emit a runtime event into Quaid's queue. dispatch=auto adapts by event capability: active events process immediately, passive events stay queued for async handling.",
+            parameters: typebox_1.Type.Object({
+                name: typebox_1.Type.String({ description: "Event name, e.g. notification.delayed or memory.force_compaction" }),
+                payload: typebox_1.Type.Optional(typebox_1.Type.Record(typebox_1.Type.String(), typebox_1.Type.Any(), { description: "JSON payload for the event" })),
+                priority: typebox_1.Type.Optional(typebox_1.Type.Union([typebox_1.Type.Literal("low"), typebox_1.Type.Literal("normal"), typebox_1.Type.Literal("high")])),
+                dispatch: typebox_1.Type.Optional(typebox_1.Type.Union([typebox_1.Type.Literal("auto"), typebox_1.Type.Literal("immediate"), typebox_1.Type.Literal("queued")])),
+                session_id: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Optional session id for the event" })),
+            }),
+            async execute(_toolCallId, params) {
+                try {
+                    const args = [
+                        "emit",
+                        "--name", String((params === null || params === void 0 ? void 0 : params.name) || "").trim(),
+                        "--payload", JSON.stringify((params === null || params === void 0 ? void 0 : params.payload) || {}),
+                        "--source", "openclaw-tool",
+                        "--priority", String((params === null || params === void 0 ? void 0 : params.priority) || "normal"),
+                        "--dispatch", String((params === null || params === void 0 ? void 0 : params.dispatch) || "auto"),
+                    ];
+                    if (params === null || params === void 0 ? void 0 : params.session_id) {
+                        args.push("--session-id", String(params.session_id));
+                    }
+                    const output = await callPython("event", args);
+                    return {
+                        content: [{ type: "text", text: output || "{}" }],
+                        details: {},
+                    };
+                }
+                catch (err) {
+                    return {
+                        content: [{ type: "text", text: `Error: ${String(err)}` }],
+                        details: { error: String(err) },
+                    };
+                }
+            },
+        }));
         // Extraction promise gate — memory_recall waits on this before querying
         // so that facts extracted from the just-compacted session are available.
         let extractionPromise = null;
@@ -3365,25 +3560,14 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
                 if (factId && fact.edges && fact.edges.length > 0) {
                     for (const edge of fact.edges) {
                         if (edge.subject && edge.relation && edge.object) {
-                            try {
-                                const edgeOutput = await callPython("create-edge", [
-                                    edge.subject,
-                                    edge.relation,
-                                    edge.object,
-                                    "--source-fact-id", factId,
-                                    "--owner", resolveOwner(),
-                                    "--create-missing",
-                                    "--json"
-                                ]);
-                                const edgeResult = JSON.parse(edgeOutput);
-                                if (edgeResult.status === "created") {
-                                    console.log(`[quaid] ${label}: created edge: ${edge.subject} --${edge.relation}--> ${edge.object}`);
-                                    edgesCreated++;
-                                    factEdges.push(`${edge.subject} --${edge.relation}--> ${edge.object}`);
-                                }
+                            const edgeWrite = await createGraphEdge(edge.subject, edge.relation, edge.object, factId, resolveOwner());
+                            if (edgeWrite.status === "created") {
+                                console.log(`[quaid] ${label}: created edge: ${edge.subject} --${edge.relation}--> ${edge.object}`);
+                                edgesCreated++;
+                                factEdges.push(`${edge.subject} --${edge.relation}--> ${edge.object}`);
                             }
-                            catch (edgeErr) {
-                                console.error(`[quaid] ${label}: failed to create edge: ${edgeErr.message}`);
+                            else if (edgeWrite.status === "failed") {
+                                console.error(`[quaid] ${label}: failed to create edge: ${edgeWrite.error || "unknown error"}`);
                             }
                         }
                     }
@@ -3796,6 +3980,11 @@ notify_memory_extraction(
                         const extractionSessionId = sessionId || extractSessionId(messages, ctx);
                         timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal");
                         console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
+                        emitRuntimeEvent("session.compaction", {
+                            trigger: "before_compaction",
+                            signal: "CompactionSignal",
+                            message_count: messages.length,
+                        }, extractionSessionId, "high");
                     }
                     else {
                         console.log("[quaid] Compaction: memory extraction skipped — memory system disabled");
@@ -3876,6 +4065,12 @@ notify_memory_extraction(
                         const extractionSessionId = sessionId || extractSessionId(messages, ctx);
                         timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal");
                         console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
+                        emitRuntimeEvent("session.reset", {
+                            trigger: "before_reset",
+                            signal: "ResetSignal",
+                            message_count: messages.length,
+                            reason: reason,
+                        }, extractionSessionId, "high");
                     }
                     else {
                         console.log("[quaid] Reset: memory extraction skipped — memory system disabled");

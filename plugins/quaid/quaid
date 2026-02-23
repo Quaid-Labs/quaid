@@ -81,7 +81,7 @@ case "$CMD" in
     ;;
 
   # Everything else goes to memory_graph.py
-  search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|search-all|search-fts|backfill-hashes|health)
+search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|search-all|search-fts|backfill-hashes|health|event)
     exec python3 "$SCRIPT_DIR/memory_graph.py" "$CMD" "$@"
     ;;
 
@@ -127,6 +127,7 @@ case "$CMD" in
     echo "  get-node <id>        Get a specific node"
     echo "  get-edges <id>       Get edges for a node"
     echo "  search-all <query>   Search memories + docs"
+    echo "  event [subcmd]       Event bus (emit/list/process/capabilities)"
     echo ""
     echo "Maintenance:"
     echo "  janitor [args]       Run janitor pipeline"

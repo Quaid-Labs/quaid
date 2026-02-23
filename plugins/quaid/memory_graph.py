@@ -4447,6 +4447,12 @@ if __name__ == "__main__":
         event_emit_p.add_argument("--session-id", default=None, help="Optional session ID")
         event_emit_p.add_argument("--owner", default=None, help="Optional owner ID")
         event_emit_p.add_argument("--priority", default="normal", help="Priority (low|normal|high)")
+        event_emit_p.add_argument(
+            "--dispatch",
+            default="auto",
+            choices=["auto", "immediate", "queued"],
+            help="Dispatch mode (auto: process active events now, queue passive events)",
+        )
 
         event_list_p = event_sub.add_parser("list", help="List queued events")
         event_list_p.add_argument("--status", default="pending", choices=["pending", "processed", "failed", "all"], help="Status filter")
@@ -5129,7 +5135,7 @@ if __name__ == "__main__":
             print(f"  Model:      {embed.model_name} ({embed.dimension()}-dim)")
 
         elif args.command == "event":
-            from events import emit_event, list_events, process_events
+            from events import emit_event, list_events, process_events, get_event_capability
 
             subcmd = args.subcmd or "list"
             if subcmd == "emit":
@@ -5140,6 +5146,12 @@ if __name__ == "__main__":
                 except Exception as e:
                     print(f"Error: invalid --payload JSON ({e})", file=sys.stderr)
                     sys.exit(1)
+                dispatch_mode = str(getattr(args, "dispatch", "auto") or "auto").strip().lower()
+                if dispatch_mode not in {"auto", "immediate", "queued"}:
+                    dispatch_mode = "auto"
+                capability = get_event_capability(args.name) or {}
+                delivery_mode = str(capability.get("delivery_mode") or "active").strip().lower()
+
                 event = emit_event(
                     name=args.name,
                     payload=payload,
@@ -5148,7 +5160,19 @@ if __name__ == "__main__":
                     owner_id=getattr(args, "owner", None),
                     priority=args.priority,
                 )
-                print(json.dumps(event, indent=2))
+                should_process = (
+                    dispatch_mode == "immediate" or
+                    (dispatch_mode == "auto" and delivery_mode == "active")
+                )
+                processed = None
+                if should_process:
+                    processed = process_events(limit=1, names=[str(args.name)])
+                print(json.dumps({
+                    "event": event,
+                    "delivery_mode": delivery_mode,
+                    "dispatch": dispatch_mode,
+                    "processed": processed,
+                }, indent=2))
             elif subcmd == "process":
                 result = process_events(limit=args.limit, names=list(args.name or []))
                 print(json.dumps(result, indent=2))

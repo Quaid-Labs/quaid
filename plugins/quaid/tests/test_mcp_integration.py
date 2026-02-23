@@ -451,7 +451,7 @@ class TestMcpProtocol:
             proc.stdin.close()
             proc.wait(timeout=5)
 
-    def test_tools_list_returns_11_tools(self, tmp_path):
+    def test_tools_list_returns_17_tools(self, tmp_path):
         db_file = tmp_path / "proto.db"
         proc = self._start_server(db_file)
         try:
@@ -467,7 +467,7 @@ class TestMcpProtocol:
 
             tools = response["result"]["tools"]
             tool_names = {t["name"] for t in tools}
-            assert len(tool_names) == 11
+            assert len(tool_names) == 17
             assert "memory_extract" in tool_names
             assert "memory_store" in tool_names
             assert "memory_recall" in tool_names
@@ -476,7 +476,15 @@ class TestMcpProtocol:
             assert "memory_forget" in tool_names
             assert "memory_create_edge" in tool_names
             assert "memory_stats" in tool_names
+            assert "memory_provider" in tool_names
+            assert "memory_write" in tool_names
+            assert "memory_capabilities" in tool_names
+            assert "memory_event_emit" in tool_names
+            assert "memory_event_list" in tool_names
+            assert "memory_event_process" in tool_names
+            assert "memory_event_capabilities" in tool_names
             assert "projects_search" in tool_names
+            assert "session_recall" in tool_names
         finally:
             proc.stdin.close()
             proc.wait(timeout=5)
@@ -638,6 +646,62 @@ class TestMcpProtocol:
                 assert len(tool["description"]) > 10, f"Tool {tool['name']} description too short"
                 assert "inputSchema" in tool, f"Tool {tool['name']} missing input schema"
 
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=5)
+
+    def test_event_capabilities_expose_delivery_modes(self, tmp_path):
+        db_file = tmp_path / "proto.db"
+        proc = self._start_server(db_file)
+        try:
+            self._initialize(proc)
+            _send_message(proc, {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_event_capabilities",
+                    "arguments": {},
+                },
+            })
+            response = _readline_with_timeout(proc, expected_id=9)
+            assert response is not None
+            payload = json.loads(response["result"]["content"][0]["text"])
+            events = payload.get("events") or []
+            assert any(e.get("name") == "session.reset" and e.get("delivery_mode") == "active" for e in events)
+            assert any(e.get("name") == "notification.delayed" and e.get("delivery_mode") == "passive" for e in events)
+        finally:
+            proc.stdin.close()
+            proc.wait(timeout=5)
+
+    def test_event_emit_auto_dispatch_respects_passive_mode(self, tmp_path):
+        db_file = tmp_path / "proto.db"
+        proc = self._start_server(db_file)
+        try:
+            self._initialize(proc)
+            _send_message(proc, {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_event_emit",
+                    "arguments": {
+                        "name": "notification.delayed",
+                        "dispatch": "auto",
+                        "payload_json": json.dumps({
+                            "message": "Please run janitor soon",
+                            "kind": "janitor",
+                            "priority": "high",
+                        }),
+                    },
+                },
+            })
+            response = _readline_with_timeout(proc, expected_id=10)
+            assert response is not None
+            payload = json.loads(response["result"]["content"][0]["text"])
+            assert payload.get("delivery_mode") == "passive"
+            assert payload.get("dispatch") == "auto"
+            assert payload.get("processed") is None
         finally:
             proc.stdin.close()
             proc.wait(timeout=5)

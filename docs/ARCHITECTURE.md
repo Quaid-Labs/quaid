@@ -67,6 +67,24 @@ Quaid exposes its knowledge layer through three interfaces: an **MCP server** (w
 
 Almost every decision in the system is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. This means Quaid naturally scales with AI models -- as reasoning capabilities improve, every decision in the pipeline gets better without code changes.
 
+### Write Pipeline (DataWriters)
+
+Read-path routing (`total_recall`) is paired with a canonical write-path in core:
+
+- `core/data-writers.ts` defines `DataWriter` contracts and a `writeData()` entrypoint.
+- Adapter/runtime code registers datastore-specific writers (for example `vector` fact writes and `graph` edge writes).
+- Callers do not write directly to datastore commands. They submit write envelopes (`datastore`, `action`, `payload`) through the shared engine.
+- This keeps write validation, action allow-lists, and failure handling centralized, making it safer to add new datastores later without scattering write logic through adapters.
+
+### Event Bus
+
+Quaid also exposes a queue-backed event bus for adapter-independent orchestration:
+
+- Event queue and handlers are implemented in `plugins/quaid/events.py`.
+- Adapter lifecycle hooks emit events like `session.new`, `session.reset`, and `session.compaction`.
+- CLI and MCP both support emitting/listing/processing events so orchestration can be tested and automated outside gateway hooks.
+- Event capabilities are discoverable via a registry (`event capabilities`, `memory_event_capabilities`) so orchestration can adapt strategy based on what this runtime supports.
+
 ### Data Flow
 
 ```

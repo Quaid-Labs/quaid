@@ -25,6 +25,13 @@ Every session starts ready to work. Project docs, architecture decisions, tool g
 
 Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integration is [OpenClaw](https://github.com/openclaw/openclaw); standalone MCP/CLI flows are also supported, with additional host adapters planned.
 
+**Interface surfaces:**
+- **OpenClaw adapter** — lifecycle hooks + tool integration (most mature path)
+- **MCP server** — host-agnostic tool surface for any MCP-capable client
+- **CLI** — direct operational control for extraction, recall, janitor, docs, and events
+
+Runtime event capabilities are discoverable (`memory_event_capabilities`, `quaid event capabilities`) so orchestration can adapt to host/runtime support instead of assuming fixed behavior.
+
 ---
 
 ## Install
@@ -156,6 +163,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
+- [Interface Contract](docs/INTERFACES.md) — MCP/CLI/adapter capability model and event contract
 - [Benchmark Results](docs/BENCHMARKS.md) — Full LoCoMo evaluation with per-category breakdowns
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
 - [v0.2.0-alpha Notes](docs/releases/v0.2.0-alpha.md) — Release highlights and known limitations

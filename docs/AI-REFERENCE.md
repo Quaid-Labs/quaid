@@ -27,6 +27,15 @@ Query
   -> Read-time injection filtering (_sanitize_for_context)
 ```
 
+**Write pipeline (current):**
+```
+Write request
+  -> writeData(datastore, action, payload)
+  -> DataWriter dispatch (vector / graph / journal / project)
+  -> datastore command execution
+  -> normalized write result (created/updated/duplicate/skipped/failed)
+```
+
 ---
 
 ## File Index
@@ -45,6 +54,7 @@ Query
 | `docs_registry.py` | Project/doc registry, CRUD, path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()`, `gc()`, `DocsRegistry`, `ensure_table()` |
 | `workspace_audit.py` | Core markdown monitoring and bloat detection | `run_workspace_check()`, `check_bloat()`, Opus review of changed files |
 | `notify.py` | User notifications via gateway | `notify_user()`, `notify_memory_extraction()`, `notify_memory_recall()`, `_check_janitor_health()` |
+| `events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
 | `project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
 | `extract.py` | Extraction module — transcript to memories | `extract_from_transcript()`, `parse_session_jsonl()`, `build_transcript()`, `_load_extraction_prompt()`, CLI (argparse at bottom) |
 | `mcp_server.py` | MCP server — memory tools over stdio | `memory_extract`, `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `projects_search`, `session_recall` |
@@ -78,6 +88,7 @@ Query
 | `adapters/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
 | `adapters/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
 | `adapters/openclaw/knowledge/orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
+| `core/data-writers.ts` | Canonical write routing/dispatch | `createDataWriteEngine()`, `writeData()`, DataWriter registry/specs |
 | `adapters/openclaw/index.js` / `adapter.js` / `knowledge/orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
 
 ### CI / Release Guard Scripts
@@ -514,6 +525,7 @@ quaid export                  # Export all facts as JSON
 quaid migrate                 # Import facts from existing markdown files
 quaid re-embed                # Re-embed all facts (after changing embedding model)
 quaid janitor [opts]          # Run janitor pipeline (--dry-run, --task <name>)
+quaid event [subcmd]          # Event bus (emit/list/process/capabilities)
 quaid mcp-server              # Start MCP server (stdio transport)
 quaid upgrade                 # Show upgrade instructions
 quaid uninstall               # Clean removal (preserves DB, offers backup restore)

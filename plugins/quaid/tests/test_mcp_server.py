@@ -89,6 +89,12 @@ EXPECTED_TOOLS = {
     "memory_create_edge",
     "memory_stats",
     "memory_provider",
+    "memory_event_emit",
+    "memory_event_list",
+    "memory_event_process",
+    "memory_event_capabilities",
+    "memory_write",
+    "memory_capabilities",
     "projects_search",
     "session_recall",
 }
@@ -107,8 +113,8 @@ class TestToolRegistration:
     def test_quaid_quiet_set(self):
         assert os.environ.get("QUAID_QUIET") == "1"
 
-    def test_all_11_tools_registered(self, server):
-        """Verify exactly 11 tools are registered with correct names."""
+    def test_all_expected_tools_registered(self, server):
+        """Verify all expected tools are registered with correct names."""
         mod, *_ = server
         registered = set(mod.mcp._tool_manager._tools.keys())
         assert registered == EXPECTED_TOOLS
