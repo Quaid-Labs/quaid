@@ -23,6 +23,8 @@ Thumbs.db
 dist/
 build/
 *.js.map
+/release/
+quaid-release.tar.gz
 # Python
 __pycache__/
 *.pyc
