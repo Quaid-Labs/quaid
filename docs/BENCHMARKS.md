@@ -1,5 +1,7 @@
 # Quaid Benchmark Results
 
+> Results snapshot: **February 2026**
+
 ## LoCoMo (ACL 2024)
 
 [LoCoMo](https://github.com/snap-research/locomo) is an industry-standard benchmark for conversational memory and knowledge systems. It consists of 10 long conversations (5,882 turns) with 1,540 scored question-answer pairs across four categories: single-hop lookup, multi-hop reasoning, temporal reasoning, and open-domain inference.
@@ -25,6 +27,12 @@ Full-context baselines (upper bound, no knowledge layer): Haiku 79.6%, Opus 86.6
 The shipping configuration uses Opus for both extraction and answer generation. Quaid achieves 88.3% of full-context Haiku performance (fair comparison) and 86.6% of full-context Opus performance while injecting only the relevant memories.
 
 > Mem0, Zep, LangMem, and OpenAI numbers are from their [April 2025 paper](https://arxiv.org/abs/2504.01094).
+
+### Competitive Context
+
+Quaid is competitive on LoCoMo, but this is not presented as SOTA. The strongest value proposition is the full lifecycle architecture (capture, retrieval, maintenance, personality synthesis, project awareness), not a single leaderboard position.
+
+Reported competitor numbers evolve quickly and vary by model/backbone, so treat any table as a dated snapshot rather than a permanent ranking. The focus here is reproducible methodology and transparent tradeoffs.
 
 ---
 

@@ -23,11 +23,11 @@ Every session starts ready to work. Project docs, architecture decisions, tool g
 - Runs a nightly janitor that reviews, deduplicates, resolves contradictions, and decays stale memories
 - Keeps project docs and personality files current without manual maintenance
 
-Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integration is [OpenClaw](https://github.com/openclaw/openclaw); standalone MCP/CLI flows are also supported, with additional host adapters planned.
+Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integration is [OpenClaw](https://github.com/openclaw/openclaw); standalone MCP/CLI flows are supported, and MCP client coverage outside OpenClaw should currently be treated as experimental.
 
 **Interface surfaces:**
 - **OpenClaw adapter** — lifecycle hooks + tool integration (most mature path)
-- **MCP server** — host-agnostic tool surface for any MCP-capable client
+- **MCP server** — host-agnostic tool surface for any MCP-capable client *(experimental coverage outside OpenClaw)*
 - **CLI** — direct operational control for extraction, recall, janitor, docs, and events
 
 Runtime event capabilities are discoverable (`memory_event_capabilities`, `quaid event capabilities`) so orchestration can adapt to host/runtime support instead of assuming fixed behavior.
@@ -57,6 +57,14 @@ cd quaid && node setup-quaid.mjs
 ---
 
 ## Benchmarks
+
+## How Quaid Is Different
+
+- **Local-first by default:** memory graph, embeddings, and maintenance run on your machine.
+- **Three knowledge areas:** facts, core personality, and project knowledge are treated differently instead of flattened into one store.
+- **Lifecycle maintenance, not just storage:** nightly janitor pipeline continuously reviews, deduplicates, resolves contradictions, and decays stale knowledge.
+- **Dual learning system:** fast snippets + slower journal distillation for long-term synthesis.
+- **OpenClaw-first, system-agnostic design:** deepest integration today is OpenClaw, but the architecture is built around adapter contracts.
 
 Evaluated on the [LoCoMo benchmark](https://github.com/snap-research/locomo) (ACL 2024) using Mem0's exact evaluation methodology — same judge model (GPT-4o-mini), same prompt, same scoring. 10 long conversations, 1,540 scored question-answer pairs testing knowledge capture quality, temporal reasoning, and multi-hop recall.
 
@@ -148,8 +156,8 @@ Quaid is in early alpha. LLM routing is adapter- and config-driven (`deep_reason
 Known limitations for **v0.2.0-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
-- Windows support exists but has less operational coverage than macOS/Linux.
-- OpenClaw is currently the most mature host integration path; broader host coverage is still in progress.
+- Windows support exists but has less operational coverage than macOS/Linux *(experimental)*.
+- OpenClaw is currently the most mature host integration path; broader host coverage is still in progress *(experimental outside OpenClaw)*.
 
 The system is backed by over 1,100 unit tests (Python + TypeScript), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md) and [LongMemEval](https://github.com/xiaowu0162/LongMemEval).
 
