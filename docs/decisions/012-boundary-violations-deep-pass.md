@@ -149,6 +149,9 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - janitor datastore imports now route through `plugins/quaid/datastore_maintenance.py`
     as a single datastore maintenance facade over `memory_graph` primitives
   - workspace audit datastore writes now route through the same facade (`store_memory`)
+  - ingestor/clustering modules now route datastore graph access through the facade:
+    - `plugins/quaid/extract.py`
+    - `plugins/quaid/semantic_clustering.py`
 - Core project catalog no longer shells to python:
   - `plugins/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:
