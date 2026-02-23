@@ -3198,49 +3198,41 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             metrics.end_task("workspace_audit")
             print(f"Task completed in {metrics.task_duration('workspace_audit'):.2f}s\n")
 
+        def _allow_doc_apply(doc_path: str, action: str) -> bool:
+            doc_p = Path(doc_path)
+            is_root_md = len(doc_p.parts) == 1 and doc_p.suffix.lower() == ".md"
+            is_quaid_project_md = (
+                len(doc_p.parts) >= 2
+                and doc_p.parts[0] == "projects"
+                and doc_p.parts[1] == "quaid"
+                and doc_p.suffix.lower() == ".md"
+            )
+            if is_root_md:
+                return _can_apply_scope("core_markdown_writes", f"docs {action}: {doc_path}")
+            if is_quaid_project_md:
+                return True
+            return _can_apply_scope("project_docs_writes", f"project docs {action}: {doc_path}")
+
         # --- Task 1b: Documentation Staleness Check ---
         # (Runs after memory pipeline — expensive Opus doc updates are lower priority)
         if task in ("docs_staleness", "all") and _system_enabled_or_skip("docs_staleness", "Task 1b: Doc Staleness") and not _skip_if_over_budget("Task 1b: Doc Staleness", 60):
             print("[Task 1b: Documentation Staleness Check]")
             metrics.start_task("docs_staleness")
-            try:
-                from docs_updater import check_staleness, update_doc_from_diffs, get_doc_purposes
-                stale = check_staleness()
-                if not stale:
-                    print("  All docs up-to-date with source files")
-                else:
-                    print(f"  Found {len(stale)} stale doc(s):")
-                    purposes = get_doc_purposes()
-                    for doc_path, info in stale.items():
-                        print(f"    {doc_path} ({info.gap_hours:.1f}h behind)")
-                        for src in info.stale_sources:
-                            print(f"      <- {src}")
-                        doc_p = Path(doc_path)
-                        is_root_md = len(doc_p.parts) == 1 and doc_p.suffix.lower() == ".md"
-                        is_quaid_project_md = (
-                            len(doc_p.parts) >= 2 and doc_p.parts[0] == "projects" and doc_p.parts[1] == "quaid"
-                            and doc_p.suffix.lower() == ".md"
-                        )
-                        allow_apply = not dry_run
-                        if is_root_md:
-                            allow_apply = allow_apply and _can_apply_scope(
-                                "core_markdown_writes", f"docs staleness update: {doc_path}"
-                            )
-                        elif not is_quaid_project_md:
-                            allow_apply = allow_apply and _can_apply_scope(
-                                "project_docs_writes", f"project docs staleness update: {doc_path}"
-                            )
-                        if allow_apply:
-                            ok = update_doc_from_diffs(
-                                doc_path, purposes.get(doc_path, ""),
-                                info.stale_sources, dry_run=False
-                            )
-                            if ok:
-                                applied_changes["docs_updated"] = \
-                                    applied_changes.get("docs_updated", 0) + 1
-            except Exception as e:
-                print(f"  Staleness check failed: {e}")
-                metrics.add_error(f"Docs staleness: {e}")
+            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                "docs_staleness",
+                RoutineContext(
+                    cfg=_cfg,
+                    dry_run=dry_run,
+                    workspace=_workspace(),
+                    allow_doc_apply=_allow_doc_apply,
+                ),
+            )
+            for line in lifecycle_result.logs:
+                print(f"  {line}")
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
+            applied_changes["docs_updated"] = lifecycle_result.metrics.get("docs_updated", 0)
             metrics.end_task("docs_staleness")
             print(f"Task completed in {metrics.task_duration('docs_staleness'):.2f}s\n")
 
@@ -3248,44 +3240,21 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("docs_cleanup", "all") and _system_enabled_or_skip("docs_cleanup", "Task 1c: Doc Cleanup") and not _skip_if_over_budget("Task 1c: Doc Cleanup", 60):
             print("[Task 1c: Documentation Cleanup]")
             metrics.start_task("docs_cleanup")
-            try:
-                from docs_updater import check_cleanup_needed, cleanup_doc, get_doc_purposes
-                needs_cleanup = check_cleanup_needed()
-                if not needs_cleanup:
-                    print("  No docs need cleanup")
-                else:
-                    print(f"  Found {len(needs_cleanup)} doc(s) needing cleanup:")
-                    purposes = get_doc_purposes()
-                    for doc_path, info in needs_cleanup.items():
-                        reason_str = {
-                            "updates": f"{info.updates_since_cleanup} updates",
-                            "growth": f"{info.growth_ratio:.1f}x growth",
-                            "both": f"{info.updates_since_cleanup} updates + {info.growth_ratio:.1f}x growth",
-                        }[info.reason]
-                        print(f"    {doc_path} ({reason_str})")
-                        doc_p = Path(doc_path)
-                        is_root_md = len(doc_p.parts) == 1 and doc_p.suffix.lower() == ".md"
-                        is_quaid_project_md = (
-                            len(doc_p.parts) >= 2 and doc_p.parts[0] == "projects" and doc_p.parts[1] == "quaid"
-                            and doc_p.suffix.lower() == ".md"
-                        )
-                        allow_apply = not dry_run
-                        if is_root_md:
-                            allow_apply = allow_apply and _can_apply_scope(
-                                "core_markdown_writes", f"docs cleanup: {doc_path}"
-                            )
-                        elif not is_quaid_project_md:
-                            allow_apply = allow_apply and _can_apply_scope(
-                                "project_docs_writes", f"project docs cleanup: {doc_path}"
-                            )
-                        if allow_apply:
-                            ok = cleanup_doc(doc_path, purposes.get(doc_path, ""), dry_run=False)
-                            if ok:
-                                applied_changes["docs_cleaned"] = \
-                                    applied_changes.get("docs_cleaned", 0) + 1
-            except Exception as e:
-                print(f"  Cleanup check failed: {e}")
-                metrics.add_error(f"Docs cleanup: {e}")
+            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                "docs_cleanup",
+                RoutineContext(
+                    cfg=_cfg,
+                    dry_run=dry_run,
+                    workspace=_workspace(),
+                    allow_doc_apply=_allow_doc_apply,
+                ),
+            )
+            for line in lifecycle_result.logs:
+                print(f"  {line}")
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
+            applied_changes["docs_cleaned"] = lifecycle_result.metrics.get("docs_cleaned", 0)
             metrics.end_task("docs_cleanup")
             print(f"Task completed in {metrics.task_duration('docs_cleanup'):.2f}s\n")
 

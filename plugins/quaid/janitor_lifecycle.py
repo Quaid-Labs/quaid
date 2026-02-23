@@ -19,6 +19,7 @@ class RoutineContext:
     dry_run: bool
     workspace: Path
     force_distill: bool = False
+    allow_doc_apply: Optional[Callable[[str, str], bool]] = None
 
 
 @dataclass
@@ -204,9 +205,80 @@ def _run_journal_distillation(ctx: RoutineContext) -> RoutineResult:
     return result
 
 
+def _run_docs_staleness(ctx: RoutineContext) -> RoutineResult:
+    result = RoutineResult()
+    try:
+        from docs_updater import check_staleness, update_doc_from_diffs, get_doc_purposes
+
+        stale = check_staleness()
+        if not stale:
+            result.logs.append("All docs up-to-date with source files")
+            return result
+
+        result.logs.append(f"Found {len(stale)} stale doc(s):")
+        purposes = get_doc_purposes()
+        updated = 0
+        for doc_path, info in stale.items():
+            result.logs.append(f"  {doc_path} ({info.gap_hours:.1f}h behind)")
+            for src in info.stale_sources:
+                result.logs.append(f"    <- {src}")
+
+            allow_apply = not ctx.dry_run
+            if allow_apply and ctx.allow_doc_apply is not None:
+                allow_apply = ctx.allow_doc_apply(doc_path, "staleness update")
+            if allow_apply:
+                ok = update_doc_from_diffs(
+                    doc_path,
+                    purposes.get(doc_path, ""),
+                    info.stale_sources,
+                    dry_run=False,
+                )
+                if ok:
+                    updated += 1
+        result.metrics["docs_updated"] = updated
+    except Exception as exc:
+        result.errors.append(f"Docs staleness failed: {exc}")
+    return result
+
+
+def _run_docs_cleanup(ctx: RoutineContext) -> RoutineResult:
+    result = RoutineResult()
+    try:
+        from docs_updater import check_cleanup_needed, cleanup_doc, get_doc_purposes
+
+        needs_cleanup = check_cleanup_needed()
+        if not needs_cleanup:
+            result.logs.append("No docs need cleanup")
+            return result
+
+        result.logs.append(f"Found {len(needs_cleanup)} doc(s) needing cleanup:")
+        purposes = get_doc_purposes()
+        cleaned = 0
+        for doc_path, info in needs_cleanup.items():
+            reason_str = {
+                "updates": f"{info.updates_since_cleanup} updates",
+                "growth": f"{info.growth_ratio:.1f}x growth",
+                "both": f"{info.updates_since_cleanup} updates + {info.growth_ratio:.1f}x growth",
+            }[info.reason]
+            result.logs.append(f"  {doc_path} ({reason_str})")
+            allow_apply = not ctx.dry_run
+            if allow_apply and ctx.allow_doc_apply is not None:
+                allow_apply = ctx.allow_doc_apply(doc_path, "cleanup")
+            if allow_apply:
+                ok = cleanup_doc(doc_path, purposes.get(doc_path, ""), dry_run=False)
+                if ok:
+                    cleaned += 1
+        result.metrics["docs_cleaned"] = cleaned
+    except Exception as exc:
+        result.errors.append(f"Docs cleanup failed: {exc}")
+    return result
+
+
 def build_default_registry() -> LifecycleRegistry:
     registry = LifecycleRegistry()
     registry.register("workspace", _run_workspace_audit)
+    registry.register("docs_staleness", _run_docs_staleness)
+    registry.register("docs_cleanup", _run_docs_cleanup)
     registry.register("snippets", _run_snippets_review)
     registry.register("journal", _run_journal_distillation)
     registry.register("rag", _run_rag_maintenance)

@@ -128,9 +128,10 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `plugins/quaid/adapters/openclaw/adapter.ts` supplies journal/project store handlers
   - removed unused legacy deps (`path`, `fs`, `callDocsRag`) from orchestrator facade contract to tighten boundary surface
 - Janitor lifecycle ownership expanded:
-  - `plugins/quaid/janitor_lifecycle.py` now registers `workspace`, `snippets`, and `journal` routines in addition to `rag`
+  - `plugins/quaid/janitor_lifecycle.py` now registers `workspace`, `docs_staleness`, `docs_cleanup`, `snippets`, and `journal` routines in addition to `rag`
   - `plugins/quaid/janitor.py` now dispatches those tasks through lifecycle registry instead of inline task bodies
-  - added lifecycle tests for workspace/snippets/journal in `plugins/quaid/tests/test_janitor_lifecycle.py`
+  - docs write policy checks are preserved via `allow_doc_apply` callback passed through routine context
+  - added lifecycle tests for workspace/docs/snippets/journal in `plugins/quaid/tests/test_janitor_lifecycle.py`
 - Core project catalog no longer shells to python:
   - `plugins/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:
@@ -156,5 +157,4 @@ These are expected and not lifecycle/datastore boundary leaks.
 - No docs/events command ownership in `memory_graph.py` CLI.
 
 ## Next Actions
-1. Move doc staleness/cleanup task ownership into janitor lifecycle registry.
-2. Add janitor task parallelization (after boundary enforcement completes).
+1. Add janitor task parallelization (after boundary enforcement completes).

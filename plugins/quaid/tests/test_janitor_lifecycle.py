@@ -130,3 +130,51 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
     assert journal_result.metrics["journal_edits"] == 1
     assert journal_result.metrics["journal_entries_distilled"] == 9
     assert calls["journal"] == [(True, True)]
+
+
+def test_docs_lifecycle_staleness_and_cleanup(monkeypatch, tmp_path):
+    docs_updater_mod = ModuleType("docs_updater")
+    calls = {"updated": [], "cleaned": []}
+
+    docs_updater_mod.get_doc_purposes = lambda: {"README.md": "summary", "projects/x/NOTES.md": "notes"}
+    docs_updater_mod.check_staleness = lambda: {
+        "README.md": SimpleNamespace(gap_hours=2.5, stale_sources=["src/a.ts"]),
+        "projects/x/NOTES.md": SimpleNamespace(gap_hours=1.0, stale_sources=["src/b.ts"]),
+    }
+    docs_updater_mod.update_doc_from_diffs = lambda doc_path, purpose, stale_sources, dry_run: (
+        calls["updated"].append((doc_path, purpose, tuple(stale_sources), dry_run)) or True
+    )
+    docs_updater_mod.check_cleanup_needed = lambda: {
+        "README.md": SimpleNamespace(reason="updates", updates_since_cleanup=5, growth_ratio=1.0),
+        "projects/x/NOTES.md": SimpleNamespace(reason="growth", updates_since_cleanup=1, growth_ratio=2.2),
+    }
+    docs_updater_mod.cleanup_doc = lambda doc_path, purpose, dry_run: (
+        calls["cleaned"].append((doc_path, purpose, dry_run)) or True
+    )
+    monkeypatch.setitem(sys.modules, "docs_updater", docs_updater_mod)
+
+    allow_calls = []
+
+    def _allow(doc_path, action):
+        allow_calls.append((doc_path, action))
+        return doc_path.endswith("README.md")
+
+    registry = build_default_registry()
+
+    staleness_result = registry.run(
+        "docs_staleness",
+        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, allow_doc_apply=_allow),
+    )
+    assert staleness_result.errors == []
+    assert staleness_result.metrics["docs_updated"] == 1
+    assert [c[0] for c in calls["updated"]] == ["README.md"]
+
+    cleanup_result = registry.run(
+        "docs_cleanup",
+        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, allow_doc_apply=_allow),
+    )
+    assert cleanup_result.errors == []
+    assert cleanup_result.metrics["docs_cleaned"] == 1
+    assert [c[0] for c in calls["cleaned"]] == ["README.md"]
+    assert ("README.md", "staleness update") in allow_calls
+    assert ("projects/x/NOTES.md", "cleanup") in allow_calls
