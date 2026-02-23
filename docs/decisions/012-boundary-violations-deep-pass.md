@@ -128,7 +128,12 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `plugins/quaid/adapters/openclaw/adapter.ts` supplies journal/project store handlers
   - removed unused legacy deps (`path`, `fs`, `callDocsRag`) from orchestrator facade contract to tighten boundary surface
 - Janitor lifecycle ownership expanded:
-  - `plugins/quaid/janitor_lifecycle.py` now registers `workspace`, `docs_staleness`, `docs_cleanup`, `snippets`, and `journal` routines in addition to `rag`
+  - `plugins/quaid/janitor_lifecycle.py` is now orchestration-only: it loads module-owned routine registrars
+  - datastore/workspace modules now own registration + maintenance logic:
+    - `plugins/quaid/workspace_audit.py` registers `workspace`
+    - `plugins/quaid/docs_updater.py` registers `docs_staleness` and `docs_cleanup`
+    - `plugins/quaid/soul_snippets.py` registers `snippets` and `journal`
+    - `plugins/quaid/docs_rag.py` registers `rag`
   - `plugins/quaid/janitor.py` now dispatches those tasks through lifecycle registry instead of inline task bodies
   - docs write policy checks are preserved via `allow_doc_apply` callback passed through routine context
   - added lifecycle tests for workspace/docs/snippets/journal in `plugins/quaid/tests/test_janitor_lifecycle.py`

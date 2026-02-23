@@ -1327,6 +1327,38 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
     }
 
 
+def register_lifecycle_routines(registry, result_factory) -> None:
+    """Register snippet/journal lifecycle maintenance routines."""
+
+    def _run_snippets_review(ctx):
+        result = result_factory()
+        try:
+            snippets_result = run_soul_snippets_review(dry_run=ctx.dry_run)
+            result.metrics["snippets_folded"] = int(snippets_result.get("folded", 0))
+            result.metrics["snippets_rewritten"] = int(snippets_result.get("rewritten", 0))
+            result.metrics["snippets_discarded"] = int(snippets_result.get("discarded", 0))
+        except Exception as exc:
+            result.errors.append(f"Snippets review failed: {exc}")
+        return result
+
+    def _run_journal_distillation(ctx):
+        result = result_factory()
+        try:
+            journal_result = run_journal_distillation(
+                dry_run=ctx.dry_run,
+                force_distill=ctx.force_distill,
+            )
+            result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
+            result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
+            result.metrics["journal_entries_distilled"] = int(journal_result.get("total_entries", 0))
+        except Exception as exc:
+            result.errors.append(f"Journal distillation failed: {exc}")
+        return result
+
+    registry.register("snippets", _run_snippets_review)
+    registry.register("journal", _run_journal_distillation)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Journal Distillation")

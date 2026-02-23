@@ -32,7 +32,7 @@ def test_rag_lifecycle_runs_and_returns_metrics(monkeypatch, tmp_path):
     (tmp_path / "projects" / "demo").mkdir(parents=True, exist_ok=True)
 
     fake_rag = _FakeRag()
-    monkeypatch.setattr("janitor_lifecycle.DocsRAG", lambda: fake_rag)
+    monkeypatch.setattr("docs_rag.DocsRAG", lambda: fake_rag)
 
     docs_registry_mod = ModuleType("docs_registry")
 
@@ -70,8 +70,7 @@ def test_rag_lifecycle_handles_missing_routine():
 
 
 def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
-    workspace_audit_mod = ModuleType("workspace_audit")
-    workspace_audit_mod.run_workspace_check = lambda dry_run: {
+    monkeypatch.setattr("workspace_audit.run_workspace_check", lambda dry_run: {
         "phase": "apply",
         "moved_to_docs": 3,
         "moved_to_memory": 1,
@@ -82,8 +81,7 @@ def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
             "big.md": {"over_limit": True, "lines": 250, "maxLines": 200},
             "ok.md": {"over_limit": False, "lines": 10, "maxLines": 200},
         },
-    }
-    monkeypatch.setitem(sys.modules, "workspace_audit", workspace_audit_mod)
+    })
 
     registry = build_default_registry()
     result = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
@@ -97,21 +95,19 @@ def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
 
 
 def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
-    soul_snippets_mod = ModuleType("soul_snippets")
     calls = {"journal": []}
 
-    soul_snippets_mod.run_soul_snippets_review = lambda dry_run: {
+    monkeypatch.setattr("soul_snippets.run_soul_snippets_review", lambda dry_run: {
         "folded": 4,
         "rewritten": 2,
         "discarded": 1,
-    }
+    })
 
     def _run_journal_distillation(*, dry_run, force_distill):
         calls["journal"].append((dry_run, force_distill))
         return {"additions": 3, "edits": 1, "total_entries": 9}
 
-    soul_snippets_mod.run_journal_distillation = _run_journal_distillation
-    monkeypatch.setitem(sys.modules, "soul_snippets", soul_snippets_mod)
+    monkeypatch.setattr("soul_snippets.run_journal_distillation", _run_journal_distillation)
 
     registry = build_default_registry()
 
@@ -133,25 +129,26 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
 
 
 def test_docs_lifecycle_staleness_and_cleanup(monkeypatch, tmp_path):
-    docs_updater_mod = ModuleType("docs_updater")
     calls = {"updated": [], "cleaned": []}
 
-    docs_updater_mod.get_doc_purposes = lambda: {"README.md": "summary", "projects/x/NOTES.md": "notes"}
-    docs_updater_mod.check_staleness = lambda: {
+    monkeypatch.setattr(
+        "docs_updater.get_doc_purposes",
+        lambda: {"README.md": "summary", "projects/x/NOTES.md": "notes"},
+    )
+    monkeypatch.setattr("docs_updater.check_staleness", lambda: {
         "README.md": SimpleNamespace(gap_hours=2.5, stale_sources=["src/a.ts"]),
         "projects/x/NOTES.md": SimpleNamespace(gap_hours=1.0, stale_sources=["src/b.ts"]),
-    }
-    docs_updater_mod.update_doc_from_diffs = lambda doc_path, purpose, stale_sources, dry_run: (
+    })
+    monkeypatch.setattr("docs_updater.update_doc_from_diffs", lambda doc_path, purpose, stale_sources, dry_run: (
         calls["updated"].append((doc_path, purpose, tuple(stale_sources), dry_run)) or True
-    )
-    docs_updater_mod.check_cleanup_needed = lambda: {
+    ))
+    monkeypatch.setattr("docs_updater.check_cleanup_needed", lambda: {
         "README.md": SimpleNamespace(reason="updates", updates_since_cleanup=5, growth_ratio=1.0),
         "projects/x/NOTES.md": SimpleNamespace(reason="growth", updates_since_cleanup=1, growth_ratio=2.2),
-    }
-    docs_updater_mod.cleanup_doc = lambda doc_path, purpose, dry_run: (
+    })
+    monkeypatch.setattr("docs_updater.cleanup_doc", lambda doc_path, purpose, dry_run: (
         calls["cleaned"].append((doc_path, purpose, dry_run)) or True
-    )
-    monkeypatch.setitem(sys.modules, "docs_updater", docs_updater_mod)
+    ))
 
     allow_calls = []
 

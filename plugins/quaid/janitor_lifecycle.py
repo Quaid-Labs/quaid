@@ -1,16 +1,16 @@
 """Lifecycle maintenance registry for janitor datastore routines.
 
-This module provides a narrow contract between janitor orchestration and
-datastore-specific maintenance implementations.
+This module provides a narrow orchestration contract between janitor and
+module-owned maintenance routines. Datastore/workspace modules own maintenance
+logic and register their routines here.
 """
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
-
-from docs_rag import DocsRAG
 
 
 @dataclass
@@ -52,234 +52,54 @@ class LifecycleRegistry:
         return routine(ctx)
 
 
-def _run_rag_maintenance(ctx: RoutineContext) -> RoutineResult:
-    result = RoutineResult()
-    cfg = ctx.cfg
-    dry_run = ctx.dry_run
-    workspace = ctx.workspace
+def _register_module_routines(
+    registry: LifecycleRegistry,
+    module_name: str,
+    expected_routines: List[str],
+) -> None:
+    """Load module-owned lifecycle registrations with safe fallback errors."""
+
+    def _register_failure(routine_name: str, message: str) -> None:
+        def _missing(_ctx: RoutineContext) -> RoutineResult:
+            return RoutineResult(errors=[message])
+
+        registry.register(routine_name, _missing)
 
     try:
-        if cfg.projects.enabled and not dry_run:
-            try:
-                from project_updater import process_all_events
-
-                result.logs.append("Processing queued project events...")
-                event_result = process_all_events()
-                processed = int(event_result.get("processed", 0))
-                result.metrics["project_events_processed"] = processed
-                if processed > 0:
-                    result.logs.append(f"  Processed {processed} event(s)")
-            except Exception as e:
-                result.errors.append(f"Project event processing failed: {e}")
-        elif cfg.projects.enabled and dry_run:
-            result.logs.append("Skipping project event processing (dry-run)")
-
-        if cfg.projects.enabled:
-            try:
-                from docs_registry import DocsRegistry
-
-                registry = DocsRegistry()
-                total_discovered = 0
-                for proj_name, proj_defn in cfg.projects.definitions.items():
-                    if proj_defn.auto_index:
-                        discovered = registry.auto_discover(proj_name)
-                        total_discovered += len(discovered)
-                result.metrics["project_files_discovered"] = total_discovered
-                if total_discovered > 0:
-                    result.logs.append(f"  Discovered {total_discovered} new file(s)")
-
-                for proj_name in cfg.projects.definitions:
-                    try:
-                        registry.sync_external_files(proj_name)
-                    except Exception:
-                        continue
-            except Exception as e:
-                result.errors.append(f"Project auto-discover failed: {e}")
-
-        rag = DocsRAG()
-        docs_dir = str(workspace / cfg.rag.docs_dir)
-        result.logs.append(f"Reindexing {docs_dir}...")
-        rag_result = rag.reindex_all(docs_dir, force=False)
-
-        total_files = int(rag_result.get("total_files", 0))
-        indexed = int(rag_result.get("indexed_files", 0))
-        skipped = int(rag_result.get("skipped_files", 0))
-        chunks = int(rag_result.get("total_chunks", 0))
-
-        if cfg.projects.enabled:
-            for proj_name, proj_defn in cfg.projects.definitions.items():
-                proj_dir = workspace / proj_defn.home_dir
-                if proj_dir.exists():
-                    result.logs.append(f"Reindexing project {proj_name}: {proj_dir}...")
-                    proj_result = rag.reindex_all(str(proj_dir), force=False)
-                    total_files += int(proj_result.get("total_files", 0))
-                    indexed += int(proj_result.get("indexed_files", 0))
-                    skipped += int(proj_result.get("skipped_files", 0))
-                    chunks += int(proj_result.get("total_chunks", 0))
-
-        result.metrics["rag_total_files"] = total_files
-        result.metrics["rag_files_indexed"] = indexed
-        result.metrics["rag_files_skipped"] = skipped
-        result.metrics["rag_chunks_created"] = chunks
-    except Exception as e:
-        result.errors.append(f"RAG maintenance failed: {e}")
-
-    return result
-
-
-def _run_workspace_audit(ctx: RoutineContext) -> RoutineResult:
-    result = RoutineResult()
-    try:
-        from workspace_audit import run_workspace_check
-
-        audit_result = run_workspace_check(dry_run=ctx.dry_run)
-        phase = audit_result.get("phase", "unknown")
-        result.data["workspace_phase"] = phase
-
-        bloat_stats = audit_result.get("bloat_stats", {})
-        bloated = [name for name, stats in bloat_stats.items() if stats.get("over_limit")]
-        if bloated:
-            result.data["bloated_files"] = bloated
-            result.logs.append(f"Files over limit: {', '.join(bloated)}")
-            for name in bloated:
-                stats = bloat_stats[name]
-                result.logs.append(f"  {name}: {stats.get('lines', 0)}/{stats.get('maxLines', 0)} lines")
-
-        if phase == "apply":
-            result.metrics["workspace_moved_to_docs"] = int(audit_result.get("moved_to_docs", 0))
-            result.metrics["workspace_moved_to_memory"] = int(audit_result.get("moved_to_memory", 0))
-            result.metrics["workspace_trimmed"] = int(audit_result.get("trimmed", 0))
-            result.metrics["workspace_bloat_warnings"] = int(audit_result.get("bloat_warnings", 0))
-            result.metrics["workspace_project_detected"] = int(audit_result.get("project_detected", 0))
-            result.logs.append(
-                f"{'Would apply' if ctx.dry_run else 'Applied'} review decisions:"
-            )
-            result.logs.append(f"  Moved to docs: {result.metrics['workspace_moved_to_docs']}")
-            result.logs.append(f"  Moved to memory: {result.metrics['workspace_moved_to_memory']}")
-            result.logs.append(f"  Trimmed: {result.metrics['workspace_trimmed']}")
-            result.logs.append(f"  Bloat warnings: {result.metrics['workspace_bloat_warnings']}")
-            if result.metrics["workspace_project_detected"] > 0:
-                result.logs.append(
-                    "  Project content detected: "
-                    f"{result.metrics['workspace_project_detected']} (queued for agent review)"
-                )
-        elif phase == "no_changes":
-            result.logs.append("No workspace files changed since last run")
-        elif phase == "error":
-            result.errors.append(f"Workspace audit error: {audit_result.get('error', 'unknown')}")
-    except RuntimeError as exc:
-        result.errors.append(f"Workspace audit skipped (API error): {exc}")
+        module = importlib.import_module(module_name)
     except Exception as exc:
-        result.errors.append(f"Workspace audit failed: {exc}")
-    return result
+        msg = f"Lifecycle module load failed: {module_name}: {exc}"
+        for routine_name in expected_routines:
+            _register_failure(routine_name, msg)
+        return
 
+    registrar = getattr(module, "register_lifecycle_routines", None)
+    if not callable(registrar):
+        msg = f"Lifecycle module missing register_lifecycle_routines: {module_name}"
+        for routine_name in expected_routines:
+            _register_failure(routine_name, msg)
+        return
 
-def _run_snippets_review(ctx: RoutineContext) -> RoutineResult:
-    result = RoutineResult()
     try:
-        from soul_snippets import run_soul_snippets_review
-
-        snippets_result = run_soul_snippets_review(dry_run=ctx.dry_run)
-        result.metrics["snippets_folded"] = int(snippets_result.get("folded", 0))
-        result.metrics["snippets_rewritten"] = int(snippets_result.get("rewritten", 0))
-        result.metrics["snippets_discarded"] = int(snippets_result.get("discarded", 0))
+        registrar(registry, RoutineResult)
     except Exception as exc:
-        result.errors.append(f"Snippets review failed: {exc}")
-    return result
-
-
-def _run_journal_distillation(ctx: RoutineContext) -> RoutineResult:
-    result = RoutineResult()
-    try:
-        from soul_snippets import run_journal_distillation
-
-        journal_result = run_journal_distillation(
-            dry_run=ctx.dry_run,
-            force_distill=ctx.force_distill,
-        )
-        result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
-        result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
-        result.metrics["journal_entries_distilled"] = int(journal_result.get("total_entries", 0))
-    except Exception as exc:
-        result.errors.append(f"Journal distillation failed: {exc}")
-    return result
-
-
-def _run_docs_staleness(ctx: RoutineContext) -> RoutineResult:
-    result = RoutineResult()
-    try:
-        from docs_updater import check_staleness, update_doc_from_diffs, get_doc_purposes
-
-        stale = check_staleness()
-        if not stale:
-            result.logs.append("All docs up-to-date with source files")
-            return result
-
-        result.logs.append(f"Found {len(stale)} stale doc(s):")
-        purposes = get_doc_purposes()
-        updated = 0
-        for doc_path, info in stale.items():
-            result.logs.append(f"  {doc_path} ({info.gap_hours:.1f}h behind)")
-            for src in info.stale_sources:
-                result.logs.append(f"    <- {src}")
-
-            allow_apply = not ctx.dry_run
-            if allow_apply and ctx.allow_doc_apply is not None:
-                allow_apply = ctx.allow_doc_apply(doc_path, "staleness update")
-            if allow_apply:
-                ok = update_doc_from_diffs(
-                    doc_path,
-                    purposes.get(doc_path, ""),
-                    info.stale_sources,
-                    dry_run=False,
-                )
-                if ok:
-                    updated += 1
-        result.metrics["docs_updated"] = updated
-    except Exception as exc:
-        result.errors.append(f"Docs staleness failed: {exc}")
-    return result
-
-
-def _run_docs_cleanup(ctx: RoutineContext) -> RoutineResult:
-    result = RoutineResult()
-    try:
-        from docs_updater import check_cleanup_needed, cleanup_doc, get_doc_purposes
-
-        needs_cleanup = check_cleanup_needed()
-        if not needs_cleanup:
-            result.logs.append("No docs need cleanup")
-            return result
-
-        result.logs.append(f"Found {len(needs_cleanup)} doc(s) needing cleanup:")
-        purposes = get_doc_purposes()
-        cleaned = 0
-        for doc_path, info in needs_cleanup.items():
-            reason_str = {
-                "updates": f"{info.updates_since_cleanup} updates",
-                "growth": f"{info.growth_ratio:.1f}x growth",
-                "both": f"{info.updates_since_cleanup} updates + {info.growth_ratio:.1f}x growth",
-            }[info.reason]
-            result.logs.append(f"  {doc_path} ({reason_str})")
-            allow_apply = not ctx.dry_run
-            if allow_apply and ctx.allow_doc_apply is not None:
-                allow_apply = ctx.allow_doc_apply(doc_path, "cleanup")
-            if allow_apply:
-                ok = cleanup_doc(doc_path, purposes.get(doc_path, ""), dry_run=False)
-                if ok:
-                    cleaned += 1
-        result.metrics["docs_cleaned"] = cleaned
-    except Exception as exc:
-        result.errors.append(f"Docs cleanup failed: {exc}")
-    return result
+        msg = f"Lifecycle registration failed: {module_name}: {exc}"
+        for routine_name in expected_routines:
+            if not registry.has(routine_name):
+                _register_failure(routine_name, msg)
 
 
 def build_default_registry() -> LifecycleRegistry:
     registry = LifecycleRegistry()
-    registry.register("workspace", _run_workspace_audit)
-    registry.register("docs_staleness", _run_docs_staleness)
-    registry.register("docs_cleanup", _run_docs_cleanup)
-    registry.register("snippets", _run_snippets_review)
-    registry.register("journal", _run_journal_distillation)
-    registry.register("rag", _run_rag_maintenance)
+
+    module_specs = [
+        ("workspace_audit", ["workspace"]),
+        ("docs_updater", ["docs_staleness", "docs_cleanup"]),
+        ("soul_snippets", ["snippets", "journal"]),
+        ("docs_rag", ["rag"]),
+    ]
+
+    for module_name, routines in module_specs:
+        _register_module_routines(registry, module_name, routines)
+
     return registry

@@ -480,6 +480,86 @@ class DocsRAG:
         }
 
 
+def register_lifecycle_routines(registry, result_factory) -> None:
+    """Register docs/project RAG lifecycle maintenance routines."""
+
+    def _run_rag_maintenance(ctx):
+        result = result_factory()
+        cfg = ctx.cfg
+        dry_run = ctx.dry_run
+        workspace = ctx.workspace
+
+        try:
+            if cfg.projects.enabled and not dry_run:
+                try:
+                    from project_updater import process_all_events
+
+                    result.logs.append("Processing queued project events...")
+                    event_result = process_all_events()
+                    processed = int(event_result.get("processed", 0))
+                    result.metrics["project_events_processed"] = processed
+                    if processed > 0:
+                        result.logs.append(f"  Processed {processed} event(s)")
+                except Exception as exc:
+                    result.errors.append(f"Project event processing failed: {exc}")
+            elif cfg.projects.enabled and dry_run:
+                result.logs.append("Skipping project event processing (dry-run)")
+
+            if cfg.projects.enabled:
+                try:
+                    from docs_registry import DocsRegistry
+
+                    docs_registry = DocsRegistry()
+                    total_discovered = 0
+                    for proj_name, proj_defn in cfg.projects.definitions.items():
+                        if proj_defn.auto_index:
+                            discovered = docs_registry.auto_discover(proj_name)
+                            total_discovered += len(discovered)
+                    result.metrics["project_files_discovered"] = total_discovered
+                    if total_discovered > 0:
+                        result.logs.append(f"  Discovered {total_discovered} new file(s)")
+
+                    for proj_name in cfg.projects.definitions:
+                        try:
+                            docs_registry.sync_external_files(proj_name)
+                        except Exception:
+                            continue
+                except Exception as exc:
+                    result.errors.append(f"Project auto-discover failed: {exc}")
+
+            rag = DocsRAG()
+            docs_dir = str(workspace / cfg.rag.docs_dir)
+            result.logs.append(f"Reindexing {docs_dir}...")
+            rag_result = rag.reindex_all(docs_dir, force=False)
+
+            total_files = int(rag_result.get("total_files", 0))
+            indexed = int(rag_result.get("indexed_files", 0))
+            skipped = int(rag_result.get("skipped_files", 0))
+            chunks = int(rag_result.get("total_chunks", 0))
+
+            if cfg.projects.enabled:
+                for proj_name, proj_defn in cfg.projects.definitions.items():
+                    proj_dir = workspace / proj_defn.home_dir
+                    if proj_dir.exists():
+                        result.logs.append(f"Reindexing project {proj_name}: {proj_dir}...")
+                        proj_result = rag.reindex_all(str(proj_dir), force=False)
+                        total_files += int(proj_result.get("total_files", 0))
+                        indexed += int(proj_result.get("indexed_files", 0))
+                        skipped += int(proj_result.get("skipped_files", 0))
+                        chunks += int(proj_result.get("total_chunks", 0))
+
+            result.metrics["rag_total_files"] = total_files
+            result.metrics["rag_files_indexed"] = indexed
+            result.metrics["rag_files_skipped"] = skipped
+            result.metrics["rag_chunks_created"] = chunks
+        except Exception as exc:
+            result.errors.append(f"RAG maintenance failed: {exc}")
+
+        return result
+
+    registry.register("rag", _run_rag_maintenance)
+
+
 def main():
     """CLI interface for docs RAG system."""
     parser = argparse.ArgumentParser(description="RAG for Technical Documentation")
