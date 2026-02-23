@@ -149,10 +149,11 @@ class TestSearchSemantic:
                 assert sims == sorted(sims, reverse=True)
 
     def test_min_similarity_filters(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("memory_graph._lib_has_vec", return_value=False):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_semantic("Quaid coffee", min_similarity=0.999)
-            # Very high threshold should filter most results
+            # Brute-force path enforces strict threshold filtering.
             for _, sim in results:
                 assert sim >= 0.999
 

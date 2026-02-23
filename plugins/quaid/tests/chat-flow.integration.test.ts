@@ -3,7 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionTimeoutManager } from "../core/session-timeout.js";
-import { extractCommandName, signalLabelForCommand } from "../adapters/openclaw/command-signals.js";
+
+function signalLabelForAction(actionRaw: unknown): "CompactionSignal" | "NewSignal" | "ResetSignal" | null {
+  const action = String(actionRaw || "").trim().toLowerCase().replace(/^\//, "");
+  if (action === "compact") return "CompactionSignal";
+  if (action === "new") return "NewSignal";
+  if (action === "reset" || action === "restart") return "ResetSignal";
+  return null;
+}
 
 function makeWorkspace(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -34,15 +41,15 @@ describe("chat flow integration", () => {
     );
 
     const events = [
-      { event: { command: "new" }, userText: "Fact one: my sister is Shannon." },
-      { event: { name: "/reset" }, userText: "Fact two: my cat is Ziggy." },
-      { event: { text: "/restart now" }, userText: "Fact three: my uncle is Drew." },
-      { event: { input: "/compact" }, userText: "Fact four: my dog is Madu." },
-      { event: { text: "/unknown" }, userText: "Ignored command payload." },
+      { action: "new", userText: "Fact one: my sister is Shannon." },
+      { action: "reset", userText: "Fact two: my cat is Ziggy." },
+      { action: "restart", userText: "Fact three: my uncle is Drew." },
+      { action: "compact", userText: "Fact four: my dog is Madu." },
+      { action: "unknown", userText: "Ignored command payload." },
     ];
 
     for (const [idx, item] of events.entries()) {
-      const { event, userText } = item;
+      const { action, userText } = item;
       manager.onAgentEnd(
         [
           { role: "user", content: userText },
@@ -50,8 +57,7 @@ describe("chat flow integration", () => {
         ],
         sessionId,
       );
-      const cmd = extractCommandName(event);
-      const label = signalLabelForCommand(cmd);
+      const label = signalLabelForAction(action);
       if (label) {
         manager.queueExtractionSignal(sessionId, label);
         await manager.processPendingExtractionSignals();
