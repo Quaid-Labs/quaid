@@ -22,6 +22,7 @@ RUN_LLM_SMOKE=true
 JANITOR_TIMEOUT_SECONDS=240
 JANITOR_MODE="apply"
 NOTIFY_LEVEL="quiet"
+E2E_SKIP_EXIT_CODE=20
 
 usage() {
   cat <<USAGE
@@ -57,6 +58,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+skip_e2e() {
+  local reason="$1"
+  echo "[e2e] SKIP_REASON:${reason}" >&2
+  echo "[e2e] SKIP: bootstrap e2e prerequisites are not available in this environment." >&2
+  echo "[e2e] To enable e2e auth-path tests:" >&2
+  echo "[e2e]   1) Set QUAID_BOOTSTRAP_ROOT (default: ~/quaid/bootstrap)." >&2
+  echo "[e2e]   2) Copy plugins/quaid/scripts/e2e.env.example to plugins/quaid/.env.e2e and set keys as needed." >&2
+  echo "[e2e]   3) Required keys by path:" >&2
+  echo "[e2e]      - openai-api: OPENAI_API_KEY" >&2
+  echo "[e2e]      - anthropic-api: ANTHROPIC_API_KEY" >&2
+  echo "[e2e]      - openai-oauth / anthropic-oauth: valid bootstrap auth profiles/tokens" >&2
+  exit "$E2E_SKIP_EXIT_CODE"
+}
+
 if [[ -f "$ENV_FILE" ]]; then
   # shellcheck disable=SC1090
   set -a; source "$ENV_FILE"; set +a
@@ -84,25 +99,36 @@ case "$NOTIFY_LEVEL" in
 esac
 
 if [[ ! -f "$PROFILE_SRC" ]]; then
-  echo "Missing profile: $PROFILE_SRC" >&2
-  exit 1
+  skip_e2e "missing-profile-src"
 fi
 
 if [[ ! -f "$PROFILE_TEST" ]]; then
-  echo "Missing test profile: $PROFILE_TEST" >&2
-  exit 1
+  skip_e2e "missing-profile-test"
 fi
 
 if [[ ! -x "${BOOTSTRAP_ROOT}/scripts/bootstrap-local.sh" ]]; then
-  echo "Missing bootstrap runner: ${BOOTSTRAP_ROOT}/scripts/bootstrap-local.sh" >&2
-  echo "Set QUAID_BOOTSTRAP_ROOT to your bootstrap workspace path." >&2
-  exit 1
+  skip_e2e "missing-bootstrap-runner"
 fi
 
 if [[ ! -f "${BOOTSTRAP_ROOT}/scripts/apply-runtime-profile.py" ]]; then
-  echo "Missing profile applier: ${BOOTSTRAP_ROOT}/scripts/apply-runtime-profile.py" >&2
-  echo "Set QUAID_BOOTSTRAP_ROOT to your bootstrap workspace path." >&2
-  exit 1
+  skip_e2e "missing-profile-applier"
+fi
+
+case "$AUTH_PATH" in
+  openai-api)
+    if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+      skip_e2e "missing-openai-api-key"
+    fi
+    ;;
+  anthropic-api)
+    if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+      skip_e2e "missing-anthropic-api-key"
+    fi
+    ;;
+esac
+
+if ! command -v openclaw >/dev/null 2>&1; then
+  skip_e2e "missing-openclaw-cli"
 fi
 
 start_gateway_safe() {

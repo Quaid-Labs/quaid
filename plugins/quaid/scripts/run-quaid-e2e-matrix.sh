@@ -92,6 +92,10 @@ lookup_value() {
 
 classify_failure_reason() {
   local log_file="$1"
+  if rg -n "SKIP_REASON:" "$log_file" >/dev/null 2>&1; then
+    rg -n "SKIP_REASON:" "$log_file" | tail -n 1 | sed -E 's/.*SKIP_REASON:([A-Za-z0-9._-]+).*/\1/' || true
+    return 0
+  fi
   if rg -n "No OpenClaw authProfiles matched selector" "$log_file" >/dev/null 2>&1; then
     echo "config-missing-auth-profile"
     return 0
@@ -210,9 +214,15 @@ for auth_path in "${PATHS[@]}"; do
     RESULTS+=("${auth_path}=pass")
     REASONS+=("${auth_path}=ok")
   else
+    exit_code=$?
     cat "$log_file"
-    RESULTS+=("${auth_path}=fail")
-    REASONS+=("${auth_path}=$(classify_failure_reason "$log_file")")
+    if [[ "$exit_code" -eq 20 ]]; then
+      RESULTS+=("${auth_path}=skipped")
+      REASONS+=("${auth_path}=$(classify_failure_reason "$log_file")")
+    else
+      RESULTS+=("${auth_path}=fail")
+      REASONS+=("${auth_path}=$(classify_failure_reason "$log_file")")
+    fi
   fi
   exc_file="$(mktemp -t "quaid-e2e-${auth_path}-exceptions")"
   extract_exception_lines "$log_file" >"$exc_file"
@@ -290,7 +300,7 @@ for p in paths:
   status = result_map.get(p, "skipped")
   reason = reason_map.get(p, "-")
   expect = expected_map.get(p, "pass")
-  ok = status == expect
+  ok = status == expect or status == "skipped"
   if not ok:
     summary["failed"] = True
   summary["paths"][p] = {
@@ -320,7 +330,7 @@ for auth_path in "${PATHS[@]}"; do
   if [[ "$status" == "fail" ]]; then
     expiry_hint="$(get_auth_expiry_hint "$auth_path")"
   fi
-  if [[ "$status" != "$expected" ]]; then
+  if [[ "$status" != "$expected" && "$status" != "skipped" ]]; then
     FAILED=1
     if [[ -n "$expiry_hint" ]]; then
       echo "  - ${auth_path}: ${status} (expected ${expected}) reason=${reason} ${expiry_hint}"
