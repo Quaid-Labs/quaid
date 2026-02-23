@@ -165,6 +165,12 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
     ingestor -> api coupling and the api <-> extract cycle
   - API search now routes through datastore interface function `memory_graph.search(...)`
     instead of `api.py` calling `get_graph().search_hybrid(...)`
+  - decay ownership moved into datastore lifecycle module:
+    - added `plugins/quaid/memory_decay.py` with datastore-owned routines
+      `memory_decay` and `memory_decay_review`
+    - `plugins/quaid/janitor.py` Task 5/5b now execute through lifecycle routines
+      instead of inline decay business logic
+    - `plugins/quaid/janitor_lifecycle.py` now registers `memory_decay` routines
 - Core project catalog no longer shells to python:
   - `plugins/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:

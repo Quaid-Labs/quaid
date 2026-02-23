@@ -3130,29 +3130,35 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 print("[Task 5: Confidence Decay] SKIPPED — pipeline aborted\n")
             else:
                 print("[Task 5: Confidence Decay]")
-                stale = find_stale_memories_optimized(graph, metrics)
-                print(f"Found {len(stale)} stale memories (>{CONFIDENCE_DECAY_DAYS} days unused)\n")
                 decay_apply_allowed = _can_apply_scope(
                     "destructive_memory_ops",
                     "confidence decay updates/deletes"
                 )
                 decay_dry_run = dry_run or (not decay_apply_allowed)
-
-                if stale:
-                    decay_result = apply_decay_optimized(stale, graph, metrics, dry_run=decay_dry_run)
-                    applied_changes["memories_decayed"] = decay_result["decayed"]
-                    applied_changes["memories_deleted_by_decay"] = decay_result["deleted"]
-                    applied_changes["decay_queued"] = decay_result.get("queued", 0)
-
-                    total_updated = decay_result["decayed"] + decay_result["deleted"] + decay_result.get("queued", 0)
-                    print(f"\n{'Would update' if decay_dry_run else 'Updated'} {total_updated} memories:")
-                    print(f"  Decayed: {decay_result['decayed']}")
-                    print(f"  Deleted: {decay_result['deleted']}")
-                    print(f"  Queued for review: {decay_result.get('queued', 0)}")
-                else:
-                    print("  No stale memories found.")
-
-                print(f"Task completed in {metrics.task_duration('decay_discovery') + metrics.task_duration('decay_application'):.2f}s\n")
+                metrics.start_task("decay")
+                lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                    "memory_decay",
+                    RoutineContext(cfg=_cfg, dry_run=decay_dry_run, workspace=_workspace(), graph=graph),
+                )
+                for line in lifecycle_result.logs:
+                    print(f"  {line}")
+                for err in lifecycle_result.errors:
+                    print(f"  {err}")
+                    metrics.add_error(err)
+                applied_changes["memories_decayed"] = lifecycle_result.metrics.get("memories_decayed", 0)
+                applied_changes["memories_deleted_by_decay"] = lifecycle_result.metrics.get("memories_deleted_by_decay", 0)
+                applied_changes["decay_queued"] = lifecycle_result.metrics.get("decay_queued", 0)
+                total_updated = (
+                    applied_changes["memories_decayed"]
+                    + applied_changes["memories_deleted_by_decay"]
+                    + applied_changes["decay_queued"]
+                )
+                print(f"  {'Would update' if decay_dry_run else 'Updated'} {total_updated} memories")
+                print(f"  Decayed: {applied_changes['memories_decayed']}")
+                print(f"  Deleted: {applied_changes['memories_deleted_by_decay']}")
+                print(f"  Queued for review: {applied_changes['decay_queued']}")
+                metrics.end_task("decay")
+                print(f"Task completed in {metrics.task_duration('decay'):.2f}s\n")
 
         # --- Task 5b: Review Decayed Memories (Opus) ---
         if task in ("decay_review", "all") and _system_enabled_or_skip("decay_review", "Task 5b: Decay Review") and not _skip_if_over_budget("Task 5b: Decay Review", 20):
@@ -3165,25 +3171,28 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     "decay review decisions"
                 )
                 decay_review_dry_run = dry_run or (not decay_review_apply_allowed)
-
-                try:
-                    decay_review_result = review_decayed_memories(graph, metrics, dry_run=decay_review_dry_run)
-
-                    applied_changes["decay_reviewed"] = decay_review_result["reviewed"]
-                    applied_changes["decay_review_deleted"] = decay_review_result["deleted"]
-                    applied_changes["decay_review_extended"] = decay_review_result["extended"]
-                    applied_changes["decay_review_pinned"] = decay_review_result["pinned"]
-
-                    print(f"  Reviewed: {decay_review_result['reviewed']}")
-                    print(f"  Deleted: {decay_review_result['deleted']}")
-                    print(f"  Extended: {decay_review_result['extended']}")
-                    print(f"  Pinned: {decay_review_result['pinned']}")
-                except RuntimeError as e:
-                    print(f"  Opus API unavailable: {e}")
-                    print("  ABORTING memory pipeline — facts will remain as pending")
-                    metrics.add_error(f"Decay review failed (API error): {e}")
+                metrics.start_task("decay_review")
+                lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                    "memory_decay_review",
+                    RoutineContext(cfg=_cfg, dry_run=decay_review_dry_run, workspace=_workspace(), graph=graph),
+                )
+                for line in lifecycle_result.logs:
+                    print(f"  {line}")
+                for err in lifecycle_result.errors:
+                    print(f"  {err}")
+                    metrics.add_error(err)
                     memory_pipeline_ok = False
 
+                applied_changes["decay_reviewed"] = lifecycle_result.metrics.get("decay_reviewed", 0)
+                applied_changes["decay_review_deleted"] = lifecycle_result.metrics.get("decay_review_deleted", 0)
+                applied_changes["decay_review_extended"] = lifecycle_result.metrics.get("decay_review_extended", 0)
+                applied_changes["decay_review_pinned"] = lifecycle_result.metrics.get("decay_review_pinned", 0)
+
+                print(f"  Reviewed: {applied_changes['decay_reviewed']}")
+                print(f"  Deleted: {applied_changes['decay_review_deleted']}")
+                print(f"  Extended: {applied_changes['decay_review_extended']}")
+                print(f"  Pinned: {applied_changes['decay_review_pinned']}")
+                metrics.end_task("decay_review")
                 print(f"Task completed in {metrics.task_duration('decay_review'):.2f}s\n")
 
         def _allow_doc_apply(doc_path: str, action: str) -> bool:
