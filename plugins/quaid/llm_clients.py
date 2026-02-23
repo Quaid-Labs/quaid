@@ -21,6 +21,7 @@ import time
 from typing import Dict, Optional, Tuple
 
 from lib.providers import LLMResult
+from lib.runtime_context import get_llm_provider
 
 # Timeouts (seconds)
 DEEP_REASONING_TIMEOUT = 600
@@ -272,8 +273,7 @@ def call_llm(system_prompt: str, user_message: str,
         {"role": "user", "content": user_message},
     ]
 
-    from lib.adapter import get_adapter
-    llm = get_adapter().get_llm_provider()
+    llm = get_llm_provider()
 
     start_time = time.time()
     retries = _MAX_RETRIES if max_retries is None else max_retries

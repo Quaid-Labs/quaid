@@ -34,6 +34,7 @@ from api import store, create_edge
 from memory_graph import get_graph
 from config import get_config
 from soul_snippets import write_journal_entry, write_snippet_entry
+from lib.runtime_context import parse_session_jsonl as _ctx_parse_session_jsonl, build_transcript as _ctx_build_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +59,7 @@ def _get_owner_id(override: Optional[str] = None) -> str:
 
 def parse_session_jsonl(path: str) -> str:
     """Parse a platform session JSONL file into a human-readable transcript."""
-    from lib.adapter import get_adapter
-    return get_adapter().parse_session_jsonl(Path(path))
+    return _ctx_parse_session_jsonl(Path(path))
 
 
 def build_transcript(messages: List[Dict[str, str]]) -> str:
@@ -67,8 +67,7 @@ def build_transcript(messages: List[Dict[str, str]]) -> str:
 
     Filters out system messages via the active adapter contract.
     """
-    from lib.adapter import get_adapter
-    return get_adapter().build_transcript(messages)
+    return _ctx_build_transcript(messages)
 
 
 def _chunk_messages(messages: List[Dict], max_chars: int = 30_000) -> List[List[Dict]]:

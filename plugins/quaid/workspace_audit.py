@@ -21,11 +21,11 @@ from typing import Dict, List, Any, Optional
 
 from llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
+from lib.runtime_context import get_workspace_dir, get_bootstrap_markdown_globs
 
 # Configuration
 def _workspace_dir() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().quaid_home()
+    return get_workspace_dir()
 
 # Configure logging — deferred to avoid module-load side effects
 def _setup_logging():
@@ -143,11 +143,7 @@ def _get_gateway_bootstrap_globs() -> List[str]:
 
     Kept as a backward-compatible function name for older callers/tests.
     """
-    from lib.adapter import get_adapter
-    try:
-        return get_adapter().get_bootstrap_markdown_globs()
-    except Exception:
-        return []
+    return get_bootstrap_markdown_globs()
 
 
 # Default maxLines for bootstrap files (project-level TOOLS.md, AGENTS.md, etc.)

@@ -61,6 +61,7 @@ from lib.tokens import (
     texts_are_near_identical,
     STOPWORDS as _LIB_STOPWORDS,
 )
+from lib.runtime_context import get_workspace_dir, get_adapter_instance
 
 # Prompt injection blocklist — defense-in-depth for stored facts
 _INJECTION_PATTERNS = [
@@ -4679,8 +4680,7 @@ if __name__ == "__main__":
                 print(f"[memory] [{r['similarity']:.2f}] [{r['category']}]{flag_str} {r['text']}")
 
             for r in doc_results:
-                from lib.adapter import get_adapter
-                home_dir = get_adapter().quaid_home().resolve()
+                home_dir = get_workspace_dir().resolve()
                 source_raw = str(r.get("source", ""))
                 try:
                     source_path = Path(source_raw).resolve()
@@ -5116,9 +5116,8 @@ if __name__ == "__main__":
                         print(f"    ID: {row['id']}  Pattern: {pattern}")
 
         elif args.command == "detect-provider":
-            from lib.adapter import get_adapter
             from lib.embeddings import get_embeddings_provider
-            adapter = get_adapter()
+            adapter = get_adapter_instance()
             adapter_name = type(adapter).__name__
             try:
                 llm = adapter.get_llm_provider()

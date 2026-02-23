@@ -30,11 +30,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from lib.markdown import strip_protected_regions as _strip_protected_regions
+from lib.runtime_context import get_workspace_dir
 
 # Configuration
 def _workspace_dir() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().quaid_home()
+    return get_workspace_dir()
 
 def _backup_dir() -> Path:
     return _workspace_dir() / "backups" / "soul-snippets"

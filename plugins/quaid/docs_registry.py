@@ -36,10 +36,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from lib.config import get_db_path
 from lib.database import get_connection
+from lib.runtime_context import get_workspace_dir
 
 def _workspace() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().quaid_home()
+    return get_workspace_dir()
 
 # Strict project name validation — prevents path traversal
 _PROJECT_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]*$')

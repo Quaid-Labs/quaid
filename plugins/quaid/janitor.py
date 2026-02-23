@@ -60,20 +60,25 @@ from llm_clients import (call_fast_reasoning, call_deep_reasoning, call_llm,
                          estimate_cost, set_token_budget, reset_token_budget,
                          is_token_budget_exhausted,
                          DEEP_REASONING_TIMEOUT, FAST_REASONING_TIMEOUT)
+from lib.runtime_context import (
+    get_workspace_dir,
+    get_data_dir,
+    get_logs_dir,
+    get_repo_slug,
+    get_install_url,
+    get_llm_provider,
+)
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
 def _workspace() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().quaid_home()
+    return get_workspace_dir()
 
 def _data_dir() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().data_dir()
+    return get_data_dir()
 
 def _logs_dir() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().logs_dir()
+    return get_logs_dir()
 
 WORKSPACE = None  # Lazy — use _workspace() instead
 _LIFECYCLE_REGISTRY = build_default_registry()
@@ -2471,8 +2476,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
     import urllib.request
     import urllib.error
 
-    from lib.adapter import get_adapter as _get_adapter
-    REPO = _get_adapter().get_repo_slug()
+    REPO = get_repo_slug()
     RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 
     # Read current version
@@ -2796,8 +2800,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # The adapter layer handles provider selection and authentication.
     if task not in ("embeddings", "cleanup", "rag"):
         try:
-            from lib.adapter import get_adapter
-            _llm = get_adapter().get_llm_provider()
+            _llm = get_llm_provider()
             _profiles = _llm.get_profiles()
             if not _profiles.get("deep", {}).get("available"):
                 raise RuntimeError("High-reasoning model not available")
@@ -3553,8 +3556,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 update_info = _check_for_updates()
                 if update_info:
                     print(f"  ⚠️  UPDATE AVAILABLE: v{update_info['current']} → v{update_info['latest']}")
-                    from lib.adapter import get_adapter as _ga
-                    print(f"  ⚠️  Update: curl -fsSL {_ga().get_install_url()} | bash")
+                    print(f"  ⚠️  Update: curl -fsSL {get_install_url()} | bash")
                     print(f"  ⚠️  Release: {update_info['url']}")
                     applied_changes["update_available"] = update_info
                 else:

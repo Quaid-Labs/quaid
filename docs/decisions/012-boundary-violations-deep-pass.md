@@ -1,7 +1,7 @@
 # 012: Deep Boundary Pass (Post-Refactor)
 
 Date: 2026-02-23
-Status: Accepted (phase 2 applied; phase 3 queued)
+Status: Accepted (phase 3 applied; phase 4 queued)
 
 ## Scope
 Deep audit of boundary ownership after the orchestrator split and janitor lifecycle extraction.
@@ -30,15 +30,23 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 - Risk: ingestion policy drift by adapter/runtime.
 - Follow-up: emit lifecycle event instead of direct ingest invocation from adapter.
 
-### Medium Priority
-3. Lifecycle still couples to adapter for path/provider resolution
+### Medium Priority (now resolved in this pass)
+3. Lifecycle/datastore direct adapter imports for runtime/provider resolution
 - Files: `plugins/quaid/janitor.py`, `plugins/quaid/llm_clients.py`
-- Evidence: direct `get_adapter()` calls for workspace/log paths and provider checks.
-- Target: introduce environment/provider ports (`runtime_context`, `llm_provider_port`) so lifecycle does not import adapter directly.
+- Previous evidence: direct `get_adapter()` calls for workspace/log paths and provider checks.
+- Resolution: added `plugins/quaid/lib/runtime_context.py` port and rewired lifecycle/datastore/ingestor modules:
+  - `janitor.py`
+  - `llm_clients.py`
+  - `docs_rag.py`
+  - `docs_registry.py`
+  - `project_updater.py`
+  - `soul_snippets.py`
+  - `workspace_audit.py`
+  - `memory_graph.py`
+  - `extract.py`
 
 4. Datastore modules resolve runtime home paths via adapter
-- Files: `plugins/quaid/docs_rag.py`, `plugins/quaid/docs_registry.py`, `plugins/quaid/project_updater.py`, `plugins/quaid/soul_snippets.py`
-- Target: pass resolved roots from core/lifecycle instead of adapter lookups in each module.
+- Resolved via `lib/runtime_context.py` in the modules listed above.
 
 ### Low Priority
 5. Mixed ownership in notification/report routing policy
@@ -65,10 +73,14 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 
 ## Boundary Scan Snapshot (post-pass)
 - `adapter.ts`: only one `callPython(...)` remains (bridge implementation); no direct call sites in handlers.
-- Remaining cross-layer coupling is now concentrated in Python modules that still import `lib.adapter.get_adapter()`:
-  - `janitor.py`, `llm_clients.py`, `docs_rag.py`, `docs_registry.py`, `project_updater.py`, `soul_snippets.py`, `workspace_audit.py`, `memory_graph.py`, `extract.py`.
+- Remaining direct `get_adapter()` imports are concentrated in adapter-facing infrastructure modules:
+  - `mcp_server.py` (host RPC entrypoint)
+  - `notify.py`, `events.py`, `logger.py` (transport/runtime wiring)
+  - `config.py`, `enable_wal.py`, `docs_updater.py` (runtime path/config helpers)
+  - `lib/*` internals including `runtime_context.py` (intentional boundary root)
+These are currently expected and not lifecycle/datastore boundary violations.
 
 ## Next Actions
-1. Add runtime/provider context object injected into lifecycle/datastore modules (remove direct `get_adapter()` imports).
-2. Convert adapter-triggered docs ingest into lifecycle event dispatch + handler.
-3. Expand janitor lifecycle registry beyond `rag` (workspace/docs/snippets/journal).
+1. Convert adapter-triggered docs ingest into lifecycle event dispatch + handler.
+2. Expand janitor lifecycle registry beyond `rag` (workspace/docs/snippets/journal).
+3. Add janitor task parallelization (after boundary enforcement completes).

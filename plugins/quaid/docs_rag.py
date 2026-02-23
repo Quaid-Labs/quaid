@@ -19,12 +19,12 @@ from lib.config import get_db_path
 from lib.database import get_connection as _lib_get_connection
 from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding as _lib_pack_embedding, unpack_embedding as _lib_unpack_embedding
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
+from lib.runtime_context import get_workspace_dir
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
 def _workspace() -> Path:
-    from lib.adapter import get_adapter
-    return get_adapter().quaid_home()
+    return get_workspace_dir()
 
 WORKSPACE = None  # Lazy — use _workspace() instead
 
