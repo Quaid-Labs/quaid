@@ -12,7 +12,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_plugin: ${{ steps.filter.outputs.needs_plugin }}
+      docs_only: ${{ steps.filter.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docs_only:
+              - 'README.md'
+              - 'ROADMAP.md'
+              - 'VISION.md'
+              - 'docs/**'
+              - '.github/**'
+              - 'CODEOWNERS'
+              - 'CONTRIBUTING.md'
+              - 'SECURITY.md'
+            needs_plugin:
+              - 'plugins/quaid/**'
+              - 'scripts/**'
+              - 'install.sh'
+              - 'install.ps1'
+              - 'setup-quaid.sh'
+              - 'setup-quaid.mjs'
+
   quick:
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -26,45 +58,54 @@ jobs:
           cache: 'npm'
           cache-dependency-path: plugins/quaid/package-lock.json
 
+      - name: Baseline docs consistency check
+        run: node scripts/check-docs-consistency.mjs
+
+      - name: Baseline release consistency check
+        run: node scripts/release-verify.mjs
+
       - name: Setup Python
+        if: needs.changes.outputs.needs_plugin == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install Python test deps
+        if: needs.changes.outputs.needs_plugin == 'true'
         run: python -m pip install --upgrade pip pytest ruff
 
       - name: Install plugin deps
+        if: needs.changes.outputs.needs_plugin == 'true'
         working-directory: plugins/quaid
         run: npm ci
 
-      - name: Docs consistency check
-        run: node scripts/check-docs-consistency.mjs
-
-      - name: Release consistency check
-        run: node scripts/release-verify.mjs
-
       - name: Runtime TS/JS pair check (strict)
+        if: needs.changes.outputs.needs_plugin == 'true'
         working-directory: plugins/quaid
         run: node scripts/check-runtime-pairs.mjs --strict
 
       - name: Python compile check
+        if: needs.changes.outputs.needs_plugin == 'true'
         working-directory: plugins/quaid
         run: python -m compileall -q .
 
       - name: TypeScript lint
+        if: needs.changes.outputs.needs_plugin == 'true'
         working-directory: plugins/quaid
         run: npm run lint:ts
 
       - name: Python lint
+        if: needs.changes.outputs.needs_plugin == 'true'
         working-directory: plugins/quaid
         run: npm run lint:py
 
       - name: TypeScript integration tests
+        if: needs.changes.outputs.needs_plugin == 'true'
         working-directory: plugins/quaid
         run: npm run test:integration
 
       - name: Python unit tests (isolated parallel)
+        if: needs.changes.outputs.needs_plugin == 'true'
         working-directory: plugins/quaid
         run: python scripts/run_pytests.py --mode unit --workers 4 --timeout 120
 

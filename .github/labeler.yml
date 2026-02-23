@@ -1,0 +1,48 @@
+area:docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'README.md'
+          - 'docs/**'
+
+area:adapter-openclaw:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'plugins/quaid/adapters/openclaw/**'
+
+area:core:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'plugins/quaid/core/**'
+
+area:tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'plugins/quaid/tests/**'
+          - 'plugins/quaid/scripts/run_pytests.py'
+          - 'plugins/quaid/scripts/run-all-tests.sh'
+
+area:installer:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'install.sh'
+          - 'install.ps1'
+          - 'setup-quaid.sh'
+          - 'setup-quaid.mjs'
+
+area:github:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+
+area:config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'config/**'
+          - 'memory.json.example'
+
+area:release:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'scripts/release-*.mjs'
+          - 'scripts/release-*.sh'
+          - 'docs/RELEASE.md'

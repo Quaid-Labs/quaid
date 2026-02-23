@@ -11,6 +11,8 @@ Report privately to the maintainer with:
 - Impact assessment (what can be accessed or changed)
 - Suggested mitigation (if available)
 
+Include your Quaid version and host mode (`openclaw`, `mcp`, `cli`) when possible.
+
 ## Scope Notes
 
 Quaid is local-first software, but security still matters:
@@ -27,3 +29,8 @@ Best effort:
 - Acknowledge report quickly
 - Confirm impact/reproducibility
 - Ship fix and update release notes
+
+## Disclosure Guidance
+
+- Keep vulnerabilities private until a patch or mitigation is available.
+- Scrub credentials, tokens, and local paths from shared logs.

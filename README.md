@@ -170,12 +170,14 @@ We're actively testing and refining the system against benchmarks and welcome co
 ## Learn More
 
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
+- [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
 - [Interface Contract](docs/INTERFACES.md) — MCP/CLI/adapter capability model and event contract
 - [Benchmark Results](docs/BENCHMARKS.md) — Full LoCoMo evaluation with per-category breakdowns
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
 - [Provider Modes](docs/PROVIDER-MODES.md) — Provider routing and cost-safety guidance
 - [Release Workflow](docs/RELEASE.md) — Pre-push checks and ownership guard
+- [Contributing](CONTRIBUTING.md) — PR expectations, validation, and AI-assisted contribution policy
 - [Good First Issues](docs/GOOD-FIRST-ISSUES.md) — Small scoped tasks for new contributors
 - [v0.2.0-alpha Notes](docs/releases/v0.2.0-alpha.md) — Release highlights and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next

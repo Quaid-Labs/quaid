@@ -1,0 +1,19 @@
+# Default owner
+* @solstead
+
+# Core knowledge layer logic
+/plugins/quaid/core/ @solstead
+/plugins/quaid/adapters/ @solstead
+
+# Release and installer flows
+/scripts/ @solstead
+/install.sh @solstead
+/install.ps1 @solstead
+/setup-quaid.sh @solstead
+/setup-quaid.mjs @solstead
+
+# Policy and repo governance docs
+/VISION.md @solstead
+/SECURITY.md @solstead
+/CONTRIBUTING.md @solstead
+/.github/ @solstead

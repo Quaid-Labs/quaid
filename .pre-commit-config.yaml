@@ -1,0 +1,30 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.10
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: quaid-ts-lint
+        name: Quaid TypeScript lint
+        entry: bash -lc 'cd plugins/quaid && npm run -s lint:ts'
+        language: system
+        pass_filenames: false
+
+      - id: quaid-py-lint
+        name: Quaid Python lint
+        entry: bash -lc 'cd plugins/quaid && npm run -s lint:py'
+        language: system
+        pass_filenames: false
