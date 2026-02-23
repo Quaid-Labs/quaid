@@ -122,6 +122,7 @@ class JanitorConfig:
     enabled: bool = True
     dry_run: bool = False
     apply_mode: str = "auto"  # Legacy master mode: auto | ask | dry_run
+    token_budget: int = 0  # Max total LLM tokens per janitor run (0 = unlimited)
     approval_policies: Dict[str, str] = field(default_factory=lambda: {
         "core_markdown_writes": "ask",
         "project_docs_writes": "ask",
@@ -578,6 +579,8 @@ def _load_config_inner() -> MemoryConfig:
         dry_run=config_data.get('janitor', {}).get('dry_run', False),
         apply_mode=config_data.get('janitor', {}).get('apply_mode',
                     config_data.get('janitor', {}).get('applyMode', 'auto')),
+        token_budget=int(config_data.get('janitor', {}).get('token_budget',
+                        config_data.get('janitor', {}).get('tokenBudget', 0))),
         approval_policies={
             "core_markdown_writes": str(config_data.get('janitor', {}).get('approval_policies', {})
                                         .get('core_markdown_writes',

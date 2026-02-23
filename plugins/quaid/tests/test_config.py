@@ -212,6 +212,23 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_loads_janitor_token_budget_from_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_data = {
+                "janitor": {"tokenBudget": 12345}
+            }
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps(config_data))
+
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.janitor.token_budget == 12345
+        finally:
+            config._config = old_config
+
     def test_loads_adapter_type_from_config(self, tmp_path):
         import config
         old_config = config._config

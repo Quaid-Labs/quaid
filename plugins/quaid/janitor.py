@@ -2552,6 +2552,8 @@ def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True
     """
     if token_budget > 0:
         set_token_budget(token_budget)
+    else:
+        reset_token_budget()
     # Prevent concurrent janitor runs
     if not _acquire_lock():
         print("ERROR: Another janitor instance is already running. Exiting.")
@@ -2562,6 +2564,8 @@ def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True
     try:
         return _run_task_optimized_inner(task, dry_run, incremental, time_budget, force_distill, user_approved)
     finally:
+        # Avoid leaking per-run budget limits across long-lived Python processes.
+        reset_token_budget()
         _release_lock()
 
 
@@ -3860,16 +3864,28 @@ if __name__ == "__main__":
                         help="Force journal distillation regardless of interval")
     parser.add_argument("--time-budget", type=int, default=0,
                         help="Wall-clock budget in seconds (0 = unlimited). Tasks are skipped when time runs low.")
-    parser.add_argument("--token-budget", type=int, default=0,
+    parser.add_argument("--token-budget", type=int, default=None,
                         help="Max total tokens (input+output) for LLM calls (0 = unlimited). "
                              "LLM calls are skipped when budget is exhausted.")
 
     args = parser.parse_args()
 
-    # Set token budget before any LLM calls
-    if args.token_budget > 0:
-        set_token_budget(args.token_budget)
-        print(f"[janitor] Token budget: {args.token_budget:,} tokens")
+    # Resolve token budget precedence: CLI > config > env fallback (compat).
+    try:
+        config_token_budget = int(getattr(_cfg.janitor, "token_budget", 0) or 0)
+    except Exception:
+        config_token_budget = 0
+    try:
+        env_token_budget = int(os.environ.get("JANITOR_TOKEN_BUDGET", "0") or 0)
+    except Exception:
+        env_token_budget = 0
+    effective_token_budget = (
+        int(args.token_budget) if args.token_budget is not None
+        else (config_token_budget if config_token_budget > 0 else env_token_budget)
+    )
+    if effective_token_budget > 0:
+        source = "cli" if args.token_budget is not None else ("config" if config_token_budget > 0 else "env")
+        print(f"[janitor] Token budget: {effective_token_budget:,} tokens (source: {source})")
 
     # dry_run is derived from apply flags and janitor apply policy.
     dry_run, apply_policy_warning = _resolve_apply_mode(args.apply, args.approve)
@@ -3880,7 +3896,8 @@ if __name__ == "__main__":
     result = run_task_optimized(args.task, dry_run=dry_run, incremental=incremental,
                                 time_budget=args.time_budget,
                                 force_distill=args.force_distill,
-                                user_approved=args.approve)
+                                user_approved=args.approve,
+                                token_budget=effective_token_budget)
     
     # Write stats to file for dashboard consumption
     stats_file = _logs_dir() / "janitor-stats.json"

@@ -144,8 +144,9 @@ def estimate_cost() -> float:
 # Per-operation token budget — set by callers to limit total tokens for a
 # sequence of LLM calls (e.g., janitor pipeline, recall with retries).
 # 0 = unlimited. Checked in call_llm() after the cost cap.
-# Also settable via JANITOR_TOKEN_BUDGET env var.
-_token_budget: int = int(os.environ.get("JANITOR_TOKEN_BUDGET", "0"))
+# Config should be the primary source (janitor.token_budget). Env var
+# fallback is handled by janitor runner for compatibility.
+_token_budget: int = 0
 _token_budget_used: int = 0
 
 
