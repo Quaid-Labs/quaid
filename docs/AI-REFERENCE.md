@@ -100,6 +100,8 @@ Write request
 | `plugins/quaid/scripts/run-quaid-e2e-matrix.sh` | Bootstrap/runtime auth-path matrix runner with failure classification + JSON summary |
 | `scripts/check-docs-consistency.mjs` | GitHub-facing docs drift gate (README/ARCHITECTURE/AI-REFERENCE invariants) |
 | `scripts/release-verify.mjs` | Release/version consistency gate (package/setup/README/release-note alignment) |
+| `scripts/release-owner-check.mjs` | Ownership/attribution gate (author/committer identity + blocked bot/co-author tags) |
+| `scripts/release-check.sh` | Combined pre-push release checklist (docs + release + ownership + runtime pair checks) |
 
 ### Prompt Templates (`prompts/`)
 

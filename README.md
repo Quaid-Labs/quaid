@@ -174,6 +174,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Interface Contract](docs/INTERFACES.md) — MCP/CLI/adapter capability model and event contract
 - [Benchmark Results](docs/BENCHMARKS.md) — Full LoCoMo evaluation with per-category breakdowns
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
+- [Release Workflow](docs/RELEASE.md) — Pre-push checks and ownership guard
 - [v0.2.0-alpha Notes](docs/releases/v0.2.0-alpha.md) — Release highlights and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 

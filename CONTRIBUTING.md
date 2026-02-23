@@ -34,6 +34,14 @@ For integration-heavy changes, also run:
 npm run test:all
 ```
 
+Before pushing release-facing updates:
+
+```bash
+bash scripts/release-check.sh
+```
+
+See `docs/RELEASE.md` for ownership guard details and expected attribution settings.
+
 ## Design Expectations
 
 - Keep adapter/orchestrator/core boundaries explicit.
