@@ -275,6 +275,13 @@ LLM_TIMEOUT = 30  # Timeout for individual LLM calls
 MAX_EXECUTION_TIME = _cfg.janitor.task_timeout_minutes * 60  # From config (seconds)
 
 
+def _is_benchmark_mode() -> bool:
+    """True when janitor is running under benchmark harness semantics."""
+    return str(os.environ.get("QUAID_BENCHMARK_MODE", "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 class JanitorMetrics:
     """Track timing and performance metrics."""
     
@@ -3578,14 +3585,17 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # After all processing (review, dedup, contradiction, edges), promote
         # approved facts to active so they're never reprocessed by the pipeline.
         # CRITICAL: Only graduate if memory pipeline completed without errors.
-        if task == "all" and not dry_run and _cfg.systems.memory:
-            if not memory_pipeline_ok:
+        if task in ("all", "graduate") and not dry_run and _cfg.systems.memory:
+            if task == "all" and not memory_pipeline_ok:
                 error_count = len(metrics.errors)
                 print(f"[Final: Graduate approved → active] BLOCKED")
                 print(f"  {error_count} error(s) occurred during memory pipeline.")
                 print(f"  Facts remain as approved/pending — will be reprocessed next run.\n")
             else:
-                print("[Final: Graduate approved → active]")
+                if task == "all":
+                    print("[Final: Graduate approved → active]")
+                else:
+                    print("[Task: Graduate approved → active]")
                 with graph._get_conn() as conn:
                     cursor = conn.execute(
                         "UPDATE nodes SET status = 'active' WHERE status = 'approved'"
@@ -3598,7 +3608,29 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         metrics.add_error(f"Critical error in task {task}: {str(e)}")
         memory_pipeline_ok = False
         print(f"ERROR: {e}")
-    
+
+    # Benchmark-mode validity gate: janitor owns run validity semantics.
+    if _is_benchmark_mode() and not dry_run and task in ("all", "graduate"):
+        try:
+            with graph._get_conn() as conn:
+                pending = int(conn.execute(
+                    "SELECT COUNT(*) FROM nodes WHERE status = 'pending'"
+                ).fetchone()[0] or 0)
+                approved = int(conn.execute(
+                    "SELECT COUNT(*) FROM nodes WHERE status = 'approved'"
+                ).fetchone()[0] or 0)
+            if pending > 0 or approved > 0:
+                msg = (
+                    "Benchmark mode invalid state: "
+                    f"pending={pending}, approved={approved} after janitor task={task}"
+                )
+                print(f"[benchmark] {msg}")
+                metrics.add_error(msg)
+                memory_pipeline_ok = False
+        except Exception as e:
+            metrics.add_error(f"Benchmark mode validation failed: {e}")
+            memory_pipeline_ok = False
+
     # Generate comprehensive report
     final_metrics = metrics.summary()
     
@@ -3735,8 +3767,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Memory Janitor (Optimized)")
-    parser.add_argument("--task", choices=["embeddings", "workspace", "docs_staleness", "docs_cleanup", "snippets", "soul_snippets", "journal", "review", "dedup_review", "duplicates", "contradictions", "decay", "decay_review", "edges", "rag", "tests", "cleanup", "update_check", "all"],
-                        default="all", help="Task to run")
+    parser.add_argument("--task", choices=["embeddings", "workspace", "docs_staleness", "docs_cleanup", "snippets", "soul_snippets", "journal", "review", "dedup_review", "duplicates", "contradictions", "decay", "decay_review", "graduate", "edges", "rag", "tests", "cleanup", "update_check", "all"],
+                       default="all", help="Task to run")
     parser.add_argument("--apply", action="store_true", help="Apply changes (default: dry-run)")
     parser.add_argument("--approve", action="store_true",
                         help="Confirm apply when janitor.applyMode is set to 'ask'")
