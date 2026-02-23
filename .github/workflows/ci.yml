@@ -2,7 +2,7 @@ name: Quaid CI
 
 on:
   push:
-    branches: [main, release-squash-20260222]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:

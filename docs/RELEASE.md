@@ -2,12 +2,26 @@
 
 Use this checklist before pushing release work to GitHub.
 
+## Safety Baseline
+
+Before public usage, treat `main` as immutable history:
+
+- No force pushes to `main`
+- No history rewrites after publish
+- Merge through PR + passing CI
+
+Configure GitHub protection:
+
+```bash
+node scripts/github-protect-main.mjs --repo Steadman-Labs/quaid
+```
+
 ## Ownership Guard
 
 Quaid release commits should be attributed to:
 
-- `user.name`: `Solomon Steadman`
-- `user.email`: `solstead@users.noreply.github.com`
+- `user.name`: `solstead`
+- `user.email`: `168413654+solstead@users.noreply.github.com`
 
 Validate ownership/attribution on local commits:
 
@@ -43,6 +57,14 @@ This runs:
 2. release metadata/version consistency
 3. ownership/attribution verification
 4. strict TypeScript/JavaScript runtime pair check
+
+## Tarball Build
+
+Build installer artifact locally:
+
+```bash
+./scripts/build-release-tarball.sh
+```
 
 ## Optional: Git Hook
 
