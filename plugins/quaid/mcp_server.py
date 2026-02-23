@@ -35,6 +35,7 @@ from api import (
     store,
     recall,
     search,
+    extract_transcript,
     create_edge,
     forget,
     get_memory,
@@ -87,8 +88,7 @@ def memory_extract(
     Returns:
         Dict with facts_stored, facts_skipped, edges_created, and extracted details.
     """
-    from extract import extract_from_transcript
-    return extract_from_transcript(
+    return extract_transcript(
         transcript=transcript,
         owner_id=OWNER_ID,
         label=label,

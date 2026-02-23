@@ -20,9 +20,9 @@ from lib.runtime_context import get_workspace_dir
 from memory_graph import (
     store as _store,
     recall as _recall,
+    search as _search,
     create_edge as _create_edge,
     stats as _stats,
-    get_graph,
     _forget as _internal_forget,
     _get_memory as _internal_get_memory,
     Node,
@@ -167,20 +167,7 @@ def search(
     Example:
         >>> results = search("Mars colony", owner_id="quaid")
     """
-    graph = get_graph()
-    raw = graph.search_hybrid(query, limit=limit, owner_id=owner_id)
-    return [
-        {
-            "id": node.id,
-            "text": node.name,
-            "category": node.type,
-            "similarity": round(score, 4),
-            "confidence": node.confidence,
-            "owner_id": node.owner_id,
-            "created_at": node.created_at,
-        }
-        for node, score in raw
-    ]
+    return _search(query=query, owner_id=owner_id, limit=limit)
 
 
 def create_edge(
@@ -265,6 +252,23 @@ def stats() -> Dict[str, Any]:
     return _stats()
 
 
+def extract_transcript(
+    transcript: str,
+    owner_id: str,
+    label: str = "mcp",
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Run transcript extraction through the ingestor interface."""
+    from extract import extract_from_transcript
+
+    return extract_from_transcript(
+        transcript=transcript,
+        owner_id=owner_id,
+        label=label,
+        dry_run=dry_run,
+    )
+
+
 def projects_search_docs(
     query: str,
     limit: int = 5,
@@ -302,8 +306,8 @@ __all__ = [
     "forget",
     "get_memory",
     "stats",
+    "extract_transcript",
     "projects_search_docs",
-    "get_graph",
     "Node",
     "Edge",
 ]

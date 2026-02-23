@@ -34,6 +34,11 @@ def _import_mcp_server():
     mock_api.get_memory.return_value = {"id": "g1", "name": "Test memory", "type": "fact"}
     mock_api.forget.return_value = True
     mock_api.create_edge.return_value = {"edge_id": "e1", "status": "created"}
+    mock_api.extract_transcript.return_value = {
+        "facts_stored": 1,
+        "facts_skipped": 0,
+        "edges_created": 0,
+    }
     mock_api.projects_search_docs.return_value = {
         "chunks": [{"content": "Some doc chunk", "source_file": "README.md", "similarity": 0.8}]
     }
@@ -42,7 +47,6 @@ def _import_mcp_server():
     mock_graph.get_stats.return_value = {
         "total_nodes": 100, "edges": 50, "by_type": {"fact": 80}, "by_status": {"active": 90}
     }
-    mock_api.get_graph.return_value = mock_graph
     mock_api.stats.return_value = mock_graph.get_stats.return_value
 
     mock_rag = MagicMock()
@@ -55,6 +59,7 @@ def _import_mcp_server():
     # Patch at the api/docs_rag module level, then force reimport of mcp_server
     # so its `from api import store, ...` binds to the mocked functions.
     with patch("api.store", mock_api.store), \
+         patch("api.extract_transcript", mock_api.extract_transcript), \
          patch("api.recall", mock_api.recall), \
          patch("api.search", mock_api.search), \
          patch("api.get_memory", mock_api.get_memory), \
@@ -62,7 +67,6 @@ def _import_mcp_server():
          patch("api.create_edge", mock_api.create_edge), \
          patch("api.stats", mock_api.stats), \
          patch("api.projects_search_docs", mock_api.projects_search_docs), \
-         patch("api.get_graph", mock_api.get_graph), \
          patch("docs_rag.DocsRAG", mock_rag):
         # Force reimport so mcp_server binds to mocked names
         if "mcp_server" in sys.modules:
@@ -165,6 +169,23 @@ class TestOwnerSecurity:
         mod, *_ = server
         with pytest.raises(TypeError):
             mod.memory_store("test", owner_id="evil")
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_extract
+# ---------------------------------------------------------------------------
+
+class TestMemoryExtract:
+    def test_extract_routes_through_api(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_extract("User likes coffee", label="mcp", dry_run=False)
+        mock_api.extract_transcript.assert_called_once_with(
+            transcript="User likes coffee",
+            owner_id="test-owner",
+            label="mcp",
+            dry_run=False,
+        )
+        assert result["facts_stored"] == 1
 
 
 # ---------------------------------------------------------------------------

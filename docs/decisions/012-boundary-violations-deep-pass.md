@@ -133,6 +133,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `plugins/quaid/mcp_server.py` uses API entrypoints only for recall/stats
   - `projects_search` in `plugins/quaid/mcp_server.py` now routes through `api.projects_search_docs(...)`
     instead of directly constructing `DocsRAG` datastore calls
+  - `memory_extract` in `plugins/quaid/mcp_server.py` now routes through
+    `api.extract_transcript(...)` instead of direct ingestor imports
 - Orchestrator store implementation moved out:
   - `plugins/quaid/orchestrator/default-orchestrator.ts` uses injected store callbacks
   - `plugins/quaid/adapters/openclaw/adapter.ts` supplies journal/project store handlers
@@ -154,6 +156,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - ingestor/clustering modules now route datastore graph access through the facade:
     - `plugins/quaid/extract.py`
     - `plugins/quaid/semantic_clustering.py`
+  - API search now routes through datastore interface function `memory_graph.search(...)`
+    instead of `api.py` calling `get_graph().search_hybrid(...)`
 - Core project catalog no longer shells to python:
   - `plugins/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:
@@ -181,6 +185,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `lib/config.py`, `lib/archive.py`, `lib/embeddings.py`, `lib/providers.py` (adapter-proximate library internals)
 These are expected and not lifecycle/datastore boundary leaks.
 - No direct `memory_graph` recall/stats bypass in MCP server.
+- No direct ingestor import in MCP server extract path (API boundary now enforced).
+- No direct graph-object `search_hybrid(...)` call in API layer.
 - No direct delayed-notification file writes from janitor.
 - No docs/events command ownership in `memory_graph.py` CLI.
 

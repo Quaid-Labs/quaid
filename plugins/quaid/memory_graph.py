@@ -2194,6 +2194,30 @@ def stats() -> Dict[str, Any]:
     return get_graph().get_stats()
 
 
+def search(
+    query: str,
+    limit: int = 10,
+    owner_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Datastore search interface for API/core callers."""
+    if not query or not query.strip():
+        return []
+    graph = get_graph()
+    raw = graph.search_hybrid(query, limit=limit, owner_id=owner_id)
+    return [
+        {
+            "id": node.id,
+            "text": node.name,
+            "category": node.type,
+            "similarity": round(score, 4),
+            "confidence": node.confidence,
+            "owner_id": node.owner_id,
+            "created_at": node.created_at,
+        }
+        for node, score in raw
+    ]
+
+
 def register_lifecycle_routines(registry, result_factory) -> None:
     """Register memory datastore lifecycle maintenance routines."""
 
