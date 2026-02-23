@@ -135,6 +135,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
     instead of directly constructing `DocsRAG` datastore calls
   - `memory_extract` in `plugins/quaid/mcp_server.py` now routes through
     `api.extract_transcript(...)` instead of direct ingestor imports
+  - API no longer re-exports datastore model internals (`Node`, `Edge`) from
+    `plugins/quaid/api.py`, tightening facade boundaries for external callers
 - Orchestrator store implementation moved out:
   - `plugins/quaid/orchestrator/default-orchestrator.ts` uses injected store callbacks
   - `plugins/quaid/adapters/openclaw/adapter.ts` supplies journal/project store handlers

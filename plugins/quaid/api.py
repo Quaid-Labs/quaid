@@ -25,8 +25,6 @@ from memory_graph import (
     stats as _stats,
     _forget as _internal_forget,
     _get_memory as _internal_get_memory,
-    Node,
-    Edge,
 )
 
 
@@ -297,7 +295,6 @@ def projects_search_docs(
     return result
 
 
-# Re-export types and graph accessor for advanced use
 __all__ = [
     "store",
     "recall",
@@ -308,6 +305,4 @@ __all__ = [
     "stats",
     "extract_transcript",
     "projects_search_docs",
-    "Node",
-    "Edge",
 ]
