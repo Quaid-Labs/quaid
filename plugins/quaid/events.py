@@ -104,12 +104,10 @@ def _event_paths() -> Dict[str, Path]:
     runtime = root / ".quaid" / "runtime"
     events_dir = runtime / "events"
     notes_dir = runtime / "notes"
-    janitor_dir = root / "logs" / "janitor"
     return {
         "queue": events_dir / "queue.json",
         "history_jsonl": events_dir / "history.jsonl",
         "delayed_llm_requests": notes_dir / "delayed-llm-requests.json",
-        "delayed_notifications": janitor_dir / "delayed-notifications.json",
     }
 
 
@@ -340,3 +338,24 @@ def process_events(limit: int = 20, names: Optional[List[str]] = None) -> Dict[s
         "summary": {"processed": processed, "failed": failed, "touched": touched},
     })
     return {"processed": processed, "failed": failed, "touched": touched, "details": details}
+
+
+def queue_delayed_notification(
+    message: str,
+    *,
+    kind: str = "janitor",
+    priority: str = "normal",
+    source: str = "quaid_runtime",
+) -> Dict[str, Any]:
+    """Canonical path for delayed notifications."""
+    event = emit_event(
+        name="notification.delayed",
+        payload={
+            "message": str(message or ""),
+            "kind": str(kind or "janitor"),
+            "priority": str(priority or "normal"),
+        },
+        source=str(source or "quaid_runtime"),
+    )
+    processed = process_events(limit=1, names=["notification.delayed"])
+    return {"event": event, "processed": processed}

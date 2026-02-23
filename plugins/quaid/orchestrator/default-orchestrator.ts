@@ -1,5 +1,3 @@
-import type * as pathType from "node:path";
-import type * as fsType from "node:fs";
 import {
   getKnowledgeDatastoreRegistry,
   getRoutableDatastoreKeys,
@@ -39,11 +37,12 @@ export type RoutedRecallPlan = {
 
 type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: number; id?: string; category: string; via?: string; sourceType?: string }> = {
   workspace: string;
-  path: typeof pathType;
-  fs: typeof fsType;
+  // Legacy/deprecated fields kept only for test/backfill compatibility.
+  path?: unknown;
+  fs?: unknown;
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
-  callDocsRag: (command: "search" | "index" | "stats", args: string[]) => Promise<string>;
+  callDocsRag?: (command: "search" | "index" | "stats", args: string[]) => Promise<string>;
   callFastRouter: (systemPrompt: string, userPrompt: string) => Promise<string>;
   callDeepRouter?: (systemPrompt: string, userPrompt: string) => Promise<string>;
   getProjectCatalog?: () => Array<{ name: string; description: string }>;
@@ -61,6 +60,13 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
     scope: TechnicalScope,
     dateFrom?: string,
     dateTo?: string
+  ) => Promise<TMemoryResult[]>;
+  recallJournalStore?: (query: string, limit: number) => Promise<TMemoryResult[]>;
+  recallProjectStore?: (
+    query: string,
+    limit: number,
+    project?: string,
+    docs?: string[]
   ) => Promise<TMemoryResult[]>;
 };
 
@@ -315,58 +321,10 @@ ${projectHints}
     });
   }
 
-  function tokenizeQuery(query: string): string[] {
-    const stop = new Set([
-      "the", "and", "for", "with", "that", "this", "from", "have", "has", "was", "were",
-      "what", "when", "where", "which", "who", "how", "why", "about", "tell", "me", "your",
-      "my", "our", "their", "his", "her", "its", "into", "onto", "than", "then",
-    ]);
-    const tokens = String(query || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .map((t) => t.trim())
-      .filter((t) => t.length >= 3 && !stop.has(t));
-    return Array.from(new Set(tokens)).slice(0, 16);
-  }
-
   async function recallFromJournalStore(query: string, limit: number): Promise<TMemoryResult[]> {
     if (!deps.isSystemEnabled("journal")) return [];
-    const journalConfig = deps.getMemoryConfig().docs?.journal || {};
-    const journalDir = deps.path.join(deps.workspace, journalConfig.journalDir || "journal");
-    const tokens = tokenizeQuery(query);
-    if (!tokens.length) return [];
-    let files: string[] = [];
-    try {
-      files = deps.fs.readdirSync(journalDir).filter((f: string) => f.endsWith(".journal.md"));
-    } catch {
-      return [];
-    }
-
-    const scored: TMemoryResult[] = [];
-    for (const file of files) {
-      try {
-        const fullPath = deps.path.join(journalDir, file);
-        const content = deps.fs.readFileSync(fullPath, "utf8");
-        const lc = content.toLowerCase();
-        let hits = 0;
-        for (const t of tokens) {
-          if (lc.includes(t)) hits += 1;
-        }
-        if (hits === 0) continue;
-        const excerpt = content.replace(/\s+/g, " ").trim().slice(0, 220);
-        const similarity = Math.min(0.95, 0.45 + (hits / Math.max(tokens.length, 1)) * 0.5);
-        scored.push({
-          text: `${file}: ${excerpt}${content.length > 220 ? "..." : ""}`,
-          category: "journal",
-          similarity,
-          via: "journal",
-        } as TMemoryResult);
-      } catch {}
-    }
-
-    scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
-    return scored.slice(0, limit);
+    if (!deps.recallJournalStore) return [];
+    return deps.recallJournalStore(query, limit);
   }
 
   async function recallFromProjectStore(
@@ -376,41 +334,8 @@ ${projectHints}
     docs?: string[]
   ): Promise<TMemoryResult[]> {
     if (!deps.isSystemEnabled("projects")) return [];
-    try {
-      const args = [query, "--limit", String(limit)];
-      if (project) args.push("--project", project);
-      if (Array.isArray(docs) && docs.length > 0) {
-        args.push("--docs", docs.join(","));
-      }
-      const out = await deps.callDocsRag("search", args);
-      if (!out || !out.trim()) return [];
-      const results: TMemoryResult[] = [];
-      const lines = out.split("\n");
-      for (const line of lines) {
-        const m = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
-        if (!m) continue;
-        const file = m[1].split("/").pop() || m[1];
-        const section = m[2].trim();
-        const sim = Number.parseFloat(m[3]) || 0.6;
-        results.push({
-          text: `${file} > ${section}`,
-          category: "project",
-          similarity: sim,
-          via: "project",
-        } as TMemoryResult);
-      }
-      if (results.length === 0) {
-        results.push({
-          text: out.replace(/\s+/g, " ").slice(0, 280),
-          category: "project",
-          similarity: 0.55,
-          via: "project",
-        } as TMemoryResult);
-      }
-      return results.slice(0, limit);
-    } catch {
-      return [];
-    }
+    if (!deps.recallProjectStore) return [];
+    return deps.recallProjectStore(query, limit, project, docs);
   }
 
   async function totalRecall(query: string, limit: number, opts: TotalRecallOptions): Promise<TMemoryResult[]> {

@@ -1,13 +1,10 @@
-import type { execSync as execSyncType } from "node:child_process";
 import type * as fsType from "node:fs";
 import type * as pathType from "node:path";
 
 type ProjectCatalogReaderDeps = {
   workspace: string;
-  docsRegistryScript: string;
   fs: typeof fsType;
   path: typeof pathType;
-  execSync: typeof execSyncType;
 };
 
 function firstUsefulLine(content: string): string {
@@ -54,27 +51,11 @@ function getProjectDescriptionFromProjectMd(
 export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
   function getProjectNames(): string[] {
     try {
-      const output = deps.execSync(
-        `python3 "${deps.docsRegistryScript}" list-projects --names-only`,
-        {
-          encoding: "utf-8",
-          env: {
-            ...process.env,
-            QUAID_HOME: deps.workspace,
-            CLAWDBOT_WORKSPACE: deps.workspace,
-          },
-          timeout: 10_000,
-        },
-      ).trim();
-      return output.split("\n").filter(Boolean);
+      const configPath = deps.path.join(deps.workspace, "config/memory.json");
+      const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
+      return Object.keys(configData?.projects?.definitions || {});
     } catch {
-      try {
-        const configPath = deps.path.join(deps.workspace, "config/memory.json");
-        const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
-        return Object.keys(configData?.projects?.definitions || {});
-      } catch {
-        return [];
-      }
+      return [];
     }
   }
 

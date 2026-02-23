@@ -88,6 +88,13 @@ def recall(
     min_similarity: Optional[float] = None,
     debug: bool = False,
     technical_scope: str = "any",
+    use_routing: bool = True,
+    use_aliases: bool = True,
+    use_intent: bool = True,
+    use_multi_pass: bool = True,
+    use_reranker: bool = True,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Recall memories matching a natural language query.
 
@@ -125,6 +132,13 @@ def recall(
         min_similarity=min_similarity,
         debug=debug,
         technical_scope=technical_scope,
+        use_routing=use_routing,
+        use_aliases=use_aliases,
+        use_intent=use_intent,
+        use_multi_pass=use_multi_pass,
+        use_reranker=use_reranker,
+        date_from=date_from,
+        date_to=date_to,
     )
 
 
@@ -242,6 +256,11 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
     return _internal_get_memory(node_id)
 
 
+def stats() -> Dict[str, Any]:
+    """Return graph-level statistics."""
+    return get_graph().get_stats()
+
+
 # Re-export types and graph accessor for advanced use
 __all__ = [
     "store",
@@ -250,6 +269,7 @@ __all__ = [
     "create_edge",
     "forget",
     "get_memory",
+    "stats",
     "get_graph",
     "Node",
     "Edge",

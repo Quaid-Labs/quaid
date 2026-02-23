@@ -124,8 +124,19 @@ def log_doc_update(
         try:
             cfg = get_config()
             if cfg.docs.notify_on_update:
-                from notify import notify_doc_update
-                notify_doc_update(doc_path, trigger, summary)
+                from events import queue_delayed_notification
+                message = (
+                    "[Quaid] 📋 Auto-Documentation Update\n"
+                    f"Updated: `{Path(doc_path).name}`\n"
+                    f"Trigger: {trigger}\n"
+                    f"Changes: {summary}"
+                )
+                queue_delayed_notification(
+                    message,
+                    kind="doc_update",
+                    priority="normal",
+                    source="docs_updater",
+                )
         except Exception as e:
             print(f"  [notify] Failed to notify user: {e}")
 

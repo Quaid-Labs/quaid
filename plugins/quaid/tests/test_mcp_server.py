@@ -40,6 +40,7 @@ def _import_mcp_server():
         "total_nodes": 100, "edges": 50, "by_type": {"fact": 80}, "by_status": {"active": 90}
     }
     mock_api.get_graph.return_value = mock_graph
+    mock_api.stats.return_value = mock_graph.get_stats.return_value
 
     mock_rag = MagicMock()
     mock_rag_instance = MagicMock()
@@ -56,6 +57,7 @@ def _import_mcp_server():
          patch("api.get_memory", mock_api.get_memory), \
          patch("api.forget", mock_api.forget), \
          patch("api.create_edge", mock_api.create_edge), \
+         patch("api.stats", mock_api.stats), \
          patch("api.get_graph", mock_api.get_graph), \
          patch("docs_rag.DocsRAG", mock_rag):
         # Force reimport so mcp_server binds to mocked names
@@ -328,8 +330,7 @@ class TestMemoryStats:
     def test_stats(self, server):
         mod, mock_api, mock_graph, _ = server
         result = mod.memory_stats()
-        mock_api.get_graph.assert_called_once()
-        mock_graph.get_stats.assert_called_once()
+        mock_api.stats.assert_called_once()
         assert result["total_nodes"] == 100
 
 

@@ -1,7 +1,7 @@
 # 011: Four-Zone Boundary Audit (Adapter / Core-Orchestrator / Datastore / Ingestor)
 
 Date: 2026-02-23
-Status: Accepted (phase 1 and phase 2 done; lifecycle phase 3 in progress)
+Status: Accepted (phases 1-5 complete; follow-up hardening queued)
 
 ## Context
 Quaid currently uses a 5+1 zone architecture:

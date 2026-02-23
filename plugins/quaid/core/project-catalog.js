@@ -30,27 +30,11 @@ function getProjectDescriptionFromProjectMd(deps, homeDir) {
 function createProjectCatalogReader(deps) {
   function getProjectNames() {
     try {
-      const output = deps.execSync(
-        `python3 "${deps.docsRegistryScript}" list-projects --names-only`,
-        {
-          encoding: "utf-8",
-          env: {
-            ...process.env,
-            QUAID_HOME: deps.workspace,
-            CLAWDBOT_WORKSPACE: deps.workspace
-          },
-          timeout: 1e4
-        }
-      ).trim();
-      return output.split("\n").filter(Boolean);
+      const configPath = deps.path.join(deps.workspace, "config/memory.json");
+      const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
+      return Object.keys(configData?.projects?.definitions || {});
     } catch {
-      try {
-        const configPath = deps.path.join(deps.workspace, "config/memory.json");
-        const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
-        return Object.keys(configData?.projects?.definitions || {});
-      } catch {
-        return [];
-      }
+      return [];
     }
   }
   function getProjectCatalog() {

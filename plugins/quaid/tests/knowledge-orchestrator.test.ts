@@ -179,19 +179,14 @@ describe("knowledge orchestrator", () => {
   });
 
   it("passes project/docs filters through project store recall", async () => {
-    const callDocsRag = vi.fn(async () => "1. ~/projects/quaid/PROJECT.md > Overview (similarity: 0.88)");
+    const recallProjectStore = vi.fn(async () => [
+      { text: "PROJECT.md > Overview", category: "project", similarity: 0.88, via: "project" },
+    ]);
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
-      path: {
-        join: (...parts: string[]) => parts.join("/"),
-      } as any,
-      fs: {
-        readdirSync: vi.fn(() => []),
-        readFileSync: vi.fn(() => ""),
-      } as any,
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      callDocsRag,
+      recallProjectStore,
       callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
       recallVector: vi.fn(async () => []),
       recallGraph: vi.fn(async () => []),
@@ -206,28 +201,25 @@ describe("knowledge orchestrator", () => {
       docs: ["PROJECT.md", "reference/memory-local-implementation.md"],
     });
 
-    expect(callDocsRag).toHaveBeenCalledWith("search", [
+    expect(recallProjectStore).toHaveBeenCalledWith(
       "architecture",
-      "--limit",
-      "5",
-      "--project",
+      5,
       "quaid",
-      "--docs",
-      "PROJECT.md,reference/memory-local-implementation.md",
-    ]);
+      ["PROJECT.md", "reference/memory-local-implementation.md"],
+    );
     expect(results.length).toBe(1);
     expect(results[0].category).toBe("project");
   });
 
   it("applies datastoreOptions override for project store scope", async () => {
-    const callDocsRag = vi.fn(async () => "1. ~/projects/quaid/PROJECT.md > Overview (similarity: 0.88)");
+    const recallProjectStore = vi.fn(async () => [
+      { text: "PROJECT.md > Overview", category: "project", similarity: 0.88, via: "project" },
+    ]);
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
-      path: { join: (...parts: string[]) => parts.join("/") } as any,
-      fs: { readdirSync: vi.fn(() => []), readFileSync: vi.fn(() => "") } as any,
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      callDocsRag,
+      recallProjectStore,
       callFastRouter: vi.fn(async () => '{"datastores":["project"]}'),
       recallVector: vi.fn(async () => []),
       recallGraph: vi.fn(async () => []),
@@ -248,15 +240,12 @@ describe("knowledge orchestrator", () => {
       },
     });
 
-    expect(callDocsRag).toHaveBeenCalledWith("search", [
+    expect(recallProjectStore).toHaveBeenCalledWith(
       "architecture",
-      "--limit",
-      "5",
-      "--project",
+      5,
       "quaid",
-      "--docs",
-      "PROJECT.md",
-    ]);
+      ["PROJECT.md"],
+    );
   });
 
   it("applies datastoreOptions override for vector technical scope", async () => {
@@ -320,15 +309,15 @@ describe("knowledge orchestrator", () => {
       datastores: ["project"],
       project: "quaid",
     }));
-    const callDocsRag = vi.fn(async () => "1. ~/projects/quaid/PROJECT.md > Overview (similarity: 0.9)");
+    const recallProjectStore = vi.fn(async () => [
+      { text: "PROJECT.md > Overview", category: "project", similarity: 0.9, via: "project" },
+    ]);
 
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
-      path: { join: (...parts: string[]) => parts.join("/") } as any,
-      fs: { readdirSync: vi.fn(() => []), readFileSync: vi.fn(() => "") } as any,
       getMemoryConfig: () => ({ docs: { journal: { journalDir: "journal" } } }),
       isSystemEnabled: (name) => name === "projects",
-      callDocsRag,
+      recallProjectStore,
       callFastRouter,
       callDeepRouter,
       getProjectCatalog: () => [{ name: "quaid", description: "Knowledge layer project docs." }],
@@ -347,13 +336,7 @@ describe("knowledge orchestrator", () => {
     expect(callDeepRouter).toHaveBeenCalledTimes(1);
     // Single prepass policy: no extra fast-router fallback call.
     expect(callFastRouter).toHaveBeenCalledTimes(0);
-    expect(callDocsRag).toHaveBeenCalledWith("search", [
-      "quaid architecture docs",
-      "--limit",
-      "5",
-      "--project",
-      "quaid",
-    ]);
+    expect(recallProjectStore).toHaveBeenCalledWith("quaid architecture docs", 5, "quaid", undefined);
     expect(results.length).toBe(1);
   });
 

@@ -4284,7 +4284,7 @@ if __name__ == "__main__":
         search_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
 
         # --- search-all ---
-        search_all_p = subparsers.add_parser("search-all", help="Unified search: memory + docs RAG")
+        search_all_p = subparsers.add_parser("search-all", help="Unified memory search (datastore only)")
         search_all_p.add_argument("query", nargs="+", help="Search query")
         search_all_p.add_argument("--owner", default=None, help="Owner ID")
         search_all_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
@@ -4444,33 +4444,6 @@ if __name__ == "__main__":
 
         # --- detect-provider ---
         subparsers.add_parser("detect-provider", help="Show current LLM and embeddings provider status")
-
-        # --- event ---
-        event_p = subparsers.add_parser("event", help="Emit/list/process runtime events")
-        event_sub = event_p.add_subparsers(dest="subcmd", help="Subcommand")
-
-        event_emit_p = event_sub.add_parser("emit", help="Emit an event into the queue")
-        event_emit_p.add_argument("--name", required=True, help="Event name (e.g. session.reset)")
-        event_emit_p.add_argument("--payload", default="{}", help="JSON payload object")
-        event_emit_p.add_argument("--source", default="cli", help="Event source label")
-        event_emit_p.add_argument("--session-id", default=None, help="Optional session ID")
-        event_emit_p.add_argument("--owner", default=None, help="Optional owner ID")
-        event_emit_p.add_argument("--priority", default="normal", help="Priority (low|normal|high)")
-        event_emit_p.add_argument(
-            "--dispatch",
-            default="auto",
-            choices=["auto", "immediate", "queued"],
-            help="Dispatch mode (auto: process active events now, queue passive events)",
-        )
-
-        event_list_p = event_sub.add_parser("list", help="List queued events")
-        event_list_p.add_argument("--status", default="pending", choices=["pending", "processed", "failed", "all"], help="Status filter")
-        event_list_p.add_argument("--limit", type=int, default=20, help="Max events to list")
-
-        event_process_p = event_sub.add_parser("process", help="Process pending events with registered handlers")
-        event_process_p.add_argument("--limit", type=int, default=20, help="Max events to process")
-        event_process_p.add_argument("--name", action="append", default=[], help="Process only this event name (repeatable)")
-        event_sub.add_parser("capabilities", help="List event capability registry")
 
         # Parse args
         args = parser.parse_args()
@@ -4658,40 +4631,14 @@ if __name__ == "__main__":
 
         elif args.command == "search-all":
             query = " ".join(args.query)
-
-            # Search memory
             memory_results = recall(query, limit=args.limit, owner_id=args.owner)
-
-            # Search docs
-            try:
-                from docs_rag import DocsRAG
-                rag = DocsRAG()
-                doc_results = rag.search_docs(query, limit=args.limit)
-            except Exception as e:
-                print(f"[docs] RAG search failed: {e}", file=sys.stderr)
-                doc_results = []
-
-            # Print tagged results
             for r in memory_results:
                 flags = []
                 if r.get('verified'): flags.append('V')
                 if r.get('pinned'): flags.append('P')
                 flag_str = f"[{''.join(flags)}]" if flags else ""
                 print(f"[memory] [{r['similarity']:.2f}] [{r['category']}]{flag_str} {r['text']}")
-
-            for r in doc_results:
-                home_dir = get_workspace_dir().resolve()
-                source_raw = str(r.get("source", ""))
-                try:
-                    source_path = Path(source_raw).resolve()
-                    source_short = f"~/{source_path.relative_to(home_dir)}"
-                except Exception:
-                    source_short = source_raw
-                header = r.get("section_header", "")
-                header_str = f" > {header}" if header else ""
-                print(f"[docs] [{r['similarity']:.2f}] {source_short}{header_str}")
-
-            if not memory_results and not doc_results:
+            if not memory_results:
                 print("No results found")
 
         elif args.command == "search-graph":
@@ -5140,55 +5087,6 @@ if __name__ == "__main__":
             print("Embeddings:")
             print(f"  Provider:   {type(embed).__name__}")
             print(f"  Model:      {embed.model_name} ({embed.dimension()}-dim)")
-
-        elif args.command == "event":
-            from events import emit_event, list_events, process_events, get_event_capability
-
-            subcmd = args.subcmd or "list"
-            if subcmd == "emit":
-                try:
-                    payload = json.loads(args.payload) if args.payload else {}
-                    if not isinstance(payload, dict):
-                        raise ValueError("payload must be a JSON object")
-                except Exception as e:
-                    print(f"Error: invalid --payload JSON ({e})", file=sys.stderr)
-                    sys.exit(1)
-                dispatch_mode = str(getattr(args, "dispatch", "auto") or "auto").strip().lower()
-                if dispatch_mode not in {"auto", "immediate", "queued"}:
-                    dispatch_mode = "auto"
-                capability = get_event_capability(args.name) or {}
-                delivery_mode = str(capability.get("delivery_mode") or "active").strip().lower()
-
-                event = emit_event(
-                    name=args.name,
-                    payload=payload,
-                    source=args.source,
-                    session_id=getattr(args, "session_id", None),
-                    owner_id=getattr(args, "owner", None),
-                    priority=args.priority,
-                )
-                should_process = (
-                    dispatch_mode == "immediate" or
-                    (dispatch_mode == "auto" and delivery_mode == "active")
-                )
-                processed = None
-                if should_process:
-                    processed = process_events(limit=1, names=[str(args.name)])
-                print(json.dumps({
-                    "event": event,
-                    "delivery_mode": delivery_mode,
-                    "dispatch": dispatch_mode,
-                    "processed": processed,
-                }, indent=2))
-            elif subcmd == "process":
-                result = process_events(limit=args.limit, names=list(args.name or []))
-                print(json.dumps(result, indent=2))
-            elif subcmd == "capabilities":
-                from events import get_event_registry
-                print(json.dumps({"events": get_event_registry()}, indent=2))
-            else:
-                events = list_events(status=args.status, limit=args.limit)
-                print(json.dumps({"events": events}, indent=2))
 
     try:
         main()

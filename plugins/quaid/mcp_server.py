@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
 
-from api import store, recall, search, create_edge, forget, get_memory, get_graph
+from api import store, recall, search, create_edge, forget, get_memory, stats
 from docs_rag import DocsRAG
 from lib.runtime_context import (
     get_adapter_instance,
@@ -178,9 +178,8 @@ def memory_recall(
     if not has_advanced:
         return recall(query=query, owner_id=OWNER_ID, limit=limit, technical_scope=technical_scope)
 
-    # Advanced path: expose full retrieval controls.
-    from memory_graph import recall as _raw_recall
-    return _raw_recall(
+    # Advanced path: still route through API boundary.
+    return recall(
         query=query,
         owner_id=OWNER_ID,
         limit=limit,
@@ -340,7 +339,7 @@ def memory_stats() -> dict:
     Returns:
         Dict with total_nodes, edges, counts by type and status, verified/unverified.
     """
-    return get_graph().get_stats()
+    return stats()
 
 
 @mcp.tool()

@@ -12,7 +12,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
-import { queueDelayedRequest, flushDelayedNotificationsToRequestQueue } from "./delayed-requests.js";
+import { queueDelayedRequest } from "./delayed-requests.js";
 import { createKnowledgeEngine } from "../../orchestrator/default-orchestrator.js";
 import { createDataWriteEngine } from "../../core/data-writers.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
@@ -55,7 +55,6 @@ const QUAID_LOGS_DIR = path.join(WORKSPACE, "logs");
 const QUAID_JANITOR_DIR = path.join(QUAID_LOGS_DIR, "janitor");
 const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-install-migration.json");
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
-const DELAYED_NOTIFICATIONS_PATH = path.join(QUAID_JANITOR_DIR, "delayed-notifications.json");
 const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 
@@ -1172,10 +1171,8 @@ async function callProjectUpdater(command: string, args: string[] = []): Promise
 
 const projectCatalogReader = createProjectCatalogReader({
   workspace: WORKSPACE,
-  docsRegistryScript: DOCS_REGISTRY,
   fs,
   path,
-  execSync,
 });
 const getProjectNames = () => projectCatalogReader.getProjectNames();
 const getProjectCatalog = () => projectCatalogReader.getProjectCatalog();
@@ -1298,23 +1295,6 @@ notify_user("Hey, I see you just installed Quaid. Want me to help migrate import
   } catch {}
 
   _saveJanitorNudgeState(state);
-}
-
-function flushDelayedNotifications(maxItems: number = 5): { delivered: number; queuedLlmRequests: number } {
-  try {
-    const result = flushDelayedNotificationsToRequestQueue(
-      DELAYED_NOTIFICATIONS_PATH,
-      DELAYED_LLM_REQUESTS_PATH,
-      maxItems
-    );
-    if (result.delivered > 0) {
-      console.log(`[quaid] Flushed ${result.delivered} delayed notification(s), queued ${result.queuedLlmRequests} llm request(s)`);
-    }
-    return result;
-  } catch (err: unknown) {
-    console.warn(`[quaid] Failed to flush delayed notifications: ${String((err as Error)?.message || err)}`);
-    return { delivered: 0, queuedLlmRequests: 0 };
-  }
 }
 
 // ============================================================================
@@ -1745,11 +1725,8 @@ async function recall(
 
 const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
   workspace: WORKSPACE,
-  path,
-  fs,
   getMemoryConfig,
   isSystemEnabled,
-  callDocsRag,
   getProjectCatalog,
   callFastRouter: async (systemPrompt: string, userPrompt: string) => {
     const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, 45_000);
@@ -1788,6 +1765,90 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
     return graphResults
       .filter((r) => (r.via || "") === "graph" || r.category === "graph")
       .map((r) => ({ ...r, via: "graph" as const }));
+  },
+  recallJournalStore: async (query, limit) => {
+    const journalConfig = getMemoryConfig().docs?.journal || {};
+    const journalDir = path.join(WORKSPACE, journalConfig.journalDir || "journal");
+    const stop = new Set([
+      "the", "and", "for", "with", "that", "this", "from", "have", "has", "was", "were",
+      "what", "when", "where", "which", "who", "how", "why", "about", "tell", "me", "your",
+      "my", "our", "their", "his", "her", "its", "into", "onto", "than", "then",
+    ]);
+    const tokens = Array.from(new Set(
+      String(query || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length >= 3 && !stop.has(t))
+    )).slice(0, 16);
+    if (!tokens.length) return [];
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(journalDir).filter((f: string) => f.endsWith(".journal.md"));
+    } catch {
+      return [];
+    }
+    const scored: MemoryResult[] = [];
+    for (const file of files) {
+      try {
+        const fullPath = path.join(journalDir, file);
+        const content = fs.readFileSync(fullPath, "utf8");
+        const lc = content.toLowerCase();
+        let hits = 0;
+        for (const t of tokens) {
+          if (lc.includes(t)) hits += 1;
+        }
+        if (hits === 0) continue;
+        const excerpt = content.replace(/\s+/g, " ").trim().slice(0, 220);
+        const similarity = Math.min(0.95, 0.45 + (hits / Math.max(tokens.length, 1)) * 0.5);
+        scored.push({
+          text: `${file}: ${excerpt}${content.length > 220 ? "..." : ""}`,
+          category: "journal",
+          similarity,
+          via: "journal",
+        });
+      } catch {}
+    }
+    scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+    return scored.slice(0, limit);
+  },
+  recallProjectStore: async (query, limit, project, docs) => {
+    try {
+      const args = [query, "--limit", String(limit)];
+      if (project) args.push("--project", project);
+      if (Array.isArray(docs) && docs.length > 0) {
+        args.push("--docs", docs.join(","));
+      }
+      const out = await callDocsRag("search", args);
+      if (!out || !out.trim()) return [];
+      const results: MemoryResult[] = [];
+      const lines = out.split("\n");
+      for (const line of lines) {
+        const m = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
+        if (!m) continue;
+        const file = m[1].split("/").pop() || m[1];
+        const section = m[2].trim();
+        const sim = Number.parseFloat(m[3]) || 0.6;
+        results.push({
+          text: `${file} > ${section}`,
+          category: "project",
+          similarity: sim,
+          via: "project",
+        });
+      }
+      if (results.length === 0) {
+        results.push({
+          text: out.replace(/\s+/g, " ").slice(0, 280),
+          category: "project",
+          similarity: 0.55,
+          via: "project",
+        });
+      }
+      return results.slice(0, limit);
+    } catch {
+      return [];
+    }
   },
 });
 
@@ -2309,7 +2370,6 @@ const quaidPlugin = {
         return;
       }
       try { maybeSendJanitorNudges(); } catch {}
-      try { flushDelayedNotifications(5); } catch {}
       try { maybeQueueJanitorHealthAlert(); } catch {}
       // Cancel inactivity timer — agent is active again
       timeoutManager.onAgentStart();

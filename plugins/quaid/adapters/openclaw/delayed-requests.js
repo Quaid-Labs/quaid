@@ -40,31 +40,6 @@ function queueDelayedRequest(requestsPath, message, kind = "janitor", priority =
     return false;
   }
 }
-function flushDelayedNotificationsToRequestQueue(delayedNotificationsPath, requestsPath, maxItems = 5) {
-  let delivered = 0;
-  let queuedLlmRequests = 0;
-  try {
-    const raw = readJson(delayedNotificationsPath);
-    const items = Array.isArray(raw?.items) ? raw.items : [];
-    if (!items.length) return { delivered, queuedLlmRequests };
-    for (const item of items) {
-      if (delivered >= maxItems) break;
-      if (!item || item.status !== "pending" || !item.message) continue;
-      const message = String(item.message);
-      if (queueDelayedRequest(requestsPath, message, String(item.kind || "janitor"), String(item.priority || "normal"))) {
-        queuedLlmRequests += 1;
-      }
-      item.status = "sent";
-      item.sent_at = (/* @__PURE__ */ new Date()).toISOString();
-      item.delivery = "llm_request_queue";
-      delivered += 1;
-    }
-    writeJson(delayedNotificationsPath, { ...raw || {}, items });
-    return { delivered, queuedLlmRequests };
-  } catch {
-    return { delivered: 0, queuedLlmRequests: 0 };
-  }
-}
 function resolveDelayedRequests(requestsPath, ids, resolutionNote = "resolved by agent") {
   if (!Array.isArray(ids) || !ids.length) return 0;
   const idSet = new Set(ids.map((x) => String(x)));
@@ -94,7 +69,6 @@ function clearResolvedRequests(requestsPath) {
 }
 export {
   clearResolvedRequests,
-  flushDelayedNotificationsToRequestQueue,
   queueDelayedRequest,
   resolveDelayedRequests
 };

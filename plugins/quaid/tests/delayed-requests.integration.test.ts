@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-  flushDelayedNotificationsToRequestQueue,
+  queueDelayedRequest,
   resolveDelayedRequests,
   clearResolvedRequests,
 } from "../adapters/openclaw/delayed-requests.js";
@@ -13,38 +13,18 @@ function makeWorkspace(prefix: string): string {
 }
 
 describe("delayed request lifecycle integration", () => {
-  it("queues from delayed notifications, then resolves and clears request items", () => {
+  it("queues, resolves and clears request items", () => {
     const workspace = makeWorkspace("quaid-delayed-requests-");
-    const delayedNotificationsPath = path.join(workspace, "delayed-notifications.json");
     const delayedRequestsPath = path.join(workspace, "delayed-llm-requests.json");
 
-    fs.writeFileSync(
-      delayedNotificationsPath,
-      JSON.stringify(
-        {
-          items: [
-            {
-              id: "janitor-1",
-              kind: "janitor_health",
-              priority: "high",
-              status: "pending",
-              message: "[Quaid] Janitor has never run.",
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const flushed = flushDelayedNotificationsToRequestQueue(
-      delayedNotificationsPath,
+    const queued = queueDelayedRequest(
       delayedRequestsPath,
-      5,
+      "[Quaid] Janitor has never run.",
+      "janitor_health",
+      "high",
+      "event.notification.delayed",
     );
-    expect(flushed.delivered).toBe(1);
-    expect(flushed.queuedLlmRequests).toBe(1);
+    expect(queued).toBe(true);
 
     const requestsData = JSON.parse(fs.readFileSync(delayedRequestsPath, "utf8"));
     expect(Array.isArray(requestsData.requests)).toBe(true);

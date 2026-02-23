@@ -449,9 +449,20 @@ def _notify_user(project_name: str, updates_applied: List[str], trigger: str) ->
         return
 
     try:
-        from notify import notify_doc_update
+        from events import queue_delayed_notification
         for doc_path in updates_applied:
-            notify_doc_update(doc_path, f"project-{trigger}", f"Updated as part of {project_name} project")
+            message = (
+                "[Quaid] 📋 Project Documentation Update\n"
+                f"Project: {project_name}\n"
+                f"Updated: `{Path(doc_path).name}`\n"
+                f"Trigger: project-{trigger}"
+            )
+            queue_delayed_notification(
+                message,
+                kind="project_doc_update",
+                priority="normal",
+                source="project_updater",
+            )
     except Exception as e:
         print(f"  Notification failed: {e}")
 

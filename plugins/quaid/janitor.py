@@ -2632,54 +2632,33 @@ def _pending_approvals_md_path() -> Path:
     return p
 
 
-def _delayed_notifications_path() -> Path:
-    p = _logs_dir() / "janitor" / "delayed-notifications.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
-
-
 def _queue_delayed_notification(
     message: str,
     kind: str = "janitor",
     priority: str = "normal",
 ) -> None:
-    """Queue notification for adapter-delayed delivery (next active user session)."""
+    """Queue notification via event bus delayed channel."""
     if not message:
         return
-    path = _delayed_notifications_path()
-    payload: Dict[str, Any] = {"version": 1, "items": []}
     try:
-        if path.exists():
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                payload = {"version": 1, "items": []}
-    except Exception:
-        payload = {"version": 1, "items": []}
-
-    items = payload.get("items", [])
-    if not isinstance(items, list):
-        items = []
-
-    item = {
-        "id": hashlib.sha256(f"{kind}|{message}".encode()).hexdigest()[:12],
-        "created_at": datetime.now().isoformat(),
-        "kind": kind,
-        "priority": priority,
-        "message": message,
-        "status": "pending",
-    }
-    if not any(isinstance(x, dict) and x.get("id") == item["id"] and x.get("status") == "pending" for x in items):
-        items.append(item)
-    payload["items"] = items
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    _append_decision_log(
-        "delayed_notification_queued",
-        {
-            "id": item["id"],
-            "kind": kind,
-            "priority": priority,
-        },
-    )
+        from events import queue_delayed_notification as _queue_event_delayed_notification
+        result = _queue_event_delayed_notification(
+            message,
+            kind=kind,
+            priority=priority,
+            source="janitor",
+        )
+        item_id = str(((result.get("event") or {}).get("id")) or "")
+        _append_decision_log(
+            "delayed_notification_queued",
+            {
+                "id": item_id,
+                "kind": kind,
+                "priority": priority,
+            },
+        )
+    except Exception as e:
+        janitor_logger.warn("delayed_notification_queue_failed", kind=kind, priority=priority, error=str(e))
 
 
 def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:

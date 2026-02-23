@@ -17,10 +17,6 @@ type RequestsPayload = {
   requests: RequestItem[];
 };
 
-type DelayedNotificationsPayload = {
-  items?: Array<Record<string, any>>;
-};
-
 function readJson(path: string): any {
   try {
     if (!fs.existsSync(path)) return null;
@@ -69,38 +65,6 @@ export function queueDelayedRequest(
     return true;
   } catch {
     return false;
-  }
-}
-
-export function flushDelayedNotificationsToRequestQueue(
-  delayedNotificationsPath: string,
-  requestsPath: string,
-  maxItems: number = 5
-): { delivered: number; queuedLlmRequests: number } {
-  let delivered = 0;
-  let queuedLlmRequests = 0;
-  try {
-    const raw = readJson(delayedNotificationsPath) as DelayedNotificationsPayload | null;
-    const items = Array.isArray(raw?.items) ? raw!.items! : [];
-    if (!items.length) return { delivered, queuedLlmRequests };
-
-    for (const item of items) {
-      if (delivered >= maxItems) break;
-      if (!item || item.status !== "pending" || !item.message) continue;
-      const message = String(item.message);
-      if (queueDelayedRequest(requestsPath, message, String(item.kind || "janitor"), String(item.priority || "normal"))) {
-        queuedLlmRequests += 1;
-      }
-      item.status = "sent";
-      item.sent_at = new Date().toISOString();
-      item.delivery = "llm_request_queue";
-      delivered += 1;
-    }
-
-    writeJson(delayedNotificationsPath, { ...(raw || {}), items });
-    return { delivered, queuedLlmRequests };
-  } catch {
-    return { delivered: 0, queuedLlmRequests: 0 };
   }
 }
 
