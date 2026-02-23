@@ -20,6 +20,7 @@ class RoutineContext:
     workspace: Path
     force_distill: bool = False
     allow_doc_apply: Optional[Callable[[str, str], bool]] = None
+    graph: Any = None
 
 
 @dataclass
@@ -97,6 +98,7 @@ def build_default_registry() -> LifecycleRegistry:
         ("docs_updater", ["docs_staleness", "docs_cleanup"]),
         ("soul_snippets", ["snippets", "journal"]),
         ("docs_rag", ["rag"]),
+        ("memory_graph", ["datastore_cleanup"]),
     ]
 
     for module_name, routines in module_specs:

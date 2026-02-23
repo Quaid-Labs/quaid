@@ -2189,6 +2189,52 @@ def get_graph() -> MemoryGraph:
     return _graph
 
 
+def register_lifecycle_routines(registry, result_factory) -> None:
+    """Register memory datastore lifecycle maintenance routines."""
+
+    def _run_datastore_cleanup(ctx):
+        result = result_factory()
+        graph = ctx.graph or get_graph()
+        cleanup_stats = {
+            "recall_log": 0,
+            "dedup_log": 0,
+            "embedding_cache": 0,
+            "health_snapshots": 0,
+            "janitor_metadata": 0,
+            "janitor_runs": 0,
+        }
+        cleanup_queries = {
+            "recall_log": "DELETE FROM recall_log WHERE created_at < datetime('now', '-90 days')",
+            "dedup_log": "DELETE FROM dedup_log WHERE review_status != 'unreviewed' AND created_at < datetime('now', '-90 days')",
+            "health_snapshots": "DELETE FROM health_snapshots WHERE created_at < datetime('now', '-180 days')",
+            "embedding_cache": "DELETE FROM embedding_cache WHERE created_at < datetime('now', '-30 days')",
+            "janitor_metadata": "DELETE FROM metadata WHERE key LIKE 'janitor_%' AND updated_at < datetime('now', '-180 days')",
+            "janitor_runs": "DELETE FROM janitor_runs WHERE completed_at < datetime('now', '-180 days')",
+        }
+        try:
+            with graph._get_conn() as conn:
+                for table, sql in cleanup_queries.items():
+                    if ctx.dry_run:
+                        count_sql = sql.replace("DELETE FROM", "SELECT COUNT(*) FROM", 1)
+                        row = conn.execute(count_sql).fetchone()
+                        cleanup_stats[table] = row[0] if row else 0
+                    else:
+                        cur = conn.execute(sql)
+                        cleanup_stats[table] = cur.rowcount
+
+            total = sum(cleanup_stats.values())
+            result.logs.append(f"{'Would remove' if ctx.dry_run else 'Removed'}: {total} rows total")
+            for table, count in cleanup_stats.items():
+                if count > 0:
+                    result.logs.append(f"  {table}: {count}")
+            result.data["cleanup"] = cleanup_stats
+        except Exception as exc:
+            result.errors.append(f"Cleanup error: {exc}")
+        return result
+
+    registry.register("datastore_cleanup", _run_datastore_cleanup)
+
+
 def _ollama_healthy(timeout: float = 0.2) -> bool:
     """Fast health check — can Ollama respond within timeout?
 

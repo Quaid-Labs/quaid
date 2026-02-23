@@ -134,6 +134,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
     - `plugins/quaid/docs_updater.py` registers `docs_staleness` and `docs_cleanup`
     - `plugins/quaid/soul_snippets.py` registers `snippets` and `journal`
     - `plugins/quaid/docs_rag.py` registers `rag`
+    - `plugins/quaid/memory_graph.py` registers `datastore_cleanup`
   - `plugins/quaid/janitor.py` now dispatches those tasks through lifecycle registry instead of inline task bodies
   - docs write policy checks are preserved via `allow_doc_apply` callback passed through routine context
   - added lifecycle tests for workspace/docs/snippets/journal in `plugins/quaid/tests/test_janitor_lifecycle.py`

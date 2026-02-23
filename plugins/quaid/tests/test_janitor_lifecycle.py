@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -175,3 +176,36 @@ def test_docs_lifecycle_staleness_and_cleanup(monkeypatch, tmp_path):
     assert [c[0] for c in calls["cleaned"]] == ["README.md"]
     assert ("README.md", "staleness update") in allow_calls
     assert ("projects/x/NOTES.md", "cleanup") in allow_calls
+
+
+def test_datastore_cleanup_lifecycle_runs_with_graph_override(tmp_path):
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE recall_log (created_at TEXT);
+        CREATE TABLE dedup_log (review_status TEXT, created_at TEXT);
+        CREATE TABLE health_snapshots (created_at TEXT);
+        CREATE TABLE embedding_cache (created_at TEXT);
+        CREATE TABLE metadata (key TEXT, updated_at TEXT);
+        CREATE TABLE janitor_runs (completed_at TEXT);
+        INSERT INTO recall_log VALUES ('2000-01-01');
+        INSERT INTO dedup_log VALUES ('done', '2000-01-01');
+        INSERT INTO health_snapshots VALUES ('2000-01-01');
+        INSERT INTO embedding_cache VALUES ('2000-01-01');
+        INSERT INTO metadata VALUES ('janitor_x', '2000-01-01');
+        INSERT INTO janitor_runs VALUES ('2000-01-01');
+        """
+    )
+
+    class _Graph:
+        def _get_conn(self):
+            return conn
+
+    registry = build_default_registry()
+    result = registry.run(
+        "datastore_cleanup",
+        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, graph=_Graph()),
+    )
+    assert result.errors == []
+    assert result.data["cleanup"]["recall_log"] == 1
+    assert result.data["cleanup"]["janitor_runs"] == 1

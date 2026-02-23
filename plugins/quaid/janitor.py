@@ -3450,35 +3450,16 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("cleanup", "all") and not _skip_if_over_budget("Task 9: Cleanup", 5):
             print("[Task 9: Audit Table Cleanup]")
             metrics.start_task("cleanup")
-            cleanup_stats = {"recall_log": 0, "dedup_log": 0, "embedding_cache": 0, "health_snapshots": 0, "janitor_metadata": 0, "janitor_runs": 0}
-            try:
-                cleanup_queries = {
-                    "recall_log": "DELETE FROM recall_log WHERE created_at < datetime('now', '-90 days')",
-                    "dedup_log": "DELETE FROM dedup_log WHERE review_status != 'unreviewed' AND created_at < datetime('now', '-90 days')",
-                    "health_snapshots": "DELETE FROM health_snapshots WHERE created_at < datetime('now', '-180 days')",
-                    "embedding_cache": "DELETE FROM embedding_cache WHERE created_at < datetime('now', '-30 days')",
-                    "janitor_metadata": "DELETE FROM metadata WHERE key LIKE 'janitor_%' AND updated_at < datetime('now', '-180 days')",
-                    "janitor_runs": "DELETE FROM janitor_runs WHERE completed_at < datetime('now', '-180 days')",
-                }
-                with graph._get_conn() as conn:
-                    for table, sql in cleanup_queries.items():
-                        if dry_run:
-                            # Use COUNT to preview without modifying data
-                            count_sql = sql.replace("DELETE FROM", "SELECT COUNT(*) FROM", 1)
-                            row = conn.execute(count_sql).fetchone()
-                            cleanup_stats[table] = row[0] if row else 0
-                        else:
-                            cur = conn.execute(sql)
-                            cleanup_stats[table] = cur.rowcount
-                total = sum(cleanup_stats.values())
-                action = "Would remove" if dry_run else "Removed"
-                print(f"  {action}: {total} rows total")
-                for table, count in cleanup_stats.items():
-                    if count > 0:
-                        print(f"    {table}: {count}")
-                applied_changes["cleanup"] = cleanup_stats
-            except Exception as e:
-                print(f"  Cleanup error: {e}")
+            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                "datastore_cleanup",
+                RoutineContext(cfg=_cfg, dry_run=dry_run, workspace=_workspace(), graph=graph),
+            )
+            for line in lifecycle_result.logs:
+                print(f"  {line}")
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
+            applied_changes["cleanup"] = lifecycle_result.data.get("cleanup", {})
             metrics.end_task("cleanup")
             print(f"Task completed in {metrics.task_duration('cleanup'):.2f}s\n")
 
