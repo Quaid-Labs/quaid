@@ -169,7 +169,8 @@ def _merge_nodes_into(
     # Inherit owner from first original
     owner = originals[0].owner_id if originals else _default_owner_id()
     # Inherit category from first original (not hardcoded "fact")
-    category = originals[0].category if originals else "fact"
+    # Node uses .type (PascalCase: "Person", "Fact", etc.) → store uses lowercase category
+    category = originals[0].type.lower() if originals else "fact"
 
     # Store merged version with inherited signals
     result = store_memory(
