@@ -18,6 +18,7 @@ from memory_graph import (
     store as _store,
     recall as _recall,
     create_edge as _create_edge,
+    stats as _stats,
     get_graph,
     _forget as _internal_forget,
     _get_memory as _internal_get_memory,
@@ -258,7 +259,7 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
 
 def stats() -> Dict[str, Any]:
     """Return graph-level statistics."""
-    return get_graph().get_stats()
+    return _stats()
 
 
 # Re-export types and graph accessor for advanced use

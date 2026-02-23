@@ -2189,6 +2189,11 @@ def get_graph() -> MemoryGraph:
     return _graph
 
 
+def stats() -> Dict[str, Any]:
+    """Datastore stats interface for API/core callers."""
+    return get_graph().get_stats()
+
+
 def register_lifecycle_routines(registry, result_factory) -> None:
     """Register memory datastore lifecycle maintenance routines."""
 

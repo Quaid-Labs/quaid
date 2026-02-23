@@ -63,6 +63,10 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - janitor now emits `janitor.run_completed` lifecycle event with metrics/change payload
   - event handler in `events.py` owns delayed notification queueing for summary/digest
   - `notify.py` exposes formatter helpers so delivery transport stays outside janitor
+  - adapter runtime Python execution moved into adapter-local bridge module (`adapters/openclaw/python-bridge.ts`)
+    so `adapter.ts` no longer defines/exports raw bridge command execution logic
+  - `api.stats()` now routes via datastore interface function `memory_graph.stats()` rather than direct
+    `get_graph().get_stats()` call in API layer
 
 ### Additional High Priority (resolved in this pass)
 6. Split delayed-notification pipelines
