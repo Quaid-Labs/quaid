@@ -30,7 +30,7 @@ This document defines Quaid's external interface model for host adapters and run
 - Discovery:
   - MCP: `memory_event_capabilities`
   - CLI: `quaid event capabilities`
-  - OpenClaw tool: `memory_event_capabilities`
+  - OpenClaw adapter: no direct event-capability tool (use MCP/CLI surfaces)
 
 Each event includes `delivery_mode`:
 - `active`: safe to trigger and process immediately.
@@ -99,8 +99,7 @@ For adapter parity, a new adapter should support:
 2. Providing a tool surface for:
    - read recall
    - write note/store
-   - event capabilities
-   - event emit (at minimum delayed notification and maintenance request use-cases)
+   - optional event controls (recommended via MCP/CLI passthrough, not adapter-specific tools)
 3. Respecting capability discovery (do not assume all event handlers/features exist).
 
 ## Known gaps

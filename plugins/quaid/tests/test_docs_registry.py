@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -423,7 +424,17 @@ class TestDeleteProject:
         r = _get_registry()
         (tmp_path / "projects" / "test-project" / "notes.md").write_text("# Notes")
 
-        result = r.delete_project("test-project")
+        def _trash_side_effect(cmd, **kwargs):
+            target = Path(cmd[1])
+            if target.exists():
+                import shutil
+                shutil.rmtree(target)
+            return None
+
+        with patch("docs_registry.subprocess.run") as mock_run:
+            mock_run.side_effect = _trash_side_effect
+            result = r.delete_project("test-project")
+
         assert result["dir_deleted"] is True
         assert not (tmp_path / "projects" / "test-project").exists()
 

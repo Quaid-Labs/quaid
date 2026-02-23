@@ -8,7 +8,7 @@ jobs:
   label:
     runs-on: ubuntu-latest
     steps:
-      - name: Label PR by path
-        uses: actions/labeler@v5
-        with:
-          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+      - name: Labeler disabled in read-only token mode
+        run: |
+          echo "PR labeling is currently disabled because GITHUB_TOKEN is read-only in this repository."
+          echo "Enable write workflow tokens before re-enabling actions/labeler."

@@ -4536,7 +4536,7 @@ if __name__ == "__main__":
                         "SELECT id, type, name, content, extraction_confidence, created_at, privacy, owner_id, session_id "
                         "FROM nodes WHERE session_id = ? AND owner_id = ? AND status IN ('active', 'approved', 'pending') "
                         "ORDER BY created_at DESC LIMIT ?",
-                        (args.session_id, args.owner or get_config().users.default_owner, int(args.limit))
+                        (args.session_id, args.owner or _get_memory_config().users.default_owner, int(args.limit))
                     ).fetchall()
                 for r in rows:
                     conf = r['extraction_confidence'] or 0.5
@@ -4571,7 +4571,7 @@ if __name__ == "__main__":
 
         elif args.command == "store":
             try:
-                owner = args.owner or get_config().users.default_owner
+                owner = args.owner or _get_memory_config().users.default_owner
                 result = store(
                     args.text,
                     category=args.category,
