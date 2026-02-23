@@ -1,53 +1,18 @@
-"use strict";
 /**
  * quaid - Total Recall memory system plugin for Clawdbot
  *
  * Uses SQLite + Ollama embeddings for fully local memory storage.
  * Replaces memory-lancedb with no external API dependencies.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", { value: true });
-const typebox_1 = require("@sinclair/typebox");
-const node_child_process_1 = require("node:child_process");
-const path = __importStar(require("node:path"));
-const fs = __importStar(require("node:fs"));
-const os = __importStar(require("node:os"));
-const session_timeout_js_1 = require("../../core/session-timeout.js");
-const delayed_requests_js_1 = require("./delayed-requests.js");
-const orchestrator_js_1 = require("./knowledge/orchestrator.js");
-const data_writers_js_1 = require("../../core/data-writers.js");
+import { Type } from "@sinclair/typebox";
+import { execSync, spawn } from "node:child_process";
+import * as path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import { SessionTimeoutManager } from "../../core/session-timeout.js";
+import { queueDelayedRequest, flushDelayedNotificationsToRequestQueue } from "./delayed-requests.js";
+import { createKnowledgeEngine } from "./knowledge/orchestrator.js";
+import { createDataWriteEngine } from "../../core/data-writers.js";
 // Configuration
 const PLUGIN_DIR = __dirname;
 function _resolveWorkspace() {
@@ -105,7 +70,7 @@ function getActiveNodeCount() {
         return _cachedNodeCount;
     }
     try {
-        const result = (0, node_child_process_1.execSync)(`sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM nodes WHERE status='active'"`, { encoding: 'utf-8', timeout: 5000 });
+        const result = execSync(`sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM nodes WHERE status='active'"`, { encoding: 'utf-8', timeout: 5000 });
         _cachedNodeCount = parseInt(result.trim(), 10) || 100;
         _nodeCountTimestamp = now;
         return _cachedNodeCount;
@@ -429,9 +394,9 @@ function triggerLabelFromType(trigger) {
     return "Unknown";
 }
 // Config schema
-const configSchema = typebox_1.Type.Object({
-    autoCapture: typebox_1.Type.Optional(typebox_1.Type.Boolean({ default: false })),
-    autoRecall: typebox_1.Type.Optional(typebox_1.Type.Boolean({ default: true })),
+const configSchema = Type.Object({
+    autoCapture: Type.Optional(Type.Boolean({ default: false })),
+    autoRecall: Type.Optional(Type.Boolean({ default: true })),
 });
 let _usersConfig = null;
 function getUsersConfig() {
@@ -477,10 +442,10 @@ function isInternalQuaidSession(sessionId) {
 // ============================================================================
 // Python Bridge
 // ============================================================================
-const PYTHON_BRIDGE_TIMEOUT_MS = 120000; // 2 minutes
+const PYTHON_BRIDGE_TIMEOUT_MS = 120_000; // 2 minutes
 async function callPython(command, args = []) {
     return new Promise((resolve, reject) => {
-        const proc = (0, node_child_process_1.spawn)("python3", [PYTHON_SCRIPT, command, ...args], {
+        const proc = spawn("python3", [PYTHON_SCRIPT, command, ...args], {
             env: { ...process.env, MEMORY_DB_PATH: DB_PATH, QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE },
         });
         let stdout = "";
@@ -757,7 +722,7 @@ function maybeForceCompactionAfterTimeout(sessionId) {
         return;
     }
     try {
-        const out = (0, node_child_process_1.execSync)(`openclaw gateway call sessions.compact --json --params '${JSON.stringify({ key })}'`, { encoding: "utf-8", timeout: 20000 });
+        const out = execSync(`openclaw gateway call sessions.compact --json --params '${JSON.stringify({ key })}'`, { encoding: "utf-8", timeout: 20_000 });
         const parsed = JSON.parse(String(out || "{}"));
         if (parsed?.ok) {
             console.log(`[quaid][timeout] auto-compaction requested for key=${key} (compacted=${String(parsed?.compacted)})`);
@@ -895,7 +860,7 @@ function _ensureGatewaySessionOverride(tier, resolved) {
     fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { mode: 0o600 });
     return sessionKey;
 }
-async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 600000) {
+async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 600_000) {
     const resolved = resolveTierModel(modelTier);
     const provider = normalizeProvider(resolved.provider);
     const started = Date.now();
@@ -970,7 +935,7 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
 }
 function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON_BRIDGE_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
-        const proc = (0, node_child_process_1.spawn)("python3", [script, command, ...args], {
+        const proc = spawn("python3", [script, command, ...args], {
             cwd: WORKSPACE,
             env: { ...process.env, ...env },
         });
@@ -1029,14 +994,14 @@ async function callProjectUpdater(command, args = []) {
     const apiKey = _getAnthropicCredential();
     return _spawnWithTimeout(PROJECT_UPDATER, command, args, "project_updater", {
         QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE, ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
-    }, 300000); // 5 min for Opus calls
+    }, 300_000); // 5 min for Opus calls
 }
 // ============================================================================
 // Project Helpers
 // ============================================================================
 function getProjectNames() {
     try {
-        const output = (0, node_child_process_1.execSync)(`python3 "${DOCS_REGISTRY}" list-projects --names-only`, { encoding: "utf-8", env: { ...process.env, MEMORY_DB_PATH: DB_PATH, QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE }, timeout: 10000 }).trim();
+        const output = execSync(`python3 "${DOCS_REGISTRY}" list-projects --names-only`, { encoding: "utf-8", env: { ...process.env, MEMORY_DB_PATH: DB_PATH, QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE }, timeout: 10_000 }).trim();
         return output.split("\n").filter(Boolean);
     }
     catch {
@@ -1120,7 +1085,7 @@ function spawnNotifyScript(scriptBody) {
     const cleanup = `\nos.unlink(${JSON.stringify(tmpFile)})\n`;
     fs.writeFileSync(tmpFile, preamble + scriptBody + cleanup, { mode: 0o600 });
     const notifyLogFd = fs.openSync(notifyLogFile, "a");
-    const proc = (0, node_child_process_1.spawn)('python3', [tmpFile], {
+    const proc = spawn('python3', [tmpFile], {
         detached: true,
         stdio: ['ignore', notifyLogFd, notifyLogFd],
         env: {
@@ -1149,13 +1114,13 @@ function _saveJanitorNudgeState(state) {
     catch { }
 }
 function queueDelayedLlmRequest(message, kind = "janitor", priority = "normal") {
-    return (0, delayed_requests_js_1.queueDelayedRequest)(DELAYED_LLM_REQUESTS_PATH, message, kind, priority, "quaid_adapter");
+    return queueDelayedRequest(DELAYED_LLM_REQUESTS_PATH, message, kind, priority, "quaid_adapter");
 }
 function getJanitorHealthIssue() {
     try {
         if (!fs.existsSync(DB_PATH))
             return null;
-        const out = (0, node_child_process_1.execSync)(`sqlite3 "${DB_PATH}" "SELECT MAX(completed_at) FROM janitor_runs WHERE status='completed'"`, { encoding: "utf-8", timeout: 4000 }).trim();
+        const out = execSync(`sqlite3 "${DB_PATH}" "SELECT MAX(completed_at) FROM janitor_runs WHERE status='completed'"`, { encoding: "utf-8", timeout: 4000 }).trim();
         if (!out) {
             return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
         }
@@ -1226,7 +1191,7 @@ notify_user("Hey, I see you just installed Quaid. Want me to help migrate import
 }
 function flushDelayedNotifications(maxItems = 5) {
     try {
-        const result = (0, delayed_requests_js_1.flushDelayedNotificationsToRequestQueue)(DELAYED_NOTIFICATIONS_PATH, DELAYED_LLM_REQUESTS_PATH, maxItems);
+        const result = flushDelayedNotificationsToRequestQueue(DELAYED_NOTIFICATIONS_PATH, DELAYED_LLM_REQUESTS_PATH, maxItems);
         if (result.delivered > 0) {
             console.log(`[quaid] Flushed ${result.delivered} delayed notification(s), queued ${result.queuedLlmRequests} llm request(s)`);
         }
@@ -1319,7 +1284,7 @@ async function emitProjectEvent(messages, trigger, sessionId) {
         }
         const logFd = fs.openSync(logFile, "a");
         try {
-            const proc = (0, node_child_process_1.spawn)("python3", [PROJECT_UPDATER, "process-event", eventPath], {
+            const proc = spawn("python3", [PROJECT_UPDATER, "process-event", eventPath], {
                 detached: true,
                 stdio: ["ignore", logFd, logFd],
                 cwd: WORKSPACE,
@@ -1653,7 +1618,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
         return [];
     }
 }
-const knowledgeEngine = (0, orchestrator_js_1.createKnowledgeEngine)({
+const knowledgeEngine = createKnowledgeEngine({
     workspace: WORKSPACE,
     path,
     fs,
@@ -1662,11 +1627,11 @@ const knowledgeEngine = (0, orchestrator_js_1.createKnowledgeEngine)({
     callDocsRag,
     getProjectCatalog,
     callFastRouter: async (systemPrompt, userPrompt) => {
-        const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, 45000);
+        const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, 45_000);
         return String(llm?.text || "");
     },
     callDeepRouter: async (systemPrompt, userPrompt) => {
-        const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, 60000);
+        const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, 60_000);
         return String(llm?.text || "");
     },
     recallVector: async (query, limit, scope, dateFrom, dateTo) => {
@@ -1721,7 +1686,7 @@ function parseStoreOutput(output) {
     }
     return null;
 }
-const dataWriteEngine = (0, data_writers_js_1.createDataWriteEngine)({
+const dataWriteEngine = createDataWriteEngine({
     writers: [
         {
             spec: {
@@ -2076,7 +2041,7 @@ const quaidPlugin = {
             console.log("[quaid] Database not found, running initial seed...");
             try {
                 const seedScript = path.join(WORKSPACE, "plugins/quaid/seed.py");
-                (0, node_child_process_1.execSync)(`python3 ${seedScript}`, {
+                execSync(`python3 ${seedScript}`, {
                     env: { ...process.env, MEMORY_DB_PATH: DB_PATH },
                 });
                 console.log("[quaid] Initial seed complete");
@@ -2372,78 +2337,78 @@ options.graph.depth: Set to 2 for relationship queries (e.g., nephew = sibling's
 options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by date range.
 
 ${recallStoreGuidance}`,
-                parameters: typebox_1.Type.Object({
-                    query: typebox_1.Type.String({ description: "Search query - use entity names and specific topics" }),
-                    options: typebox_1.Type.Optional(typebox_1.Type.Object({
-                        limit: typebox_1.Type.Optional(typebox_1.Type.Number({ description: "Max results to return. Default reads from config." })),
-                        datastores: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Union([
-                            typebox_1.Type.Literal("vector"),
-                            typebox_1.Type.Literal("vector_basic"),
-                            typebox_1.Type.Literal("vector_technical"),
-                            typebox_1.Type.Literal("graph"),
-                            typebox_1.Type.Literal("journal"),
-                            typebox_1.Type.Literal("project"),
+                parameters: Type.Object({
+                    query: Type.String({ description: "Search query - use entity names and specific topics" }),
+                    options: Type.Optional(Type.Object({
+                        limit: Type.Optional(Type.Number({ description: "Max results to return. Default reads from config." })),
+                        datastores: Type.Optional(Type.Array(Type.Union([
+                            Type.Literal("vector"),
+                            Type.Literal("vector_basic"),
+                            Type.Literal("vector_technical"),
+                            Type.Literal("graph"),
+                            Type.Literal("journal"),
+                            Type.Literal("project"),
                         ]), { description: "Knowledge datastores to query." })),
-                        graph: typebox_1.Type.Optional(typebox_1.Type.Object({
-                            expand: typebox_1.Type.Optional(typebox_1.Type.Boolean({ description: "Traverse relationship graph - use for people/family queries (default: true)." })),
-                            depth: typebox_1.Type.Optional(typebox_1.Type.Number({ description: "Graph traversal depth (default: 1). Use 2 for extended relationships." })),
+                        graph: Type.Optional(Type.Object({
+                            expand: Type.Optional(Type.Boolean({ description: "Traverse relationship graph - use for people/family queries (default: true)." })),
+                            depth: Type.Optional(Type.Number({ description: "Graph traversal depth (default: 1). Use 2 for extended relationships." })),
                         })),
-                        routing: typebox_1.Type.Optional(typebox_1.Type.Object({
-                            enabled: typebox_1.Type.Optional(typebox_1.Type.Boolean({ description: "Enable total_recall planning pass (query cleanup + store routing)." })),
-                            reasoning: typebox_1.Type.Optional(typebox_1.Type.Union([
-                                typebox_1.Type.Literal("fast"),
-                                typebox_1.Type.Literal("deep"),
+                        routing: Type.Optional(Type.Object({
+                            enabled: Type.Optional(Type.Boolean({ description: "Enable total_recall planning pass (query cleanup + store routing)." })),
+                            reasoning: Type.Optional(Type.Union([
+                                Type.Literal("fast"),
+                                Type.Literal("deep"),
                             ], { description: "Reasoning model for routing pass." })),
-                            intent: typebox_1.Type.Optional(typebox_1.Type.Union([
-                                typebox_1.Type.Literal("general"),
-                                typebox_1.Type.Literal("agent_actions"),
-                                typebox_1.Type.Literal("relationship"),
-                                typebox_1.Type.Literal("technical"),
+                            intent: Type.Optional(Type.Union([
+                                Type.Literal("general"),
+                                Type.Literal("agent_actions"),
+                                Type.Literal("relationship"),
+                                Type.Literal("technical"),
                             ], { description: "Intent facet for routing and ranking boosts." })),
-                            failOpen: typebox_1.Type.Optional(typebox_1.Type.Boolean({ description: "If true, router/prepass failures return no recall instead of throwing an error." })),
+                            failOpen: Type.Optional(Type.Boolean({ description: "If true, router/prepass failures return no recall instead of throwing an error." })),
                         })),
-                        technicalScope: typebox_1.Type.Optional(typebox_1.Type.Union([
-                            typebox_1.Type.Literal("personal"),
-                            typebox_1.Type.Literal("technical"),
-                            typebox_1.Type.Literal("any"),
+                        technicalScope: Type.Optional(Type.Union([
+                            Type.Literal("personal"),
+                            Type.Literal("technical"),
+                            Type.Literal("any"),
                         ], { description: "Filter memory type: personal=non-technical only, technical=technical only, any=both (default personal)." })),
-                        filters: typebox_1.Type.Optional(typebox_1.Type.Object({
-                            dateFrom: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Only return memories from this date onward (YYYY-MM-DD)." })),
-                            dateTo: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Only return memories up to this date (YYYY-MM-DD)." })),
-                            docs: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.String({ description: "Optional doc path/name filters when project-store recall is used." }))),
+                        filters: Type.Optional(Type.Object({
+                            dateFrom: Type.Optional(Type.String({ description: "Only return memories from this date onward (YYYY-MM-DD)." })),
+                            dateTo: Type.Optional(Type.String({ description: "Only return memories up to this date (YYYY-MM-DD)." })),
+                            docs: Type.Optional(Type.Array(Type.String({ description: "Optional doc path/name filters when project-store recall is used." }))),
                         })),
-                        ranking: typebox_1.Type.Optional(typebox_1.Type.Object({
-                            sourceTypeBoosts: typebox_1.Type.Optional(typebox_1.Type.Object({
-                                user: typebox_1.Type.Optional(typebox_1.Type.Number()),
-                                assistant: typebox_1.Type.Optional(typebox_1.Type.Number()),
-                                both: typebox_1.Type.Optional(typebox_1.Type.Number()),
-                                tool: typebox_1.Type.Optional(typebox_1.Type.Number()),
-                                import: typebox_1.Type.Optional(typebox_1.Type.Number()),
+                        ranking: Type.Optional(Type.Object({
+                            sourceTypeBoosts: Type.Optional(Type.Object({
+                                user: Type.Optional(Type.Number()),
+                                assistant: Type.Optional(Type.Number()),
+                                both: Type.Optional(Type.Number()),
+                                tool: Type.Optional(Type.Number()),
+                                import: Type.Optional(Type.Number()),
                             })),
                         })),
-                        datastoreOptions: typebox_1.Type.Optional(typebox_1.Type.Object({
-                            vector: typebox_1.Type.Optional(typebox_1.Type.Object({
-                                technicalScope: typebox_1.Type.Optional(typebox_1.Type.Union([
-                                    typebox_1.Type.Literal("personal"),
-                                    typebox_1.Type.Literal("technical"),
-                                    typebox_1.Type.Literal("any"),
+                        datastoreOptions: Type.Optional(Type.Object({
+                            vector: Type.Optional(Type.Object({
+                                technicalScope: Type.Optional(Type.Union([
+                                    Type.Literal("personal"),
+                                    Type.Literal("technical"),
+                                    Type.Literal("any"),
                                 ])),
                             })),
-                            graph: typebox_1.Type.Optional(typebox_1.Type.Object({
-                                depth: typebox_1.Type.Optional(typebox_1.Type.Number()),
-                                technicalScope: typebox_1.Type.Optional(typebox_1.Type.Union([
-                                    typebox_1.Type.Literal("personal"),
-                                    typebox_1.Type.Literal("technical"),
-                                    typebox_1.Type.Literal("any"),
+                            graph: Type.Optional(Type.Object({
+                                depth: Type.Optional(Type.Number()),
+                                technicalScope: Type.Optional(Type.Union([
+                                    Type.Literal("personal"),
+                                    Type.Literal("technical"),
+                                    Type.Literal("any"),
                                 ])),
                             })),
-                            project: typebox_1.Type.Optional(typebox_1.Type.Object({
-                                project: typebox_1.Type.Optional(typebox_1.Type.String()),
-                                docs: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.String())),
+                            project: Type.Optional(Type.Object({
+                                project: Type.Optional(Type.String()),
+                                docs: Type.Optional(Type.Array(Type.String())),
                             })),
-                            journal: typebox_1.Type.Optional(typebox_1.Type.Object({})),
-                            vector_basic: typebox_1.Type.Optional(typebox_1.Type.Object({})),
-                            vector_technical: typebox_1.Type.Optional(typebox_1.Type.Object({})),
+                            journal: Type.Optional(Type.Object({})),
+                            vector_basic: Type.Optional(Type.Object({})),
+                            vector_technical: Type.Optional(Type.Object({})),
                         })),
                     })),
                 }),
@@ -2612,9 +2577,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 description: `Queue a fact for memory extraction at next compaction. The fact will go through full quality review (Opus extraction with edges and janitor review) rather than being stored directly.
 
 Only use when the user EXPLICITLY asks you to remember something (e.g., "remember this", "save this"). Do NOT proactively store facts — auto-extraction at compaction handles that.`,
-                parameters: typebox_1.Type.Object({
-                    text: typebox_1.Type.String({ description: "Information to remember" }),
-                    category: typebox_1.Type.Optional(typebox_1.Type.String({
+                parameters: Type.Object({
+                    text: Type.String({ description: "Information to remember" }),
+                    category: Type.Optional(Type.String({
                         enum: ["preference", "fact", "decision", "entity", "other"],
                     })),
                 }),
@@ -2642,9 +2607,9 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             api.registerTool(() => ({
                 name: "memory_forget",
                 description: "Delete specific memories",
-                parameters: typebox_1.Type.Object({
-                    query: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Search to find memory" })),
-                    memoryId: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Specific memory ID" })),
+                parameters: Type.Object({
+                    query: Type.Optional(Type.String({ description: "Search to find memory" })),
+                    memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
                 }),
                 async execute(_toolCallId, params) {
                     try {
@@ -2682,11 +2647,11 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
         api.registerTool(() => ({
             name: "projects_search",
             description: "Search project documentation (architecture, implementation, reference guides). Use TOOLS.md to discover systems, then use this tool to find detailed docs. Returns relevant sections with file paths.",
-            parameters: typebox_1.Type.Object({
-                query: typebox_1.Type.String({ description: "Search query" }),
-                limit: typebox_1.Type.Optional(typebox_1.Type.Number({ description: "Max results (default 5)" })),
-                project: typebox_1.Type.Optional(typebox_1.Type.String({ description: `Filter by project name. Available: ${getProjectNames().join(", ") || "none"}` })),
-                docs: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.String({ description: "Optional doc path/name filters for RAG scope" }))),
+            parameters: Type.Object({
+                query: Type.String({ description: "Search query" }),
+                limit: Type.Optional(Type.Number({ description: "Max results (default 5)" })),
+                project: Type.Optional(Type.String({ description: `Filter by project name. Available: ${getProjectNames().join(", ") || "none"}` })),
+                docs: Type.Optional(Type.Array(Type.String({ description: "Optional doc path/name filters for RAG scope" }))),
             }),
             async execute(_toolCallId, params) {
                 try {
@@ -2786,8 +2751,8 @@ notify_docs_search(data['query'], data['results'])
         api.registerTool(() => ({
             name: "docs_read",
             description: "Read the full content of a registered document by file path or title.",
-            parameters: typebox_1.Type.Object({
-                identifier: typebox_1.Type.String({ description: "File path (workspace-relative) or document title" }),
+            parameters: Type.Object({
+                identifier: Type.String({ description: "File path (workspace-relative) or document title" }),
             }),
             async execute(_toolCallId, params) {
                 try {
@@ -2810,9 +2775,9 @@ notify_docs_search(data['query'], data['results'])
         api.registerTool(() => ({
             name: "docs_list",
             description: "List registered documents, optionally filtered by project or type.",
-            parameters: typebox_1.Type.Object({
-                project: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Filter by project name" })),
-                type: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Filter by asset type (doc, note, reference)" })),
+            parameters: Type.Object({
+                project: Type.Optional(Type.String({ description: "Filter by project name" })),
+                type: Type.Optional(Type.String({ description: "Filter by asset type (doc, note, reference)" })),
             }),
             async execute(_toolCallId, params) {
                 try {
@@ -2841,13 +2806,13 @@ notify_docs_search(data['query'], data['results'])
         api.registerTool(() => ({
             name: "docs_register",
             description: "Register a document for indexing and tracking. Use for external files or docs with source file tracking.",
-            parameters: typebox_1.Type.Object({
-                file_path: typebox_1.Type.String({ description: "File path (workspace-relative)" }),
-                project: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Project name (default: 'default')" })),
-                title: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Document title" })),
-                description: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Document description" })),
-                auto_update: typebox_1.Type.Optional(typebox_1.Type.Boolean({ description: "Auto-update when source files change" })),
-                source_files: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.String(), { description: "Source files this doc tracks" })),
+            parameters: Type.Object({
+                file_path: Type.String({ description: "File path (workspace-relative)" }),
+                project: Type.Optional(Type.String({ description: "Project name (default: 'default')" })),
+                title: Type.Optional(Type.String({ description: "Document title" })),
+                description: Type.Optional(Type.String({ description: "Document description" })),
+                auto_update: Type.Optional(Type.Boolean({ description: "Auto-update when source files change" })),
+                source_files: Type.Optional(Type.Array(Type.String(), { description: "Source files this doc tracks" })),
             }),
             async execute(_toolCallId, params) {
                 try {
@@ -2886,11 +2851,11 @@ notify_docs_search(data['query'], data['results'])
         api.registerTool(() => ({
             name: "project_create",
             description: "Create a new project with a PROJECT.md template. Sets up the directory structure and scaffolding.",
-            parameters: typebox_1.Type.Object({
-                name: typebox_1.Type.String({ description: "Project name (kebab-case, e.g., 'my-essay')" }),
-                label: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Display label (e.g., 'My Essay')" })),
-                description: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Project description" })),
-                source_roots: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.String(), { description: "Source root directories" })),
+            parameters: Type.Object({
+                name: Type.String({ description: "Project name (kebab-case, e.g., 'my-essay')" }),
+                label: Type.Optional(Type.String({ description: "Display label (e.g., 'My Essay')" })),
+                description: Type.Optional(Type.String({ description: "Project description" })),
+                source_roots: Type.Optional(Type.Array(Type.String(), { description: "Source root directories" })),
             }),
             async execute(_toolCallId, params) {
                 try {
@@ -2922,7 +2887,7 @@ notify_docs_search(data['query'], data['results'])
         api.registerTool(() => ({
             name: "project_list",
             description: `List all defined projects with their doc counts and metadata. Available projects: ${getProjectNames().join(", ") || "none"}`,
-            parameters: typebox_1.Type.Object({}),
+            parameters: Type.Object({}),
             async execute() {
                 try {
                     const output = await callDocsRegistry("list-projects", ["--json"]);
@@ -2943,10 +2908,10 @@ notify_docs_search(data['query'], data['results'])
         api.registerTool(() => ({
             name: "session_recall",
             description: `List or load recent conversation sessions. Use when the user wants to continue previous work, references a past conversation, or you need context about what was discussed recently.`,
-            parameters: typebox_1.Type.Object({
-                action: typebox_1.Type.String({ description: '"list" = recent sessions, "load" = specific session transcript' }),
-                session_id: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Session ID to load (for action=load)" })),
-                limit: typebox_1.Type.Optional(typebox_1.Type.Number({ description: "How many recent sessions to list (default 5, for action=list)" })),
+            parameters: Type.Object({
+                action: Type.String({ description: '"list" = recent sessions, "load" = specific session transcript' }),
+                session_id: Type.Optional(Type.String({ description: "Session ID to load (for action=load)" })),
+                limit: Type.Optional(Type.Number({ description: "How many recent sessions to list (default 5, for action=list)" })),
             }),
             async execute(_toolCallId, params) {
                 try {
@@ -3044,7 +3009,7 @@ notify_docs_search(data['query'], data['results'])
         // Extraction promise gate — memory_recall waits on this before querying
         // so that facts extracted from the just-compacted session are available.
         let extractionPromise = null;
-        const timeoutManager = new session_timeout_js_1.SessionTimeoutManager({
+        const timeoutManager = new SessionTimeoutManager({
             workspace: WORKSPACE,
             timeoutMinutes: getCaptureTimeoutMinutes(),
             isBootstrapOnly: isResetBootstrapOnlyConversation,
@@ -3067,7 +3032,7 @@ notify_docs_search(data['query'], data['results'])
                 try {
                     await Promise.race([
                         extractionPromise,
-                        new Promise((_, rej) => { raceTimer = setTimeout(() => rej(new Error("timeout")), 60000); })
+                        new Promise((_, rej) => { raceTimer = setTimeout(() => rej(new Error("timeout")), 60_000); })
                     ]);
                 }
                 catch { }
@@ -3354,6 +3319,47 @@ from notify import notify_user
 notify_user("🧠 Processing memories from ${triggerDesc}...")
 `);
             }
+            const buildCarryContextFromFacts = (extractedFacts, maxItems = 40, maxChars = 4000) => {
+                if (!Array.isArray(extractedFacts) || extractedFacts.length === 0)
+                    return "";
+                const weighted = [];
+                for (const fact of extractedFacts) {
+                    if (!fact || typeof fact.text !== "string")
+                        continue;
+                    const text = fact.text.trim();
+                    if (text.split(/\s+/).length < 3)
+                        continue;
+                    const conf = String(fact.extraction_confidence || "medium").toLowerCase();
+                    const score = conf === "high" ? 3 : conf === "medium" ? 2 : 1;
+                    const category = String(fact.category || "fact");
+                    const source = String(fact.source || "unknown");
+                    let line = `- [${category} | ${source} | ${conf}] ${text}`;
+                    if (Array.isArray(fact.edges) && fact.edges.length > 0) {
+                        const edgeBits = fact.edges
+                            .slice(0, 3)
+                            .filter((e) => e?.subject && e?.relation && e?.object)
+                            .map((e) => `${e.subject} --${e.relation}--> ${e.object}`);
+                        if (edgeBits.length > 0)
+                            line += ` | edges: ${edgeBits.join(", ")}`;
+                    }
+                    weighted.push({ score, line });
+                }
+                if (weighted.length === 0)
+                    return "";
+                weighted.sort((a, b) => b.score - a.score);
+                const selected = [];
+                let usedChars = 0;
+                for (const entry of weighted) {
+                    if (selected.length >= maxItems)
+                        break;
+                    const addLen = entry.line.length + (selected.length > 0 ? 1 : 0);
+                    if (usedChars + addLen > maxChars)
+                        break;
+                    selected.push(entry.line);
+                    usedChars += addLen;
+                }
+                return selected.join("\n");
+            };
             const chunkSize = getMemoryConfig().capture?.chunkSize ?? 30000;
             const messageChunks = chunkMessages(messages, chunkSize);
             const MAX_CHUNKS = 10;
@@ -3367,6 +3373,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
             const allFacts = [];
             const allSnippets = {};
             const allJournal = {};
+            const carryFacts = [];
             for (let chunkIdx = 0; chunkIdx < messageChunks.length; chunkIdx++) {
                 let chunkTranscript = buildTranscript(messageChunks[chunkIdx]);
                 if (!chunkTranscript.trim())
@@ -3379,8 +3386,15 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
                 if (messageChunks.length > 1) {
                     console.log(`[quaid] ${label}: chunk ${chunkIdx + 1}/${messageChunks.length} (${chunkTranscript.length} chars, ${messageChunks[chunkIdx].length} messages)`);
                 }
+                const carryContext = buildCarryContextFromFacts(carryFacts);
+                const extractionUserMessage = carryContext
+                    ? ("Use this context from earlier conversation chunks for continuity. " +
+                        "Use it only as reference and avoid duplicate facts unless new details are added.\n\n" +
+                        `=== EARLIER CHUNK CONTEXT ===\n${carryContext}\n=== END CONTEXT ===\n\n` +
+                        `Extract memorable facts and journal entries from this conversation chunk:\n\n${chunkTranscript}`)
+                    : `Extract memorable facts and journal entries from this conversation chunk:\n\n${chunkTranscript}`;
                 try {
-                    const llm = await callConfiguredLLM(extractionSystemPrompt, `Extract memorable facts and journal entries from this conversation:\n\n${chunkTranscript}`, "deep", 6144);
+                    const llm = await callConfiguredLLM(extractionSystemPrompt, extractionUserMessage, "deep", 6144);
                     const output = (llm.text || "").trim();
                     // Parse JSON from response
                     let jsonStr = output;
@@ -3411,7 +3425,9 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
                         }
                     }
                     // Merge facts
-                    allFacts.push(...(chunkResult.facts || []));
+                    const chunkFacts = (chunkResult.facts || []);
+                    allFacts.push(...chunkFacts);
+                    carryFacts.push(...chunkFacts.filter((f) => !!f && typeof f.text === "string"));
                     // Merge snippets (dedup across chunks)
                     for (const [file, snips] of Object.entries(chunkResult.soul_snippets || {})) {
                         if (Array.isArray(snips)) {
@@ -4069,7 +4085,7 @@ notify_memory_extraction(
                 }
                 try {
                     const tier = model_tier === "fast" ? "fast" : "deep";
-                    const data = await callConfiguredLLM(system_prompt, user_message, tier, max_tokens, 600000);
+                    const data = await callConfiguredLLM(system_prompt, user_message, tier, max_tokens, 600_000);
                     res.writeHead(200, { "Content-Type": "application/json" });
                     res.end(JSON.stringify(data));
                 }
@@ -4152,4 +4168,4 @@ notify_memory_extraction(
         console.log("[quaid] Plugin loaded with compaction/reset hooks and HTTP endpoint");
     },
 };
-exports.default = quaidPlugin;
+export default quaidPlugin;

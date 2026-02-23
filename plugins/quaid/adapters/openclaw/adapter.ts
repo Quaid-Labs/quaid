@@ -3693,6 +3693,50 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         edges?: ExtractedEdge[];
       };
 
+      const buildCarryContextFromFacts = (
+        extractedFacts: ExtractedFact[],
+        maxItems: number = 40,
+        maxChars: number = 4000,
+      ): string => {
+        if (!Array.isArray(extractedFacts) || extractedFacts.length === 0) return "";
+
+        const weighted: Array<{ score: number; line: string }> = [];
+        for (const fact of extractedFacts) {
+          if (!fact || typeof fact.text !== "string") continue;
+          const text = fact.text.trim();
+          if (text.split(/\s+/).length < 3) continue;
+
+          const conf = String(fact.extraction_confidence || "medium").toLowerCase();
+          const score = conf === "high" ? 3 : conf === "medium" ? 2 : 1;
+          const category = String(fact.category || "fact");
+          const source = String(fact.source || "unknown");
+
+          let line = `- [${category} | ${source} | ${conf}] ${text}`;
+          if (Array.isArray(fact.edges) && fact.edges.length > 0) {
+            const edgeBits = fact.edges
+              .slice(0, 3)
+              .filter((e) => e?.subject && e?.relation && e?.object)
+              .map((e) => `${e.subject} --${e.relation}--> ${e.object}`);
+            if (edgeBits.length > 0) line += ` | edges: ${edgeBits.join(", ")}`;
+          }
+          weighted.push({ score, line });
+        }
+
+        if (weighted.length === 0) return "";
+        weighted.sort((a, b) => b.score - a.score);
+
+        const selected: string[] = [];
+        let usedChars = 0;
+        for (const entry of weighted) {
+          if (selected.length >= maxItems) break;
+          const addLen = entry.line.length + (selected.length > 0 ? 1 : 0);
+          if (usedChars + addLen > maxChars) break;
+          selected.push(entry.line);
+          usedChars += addLen;
+        }
+        return selected.join("\n");
+      };
+
       const chunkSize = getMemoryConfig().capture?.chunkSize ?? 30000;
       const messageChunks = chunkMessages(messages, chunkSize);
 
@@ -3709,6 +3753,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const allFacts: ExtractedFact[] = [];
       const allSnippets: Record<string, string[]> = {};
       const allJournal: Record<string, string> = {};
+      const carryFacts: ExtractedFact[] = [];
 
       for (let chunkIdx = 0; chunkIdx < messageChunks.length; chunkIdx++) {
         let chunkTranscript = buildTranscript(messageChunks[chunkIdx]);
@@ -3724,10 +3769,20 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
           console.log(`[quaid] ${label}: chunk ${chunkIdx + 1}/${messageChunks.length} (${chunkTranscript.length} chars, ${messageChunks[chunkIdx].length} messages)`);
         }
 
+        const carryContext = buildCarryContextFromFacts(carryFacts);
+        const extractionUserMessage = carryContext
+          ? (
+            "Use this context from earlier conversation chunks for continuity. " +
+            "Use it only as reference and avoid duplicate facts unless new details are added.\n\n" +
+            `=== EARLIER CHUNK CONTEXT ===\n${carryContext}\n=== END CONTEXT ===\n\n` +
+            `Extract memorable facts and journal entries from this conversation chunk:\n\n${chunkTranscript}`
+          )
+          : `Extract memorable facts and journal entries from this conversation chunk:\n\n${chunkTranscript}`;
+
         try {
           const llm = await callConfiguredLLM(
             extractionSystemPrompt,
-            `Extract memorable facts and journal entries from this conversation:\n\n${chunkTranscript}`,
+            extractionUserMessage,
             "deep",
             6144,
           );
@@ -3759,7 +3814,9 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
           }
 
           // Merge facts
-          allFacts.push(...(chunkResult.facts || []));
+          const chunkFacts = (chunkResult.facts || []);
+          allFacts.push(...chunkFacts);
+          carryFacts.push(...chunkFacts.filter((f): f is ExtractedFact => !!f && typeof f.text === "string"));
 
           // Merge snippets (dedup across chunks)
           for (const [file, snips] of Object.entries(chunkResult.soul_snippets || {})) {

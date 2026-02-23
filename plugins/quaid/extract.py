@@ -112,6 +112,73 @@ def _chunk_transcript_text(transcript: str, max_chars: int = 30_000) -> List[str
     return chunks
 
 
+def _build_chunk_carry_context(
+    extracted_facts: List[Dict[str, Any]],
+    max_items: int = 40,
+    max_chars: int = 4000,
+) -> str:
+    """Build concise context from earlier chunk extractions.
+
+    Carries forward high-signal facts to help pronoun/coreference resolution
+    across chunk boundaries. Keeps output bounded to avoid prompt bloat.
+    """
+    if not extracted_facts:
+        return ""
+
+    weighted: List[tuple[int, str]] = []
+    for fact in extracted_facts:
+        if not isinstance(fact, dict):
+            continue
+        text = str(fact.get("text", "")).strip()
+        if len(text.split()) < 3:
+            continue
+
+        conf = str(fact.get("extraction_confidence", "medium")).lower()
+        score = 3 if conf == "high" else 2 if conf == "medium" else 1
+
+        category = str(fact.get("category", "fact")).strip() or "fact"
+        source = str(fact.get("source", "unknown")).strip() or "unknown"
+        line = f"- [{category} | {source} | {conf}] {text}"
+
+        edges = fact.get("edges", [])
+        if isinstance(edges, list):
+            edge_bits: List[str] = []
+            for e in edges[:3]:
+                if not isinstance(e, dict):
+                    continue
+                subj = str(e.get("subject", "")).strip()
+                rel = str(e.get("relation", "")).strip()
+                obj = str(e.get("object", "")).strip()
+                if subj and rel and obj:
+                    edge_bits.append(f"{subj} --{rel}--> {obj}")
+            if edge_bits:
+                line += f" | edges: {', '.join(edge_bits)}"
+
+        weighted.append((score, line))
+
+    if not weighted:
+        return ""
+
+    # Prefer higher-confidence lines first, then stable order.
+    weighted.sort(key=lambda x: x[0], reverse=True)
+
+    selected: List[str] = []
+    used_chars = 0
+    for _, line in weighted:
+        if len(selected) >= max_items:
+            break
+        add_len = len(line) + (1 if selected else 0)
+        if used_chars + add_len > max_chars:
+            break
+        selected.append(line)
+        used_chars += add_len
+
+    if not selected:
+        return ""
+
+    return "\n".join(selected)
+
+
 def extract_from_transcript(
     transcript: str,
     owner_id: str,
@@ -178,6 +245,7 @@ def extract_from_transcript(
     all_facts: List[Dict] = []
     all_snippets: Dict[str, List[str]] = {}
     all_journal: Dict[str, str] = {}
+    carry_facts: List[Dict[str, Any]] = []
 
     for ci, chunk in enumerate(transcript_chunks):
         if not chunk.strip():
@@ -186,7 +254,16 @@ def extract_from_transcript(
         if len(transcript_chunks) > 1:
             logger.info(f"[extract] {label}: chunk {ci + 1}/{len(transcript_chunks)} ({len(chunk)} chars)")
 
-        user_message = f"Extract memorable facts and journal entries from this conversation:\n\n{chunk}"
+        carry_context = _build_chunk_carry_context(carry_facts)
+        if carry_context:
+            user_message = (
+                "Use this context from earlier conversation chunks for continuity. "
+                "Use it only as reference and avoid duplicate facts unless new details are added.\n\n"
+                f"=== EARLIER CHUNK CONTEXT ===\n{carry_context}\n=== END CONTEXT ===\n\n"
+                f"Extract memorable facts and journal entries from this conversation chunk:\n\n{chunk}"
+            )
+        else:
+            user_message = f"Extract memorable facts and journal entries from this conversation chunk:\n\n{chunk}"
 
         response_text, duration = call_deep_reasoning(
             prompt=user_message,
@@ -205,7 +282,10 @@ def extract_from_transcript(
             logger.error(f"[extract] {label} chunk {ci + 1}: could not parse Opus response: {response_text[:200]}")
             continue
 
-        all_facts.extend(parsed.get("facts", []))
+        parsed_facts = parsed.get("facts", []) or []
+        all_facts.extend(parsed_facts)
+        if isinstance(parsed_facts, list):
+            carry_facts.extend([f for f in parsed_facts if isinstance(f, dict)])
 
         for file, snips in (parsed.get("soul_snippets", {}) or {}).items():
             if isinstance(snips, list):

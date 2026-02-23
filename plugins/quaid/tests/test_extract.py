@@ -512,6 +512,44 @@ class TestExtractFromTranscript:
         assert result["facts_stored"] == 1
         assert result["edges_created"] == 0
 
+    @patch("extract._chunk_transcript_text")
+    @patch("extract.call_deep_reasoning")
+    @patch("extract.store")
+    def test_chunk_carry_context_passed_to_later_chunks(self, mock_store, mock_llm, mock_chunk):
+        from extract import extract_from_transcript
+
+        mock_chunk.return_value = [
+            "User: Maya said she changed jobs.",
+            "User: She starts next week.",
+        ]
+        mock_llm.side_effect = [
+            (
+                json.dumps({
+                    "facts": [
+                        {
+                            "text": "Maya changed jobs from TechFlow to Stripe",
+                            "category": "fact",
+                            "extraction_confidence": "high",
+                        }
+                    ]
+                }),
+                0.8,
+            ),
+            (json.dumps({"facts": []}), 0.7),
+        ]
+        mock_store.return_value = {"id": "n1", "status": "created"}
+
+        extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="test",
+        )
+
+        assert mock_llm.call_count == 2
+        second_prompt = mock_llm.call_args_list[1].kwargs["prompt"]
+        assert "EARLIER CHUNK CONTEXT" in second_prompt
+        assert "Maya changed jobs from TechFlow to Stripe" in second_prompt
+
 
 # ---------------------------------------------------------------------------
 # _format_human_summary tests
@@ -589,6 +627,21 @@ class TestGetOwnerId:
         # With config mocked to fail
         with patch("extract.get_config", side_effect=Exception("no config")):
             assert _get_owner_id(None) == "default"
+
+
+class TestChunkCarryContext:
+    def test_prefers_high_confidence_and_caps_size(self):
+        from extract import _build_chunk_carry_context
+
+        facts = [
+            {"text": "A high confidence technical migration happened", "category": "fact", "source": "user", "extraction_confidence": "high"},
+            {"text": "A medium confidence note about dinner plans", "category": "fact", "source": "user", "extraction_confidence": "medium"},
+            {"text": "A low confidence guess", "category": "fact", "source": "assistant", "extraction_confidence": "low"},
+        ]
+        ctx = _build_chunk_carry_context(facts, max_items=2, max_chars=300)
+        assert "high" in ctx
+        assert "medium" in ctx
+        assert "low" not in ctx
 
 
 # ---------------------------------------------------------------------------
