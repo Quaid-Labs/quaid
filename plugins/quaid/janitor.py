@@ -53,7 +53,6 @@ from lib.tokens import extract_key_tokens as _lib_extract_key_tokens, STOPWORDS 
 from lib.archive import archive_node as _archive_node
 from logger import janitor_logger, rotate_logs
 from config import get_config
-from workspace_audit import run_workspace_check, backup_workspace_files
 from janitor_lifecycle import build_default_registry, RoutineContext
 from llm_clients import (call_fast_reasoning, call_deep_reasoning, call_llm,
                          parse_json_response, reset_token_usage, get_token_usage,
@@ -3176,44 +3175,25 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             )
             workspace_dry_run = dry_run or (not workspace_apply_allowed)
 
-            try:
-                audit_result = run_workspace_check(dry_run=workspace_dry_run)
+            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                "workspace",
+                RoutineContext(cfg=_cfg, dry_run=workspace_dry_run, workspace=_workspace()),
+            )
+            for line in lifecycle_result.logs:
+                print(f"  {line}")
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
 
-                phase = audit_result.get("phase", "unknown")
-                applied_changes["workspace_phase"] = phase
+            applied_changes["workspace_phase"] = lifecycle_result.data.get("workspace_phase", "unknown")
+            if lifecycle_result.data.get("bloated_files"):
+                applied_changes["bloated_files"] = lifecycle_result.data["bloated_files"]
 
-                # Check for bloat warnings
-                bloat_stats = audit_result.get("bloat_stats", {})
-                bloated = [f for f, s in bloat_stats.items() if s.get("over_limit")]
-                if bloated:
-                    applied_changes["bloated_files"] = bloated
-                    print(f"\n  Files over limit: {', '.join(bloated)}")
-                    for f in bloated:
-                        s = bloat_stats[f]
-                        print(f"     {f}: {s['lines']}/{s['maxLines']} lines")
-
-                if phase == "apply":
-                    applied_changes["workspace_moved_to_docs"] = audit_result.get("moved_to_docs", 0)
-                    applied_changes["workspace_moved_to_memory"] = audit_result.get("moved_to_memory", 0)
-                    applied_changes["workspace_trimmed"] = audit_result.get("trimmed", 0)
-                    applied_changes["workspace_bloat_warnings"] = audit_result.get("bloat_warnings", 0)
-                    applied_changes["workspace_project_detected"] = audit_result.get("project_detected", 0)
-                    print(f"\n{'Would apply' if workspace_dry_run else 'Applied'} review decisions:")
-                    print(f"   Moved to docs: {audit_result.get('moved_to_docs', 0)}")
-                    print(f"   Moved to memory: {audit_result.get('moved_to_memory', 0)}")
-                    print(f"   Trimmed: {audit_result.get('trimmed', 0)}")
-                    print(f"   Bloat warnings: {audit_result.get('bloat_warnings', 0)}")
-                    project_detected = audit_result.get("project_detected", 0)
-                    if project_detected > 0:
-                        print(f"   Project content detected: {project_detected} (queued for agent review)")
-                elif phase == "no_changes":
-                    print(f"\n  No workspace files changed since last run")
-                elif phase == "error":
-                    print(f"\n  Workspace audit error: {audit_result.get('error', 'unknown')}")
-            except RuntimeError as e:
-                print(f"  Opus API unavailable: {e}")
-                print("  Skipping workspace audit, continuing with local tasks...")
-                metrics.add_error(f"Workspace audit skipped (API error): {e}")
+            applied_changes["workspace_moved_to_docs"] = lifecycle_result.metrics.get("workspace_moved_to_docs", 0)
+            applied_changes["workspace_moved_to_memory"] = lifecycle_result.metrics.get("workspace_moved_to_memory", 0)
+            applied_changes["workspace_trimmed"] = lifecycle_result.metrics.get("workspace_trimmed", 0)
+            applied_changes["workspace_bloat_warnings"] = lifecycle_result.metrics.get("workspace_bloat_warnings", 0)
+            applied_changes["workspace_project_detected"] = lifecycle_result.metrics.get("workspace_project_detected", 0)
 
             metrics.end_task("workspace_audit")
             print(f"Task completed in {metrics.task_duration('workspace_audit'):.2f}s\n")
@@ -3318,15 +3298,16 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 "snippets fold into root core markdown"
             )
             snippets_dry_run = dry_run or (not snippets_apply_allowed)
-            try:
-                from soul_snippets import run_soul_snippets_review
-                snippets_result = run_soul_snippets_review(dry_run=snippets_dry_run)
-                applied_changes["snippets_folded"] = snippets_result.get("folded", 0)
-                applied_changes["snippets_rewritten"] = snippets_result.get("rewritten", 0)
-                applied_changes["snippets_discarded"] = snippets_result.get("discarded", 0)
-            except Exception as e:
-                print(f"  Snippets review failed: {e}")
-                metrics.add_error(f"Snippets: {e}")
+            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                "snippets",
+                RoutineContext(cfg=_cfg, dry_run=snippets_dry_run, workspace=_workspace()),
+            )
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
+            applied_changes["snippets_folded"] = lifecycle_result.metrics.get("snippets_folded", 0)
+            applied_changes["snippets_rewritten"] = lifecycle_result.metrics.get("snippets_rewritten", 0)
+            applied_changes["snippets_discarded"] = lifecycle_result.metrics.get("snippets_discarded", 0)
             metrics.end_task("snippets")
             print(f"Task completed in {metrics.task_duration('snippets'):.2f}s\n")
 
@@ -3339,15 +3320,21 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 "journal distillation updates root core markdown"
             )
             journal_dry_run = dry_run or (not journal_apply_allowed)
-            try:
-                from soul_snippets import run_journal_distillation
-                journal_result = run_journal_distillation(dry_run=journal_dry_run, force_distill=force_distill)
-                applied_changes["journal_additions"] = journal_result.get("additions", 0)
-                applied_changes["journal_edits"] = journal_result.get("edits", 0)
-                applied_changes["journal_entries_distilled"] = journal_result.get("total_entries", 0)
-            except Exception as e:
-                print(f"  Journal distillation failed: {e}")
-                metrics.add_error(f"Journal: {e}")
+            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                "journal",
+                RoutineContext(
+                    cfg=_cfg,
+                    dry_run=journal_dry_run,
+                    workspace=_workspace(),
+                    force_distill=force_distill,
+                ),
+            )
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
+            applied_changes["journal_additions"] = lifecycle_result.metrics.get("journal_additions", 0)
+            applied_changes["journal_edits"] = lifecycle_result.metrics.get("journal_edits", 0)
+            applied_changes["journal_entries_distilled"] = lifecycle_result.metrics.get("journal_entries_distilled", 0)
             metrics.end_task("journal")
             print(f"Task completed in {metrics.task_duration('journal'):.2f}s\n")
 

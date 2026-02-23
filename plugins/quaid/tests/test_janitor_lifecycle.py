@@ -67,3 +67,66 @@ def test_rag_lifecycle_handles_missing_routine():
     result = registry.run("missing", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=Path(".")))
     assert result.errors
     assert "No lifecycle routine registered" in result.errors[0]
+
+
+def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
+    workspace_audit_mod = ModuleType("workspace_audit")
+    workspace_audit_mod.run_workspace_check = lambda dry_run: {
+        "phase": "apply",
+        "moved_to_docs": 3,
+        "moved_to_memory": 1,
+        "trimmed": 2,
+        "bloat_warnings": 1,
+        "project_detected": 1,
+        "bloat_stats": {
+            "big.md": {"over_limit": True, "lines": 250, "maxLines": 200},
+            "ok.md": {"over_limit": False, "lines": 10, "maxLines": 200},
+        },
+    }
+    monkeypatch.setitem(sys.modules, "workspace_audit", workspace_audit_mod)
+
+    registry = build_default_registry()
+    result = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
+
+    assert result.errors == []
+    assert result.data["workspace_phase"] == "apply"
+    assert result.data["bloated_files"] == ["big.md"]
+    assert result.metrics["workspace_moved_to_docs"] == 3
+    assert result.metrics["workspace_project_detected"] == 1
+    assert any("Would apply review decisions" in line for line in result.logs)
+
+
+def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
+    soul_snippets_mod = ModuleType("soul_snippets")
+    calls = {"journal": []}
+
+    soul_snippets_mod.run_soul_snippets_review = lambda dry_run: {
+        "folded": 4,
+        "rewritten": 2,
+        "discarded": 1,
+    }
+
+    def _run_journal_distillation(*, dry_run, force_distill):
+        calls["journal"].append((dry_run, force_distill))
+        return {"additions": 3, "edits": 1, "total_entries": 9}
+
+    soul_snippets_mod.run_journal_distillation = _run_journal_distillation
+    monkeypatch.setitem(sys.modules, "soul_snippets", soul_snippets_mod)
+
+    registry = build_default_registry()
+
+    snippets_result = registry.run("snippets", RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path))
+    assert snippets_result.errors == []
+    assert snippets_result.metrics["snippets_folded"] == 4
+    assert snippets_result.metrics["snippets_rewritten"] == 2
+    assert snippets_result.metrics["snippets_discarded"] == 1
+
+    journal_result = registry.run(
+        "journal",
+        RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path, force_distill=True),
+    )
+    assert journal_result.errors == []
+    assert journal_result.metrics["journal_additions"] == 3
+    assert journal_result.metrics["journal_edits"] == 1
+    assert journal_result.metrics["journal_entries_distilled"] == 9
+    assert calls["journal"] == [(True, True)]
