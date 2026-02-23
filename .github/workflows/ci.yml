@@ -32,7 +32,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python test deps
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest ruff
 
       - name: Install plugin deps
         working-directory: plugins/quaid
@@ -51,6 +51,14 @@ jobs:
       - name: Python compile check
         working-directory: plugins/quaid
         run: python -m compileall -q .
+
+      - name: TypeScript lint
+        working-directory: plugins/quaid
+        run: npm run lint:ts
+
+      - name: Python lint
+        working-directory: plugins/quaid
+        run: npm run lint:py
 
       - name: TypeScript integration tests
         working-directory: plugins/quaid
@@ -81,7 +89,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python test deps
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest ruff
 
       - name: Install plugin deps
         working-directory: plugins/quaid
@@ -92,3 +100,11 @@ jobs:
         env:
           QUAID_E2E_MATRIX_SCRIPT: /nonexistent
         run: bash scripts/run-all-tests.sh --full
+
+      - name: TypeScript lint
+        working-directory: plugins/quaid
+        run: npm run lint:ts
+
+      - name: Python lint
+        working-directory: plugins/quaid
+        run: npm run lint:py

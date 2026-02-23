@@ -3684,7 +3684,7 @@ Notes on edges:
 - Only include edges array when the fact describes a relationship between named entities
 - A fact can have zero, one, or multiple edges
 - Most non-relationship facts will have no edges (omit the edges field or use empty array)
-- source is required on each fact (`user`, `agent`, or `both`)
+- source is required on each fact (\`user\`, \`agent\`, or \`both\`)
 
 === SOUL SNIPPETS ===
 
