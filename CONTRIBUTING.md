@@ -7,6 +7,7 @@ Thanks for considering a contribution.
 - Open an issue for significant changes so we can align scope first.
 - Keep PRs focused and small where possible.
 - Prioritize correctness and reproducibility over novelty.
+- If you want a starter task, check `docs/GOOD-FIRST-ISSUES.md`.
 
 ## Local Setup
 

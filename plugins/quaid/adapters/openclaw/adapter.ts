@@ -239,7 +239,11 @@ function getEffectiveProvider(): string {
   if (configuredProvider && configuredProvider !== "default") { return configuredProvider; }
   const gatewayProvider = getGatewayDefaultProvider();
   if (gatewayProvider) { return gatewayProvider; }
-  throw new Error("models.llmProvider is default, but no active gateway provider could be resolved");
+  throw new Error(
+    "models.llmProvider is 'default' but no active gateway provider was resolved. " +
+    "Set models.llmProvider explicitly (anthropic/openai/openai-compatible/claude-code), " +
+    "or ensure OpenClaw auth profiles exist and lastGood is set in ~/.openclaw/agents/main/agent/auth-profiles.json."
+  );
 }
 
 function getEffectiveTierProvider(tier: ModelTier): string {
@@ -298,6 +302,10 @@ function runStartupSelfCheck(): void {
   try {
     const deep = resolveTierModel("deep");
     console.log(`[quaid][startup] deep model resolved: provider=${deep.provider} model=${deep.model}`);
+    const paidProviders = new Set(["openai-compatible"]);
+    if (paidProviders.has(deep.provider)) {
+      console.warn(`[quaid][billing] paid provider active for deep reasoning: ${deep.provider}/${deep.model}`);
+    }
   } catch (err: unknown) {
     errors.push(`deep reasoning model resolution failed: ${String((err as Error)?.message || err)}`);
   }
@@ -305,6 +313,10 @@ function runStartupSelfCheck(): void {
   try {
     const fast = resolveTierModel("fast");
     console.log(`[quaid][startup] fast model resolved: provider=${fast.provider} model=${fast.model}`);
+    const paidProviders = new Set(["openai-compatible"]);
+    if (paidProviders.has(fast.provider)) {
+      console.warn(`[quaid][billing] paid provider active for fast reasoning: ${fast.provider}/${fast.model}`);
+    }
   } catch (err: unknown) {
     errors.push(`fast reasoning model resolution failed: ${String((err as Error)?.message || err)}`);
   }
