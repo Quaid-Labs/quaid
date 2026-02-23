@@ -7,12 +7,24 @@ Moves transcript->docs orchestration out of the adapter layer.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 from pathlib import Path
 from typing import Any, Dict
 
 from config import get_config
-from docs_updater import check_staleness, cmd_update_from_transcript
+
+
+def _docs_updater_module():
+    return importlib.import_module("docs_updater")
+
+
+def check_staleness():
+    return _docs_updater_module().check_staleness()
+
+
+def cmd_update_from_transcript(transcript_path: str, dry_run: bool = False, max_docs: int = 3):
+    return _docs_updater_module().cmd_update_from_transcript(transcript_path, dry_run=dry_run, max_docs=max_docs)
 
 
 def _run(transcript_path: Path, label: str, session_id: str | None = None) -> Dict[str, Any]:
@@ -59,4 +71,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

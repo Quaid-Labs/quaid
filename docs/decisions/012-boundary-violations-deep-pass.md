@@ -122,6 +122,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `plugins/quaid/docs_ingest.py`
   - adapter now dispatches `docs.ingest_transcript` through event bus (`plugins/quaid/events.py`) with immediate active processing
   - docs ingestion executes in events handler (`_handle_docs_ingest_transcript`) instead of direct adapter subprocess ownership
+  - removed import-time cycle (`docs_updater -> events -> docs_ingest -> docs_updater`)
+    by loading docs-updater entrypoints lazily via `importlib` wrappers in `docs_ingest.py`
 - Delayed notification flow unified through event bus:
   - `plugins/quaid/events.py` added `queue_delayed_notification(...)`
   - `plugins/quaid/janitor.py` now uses event bus for delayed messages
