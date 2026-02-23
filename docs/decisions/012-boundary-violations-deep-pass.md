@@ -126,6 +126,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 - Orchestrator store implementation moved out:
   - `plugins/quaid/orchestrator/default-orchestrator.ts` uses injected store callbacks
   - `plugins/quaid/adapters/openclaw/adapter.ts` supplies journal/project store handlers
+  - removed unused legacy deps (`path`, `fs`, `callDocsRag`) from orchestrator facade contract to tighten boundary surface
 - Core project catalog no longer shells to python:
   - `plugins/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:

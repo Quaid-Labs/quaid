@@ -37,12 +37,8 @@ export type RoutedRecallPlan = {
 
 type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: number; id?: string; category: string; via?: string; sourceType?: string }> = {
   workspace: string;
-  // Legacy/deprecated fields kept only for test/backfill compatibility.
-  path?: unknown;
-  fs?: unknown;
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
-  callDocsRag?: (command: "search" | "index" | "stats", args: string[]) => Promise<string>;
   callFastRouter: (systemPrompt: string, userPrompt: string) => Promise<string>;
   callDeepRouter?: (systemPrompt: string, userPrompt: string) => Promise<string>;
   getProjectCatalog?: () => Array<{ name: string; description: string }>;
