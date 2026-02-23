@@ -20,6 +20,7 @@ import abc
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -393,6 +394,74 @@ class TestLLMProvider(LLMProvider):
         return {
             "deep": {"model": "test-deep", "available": True},
             "fast": {"model": "test-fast", "available": True},
+        }
+
+
+class OpenAICompatibleLLMProvider(LLMProvider):
+    """Calls any OpenAI-compatible API (vLLM, Ollama chat, LiteLLM, etc.)."""
+
+    def __init__(self, base_url: str = "http://localhost:8000",
+                 api_key: str = "",
+                 deep_model: str = "", fast_model: str = ""):
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._deep_model = deep_model
+        self._fast_model = fast_model or deep_model
+
+    def _resolve_model(self, model_tier: str) -> str:
+        if model_tier == "fast" and self._fast_model:
+            return self._fast_model
+        return self._deep_model
+
+    def llm_call(self, messages, model_tier="deep",
+                 max_tokens=4000, timeout=600):
+        import time as _time
+        model = self._resolve_model(model_tier)
+        url = f"{self._base_url}/v1/chat/completions"
+
+        # Convert messages to OpenAI format
+        oai_messages = []
+        for m in messages:
+            oai_messages.append({"role": m["role"], "content": m["content"]})
+
+        payload = {
+            "model": model,
+            "messages": oai_messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+        }
+
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers=headers,
+        )
+
+        t0 = _time.time()
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+        elapsed = _time.time() - t0
+
+        text = data["choices"][0]["message"]["content"] or ""
+        # Strip thinking tags (Qwen3 and similar models)
+        text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
+        usage = data.get("usage", {})
+        return LLMResult(
+            text=text,
+            duration=elapsed,
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+            model=model,
+        )
+
+    def get_profiles(self):
+        return {
+            "deep": {"model": self._deep_model, "available": True},
+            "fast": {"model": self._fast_model, "available": True},
         }
 
 

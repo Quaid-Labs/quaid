@@ -303,9 +303,22 @@ class StandaloneAdapter(QuaidAdapter):
         provider_id = "default"
         try:
             from config import get_config
-            provider_id = get_config().models.llm_provider or "default"
+            cfg = get_config()
+            provider_id = cfg.models.llm_provider or "default"
         except Exception:
-            pass
+            cfg = None
+
+        if provider_id == "openai-compatible":
+            from lib.providers import OpenAICompatibleLLMProvider
+            import os
+            base_url = os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:8000")
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            deep = cfg.models.deep_reasoning if cfg else ""
+            fast = cfg.models.fast_reasoning if cfg else ""
+            return OpenAICompatibleLLMProvider(
+                base_url=base_url, api_key=api_key,
+                deep_model=deep, fast_model=fast,
+            )
 
         if provider_id == "claude-code":
             return ClaudeCodeLLMProvider()

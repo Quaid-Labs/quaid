@@ -141,6 +141,40 @@ def estimate_cost() -> float:
     return round(cost, 4)
 
 
+# Per-operation token budget — set by callers to limit total tokens for a
+# sequence of LLM calls (e.g., janitor pipeline, recall with retries).
+# 0 = unlimited. Checked in call_llm() after the cost cap.
+# Also settable via JANITOR_TOKEN_BUDGET env var.
+_token_budget: int = int(os.environ.get("JANITOR_TOKEN_BUDGET", "0"))
+_token_budget_used: int = 0
+
+
+def set_token_budget(max_tokens: int) -> None:
+    """Set a token budget for subsequent LLM calls. 0 = unlimited."""
+    global _token_budget, _token_budget_used
+    _token_budget = max(0, max_tokens)
+    _token_budget_used = 0
+
+
+def reset_token_budget() -> None:
+    """Clear the token budget (unlimited)."""
+    global _token_budget, _token_budget_used
+    _token_budget = 0
+    _token_budget_used = 0
+
+
+def get_token_budget_remaining() -> int:
+    """Return remaining tokens in budget. -1 = unlimited."""
+    if _token_budget <= 0:
+        return -1
+    return max(0, _token_budget - _token_budget_used)
+
+
+def is_token_budget_exhausted() -> bool:
+    """Check if token budget is set and exhausted."""
+    return _token_budget > 0 and _token_budget_used >= _token_budget
+
+
 # Retry config
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0  # seconds, doubled each retry
@@ -150,12 +184,16 @@ def _track_usage(result: LLMResult) -> None:
     """Accumulate token usage from an LLMResult into module-level counters."""
     global _usage_input_tokens, _usage_output_tokens, _usage_calls
     global _usage_cache_read_tokens, _usage_cache_creation_tokens, _usage_by_model
+    global _token_budget_used
 
     _usage_input_tokens += result.input_tokens
     _usage_output_tokens += result.output_tokens
     _usage_cache_read_tokens += result.cache_read_tokens
     _usage_cache_creation_tokens += result.cache_creation_tokens
     _usage_calls += 1
+
+    # Track against per-operation token budget
+    _token_budget_used += result.input_tokens + result.output_tokens
 
     # Per-model tracking (for accurate cost estimation)
     if result.model_usage:
@@ -221,6 +259,11 @@ def call_llm(system_prompt: str, user_message: str,
     current_cost = estimate_cost()
     if current_cost > _COST_CAP:
         print(f"[llm_clients] COST CAP EXCEEDED: ${current_cost:.4f} > ${_COST_CAP:.2f}, aborting call", file=sys.stderr)
+        return (None, 0.0)
+
+    # Token budget check
+    if is_token_budget_exhausted():
+        print(f"[llm_clients] TOKEN BUDGET EXHAUSTED: {_token_budget_used:,} >= {_token_budget:,}, aborting call", file=sys.stderr)
         return (None, 0.0)
 
     messages = [

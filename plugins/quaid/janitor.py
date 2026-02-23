@@ -57,7 +57,9 @@ from workspace_audit import run_workspace_check, backup_workspace_files
 from docs_rag import DocsRAG
 from llm_clients import (call_fast_reasoning, call_deep_reasoning, call_llm,
                          parse_json_response, reset_token_usage, get_token_usage,
-                         estimate_cost, DEEP_REASONING_TIMEOUT, FAST_REASONING_TIMEOUT)
+                         estimate_cost, set_token_budget, reset_token_budget,
+                         is_token_budget_exhausted,
+                         DEEP_REASONING_TIMEOUT, FAST_REASONING_TIMEOUT)
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
@@ -167,8 +169,7 @@ def _merge_nodes_into(
     # Inherit owner from first original
     owner = originals[0].owner_id if originals else _default_owner_id()
     # Inherit category from first original (not hardcoded "fact")
-    # Node uses .type (PascalCase: "Person", "Fact", etc.) → store uses lowercase category
-    category = originals[0].type.lower() if originals else "fact"
+    category = originals[0].category if originals else "fact"
 
     # Store merged version with inherited signals
     result = store_memory(
@@ -2538,14 +2539,18 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
 
 def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True,
                        time_budget: int = 0, force_distill: bool = False,
-                       user_approved: bool = False):
+                       user_approved: bool = False, token_budget: int = 0):
     """Run optimized janitor task with comprehensive reporting.
 
     Args:
         time_budget: Wall-clock budget in seconds. 0 = unlimited.
             When set, tasks are skipped if remaining time is insufficient.
         force_distill: Force journal distillation regardless of interval.
+        token_budget: Max total tokens for LLM calls. 0 = unlimited.
+            When set, LLM calls return None after budget is exhausted.
     """
+    if token_budget > 0:
+        set_token_budget(token_budget)
     # Prevent concurrent janitor runs
     if not _acquire_lock():
         print("ERROR: Another janitor instance is already running. Exiting.")
@@ -3854,8 +3859,16 @@ if __name__ == "__main__":
                         help="Force journal distillation regardless of interval")
     parser.add_argument("--time-budget", type=int, default=0,
                         help="Wall-clock budget in seconds (0 = unlimited). Tasks are skipped when time runs low.")
+    parser.add_argument("--token-budget", type=int, default=0,
+                        help="Max total tokens (input+output) for LLM calls (0 = unlimited). "
+                             "LLM calls are skipped when budget is exhausted.")
 
     args = parser.parse_args()
+
+    # Set token budget before any LLM calls
+    if args.token_budget > 0:
+        set_token_budget(args.token_budget)
+        print(f"[janitor] Token budget: {args.token_budget:,} tokens")
 
     # dry_run is derived from apply flags and janitor apply policy.
     dry_run, apply_policy_warning = _resolve_apply_mode(args.apply, args.approve)
