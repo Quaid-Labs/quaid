@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -51,7 +52,9 @@ class TestLLMProviderSelection:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
         adapter = StandaloneAdapter(home=tmp_path)
         set_adapter(adapter)
-        llm = adapter.get_llm_provider()
+        cfg = SimpleNamespace(models=SimpleNamespace(llm_provider="anthropic"))
+        with patch("config.get_config", return_value=cfg):
+            llm = adapter.get_llm_provider()
         assert isinstance(llm, AnthropicLLMProvider)
 
     def test_test_adapter_produces_test_provider(self, tmp_path):
