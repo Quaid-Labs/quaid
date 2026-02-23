@@ -10,6 +10,7 @@ Provides a small extensible event interface for:
 from __future__ import annotations
 
 import base64
+import argparse
 import json
 import os
 from datetime import datetime, timezone
@@ -87,6 +88,14 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
         "listenable": True,
         "delivery_mode": "passive",
         "delivery_notes": "Compaction requests are queued for later user/heartbeat handling.",
+    },
+    {
+        "name": "docs.ingest_transcript",
+        "description": "Run docs ingestion pipeline from a transcript file path.",
+        "fireable": True,
+        "processable": True,
+        "listenable": True,
+        "delivery_mode": "active",
     },
 ]
 
@@ -194,9 +203,31 @@ def _handle_force_compaction(event: Event) -> Dict[str, Any]:
     return {"status": "queued" if queued else "duplicate", "queued": queued}
 
 
+def _handle_docs_ingest_transcript(event: Event) -> Dict[str, Any]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    transcript_path = str(payload.get("transcript_path") or "").strip()
+    label = str(payload.get("label") or "Unknown").strip() or "Unknown"
+    session_id = payload.get("session_id")
+    if not transcript_path:
+        return {"status": "failed", "error": "payload.transcript_path is required"}
+    try:
+        from docs_ingest import _run as _docs_ingest_run
+        result = _docs_ingest_run(
+            Path(transcript_path),
+            label,
+            str(session_id) if session_id else None,
+        )
+        if isinstance(result, dict) and str(result.get("status") or "").lower() == "error":
+            return {"status": "failed", "result": result}
+        return {"status": "processed", "result": result}
+    except Exception as e:  # pragma: no cover
+        return {"status": "failed", "error": str(e)}
+
+
 EVENT_HANDLERS: Dict[str, EventHandler] = {
     "notification.delayed": _handle_delayed_notification,
     "memory.force_compaction": _handle_force_compaction,
+    "docs.ingest_transcript": _handle_docs_ingest_transcript,
     "session.new": _handle_session_lifecycle,
     "session.reset": _handle_session_lifecycle,
     "session.compaction": _handle_session_lifecycle,
@@ -359,3 +390,83 @@ def queue_delayed_notification(
     )
     processed = process_events(limit=1, names=["notification.delayed"])
     return {"event": event, "processed": processed}
+
+
+def _main() -> int:
+    parser = argparse.ArgumentParser(description="Quaid event bus")
+    subparsers = parser.add_subparsers(dest="command")
+
+    emit_p = subparsers.add_parser("emit", help="Emit an event")
+    emit_p.add_argument("--name", required=True, help="Event name")
+    emit_p.add_argument("--payload", default="{}", help="JSON payload object")
+    emit_p.add_argument("--source", default="cli", help="Source label")
+    emit_p.add_argument("--session-id", default=None, help="Optional session ID")
+    emit_p.add_argument("--owner-id", default=None, help="Optional owner ID")
+    emit_p.add_argument("--priority", default="normal", help="Priority")
+    emit_p.add_argument("--dispatch", default="auto", choices=["auto", "immediate", "queued"], help="Dispatch mode")
+
+    list_p = subparsers.add_parser("list", help="List events")
+    list_p.add_argument("--status", default="pending", choices=["pending", "processed", "failed", "all"])
+    list_p.add_argument("--limit", type=int, default=20)
+
+    process_p = subparsers.add_parser("process", help="Process pending events")
+    process_p.add_argument("--limit", type=int, default=20)
+    process_p.add_argument("--name", action="append", default=[], help="Event name filter (repeatable)")
+
+    subparsers.add_parser("capabilities", help="List event capabilities")
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        return 1
+
+    if args.command == "emit":
+        try:
+            payload = json.loads(args.payload) if args.payload else {}
+            if not isinstance(payload, dict):
+                raise ValueError("payload must be an object")
+        except Exception as e:
+            print(json.dumps({"status": "error", "error": f"invalid payload: {e}"}))
+            return 1
+
+        event = emit_event(
+            name=args.name,
+            payload=payload,
+            source=args.source,
+            session_id=args.session_id,
+            owner_id=args.owner_id,
+            priority=args.priority,
+        )
+        dispatch_mode = str(args.dispatch or "auto").strip().lower()
+        if dispatch_mode not in {"auto", "immediate", "queued"}:
+            dispatch_mode = "auto"
+        cap = get_event_capability(args.name) or {}
+        delivery_mode = str(cap.get("delivery_mode") or "active").strip().lower()
+        should_process = dispatch_mode == "immediate" or (dispatch_mode == "auto" and delivery_mode == "active")
+        processed = process_events(limit=1, names=[args.name]) if should_process else None
+        print(json.dumps({
+            "status": "ok",
+            "event": event,
+            "delivery_mode": delivery_mode,
+            "dispatch": dispatch_mode,
+            "processed": processed,
+        }))
+        return 0
+
+    if args.command == "list":
+        print(json.dumps({"status": "ok", "events": list_events(status=args.status, limit=args.limit)}))
+        return 0
+
+    if args.command == "process":
+        print(json.dumps({"status": "ok", **process_events(limit=args.limit, names=list(args.name or []))}))
+        return 0
+
+    if args.command == "capabilities":
+        print(json.dumps({"status": "ok", "events": get_event_registry()}))
+        return 0
+
+    return 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(_main())

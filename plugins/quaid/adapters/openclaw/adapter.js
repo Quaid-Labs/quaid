@@ -658,10 +658,10 @@ function maybeForceCompactionAfterTimeout(sessionId) {
   }
 }
 const DOCS_UPDATER = path.join(WORKSPACE, "plugins/quaid/docs_updater.py");
-const DOCS_INGEST = path.join(WORKSPACE, "plugins/quaid/docs_ingest.py");
 const DOCS_RAG = path.join(WORKSPACE, "plugins/quaid/docs_rag.py");
 const DOCS_REGISTRY = path.join(WORKSPACE, "plugins/quaid/docs_registry.py");
 const PROJECT_UPDATER = path.join(WORKSPACE, "plugins/quaid/project_updater.py");
+const EVENTS_SCRIPT = path.join(WORKSPACE, "plugins/quaid/events.py");
 function _getGatewayCredential(providers) {
   try {
     const profilesPath = path.join(
@@ -980,63 +980,23 @@ async function callDocsUpdater(command, args = []) {
     ...apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}
   });
 }
-async function callDocsIngestPipeline(opts) {
-  const tmpPath = path.join(QUAID_TMP_DIR, `docs-ingest-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-  fs.writeFileSync(tmpPath, opts.transcript, { mode: 384 });
-  try {
-    const args = ["--transcript", tmpPath, "--label", opts.label, "--json"];
-    if (opts.sessionId) {
-      args.push("--session-id", opts.sessionId);
-    }
-    const output = await new Promise((resolve, reject) => {
-      const proc = spawn("python3", [DOCS_INGEST, ...args], {
-        cwd: WORKSPACE,
-        env: {
-          ...process.env,
-          QUAID_HOME: WORKSPACE,
-          CLAWDBOT_WORKSPACE: WORKSPACE
-        }
-      });
-      let stdout = "";
-      let stderr = "";
-      let settled = false;
-      const timeoutMs = 3e5;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        proc.kill("SIGTERM");
-        reject(new Error(`docs_ingest timeout after ${timeoutMs}ms`));
-      }, timeoutMs);
-      proc.stdout.on("data", (data) => {
-        stdout += data;
-      });
-      proc.stderr.on("data", (data) => {
-        stderr += data;
-      });
-      proc.on("close", (code) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (code === 0) {
-          resolve(stdout.trim());
-        } else {
-          reject(new Error(`docs_ingest error: ${stderr || stdout}`));
-        }
-      });
-      proc.on("error", (err) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
-    return JSON.parse(output || "{}");
-  } finally {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-    }
-  }
+async function emitEvent(name, payload, dispatch = "auto") {
+  const args = [
+    "emit",
+    "--name",
+    name,
+    "--payload",
+    JSON.stringify(payload || {}),
+    "--source",
+    "openclaw_adapter",
+    "--dispatch",
+    dispatch
+  ];
+  const out = await _spawnWithTimeout(EVENTS_SCRIPT, "emit", args.slice(1), "events", {
+    QUAID_HOME: WORKSPACE,
+    CLAWDBOT_WORKSPACE: WORKSPACE
+  }, 3e5);
+  return JSON.parse(out || "{}");
 }
 async function callDocsRag(command, args = []) {
   return _spawnWithTimeout(DOCS_RAG, command, args, "docs_rag", {
@@ -1336,10 +1296,21 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
     console.log(`[quaid] ${label}: no transcript for doc update`);
     return;
   }
+  const tmpPath = path.join(QUAID_TMP_DIR, `docs-ingest-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  fs.writeFileSync(tmpPath, fullTranscript, { mode: 384 });
   try {
-    console.log(`[quaid] ${label}: running docs ingest pipeline...`);
+    console.log(`[quaid] ${label}: dispatching docs ingest event...`);
     const startTime = Date.now();
-    const result = await callDocsIngestPipeline({ transcript: fullTranscript, label, sessionId });
+    const out = await emitEvent(
+      "docs.ingest_transcript",
+      {
+        transcript_path: tmpPath,
+        label,
+        session_id: sessionId || null
+      },
+      "immediate"
+    );
+    const result = out?.processed?.details?.[0]?.result?.result || out?.processed?.details?.[0]?.result || {};
     const elapsed = ((Date.now() - startTime) / 1e3).toFixed(1);
     if (result.status === "up_to_date") {
       console.log(`[quaid] ${label}: all docs up-to-date (${elapsed}s)`);
@@ -1356,6 +1327,11 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
     console.log(`[quaid] ${label}: docs ingest finished (${elapsed}s)`);
   } catch (err) {
     console.error(`[quaid] ${label} doc update failed:`, err.message);
+  } finally {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+    }
   }
 }
 function isLowInformationEntityNode(result) {

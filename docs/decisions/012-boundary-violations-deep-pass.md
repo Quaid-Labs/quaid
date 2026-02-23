@@ -112,7 +112,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - adapter now routes memory bridge operations via `datastoreBridge`.
 - Added docs ingest pipeline entrypoint and adapter integration:
   - `plugins/quaid/docs_ingest.py`
-  - adapter uses `callDocsIngestPipeline(...)`.
+  - adapter now dispatches `docs.ingest_transcript` through event bus (`plugins/quaid/events.py`) with immediate active processing
+  - docs ingestion executes in events handler (`_handle_docs_ingest_transcript`) instead of direct adapter subprocess ownership
 - Delayed notification flow unified through event bus:
   - `plugins/quaid/events.py` added `queue_delayed_notification(...)`
   - `plugins/quaid/janitor.py` now uses event bus for delayed messages
@@ -150,6 +151,5 @@ These are expected and not lifecycle/datastore boundary leaks.
 - No docs/events command ownership in `memory_graph.py` CLI.
 
 ## Next Actions
-1. Convert adapter-triggered docs ingest into lifecycle event dispatch + handler.
-2. Expand janitor lifecycle registry beyond `rag` (workspace/docs/snippets/journal).
-3. Add janitor task parallelization (after boundary enforcement completes).
+1. Expand janitor lifecycle registry beyond `rag` (workspace/docs/snippets/journal).
+2. Add janitor task parallelization (after boundary enforcement completes).

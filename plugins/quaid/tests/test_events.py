@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 
 from events import emit_event, get_event_registry, get_event_capability, list_events, process_events
 from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
@@ -64,3 +66,38 @@ def test_event_process_delayed_notification_queues_llm_request(tmp_path):
     payload = json.loads(requests_path.read_text(encoding="utf-8"))
     requests = payload.get("requests") or []
     assert any("Please review janitor changes" in str(r.get("message", "")) for r in requests)
+
+
+def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("session transcript", encoding="utf-8")
+
+    import events
+    called = {}
+
+    def _fake_run(path, label, session_id=None):
+        called["path"] = str(path)
+        called["label"] = label
+        called["session_id"] = session_id
+        return {"status": "updated", "updatedDocs": 1, "staleDocs": 1}
+
+    fake_docs_ingest = types.SimpleNamespace(_run=_fake_run)
+    monkeypatch.setitem(sys.modules, "docs_ingest", fake_docs_ingest)
+
+    emit_event(
+        name="docs.ingest_transcript",
+        payload={
+            "transcript_path": str(transcript),
+            "label": "Compaction",
+            "session_id": "sess-1",
+        },
+        source="pytest",
+    )
+
+    out = process_events(limit=5, names=["docs.ingest_transcript"])
+    assert out["processed"] >= 1
+    assert out["failed"] == 0
+    assert called["path"] == str(transcript)
+    assert called["label"] == "Compaction"
+    assert called["session_id"] == "sess-1"
