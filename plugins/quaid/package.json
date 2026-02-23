@@ -15,6 +15,7 @@
   "author": "Steadman Labs",
   "license": "MIT",
   "scripts": {
+    "build:runtime": "node scripts/build-runtime.mjs",
     "lint": "npm run lint:ts && npm run lint:py",
     "lint:ts": "eslint . --ext .ts",
     "lint:py": "python3 -m ruff check .",

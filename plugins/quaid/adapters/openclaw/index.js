@@ -1,4 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const adapter_js_1 = require("./adapter.js");
-exports.default = adapter_js_1.default;
+import quaidPlugin from "./adapter.js";
+var index_default = quaidPlugin;
+export {
+  index_default as default
+};

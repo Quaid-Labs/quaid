@@ -9,23 +9,23 @@ const STORE_REGISTRY = [
         key: "technicalScope",
         description: "Override scope for this store.",
         valueType: "enum",
-        enumValues: ["personal", "technical", "any"],
-      },
-    ],
+        enumValues: ["personal", "technical", "any"]
+      }
+    ]
   },
   {
     key: "vector_basic",
     description: "Personal facts, preferences, and relationship-adjacent memory facts.",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: true,
-    options: [],
+    options: []
   },
   {
     key: "vector_technical",
     description: "Technical and project-state facts (bugs, tests, versions, architecture changes).",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
-    options: [],
+    options: []
   },
   {
     key: "graph",
@@ -36,22 +36,22 @@ const STORE_REGISTRY = [
       {
         key: "depth",
         description: "Traversal depth for this store.",
-        valueType: "number",
+        valueType: "number"
       },
       {
         key: "technicalScope",
         description: "Filter graph-backed recalls by personal/technical/all facts.",
         valueType: "enum",
-        enumValues: ["personal", "technical", "any"],
-      },
-    ],
+        enumValues: ["personal", "technical", "any"]
+      }
+    ]
   },
   {
     key: "journal",
     description: "Distilled reflective context from journal files.",
     defaultWhenExpandGraph: true,
     defaultWhenFlatRecall: true,
-    options: [],
+    options: []
   },
   {
     key: "project",
@@ -62,62 +62,57 @@ const STORE_REGISTRY = [
       {
         key: "project",
         description: "Project name filter.",
-        valueType: "string",
+        valueType: "string"
       },
       {
         key: "docs",
         description: "Doc path/name filters to restrict project recall.",
-        valueType: "string_array",
-      },
-    ],
-  },
+        valueType: "string_array"
+      }
+    ]
+  }
 ];
-
-export function getKnowledgeDatastoreRegistry() {
+function getKnowledgeDatastoreRegistry() {
   return STORE_REGISTRY.map((store) => ({
     ...store,
-    options: store.options.map((opt) => ({ ...opt, enumValues: opt.enumValues ? [...opt.enumValues] : undefined })),
+    options: store.options.map((opt) => ({ ...opt, enumValues: opt.enumValues ? [...opt.enumValues] : void 0 }))
   }));
 }
-
-export function getKnowledgeDatastoreKeys() {
+function getKnowledgeDatastoreKeys() {
   return STORE_REGISTRY.map((s) => s.key);
 }
-
-export function getRoutableDatastoreKeys() {
+function getRoutableDatastoreKeys() {
   return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector");
 }
-
-export function normalizeKnowledgeDatastores(datastores, expandGraph) {
+function normalizeKnowledgeDatastores(datastores, expandGraph) {
   const allowed = new Set(getKnowledgeDatastoreKeys());
-  const defaults = STORE_REGISTRY
-    .filter((s) => (expandGraph ? s.defaultWhenExpandGraph : s.defaultWhenFlatRecall))
-    .map((s) => s.key);
-
+  const defaults = STORE_REGISTRY.filter((s) => expandGraph ? s.defaultWhenExpandGraph : s.defaultWhenFlatRecall).map((s) => s.key);
   if (!Array.isArray(datastores) || datastores.length === 0) return defaults;
-
   const normalized = [];
   for (const raw of datastores) {
     const value = String(raw || "").trim().toLowerCase();
     if (!allowed.has(value) || normalized.includes(value)) continue;
     normalized.push(value);
   }
-
   return normalized.length ? normalized : defaults;
 }
-
-export function renderKnowledgeDatastoreGuidanceForAgents() {
+function renderKnowledgeDatastoreGuidanceForAgents() {
   const lines = ["Knowledge datastores:"];
   for (const store of STORE_REGISTRY) {
-    const optionSummary = store.options.length
-      ? ` Options: ${store.options.map((o) => {
-        if (o.valueType === "enum" && o.enumValues?.length) {
-          return `${o.key} (${o.enumValues.join("|")})`;
-        }
-        return `${o.key} (${o.valueType})`;
-      }).join(", ")}.`
-      : "";
+    const optionSummary = store.options.length ? ` Options: ${store.options.map((o) => {
+      if (o.valueType === "enum" && o.enumValues?.length) {
+        return `${o.key} (${o.enumValues.join("|")})`;
+      }
+      return `${o.key} (${o.valueType})`;
+    }).join(", ")}.` : "";
     lines.push(`- ${store.key}: ${store.description}${optionSummary}`);
   }
   return lines.join("\n");
 }
+export {
+  getKnowledgeDatastoreKeys,
+  getKnowledgeDatastoreRegistry,
+  getRoutableDatastoreKeys,
+  normalizeKnowledgeDatastores,
+  renderKnowledgeDatastoreGuidanceForAgents
+};

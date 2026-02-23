@@ -326,18 +326,30 @@ def extract_from_transcript(
         is_technical = bool(fact.get("is_technical", False))
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = f"{label}-extraction"
+        raw_source = str(fact.get("source", "user")).strip().lower()
+        source_type = (
+            "assistant" if raw_source == "agent"
+            else "both" if raw_source == "both"
+            else "user"
+        )
 
         fact_entry = {"text": text, "status": "pending", "edges": []}
 
         if not dry_run:
             store_result = store(
                 text=text,
-                owner_id=owner_id,
                 category=category,
+                verified=False,
+                pinned=False,
                 confidence=conf_num,
+                privacy=privacy,
                 source=source_label,
+                source_id=session_id,
+                owner_id=owner_id,
+                session_id=session_id,
                 knowledge_type=knowledge_type,
-                source_type="user",
+                keywords=keywords,
+                source_type=source_type,
                 is_technical=is_technical,
             )
 
@@ -360,7 +372,20 @@ def extract_from_transcript(
                 fact_entry["status"] = "stored"
                 result["facts_stored"] += 1
 
-                # Create edges
+            elif store_result.get("status") == "duplicate":
+                fact_entry["status"] = "duplicate"
+                fact_entry["reason"] = store_result.get("existing_text", "")[:50]
+                result["facts_skipped"] += 1
+            elif store_result.get("status") == "updated":
+                fact_entry["status"] = "updated"
+                result["facts_stored"] += 1
+            else:
+                fact_entry["status"] = "failed"
+                result["facts_skipped"] += 1
+
+            # Create edges for any successful fact write where we have a fact id.
+            fact_id = store_result.get("id")
+            if fact_id and isinstance(fact.get("edges"), list):
                 for edge in fact.get("edges", []):
                     if not isinstance(edge, dict):
                         continue
@@ -374,7 +399,7 @@ def extract_from_transcript(
                                 relation=rel,
                                 object_name=obj,
                                 owner_id=owner_id,
-                                source_fact_id=store_result.get("id"),
+                                source_fact_id=fact_id,
                             )
                             if edge_result.get("status") == "created":
                                 result["edges_created"] += 1
@@ -383,17 +408,6 @@ def extract_from_transcript(
                                 )
                         except Exception as e:
                             logger.warning(f"[extract] {label}: edge failed: {e}")
-
-            elif store_result.get("status") == "duplicate":
-                fact_entry["status"] = "duplicate"
-                fact_entry["reason"] = store_result.get("existing_text", "")[:50]
-                result["facts_skipped"] += 1
-            elif store_result.get("status") == "updated":
-                fact_entry["status"] = "updated"
-                result["facts_stored"] += 1
-            else:
-                fact_entry["status"] = "failed"
-                result["facts_skipped"] += 1
         else:
             # Dry run — just mark as would-store
             fact_entry["status"] = "would_store"
@@ -493,6 +507,7 @@ def main():
     )
     parser.add_argument("--owner", default=None, help="Owner ID (default: from config)")
     parser.add_argument("--label", default="cli", help="Source label for logging")
+    parser.add_argument("--session-id", default=None, help="Optional session ID")
     parser.add_argument("--dry-run", action="store_true", help="Parse and plan but don't store")
     parser.add_argument("--no-snippets", action="store_true", help="Skip writing snippets")
     parser.add_argument("--no-journal", action="store_true", help="Skip writing journal entries")
@@ -550,6 +565,7 @@ def main():
         transcript=transcript,
         owner_id=owner_id,
         label=args.label,
+        session_id=args.session_id,
         write_snippets=not args.no_snippets,
         write_journal=not args.no_journal,
         dry_run=args.dry_run,

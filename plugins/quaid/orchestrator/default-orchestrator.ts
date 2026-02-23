@@ -5,13 +5,13 @@ import {
   getRoutableDatastoreKeys,
   normalizeKnowledgeDatastores,
   renderKnowledgeDatastoreGuidanceForAgents,
-} from "../../../core/knowledge-stores.js";
+} from "../core/knowledge-stores.js";
 import type {
   KnowledgeDatastore,
   TechnicalScope,
   RecallIntent,
   SourceType,
-} from "../../../core/knowledge-stores.js";
+} from "../core/knowledge-stores.js";
 
 export type TotalRecallOptions = {
   datastores: KnowledgeDatastore[];

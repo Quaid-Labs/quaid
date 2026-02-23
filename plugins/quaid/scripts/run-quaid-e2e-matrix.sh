@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="${SCRIPT_DIR}/run-quaid-e2e.sh"
 BOOTSTRAP_ROOT="${QUAID_BOOTSTRAP_ROOT:-${HOME}/quaid/bootstrap}"
 PROFILE_PATH="${QUAID_E2E_PROFILE_PATH:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
+PATH_TIMEOUT_SEC="${QUAID_E2E_PATH_TIMEOUT_SEC:-600}"
 
 PATHS=("openai-oauth" "openai-api" "anthropic-oauth" "anthropic-api")
 EXPECT_SPEC=""
@@ -21,6 +22,9 @@ Options:
   --json-out <path>   Write matrix summary JSON (default: /tmp/quaid-e2e-matrix-<timestamp>.json)
   --                 Forward remaining args to run-quaid-e2e.sh
   -h, --help         Show help
+
+Environment:
+  QUAID_E2E_PATH_TIMEOUT_SEC  Max seconds per auth path before timeout classification (default: 600)
 USAGE
 }
 
@@ -92,6 +96,10 @@ lookup_value() {
 
 classify_failure_reason() {
   local log_file="$1"
+  if rg -n "E2E_TIMEOUT_EXPIRED" "$log_file" >/dev/null 2>&1; then
+    echo "matrix-path-timeout"
+    return 0
+  fi
   if rg -n "SKIP_REASON:" "$log_file" >/dev/null 2>&1; then
     rg -n "SKIP_REASON:" "$log_file" | tail -n 1 | sed -E 's/.*SKIP_REASON:([A-Za-z0-9._-]+).*/\1/' || true
     return 0
@@ -141,6 +149,30 @@ classify_failure_reason() {
     return 0
   fi
   echo "unknown"
+}
+
+run_runner_with_timeout() {
+  python3 - "$@" <<'PY'
+import subprocess
+import sys
+
+if len(sys.argv) < 3:
+  print("E2E_TIMEOUT_EXPIRED invalid-args")
+  sys.exit(124)
+
+try:
+  timeout_sec = int(float(sys.argv[1]))
+except Exception:
+  timeout_sec = 600
+
+cmd = sys.argv[2:]
+try:
+  proc = subprocess.run(cmd, timeout=timeout_sec)
+  sys.exit(proc.returncode)
+except subprocess.TimeoutExpired:
+  print(f"E2E_TIMEOUT_EXPIRED timeout_sec={timeout_sec} cmd={' '.join(cmd)}")
+  sys.exit(124)
+PY
 }
 
 extract_exception_lines() {
@@ -209,7 +241,7 @@ for auth_path in "${PATHS[@]}"; do
   if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
     runner_args+=("${EXTRA_ARGS[@]}")
   fi
-  if "$RUNNER" "${runner_args[@]}" >"$log_file" 2>&1; then
+  if run_runner_with_timeout "$PATH_TIMEOUT_SEC" "$RUNNER" "${runner_args[@]}" >"$log_file" 2>&1; then
     cat "$log_file"
     RESULTS+=("${auth_path}=pass")
     REASONS+=("${auth_path}=ok")

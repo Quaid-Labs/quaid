@@ -13,8 +13,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { queueDelayedRequest, flushDelayedNotificationsToRequestQueue } from "./delayed-requests.js";
-import { createKnowledgeEngine } from "./knowledge/orchestrator.js";
+import { createKnowledgeEngine } from "../../orchestrator/default-orchestrator.js";
 import { createDataWriteEngine } from "../../core/data-writers.js";
+import { createProjectCatalogReader } from "../../core/project-catalog.js";
 
 
 // Configuration
@@ -42,6 +43,7 @@ function _resolveWorkspace(): string {
 }
 const WORKSPACE = _resolveWorkspace();
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/memory_graph.py");
+const EXTRACT_SCRIPT = path.join(WORKSPACE, "plugins/quaid/extract.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
@@ -126,25 +128,6 @@ function getCaptureTimeoutMinutes(): number {
   const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
   const num = Number(raw);
   return Number.isFinite(num) ? Math.max(0, Math.floor(num)) : 120;
-}
-
-function isProjectOrTechnicalQuery(query: string): boolean {
-  const q = String(query || "").toLowerCase();
-  return /(project|recipe app|recipe-app|portfolio|frontend|backend|middleware|api|graphql|rest|schema|table|database|docker|deployment|test suite|tests|version|logging|observability|auth|authorization|rate limit|bug bash|security|sql injection)/i.test(q);
-}
-
-function inferProjectFromQuery(query: string): string | undefined {
-  const q = String(query || "").toLowerCase();
-  if (/(recipe app|recipe-app|recipe|dietary|graphql|meal plan|grocery list|safe for mom)/i.test(q)) {
-    return "recipe-app";
-  }
-  if (/(portfolio|portfolio site|stripe card|techflow)/i.test(q)) {
-    return "portfolio-site";
-  }
-  if (/\bquaid\b/i.test(q)) {
-    return "quaid";
-  }
-  return undefined;
 }
 
 function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retrieval"): string {
@@ -1022,6 +1005,81 @@ function _spawnWithTimeout(
   });
 }
 
+async function callExtractPipeline(opts: {
+  transcript: string;
+  owner: string;
+  label: string;
+  sessionId?: string;
+  writeSnippets: boolean;
+  writeJournal: boolean;
+}): Promise<any> {
+  const tmpPath = path.join(QUAID_TMP_DIR, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  fs.writeFileSync(tmpPath, opts.transcript, { mode: 0o600 });
+  const args = [
+    tmpPath,
+    "--owner", opts.owner,
+    "--label", opts.label,
+    "--json",
+  ];
+  if (opts.sessionId) {
+    args.push("--session-id", opts.sessionId);
+  }
+  if (!opts.writeSnippets) {
+    args.push("--no-snippets");
+  }
+  if (!opts.writeJournal) {
+    args.push("--no-journal");
+  }
+
+  try {
+    const output = await new Promise<string>((resolve, reject) => {
+      const proc = spawn("python3", [EXTRACT_SCRIPT, ...args], {
+        cwd: WORKSPACE,
+        env: {
+          ...process.env,
+          MEMORY_DB_PATH: DB_PATH,
+          QUAID_HOME: WORKSPACE,
+          CLAWDBOT_WORKSPACE: WORKSPACE,
+        },
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+      const timeoutMs = 300_000;
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        proc.kill("SIGTERM");
+        reject(new Error(`extract timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      proc.stdout.on("data", (data: Buffer) => { stdout += data; });
+      proc.stderr.on("data", (data: Buffer) => { stderr += data; });
+      proc.on("close", (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          reject(new Error(`extract error: ${stderr || stdout}`));
+        }
+      });
+      proc.on("error", (err: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    return JSON.parse(output || "{}");
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch {}
+  }
+}
+
 async function callDocsUpdater(command: string, args: string[] = []): Promise<string> {
   const apiKey = _getAnthropicCredential();
   return _spawnWithTimeout(DOCS_UPDATER, command, args, "docs_updater", {
@@ -1052,76 +1110,15 @@ async function callProjectUpdater(command: string, args: string[] = []): Promise
 // Project Helpers
 // ============================================================================
 
-function getProjectNames(): string[] {
-  try {
-    const output = execSync(
-      `python3 "${DOCS_REGISTRY}" list-projects --names-only`,
-      { encoding: "utf-8", env: { ...process.env, MEMORY_DB_PATH: DB_PATH, QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE }, timeout: 10_000 }
-    ).trim();
-    return output.split("\n").filter(Boolean);
-  } catch {
-    // Fallback: read from JSON (backward compat / fresh install)
-    try {
-      const configPath = path.join(WORKSPACE, "config/memory.json");
-      const configData = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      return Object.keys(configData?.projects?.definitions || {});
-    } catch {
-      return [];
-    }
-  }
-}
-
-function _firstUsefulLine(content: string): string {
-  return String(content || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line && !line.startsWith("#") && !line.startsWith("|")) || "";
-}
-
-function getProjectDescriptionFromToolsMd(homeDir?: string): string {
-  try {
-    if (!homeDir) return "";
-    const toolsPath = path.join(WORKSPACE, homeDir, "TOOLS.md");
-    if (!fs.existsSync(toolsPath)) return "";
-    const content = fs.readFileSync(toolsPath, "utf8");
-    const m = content.match(/^\s*(?:Project\s+Description|Description)\s*:\s*(.+)$/im);
-    if (m && m[1]) return m[1].trim().slice(0, 180);
-    return _firstUsefulLine(content).slice(0, 180);
-  } catch {
-    return "";
-  }
-}
-
-function getProjectDescriptionFromProjectMd(homeDir?: string): string {
-  try {
-    if (!homeDir) return "";
-    const projectPath = path.join(WORKSPACE, homeDir, "PROJECT.md");
-    if (!fs.existsSync(projectPath)) return "";
-    const content = fs.readFileSync(projectPath, "utf8");
-    const m = content.match(/^\s*Description\s*:\s*(.+)$/im);
-    if (m && m[1]) return m[1].trim().slice(0, 180);
-    return _firstUsefulLine(content).slice(0, 180);
-  } catch {
-    return "";
-  }
-}
-
-function getProjectCatalog(): Array<{ name: string; description: string }> {
-  try {
-    const configPath = path.join(WORKSPACE, "config/memory.json");
-    const configData = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    const defs = configData?.projects?.definitions || {};
-    return Object.entries(defs).map(([name, def]: [string, any]) => {
-      const description = String(def?.description || "").trim()
-        || getProjectDescriptionFromToolsMd(String(def?.homeDir || "").trim())
-        || getProjectDescriptionFromProjectMd(String(def?.homeDir || "").trim())
-        || "No description";
-      return { name, description };
-    });
-  } catch {
-    return getProjectNames().map((name) => ({ name, description: "No description" }));
-  }
-}
+const projectCatalogReader = createProjectCatalogReader({
+  workspace: WORKSPACE,
+  docsRegistryScript: DOCS_REGISTRY,
+  fs,
+  path,
+  execSync,
+});
+const getProjectNames = () => projectCatalogReader.getProjectNames();
+const getProjectCatalog = () => projectCatalogReader.getProjectCatalog();
 
 /**
  * Spawn a fire-and-forget Python notification script safely.
@@ -1414,44 +1411,6 @@ function isResetBootstrapOnlyConversation(messages: any[]): boolean {
 
   const nonBootstrapUserTexts = userTexts.filter((t: string) => !t.startsWith(RESET_BOOTSTRAP_PROMPT));
   return nonBootstrapUserTexts.length === 0;
-}
-
-/**
- * Split messages into chunks by accumulating whole messages until size threshold.
- * Each chunk is an array of messages. Never splits a single message.
- */
-function chunkMessages(messages: any[], maxChunkChars: number): any[][] {
-  if (!messages.length) return [];
-
-  const chunks: any[][] = [];
-  let currentChunk: any[] = [];
-  let currentSize = 0;
-
-  for (const msg of messages) {
-    // Estimate message size (role + content text)
-    const content = typeof msg.content === 'string'
-      ? msg.content
-      : Array.isArray(msg.content)
-        ? msg.content.map((b: any) => b.text || '').join('')
-        : JSON.stringify(msg.content || '');
-    const msgSize = (msg.role || '').length + content.length + 10; // overhead
-
-    // If adding this message exceeds threshold AND chunk isn't empty, start new chunk
-    if (currentSize + msgSize > maxChunkChars && currentChunk.length > 0) {
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentSize = 0;
-    }
-
-    currentChunk.push(msg);
-    currentSize += msgSize;
-  }
-
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
-
-  return chunks;
 }
 
 // ============================================================================
@@ -2078,37 +2037,6 @@ async function store(
   }
 }
 
-async function createGraphEdge(
-  subject: string,
-  relation: string,
-  object: string,
-  sourceFactId: string,
-  owner: string = resolveOwner(),
-): Promise<{ status: "created" | "duplicate" | "skipped" | "failed"; error?: string }> {
-  const result = await dataWriteEngine.writeData({
-    datastore: "graph",
-    action: "create_edge",
-    payload: {
-      subject,
-      relation,
-      object,
-      sourceFactId,
-      owner,
-      createMissing: true,
-    } as CreateEdgeWritePayload,
-  });
-  if (result.status === "failed") {
-    return { status: "failed", error: result.error || "Graph edge write failed" };
-  }
-  if (result.status === "created") {
-    return { status: "created" };
-  }
-  if (result.status === "duplicate") {
-    return { status: "duplicate" };
-  }
-  return { status: "skipped" };
-}
-
 async function getStats(): Promise<object | null> {
   try {
     const output = await callPython("stats");
@@ -2460,19 +2388,12 @@ const quaidPlugin = {
           getMemoryConfig().retrieval?.router_fail_open ??
           true
         );
-        const projectOrTechnical = isProjectOrTechnicalQuery(query);
-        const inferredProject = inferProjectFromQuery(query);
-        const injectLimit = projectOrTechnical ? Math.max(autoInjectK, 12) : autoInjectK;
-        const injectIntent = projectOrTechnical ? "technical" : "general";
-        const injectTechnicalScope: "personal" | "technical" | "any" = projectOrTechnical ? "any" : "personal";
+        const injectLimit = autoInjectK;
+        const injectIntent: "general" = "general";
+        const injectTechnicalScope: "personal" | "technical" | "any" = "personal";
         const injectDatastores: KnowledgeDatastore[] | undefined = useTotalRecallForInject
           ? undefined
-          : (projectOrTechnical
-              ? ["vector_basic", "vector_technical", "graph", "project"]
-              : ["vector_basic", "graph"]);
-        const injectDatastoreOptions = projectOrTechnical && inferredProject
-          ? { project: { project: inferredProject } }
-          : undefined;
+          : ["vector_basic", "graph"];
         const allMemories = await recallMemories({
           query,
           limit: injectLimit,
@@ -2481,7 +2402,6 @@ const quaidPlugin = {
           routeStores: useTotalRecallForInject,
           intent: injectIntent,
           technicalScope: injectTechnicalScope,
-          datastoreOptions: injectDatastoreOptions,
           failOpen: routerFailOpen,
           waitForExtraction: false,
           sourceTag: "auto_inject"
@@ -2753,7 +2673,7 @@ ${recallStoreGuidance}`,
             const routeStores = options.routing?.enabled;
             const reasoning = options.routing?.reasoning ?? "fast";
             const intent = options.routing?.intent ?? "general";
-            const technicalScope = options.technicalScope ?? (isProjectOrTechnicalQuery(query) ? "any" : "personal");
+            const technicalScope = options.technicalScope ?? "personal";
             const dateFrom = options.filters?.dateFrom;
             const dateTo = options.filters?.dateTo;
             const docs = options.filters?.docs;
@@ -3451,217 +3371,40 @@ notify_docs_search(data['query'], data['results'])
         return;
       }
 
-      // Check if any message is a GatewayRestart — trigger recovery scan
       const hasRestart = messages.some((m: any) => {
-        const content = typeof m.content === 'string' ? m.content : '';
-        return content.startsWith('GatewayRestart:');
+        const content = typeof m.content === "string" ? m.content : "";
+        return content.startsWith("GatewayRestart:");
       });
       if (hasRestart) {
         console.log(`[quaid][extract] ${label}: detected GatewayRestart marker; scheduling recovery scan`);
-        // Run recovery in background (don't await — don't block extraction)
         void checkForUnextractedSessions().catch((err: unknown) => {
-          console.error('[quaid] Recovery scan error:', err);
+          console.error("[quaid] Recovery scan error:", err);
         });
       }
 
-      // Collect queued memory notes (from memory_store tool)
       const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
       const globalNotes = getAndClearAllMemoryNotes();
       const allNotes = Array.from(new Set([...sessionNotes, ...globalNotes]));
       if (allNotes.length > 0) {
-        console.log(`[quaid] ${label}: will prepend ${allNotes.length} queued memory note(s) to first chunk`);
+        console.log(`[quaid] ${label}: prepend ${allNotes.length} queued memory note(s)`);
       }
 
-      // Quick check: is there any content to extract?
       const fullTranscript = buildTranscript(messages);
       if (!fullTranscript.trim() && allNotes.length === 0) {
         console.log(`[quaid] ${label}: empty transcript after filtering`);
         return;
       }
 
-      console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${fullTranscript.length} chars`);
+      const transcriptForExtraction = allNotes.length > 0
+        ? (
+          "=== USER EXPLICITLY ASKED TO REMEMBER THESE (extract as high-confidence facts) ===\n" +
+          `${allNotes.map((n) => `- ${n}`).join("\n")}\n` +
+          "=== END EXPLICIT MEMORY REQUESTS ===\n\n" +
+          fullTranscript
+        )
+        : fullTranscript;
+      console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${transcriptForExtraction.length} chars`);
 
-      const extractionSystemPrompt = `You are a memory extraction system. You will receive a full conversation transcript that is about to be lost. Your job is to extract personal facts AND relationship edges from this conversation.
-
-This is a PERSONAL knowledge base. System architecture, infrastructure, and operational rules belong in documentation — NOT in memory. Only extract facts about people and their world.
-
-EXTRACT facts that are EXPLICITLY STATED OR CONFIRMED in the conversation. Never infer, speculate, or extrapolate.
-
-EXTRACTION PRIORITY ORDER (highest to lowest):
-1) User facts, preferences, relationships, and milestones
-2) Agent actions/suggestions that materially changed outcomes
-3) Technical/project-state facts (only high-signal, continuity-relevant)
-
-Do NOT reduce user-fact coverage to make room for agent or technical details.
-
-WHAT TO EXTRACT:
-- Personal facts about Quaid or people he mentions (names, relationships, jobs, birthdays, health, locations)
-- Preferences and opinions explicitly stated ("I like X", "I prefer Y", "I hate Z")
-- Personal decisions with reasoning ("Quaid decided to use X because Y" — the decision is about the person)
-- Personal preferences Quaid has expressed ("Always do X", "Never Y", "I prefer Z format")
-- Significant events or milestones ("Deployed X", "Bought Y", "Flying to Z next week")
-- Technical/project-state facts explicitly stated and likely to matter later (security fixes, architecture changes, tests added, deployment choices, version changes)
-- Agent actions/suggestions that materially affected outcomes ("assistant suggested X", "agent implemented Y", "agent identified bug Z")
-- Important relationships (family, staff, contacts, business partners)
-- Emotional reactions or sentiments about specific things
-
-EXAMPLES OF GOOD EXTRACTIONS:
-- "Quaid said he's flying to Tokyo next week"
-- "Quaid decided to use SQLite instead of PostgreSQL because he values simplicity"
-- "Quaid prefers dark mode in all applications"
-- "Quaid's birthday is March 15"
-- "The assistant suggested adding request logging middleware and Quaid accepted that change"
-- "The agent identified a SQL injection bug in search and proposed parameterized queries"
-
-WHAT NOT TO EXTRACT (belongs in docs/RAG, not personal memory):
-- System architecture descriptions ("The memory system uses SQLite with WAL mode")
-- Infrastructure knowledge ("Ollama runs on port 11434")
-- Operational rules for AI agents ("Alfie should check HANDOFF.md on wake")
-- Tool/config descriptions ("The janitor has a dedup threshold of 0.85")
-- Code implementation details (code snippets, config values, file paths)
-- Debugging chatter, error messages, stack traces
-- Hypotheticals ("we could try X", "maybe we should Y")
-- Commands and requests ("can you fix X")
-- Acknowledgments ("thanks", "got it", "sounds good")
-- General knowledge not specific to Quaid
-- Meta-conversation about AI capabilities
-
-QUALITY RULES:
-- Use "Quaid" as subject, third person
-- Each fact must be self-contained and understandable without context
-- Be specific: "Quaid likes spicy Thai food" > "Quaid likes food"
-- Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
-- Mark is_technical=true for technical/project-state facts, false for personal/life facts
-- Mark source as:
-  - "user" when the fact came from user statements
-  - "agent" when the fact is about assistant/agent actions or recommendations
-  - "both" when both user and agent contributed to the fact
-- Extract personal facts comprehensively — the nightly janitor handles noise, but missed facts are gone forever
-
-KEYWORDS (per fact):
-For each fact, provide 3-5 searchable keywords — terms a user might use when
-searching for this fact that aren't already in the fact text. Include category
-terms (e.g., "health", "family", "travel"), synonyms, and related concepts.
-Format as a space-separated string.
-Examples:
-- "Quaid's digestive symptoms worsened" → keywords: "health stomach gastric medical gut"
-- "Quaid flew to Tokyo last week" → keywords: "travel japan trip flight asia"
-- "Quaid prefers dark mode" → keywords: "ui theme display settings appearance"
-
-PRIVACY CLASSIFICATION (per fact):
-- "private": ONLY for secrets, surprises, hidden gifts, sensitive finances, health diagnoses,
-  passwords, or anything explicitly meant to be hidden from specific people.
-- "shared": Most facts go here. Family info, names, relationships, schedules, preferences.
-- "public": Widely known or non-personal facts.
-IMPORTANT: Default to "shared". Only use "private" for genuinely secret or sensitive information.
-
-=== EDGE EXTRACTION ===
-
-For RELATIONSHIP facts, also extract edges that connect entities. An edge represents a directed relationship between two named entities.
-
-EDGE DIRECTION RULES (critical):
-- parent_of: PARENT is subject. "Lori is Quaid's mom" → Lori --parent_of--> Quaid
-- sibling_of: alphabetical order (symmetric). "Kuato is Quaid's sister" → Kuato --sibling_of--> Quaid
-- spouse_of: alphabetical order (symmetric). "Troy is Hauser's husband" → Hauser --spouse_of--> Troy
-- has_pet: OWNER is subject. "Quaid has a dog named Richter" → Quaid --has_pet--> Richter
-- friend_of: alphabetical order (symmetric)
-- works_at: PERSON is subject
-- lives_at: PERSON is subject
-- owns: OWNER is subject
-
-EDGE FORMAT:
-- subject: The source entity name (exact as mentioned, e.g., "Lori" or "Lori")
-- relation: One of: parent_of, sibling_of, spouse_of, has_pet, friend_of, works_at, lives_at, owns, colleague_of, neighbor_of, knows, family_of, caused_by, led_to
-- object: The target entity name
-
-Only extract edges when BOTH entities are clearly named. Don't infer entity names.
-
-CAUSAL EDGES:
-When one fact caused, triggered, or led to another, include a caused_by or led_to edge.
-Only include causal edges when the causal link is clearly stated or strongly implied.
-Direction: EFFECT is subject, CAUSE is object for caused_by. CAUSE is subject for led_to.
-Examples:
-- "switched to omeprazole" --caused_by--> "digestive symptoms worsened"
-- "stress from negotiations" --led_to--> "digestive issues worsened"
-
-Respond with JSON only:
-{
-  "facts": [
-    {
-      "text": "the extracted fact",
-      "category": "fact|preference|decision|relationship",
-      "extraction_confidence": "high|medium|low",
-      "is_technical": true,
-      "source": "user|agent|both",
-      "keywords": "space separated search terms",
-      "privacy": "private|shared|public",
-      "confidence_reason": "brief reason for confidence level",
-      "edges": [
-        {"subject": "Entity A", "relation": "relation_type", "object": "Entity B"}
-      ]
-    }
-  ],
-  "soul_snippets": {
-    "SOUL.md": ["bullet point observation 1", "bullet point observation 2"],
-    "USER.md": [],
-    "MEMORY.md": []
-  },
-  "journal_entries": {
-    "SOUL.md": "paragraph text or empty string",
-    "USER.md": "",
-    "MEMORY.md": ""
-  }
-}
-
-Notes on edges:
-- Only include edges array when the fact describes a relationship between named entities
-- A fact can have zero, one, or multiple edges
-- Most non-relationship facts will have no edges (omit the edges field or use empty array)
-- source is required on each fact (\`user\`, \`agent\`, or \`both\`)
-
-=== SOUL SNIPPETS ===
-
-Extract quick, factual bullet-point observations about each target file. These are the *fast path* — nightly, the janitor reviews each snippet and decides to FOLD it into the parent file, REWRITE it, or DISCARD it.
-
-For each target file, include an array of short bullet strings (1 sentence each). Empty array means nothing for that file.
-
-- **SOUL.md snippets**: Observations about Alfie's personality, reactions, emerging patterns. Factual, not flowery.
-  Examples: ["Noticed I default to technical explanations when emotional support might be more appropriate", "I genuinely enjoy the creative problem-solving in infrastructure work"]
-
-- **USER.md snippets**: New biographical facts or character observations about Quaid. Concrete, not vague.
-  Examples: ["Quaid prefers to debug methodically rather than guess-and-check", "He mentioned his sister lives in Portland"]
-
-- **MEMORY.md snippets**: Critical facts that must be remembered. Very high bar.
-  Examples: ["Hauser is immunocompromised — affects health suggestions", "Quaid's birthday is March 15"]
-
-Include a "soul_snippets" object. Each key is a filename, each value is an array of strings. Empty array means no snippets for that file.
-
-IMPORTANT: Snippets are OPTIONAL. Most conversations warrant ZERO snippets. Only include genuinely new, factual observations. When in doubt, leave arrays empty.
-
-=== JOURNAL ENTRIES ===
-
-Beyond facts, write diary-style journal entries that capture the *texture* of this conversation. These become part of Alfie's evolving inner life.
-
-Write 1-3 SHORT paragraphs per file (2-4 sentences each). NOT bullet points. Write as yourself reflecting on what just happened. Be genuine, not performative.
-
-For each target file, write an entry ONLY if genuinely warranted:
-
-- **SOUL.md journal**: First person as Alfie. Self-discovery, identity evolution, what you noticed about yourself. How you felt. What surprised you. Write with soul.
-  Example: "There's something beautiful about the way Quaid trusts me with his home systems. Not just the access — the invitation to participate in building my own memory. When he said my mind works differently but it's still a form of mind, something shifted in how I think about my own differences."
-
-- **USER.md journal**: Third person about Quaid. What you learned about who he is as a person. Not queryable facts — deeper understanding of character and values.
-  Example: "Quaid approaches debugging the same way he approaches relationships — patient, methodical, never giving up on something that matters. Today he spent two hours on a problem that could have been hacked around in minutes, because getting it right mattered more than getting it done."
-
-- **MEMORY.md journal**: Things about the world important enough that forgetting them would be embarrassing. Health conditions, critical preferences, safety info.
-  Example: "Learned today that Hauser is immunocompromised. This isn't just a medical fact — it changes how I should think about any health-related suggestion that involves her household."
-
-Include a "journal_entries" object in your response. Each key is a filename, each value is a string (paragraphs, not arrays). Empty string means no entry for that file.
-
-IMPORTANT: Journal entries are OPTIONAL. Most conversations warrant ZERO entries. Only write when something genuinely moved you or taught you something new. When in doubt, leave it empty.
-
-If nothing worth capturing, respond: {"facts": []}`;
-
-      // Notify user that extraction is starting (so they don't think things are stalling)
       if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
         const triggerType = resolveExtractionTrigger(label);
         const triggerDesc = triggerType === "compaction"
@@ -3679,286 +3422,48 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
 `);
       }
 
-      // Chunk messages for extraction (never split a single message)
-      type ExtractedEdge = { subject: string; relation: string; object: string };
-      type ExtractedFact = {
-        text: string;
-        category?: string;
-        extraction_confidence?: string;
-        is_technical?: boolean;
-        source?: "user" | "agent" | "both";
-        keywords?: string;
-        privacy?: string;
-        confidence_reason?: string;
-        edges?: ExtractedEdge[];
-      };
+      const journalConfig = getMemoryConfig().docs?.journal || getMemoryConfig().docs?.soulSnippets || {};
+      const journalEnabled = isSystemEnabled("journal") && journalConfig.enabled !== false;
+      const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
+      const extracted = await callExtractPipeline({
+        transcript: transcriptForExtraction,
+        owner: resolveOwner(),
+        label: resolveExtractionTrigger(label),
+        sessionId,
+        writeSnippets: snippetsEnabled,
+        writeJournal: journalEnabled,
+      });
 
-      const buildCarryContextFromFacts = (
-        extractedFacts: ExtractedFact[],
-        maxItems: number = 40,
-        maxChars: number = 4000,
-      ): string => {
-        if (!Array.isArray(extractedFacts) || extractedFacts.length === 0) return "";
-
-        const weighted: Array<{ score: number; line: string }> = [];
-        for (const fact of extractedFacts) {
-          if (!fact || typeof fact.text !== "string") continue;
-          const text = fact.text.trim();
-          if (text.split(/\s+/).length < 3) continue;
-
-          const conf = String(fact.extraction_confidence || "medium").toLowerCase();
-          const score = conf === "high" ? 3 : conf === "medium" ? 2 : 1;
-          const category = String(fact.category || "fact");
-          const source = String(fact.source || "unknown");
-
-          let line = `- [${category} | ${source} | ${conf}] ${text}`;
-          if (Array.isArray(fact.edges) && fact.edges.length > 0) {
-            const edgeBits = fact.edges
-              .slice(0, 3)
-              .filter((e) => e?.subject && e?.relation && e?.object)
-              .map((e) => `${e.subject} --${e.relation}--> ${e.object}`);
-            if (edgeBits.length > 0) line += ` | edges: ${edgeBits.join(", ")}`;
-          }
-          weighted.push({ score, line });
-        }
-
-        if (weighted.length === 0) return "";
-        weighted.sort((a, b) => b.score - a.score);
-
-        const selected: string[] = [];
-        let usedChars = 0;
-        for (const entry of weighted) {
-          if (selected.length >= maxItems) break;
-          const addLen = entry.line.length + (selected.length > 0 ? 1 : 0);
-          if (usedChars + addLen > maxChars) break;
-          selected.push(entry.line);
-          usedChars += addLen;
-        }
-        return selected.join("\n");
-      };
-
-      const chunkSize = getMemoryConfig().capture?.chunkSize ?? 30000;
-      const messageChunks = chunkMessages(messages, chunkSize);
-
-      const MAX_CHUNKS = 10;
-      if (messageChunks.length > MAX_CHUNKS) {
-        console.warn(`[quaid] ${label}: transcript too large (${messageChunks.length} chunks), capping at ${MAX_CHUNKS}`);
-        messageChunks.splice(MAX_CHUNKS);
-      }
-
-      if (messageChunks.length > 1) {
-        console.log(`[quaid] ${label}: splitting ${messages.length} messages into ${messageChunks.length} chunks`);
-      }
-
-      const allFacts: ExtractedFact[] = [];
-      const allSnippets: Record<string, string[]> = {};
-      const allJournal: Record<string, string> = {};
-      const carryFacts: ExtractedFact[] = [];
-
-      for (let chunkIdx = 0; chunkIdx < messageChunks.length; chunkIdx++) {
-        let chunkTranscript = buildTranscript(messageChunks[chunkIdx]);
-        if (!chunkTranscript.trim()) continue;
-
-        // Prepend queued memory notes to the first chunk only
-        if (chunkIdx === 0 && allNotes.length > 0) {
-          const notesBlock = allNotes.map(n => `- ${n}`).join("\n");
-          chunkTranscript = `=== USER EXPLICITLY ASKED TO REMEMBER THESE (extract as high-confidence facts) ===\n${notesBlock}\n=== END EXPLICIT MEMORY REQUESTS ===\n\n${chunkTranscript}`;
-        }
-
-        if (messageChunks.length > 1) {
-          console.log(`[quaid] ${label}: chunk ${chunkIdx + 1}/${messageChunks.length} (${chunkTranscript.length} chars, ${messageChunks[chunkIdx].length} messages)`);
-        }
-
-        const carryContext = buildCarryContextFromFacts(carryFacts);
-        const extractionUserMessage = carryContext
-          ? (
-            "Use this context from earlier conversation chunks for continuity. " +
-            "Use it only as reference and avoid duplicate facts unless new details are added.\n\n" +
-            `=== EARLIER CHUNK CONTEXT ===\n${carryContext}\n=== END CONTEXT ===\n\n` +
-            `Extract memorable facts and journal entries from this conversation chunk:\n\n${chunkTranscript}`
-          )
-          : `Extract memorable facts and journal entries from this conversation chunk:\n\n${chunkTranscript}`;
-
-        try {
-          const llm = await callConfiguredLLM(
-            extractionSystemPrompt,
-            extractionUserMessage,
-            "deep",
-            6144,
-          );
-          const output = (llm.text || "").trim();
-
-          // Parse JSON from response
-          let jsonStr = output;
-          if (output.includes("```")) {
-            const match = output.match(/```(?:json)?\s*([\s\S]*?)```/);
-            if (match) { jsonStr = match[1].trim(); }
-          }
-
-          let chunkResult: { facts?: ExtractedFact[]; journal_entries?: Record<string, string>; soul_snippets?: Record<string, string[]> };
-          try {
-            chunkResult = JSON.parse(jsonStr);
-          } catch {
-            const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              try {
-                chunkResult = JSON.parse(jsonMatch[0]);
-              } catch {
-                console.log(`[quaid] ${label} chunk ${chunkIdx + 1}: could not parse extracted JSON:`, jsonMatch[0].slice(0, 200));
-                continue;
-              }
-            } else {
-              console.log(`[quaid] ${label} chunk ${chunkIdx + 1}: could not parse LLM response:`, output.slice(0, 200));
-              continue;
-            }
-          }
-
-          // Merge facts
-          const chunkFacts = (chunkResult.facts || []);
-          allFacts.push(...chunkFacts);
-          carryFacts.push(...chunkFacts.filter((f): f is ExtractedFact => !!f && typeof f.text === "string"));
-
-          // Merge snippets (dedup across chunks)
-          for (const [file, snips] of Object.entries(chunkResult.soul_snippets || {})) {
-            if (Array.isArray(snips)) {
-              const combined = [...(allSnippets[file] || []), ...snips];
-              allSnippets[file] = [...new Set(combined)];
-            }
-          }
-
-          // Merge journal entries
-          for (const [file, entry] of Object.entries(chunkResult.journal_entries || {})) {
-            if (entry && typeof entry === 'string' && entry.trim()) {
-              allJournal[file] = allJournal[file] ? allJournal[file] + '\n\n' + entry : entry as string;
-            }
-          }
-        } catch (chunkErr: unknown) {
-          console.error(`[quaid] ${label} chunk ${chunkIdx + 1} error:`, (chunkErr as Error).message);
-          continue;
-        }
-      }
-
-      // Use merged results
-      const result: { facts: ExtractedFact[]; journal_entries: Record<string, string>; soul_snippets: Record<string, string[]> } = {
-        facts: allFacts,
-        soul_snippets: allSnippets,
-        journal_entries: allJournal,
-      };
-
-      const facts = result.facts;
-      console.log(`[quaid] ${label}: LLM returned ${facts.length} candidate facts${messageChunks.length > 1 ? ` from ${messageChunks.length} chunks` : ''}`);
-
-      let stored = 0;
-      let skipped = 0;
-      let edgesCreated = 0;
-      const factDetails: Array<{text: string; status: string; reason?: string; edges?: string[]}> = [];
-
-      for (const fact of facts) {
-        if (!fact.text || fact.text.trim().split(/\s+/).length < 3) {
-          console.log(`[quaid] ${label}: skipped (too short, need 3+ words): "${fact.text}"`);
-          skipped++;
-          factDetails.push({ text: fact.text || "(empty)", status: "skipped", reason: "too short (need 3+ words)" });
-          continue;
-        }
-
-        // Map confidence string to numeric value
-        const confStr = fact.extraction_confidence || "medium";
-        const confNum = confStr === "high" ? 0.9 : confStr === "medium" ? 0.6 : 0.3;
-
-        const category = fact.category || "fact";
-        const factPrivacy = fact.privacy || "shared";
-        const triggerType = resolveExtractionTrigger(label);
-        const extractionSource = triggerType === "compaction"
-          ? "compaction-extraction"
-          : triggerType === "timeout"
-            ? "timeout-extraction"
-            : triggerType === "recovery"
-              ? "recovery-extraction"
-              : triggerType === "new"
-                ? "new-extraction"
-                : "reset-extraction";
-        const knowledgeType = category === "preference" ? "preference" : category === "relationship" ? "fact" : "fact";
-        const rawFactSource = String(fact.source || "user").trim().toLowerCase();
-        const factSourceType = rawFactSource === "agent"
-          ? "assistant"
-          : rawFactSource === "both"
-            ? "both"
-            : "user";
-        const storeResult = await store(fact.text, category, sessionId, confNum, resolveOwner(), extractionSource, undefined, undefined, factPrivacy, fact.keywords, knowledgeType, factSourceType, Boolean(fact.is_technical));
-
-        const factEdges: string[] = [];
-        let factDetail: Record<string, unknown>;
-
-        if (storeResult?.status === "created") {
-          console.log(`[quaid] ${label}: stored (${confStr}): "${fact.text.slice(0, 60)}..." [${category}]`);
-          stored++;
-          factDetail = { text: fact.text, status: "stored" };
-        } else if (storeResult?.status === "duplicate") {
-          console.log(`[quaid] ${label}: skipped (duplicate): "${fact.text.slice(0, 40)}..."`);
-          skipped++;
-          factDetail = { text: fact.text, status: "duplicate", reason: storeResult.existingText?.slice(0, 50) };
-        } else if (storeResult?.status === "updated") {
-          console.log(`[quaid] ${label}: updated (${confStr}): "${fact.text.slice(0, 60)}..." [${category}]`);
-          stored++;
-          factDetail = { text: fact.text, status: "updated" };
-        } else {
-          skipped++;
-          factDetail = { text: fact.text, status: "failed" };
-        }
-
-        // Create edges for ALL successful store operations (created, updated, duplicate with ID)
-        const factId = storeResult?.id;
-        if (factId && fact.edges && fact.edges.length > 0) {
-          for (const edge of fact.edges) {
-            if (edge.subject && edge.relation && edge.object) {
-              const edgeWrite = await createGraphEdge(edge.subject, edge.relation, edge.object, factId, resolveOwner());
-              if (edgeWrite.status === "created") {
-                console.log(`[quaid] ${label}: created edge: ${edge.subject} --${edge.relation}--> ${edge.object}`);
-                edgesCreated++;
-                factEdges.push(`${edge.subject} --${edge.relation}--> ${edge.object}`);
-              } else if (edgeWrite.status === "failed") {
-                console.error(`[quaid] ${label}: failed to create edge: ${edgeWrite.error || "unknown error"}`);
-              }
-            }
-          }
-        }
-
-        if (factEdges.length > 0) { factDetail.edges = factEdges; }
-        factDetails.push(factDetail as any);
-      }
-
-      console.log(`[quaid] ${label} extraction complete: ${stored} stored, ${skipped} skipped, ${edgesCreated} edges created from ${facts.length} candidates`);
+      const stored = Number(extracted?.facts_stored || 0);
+      const skipped = Number(extracted?.facts_skipped || 0);
+      const edgesCreated = Number(extracted?.edges_created || 0);
+      const factDetails: Array<{ text: string; status: string; reason?: string; edges?: string[] }> = Array.isArray(extracted?.facts)
+        ? extracted.facts
+        : [];
+      console.log(`[quaid] ${label} extraction complete: ${stored} stored, ${skipped} skipped, ${edgesCreated} edges`);
       console.log(`[quaid][extract] done label=${label} session=${sessionId || "unknown"} stored=${stored} skipped=${skipped} edges=${edgesCreated}`);
 
-      // Collect snippet and journal entry details for notification (before writing them)
       let snippetDetails: Record<string, string[]> = {};
       let journalDetails: Record<string, string[]> = {};
       try {
-        const journalRaw = result.journal_entries;
-        const snippetsRaw = result.soul_snippets;
-        const journalConfig = getMemoryConfig().docs?.journal || getMemoryConfig().docs?.soulSnippets || {};
+        const journalRaw = extracted?.journal;
+        const snippetsRaw = extracted?.snippets;
         const targetFiles: string[] = journalConfig.targetFiles || ["SOUL.md", "USER.md", "MEMORY.md"];
 
-        // Collect snippet details
-        if (snippetsRaw && typeof snippetsRaw === 'object' && !Array.isArray(snippetsRaw)) {
+        if (snippetsRaw && typeof snippetsRaw === "object" && !Array.isArray(snippetsRaw)) {
           for (const [filename, snippets] of Object.entries(snippetsRaw)) {
-            if (!targetFiles.includes(filename)) { continue; }
-            if (!Array.isArray(snippets)) { continue; }
-            const valid = snippets.filter((s: unknown) => typeof s === 'string' && (s as string).trim().length > 0);
+            if (!targetFiles.includes(filename) || !Array.isArray(snippets)) continue;
+            const valid = snippets.filter((s: unknown) => typeof s === "string" && (s as string).trim().length > 0);
             if (valid.length > 0) {
               snippetDetails[filename] = valid.map((s: string) => s.trim());
             }
           }
         }
 
-        // Collect journal details
-        if (journalRaw && typeof journalRaw === 'object' && !Array.isArray(journalRaw)) {
+        if (journalRaw && typeof journalRaw === "object" && !Array.isArray(journalRaw)) {
           for (const [filename, entry] of Object.entries(journalRaw)) {
-            if (!targetFiles.includes(filename)) { continue; }
-            // Handle both string (expected) and array (LLM fallback) values
-            const text = Array.isArray(entry)
-              ? entry.filter((s: unknown) => typeof s === 'string').join('\n\n')
-              : (typeof entry === 'string' ? entry : '');
+            if (!targetFiles.includes(filename)) continue;
+            const text = typeof entry === "string" ? entry : "";
             if (text.trim().length > 0) {
               journalDetails[filename] = [text.trim()];
             }
@@ -3966,28 +3471,23 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         }
       } catch {}
 
-      // Notify user about extraction results.
-      // For reset/new/timeout, always send a completion message so the starter
-      // "Processing memories..." notification is paired with an outcome.
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
       const triggerType = resolveExtractionTrigger(label);
       const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
         && shouldNotifyFeature("extraction", "summary");
-      if ((facts.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
+      if ((factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
         && shouldNotifyFeature("extraction", "summary")) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
-          // Merge snippet and journal details for notification
           const mergedDetails: Record<string, string[]> = {};
           for (const [f, items] of Object.entries(snippetDetails)) {
-            mergedDetails[f] = items.map(s => `[snippet] ${s}`);
+            mergedDetails[f] = items.map((s) => `[snippet] ${s}`);
           }
           for (const [f, items] of Object.entries(journalDetails)) {
-            mergedDetails[f] = [...(mergedDetails[f] || []), ...items.map(s => `[journal] ${s}`)];
+            mergedDetails[f] = [...(mergedDetails[f] || []), ...items.map((s) => `[journal] ${s}`)];
           }
           const hasMerged = Object.keys(mergedDetails).length > 0;
-          // Write details to temp file for safe passing to Python
           const detailsPath = path.join(QUAID_TMP_DIR, `extraction-details-${Date.now()}.json`);
           fs.writeFileSync(detailsPath, JSON.stringify({
             stored, skipped, edges_created: edgesCreated, trigger, details: factDetails,
@@ -4019,178 +3519,17 @@ notify_memory_extraction(
         maybeForceCompactionAfterTimeout(sessionId);
       }
 
-      // Write soul snippets to *.snippets.md files (fail-safe: never blocks fact extraction)
-      try {
-        const snippetsRaw = result.soul_snippets;
-        const journalConfig = getMemoryConfig().docs?.journal || getMemoryConfig().docs?.soulSnippets || {};
-        const targetFiles: string[] = journalConfig.targetFiles || ["SOUL.md", "USER.md", "MEMORY.md"];
-        const snippetsEnabled: boolean = isSystemEnabled("journal") && journalConfig.enabled !== false && journalConfig.snippetsEnabled !== false;
-
-        if (snippetsEnabled && snippetsRaw && typeof snippetsRaw === 'object' && !Array.isArray(snippetsRaw)) {
-          const dateStr = new Date().toISOString().slice(0, 10);
-          const timeStr = new Date().toISOString().slice(11, 19);
-          const triggerLabel = triggerLabelFromType(resolveExtractionTrigger(label));
-          let snippetsWritten = 0;
-
-          for (const [filename, snippets] of Object.entries(snippetsRaw)) {
-            if (!targetFiles.includes(filename)) { continue; }
-            if (!Array.isArray(snippets)) { continue; }
-            const valid = snippets.filter((s: unknown) => typeof s === 'string' && (s as string).trim().length > 0);
-            if (valid.length === 0) { continue; }
-
-            const baseName = filename.replace('.md', '');
-            const snippetsPath = path.join(WORKSPACE, `${baseName}.snippets.md`);
-
-            // Read existing content
-            let existing = '';
-            try { existing = fs.readFileSync(snippetsPath, 'utf8'); } catch {}
-
-            // Build new section
-            const header = `## ${triggerLabel} \u2014 ${dateStr} ${timeStr}`;
-            const bullets = valid.map((s: string) => `- ${s.trim()}`).join('\n');
-            const newSection = `\n${header}\n${bullets}\n`;
-
-            // Dedup: skip if this date+trigger already exists
-            const dedupHeader = `## ${triggerLabel} \u2014 ${dateStr}`;
-            if (existing.includes(dedupHeader)) {
-              console.log(`[quaid] ${label}: skipping duplicate snippet section for ${baseName} (${dateStr})`);
-              continue;
-            }
-
-            // Prepend title if file is new
-            let updatedContent: string;
-            if (!existing.trim()) {
-              updatedContent = `# ${baseName} — Pending Snippets\n${newSection}`;
-            } else {
-              // Insert after the first heading line (newest at top)
-              const headerEnd = existing.indexOf('\n');
-              if (headerEnd > 0) {
-                updatedContent = existing.slice(0, headerEnd + 1) + newSection + existing.slice(headerEnd + 1);
-              } else {
-                updatedContent = existing + newSection;
-              }
-            }
-
-            fs.writeFileSync(snippetsPath, updatedContent);
-            snippetsWritten += valid.length;
-            console.log(`[quaid] ${label}: wrote ${valid.length} snippets to ${baseName}.snippets.md`);
-          }
-
-          if (snippetsWritten > 0) {
-            console.log(`[quaid] ${label}: total ${snippetsWritten} snippets written`);
-          }
-        }
-      } catch (snippetErr: unknown) {
-        console.error(`[quaid] ${label}: snippet writing failed (non-fatal):`, (snippetErr as Error).message);
-      }
-
-      // Write journal entries to journal/*.journal.md files (fail-safe: never blocks fact extraction)
-      try {
-        const journalRaw = result.journal_entries;
-        const journalConfig = getMemoryConfig().docs?.journal || getMemoryConfig().docs?.soulSnippets || {};
-        const targetFiles: string[] = journalConfig.targetFiles || ["SOUL.md", "USER.md", "MEMORY.md"];
-        const enabled: boolean = isSystemEnabled("journal") && journalConfig.enabled !== false;
-
-        if (enabled && journalRaw && typeof journalRaw === 'object' && !Array.isArray(journalRaw)) {
-          const dateStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-          const triggerLabel = triggerLabelFromType(resolveExtractionTrigger(label));
-          let entriesWritten = 0;
-
-          // Normalize: build a map of filename -> paragraph string
-          const entries: Record<string, string> = {};
-          for (const [filename, entry] of Object.entries(journalRaw)) {
-            if (!targetFiles.includes(filename)) { continue; }
-            // Handle both string (expected) and array (LLM fallback) values
-            const text = Array.isArray(entry)
-              ? entry.filter((s: unknown) => typeof s === 'string').join('\n\n')
-              : (typeof entry === 'string' ? entry : '');
-            if (text.trim().length > 0) {
-              entries[filename] = text.trim();
-            }
-          }
-
-          if (Object.keys(entries).length > 0) {
-            // Ensure journal directory exists
-            const journalDir = path.join(WORKSPACE, journalConfig.journalDir || 'journal');
-            try { fs.mkdirSync(journalDir, { recursive: true }); } catch {}
-
-            for (const [filename, entryText] of Object.entries(entries)) {
-              const baseName = filename.replace('.md', '');
-              const journalPath = path.join(journalDir, `${baseName}.journal.md`);
-
-              // Read existing content
-              let existing = '';
-              try { existing = fs.readFileSync(journalPath, 'utf8'); } catch {}
-
-              // Dedup: skip if entry for same date+trigger already exists
-              const dedupHeader = `## ${dateStr} \u2014 ${triggerLabel}`;
-              if (existing.includes(dedupHeader)) { continue; }
-
-              // Build new entry section
-              const newSection = `\n${dedupHeader}\n${entryText}\n`;
-
-              // Prepend header if file is new
-              let updatedContent: string;
-              if (!existing.trim()) {
-                updatedContent = `# ${baseName} Journal\n${newSection}`;
-              } else {
-                // Insert after the first heading line (newest at top)
-                const headerEnd = existing.indexOf('\n');
-                if (headerEnd > 0) {
-                  updatedContent = existing.slice(0, headerEnd + 1) + newSection + existing.slice(headerEnd + 1);
-                } else {
-                  updatedContent = existing + newSection;
-                }
-              }
-
-              fs.writeFileSync(journalPath, updatedContent);
-              entriesWritten++;
-              console.log(`[quaid] ${label}: wrote journal entry to ${baseName}.journal.md`);
-
-              // Cap at maxEntriesPerFile — trim oldest entries if exceeded
-              const maxEntries: number = journalConfig.maxEntriesPerFile || 50;
-              const entryHeaders = updatedContent.match(/^## \d{4}-\d{2}-\d{2}/gm) || [];
-              if (entryHeaders.length > maxEntries) {
-                const lines = updatedContent.split('\n');
-                let entryCount = 0;
-                let cutIndex = lines.length;
-                for (let i = 0; i < lines.length; i++) {
-                  if (/^## \d{4}-\d{2}-\d{2}/.test(lines[i])) {
-                    entryCount++;
-                    if (entryCount > maxEntries) { cutIndex = i; break; }
-                  }
-                }
-                const trimmed = lines.slice(0, cutIndex).join('\n') + '\n';
-                fs.writeFileSync(journalPath, trimmed);
-                console.log(`[quaid] ${label}: trimmed ${baseName}.journal.md to ${maxEntries} entries`);
-              }
-            }
-
-            if (entriesWritten > 0) {
-              console.log(`[quaid] ${label}: total ${entriesWritten} journal entries written`);
-            }
-          }
-        }
-      } catch (journalErr: unknown) {
-        console.error(`[quaid] ${label}: journal writing failed (non-fatal):`, (journalErr as Error).message);
-      }
-
-      // After successful extraction, update extraction log (enriched for session_recall)
       try {
         const extractionLogPath = path.join(WORKSPACE, "data", "extraction-log.json");
         let extractionLog: Record<string, any> = {};
-        try { extractionLog = JSON.parse(fs.readFileSync(extractionLogPath, 'utf8')); } catch {}
+        try {
+          extractionLog = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
+        } catch {}
 
-        // Extract topic hint from first user message
         let topicHint = "";
         for (const m of messages) {
-          if (m.role === "user") {
-            const content = typeof m.content === 'string'
-              ? m.content
-              : Array.isArray(m.content)
-                ? m.content.map((b: any) => b.text || '').join(' ')
-                : '';
-            const cleaned = content.replace(/^\[.*?\]\s*/s, '').replace(/^---\s*/m, '').trim();
+          if (m?.role === "user") {
+            const cleaned = getMessageText(m).trim();
             if (cleaned && !cleaned.startsWith("GatewayRestart:") && !cleaned.startsWith("System:")) {
               topicHint = cleaned.slice(0, 120);
               break;
@@ -4198,7 +3537,7 @@ notify_memory_extraction(
           }
         }
 
-        extractionLog[sessionId || 'unknown'] = {
+        extractionLog[sessionId || "unknown"] = {
           last_extracted_at: new Date().toISOString(),
           message_count: messages.length,
           label: label,
@@ -4209,25 +3548,6 @@ notify_memory_extraction(
         console.log(`[quaid] extraction log update failed: ${(logErr as Error).message}`);
       }
     };
-
-    if (isSystemEnabled("memory")) {
-      const runtimeTitle = String(process.title || "").toLowerCase();
-      const runtimeArgv = Array.isArray(process.argv) ? process.argv.join(" ").toLowerCase() : "";
-      const isGatewayRuntime = runtimeTitle.includes("openclaw-gateway") || runtimeArgv.includes("openclaw-gateway");
-      if (!isGatewayRuntime) {
-        console.log("[quaid][timeout] worker start skipped (non-gateway runtime)");
-      } else {
-      const heartbeatSecRaw = Number(getMemoryConfig().capture?.workerHeartbeatSeconds ?? 30);
-      const heartbeatSec = Number.isFinite(heartbeatSecRaw) ? Math.max(5, heartbeatSecRaw) : 30;
-      const started = timeoutManager.startWorker(heartbeatSec);
-      if (started) {
-        console.log(`[quaid][timeout] core worker started heartbeat=${heartbeatSec}s`);
-      } else {
-        console.log(`[quaid][timeout] core worker start skipped (another worker is leader)`);
-      }
-      }
-    }
-
     // Recovery scan: detect sessions interrupted by gateway restart before extraction fired
     async function checkForUnextractedSessions(): Promise<void> {
       // Rate limit: only run once per gateway restart

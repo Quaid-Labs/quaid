@@ -54,7 +54,7 @@ from lib.archive import archive_node as _archive_node
 from logger import janitor_logger, rotate_logs
 from config import get_config
 from workspace_audit import run_workspace_check, backup_workspace_files
-from docs_rag import DocsRAG
+from janitor_lifecycle import build_default_registry, RoutineContext
 from llm_clients import (call_fast_reasoning, call_deep_reasoning, call_llm,
                          parse_json_response, reset_token_usage, get_token_usage,
                          estimate_cost, set_token_budget, reset_token_budget,
@@ -76,6 +76,7 @@ def _logs_dir() -> Path:
     return get_adapter().logs_dir()
 
 WORKSPACE = None  # Lazy — use _workspace() instead
+_LIFECYCLE_REGISTRY = build_default_registry()
 
 # Load config values (with fallbacks for safety)
 def _get_config_value(getter, default):
@@ -3468,77 +3469,28 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("rag", "all") and _system_enabled_or_skip("rag", "Task 7: RAG Reindex") and not _skip_if_over_budget("Task 7: RAG Reindex", 15):
             print("[Task 7: RAG Reindex + Project Discovery]")
             metrics.start_task("rag_reindex")
+            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                "rag",
+                RoutineContext(cfg=_cfg, dry_run=dry_run, workspace=_workspace()),
+            )
 
-            try:
-                # 7a: Process any queued project events (skip in dry-run — calls Opus)
-                if _cfg.projects.enabled and not dry_run:
-                    try:
-                        from project_updater import process_all_events
-                        print("  Processing queued project events...")
-                        event_result = process_all_events()
-                        applied_changes["project_events_processed"] = event_result.get("processed", 0)
-                        if event_result.get("processed", 0) > 0:
-                            print(f"    Processed {event_result['processed']} event(s)")
-                    except Exception as e:
-                        print(f"  Project event processing failed: {e}")
-                elif _cfg.projects.enabled and dry_run:
-                    print("  Skipping project event processing (dry-run)")
+            for line in lifecycle_result.logs:
+                print(f"  {line}")
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
 
-                # 7b: Auto-discover for autoIndex projects
-                if _cfg.projects.enabled:
-                    try:
-                        from docs_registry import DocsRegistry
-                        registry = DocsRegistry()
-                        total_discovered = 0
-                        for proj_name, proj_defn in _cfg.projects.definitions.items():
-                            if proj_defn.auto_index:
-                                discovered = registry.auto_discover(proj_name)
-                                total_discovered += len(discovered)
-                        applied_changes["project_files_discovered"] = total_discovered
-                        if total_discovered > 0:
-                            print(f"    Discovered {total_discovered} new file(s)")
+            applied_changes["project_events_processed"] = lifecycle_result.metrics.get("project_events_processed", 0)
+            applied_changes["project_files_discovered"] = lifecycle_result.metrics.get("project_files_discovered", 0)
+            applied_changes["rag_files_indexed"] = lifecycle_result.metrics.get("rag_files_indexed", 0)
+            applied_changes["rag_chunks_created"] = lifecycle_result.metrics.get("rag_chunks_created", 0)
+            applied_changes["rag_files_skipped"] = lifecycle_result.metrics.get("rag_files_skipped", 0)
 
-                        # 7c: Sync PROJECT.md External Files -> registry
-                        for proj_name in _cfg.projects.definitions:
-                            try:
-                                registry.sync_external_files(proj_name)
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        print(f"  Project auto-discover failed: {e}")
-
-                # 7d: RAG reindex
-                rag = DocsRAG()
-                # Resolve docs_dir relative to workspace
-                docs_dir = str(_workspace() / _cfg.rag.docs_dir)
-
-                print(f"  Reindexing {docs_dir}...")
-                result = rag.reindex_all(docs_dir, force=False)
-
-                # Also reindex project directories
-                if _cfg.projects.enabled:
-                    for proj_name, proj_defn in _cfg.projects.definitions.items():
-                        proj_dir = str(_workspace() / proj_defn.home_dir)
-                        if Path(proj_dir).exists():
-                            print(f"  Reindexing project {proj_name}: {proj_dir}...")
-                            proj_result = rag.reindex_all(proj_dir, force=False)
-                            result["indexed_files"] = result.get("indexed_files", 0) + proj_result.get("indexed_files", 0)
-                            result["total_chunks"] = result.get("total_chunks", 0) + proj_result.get("total_chunks", 0)
-                            result["skipped_files"] = result.get("skipped_files", 0) + proj_result.get("skipped_files", 0)
-
-                applied_changes["rag_files_indexed"] = result.get("indexed_files", 0)
-                applied_changes["rag_chunks_created"] = result.get("total_chunks", 0)
-                applied_changes["rag_files_skipped"] = result.get("skipped_files", 0)
-
-                print(f"\n  RAG Index Updated:")
-                print(f"    Total files: {result.get('total_files', 0)}")
-                print(f"    Indexed: {result.get('indexed_files', 0)}")
-                print(f"    Skipped (unchanged): {result.get('skipped_files', 0)}")
-                print(f"    Chunks created: {result.get('total_chunks', 0)}")
-
-            except Exception as e:
-                print(f"  RAG reindex failed: {e}")
-                metrics.add_error(f"RAG reindex failed: {e}")
+            print(f"\n  RAG Index Updated:")
+            print(f"    Total files: {lifecycle_result.metrics.get('rag_total_files', 0)}")
+            print(f"    Indexed: {lifecycle_result.metrics.get('rag_files_indexed', 0)}")
+            print(f"    Skipped (unchanged): {lifecycle_result.metrics.get('rag_files_skipped', 0)}")
+            print(f"    Chunks created: {lifecycle_result.metrics.get('rag_chunks_created', 0)}")
 
             metrics.end_task("rag_reindex")
             print(f"Task completed in {metrics.task_duration('rag_reindex'):.2f}s\n")

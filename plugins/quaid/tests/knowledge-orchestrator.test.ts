@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createKnowledgeEngine } from "../adapters/openclaw/knowledge/orchestrator.js";
+import { createKnowledgeEngine } from "../orchestrator/default-orchestrator.js";
 
 type Result = {
   text: string;
