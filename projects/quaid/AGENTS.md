@@ -67,6 +67,10 @@ memory_recall query="Hauser birthday" options={graph:{expand:true}}
   - `project` for docs-derived project knowledge
 - Use catch-all routing (`options.routing.enabled: true`) only when uncertain.
   - `total_recall` triggers an extra fast-LLM planning pass (better recall plan, higher cost/latency).
+  - Routing output must be valid structured JSON; the router auto-retries once with validation feedback.
+  - If the retry still fails, recall throws by default. Use a stronger fast model.
+  - Default behavior is fail-open (`retrieval.routerFailOpen: true`): log loudly and continue with deterministic default recall plan if prepass fails.
+  - Set `options.routing.failOpen: false` (or config `retrieval.routerFailOpen: false`) for strict fail-through behavior.
   - If the query is obvious, explicit `datastores` via plain recall is cheaper and usually faster.
   - Optional: `options.routing.reasoning: "deep"` for a higher-quality routing pass when you can afford extra cost/latency.
   - Optional: `options.routing.intent: "agent_actions"` when asking what the assistant/agent did or suggested.

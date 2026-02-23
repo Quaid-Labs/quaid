@@ -3,33 +3,75 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createKnowledgeEngine = createKnowledgeEngine;
 const knowledge_stores_js_1 = require("../../../core/knowledge-stores.js");
 function createKnowledgeEngine(deps) {
+    async function routeWithRepair(router, systemPrompt, userPrompt, validate, label) {
+        const first = await router(systemPrompt, userPrompt);
+        try {
+            return validate(first);
+        }
+        catch (err) {
+            const reason = err?.message || String(err);
+            console.warn(`[quaid][recall-router] ${label}: invalid first response; retrying repair (${reason})`);
+            const repairSystemPrompt = `${systemPrompt}\n\nReturn STRICT JSON only. No prose, no markdown, no comments, no code fences.`;
+            const repairUserPrompt = `${userPrompt}\n\nPrevious response (invalid):\n${first}\n\nValidation error:\n${reason}\n\nRewrite into valid JSON matching the required schema exactly.`;
+            const second = await router(repairSystemPrompt, repairUserPrompt);
+            try {
+                return validate(second);
+            }
+            catch (err2) {
+                const reason2 = err2?.message || String(err2);
+                throw new Error(`Fast recall prepass failed to produce valid structured output after retry (${label}). Use a stronger fast model (e.g. Haiku/GPT-class) or set retrieval.routerFailOpen=true. Last validation error: ${reason2}`);
+            }
+        }
+    }
     function storeOption(opts, store, key) {
         return opts.datastoreOptions?.[store]?.[key];
+    }
+    function sanitizeRecallResults(items) {
+        const out = [];
+        for (const raw of items || []) {
+            if (!raw || typeof raw !== "object")
+                continue;
+            const obj = raw;
+            const text = String(obj.text || "").trim();
+            if (!text)
+                continue;
+            const category = String(obj.category || "fact").trim() || "fact";
+            const simRaw = Number(obj.similarity);
+            const similarity = Number.isFinite(simRaw) ? Math.max(0, Math.min(1, simRaw)) : 0.5;
+            const viaRaw = String(obj.via || "").trim().toLowerCase();
+            const via = (viaRaw === "vector" || viaRaw === "graph" || viaRaw === "journal" || viaRaw === "project")
+                ? viaRaw
+                : "vector";
+            out.push({
+                ...obj,
+                text,
+                category,
+                similarity,
+                via,
+            });
+        }
+        return out;
+    }
+    function parseRoutedDatastores(raw, allowed) {
+        if (!Array.isArray(raw) || raw.length === 0) {
+            throw new Error("router response missing datastores array");
+        }
+        const out = [];
+        for (const entry of raw) {
+            const key = String(entry || "").trim().toLowerCase();
+            if (!allowed.includes(key))
+                continue;
+            if (!out.includes(key))
+                out.push(key);
+        }
+        if (!out.length) {
+            throw new Error("router returned no valid datastores");
+        }
+        return out;
     }
     const normalizeKnowledgeDatastores = knowledge_stores_js_1.normalizeKnowledgeDatastores;
     async function routeKnowledgeDatastores(query, expandGraph) {
         const allowed = (0, knowledge_stores_js_1.getRoutableDatastoreKeys)();
-        const heuristic = (() => {
-            const q = String(query || "").toLowerCase();
-            const out = new Set();
-            const technicalHint = /(api|schema|database|migration|deploy|docker|auth|test|bug|refactor|config|code|typescript|python|endpoint)/i;
-            const relationshipHint = /(family|sister|brother|mother|father|wife|husband|partner|child|kids|relationship|related|who is)/i;
-            const reflectiveHint = /(feel|feeling|reflect|journal|inner|tone|vibe|personality)/i;
-            if (technicalHint.test(q)) {
-                out.add("vector_technical");
-                out.add("project");
-            }
-            else {
-                out.add("vector_basic");
-            }
-            if (expandGraph && relationshipHint.test(q))
-                out.add("graph");
-            if (reflectiveHint.test(q))
-                out.add("journal");
-            if (!out.size)
-                out.add("vector_basic");
-            return Array.from(out);
-        })();
         const systemPrompt = `You route a recall query to knowledge datastores.
 Choose the MINIMAL useful set.
 Stores:
@@ -40,8 +82,7 @@ Stores:
 - project: project docs and architecture notes
 Return JSON only: {"datastores":["vector_basic","graph"]}`;
         const userPrompt = `Query: "${query}"\nexpandGraphAllowed: ${expandGraph ? "true" : "false"}`;
-        try {
-            const text = await deps.callFastRouter(systemPrompt, userPrompt);
+        return routeWithRepair(deps.callFastRouter, systemPrompt, userPrompt, (text) => {
             let payload = null;
             try {
                 payload = JSON.parse(String(text || "").trim());
@@ -49,23 +90,22 @@ Return JSON only: {"datastores":["vector_basic","graph"]}`;
             catch {
                 const m = String(text || "").match(/\{[\s\S]*\}/);
                 if (m) {
-                    try {
-                        payload = JSON.parse(m[0]);
-                    }
-                    catch { }
+                    payload = JSON.parse(m[0]);
+                }
+                else {
+                    throw new Error("router response is not JSON");
                 }
             }
-            const datastores = normalizeKnowledgeDatastores(payload?.datastores, expandGraph).filter((s) => allowed.includes(s));
-            if (datastores.length)
-                return datastores;
-        }
-        catch { }
-        return normalizeKnowledgeDatastores(heuristic, expandGraph);
+            if (!payload || typeof payload !== "object") {
+                throw new Error("router response is not an object");
+            }
+            const datastores = parseRoutedDatastores(payload?.datastores, allowed);
+            return datastores;
+        }, "routeKnowledgeDatastores");
     }
     async function routeRecallPlan(query, expandGraph, reasoning = "fast", intent = "general") {
         const allowed = (0, knowledge_stores_js_1.getRoutableDatastoreKeys)();
         const original = String(query || "").trim();
-        const fallbackStores = await routeKnowledgeDatastores(original, expandGraph);
         const projectCatalog = (deps.getProjectCatalog ? deps.getProjectCatalog() : [])
             .slice(0, 40);
         const projectHints = projectCatalog.length
@@ -93,11 +133,10 @@ Rules:
 ${projectHints}
 - If unsure, keep query close to original and prefer vector_basic.`;
         const userPrompt = `Query: "${original}"\\nexpandGraphAllowed: ${expandGraph ? "true" : "false"}\\nintent: ${intent}`;
-        try {
-            const router = reasoning === "deep" && deps.callDeepRouter
-                ? deps.callDeepRouter
-                : deps.callFastRouter;
-            const text = await router(systemPrompt, userPrompt);
+        const router = reasoning === "deep" && deps.callDeepRouter
+            ? deps.callDeepRouter
+            : deps.callFastRouter;
+        return routeWithRepair(router, systemPrompt, userPrompt, (text) => {
             let payload = null;
             try {
                 payload = JSON.parse(String(text || "").trim());
@@ -105,27 +144,30 @@ ${projectHints}
             catch {
                 const m = String(text || "").match(/\{[\s\S]*\}/);
                 if (m) {
-                    try {
-                        payload = JSON.parse(m[0]);
-                    }
-                    catch { }
+                    payload = JSON.parse(m[0]);
+                }
+                else {
+                    throw new Error("router response is not JSON");
                 }
             }
-            const cleaned = String(payload?.query || "").trim() || original;
-            const datastores = normalizeKnowledgeDatastores(payload?.datastores, expandGraph).filter((s) => allowed.includes(s));
+            if (!payload || typeof payload !== "object") {
+                throw new Error("router response is not an object");
+            }
+            const cleaned = String(payload?.query || "").trim();
+            if (!cleaned) {
+                throw new Error("router response missing query");
+            }
+            const datastores = parseRoutedDatastores(payload?.datastores, allowed);
             const routedProjectRaw = String(payload?.project || "").trim();
             const routedProject = routedProjectRaw && allowedProjectNames.has(routedProjectRaw)
                 ? routedProjectRaw
                 : undefined;
             return {
                 query: cleaned,
-                datastores: datastores.length ? datastores : fallbackStores,
+                datastores,
                 project: routedProject,
             };
-        }
-        catch {
-            return { query: original, datastores: fallbackStores };
-        }
+        }, "routeRecallPlan");
     }
     function normalizeSourceType(value) {
         const raw = String(value || "").trim().toLowerCase();
@@ -337,12 +379,36 @@ ${projectHints}
         return merged.slice(0, limit);
     }
     async function total_recall(query, limit, opts) {
-        const plan = await routeRecallPlan(query, opts.expandGraph, opts.reasoning || "fast", opts.intent || "general");
-        return totalRecall(plan.query, limit, {
-            ...opts,
-            datastores: plan.datastores,
-            project: plan.project,
-        });
+        try {
+            const plan = await routeRecallPlan(query, opts.expandGraph, opts.reasoning || "fast", opts.intent || "general");
+            const routed = await totalRecall(plan.query, limit, {
+                ...opts,
+                datastores: plan.datastores,
+                project: plan.project,
+            });
+            return sanitizeRecallResults(routed).slice(0, limit);
+        }
+        catch (err) {
+            if (opts.failOpen) {
+                const reason = err?.message || String(err);
+                const fallbackDatastores = normalizeKnowledgeDatastores(undefined, opts.expandGraph);
+                console.error(`[quaid][recall-router][FAIL-OPEN] Router prepass failed; using deterministic default recall plan. ` +
+                    `reason="${reason}" datastores=${fallbackDatastores.join(",")}`);
+                const fallbackResults = await totalRecall(query, limit, {
+                    ...opts,
+                    datastores: fallbackDatastores,
+                });
+                const warning = {
+                    text: `[RECALL ROUTER WARNING] Fast prepass failed and fallback recall plan was used. ` +
+                        `Reason: ${reason}. Consider upgrading the fast model if this repeats.`,
+                    category: "system_notice",
+                    similarity: 1.0,
+                    via: "vector",
+                };
+                return sanitizeRecallResults([warning, ...fallbackResults]).slice(0, limit);
+            }
+            throw err;
+        }
     }
     return {
         normalizeKnowledgeDatastores,

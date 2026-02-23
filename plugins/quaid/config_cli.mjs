@@ -210,6 +210,7 @@ function compactSummary(cfgPath, cfg) {
   const projectPolicy = String(getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask"));
   const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask"));
   const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
+  const routerFailOpen = !!getPath(cfg, "retrieval.routerFailOpen", true);
 
   const lines = [
     `${C.bold("Config")}: ${cfgPath}`,
@@ -225,6 +226,7 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Janitor Policies")}: core=${corePolicy} project=${projectPolicy} workspace=${workspacePolicy} destructive=${destructivePolicy}`,
     `${C.bold("Timeout")}: ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`,
     `${C.bold("Pre-injection Pass")}: ${getPath(cfg, "retrieval.preInjectionPass", true) ? "on" : "off"} ${C.dim("(auto-inject total_recall planner)")}`,
+    `${C.bold("Router Fail-Open")}: ${routerFailOpen ? "on" : "off"} ${C.dim("(on: noisy fallback to default recall plan if prepass fails)")}`,
   ];
   note(lines.join("\n"), "Current");
 }
@@ -393,6 +395,7 @@ async function runEdit() {
         { value: "notify_extraction", label: "Notifications: extraction", hint: "off/summary/full" },
         { value: "notify_retrieval", label: "Notifications: retrieval", hint: "off/summary/full" },
         { value: "pre_injection_pass", label: "Recall: pre-injection pass", hint: "auto-inject uses total_recall planner (recommended on)" },
+        { value: "router_fail_open", label: "Recall: router fail-open", hint: "on = fallback to default recall plan if prepass fails (recommended)" },
         { value: "janitor_policy_core", label: "Janitor: core markdown policy", hint: "root markdown writes (SOUL/USER/MEMORY/TOOLS)" },
         { value: "janitor_policy_project", label: "Janitor: project docs policy", hint: "project docs outside projects/quaid" },
         { value: "janitor_policy_workspace", label: "Janitor: workspace move/delete policy", hint: "workspace audit file moves/deletes" },
@@ -503,6 +506,17 @@ async function runEdit() {
         ],
       }));
       setPath(cfg, "retrieval.preInjectionPass", next === "on");
+    } else if (menu === "router_fail_open") {
+      const current = !!getPath(cfg, "retrieval.routerFailOpen", true);
+      const next = handleCancel(await select({
+        message: "retrieval.routerFailOpen",
+        initialValue: current ? "on" : "off",
+        options: [
+          { value: "on", label: "on", hint: "fail-open: log error and continue with deterministic default recall plan (recommended)" },
+          { value: "off", label: "off", hint: "strict mode: router failure raises error" },
+        ],
+      }));
+      setPath(cfg, "retrieval.routerFailOpen", next === "on");
     } else if (menu === "janitor_policy_core") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.coreMarkdownWrites",

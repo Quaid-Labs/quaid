@@ -122,6 +122,25 @@ function isPreInjectionPassEnabled(): boolean {
   return true;
 }
 
+function isProjectOrTechnicalQuery(query: string): boolean {
+  const q = String(query || "").toLowerCase();
+  return /(project|recipe app|recipe-app|portfolio|frontend|backend|middleware|api|graphql|rest|schema|table|database|docker|deployment|test suite|tests|version|logging|observability|auth|authorization|rate limit|bug bash|security|sql injection)/i.test(q);
+}
+
+function inferProjectFromQuery(query: string): string | undefined {
+  const q = String(query || "").toLowerCase();
+  if (/(recipe app|recipe-app|recipe|dietary|graphql|meal plan|grocery list|safe for mom)/i.test(q)) {
+    return "recipe-app";
+  }
+  if (/(portfolio|portfolio site|stripe card|techflow)/i.test(q)) {
+    return "portfolio-site";
+  }
+  if (/\bquaid\b/i.test(q)) {
+    return "quaid";
+  }
+  return undefined;
+}
+
 function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retrieval"): string {
   const notifications = getMemoryConfig().notifications || {};
   const featureConfig = notifications[feature];
@@ -1842,6 +1861,7 @@ interface RecallOptions {
   dateTo?: string;
   docs?: string[];
   datastoreOptions?: Partial<Record<KnowledgeDatastore, Record<string, unknown>>>;
+  failOpen?: boolean;
   waitForExtraction?: boolean;  // wait on extractionPromise (tool=yes, inject=no)
   sourceTag?: "tool" | "auto_inject" | "unknown";
 }
@@ -2420,17 +2440,39 @@ const quaidPlugin = {
         }
 
         // Auto-inject can either use total_recall (fast planning pass) or plain
-        // direct datastores (vector_basic + graph) without the planning pass.
+        // direct datastores. For project/technical prompts, include technical/project
+        // sources explicitly so implementation facts are not filtered out.
         // Dynamic K: 2 * log2(nodeCount) — scales with graph size
         const autoInjectK = computeDynamicK();
         const useTotalRecallForInject = isPreInjectionPassEnabled();
+        const routerFailOpen = Boolean(
+          getMemoryConfig().retrieval?.routerFailOpen ??
+          getMemoryConfig().retrieval?.router_fail_open ??
+          true
+        );
+        const projectOrTechnical = isProjectOrTechnicalQuery(query);
+        const inferredProject = inferProjectFromQuery(query);
+        const injectLimit = projectOrTechnical ? Math.max(autoInjectK, 12) : autoInjectK;
+        const injectIntent = projectOrTechnical ? "technical" : "general";
+        const injectTechnicalScope: "personal" | "technical" | "any" = projectOrTechnical ? "any" : "personal";
+        const injectDatastores: KnowledgeDatastore[] | undefined = useTotalRecallForInject
+          ? undefined
+          : (projectOrTechnical
+              ? ["vector_basic", "vector_technical", "graph", "project"]
+              : ["vector_basic", "graph"]);
+        const injectDatastoreOptions = projectOrTechnical && inferredProject
+          ? { project: { project: inferredProject } }
+          : undefined;
         const allMemories = await recallMemories({
           query,
-          limit: autoInjectK,
+          limit: injectLimit,
           expandGraph: true,
-          datastores: useTotalRecallForInject ? undefined : ["vector_basic", "graph"],
+          datastores: injectDatastores,
           routeStores: useTotalRecallForInject,
-          technicalScope: "personal",
+          intent: injectIntent,
+          technicalScope: injectTechnicalScope,
+          datastoreOptions: injectDatastoreOptions,
+          failOpen: routerFailOpen,
           waitForExtraction: false,
           sourceTag: "auto_inject"
         });
@@ -2455,7 +2497,7 @@ const quaidPlugin = {
         const newMemories = filtered.filter(m => !previouslyInjected.includes(m.id || m.text));
 
         // Cap and format — use dynamic K for injection cap too
-        const toInject = newMemories.slice(0, autoInjectK);
+        const toInject = newMemories.slice(0, injectLimit);
         if (!toInject.length) return;
 
         const formatted = formatMemories(toInject);
@@ -2679,6 +2721,9 @@ ${recallStoreGuidance}`,
                   Type.Literal("technical"),
                 ], { description: "Intent facet for routing and ranking boosts." })
               ),
+              failOpen: Type.Optional(
+                Type.Boolean({ description: "If true, router/prepass failures return no recall instead of throwing an error." })
+              ),
             })),
             technicalScope: Type.Optional(
               Type.Union([
@@ -2756,12 +2801,18 @@ ${recallStoreGuidance}`,
             const routeStores = options.routing?.enabled;
             const reasoning = options.routing?.reasoning ?? "fast";
             const intent = options.routing?.intent ?? "general";
-            const technicalScope = options.technicalScope ?? "personal";
+            const technicalScope = options.technicalScope ?? (isProjectOrTechnicalQuery(query) ? "any" : "personal");
             const dateFrom = options.filters?.dateFrom;
             const dateTo = options.filters?.dateTo;
             const docs = options.filters?.docs;
             const ranking = options.ranking;
             const datastoreOptions = options.datastoreOptions;
+            const routerFailOpen = Boolean(
+              options.routing?.failOpen ??
+              getMemoryConfig().retrieval?.routerFailOpen ??
+              getMemoryConfig().retrieval?.router_fail_open ??
+              true
+            );
             if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
               return {
                 content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
@@ -2777,6 +2828,7 @@ ${recallStoreGuidance}`,
             const results = await recallMemories({
               query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, technicalScope,
               datastoreOptions,
+              failOpen: routerFailOpen,
               dateFrom, dateTo, docs, waitForExtraction: true, sourceTag: "tool"
             });
 

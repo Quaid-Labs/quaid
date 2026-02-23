@@ -36,7 +36,7 @@ describe("knowledge orchestrator", () => {
     ]);
   });
 
-  it("routes with heuristic fallback when router fails", async () => {
+  it("throws when router fails and fail-open is not enabled", async () => {
     const engine = createKnowledgeEngine<Result>({
       workspace: "/tmp",
       path: {} as any,
@@ -51,9 +51,66 @@ describe("knowledge orchestrator", () => {
       recallGraph: vi.fn(async () => []),
     });
 
-    const datastores = await engine.routeKnowledgeDatastores("Tell me about family relationships", true);
-    expect(datastores).toContain("vector_basic");
-    expect(datastores).toContain("graph");
+    await expect(engine.routeKnowledgeDatastores("Tell me about family relationships", true))
+      .rejects.toThrow("offline");
+  });
+
+  it("uses deterministic default recall plan when router fails and fail-open is enabled", async () => {
+    const recallVector = vi.fn(async () => [
+      { text: "fallback-hit", category: "fact", similarity: 0.81, via: "vector" },
+    ]);
+    const recallGraph = vi.fn(async () => [
+      { text: "A --related--> B", category: "graph", similarity: 0.7, via: "graph" },
+    ]);
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+      recallVector,
+      recallGraph,
+    });
+
+    const out = await engine.total_recall("Tell me about family relationships", 5, {
+      datastores: [],
+      expandGraph: true,
+      graphDepth: 1,
+      technicalScope: "personal",
+      reasoning: "fast",
+      failOpen: true,
+    });
+
+    expect(recallVector).toHaveBeenCalledTimes(1);
+    expect(recallGraph).toHaveBeenCalledTimes(1);
+    expect(out.length).toBeGreaterThan(0);
+    expect(out[0].text).toContain("[RECALL ROUTER WARNING]");
+  });
+
+  it("rejects invalid datastore arrays from router plan", async () => {
+    const callFastRouter = vi
+      .fn(async () => '{"query":"one","datastores":["not_real"]}')
+      .mockResolvedValueOnce('{"query":"two","datastores":["still_wrong"]}');
+
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter,
+      recallVector: vi.fn(async () => []),
+      recallGraph: vi.fn(async () => []),
+    });
+
+    await expect(engine.routeRecallPlan("x", false, "fast"))
+      .rejects.toThrow("failed to produce valid structured output");
+    expect(callFastRouter).toHaveBeenCalledTimes(2);
   });
 
   it("skips router when datastores are explicitly supplied to totalRecall", async () => {
@@ -288,7 +345,8 @@ describe("knowledge orchestrator", () => {
     });
 
     expect(callDeepRouter).toHaveBeenCalledTimes(1);
-    expect(callFastRouter).toHaveBeenCalledTimes(1); // fallback store routing pass
+    // Single prepass policy: no extra fast-router fallback call.
+    expect(callFastRouter).toHaveBeenCalledTimes(0);
     expect(callDocsRag).toHaveBeenCalledWith("search", [
       "quaid architecture docs",
       "--limit",
