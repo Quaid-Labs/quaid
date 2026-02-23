@@ -39,15 +39,31 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
-# Import from our memory_graph module
-from memory_graph import (get_graph, MemoryGraph, Node, Edge, store as store_memory,
-                         store_contradiction, get_pending_contradictions,
-                         resolve_contradiction, mark_contradiction_false_positive, soft_delete,
-                         get_recent_dedup_rejections, resolve_dedup_review,
-                         queue_for_decay_review, get_pending_decay_reviews, resolve_decay_review,
-                         ensure_keywords_for_relation, get_edge_keywords,
-                         delete_edges_by_source_fact, create_edge,
-                         content_hash, hard_delete_node)
+# Import through datastore facade to preserve janitor/datastore boundary surface.
+from datastore_maintenance import (
+    get_graph,
+    MemoryGraph,
+    Node,
+    Edge,
+    store_memory,
+    store_contradiction,
+    get_pending_contradictions,
+    resolve_contradiction,
+    mark_contradiction_false_positive,
+    soft_delete,
+    get_recent_dedup_rejections,
+    resolve_dedup_review,
+    queue_for_decay_review,
+    get_pending_decay_reviews,
+    resolve_decay_review,
+    ensure_keywords_for_relation,
+    get_edge_keywords,
+    delete_edges_by_source_fact,
+    create_edge,
+    content_hash,
+    hard_delete_node,
+    store_edge_keywords,
+)
 from lib.config import get_db_path
 from lib.tokens import extract_key_tokens as _lib_extract_key_tokens, STOPWORDS as _LIB_STOPWORDS, estimate_tokens
 from lib.archive import archive_node as _archive_node
@@ -1406,7 +1422,6 @@ JSON array only:"""
             # Filter to strings only
             keywords = [k for k in keywords if isinstance(k, str) and k.strip()]
             if keywords:
-                from memory_graph import store_edge_keywords
                 stored = store_edge_keywords(relation, keywords)
                 if stored:
                     print(f"    Stored keywords for new relation '{relation}': {keywords[:5]}")

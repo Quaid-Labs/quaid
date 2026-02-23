@@ -146,6 +146,9 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `plugins/quaid/janitor.py` now dispatches those tasks through lifecycle registry instead of inline task bodies
   - docs write policy checks are preserved via `allow_doc_apply` callback passed through routine context
   - added lifecycle tests for workspace/docs/snippets/journal in `plugins/quaid/tests/test_janitor_lifecycle.py`
+  - janitor datastore imports now route through `plugins/quaid/datastore_maintenance.py`
+    as a single datastore maintenance facade over `memory_graph` primitives
+  - workspace audit datastore writes now route through the same facade (`store_memory`)
 - Core project catalog no longer shells to python:
   - `plugins/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:

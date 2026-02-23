@@ -437,7 +437,7 @@ def apply_review_decisions(dry_run: bool = True,
 
     If decisions_data is provided, use it directly. Otherwise load from file.
     """
-    from memory_graph import store as store_memory
+    from datastore_maintenance import store_memory
 
     if decisions_data is None:
         # Fallback: load from file
