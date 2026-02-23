@@ -849,8 +849,8 @@ class TestResolveAnthropicCredential:
         cred = adapter._resolve_anthropic_credential()
         assert cred == "sk-ant-oat01-test-oauth-token"
 
-    def test_reads_auth_profiles_any_anthropic(self, tmp_path, monkeypatch):
-        """Falls back to any anthropic profile if lastGood is missing."""
+    def test_no_profile_fallback_when_last_good_missing(self, tmp_path, monkeypatch):
+        """Does not scan arbitrary profiles when lastGood is missing."""
         adapter, agent_dir = self._make_adapter(tmp_path, monkeypatch)
         import json
         profiles = {
@@ -866,7 +866,7 @@ class TestResolveAnthropicCredential:
         }
         (agent_dir / "auth-profiles.json").write_text(json.dumps(profiles))
         cred = adapter._resolve_anthropic_credential()
-        assert cred == "sk-ant-api-fallback-key"
+        assert cred is None
 
     def test_reads_legacy_auth_json(self, tmp_path, monkeypatch):
         """Falls back to auth.json if no auth-profiles.json."""
@@ -877,19 +877,19 @@ class TestResolveAnthropicCredential:
         cred = adapter._resolve_anthropic_credential()
         assert cred == "sk-ant-api-legacy"
 
-    def test_falls_through_to_env_var(self, tmp_path, monkeypatch):
-        """Falls back to ANTHROPIC_API_KEY env var when no gateway auth."""
+    def test_does_not_fall_through_to_env_var(self, tmp_path, monkeypatch):
+        """Does not fall through to ANTHROPIC_API_KEY env var."""
         adapter, _ = self._make_adapter(tmp_path, monkeypatch)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-from-env")
         cred = adapter._resolve_anthropic_credential()
-        assert cred == "sk-test-from-env"
+        assert cred is None
 
-    def test_falls_through_to_dotenv(self, tmp_path, monkeypatch):
-        """Falls back to .env file when no gateway auth and no env var."""
+    def test_does_not_fall_through_to_dotenv(self, tmp_path, monkeypatch):
+        """Does not fall through to .env file when gateway auth is missing."""
         adapter, _ = self._make_adapter(tmp_path, monkeypatch)
         (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=sk-test-from-dotenv\n")
         cred = adapter._resolve_anthropic_credential()
-        assert cred == "sk-test-from-dotenv"
+        assert cred is None
 
     def test_returns_none_when_nothing_found(self, tmp_path, monkeypatch):
         """Returns None when no credentials found anywhere."""
@@ -897,8 +897,8 @@ class TestResolveAnthropicCredential:
         cred = adapter._resolve_anthropic_credential()
         assert cred is None
 
-    def test_profiles_take_priority_over_env(self, tmp_path, monkeypatch):
-        """Auth profiles always win over env vars."""
+    def test_profiles_take_priority_when_env_present(self, tmp_path, monkeypatch):
+        """Gateway-auth profile still wins when env var is present."""
         adapter, agent_dir = self._make_adapter(tmp_path, monkeypatch)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-from-env")
         import json

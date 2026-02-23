@@ -247,8 +247,6 @@ class OpenClawAdapter(QuaidAdapter):
         Resolution chain:
         1. Gateway auth-profiles.json (lastGood.anthropic -> profile token/key)
         2. Gateway auth.json (anthropic.key - legacy)
-        3. ANTHROPIC_API_KEY env var (backwards compat)
-        4. Workspace .env file (backwards compat)
         """
         openclaw_dir = self._get_agent_config_dir()
 
@@ -266,12 +264,6 @@ class OpenClawAdapter(QuaidAdapter):
                     token = profile.get("token") or profile.get("key")
                     if token:
                         return token
-                # No lastGood - try any anthropic profile
-                for pid, profile in profiles.items():
-                    if profile.get("provider") == "anthropic" or pid.startswith("anthropic:"):
-                        token = profile.get("token") or profile.get("key")
-                        if token:
-                            return token
             except (json.JSONDecodeError, IOError, OSError):
                 pass
 
@@ -287,8 +279,8 @@ class OpenClawAdapter(QuaidAdapter):
             except (json.JSONDecodeError, IOError, OSError):
                 pass
 
-        # 3/4. Env var and .env fallback
-        return self.get_api_key("ANTHROPIC_API_KEY")
+        # No env/.env fallback here: avoid implicit paid API usage.
+        return None
 
     def discover_llm_providers(self) -> list:
         providers = [{"id": "default", "name": "Default (agent provider's model)"}]

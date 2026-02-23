@@ -299,25 +299,28 @@ class StandaloneAdapter(QuaidAdapter):
     def get_llm_provider(self):
         from lib.providers import AnthropicLLMProvider, ClaudeCodeLLMProvider
 
-        # Resolve provider from config (models.llmProvider)
-        provider_id = "default"
-        try:
-            from config import get_config
-            cfg = get_config()
-            provider_id = cfg.models.llm_provider or "default"
-        except Exception:
-            cfg = None
+        # Resolve provider from config — models.llmProvider MUST be set.
+        # No ENV sniffing, no fallbacks. Explicit config only.
+        from config import get_config
+        cfg = get_config()
+        provider_id = cfg.models.llm_provider
+
+        if not provider_id or provider_id == "default":
+            raise RuntimeError(
+                "models.llmProvider must be explicitly set in config/memory.json. "
+                "Valid values: 'claude-code', 'anthropic', 'openai-compatible'. "
+                "No default fallback — set it explicitly."
+            )
 
         if provider_id == "openai-compatible":
             from lib.providers import OpenAICompatibleLLMProvider
             import os
             base_url = os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:8000")
             api_key = os.environ.get("OPENAI_API_KEY", "")
-            deep = cfg.models.deep_reasoning if cfg else ""
-            fast = cfg.models.fast_reasoning if cfg else ""
             return OpenAICompatibleLLMProvider(
                 base_url=base_url, api_key=api_key,
-                deep_model=deep, fast_model=fast,
+                deep_model=cfg.models.deep_reasoning,
+                fast_model=cfg.models.fast_reasoning,
             )
 
         if provider_id == "claude-code":
@@ -328,24 +331,13 @@ class StandaloneAdapter(QuaidAdapter):
             if not api_key:
                 raise RuntimeError(
                     "LLM provider is 'anthropic' but ANTHROPIC_API_KEY not found. "
-                    "Set it in your environment, in ~/quaid/.env, or change "
-                    "models.llmProvider to 'claude-code' in config/memory.json."
+                    "Set it in your environment or in ~/quaid/.env."
                 )
             return AnthropicLLMProvider(api_key=api_key)
 
-        # "default": use API key if available, otherwise claude CLI
-        api_key = self.get_api_key("ANTHROPIC_API_KEY")
-        if api_key:
-            return AnthropicLLMProvider(api_key=api_key)
-
-        import shutil
-        if shutil.which("claude"):
-            return ClaudeCodeLLMProvider()
-
         raise RuntimeError(
-            "No LLM provider available. Either set ANTHROPIC_API_KEY or "
-            "install the claude CLI, or set models.llmProvider explicitly "
-            "in config/memory.json."
+            f"Unknown LLM provider '{provider_id}'. "
+            "Valid values: 'claude-code', 'anthropic', 'openai-compatible'."
         )
 
 

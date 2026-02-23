@@ -777,24 +777,15 @@ function _getGatewayCredential(providers) {
                     if (key) return key;
                 }
             }
-            for (const [id, cred] of Object.entries(profiles)) {
-                const c = cred;
-                if (providers.includes(c.provider) || providers.some((p) => id.startsWith(`${p}:`))) {
-                    const key = c.access || c.token || c.key;
-                    if (key) return key;
-                }
-            }
         }
     }
     catch { /* auth-profiles not available */ }
     return undefined;
 }
 function _getAnthropicCredential() {
-    let apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiKey = _getGatewayCredential(["anthropic"]);
     if (apiKey) return apiKey;
-    apiKey = _getGatewayCredential(["anthropic"]);
-    if (apiKey) return apiKey;
-    // 3. Legacy auth.json
+    // Legacy auth.json (older gateway installs)
     try {
         const authPath = path.join(os.homedir(), ".openclaw", "agents", "main", "agent", "auth.json");
         if (fs.existsSync(authPath)) {
@@ -804,12 +795,6 @@ function _getAnthropicCredential() {
         }
     }
     catch { /* auth.json not available */ }
-    // 4. macOS Keychain (fallback)
-    try {
-        apiKey = (0, node_child_process_1.execSync)("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
-        if (apiKey) return apiKey;
-    }
-    catch { /* Keychain not available */ }
     return undefined;
 }
 function _getOpenAICredential() {
@@ -1305,14 +1290,8 @@ async function emitProjectEvent(messages, trigger, sessionId) {
         }
         const eventPath = path.join(stagingDir, `${Date.now()}-${trigger}.json`);
         fs.writeFileSync(eventPath, JSON.stringify(event, null, 2));
-        // 3. Spawn background processor (detached) — pass API key for Opus calls
-        let bgApiKey = process.env.ANTHROPIC_API_KEY;
-        if (!bgApiKey) {
-            try {
-                bgApiKey = (0, node_child_process_1.execSync)("security find-generic-password -a alfie -s anthropic-api-key -w", { encoding: "utf8" }).trim();
-            }
-            catch { /* Keychain fallback in Python */ }
-        }
+        // 3. Spawn background processor (detached) — gateway-managed credential only
+        const bgApiKey = _getAnthropicCredential();
         const logFile = path.join(WORKSPACE, "logs/project-updater.log");
         const logDir = path.dirname(logFile);
         if (!fs.existsSync(logDir)) {
