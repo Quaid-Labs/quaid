@@ -3601,19 +3601,35 @@ def create_edge(
         "lives_in": "Place", "lives_at": "Place", "located_in": "Place",
         "born_in": "Place", "moved_to": "Place", "visited": "Place",
         "has_pet": "Pet", "owns_pet": "Pet",
+        "has_feature": "Feature", "uses_tool": "Tool",
+        "works_on": "Project", "contributes_to": "Project",
+        "manages": "Project",
     }
     _RELATION_SUBJECT_TYPES = {
         "subsidiary_of": "Organization", "part_of": "Organization",
+        "feature_of": "Project", "component_of": "Project",
+    }
+
+    # Relations that always indicate the other entity is a person
+    _PERSON_RELATIONS = {
+        "parent_of", "child_of", "sibling_of", "spouse_of", "partner_of",
+        "friend_of", "aunt_of", "uncle_of", "cousin_of", "grandparent_of",
+        "has_manager", "managed_by", "mentored_by", "mentors",
+        "married_to", "dating", "roommate_of", "has_employee",
     }
 
     def _infer_entity_type(name: str, relation: str, is_subject: bool) -> str:
-        """Infer entity type from relation. Falls back to Person for relationship edges."""
+        """Infer entity type from relation and name heuristics."""
         rel_lower = relation.lower().replace("-", "_")
         if is_subject and rel_lower in _RELATION_SUBJECT_TYPES:
             return _RELATION_SUBJECT_TYPES[rel_lower]
         if not is_subject and rel_lower in _RELATION_OBJECT_TYPES:
             return _RELATION_OBJECT_TYPES[rel_lower]
-        return "Person"
+        # Relationship edges → Person
+        if rel_lower in _PERSON_RELATIONS:
+            return "Person"
+        # Fallback: unknown relation → Fact (not Person)
+        return "Fact"
 
     def _find_entity(name: str) -> Optional[Node]:
         """Find entity by exact name, then fuzzy match using SQL patterns.
@@ -4420,6 +4436,27 @@ if __name__ == "__main__":
         # --- detect-provider ---
         subparsers.add_parser("detect-provider", help="Show current LLM and embeddings provider status")
 
+        # --- event ---
+        event_p = subparsers.add_parser("event", help="Emit/list/process runtime events")
+        event_sub = event_p.add_subparsers(dest="subcmd", help="Subcommand")
+
+        event_emit_p = event_sub.add_parser("emit", help="Emit an event into the queue")
+        event_emit_p.add_argument("--name", required=True, help="Event name (e.g. session.reset)")
+        event_emit_p.add_argument("--payload", default="{}", help="JSON payload object")
+        event_emit_p.add_argument("--source", default="cli", help="Event source label")
+        event_emit_p.add_argument("--session-id", default=None, help="Optional session ID")
+        event_emit_p.add_argument("--owner", default=None, help="Optional owner ID")
+        event_emit_p.add_argument("--priority", default="normal", help="Priority (low|normal|high)")
+
+        event_list_p = event_sub.add_parser("list", help="List queued events")
+        event_list_p.add_argument("--status", default="pending", choices=["pending", "processed", "failed", "all"], help="Status filter")
+        event_list_p.add_argument("--limit", type=int, default=20, help="Max events to list")
+
+        event_process_p = event_sub.add_parser("process", help="Process pending events with registered handlers")
+        event_process_p.add_argument("--limit", type=int, default=20, help="Max events to process")
+        event_process_p.add_argument("--name", action="append", default=[], help="Process only this event name (repeatable)")
+        event_sub.add_parser("capabilities", help="List event capability registry")
+
         # Parse args
         args = parser.parse_args()
 
@@ -5080,14 +5117,47 @@ if __name__ == "__main__":
             print("LLM:")
             print(f"  Adapter:    {adapter_name}")
             print(f"  Provider:   {llm_name}")
-            if profiles.get("high"):
-                print(f"  Deep:s+{profiles['deep'].get('model', '?')}")
-            if profiles.get("low"):
-                print(f"  Fast:s+{profiles['fast'].get('model', '?')}")
+            deep_profile = profiles.get("deep") or profiles.get("high")
+            fast_profile = profiles.get("fast") or profiles.get("low")
+            if isinstance(deep_profile, dict):
+                print(f"  Deep:       {deep_profile.get('model', '?')}")
+            if isinstance(fast_profile, dict):
+                print(f"  Fast:       {fast_profile.get('model', '?')}")
             print()
             print("Embeddings:")
             print(f"  Provider:   {type(embed).__name__}")
             print(f"  Model:      {embed.model_name} ({embed.dimension()}-dim)")
+
+        elif args.command == "event":
+            from events import emit_event, list_events, process_events
+
+            subcmd = args.subcmd or "list"
+            if subcmd == "emit":
+                try:
+                    payload = json.loads(args.payload) if args.payload else {}
+                    if not isinstance(payload, dict):
+                        raise ValueError("payload must be a JSON object")
+                except Exception as e:
+                    print(f"Error: invalid --payload JSON ({e})", file=sys.stderr)
+                    sys.exit(1)
+                event = emit_event(
+                    name=args.name,
+                    payload=payload,
+                    source=args.source,
+                    session_id=getattr(args, "session_id", None),
+                    owner_id=getattr(args, "owner", None),
+                    priority=args.priority,
+                )
+                print(json.dumps(event, indent=2))
+            elif subcmd == "process":
+                result = process_events(limit=args.limit, names=list(args.name or []))
+                print(json.dumps(result, indent=2))
+            elif subcmd == "capabilities":
+                from events import get_event_registry
+                print(json.dumps({"events": get_event_registry()}, indent=2))
+            else:
+                events = list_events(status=args.status, limit=args.limit)
+                print(json.dumps({"events": events}, indent=2))
 
     try:
         main()
