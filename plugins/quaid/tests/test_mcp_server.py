@@ -34,6 +34,9 @@ def _import_mcp_server():
     mock_api.get_memory.return_value = {"id": "g1", "name": "Test memory", "type": "fact"}
     mock_api.forget.return_value = True
     mock_api.create_edge.return_value = {"edge_id": "e1", "status": "created"}
+    mock_api.projects_search_docs.return_value = {
+        "chunks": [{"content": "Some doc chunk", "source_file": "README.md", "similarity": 0.8}]
+    }
 
     mock_graph = MagicMock()
     mock_graph.get_stats.return_value = {
@@ -58,6 +61,7 @@ def _import_mcp_server():
          patch("api.forget", mock_api.forget), \
          patch("api.create_edge", mock_api.create_edge), \
          patch("api.stats", mock_api.stats), \
+         patch("api.projects_search_docs", mock_api.projects_search_docs), \
          patch("api.get_graph", mock_api.get_graph), \
          patch("docs_rag.DocsRAG", mock_rag):
         # Force reimport so mcp_server binds to mocked names
@@ -340,9 +344,9 @@ class TestMemoryStats:
 
 class TestDocsSearch:
     def test_docs_search_basic(self, server):
-        mod, _, _, mock_rag = server
+        mod, mock_api, _, _ = server
         result = mod.projects_search("architecture")
-        mock_rag.search_docs.assert_called_once_with(
+        mock_api.projects_search_docs.assert_called_once_with(
             query="architecture",
             limit=5,
             project=None,
@@ -352,19 +356,19 @@ class TestDocsSearch:
         assert len(result["chunks"]) == 1
 
     def test_docs_search_with_project(self, server):
-        mod, _, _, mock_rag = server
+        mod, mock_api, _, _ = server
         mod.projects_search("setup", project="quaid")
-        assert mock_rag.search_docs.call_args.kwargs["project"] == "quaid"
+        assert mock_api.projects_search_docs.call_args.kwargs["project"] == "quaid"
 
     def test_docs_search_limit_capped(self, server):
-        mod, _, _, mock_rag = server
+        mod, mock_api, _, _ = server
         mod.projects_search("test", limit=100)
-        assert mock_rag.search_docs.call_args.kwargs["limit"] == 20
+        assert mock_api.projects_search_docs.call_args.kwargs["limit"] == 20
 
     def test_docs_search_empty_project_becomes_none(self, server):
-        mod, _, _, mock_rag = server
+        mod, mock_api, _, _ = server
         mod.projects_search("test", project="")
-        assert mock_rag.search_docs.call_args.kwargs["project"] is None
+        assert mock_api.projects_search_docs.call_args.kwargs["project"] is None
 
 
 # ---------------------------------------------------------------------------

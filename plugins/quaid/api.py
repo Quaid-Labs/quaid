@@ -14,6 +14,9 @@ Usage:
 
 from typing import Optional, List, Dict, Any
 
+from docs_rag import DocsRAG
+from lib.runtime_context import get_workspace_dir
+
 from memory_graph import (
     store as _store,
     recall as _recall,
@@ -262,6 +265,34 @@ def stats() -> Dict[str, Any]:
     return _stats()
 
 
+def projects_search_docs(
+    query: str,
+    limit: int = 5,
+    project: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Search documentation chunks and optionally include project README context."""
+    rag = DocsRAG()
+    chunks = rag.search_docs(
+        query=query,
+        limit=max(1, min(limit, 20)),
+        project=project if project else None,
+    )
+    result: Dict[str, Any] = {"chunks": chunks}
+    if project:
+        try:
+            from config import get_config as _get_config
+
+            cfg = _get_config()
+            defn = cfg.projects.definitions.get(project)
+            if defn and defn.home_dir:
+                md_path = get_workspace_dir() / defn.home_dir / "PROJECT.md"
+                if md_path.exists():
+                    result["project_md"] = md_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    return result
+
+
 # Re-export types and graph accessor for advanced use
 __all__ = [
     "store",
@@ -271,6 +302,7 @@ __all__ = [
     "forget",
     "get_memory",
     "stats",
+    "projects_search_docs",
     "get_graph",
     "Node",
     "Edge",

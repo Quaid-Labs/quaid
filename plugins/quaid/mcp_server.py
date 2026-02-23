@@ -31,8 +31,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
 
-from api import store, recall, search, create_edge, forget, get_memory, stats
-from docs_rag import DocsRAG
+from api import (
+    store,
+    recall,
+    search,
+    create_edge,
+    forget,
+    get_memory,
+    stats,
+    projects_search_docs,
+)
 from lib.runtime_context import (
     get_adapter_instance,
     get_llm_provider,
@@ -357,28 +365,8 @@ def projects_search(query: str, limit: int = 5, project: str = "") -> dict:
     Returns:
         Dict with 'chunks' (list of search results) and optionally 'project_md' (full PROJECT.md content).
     """
-    from pathlib import Path as _Path
-    from config import get_config as _get_config
-
     limit = max(1, min(limit, 20))
-    rag = DocsRAG()
-    chunks = rag.search_docs(
-        query=query,
-        limit=limit,
-        project=project if project else None,
-    )
-    result = {"chunks": chunks}
-    if project:
-        try:
-            cfg = _get_config()
-            defn = cfg.projects.definitions.get(project)
-            if defn and defn.home_dir:
-                md_path = get_workspace_dir() / defn.home_dir / "PROJECT.md"
-                if md_path.exists():
-                    result["project_md"] = md_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
-    return result
+    return projects_search_docs(query=query, limit=limit, project=(project or None))
 
 
 @mcp.tool()

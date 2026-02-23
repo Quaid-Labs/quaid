@@ -131,6 +131,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 - MCP API boundary enforced:
   - `plugins/quaid/api.py` now exposes `stats()` and richer `recall(...)` options
   - `plugins/quaid/mcp_server.py` uses API entrypoints only for recall/stats
+  - `projects_search` in `plugins/quaid/mcp_server.py` now routes through `api.projects_search_docs(...)`
+    instead of directly constructing `DocsRAG` datastore calls
 - Orchestrator store implementation moved out:
   - `plugins/quaid/orchestrator/default-orchestrator.ts` uses injected store callbacks
   - `plugins/quaid/adapters/openclaw/adapter.ts` supplies journal/project store handlers
