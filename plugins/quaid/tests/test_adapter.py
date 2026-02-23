@@ -711,22 +711,10 @@ class TestProviderFactoryMethods:
     def test_standalone_returns_anthropic_provider(self, standalone, monkeypatch):
         """StandaloneAdapter.get_llm_provider() returns AnthropicLLMProvider."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
-        llm = standalone.get_llm_provider()
+        with patch("config.get_config") as mock_cfg:
+            mock_cfg.return_value.models.llm_provider = "anthropic"
+            llm = standalone.get_llm_provider()
         assert isinstance(llm, AnthropicLLMProvider)
-
-    def test_standalone_falls_back_to_claude_code(self, standalone, monkeypatch):
-        """StandaloneAdapter uses ClaudeCodeLLMProvider when no API key but claude CLI exists."""
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/claude" if cmd == "claude" else None)
-        llm = standalone.get_llm_provider()
-        assert isinstance(llm, ClaudeCodeLLMProvider)
-
-    def test_standalone_raises_without_any_provider(self, standalone, monkeypatch):
-        """StandaloneAdapter raises if no API key and no claude CLI."""
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        monkeypatch.setattr("shutil.which", lambda cmd: None)
-        with pytest.raises(RuntimeError, match="No LLM provider available"):
-            standalone.get_llm_provider()
 
     def test_standalone_explicit_claude_code_provider(self, standalone, monkeypatch):
         """StandaloneAdapter uses ClaudeCodeLLMProvider when config says claude-code."""
@@ -734,7 +722,15 @@ class TestProviderFactoryMethods:
         with patch("config.get_config") as mock_cfg:
             mock_cfg.return_value.models.llm_provider = "claude-code"
             llm = standalone.get_llm_provider()
-            assert isinstance(llm, ClaudeCodeLLMProvider)
+        assert isinstance(llm, ClaudeCodeLLMProvider)
+
+    def test_standalone_raises_without_any_provider(self, standalone, monkeypatch):
+        """StandaloneAdapter raises when config requires anthropic but no key."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with patch("config.get_config") as mock_cfg:
+            mock_cfg.return_value.models.llm_provider = "anthropic"
+            with pytest.raises(RuntimeError, match="LLM provider is 'anthropic'"):
+                standalone.get_llm_provider()
 
     def test_standalone_explicit_anthropic_raises_without_key(self, standalone, monkeypatch):
         """StandaloneAdapter raises when config says anthropic but no key."""

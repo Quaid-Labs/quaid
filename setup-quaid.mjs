@@ -573,6 +573,11 @@ async function step3_models() {
     initialValue: true,
   }));
 
+  const autoCompactionOnTimeout = handleCancel(await confirm({
+    message: "Do you want to trade off a little less quality for a LOT of savings by auto-compacting after timeout memory extraction?",
+    initialValue: true,
+  }));
+
   const advancedSetup = handleCancel(await confirm({
     message: "Advanced setup? (recommended keeps sane defaults)",
     initialValue: false,
@@ -701,6 +706,7 @@ async function step3_models() {
     advancedSetup,
     adapterType,
     janitorAskFirst,
+    autoCompactionOnTimeout,
   };
 }
 
@@ -1794,6 +1800,8 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     capture: {
       enabled: true,
       strictness: "high",
+      inactivityTimeoutMinutes: 120,
+      autoCompactionOnTimeout: models.autoCompactionOnTimeout ?? true,
       skipPatterns: ["^(thanks|ok|sure|yes|no)$", "^(hi|hello|hey)\\b"],
     },
     decay: {

@@ -24,7 +24,10 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lib.providers import EmbeddingsProvider, LLMProvider
 
 
 @dataclass

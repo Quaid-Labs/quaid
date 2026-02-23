@@ -320,7 +320,6 @@ rsync -a --delete \
 
 echo "[e2e] Running Quaid integration tests..."
 for required in \
-  "${E2E_WS}/plugins/quaid/tests/command-signals.integration.test.ts" \
   "${E2E_WS}/plugins/quaid/tests/session-timeout-manager.test.ts" \
   "${E2E_WS}/plugins/quaid/tests/chat-flow.integration.test.ts"; do
   if [[ ! -f "$required" ]]; then
@@ -329,7 +328,7 @@ for required in \
     exit 1
   fi
 done
-(cd "${E2E_WS}/plugins/quaid" && npx vitest run tests/command-signals.integration.test.ts tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts --reporter=verbose)
+(cd "${E2E_WS}/plugins/quaid" && npx vitest run tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts --reporter=verbose)
 
 if [[ "$RUN_JANITOR" == true ]]; then
 echo "[e2e] Running janitor (${JANITOR_MODE})..."

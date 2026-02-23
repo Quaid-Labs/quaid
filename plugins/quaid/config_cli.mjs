@@ -211,6 +211,7 @@ function compactSummary(cfgPath, cfg) {
   const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask"));
   const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
   const routerFailOpen = !!getPath(cfg, "retrieval.routerFailOpen", true);
+  const autoCompactionOnTimeout = !!getPath(cfg, "capture.autoCompactionOnTimeout", true);
 
   const lines = [
     `${C.bold("Config")}: ${cfgPath}`,
@@ -225,6 +226,7 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Janitor Apply")}: ${janitorApplyMode} ${C.dim("(legacy master policy)")}`,
     `${C.bold("Janitor Policies")}: core=${corePolicy} project=${projectPolicy} workspace=${workspacePolicy} destructive=${destructivePolicy}`,
     `${C.bold("Timeout")}: ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`,
+    `${C.bold("Auto-compact Timeout")}: ${autoCompactionOnTimeout ? "on" : "off"} ${C.dim("(trigger compaction after timeout extraction)")}`,
     `${C.bold("Pre-injection Pass")}: ${getPath(cfg, "retrieval.preInjectionPass", true) ? "on" : "off"} ${C.dim("(auto-inject total_recall planner)")}`,
     `${C.bold("Router Fail-Open")}: ${routerFailOpen ? "on" : "off"} ${C.dim("(on: noisy fallback to default recall plan if prepass fails)")}`,
   ];
@@ -402,6 +404,7 @@ async function runEdit() {
         { value: "janitor_policy_destructive", label: "Janitor: destructive memory policy", hint: "merges/supersedes/deletes in memory DB" },
         { value: "janitor_apply", label: "Janitor apply mode (legacy)", hint: "master fallback: auto/ask/dry-run-only" },
         { value: "timeout", label: "Inactivity timeout", hint: "minutes before timeout extraction" },
+        { value: "timeout_auto_compact", label: "Timeout auto-compaction", hint: "on/off compaction after timeout extraction (recommended on)" },
         { value: "systems", label: "Systems on/off", hint: "feature gates" },
         { value: "save", label: "Save and exit" },
         { value: "discard", label: "Exit without saving" },
@@ -559,6 +562,12 @@ async function runEdit() {
         validate: (v) => /^\d+$/.test(String(v || "").trim()) ? undefined : "Enter a whole number",
       }));
       setPath(cfg, "capture.inactivityTimeoutMinutes", parseInt(String(next).trim(), 10));
+    } else if (menu === "timeout_auto_compact") {
+      const next = handleCancel(await confirm({
+        message: "capture.autoCompactionOnTimeout",
+        initialValue: !!getPath(cfg, "capture.autoCompactionOnTimeout", true),
+      }));
+      setPath(cfg, "capture.autoCompactionOnTimeout", !!next);
     } else if (menu === "systems") {
       await editSystems(cfg, cfgPath);
     } else if (menu === "save") {
@@ -600,6 +609,7 @@ function showConfig() {
   console.log(`janitor apply:    ${getPath(cfg, "janitor.applyMode", "auto")}`);
   console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} workspace=${getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
   console.log(`idle timeout:     ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`);
+  console.log(`timeout compact:  ${getPath(cfg, "capture.autoCompactionOnTimeout", true) ? "on" : "off"}`);
   console.log("\nsystems:");
   for (const row of systemRows(cfg)) {
     console.log(`  ${row.key.padEnd(10, " ")} ${row.on ? "on" : "off"}  # ${row.desc}`);

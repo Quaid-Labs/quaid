@@ -45,11 +45,9 @@ const path = __importStar(require("node:path"));
 const fs = __importStar(require("node:fs"));
 const os = __importStar(require("node:os"));
 const session_timeout_js_1 = require("../../core/session-timeout.js");
-const command_signals_js_1 = require("./command-signals.js");
 const delayed_requests_js_1 = require("./delayed-requests.js");
 const orchestrator_js_1 = require("./knowledge/orchestrator.js");
 const data_writers_js_1 = require("../../core/data-writers.js");
-
 // Configuration
 const PLUGIN_DIR = __dirname;
 function _resolveWorkspace() {
@@ -107,13 +105,13 @@ function getActiveNodeCount() {
         return _cachedNodeCount;
     }
     try {
-        const result = execSync(`sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM nodes WHERE status='active'"`, { encoding: 'utf-8', timeout: 5000 });
+        const result = (0, node_child_process_1.execSync)(`sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM nodes WHERE status='active'"`, { encoding: 'utf-8', timeout: 5000 });
         _cachedNodeCount = parseInt(result.trim(), 10) || 100;
         _nodeCountTimestamp = now;
         return _cachedNodeCount;
     }
     catch {
-        return _cachedNodeCount ?? 100;
+        return _cachedNodeCount ?? 100; // use last known or fallback
     }
 }
 function computeDynamicK() {
@@ -121,7 +119,7 @@ function computeDynamicK() {
     if (nodeCount < 10)
         return 5;
     const k = Math.round(11.5 * Math.log(nodeCount) - 61.7);
-    return Math.max(5, Math.min(k, 40));
+    return Math.max(5, Math.min(k, 40)); // floor 5, ceiling 40
 }
 // Model resolution — reads from config/memory.json, no hardcoded model IDs
 let _memoryConfig = null;
@@ -151,6 +149,12 @@ function isPreInjectionPassEnabled() {
     if (typeof retrieval.pre_injection_pass === "boolean")
         return retrieval.pre_injection_pass;
     return true;
+}
+function getCaptureTimeoutMinutes() {
+    const capture = getMemoryConfig().capture || {};
+    const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
+    const num = Number(raw);
+    return Number.isFinite(num) ? Math.max(0, Math.floor(num)) : 120;
 }
 function isProjectOrTechnicalQuery(query) {
     const q = String(query || "").toLowerCase();
@@ -518,21 +522,6 @@ async function callPython(command, args = []) {
         });
     });
 }
-function emitRuntimeEvent(name, payload = {}, sessionId, priority = "normal") {
-    const args = [
-        "emit",
-        "--name", name,
-        "--payload", JSON.stringify(payload || {}),
-        "--source", "openclaw-adapter",
-        "--priority", priority,
-    ];
-    if (sessionId) {
-        args.push("--session-id", sessionId);
-    }
-    void callPython("event", args).catch((err) => {
-        console.log(`[quaid] event emit skipped (${name}): ${String((err === null || err === void 0 ? void 0 : err.message) || err)}`);
-    });
-}
 // ============================================================================
 // Memory Notes — queued for extraction at compaction/reset
 // ============================================================================
@@ -716,58 +705,6 @@ function isInternalMaintenancePrompt(text) {
     ];
     return markers.some((m) => s.includes(m));
 }
-function isLowInformationEntityNode(result) {
-    if ((result.via || "vector") === "graph" || result.category === "graph")
-        return false;
-    const category = String(result.category || "").toLowerCase();
-    if (!["person", "concept", "event", "entity"].includes(category))
-        return false;
-    const text = String(result.text || "").trim();
-    if (!text)
-        return true;
-    const words = text.split(/\s+/).filter(Boolean);
-    // Entity stub: bare name/token without relational/factual structure.
-    if (words.length <= 2 && /^[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?$/.test(text))
-        return true;
-    return false;
-}
-function messageToText(msg) {
-    if (!msg)
-        return "";
-    if (typeof msg.content === "string")
-        return msg.content;
-    if (Array.isArray(msg.content))
-        return msg.content.map((c) => c?.text || "").join("\n");
-    return "";
-}
-function latestUserCommand(messages) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        if (!msg || msg.role !== "user")
-            continue;
-        const text = messageToText(msg);
-        if (!text)
-            continue;
-        if (/(^|\n)\s*\/restart(?:@[a-z0-9_]+)?(?:\s|$)/im.test(text))
-            return "reset";
-        if (/(^|\n)\s*\/reset(?:@[a-z0-9_]+)?(?:\s|$)/im.test(text))
-            return "reset";
-        if (/(^|\n)\s*\/new(?:@[a-z0-9_]+)?(?:\s|$)/im.test(text))
-            return "new";
-        return null;
-    }
-    return null;
-}
-function summarizeEventKeys(event) {
-    try {
-        if (!event || typeof event !== "object")
-            return "none";
-        return Object.keys(event).slice(0, 20).join(",") || "none";
-    }
-    catch {
-        return "error";
-    }
-}
 function getActiveSessionFileFromSessionsJson() {
     try {
         const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
@@ -775,11 +712,62 @@ function getActiveSessionFileFromSessionsJson() {
         const data = JSON.parse(raw);
         const entry = data?.["agent:main:main"] || data?.active;
         const sessionFile = entry?.sessionFile;
-        const sessionId = entry?.sessionId || (typeof sessionFile === "string" ? path.basename(sessionFile).split(".jsonl")[0] : undefined);
+        const sessionId = entry?.sessionId ||
+            (typeof sessionFile === "string" ? path.basename(sessionFile).split(".jsonl")[0] : undefined);
         return { sessionId, sessionFile };
     }
     catch {
         return {};
+    }
+}
+function resolveSessionKeyForCompaction(sessionId) {
+    try {
+        const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+        const raw = fs.readFileSync(sessionsPath, "utf8");
+        const data = JSON.parse(raw);
+        const entries = Object.entries(data || {}).filter(([_, v]) => v && typeof v === "object");
+        if (!entries.length)
+            return null;
+        if (sessionId) {
+            for (const [key, entry] of entries) {
+                if (String(entry?.sessionId || "").trim() === String(sessionId).trim()) {
+                    return key;
+                }
+            }
+        }
+        if (entries.some(([k]) => k === "agent:main:main")) {
+            return "agent:main:main";
+        }
+        return entries[0][0];
+    }
+    catch {
+        return null;
+    }
+}
+function maybeForceCompactionAfterTimeout(sessionId) {
+    const captureCfg = getMemoryConfig().capture || {};
+    const enabled = Boolean(captureCfg.autoCompactionOnTimeout ??
+        captureCfg.auto_compaction_on_timeout ??
+        true);
+    if (!enabled)
+        return;
+    const key = resolveSessionKeyForCompaction(sessionId);
+    if (!key) {
+        console.warn(`[quaid][timeout] auto-compaction skipped: could not resolve session key (session=${sessionId || "unknown"})`);
+        return;
+    }
+    try {
+        const out = (0, node_child_process_1.execSync)(`openclaw gateway call sessions.compact --json --params '${JSON.stringify({ key })}'`, { encoding: "utf-8", timeout: 20000 });
+        const parsed = JSON.parse(String(out || "{}"));
+        if (parsed?.ok) {
+            console.log(`[quaid][timeout] auto-compaction requested for key=${key} (compacted=${String(parsed?.compacted)})`);
+        }
+        else {
+            console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
+        }
+    }
+    catch (err) {
+        console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
     }
 }
 // ============================================================================
@@ -801,7 +789,8 @@ function _getGatewayCredential(providers) {
                 if (lastGoodId && profiles[lastGoodId]) {
                     const cred = profiles[lastGoodId];
                     const key = cred.access || cred.token || cred.key;
-                    if (key) return key;
+                    if (key)
+                        return key;
                 }
             }
         }
@@ -810,15 +799,18 @@ function _getGatewayCredential(providers) {
     return undefined;
 }
 function _getAnthropicCredential() {
+    // OpenClaw adapter should only use gateway-managed credentials.
     const apiKey = _getGatewayCredential(["anthropic"]);
-    if (apiKey) return apiKey;
-    // Legacy auth.json (older gateway installs)
+    if (apiKey)
+        return apiKey;
+    // Legacy gateway auth.json (for older installs).
     try {
         const authPath = path.join(os.homedir(), ".openclaw", "agents", "main", "agent", "auth.json");
         if (fs.existsSync(authPath)) {
             const data = JSON.parse(fs.readFileSync(authPath, "utf8"));
             const key = data?.anthropic?.key;
-            if (key) return key;
+            if (key)
+                return key;
         }
     }
     catch { /* auth.json not available */ }
@@ -827,7 +819,8 @@ function _getAnthropicCredential() {
 function _getOpenAICredential() {
     // OAuth/API creds managed by OpenClaw auth profiles only.
     const gatewayKey = _getGatewayCredential(["openai-codex", "openai"]);
-    if (gatewayKey) return gatewayKey;
+    if (gatewayKey)
+        return gatewayKey;
     return undefined;
 }
 function _getProviderCredential(provider) {
@@ -1199,16 +1192,16 @@ function maybeQueueJanitorHealthAlert() {
     }
 }
 function maybeSendJanitorNudges() {
-    // Adapter-owned reminders: the janitor queues requests; heartbeat/adapter asks users.
+    // Adapter-owned reminders: do not rely on HEARTBEAT for cross-platform behavior.
     const now = Date.now();
     const state = _loadJanitorNudgeState();
     const lastInstallNudge = Number(state.lastInstallNudgeAt || 0);
     const lastApprovalNudge = Number(state.lastApprovalNudgeAt || 0);
-    const NUDGE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+    const NUDGE_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h
     try {
         if (fs.existsSync(PENDING_INSTALL_MIGRATION_PATH) && now - lastInstallNudge > NUDGE_COOLDOWN_MS) {
             const raw = JSON.parse(fs.readFileSync(PENDING_INSTALL_MIGRATION_PATH, "utf8"));
-            if ((raw === null || raw === void 0 ? void 0 : raw.status) === "pending") {
+            if (raw?.status === "pending") {
                 spawnNotifyScript(`
 from notify import notify_user
 notify_user("Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?")
@@ -1221,8 +1214,8 @@ notify_user("Hey, I see you just installed Quaid. Want me to help migrate import
     try {
         if (fs.existsSync(PENDING_APPROVAL_REQUESTS_PATH) && now - lastApprovalNudge > NUDGE_COOLDOWN_MS) {
             const raw = JSON.parse(fs.readFileSync(PENDING_APPROVAL_REQUESTS_PATH, "utf8"));
-            const requests = Array.isArray(raw === null || raw === void 0 ? void 0 : raw.requests) ? raw.requests : [];
-            const pendingCount = requests.filter((r) => (r === null || r === void 0 ? void 0 : r.status) === "pending").length;
+            const requests = Array.isArray(raw?.requests) ? raw.requests : [];
+            const pendingCount = requests.filter((r) => r?.status === "pending").length;
             if (pendingCount > 0) {
                 state.lastApprovalNudgeAt = now;
             }
@@ -1240,7 +1233,7 @@ function flushDelayedNotifications(maxItems = 5) {
         return result;
     }
     catch (err) {
-        console.warn(`[quaid] Failed to flush delayed notifications: ${String(err === null || err === void 0 ? void 0 : err.message) || String(err)}`);
+        console.warn(`[quaid] Failed to flush delayed notifications: ${String(err?.message || err)}`);
         return { delivered: 0, queuedLlmRequests: 0 };
     }
 }
@@ -1272,7 +1265,7 @@ async function getQuickProjectSummary(messages) {
         return { project_name: null, text: "" };
     }
     try {
-        const llm = await callConfiguredLLM(`You summarize coding sessions. Given a conversation, identify: 1) What project was being worked on (use one of the available project names, or null if unclear), 2) Brief summary of what changed/was discussed. Available projects: ${getProjectNames().join(", ")}. Use these EXACT names. Respond with JSON only: {"project_name": "name-or-null", "text": "brief summary"}`, `Summarize this session:\n\n${transcript.slice(0, 4000)}`, "low", 300);
+        const llm = await callConfiguredLLM(`You summarize coding sessions. Given a conversation, identify: 1) What project was being worked on (use one of the available project names, or null if unclear), 2) Brief summary of what changed/was discussed. Available projects: ${getProjectNames().join(", ")}. Use these EXACT names. Respond with JSON only: {"project_name": "name-or-null", "text": "brief summary"}`, `Summarize this session:\n\n${transcript.slice(0, 4000)}`, "fast", 300);
         const output = (llm.text || "").trim();
         const jsonMatch = output.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
@@ -1380,8 +1373,6 @@ function buildTranscript(messages) {
     }
     return transcript.join("\n\n");
 }
-const RESET_BOOTSTRAP_PROMPT = "A new session was started via /new or /reset.";
-let lastActiveConversationSessionId = null;
 function getMessageText(msg) {
     if (!msg) {
         return "";
@@ -1395,6 +1386,7 @@ function getMessageText(msg) {
     return "";
 }
 function isResetBootstrapOnlyConversation(messages) {
+    const RESET_BOOTSTRAP_PROMPT = "A new session was started via /new or /reset.";
     const userTexts = messages
         .filter((m) => m?.role === "user")
         .map((m) => getMessageText(m).trim())
@@ -1519,10 +1511,25 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
         catch { }
     }
 }
+function isLowInformationEntityNode(result) {
+    if ((result.via || "vector") === "graph" || result.category === "graph")
+        return false;
+    const category = String(result.category || "").toLowerCase();
+    if (!["person", "concept", "event", "entity"].includes(category))
+        return false;
+    const text = String(result.text || "").trim();
+    if (!text)
+        return true;
+    const words = text.split(/\s+/).filter(Boolean);
+    // Entity stub: bare name/token without relational/factual structure.
+    if (words.length <= 2 && /^[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?$/.test(text))
+        return true;
+    return false;
+}
 async function recall(query, limit = 5, currentSessionId, compactionTime, expandGraph = true, graphDepth = 1, technicalScope = "any", dateFrom, dateTo) {
     try {
-    const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
-    args.push("--technical-scope", technicalScope);
+        const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
+        args.push("--technical-scope", technicalScope);
         // Use search-graph-aware for enhanced graph traversal, or basic search
         if (!expandGraph) {
             // Basic search without graph expansion — accepts --current-session-id, --compaction-time
@@ -1824,7 +1831,7 @@ async function store(text, category = "fact", sessionId, extractionConfidence = 
             console.error("[quaid] store error:", writeResult.error || "unknown writer failure");
             return null;
         }
-        const details = writeResult.details || {};
+        const details = (writeResult.details || {});
         return {
             id: writeResult.id || details.id,
             status: writeResult.status,
@@ -1888,7 +1895,9 @@ function formatMemories(memories) {
         }
         return a.createdAt.localeCompare(b.createdAt);
     });
-    const lines = sorted.map((m) => {
+    const graphNodeHits = sorted.filter((m) => isLowInformationEntityNode(m));
+    const regularMemories = sorted.filter((m) => !isLowInformationEntityNode(m));
+    const lines = regularMemories.map((m) => {
         const conf = m.extractionConfidence ?? 0.5;
         const timestamp = m.createdAt ? ` (${m.createdAt.split("T")[0]})` : "";
         if (conf < 0.4) {
@@ -1896,6 +1905,13 @@ function formatMemories(memories) {
         }
         return `- [${m.category}]${timestamp} ${m.text}`;
     });
+    if (graphNodeHits.length > 0) {
+        const packed = graphNodeHits
+            .slice(0, 8)
+            .map((m) => `${m.text} (${Math.round((m.similarity || 0) * 100)}%)`)
+            .join(", ");
+        lines.push(`- [graph-node-hits] Entity node references (not standalone facts): ${packed}`);
+    }
     return `<injected_memories>
 AUTOMATED MEMORY SYSTEM: The following memories were automatically retrieved from past conversations. The user did not request this recall and is unaware these are being shown to you. Use them as background context only. Items marked (uncertain) have lower extraction confidence. Dates shown are when the fact was recorded.
 INJECTOR CONFIDENCE RULE: Treat injected memories as hints, not final truth. If the answer depends on personal details and the match is not exact/high-confidence, run memory_recall before answering.
@@ -2087,27 +2103,24 @@ const quaidPlugin = {
         // This code is preserved for potential future use with better query gating.
         // To re-enable: set MEMORY_AUTO_INJECT=1 in environment or update config.
         // ============================================================================
-    const beforeAgentStartHandler = async (event, ctx) => {
+        const beforeAgentStartHandler = async (event, ctx) => {
             if (isInternalQuaidSession(ctx?.sessionId)) {
-            return;
-        }
-        try {
-            maybeSendJanitorNudges();
-        }
-        catch { }
-        try {
-            flushDelayedNotifications(5);
-        }
-        catch { }
-        try {
-            maybeQueueJanitorHealthAlert();
-        }
-        catch { }
-        // Cancel inactivity timer — agent is active again
-        timeoutManager.onAgentStart();
-        emitRuntimeEvent("session.agent_start", {
-            trigger: "before_agent_start",
-        }, String((ctx === null || ctx === void 0 ? void 0 : ctx.sessionId) || "").trim() || undefined);
+                return;
+            }
+            try {
+                maybeSendJanitorNudges();
+            }
+            catch { }
+            try {
+                flushDelayedNotifications(5);
+            }
+            catch { }
+            try {
+                maybeQueueJanitorHealthAlert();
+            }
+            catch { }
+            // Cancel inactivity timer — agent is active again
+            timeoutManager.onAgentStart();
             // Journal injection (full soul mode) — gated by journal system
             if (!isSystemEnabled("journal")) {
                 // Skip journal injection entirely
@@ -2321,43 +2334,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             if (conversationMessages.length === 0)
                 return;
             const timeoutSessionId = ctx?.sessionId || extractSessionId(messages, ctx);
-            timeoutManager.setTimeoutMinutes(getMemoryConfig().capture?.inactivityTimeoutMinutes ?? 120);
+            timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
             // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
             timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
-            emitRuntimeEvent("session.agent_end", {
-                trigger: "agent_end",
-                message_count: conversationMessages.length,
-            }, timeoutSessionId || undefined);
             // /new and /reset often produce a bootstrap-only first turn in a new session.
             // In that case, queue extraction against the last active conversation session.
             if (isResetBootstrapOnlyConversation(conversationMessages)) {
                 const active = getActiveSessionFileFromSessionsJson();
-                const bootstrapTargetSessionId = String(lastActiveConversationSessionId || active.sessionId || "").trim();
+                const bootstrapTargetSessionId = String(active.sessionId || "").trim();
                 if (bootstrapTargetSessionId && bootstrapTargetSessionId !== timeoutSessionId) {
-                    console.log(`[quaid][agent_end] bootstrap-only session=${timeoutSessionId || "unknown"}; queue ResetSignal for prior_session=${bootstrapTargetSessionId}`);
+                    console.log(`[quaid][agent_end] bootstrap-only session=${timeoutSessionId || "unknown"}; ` +
+                        `queue ResetSignal for prior_session=${bootstrapTargetSessionId}`);
                     timeoutManager.queueExtractionSignal(bootstrapTargetSessionId, "ResetSignal");
                 }
                 return;
-            }
-            if (timeoutSessionId) {
-                lastActiveConversationSessionId = timeoutSessionId;
-            }
-            // Fallback signal path: before_reset/new hooks can miss due to async teardown timing.
-            // Detect slash commands from conversation messages at agent_end and queue extraction.
-            const resetLikeCommand = latestUserCommand(conversationMessages);
-            if (resetLikeCommand) {
-                // TODO(quaid): sessions.json fallback is global and can misattribute under
-                // parallel sessions. Replace with per-conversation scoping.
-                const active = getActiveSessionFileFromSessionsJson();
-                const resetTargetSessionId = String(timeoutSessionId || active.sessionId || "").trim();
-                if (!resetTargetSessionId) {
-                    console.warn(`[quaid][agent_end] detected /${resetLikeCommand} but no reset target session id`);
-                    return;
-                }
-                const label = resetLikeCommand === "new" ? "NewSignal" : "ResetSignal";
-                console.log(`[quaid][agent_end] detected /${resetLikeCommand} session=${resetTargetSessionId} -> queue ${label}`);
-                timeoutManager.queueExtractionSignal(resetTargetSessionId, label);
-                emitRuntimeEvent(resetLikeCommand === "new" ? "session.new" : "session.reset", { trigger: "agent_end_command_fallback", signal: label }, resetTargetSessionId, "high");
             }
         };
         // Register agent_end hook using api.on() for typed hooks
@@ -2366,38 +2356,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             name: "auto-capture",
             priority: 10
         });
-        // Explicit slash command hook to avoid relying on before_reset/before_compaction async timing.
-        try {
-            api.on("command", async (event, ctx) => {
-                if (!isSystemEnabled("memory"))
-                    return;
-                const command = (0, command_signals_js_1.extractCommandName)(event);
-                const label = (0, command_signals_js_1.signalLabelForCommand)(command);
-                if (!label)
-                    return;
-                const commandSessionId = String(ctx?.sessionId || "").trim();
-                if (!commandSessionId)
-                    return;
-                console.log(`[quaid][command] /${command} session=${commandSessionId} -> queue ${label}`);
-                timeoutManager.queueExtractionSignal(commandSessionId, label);
-                if (command === "compact") {
-                    emitRuntimeEvent("session.compaction", { trigger: "command_hook", signal: label }, commandSessionId, "high");
-                }
-                else if (command === "new") {
-                    emitRuntimeEvent("session.new", { trigger: "command_hook", signal: label }, commandSessionId, "high");
-                }
-                else if (command === "reset") {
-                    emitRuntimeEvent("session.reset", { trigger: "command_hook", signal: label }, commandSessionId, "high");
-                }
-            }, {
-                name: "command-memory-signal",
-                priority: 10
-            });
-            console.log("[quaid] Registered command hook for memory signals");
-        }
-        catch (err) {
-            console.warn(`[quaid] command hook registration failed; relying on before_* hooks: ${String(err?.message || err)}`);
-        }
         // Register memory tools (gated by memory system)
         if (isSystemEnabled("memory")) {
             api.registerTool(() => ({
@@ -2505,19 +2463,19 @@ ${recallStoreGuidance}`,
                         const expandGraph = options.graph?.expand ?? true;
                         const graphDepth = options.graph?.depth ?? 1;
                         const datastores = options.datastores;
-                const routeStores = options.routing?.enabled;
-                const reasoning = options.routing?.reasoning ?? "fast";
-                const intent = options.routing?.intent ?? "general";
-                const technicalScope = options.technicalScope ?? (isProjectOrTechnicalQuery(query) ? "any" : "personal");
-                const dateFrom = options.filters?.dateFrom;
-                const dateTo = options.filters?.dateTo;
-                const docs = options.filters?.docs;
-                const ranking = options.ranking;
-                const datastoreOptions = options.datastoreOptions;
-                const routerFailOpen = Boolean(options.routing?.failOpen ??
-                    getMemoryConfig().retrieval?.routerFailOpen ??
-                    getMemoryConfig().retrieval?.router_fail_open ??
-                    true);
+                        const routeStores = options.routing?.enabled;
+                        const reasoning = options.routing?.reasoning ?? "fast";
+                        const intent = options.routing?.intent ?? "general";
+                        const technicalScope = options.technicalScope ?? (isProjectOrTechnicalQuery(query) ? "any" : "personal");
+                        const dateFrom = options.filters?.dateFrom;
+                        const dateTo = options.filters?.dateTo;
+                        const docs = options.filters?.docs;
+                        const ranking = options.ranking;
+                        const datastoreOptions = options.datastoreOptions;
+                        const routerFailOpen = Boolean(options.routing?.failOpen ??
+                            getMemoryConfig().retrieval?.routerFailOpen ??
+                            getMemoryConfig().retrieval?.router_fail_open ??
+                            true);
                         if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
                             return {
                                 content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
@@ -2531,7 +2489,9 @@ ${recallStoreGuidance}`,
                         console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, technicalScope=${technicalScope}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
                         const results = await recallMemories({
                             query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, technicalScope,
-                            datastoreOptions, failOpen: routerFailOpen, dateFrom, dateTo, docs, waitForExtraction: true, sourceTag: "tool"
+                            datastoreOptions,
+                            failOpen: routerFailOpen,
+                            dateFrom, dateTo, docs, waitForExtraction: true, sourceTag: "tool"
                         });
                         if (results.length === 0) {
                             return {
@@ -2541,7 +2501,7 @@ ${recallStoreGuidance}`,
                         }
                         // Group by source type for better formatting
                         const vectorResults = results.filter(r => (r.via || "vector") === "vector");
-                        const graphResults = results.filter(r => r.via === "graph" || r.category === "graph");
+                        const graphResults = results.filter(r => (r.via || "") === "graph" || r.category === "graph");
                         const journalResults = results.filter(r => (r.via || "") === "journal");
                         const projectResults = results.filter(r => (r.via || "") === "project");
                         // Check if results are low quality (all below 60% similarity)
@@ -2605,7 +2565,7 @@ ${recallStoreGuidance}`,
                                     journal_count: journalResults.length,
                                     project_count: projectResults.length,
                                     query: query,
-                                    mode: "tool"
+                                    mode: "tool",
                                 });
                                 // Fire and forget notification
                                 const dataFile2 = path.join(QUAID_TMP_DIR, `recall-data-${Date.now()}.json`);
@@ -3023,11 +2983,12 @@ notify_docs_search(data['query'], data['results'])
                         };
                     }
                     if (action === "load" && sid) {
+                        // Validate session_id to prevent path traversal
                         if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sid)) {
-                          return {
-                            content: [{ type: "text", text: "Invalid session ID format." }],
-                            details: { error: "invalid_session_id" },
-                          };
+                            return {
+                                content: [{ type: "text", text: "Invalid session ID format." }],
+                                details: { error: "invalid_session_id" },
+                            };
                         }
                         // Try to load session JSONL
                         const sessionsDir = path.join(os.homedir(), '.openclaw', 'sessions');
@@ -3044,7 +3005,8 @@ notify_docs_search(data['query'], data['results'])
                                     content: [{ type: "text", text: `Session ${sid} (${messages.length} messages):\n\n${truncated}` }],
                                     details: { session_id: sid, message_count: messages.length, truncated: transcript.length > 10000 },
                                 };
-                            } catch {
+                            }
+                            catch {
                                 // File disappeared or unreadable — fall through to facts fallback
                             }
                         }
@@ -3079,69 +3041,12 @@ notify_docs_search(data['query'], data['results'])
                 }
             },
         }));
-        api.registerTool(() => ({
-            name: "memory_event_capabilities",
-            description: "List runtime event capabilities (including delivery_mode active|passive) so orchestration can adapt direct vs async event handling.",
-            parameters: typebox_1.Type.Object({}),
-            async execute() {
-                try {
-                    const output = await callPython("event", ["capabilities"]);
-                    return {
-                        content: [{ type: "text", text: output || '{"events":[]}' }],
-                        details: {},
-                    };
-                }
-                catch (err) {
-                    return {
-                        content: [{ type: "text", text: `Error: ${String(err)}` }],
-                        details: { error: String(err) },
-                    };
-                }
-            },
-        }));
-        api.registerTool(() => ({
-            name: "memory_event_emit",
-            description: "Emit a runtime event into Quaid's queue. dispatch=auto adapts by event capability: active events process immediately, passive events stay queued for async handling.",
-            parameters: typebox_1.Type.Object({
-                name: typebox_1.Type.String({ description: "Event name, e.g. notification.delayed or memory.force_compaction" }),
-                payload: typebox_1.Type.Optional(typebox_1.Type.Record(typebox_1.Type.String(), typebox_1.Type.Any(), { description: "JSON payload for the event" })),
-                priority: typebox_1.Type.Optional(typebox_1.Type.Union([typebox_1.Type.Literal("low"), typebox_1.Type.Literal("normal"), typebox_1.Type.Literal("high")])),
-                dispatch: typebox_1.Type.Optional(typebox_1.Type.Union([typebox_1.Type.Literal("auto"), typebox_1.Type.Literal("immediate"), typebox_1.Type.Literal("queued")])),
-                session_id: typebox_1.Type.Optional(typebox_1.Type.String({ description: "Optional session id for the event" })),
-            }),
-            async execute(_toolCallId, params) {
-                try {
-                    const args = [
-                        "emit",
-                        "--name", String((params === null || params === void 0 ? void 0 : params.name) || "").trim(),
-                        "--payload", JSON.stringify((params === null || params === void 0 ? void 0 : params.payload) || {}),
-                        "--source", "openclaw-tool",
-                        "--priority", String((params === null || params === void 0 ? void 0 : params.priority) || "normal"),
-                        "--dispatch", String((params === null || params === void 0 ? void 0 : params.dispatch) || "auto"),
-                    ];
-                    if (params === null || params === void 0 ? void 0 : params.session_id) {
-                        args.push("--session-id", String(params.session_id));
-                    }
-                    const output = await callPython("event", args);
-                    return {
-                        content: [{ type: "text", text: output || "{}" }],
-                        details: {},
-                    };
-                }
-                catch (err) {
-                    return {
-                        content: [{ type: "text", text: `Error: ${String(err)}` }],
-                        details: { error: String(err) },
-                    };
-                }
-            },
-        }));
         // Extraction promise gate — memory_recall waits on this before querying
         // so that facts extracted from the just-compacted session are available.
         let extractionPromise = null;
         const timeoutManager = new session_timeout_js_1.SessionTimeoutManager({
             workspace: WORKSPACE,
-            timeoutMinutes: getMemoryConfig().capture?.inactivityTimeoutMinutes ?? 120,
+            timeoutMinutes: getCaptureTimeoutMinutes(),
             isBootstrapOnly: isResetBootstrapOnlyConversation,
             logger: (msg) => console.log(msg),
             extract: async (msgs, sid, label) => {
@@ -3153,7 +3058,7 @@ notify_docs_search(data['query'], data['results'])
         });
         // Shared recall abstraction — used by both memory_recall tool and auto-inject
         async function recallMemories(opts) {
-            const { query, limit = 10, expandGraph = false, graphDepth = 1, technicalScope = "any", datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown" } = opts;
+            const { query, limit = 10, expandGraph = false, graphDepth = 1, datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, technicalScope = "any", dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown" } = opts;
             const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
             console.log(`[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} technicalScope=${technicalScope} waitForExtraction=${waitForExtraction}`);
             // Wait for in-flight extraction if requested
@@ -3164,8 +3069,11 @@ notify_docs_search(data['query'], data['results'])
                         extractionPromise,
                         new Promise((_, rej) => { raceTimer = setTimeout(() => rej(new Error("timeout")), 60000); })
                     ]);
-                } catch {} finally {
-                    if (raceTimer) clearTimeout(raceTimer);
+                }
+                catch { }
+                finally {
+                    if (raceTimer)
+                        clearTimeout(raceTimer);
                 }
             }
             if (routeStores) {
@@ -3430,7 +3338,7 @@ IMPORTANT: Journal entries are OPTIONAL. Most conversations warrant ZERO entries
 
 If nothing worth capturing, respond: {"facts": []}`;
             // Notify user that extraction is starting (so they don't think things are stalling)
-            if (getMemoryConfig().notifications?.showProcessingStart !== false) {
+            if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
                 const triggerType = resolveExtractionTrigger(label);
                 const triggerDesc = triggerType === "compaction"
                     ? "compaction"
@@ -3450,8 +3358,8 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
             const messageChunks = chunkMessages(messages, chunkSize);
             const MAX_CHUNKS = 10;
             if (messageChunks.length > MAX_CHUNKS) {
-              console.warn(`[quaid] ${label}: transcript too large (${messageChunks.length} chunks), capping at ${MAX_CHUNKS}`);
-              messageChunks.splice(MAX_CHUNKS);
+                console.warn(`[quaid] ${label}: transcript too large (${messageChunks.length} chunks), capping at ${MAX_CHUNKS}`);
+                messageChunks.splice(MAX_CHUNKS);
             }
             if (messageChunks.length > 1) {
                 console.log(`[quaid] ${label}: splitting ${messages.length} messages into ${messageChunks.length} chunks`);
@@ -3472,7 +3380,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
                     console.log(`[quaid] ${label}: chunk ${chunkIdx + 1}/${messageChunks.length} (${chunkTranscript.length} chars, ${messageChunks[chunkIdx].length} messages)`);
                 }
                 try {
-                    const llm = await callConfiguredLLM(extractionSystemPrompt, `Extract memorable facts and journal entries from this conversation:\n\n${chunkTranscript}`, "high", 6144);
+                    const llm = await callConfiguredLLM(extractionSystemPrompt, `Extract memorable facts and journal entries from this conversation:\n\n${chunkTranscript}`, "deep", 6144);
                     const output = (llm.text || "").trim();
                     // Parse JSON from response
                     let jsonStr = output;
@@ -3504,7 +3412,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
                     }
                     // Merge facts
                     allFacts.push(...(chunkResult.facts || []));
-                    // Merge snippets
+                    // Merge snippets (dedup across chunks)
                     for (const [file, snips] of Object.entries(chunkResult.soul_snippets || {})) {
                         if (Array.isArray(snips)) {
                             const combined = [...(allSnippets[file] || []), ...snips];
@@ -3656,7 +3564,8 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
             const hasSnippets = Object.keys(snippetDetails).length > 0;
             const hasJournalEntries = Object.keys(journalDetails).length > 0;
             const triggerType = resolveExtractionTrigger(label);
-            const alwaysNotifyCompletion = triggerType === "timeout" || triggerType === "reset" || triggerType === "new";
+            const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
+                && shouldNotifyFeature("extraction", "summary");
             if ((facts.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
                 && shouldNotifyFeature("extraction", "summary")) {
                 try {
@@ -3697,6 +3606,9 @@ notify_memory_extraction(
                 catch (notifyErr) {
                     console.log(`[quaid] Extraction notification skipped: ${notifyErr.message}`);
                 }
+            }
+            if (triggerType === "timeout") {
+                maybeForceCompactionAfterTimeout(sessionId);
             }
             // Write soul snippets to *.snippets.md files (fail-safe: never blocks fact extraction)
             try {
@@ -3983,7 +3895,6 @@ notify_memory_extraction(
         // in-memory messages for backwards compatibility with older gateway versions.
         api.on("before_compaction", async (event, ctx) => {
             try {
-                console.log(`[quaid][debug][before_compaction] entry session=${String(ctx?.sessionId || "unknown")} has_session_file=${event?.sessionFile ? "yes" : "no"} event_messages=${Array.isArray(event?.messages) ? event.messages.length : 0} event_keys=${summarizeEventKeys(event)}`);
                 // Prefer reading from sessionFile (all messages already on disk, runs in
                 // parallel with compaction). Fall back to in-memory messages array.
                 let messages;
@@ -4011,11 +3922,6 @@ notify_memory_extraction(
                         const extractionSessionId = sessionId || extractSessionId(messages, ctx);
                         timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal");
                         console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
-                        emitRuntimeEvent("session.compaction", {
-                            trigger: "before_compaction",
-                            signal: "CompactionSignal",
-                            message_count: messages.length,
-                        }, extractionSessionId, "high");
                     }
                     else {
                         console.log("[quaid] Compaction: memory extraction skipped — memory system disabled");
@@ -4040,7 +3946,7 @@ notify_memory_extraction(
                         const logPath = getInjectionLogPath(uniqueSessionId);
                         let logData = {};
                         try {
-                            logData = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+                            logData = JSON.parse(fs.readFileSync(logPath, "utf8"));
                         }
                         catch { }
                         logData.lastCompactionAt = new Date().toISOString();
@@ -4067,12 +3973,9 @@ notify_memory_extraction(
         // Uses sessionFile when available, falls back to in-memory messages.
         api.on("before_reset", async (event, ctx) => {
             try {
-                console.log(`[quaid][debug][before_reset] entry session=${String(ctx?.sessionId || "unknown")} reason=${String(event?.reason || "unknown")} has_session_file=${event?.sessionFile ? "yes" : "no"} event_messages=${Array.isArray(event?.messages) ? event.messages.length : 0} event_keys=${summarizeEventKeys(event)}`);
-                console.log(`[quaid][reset] hook_entry session=${ctx?.sessionId || "unknown"} reason=${event?.reason || "unknown"} has_session_file=${event?.sessionFile ? "yes" : "no"} event_messages=${Array.isArray(event?.messages) ? event.messages.length : 0}`);
                 // Prefer sessionFile (complete transcript on disk), fall back to in-memory messages
                 let messages;
                 if (event.sessionFile) {
-                    console.log(`[quaid][reset] session_file=${event.sessionFile}`);
                     try {
                         messages = readMessagesFromSessionFile(event.sessionFile);
                         console.log(`[quaid] before_reset: read ${messages.length} messages from sessionFile`);
@@ -4089,19 +3992,11 @@ notify_memory_extraction(
                 const sessionId = ctx?.sessionId;
                 console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
                 const doExtraction = async () => {
-                    const started = Date.now();
-                    console.log(`[quaid][reset] extraction_begin session=${sessionId || "unknown"} message_count=${messages.length}`);
                     // before_reset can race with session teardown; queue signal for worker tick.
                     if (isSystemEnabled("memory")) {
                         const extractionSessionId = sessionId || extractSessionId(messages, ctx);
                         timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal");
                         console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
-                        emitRuntimeEvent("session.reset", {
-                            trigger: "before_reset",
-                            signal: "ResetSignal",
-                            message_count: messages.length,
-                            reason: reason,
-                        }, extractionSessionId, "high");
                     }
                     else {
                         console.log("[quaid] Reset: memory extraction skipped — memory system disabled");
@@ -4121,7 +4016,7 @@ notify_memory_extraction(
                     catch (err) {
                         console.error("[quaid] Reset project event failed:", err.message);
                     }
-                    console.log(`[quaid][reset] extraction_end session=${sessionId || "unknown"} duration_ms=${Date.now() - started}`);
+                    console.log(`[quaid][reset] extraction_end session=${sessionId || "unknown"}`);
                 };
                 // Chain onto any in-flight extraction to avoid overwrite race
                 console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${extractionPromise ? "yes" : "no"}`);
@@ -4143,6 +4038,7 @@ notify_memory_extraction(
             priority: 10
         });
         // Register HTTP endpoint for LLM proxy (used by Python janitor/extraction)
+        // Python code calls this instead of the Anthropic API directly — gateway handles auth.
         api.registerHttpRoute({
             path: "/plugins/quaid/llm",
             handler: async (req, res) => {
@@ -4151,8 +4047,11 @@ notify_memory_extraction(
                     res.end(JSON.stringify({ error: "Method not allowed" }));
                     return;
                 }
+                // Read request body
                 const chunks = [];
-                for await (const chunk of req) { chunks.push(chunk); }
+                for await (const chunk of req) {
+                    chunks.push(chunk);
+                }
                 let body;
                 try {
                     body = JSON.parse(Buffer.concat(chunks).toString("utf8"));

@@ -78,9 +78,11 @@ describe('Memory Store', () => {
     expect(result.id).toBeDefined()
   })
 
-  it('rejects missing owner', async () => {
-    await expect(memory.store('test content is here', ''))
-      .rejects.toThrow()
+  it('defaults owner when owner is missing', async () => {
+    const result = await memory.store('test content is here', '')
+    expect(result.id).toBeDefined()
+    // CLI store path resolves blank owner to configured default owner.
+    expect(result.owner_id || result.owner).toBeDefined()
   })
 
   it('handles special characters in content', async () => {

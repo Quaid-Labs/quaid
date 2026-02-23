@@ -2,9 +2,14 @@
 
 import { execSync } from 'node:child_process';
 
-const expectedName = process.env.QUAID_OWNER_NAME || 'Solomon Steadman';
+const expectedName = process.env.QUAID_OWNER_NAME || 'solstead';
 const expectedEmail =
-  process.env.QUAID_OWNER_EMAIL || 'solstead@users.noreply.github.com';
+  process.env.QUAID_OWNER_EMAIL || '168413654+solstead@users.noreply.github.com';
+const allowedIdentityPairs = new Set([
+  `${expectedName}\x00${expectedEmail}`,
+  // Transition alias: older canonical identity used in prior public commits.
+  'Solomon Steadman\x00solstead@users.noreply.github.com',
+]);
 
 const bannedMessagePatterns = [
   /co-authored-by:/i,
@@ -72,14 +77,14 @@ if (!raw.ok) {
     const [sha, authorName, authorEmail, committerName, committerEmail, subject, body = ''] =
       record.split('\x00');
     const id = `${sha.slice(0, 8)} ${subject}`;
-    if (authorName !== expectedName || authorEmail !== expectedEmail) {
+    if (!allowedIdentityPairs.has(`${authorName}\x00${authorEmail}`)) {
       failures.push(
-        `${id}: author is "${authorName} <${authorEmail}>", expected "${expectedName} <${expectedEmail}>"`,
+        `${id}: author is "${authorName} <${authorEmail}>", expected one of allowed owner identities`,
       );
     }
-    if (committerName !== expectedName || committerEmail !== expectedEmail) {
+    if (!allowedIdentityPairs.has(`${committerName}\x00${committerEmail}`)) {
       failures.push(
-        `${id}: committer is "${committerName} <${committerEmail}>", expected "${expectedName} <${expectedEmail}>"`,
+        `${id}: committer is "${committerName} <${committerEmail}>", expected one of allowed owner identities`,
       );
     }
     const message = `${subject}\n${body}`;
