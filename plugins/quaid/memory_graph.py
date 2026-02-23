@@ -795,8 +795,16 @@ class MemoryGraph:
             if not vec_rows:
                 return []
 
-            # Batch-fetch the actual nodes for filtering
-            node_ids = [r["node_id"] for r in vec_rows if r["distance"] <= max_distance]
+            # Batch-fetch the actual nodes for filtering.
+            # Guarantee at least min_results candidates even if below similarity
+            # threshold — they'll be reranked downstream anyway.
+            min_results = max(5, candidate_limit // 4)
+            above_threshold = [r["node_id"] for r in vec_rows if r["distance"] <= max_distance]
+            if len(above_threshold) >= min_results:
+                node_ids = above_threshold
+            else:
+                # Not enough above threshold — take best available up to min_results
+                node_ids = [r["node_id"] for r in sorted(vec_rows, key=lambda r: r["distance"])[:max(min_results, len(above_threshold))]]
             if not node_ids:
                 return []
 
