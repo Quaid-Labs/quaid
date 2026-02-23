@@ -209,3 +209,27 @@ def test_datastore_cleanup_lifecycle_runs_with_graph_override(tmp_path):
     assert result.errors == []
     assert result.data["cleanup"]["recall_log"] == 1
     assert result.data["cleanup"]["janitor_runs"] == 1
+
+
+def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):
+    registry = build_default_registry()
+
+    def _ok_a(_ctx):
+        return SimpleNamespace(metrics={"a": 1}, logs=[], errors=[], data={})
+
+    def _ok_b(_ctx):
+        return SimpleNamespace(metrics={"b": 1}, logs=[], errors=[], data={})
+
+    registry.register("a", _ok_a)
+    registry.register("b", _ok_b)
+
+    out = registry.run_many(
+        [
+            ("a", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path)),
+            ("b", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path)),
+        ],
+        max_workers=2,
+    )
+    assert set(out.keys()) == {"a", "b"}
+    assert out["a"].metrics["a"] == 1
+    assert out["b"].metrics["b"] == 1

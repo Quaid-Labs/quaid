@@ -490,6 +490,10 @@ def register_lifecycle_routines(registry, result_factory) -> None:
         workspace = ctx.workspace
 
         try:
+            if dry_run:
+                result.logs.append("Skipping RAG reindex (dry-run)")
+                return result
+
             if cfg.projects.enabled and not dry_run:
                 try:
                     from project_updater import process_all_events

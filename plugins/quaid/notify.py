@@ -521,6 +521,12 @@ def notify_janitor_summary(
     Returns:
         True if notification sent
     """
+    message = format_janitor_summary_message(metrics, applied_changes)
+    return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("janitor"))
+
+
+def format_janitor_summary_message(metrics: dict, applied_changes: dict) -> str:
+    """Format janitor summary content for either direct or delayed delivery."""
     msg_parts = [f"{QUAID_HEADER} 🧹 **Nightly Janitor Complete:**", ""]
 
     # Duration and stats
@@ -594,8 +600,7 @@ def notify_janitor_summary(
         msg_parts.append(f"`curl -fsSL {get_install_url()} | bash`")
         msg_parts.append(f"Release notes: {update_info.get('url', '')}")
 
-    message = "\n".join(msg_parts)
-    return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("janitor"))
+    return "\n".join(msg_parts)
 
 
 def notify_daily_memories(
@@ -612,8 +617,16 @@ def notify_daily_memories(
     Returns:
         True if notification sent
     """
-    if not memories:
+    message = format_daily_memories_message(memories)
+    if not message:
         return False
+    return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("retrieval"))
+
+
+def format_daily_memories_message(memories: list) -> Optional[str]:
+    """Format daily memories digest for either direct or delayed delivery."""
+    if not memories:
+        return None
 
     full_text = _notify_full_text()
     msg_parts = [f"{QUAID_HEADER} 📚 **Today's New Memories:**", ""]
@@ -650,8 +663,7 @@ def notify_daily_memories(
             msg_parts.append(f"  _...and {len(mems) - 10} more_")
         msg_parts.append("")
 
-    message = "\n".join(msg_parts)
-    return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("retrieval"))
+    return "\n".join(msg_parts)
 
 
 def main():

@@ -8,6 +8,7 @@ logic and register their routines here.
 from __future__ import annotations
 
 import importlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
@@ -51,6 +52,28 @@ class LifecycleRegistry:
         if routine is None:
             return RoutineResult(errors=[f"No lifecycle routine registered: {name}"])
         return routine(ctx)
+
+    def run_many(
+        self,
+        routines: List[tuple[str, RoutineContext]],
+        max_workers: int = 3,
+    ) -> Dict[str, RoutineResult]:
+        results: Dict[str, RoutineResult] = {}
+        if not routines:
+            return results
+        worker_count = max(1, min(int(max_workers), len(routines)))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            fut_to_name = {
+                executor.submit(self.run, name, ctx): name
+                for name, ctx in routines
+            }
+            for fut in as_completed(fut_to_name):
+                name = fut_to_name[fut]
+                try:
+                    results[name] = fut.result()
+                except Exception as exc:  # pragma: no cover
+                    results[name] = RoutineResult(errors=[f"Parallel lifecycle run failed for {name}: {exc}"])
+        return results
 
 
 def _register_module_routines(

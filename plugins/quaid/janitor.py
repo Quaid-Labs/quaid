@@ -3164,6 +3164,53 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
                 print(f"Task completed in {metrics.task_duration('decay_review'):.2f}s\n")
 
+        def _allow_doc_apply(doc_path: str, action: str) -> bool:
+            doc_p = Path(doc_path)
+            is_root_md = len(doc_p.parts) == 1 and doc_p.suffix.lower() == ".md"
+            is_quaid_project_md = (
+                len(doc_p.parts) >= 2
+                and doc_p.parts[0] == "projects"
+                and doc_p.parts[1] == "quaid"
+                and doc_p.suffix.lower() == ".md"
+            )
+            if is_root_md:
+                return _can_apply_scope("core_markdown_writes", f"docs {action}: {doc_path}")
+            if is_quaid_project_md:
+                return True
+            return _can_apply_scope("project_docs_writes", f"project docs {action}: {doc_path}")
+
+        parallel_lifecycle_results = {}
+        if task == "all" and dry_run:
+            try:
+                parallel_lifecycle_results = _LIFECYCLE_REGISTRY.run_many(
+                    [
+                        ("workspace", RoutineContext(cfg=_cfg, dry_run=True, workspace=_workspace())),
+                        ("docs_staleness", RoutineContext(
+                            cfg=_cfg,
+                            dry_run=True,
+                            workspace=_workspace(),
+                            allow_doc_apply=_allow_doc_apply,
+                        )),
+                        ("docs_cleanup", RoutineContext(
+                            cfg=_cfg,
+                            dry_run=True,
+                            workspace=_workspace(),
+                            allow_doc_apply=_allow_doc_apply,
+                        )),
+                        ("snippets", RoutineContext(cfg=_cfg, dry_run=True, workspace=_workspace())),
+                        ("journal", RoutineContext(
+                            cfg=_cfg,
+                            dry_run=True,
+                            workspace=_workspace(),
+                            force_distill=force_distill,
+                        )),
+                    ],
+                    max_workers=3,
+                )
+                print("[lifecycle] Parallel dry-run prepass completed for workspace/docs/snippets/journal")
+            except Exception as e:
+                print(f"[lifecycle] Parallel prepass unavailable, falling back to sequential: {e}")
+
         # --- Task 1: Workspace Audit (Opus API) ---
         # (Runs after memory pipeline — memory tasks are higher priority under time budget)
         if task in ("workspace", "all") and _system_enabled_or_skip("workspace", "Task 1: Workspace Audit") and not _skip_if_over_budget("Task 1: Workspace Audit", 30):
@@ -3175,7 +3222,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             )
             workspace_dry_run = dry_run or (not workspace_apply_allowed)
 
-            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("workspace") or _LIFECYCLE_REGISTRY.run(
                 "workspace",
                 RoutineContext(cfg=_cfg, dry_run=workspace_dry_run, workspace=_workspace()),
             )
@@ -3198,27 +3245,12 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             metrics.end_task("workspace_audit")
             print(f"Task completed in {metrics.task_duration('workspace_audit'):.2f}s\n")
 
-        def _allow_doc_apply(doc_path: str, action: str) -> bool:
-            doc_p = Path(doc_path)
-            is_root_md = len(doc_p.parts) == 1 and doc_p.suffix.lower() == ".md"
-            is_quaid_project_md = (
-                len(doc_p.parts) >= 2
-                and doc_p.parts[0] == "projects"
-                and doc_p.parts[1] == "quaid"
-                and doc_p.suffix.lower() == ".md"
-            )
-            if is_root_md:
-                return _can_apply_scope("core_markdown_writes", f"docs {action}: {doc_path}")
-            if is_quaid_project_md:
-                return True
-            return _can_apply_scope("project_docs_writes", f"project docs {action}: {doc_path}")
-
         # --- Task 1b: Documentation Staleness Check ---
         # (Runs after memory pipeline — expensive Opus doc updates are lower priority)
         if task in ("docs_staleness", "all") and _system_enabled_or_skip("docs_staleness", "Task 1b: Doc Staleness") and not _skip_if_over_budget("Task 1b: Doc Staleness", 60):
             print("[Task 1b: Documentation Staleness Check]")
             metrics.start_task("docs_staleness")
-            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("docs_staleness") or _LIFECYCLE_REGISTRY.run(
                 "docs_staleness",
                 RoutineContext(
                     cfg=_cfg,
@@ -3240,7 +3272,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("docs_cleanup", "all") and _system_enabled_or_skip("docs_cleanup", "Task 1c: Doc Cleanup") and not _skip_if_over_budget("Task 1c: Doc Cleanup", 60):
             print("[Task 1c: Documentation Cleanup]")
             metrics.start_task("docs_cleanup")
-            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("docs_cleanup") or _LIFECYCLE_REGISTRY.run(
                 "docs_cleanup",
                 RoutineContext(
                     cfg=_cfg,
@@ -3267,7 +3299,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 "snippets fold into root core markdown"
             )
             snippets_dry_run = dry_run or (not snippets_apply_allowed)
-            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("snippets") or _LIFECYCLE_REGISTRY.run(
                 "snippets",
                 RoutineContext(cfg=_cfg, dry_run=snippets_dry_run, workspace=_workspace()),
             )
@@ -3289,7 +3321,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 "journal distillation updates root core markdown"
             )
             journal_dry_run = dry_run or (not journal_apply_allowed)
-            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("journal") or _LIFECYCLE_REGISTRY.run(
                 "journal",
                 RoutineContext(
                     cfg=_cfg,
@@ -3634,75 +3666,40 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         except Exception as e:
             print(f"  Warning: Failed to record janitor run: {e}")
 
-    # Queue user notifications for adapter-delayed delivery (only for full runs, not dry-run)
+    # Queue user notifications through lifecycle event bus (only for full runs, not dry-run)
     if task == "all" and not dry_run:
         try:
-            duration = final_metrics.get("total_duration_seconds", 0)
-            duration_label = f"{duration/60:.1f}min" if duration >= 60 else f"{duration:.0f}s"
-            summary_lines = [
-                "[Quaid] 🧹 Nightly Janitor Complete",
-                f"Duration: {duration_label}",
-                f"LLM calls: {final_metrics.get('llm_calls', 0)}",
-                f"Errors: {final_metrics.get('errors', 0)}",
-                "",
-                "Changes:",
-                f"- reviewed: {applied_changes.get('memories_reviewed', 0)}",
-                f"- merged: {applied_changes.get('duplicates_merged', 0)}",
-                f"- contradictions found: {applied_changes.get('contradictions_found', 0)}",
-                f"- contradictions resolved: {applied_changes.get('contradictions_resolved', 0)}",
-                f"- decayed: {applied_changes.get('memories_decayed', 0)}",
-                f"- deleted_by_decay: {applied_changes.get('memories_deleted_by_decay', 0)}",
-            ]
-            # Always include full contradiction decision details.
-            contradiction_findings = applied_changes.get("contradiction_findings") or []
-            contradiction_decisions = applied_changes.get("contradiction_decisions") or []
-            if contradiction_findings or contradiction_decisions:
-                summary_lines.append("")
-                summary_lines.append("Contradiction Details (full):")
-                for f in contradiction_findings[:10]:
-                    if isinstance(f, dict):
-                        summary_lines.append(f"- Found: \"{f.get('text_a', '')}\" ↔ \"{f.get('text_b', '')}\"")
-                        summary_lines.append(f"  Reason: {f.get('reason', '')}")
-                for d in contradiction_decisions[:15]:
-                    if isinstance(d, dict):
-                        summary_lines.append(f"- Decision: {d.get('action', 'UNKNOWN')}")
-                        summary_lines.append(f"  A: {d.get('text_a', '')}")
-                        summary_lines.append(f"  B: {d.get('text_b', '')}")
-                        summary_lines.append(f"  Why: {d.get('reason', '')}")
+            from events import emit_event, process_events
 
-            if _cfg.notifications.should_notify("janitor", detail="summary"):
-                _queue_delayed_notification("\n".join(summary_lines), kind="janitor_summary", priority="normal")
-                print("[notify] Queued janitor summary for delayed adapter delivery")
-            else:
-                print("[notify] Janitor summary suppressed by notifications config")
+            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            with graph._get_conn() as conn:
+                rows = conn.execute("""
+                    SELECT name as text
+                    FROM nodes
+                    WHERE type = 'Fact'
+                      AND created_at >= ?
+                      AND status IN ('pending', 'approved', 'active')
+                    ORDER BY created_at DESC
+                    LIMIT 25
+                """, (today_start,)).fetchall()
+            today_memories = [{"text": str(r["text"]), "category": "fact"} for r in rows]
 
-            # Queue daily memory digest if enabled.
-            if _cfg.notifications.should_notify("janitor", detail="summary"):
-                today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-                with graph._get_conn() as conn:
-                    rows = conn.execute("""
-                        SELECT name as text
-                        FROM nodes
-                        WHERE type = 'Fact'
-                          AND created_at >= ?
-                          AND status IN ('pending', 'approved', 'active')
-                        ORDER BY created_at DESC
-                        LIMIT 25
-                    """, (today_start,)).fetchall()
-                today_memories = [str(r["text"]) for r in rows]
-                if today_memories:
-                    digest_lines = ["[Quaid] 📚 Today's New Memories", f"Count: {len(today_memories)}", ""]
-                    for text in today_memories[:10]:
-                        digest_lines.append(f"- {text}")
-                    if len(today_memories) > 10:
-                        digest_lines.append(f"- ...and {len(today_memories)-10} more")
-                    _queue_delayed_notification("\n".join(digest_lines), kind="janitor_daily_digest", priority="low")
-                    print(f"[notify] Queued daily digest ({len(today_memories)} memories)")
-                else:
-                    print("[notify] No new memories today, skipping daily digest")
+            emit_event(
+                name="janitor.run_completed",
+                payload={
+                    "metrics": final_metrics,
+                    "applied_changes": applied_changes,
+                    "today_memories": today_memories,
+                },
+                source="janitor",
+                owner_id=_default_owner_id(),
+                priority="normal",
+            )
+            process_events(limit=1, names=["janitor.run_completed"])
+            print("[notify] Janitor completion event dispatched")
 
         except Exception as e:
-            print(f"[notify] Failed to queue delayed notifications: {e}")
+            print(f"[notify] Failed to dispatch janitor completion event: {e}")
 
     # Return metrics for programmatic use
     # WAL checkpoint at end of run to reclaim WAL file space

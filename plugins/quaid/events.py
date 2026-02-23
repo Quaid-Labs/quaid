@@ -97,6 +97,14 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
         "listenable": True,
         "delivery_mode": "active",
     },
+    {
+        "name": "janitor.run_completed",
+        "description": "Process janitor completion payload and queue user-facing notifications.",
+        "fireable": True,
+        "processable": True,
+        "listenable": True,
+        "delivery_mode": "active",
+    },
 ]
 
 
@@ -224,10 +232,46 @@ def _handle_docs_ingest_transcript(event: Event) -> Dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
+def _handle_janitor_run_completed(event: Event) -> Dict[str, Any]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    applied_changes = payload.get("applied_changes") if isinstance(payload.get("applied_changes"), dict) else {}
+    today_memories = payload.get("today_memories") if isinstance(payload.get("today_memories"), list) else []
+    try:
+        from config import get_config
+        from notify import format_janitor_summary_message, format_daily_memories_message
+
+        cfg = get_config()
+        queued = 0
+        if cfg.notifications.should_notify("janitor", detail="summary"):
+            summary = format_janitor_summary_message(metrics, applied_changes)
+            if _queue_delayed_llm_request(
+                message=summary,
+                kind="janitor_summary",
+                priority="normal",
+                source="event.janitor.run_completed",
+            ):
+                queued += 1
+
+            digest = format_daily_memories_message(today_memories)
+            if digest and _queue_delayed_llm_request(
+                message=digest,
+                kind="janitor_daily_digest",
+                priority="low",
+                source="event.janitor.run_completed",
+            ):
+                queued += 1
+
+        return {"status": "processed", "queued": queued}
+    except Exception as e:  # pragma: no cover
+        return {"status": "failed", "error": str(e)}
+
+
 EVENT_HANDLERS: Dict[str, EventHandler] = {
     "notification.delayed": _handle_delayed_notification,
     "memory.force_compaction": _handle_force_compaction,
     "docs.ingest_transcript": _handle_docs_ingest_transcript,
+    "janitor.run_completed": _handle_janitor_run_completed,
     "session.new": _handle_session_lifecycle,
     "session.reset": _handle_session_lifecycle,
     "session.compaction": _handle_session_lifecycle,

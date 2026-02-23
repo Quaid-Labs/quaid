@@ -59,6 +59,10 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 5. Mixed ownership in notification/report routing policy
 - Files: `plugins/quaid/janitor.py`, `plugins/quaid/notify.py`, `plugins/quaid/events.py`
 - Target: lifecycle emits report events; adapter decides immediate vs delayed transport.
+- Resolution:
+  - janitor now emits `janitor.run_completed` lifecycle event with metrics/change payload
+  - event handler in `events.py` owns delayed notification queueing for summary/digest
+  - `notify.py` exposes formatter helpers so delivery transport stays outside janitor
 
 ### Additional High Priority (resolved in this pass)
 6. Split delayed-notification pipelines
@@ -149,6 +153,12 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 - Added tests for new boundary surfaces:
   - `plugins/quaid/tests/datastore-bridge.test.ts`
   - `plugins/quaid/tests/test_docs_ingest.py`
+  - `plugins/quaid/tests/test_events.py` janitor completion event routing
+  - `plugins/quaid/tests/test_janitor_lifecycle.py` lifecycle parallel run surface
+- Added lifecycle dry-run parallelization path:
+  - `LifecycleRegistry.run_many(...)` in `plugins/quaid/janitor_lifecycle.py`
+  - janitor uses parallel prepass for workspace/docs/snippets/journal during `--task all --dry-run`
+  - `docs_rag` lifecycle routine now honors dry-run by skipping reindex mutation path
 
 ## Boundary Scan Snapshot (post-pass)
 - `adapter.ts`: only one `callPython(...)` remains (bridge implementation); no direct handler call-site leakage.
@@ -163,4 +173,4 @@ These are expected and not lifecycle/datastore boundary leaks.
 - No docs/events command ownership in `memory_graph.py` CLI.
 
 ## Next Actions
-1. Add janitor task parallelization (after boundary enforcement completes).
+1. Expand safe parallel execution beyond dry-run prepass once mutation isolation is formalized per routine scope.
