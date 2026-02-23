@@ -1,7 +1,7 @@
 # 012: Deep Boundary Pass (Post-Refactor)
 
 Date: 2026-02-23
-Status: Accepted (tracking queue)
+Status: Accepted (phase 2 applied; phase 3 queued)
 
 ## Scope
 Deep audit of boundary ownership after the orchestrator split and janitor lifecycle extraction.
@@ -15,18 +15,20 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 
 ## Findings
 
-### High Priority
-1. Adapter still owns Python datastore bridge wiring
+### High Priority (now resolved in this pass)
+1. Adapter-owned Python datastore bridge calls in handlers
 - File: `plugins/quaid/adapters/openclaw/adapter.ts`
-- Evidence: direct `callPython("search"|"store"|"create-edge"|...)` calls.
+- Previous evidence: direct `callPython("search"|"store"|"create-edge"|...)` calls.
+- Resolution: introduced `plugins/quaid/core/datastore-bridge.ts` and migrated handler calls to `datastoreBridge`.
 - Risk: adapter knows datastore verbs and payload shape, reducing portability.
-- Target: move bridge verbs behind core ports (`runRecall`, `runWrite`, `runStats`, `runForget`).
+- Follow-up: move to richer core ports (`runRecall`, `runWrite`, `runStats`, `runForget`) with host-agnostic envelopes.
 
-2. Adapter still owns doc-ingestion orchestration hook
+2. Adapter-owned transcript docs update logic
 - File: `plugins/quaid/adapters/openclaw/adapter.ts`
-- Evidence: `updateDocsFromTranscript(...)` is still called from adapter events.
+- Previous evidence: full stale-doc check + transcript update orchestration in adapter.
+- Resolution: moved orchestration into `plugins/quaid/docs_ingest.py`; adapter now calls `callDocsIngestPipeline(...)`.
 - Risk: ingestion policy drift by adapter/runtime.
-- Target: move to ingestor/lifecycle entrypoint, adapter emits only trigger metadata.
+- Follow-up: emit lifecycle event instead of direct ingest invocation from adapter.
 
 ### Medium Priority
 3. Lifecycle still couples to adapter for path/provider resolution
@@ -51,8 +53,22 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `plugins/quaid/tests/test_janitor_lifecycle.py`
 - Added E2E matrix path timeout guard to prevent hanging full suites:
   - `plugins/quaid/scripts/run-quaid-e2e-matrix.sh`
+- Added core datastore bridge and migrated adapter handler calls:
+  - `plugins/quaid/core/datastore-bridge.ts`
+  - adapter now routes memory bridge operations via `datastoreBridge`.
+- Added docs ingest pipeline entrypoint and adapter integration:
+  - `plugins/quaid/docs_ingest.py`
+  - adapter uses `callDocsIngestPipeline(...)`.
+- Added tests for new boundary surfaces:
+  - `plugins/quaid/tests/datastore-bridge.test.ts`
+  - `plugins/quaid/tests/test_docs_ingest.py`
+
+## Boundary Scan Snapshot (post-pass)
+- `adapter.ts`: only one `callPython(...)` remains (bridge implementation); no direct call sites in handlers.
+- Remaining cross-layer coupling is now concentrated in Python modules that still import `lib.adapter.get_adapter()`:
+  - `janitor.py`, `llm_clients.py`, `docs_rag.py`, `docs_registry.py`, `project_updater.py`, `soul_snippets.py`, `workspace_audit.py`, `memory_graph.py`, `extract.py`.
 
 ## Next Actions
-1. Add core bridge ports and remove direct `callPython(...)` usage from adapter handlers.
-2. Move `updateDocsFromTranscript` into ingestor/lifecycle and expose one adapter trigger method.
-3. Add runtime/provider context object injected into lifecycle/datastore modules (no direct adapter imports).
+1. Add runtime/provider context object injected into lifecycle/datastore modules (remove direct `get_adapter()` imports).
+2. Convert adapter-triggered docs ingest into lifecycle event dispatch + handler.
+3. Expand janitor lifecycle registry beyond `rag` (workspace/docs/snippets/journal).

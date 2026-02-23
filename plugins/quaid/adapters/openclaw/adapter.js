@@ -8,6 +8,7 @@ import { queueDelayedRequest, flushDelayedNotificationsToRequestQueue } from "./
 import { createKnowledgeEngine } from "../../orchestrator/default-orchestrator.js";
 import { createDataWriteEngine } from "../../core/data-writers.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
+import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 const PLUGIN_DIR = __dirname;
 function _resolveWorkspace() {
   const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
@@ -445,6 +446,7 @@ async function callPython(command, args = []) {
     });
   });
 }
+const datastoreBridge = createDatastoreBridge(callPython);
 const _memoryNotes = /* @__PURE__ */ new Map();
 const NOTES_DIR = QUAID_NOTES_DIR;
 function getNotesPath(sessionId) {
@@ -657,6 +659,7 @@ function maybeForceCompactionAfterTimeout(sessionId) {
   }
 }
 const DOCS_UPDATER = path.join(WORKSPACE, "plugins/quaid/docs_updater.py");
+const DOCS_INGEST = path.join(WORKSPACE, "plugins/quaid/docs_ingest.py");
 const DOCS_RAG = path.join(WORKSPACE, "plugins/quaid/docs_rag.py");
 const DOCS_REGISTRY = path.join(WORKSPACE, "plugins/quaid/docs_registry.py");
 const PROJECT_UPDATER = path.join(WORKSPACE, "plugins/quaid/project_updater.py");
@@ -978,6 +981,64 @@ async function callDocsUpdater(command, args = []) {
     ...apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}
   });
 }
+async function callDocsIngestPipeline(opts) {
+  const tmpPath = path.join(QUAID_TMP_DIR, `docs-ingest-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  fs.writeFileSync(tmpPath, opts.transcript, { mode: 384 });
+  try {
+    const args = ["--transcript", tmpPath, "--label", opts.label, "--json"];
+    if (opts.sessionId) {
+      args.push("--session-id", opts.sessionId);
+    }
+    const output = await new Promise((resolve, reject) => {
+      const proc = spawn("python3", [DOCS_INGEST, ...args], {
+        cwd: WORKSPACE,
+        env: {
+          ...process.env,
+          QUAID_HOME: WORKSPACE,
+          CLAWDBOT_WORKSPACE: WORKSPACE
+        }
+      });
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+      const timeoutMs = 3e5;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        proc.kill("SIGTERM");
+        reject(new Error(`docs_ingest timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+      proc.stdout.on("data", (data) => {
+        stdout += data;
+      });
+      proc.stderr.on("data", (data) => {
+        stderr += data;
+      });
+      proc.on("close", (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          reject(new Error(`docs_ingest error: ${stderr || stdout}`));
+        }
+      });
+      proc.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    return JSON.parse(output || "{}");
+  } finally {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+    }
+  }
+}
 async function callDocsRag(command, args = []) {
   return _spawnWithTimeout(DOCS_RAG, command, args, "docs_rag", {
     QUAID_HOME: WORKSPACE,
@@ -1294,58 +1355,26 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
     console.log(`[quaid] ${label}: no transcript for doc update`);
     return;
   }
-  let staleDocs = [];
   try {
-    const stalenessJson = await callDocsUpdater("check", ["--json"]);
-    if (stalenessJson) {
-      const stale = JSON.parse(stalenessJson);
-      staleDocs = Object.keys(stale);
-    }
-  } catch {
-  }
-  if (staleDocs.length === 0) {
-    console.log(`[quaid] ${label}: all docs up-to-date`);
-    return;
-  }
-  console.log(`[quaid] ${label}: ${staleDocs.length} stale doc(s) detected - updating before context is lost...`);
-  for (const doc of staleDocs.slice(0, 3)) {
-    console.log(`[quaid]   \u2022 ${doc}`);
-  }
-  const tmpPath = path.join(QUAID_TMP_DIR, `doc-update-transcript-${Date.now()}.txt`);
-  fs.writeFileSync(tmpPath, fullTranscript);
-  try {
-    const maxDocs = memConfig.docs?.maxDocsPerUpdate || 3;
-    console.log(`[quaid] ${label}: calling Opus to update docs (this may take a moment)...`);
+    console.log(`[quaid] ${label}: running docs ingest pipeline...`);
     const startTime = Date.now();
-    const output = await callDocsUpdater("update-from-transcript", [
-      "--transcript",
-      tmpPath,
-      "--apply",
-      "--max-docs",
-      String(maxDocs)
-    ]);
+    const result = await callDocsIngestPipeline({ transcript: fullTranscript, label, sessionId });
     const elapsed = ((Date.now() - startTime) / 1e3).toFixed(1);
-    if (output && output.includes("Updated")) {
-      console.log(`[quaid] ${label}: doc update complete (${elapsed}s)`);
-      const updatedMatches = output.match(/Updated ([^\s]+)/g);
-      const updatedDocs = [];
-      if (updatedMatches) {
-        for (const m of updatedMatches) {
-          const docName = m.replace("Updated ", "");
-          console.log(`[quaid]   \u2713 ${docName}`);
-          updatedDocs.push(docName);
-        }
-      }
-    } else {
-      console.log(`[quaid] ${label}: no docs updated (${elapsed}s)`);
+    if (result.status === "up_to_date") {
+      console.log(`[quaid] ${label}: all docs up-to-date (${elapsed}s)`);
+      return;
     }
+    if (result.status === "updated") {
+      console.log(`[quaid] ${label}: docs updated (${result.updatedDocs || 0}/${result.staleDocs || 0}) (${elapsed}s)`);
+      return;
+    }
+    if (result.status === "disabled" || result.status === "skipped") {
+      console.log(`[quaid] ${label}: docs ingest skipped (${result.message || "disabled"})`);
+      return;
+    }
+    console.log(`[quaid] ${label}: docs ingest finished (${elapsed}s)`);
   } catch (err) {
     console.error(`[quaid] ${label} doc update failed:`, err.message);
-  } finally {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-    }
   }
 }
 function isLowInformationEntityNode(result) {
@@ -1375,7 +1404,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
       if (dateTo) {
         args.push("--date-to", dateTo);
       }
-      const output2 = await callPython("search", args);
+      const output2 = await datastoreBridge.search(args);
       const results2 = [];
       for (const line of output2.split("\n")) {
         const match = line.match(/\[(\d+\.\d+)\]\s+\[(\w+)\](?:\([^)]*\))?(?:\[[^\]]*\])*\[C:([\d.]+)\]\s*(.+?)(?:\s*\|ID:([^|]+))?(?:\|T:([^|]*))?(?:\|VF:([^|]*))?(?:\|VU:([^|]*))?(?:\|P:([^|]*))?(?:\|O:([^|]*))?(?:\|ST:(.*))?$/);
@@ -1402,7 +1431,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
       args.push("--depth", String(graphDepth));
     }
     args.push("--json");
-    const output = await callPython("search-graph-aware", args);
+    const output = await datastoreBridge.searchGraphAware(args);
     const results = [];
     try {
       const parsed = JSON.parse(output);
@@ -1591,7 +1620,7 @@ const dataWriteEngine = createDataWriteEngine({
         if (payload.knowledgeType) args.push("--knowledge-type", payload.knowledgeType);
         if (payload.sourceType) args.push("--source-type", payload.sourceType);
         if (payload.isTechnical) args.push("--is-technical");
-        const output = await callPython("store", args);
+        const output = await datastoreBridge.store(args);
         const parsed = parseStoreOutput(output);
         if (!parsed) {
           return { status: "failed", error: "Unrecognized store output", details: { output: output.slice(0, 200) } };
@@ -1623,7 +1652,7 @@ const dataWriteEngine = createDataWriteEngine({
         if (payload.createMissing !== false) {
           args.push("--create-missing");
         }
-        const output = await callPython("create-edge", args);
+        const output = await datastoreBridge.createEdge(args);
         const parsed = JSON.parse(output || "{}");
         const status = String(parsed?.status || "").toLowerCase();
         if (status === "created") {
@@ -1679,7 +1708,7 @@ async function store(text, category = "fact", sessionId, extractionConfidence = 
 }
 async function getStats() {
   try {
-    const output = await callPython("stats");
+    const output = await datastoreBridge.stats();
     return JSON.parse(output);
   } catch (err) {
     console.error("[quaid] stats error:", err.message);
@@ -2411,13 +2440,13 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             try {
               const { query, memoryId } = params || {};
               if (memoryId) {
-                await callPython("forget", ["--id", memoryId]);
+                await datastoreBridge.forget(["--id", memoryId]);
                 return {
                   content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
                   details: { action: "deleted", id: memoryId }
                 };
               } else if (query) {
-                await callPython("forget", [query]);
+                await datastoreBridge.forget([query]);
                 return {
                   content: [{ type: "text", text: `Deleted memories matching: "${query}"` }],
                   details: { action: "deleted", query }
@@ -2766,7 +2795,7 @@ ${truncated}` }],
                 }
               }
               try {
-                const factsOutput = await callPython("search", [
+                const factsOutput = await datastoreBridge.search([
                   "*",
                   "--session-id",
                   sid,

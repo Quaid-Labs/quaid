@@ -4,6 +4,7 @@ export const RUNTIME_PAIRS = [
   ["orchestrator/default-orchestrator.ts", "orchestrator/default-orchestrator.js"],
   ["adapters/openclaw/adapter.ts", "adapters/openclaw/adapter.js"],
   ["core/knowledge-stores.ts", "core/knowledge-stores.js"],
+  ["core/datastore-bridge.ts", "core/datastore-bridge.js"],
   ["core/data-writers.ts", "core/data-writers.js"],
   ["core/project-catalog.ts", "core/project-catalog.js"],
   ["core/session-timeout.ts", "core/session-timeout.js"],

@@ -9,6 +9,7 @@ It reflects broad areas of active focus, not delivery guarantees.
   - Continue hardening extraction, recall, and janitor paths.
   - Reduce failure ambiguity with better diagnostics and test isolation.
   - Keep OpenClaw integration stable as the primary production path.
+  - Parallelize janitor task execution after architectural boundary enforcement is complete.
 
 - **Benchmark rigor**
   - Keep LoCoMo runs reproducible and current.
