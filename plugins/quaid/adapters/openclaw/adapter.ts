@@ -121,6 +121,13 @@ function isPreInjectionPassEnabled(): boolean {
   return true;
 }
 
+function getCaptureTimeoutMinutes(): number {
+  const capture = getMemoryConfig().capture || {};
+  const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
+  const num = Number(raw);
+  return Number.isFinite(num) ? Math.max(0, Math.floor(num)) : 120;
+}
+
 function isProjectOrTechnicalQuery(query: string): boolean {
   const q = String(query || "").toLowerCase();
   return /(project|recipe app|recipe-app|portfolio|frontend|backend|middleware|api|graphql|rest|schema|table|database|docker|deployment|test suite|tests|version|logging|observability|auth|authorization|rate limit|bug bash|security|sql injection)/i.test(q);
@@ -683,6 +690,58 @@ function getActiveSessionFileFromSessionsJson(): { sessionId?: string; sessionFi
     return { sessionId, sessionFile };
   } catch {
     return {};
+  }
+}
+
+function resolveSessionKeyForCompaction(sessionId?: string): string | null {
+  try {
+    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    const raw = fs.readFileSync(sessionsPath, "utf8");
+    const data = JSON.parse(raw);
+    const entries = Object.entries(data || {}).filter(([_, v]) => v && typeof v === "object") as Array<[string, any]>;
+    if (!entries.length) return null;
+    if (sessionId) {
+      for (const [key, entry] of entries) {
+        if (String(entry?.sessionId || "").trim() === String(sessionId).trim()) {
+          return key;
+        }
+      }
+    }
+    if (entries.some(([k]) => k === "agent:main:main")) {
+      return "agent:main:main";
+    }
+    return entries[0][0];
+  } catch {
+    return null;
+  }
+}
+
+function maybeForceCompactionAfterTimeout(sessionId?: string): void {
+  const captureCfg = getMemoryConfig().capture || {};
+  const enabled = Boolean(
+    captureCfg.autoCompactionOnTimeout ??
+    captureCfg.auto_compaction_on_timeout ??
+    true
+  );
+  if (!enabled) return;
+  const key = resolveSessionKeyForCompaction(sessionId);
+  if (!key) {
+    console.warn(`[quaid][timeout] auto-compaction skipped: could not resolve session key (session=${sessionId || "unknown"})`);
+    return;
+  }
+  try {
+    const out = execSync(
+      `openclaw gateway call sessions.compact --json --params '${JSON.stringify({ key })}'`,
+      { encoding: "utf-8", timeout: 20_000 }
+    );
+    const parsed = JSON.parse(String(out || "{}"));
+    if (parsed?.ok) {
+      console.log(`[quaid][timeout] auto-compaction requested for key=${key} (compacted=${String(parsed?.compacted)})`);
+    } else {
+      console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
+    }
+  } catch (err: unknown) {
+    console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String((err as Error)?.message || err)}`);
   }
 }
 
@@ -2525,7 +2584,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const conversationMessages = getAllConversationMessages(messages);
       if (conversationMessages.length === 0) return;
       const timeoutSessionId = ctx?.sessionId || extractSessionId(messages, ctx);
-      timeoutManager.setTimeoutMinutes(getMemoryConfig().capture?.inactivityTimeoutMinutes ?? 120);
+      timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
       timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
 
@@ -3298,7 +3357,7 @@ notify_docs_search(data['query'], data['results'])
     let extractionPromise: Promise<void> | null = null;
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
-      timeoutMinutes: getMemoryConfig().capture?.inactivityTimeoutMinutes ?? 120,
+      timeoutMinutes: getCaptureTimeoutMinutes(),
       isBootstrapOnly: isResetBootstrapOnlyConversation,
       logger: (msg: string) => console.log(msg),
       extract: async (msgs: any[], sid?: string, label?: string) => {
@@ -3897,6 +3956,10 @@ notify_memory_extraction(
         } catch (notifyErr: unknown) {
           console.log(`[quaid] Extraction notification skipped: ${(notifyErr as Error).message}`);
         }
+      }
+
+      if (triggerType === "timeout") {
+        maybeForceCompactionAfterTimeout(sessionId);
       }
 
       // Write soul snippets to *.snippets.md files (fail-safe: never blocks fact extraction)

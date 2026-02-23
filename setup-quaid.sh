@@ -283,6 +283,7 @@ NOTIFICATION_LEVEL="normal"
 NOTIF_JANITOR="summary"
 NOTIF_EXTRACTION="summary"
 NOTIF_RETRIEVAL="off"
+AUTO_COMPACTION_ON_TIMEOUT=true
 
 # =============================================================================
 # Step 1: Welcome & Pre-flight
@@ -712,6 +713,16 @@ step3_models() {
 
     echo ""
     info "Models: ${HIGH_MODEL} (high) + ${LOW_MODEL} (low) via ${provider_key}"
+
+    # --- Notification verbosity ---
+    echo ""
+    if confirm "Do you want to trade off a little less quality for a LOT of savings by auto-compacting after timeout memory extraction? [Y/n]"; then
+        AUTO_COMPACTION_ON_TIMEOUT=true
+        info "Timeout auto-compaction: enabled (recommended)"
+    else
+        AUTO_COMPACTION_ON_TIMEOUT=false
+        warn "Timeout auto-compaction: disabled"
+    fi
 
     # --- Notification verbosity ---
     echo ""
@@ -1303,6 +1314,8 @@ _write_config() {
   "capture": {
     "enabled": true,
     "strictness": "high",
+    "inactivityTimeoutMinutes": 120,
+    "autoCompactionOnTimeout": ${AUTO_COMPACTION_ON_TIMEOUT},
     "skipPatterns": ["^(thanks|ok|sure|yes|no)$", "^(hi|hello|hey)\\\\b"]
   },
   "decay": {

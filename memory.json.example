@@ -41,11 +41,13 @@
   "capture": {
     "enabled": true,
     "strictness": "high",
+    "inactivityTimeoutMinutes": 120,
+    "autoCompactionOnTimeout": true,
     "skipPatterns": [
       "^(thanks|ok|sure|yes|no)$",
       "^(hi|hello|hey)\\b"
     ],
-    "_notes": "strictness: high = only clear facts, medium = default, low = capture more. skipPatterns: regex patterns to skip during extraction."
+    "_notes": "strictness: high = only clear facts, medium = default, low = capture more. inactivityTimeoutMinutes: extract after inactivity. autoCompactionOnTimeout: after timeout extraction, compact session to reduce token usage. skipPatterns: regex patterns to skip during extraction."
   },
 
   "decay": {
