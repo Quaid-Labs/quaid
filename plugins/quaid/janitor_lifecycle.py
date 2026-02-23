@@ -121,6 +121,7 @@ def build_default_registry() -> LifecycleRegistry:
         ("docs_updater", ["docs_staleness", "docs_cleanup"]),
         ("soul_snippets", ["snippets", "journal"]),
         ("docs_rag", ["rag"]),
+        ("memory_quality", ["memory_dedup_review"]),
         ("memory_decay", ["memory_decay", "memory_decay_review"]),
         ("memory_graph", ["datastore_cleanup"]),
     ]

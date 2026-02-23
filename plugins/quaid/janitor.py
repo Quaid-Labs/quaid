@@ -2972,23 +2972,24 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 print("[Task 2b: Review Dedup Rejections] SKIPPED — pipeline aborted\n")
             else:
                 print("[Task 2b: Review Dedup Rejections - Opus API]")
-
-                try:
-                    dedup_review_result = review_dedup_rejections(graph, metrics, dry_run=dry_run)
-
-                    applied_changes["dedup_reviewed"] = dedup_review_result["reviewed"]
-                    applied_changes["dedup_confirmed"] = dedup_review_result["confirmed"]
-                    applied_changes["dedup_reversed"] = dedup_review_result["reversed"]
-
-                    print(f"  Reviewed: {dedup_review_result['reviewed']}")
-                    print(f"  Confirmed: {dedup_review_result['confirmed']}")
-                    print(f"  Reversed (restored): {dedup_review_result['reversed']}")
-                except RuntimeError as e:
-                    print(f"  Opus API unavailable: {e}")
-                    print("  ABORTING memory pipeline — facts will remain as pending")
-                    metrics.add_error(f"Dedup review failed (API error): {e}")
+                metrics.start_task("dedup_review")
+                lifecycle_result = _LIFECYCLE_REGISTRY.run(
+                    "memory_dedup_review",
+                    RoutineContext(cfg=_cfg, dry_run=dry_run, workspace=_workspace(), graph=graph),
+                )
+                for line in lifecycle_result.logs:
+                    print(f"  {line}")
+                for err in lifecycle_result.errors:
+                    print(f"  {err}")
+                    metrics.add_error(err)
                     memory_pipeline_ok = False
-
+                applied_changes["dedup_reviewed"] = lifecycle_result.metrics.get("dedup_reviewed", 0)
+                applied_changes["dedup_confirmed"] = lifecycle_result.metrics.get("dedup_confirmed", 0)
+                applied_changes["dedup_reversed"] = lifecycle_result.metrics.get("dedup_reversed", 0)
+                print(f"  Reviewed: {applied_changes['dedup_reviewed']}")
+                print(f"  Confirmed: {applied_changes['dedup_confirmed']}")
+                print(f"  Reversed (restored): {applied_changes['dedup_reversed']}")
+                metrics.end_task("dedup_review")
                 print(f"Task completed in {metrics.task_duration('dedup_review'):.2f}s\n")
 
         # --- Tasks 3+4: Shared recall pass, then dedup + contradiction ---

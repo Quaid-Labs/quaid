@@ -171,6 +171,12 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
     - `plugins/quaid/janitor.py` Task 5/5b now execute through lifecycle routines
       instead of inline decay business logic
     - `plugins/quaid/janitor_lifecycle.py` now registers `memory_decay` routines
+  - dedup-review ownership moved into datastore lifecycle module:
+    - added `plugins/quaid/memory_quality.py` with datastore-owned routine
+      `memory_dedup_review`
+    - `plugins/quaid/janitor.py` Task 2b now executes through lifecycle routine
+      instead of inline dedup-review business logic
+    - `plugins/quaid/janitor_lifecycle.py` now registers `memory_quality` routine
 - Core project catalog no longer shells to python:
   - `plugins/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:
