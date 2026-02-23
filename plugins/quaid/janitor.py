@@ -2918,39 +2918,34 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # Memory pipeline starts here. If any task (2-6) fails,
         # remaining memory tasks are skipped and graduation is blocked.
         # Infrastructure tasks (0, 0b, 1, 7, 8) still run regardless.
+        def _run_memory_graph_stage(stage: str, stage_dry_run: bool) -> Any:
+            return _LIFECYCLE_REGISTRY.run(
+                "memory_graph_maintenance",
+                RoutineContext(
+                    cfg=_cfg,
+                    dry_run=stage_dry_run,
+                    workspace=_workspace(),
+                    graph=graph,
+                    options={"subtask": stage},
+                ),
+            )
+
         if task in ("review", "all") and _system_enabled_or_skip("review", "Task 2: Review Memories") and not _skip_if_over_budget("Task 2: Review Memories", 30):
             print("[Task 2: Review Pending Memories - Opus API]")
             metrics.start_task("review")
-
-            try:
-                review_result = review_pending_memories(graph, dry_run=dry_run, metrics=metrics)
-
-                applied_changes["memories_reviewed"] = review_result["total_reviewed"]
-                applied_changes["memories_deleted"] = review_result["deleted"]
-                applied_changes["memories_fixed"] = review_result["fixed"]
-
-                # Also check for work completed today
-                today_work = get_completed_review_work_today()
-                if today_work["deleted"] > 0 or today_work["fixed"] > 0 or today_work["reviewed"] > 0:
-                    print(f"\n  Total review work completed today:")
-                    print(f"   Reviewed: {today_work['reviewed']}")
-                    print(f"   Deleted: {today_work['deleted']}")
-                    print(f"   Fixed: {today_work['fixed']}")
-
-                    applied_changes["memories_reviewed"] = max(applied_changes["memories_reviewed"], today_work["reviewed"])
-                    applied_changes["memories_deleted"] = max(applied_changes["memories_deleted"], today_work["deleted"])
-                    applied_changes["memories_fixed"] = max(applied_changes["memories_fixed"], today_work["fixed"])
-
-                print(f"Reviewed {review_result['total_reviewed']} pending memories")
-                print(f"{'Would delete' if dry_run else 'Deleted'}: {review_result['deleted']}")
-                print(f"{'Would fix' if dry_run else 'Fixed'}: {review_result['fixed']}")
-                print(f"Kept: {review_result['kept']}")
-            except RuntimeError as e:
-                print(f"  Opus API unavailable: {e}")
-                print("  ABORTING memory pipeline — facts will remain as pending")
-                metrics.add_error(f"Memory review failed (API error): {e}")
+            lifecycle_result = _run_memory_graph_stage("review", dry_run)
+            for line in lifecycle_result.logs:
+                print(f"  {line}")
+            for err in lifecycle_result.errors:
+                print(f"  {err}")
+                metrics.add_error(err)
                 memory_pipeline_ok = False
-
+            applied_changes["memories_reviewed"] = lifecycle_result.metrics.get("memories_reviewed", 0)
+            applied_changes["memories_deleted"] = lifecycle_result.metrics.get("memories_deleted", 0)
+            applied_changes["memories_fixed"] = lifecycle_result.metrics.get("memories_fixed", 0)
+            print(f"  Reviewed: {applied_changes['memories_reviewed']}")
+            print(f"  {'Would delete' if dry_run else 'Deleted'}: {applied_changes['memories_deleted']}")
+            print(f"  {'Would fix' if dry_run else 'Fixed'}: {applied_changes['memories_fixed']}")
             metrics.end_task("review")
             print(f"Task completed in {metrics.task_duration('review'):.2f}s\n")
 
@@ -2960,10 +2955,16 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 print("[Task 2a: Resolve Temporal References] SKIPPED — pipeline aborted\n")
             else:
                 print("[Task 2a: Resolve Temporal References]")
-                temporal_result = resolve_temporal_references(graph, dry_run=dry_run, metrics=metrics)
-                applied_changes["temporal_found"] = temporal_result["found"]
-                applied_changes["temporal_fixed"] = temporal_result["fixed"]
-                print(f"  Found: {temporal_result['found']}, Fixed: {temporal_result['fixed']}, Skipped: {temporal_result['skipped']}")
+                metrics.start_task("temporal_resolution")
+                lifecycle_result = _run_memory_graph_stage("temporal", dry_run)
+                for err in lifecycle_result.errors:
+                    print(f"  {err}")
+                    metrics.add_error(err)
+                    memory_pipeline_ok = False
+                applied_changes["temporal_found"] = lifecycle_result.metrics.get("temporal_found", 0)
+                applied_changes["temporal_fixed"] = lifecycle_result.metrics.get("temporal_fixed", 0)
+                print(f"  Found: {applied_changes['temporal_found']}, Fixed: {applied_changes['temporal_fixed']}")
+                metrics.end_task("temporal_resolution")
                 print(f"Task completed in {metrics.task_duration('temporal_resolution'):.2f}s\n")
 
         # --- Task 2b: Review Dedup Rejections (Opus) ---
@@ -2973,10 +2974,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             else:
                 print("[Task 2b: Review Dedup Rejections - Opus API]")
                 metrics.start_task("dedup_review")
-                lifecycle_result = _LIFECYCLE_REGISTRY.run(
-                    "memory_dedup_review",
-                    RoutineContext(cfg=_cfg, dry_run=dry_run, workspace=_workspace(), graph=graph),
-                )
+                lifecycle_result = _run_memory_graph_stage("dedup_review", dry_run)
                 for line in lifecycle_result.logs:
                     print(f"  {line}")
                 for err in lifecycle_result.errors:
@@ -2992,107 +2990,42 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.end_task("dedup_review")
                 print(f"Task completed in {metrics.task_duration('dedup_review'):.2f}s\n")
 
-        # --- Tasks 3+4: Shared recall pass, then dedup + contradiction ---
-        pair_buckets = None
-        if task in ("duplicates", "contradictions", "all") and _system_enabled_or_skip("duplicates", "Tasks 3-4: Dedup+Contradictions") and not _skip_if_over_budget("Tasks 3-4: Dedup+Contradictions", 30):
-            if task == "all" and not memory_pipeline_ok:
-                print("[Tasks 3-4b: Dedup + Contradictions] SKIPPED — pipeline aborted\n")
-            else:
-                print("[Recall Pass: Building candidate pairs for dedup + contradictions]")
-                _errors_before = len(metrics.errors)
-                pair_buckets = recall_similar_pairs(graph, metrics, since=last_run)
-                print(f"Recall pass completed in {metrics.task_duration('recall_pass'):.2f}s\n")
-
         if task in ("duplicates", "all") and _system_enabled_or_skip("duplicates", "Task 3: Find Near-Duplicates"):
             if task == "all" and not memory_pipeline_ok:
-                pass  # Already printed skip message above
+                print("[Task 3: Find Near-Duplicates] SKIPPED — pipeline aborted\n")
             else:
                 print("[Task 3: Find Near-Duplicates]")
-                dup_candidates = pair_buckets["duplicates"] if pair_buckets else []
-                dups = find_duplicates_from_pairs(dup_candidates, metrics)
-                print(f"Found {len(dups)} potential duplicates\n")
-
-                merges_applied = 0
-                merged_ids = set()  # Track already-merged node IDs
                 dedup_apply_allowed = _can_apply_scope(
                     "destructive_memory_ops",
                     "dedup merge operations"
                 )
-                for dup in dups:
-                    # Skip pairs where either node was already merged this run
-                    if dup["id_a"] in merged_ids or dup["id_b"] in merged_ids:
-                        continue
-
-                    print(f"  Similarity: {dup['similarity']}")
-                    print(f"    A: {dup['text_a'][:70]}...")
-                    print(f"    B: {dup['text_b'][:70]}...")
-
-                    suggestion = dup.get("suggestion", {})
-                    if suggestion.get("action") == "merge":
-                        merged_text = suggestion.get("merged_text", "")
-                        print(f"    -> MERGE: {merged_text[:70]}...")
-                        if (not dry_run) and dedup_apply_allowed and merged_text:
-                            try:
-                                id_a, id_b = dup["id_a"], dup["id_b"]
-                                _merge_nodes_into(
-                                    graph, merged_text,
-                                    [id_a, id_b],
-                                    source="dedup_merge",
-                                )
-                                _append_decision_log("dedup_merge", {
-                                    "id_a": id_a,
-                                    "id_b": id_b,
-                                    "merged_text": merged_text[:400],
-                                })
-                                merged_ids.add(id_a)
-                                merged_ids.add(id_b)
-                                merges_applied += 1
-                            except Exception as e:
-                                print(f"    ERROR merging: {e}")
-                                metrics.add_error(f"Dedup merge failed: {e}")
-                    elif suggestion.get("action") == "keep_both":
-                        print(f"    -> KEEP BOTH: {suggestion.get('reason', '')[:50]}...")
-                    print()
-
-                applied_changes["duplicates_merged"] = merges_applied
+                metrics.start_task("duplicates")
+                lifecycle_result = _run_memory_graph_stage("duplicates", dry_run or (not dedup_apply_allowed))
+                for err in lifecycle_result.errors:
+                    print(f"  {err}")
+                    metrics.add_error(err)
+                    memory_pipeline_ok = False
+                applied_changes["duplicates_merged"] = lifecycle_result.metrics.get("duplicates_merged", 0)
+                print(f"  Merged: {applied_changes['duplicates_merged']}")
+                metrics.end_task("duplicates")
                 print(f"Task completed in {metrics.task_duration('duplicates'):.2f}s\n")
 
         if task in ("contradictions", "all") and _system_enabled_or_skip("contradictions", "Task 4: Contradictions"):
             if task == "all" and not memory_pipeline_ok:
-                pass  # Already printed skip message above
+                print("[Task 4: Verify Contradictions] SKIPPED — pipeline aborted\n")
             else:
                 print("[Task 4: Verify Contradictions]")
-                contradiction_candidates = pair_buckets["contradictions"] if pair_buckets else []
-                _errors_before = len(metrics.errors)  # Snapshot errors just before this task
-                contradictions = find_contradictions_from_pairs(contradiction_candidates, metrics, dry_run=dry_run)
-
-                applied_changes["contradictions_found"] = len(contradictions)
-                if contradictions:
-                    applied_changes["contradiction_findings"] = [
-                        {
-                            "text_a": c.get("text_a", ""),
-                            "text_b": c.get("text_b", ""),
-                            "reason": c.get("explanation", ""),
-                        }
-                        for c in contradictions[:25]
-                    ]
-
-                for contradiction in contradictions:
-                    print(f"  CONTRADICTION FOUND:")
-                    print(f"    A: {contradiction['text_a'][:60]}...")
-                    print(f"    B: {contradiction['text_b'][:60]}...")
-                    print(f"    Reason: {contradiction.get('explanation', '')[:50]}...")
-                    print()
-                    _append_decision_log("contradiction_found", {
-                        "text_a": contradiction.get("text_a", ""),
-                        "text_b": contradiction.get("text_b", ""),
-                        "reason": contradiction.get("explanation", ""),
-                    })
-
-                # Check if batch functions added errors
-                if len(metrics.errors) > _errors_before:
+                metrics.start_task("contradictions")
+                lifecycle_result = _run_memory_graph_stage("contradictions", dry_run)
+                for err in lifecycle_result.errors:
+                    print(f"  {err}")
+                    metrics.add_error(err)
                     memory_pipeline_ok = False
-
+                applied_changes["contradictions_found"] = lifecycle_result.metrics.get("contradictions_found", 0)
+                if lifecycle_result.data.get("contradiction_findings"):
+                    applied_changes["contradiction_findings"] = lifecycle_result.data.get("contradiction_findings")
+                print(f"  Found: {applied_changes['contradictions_found']}")
+                metrics.end_task("contradictions")
                 print(f"Task completed in {metrics.task_duration('contradictions'):.2f}s\n")
 
                 # --- Task 4b: Resolve Contradictions (Opus) ---
@@ -3104,25 +3037,24 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         "destructive_memory_ops",
                         "contradiction resolution operations"
                     )
-                    try:
-                        resolution_result = resolve_contradictions_with_opus(
-                            graph,
-                            metrics,
-                            dry_run=(dry_run or (not contradiction_apply_allowed))
-                        )
-                        applied_changes["contradictions_resolved"] = resolution_result["resolved"]
-                        applied_changes["contradictions_false_positive"] = resolution_result["false_positive"]
-                        applied_changes["contradictions_merged"] = resolution_result["merged"]
-                        if resolution_result.get("decisions"):
-                            applied_changes["contradiction_decisions"] = resolution_result["decisions"][:50]
-                        print(f"  Resolved: {resolution_result['resolved']}, "
-                              f"False positives: {resolution_result['false_positive']}, "
-                              f"Merged: {resolution_result['merged']}")
-                    except RuntimeError as e:
-                        print(f"  Opus API unavailable: {e}")
-                        print("  ABORTING memory pipeline — facts will remain as pending")
-                        metrics.add_error(f"Contradiction resolution failed (API error): {e}")
+                    metrics.start_task("contradiction_resolution")
+                    lifecycle_result = _run_memory_graph_stage(
+                        "contradictions_resolve",
+                        dry_run or (not contradiction_apply_allowed),
+                    )
+                    for err in lifecycle_result.errors:
+                        print(f"  {err}")
+                        metrics.add_error(err)
                         memory_pipeline_ok = False
+                    applied_changes["contradictions_resolved"] = lifecycle_result.metrics.get("contradictions_resolved", 0)
+                    applied_changes["contradictions_false_positive"] = lifecycle_result.metrics.get("contradictions_false_positive", 0)
+                    applied_changes["contradictions_merged"] = lifecycle_result.metrics.get("contradictions_merged", 0)
+                    if lifecycle_result.data.get("contradiction_decisions"):
+                        applied_changes["contradiction_decisions"] = lifecycle_result.data.get("contradiction_decisions")
+                    print(f"  Resolved: {applied_changes['contradictions_resolved']}, "
+                          f"False positives: {applied_changes['contradictions_false_positive']}, "
+                          f"Merged: {applied_changes['contradictions_merged']}")
+                    metrics.end_task("contradiction_resolution")
                     print(f"Task completed in {metrics.task_duration('contradiction_resolution'):.2f}s\n")
 
         # --- Task 5: Confidence Decay (no LLM) ---
@@ -3137,10 +3069,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 )
                 decay_dry_run = dry_run or (not decay_apply_allowed)
                 metrics.start_task("decay")
-                lifecycle_result = _LIFECYCLE_REGISTRY.run(
-                    "memory_decay",
-                    RoutineContext(cfg=_cfg, dry_run=decay_dry_run, workspace=_workspace(), graph=graph),
-                )
+                lifecycle_result = _run_memory_graph_stage("decay", decay_dry_run)
                 for line in lifecycle_result.logs:
                     print(f"  {line}")
                 for err in lifecycle_result.errors:
@@ -3173,10 +3102,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 )
                 decay_review_dry_run = dry_run or (not decay_review_apply_allowed)
                 metrics.start_task("decay_review")
-                lifecycle_result = _LIFECYCLE_REGISTRY.run(
-                    "memory_decay_review",
-                    RoutineContext(cfg=_cfg, dry_run=decay_review_dry_run, workspace=_workspace(), graph=graph),
-                )
+                lifecycle_result = _run_memory_graph_stage("decay_review", decay_review_dry_run)
                 for line in lifecycle_result.logs:
                     print(f"  {line}")
                 for err in lifecycle_result.errors:

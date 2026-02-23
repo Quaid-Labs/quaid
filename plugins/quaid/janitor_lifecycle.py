@@ -22,6 +22,7 @@ class RoutineContext:
     force_distill: bool = False
     allow_doc_apply: Optional[Callable[[str, str], bool]] = None
     graph: Any = None
+    options: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -121,8 +122,7 @@ def build_default_registry() -> LifecycleRegistry:
         ("docs_updater", ["docs_staleness", "docs_cleanup"]),
         ("soul_snippets", ["snippets", "journal"]),
         ("docs_rag", ["rag"]),
-        ("memory_graph_quality", ["memory_dedup_review"]),
-        ("memory_graph_decay", ["memory_decay", "memory_decay_review"]),
+        ("memory_graph_pipeline", ["memory_graph_maintenance"]),
         ("memory_graph", ["datastore_cleanup"]),
     ]
 
