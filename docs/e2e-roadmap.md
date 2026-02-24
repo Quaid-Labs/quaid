@@ -76,10 +76,11 @@ Coverage requirements:
    - Added gateway restart during janitor run-write probe (cleanup apply run must still record a completed `janitor_runs` row).
    - Added migration-fixture resilience probe (legacy `janitor_runs` schema auto-migrates before run write).
    - Added registry/index drift fixture probe (`doc_registry.last_indexed_at` for seeded doc must refresh after janitor RAG).
+   - Added bounded soak mode for resilience checks (`--resilience-loops`, nightly defaults to 2 iterations).
 
 ## Backlog Order
 
 Implement next in this order:
-1. Nightly long-run soak profile (repeat resilience block N times with bounded runtime).
-2. Parallel janitor-stage stress profile (bounded stage caps + carryover invariants across repeated runs).
-3. Registry/doc-chunk path-mismatch migration fixture (absolute vs workspace-relative source paths).
+1. Parallel janitor-stage stress profile (bounded stage caps + carryover invariants across repeated runs).
+2. Registry/doc-chunk path-mismatch migration fixture (absolute vs workspace-relative source paths).
+3. Failure-injection matrix for adapter/provider outages during janitor + live-turn overlap.
