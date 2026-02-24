@@ -258,6 +258,30 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
     def llm_call(self, messages, model_tier="deep",
                  max_tokens=4000, timeout=600):
+        # Allow environment overrides for claude-code subprocess timeout.
+        # Useful for benchmark/LoCoMo lanes where fast-tier dedup/review calls
+        # may exceed conservative defaults.
+        try:
+            global_timeout = float(os.environ.get("CLAUDE_CODE_TIMEOUT_S", "0") or 0)
+        except ValueError:
+            global_timeout = 0.0
+        try:
+            fast_timeout = float(os.environ.get("CLAUDE_CODE_FAST_TIMEOUT_S", "0") or 0)
+        except ValueError:
+            fast_timeout = 0.0
+        try:
+            deep_timeout = float(os.environ.get("CLAUDE_CODE_DEEP_TIMEOUT_S", "0") or 0)
+        except ValueError:
+            deep_timeout = 0.0
+
+        effective_timeout = float(timeout)
+        if global_timeout > 0:
+            effective_timeout = max(effective_timeout, global_timeout)
+        if model_tier == "fast" and fast_timeout > 0:
+            effective_timeout = max(effective_timeout, fast_timeout)
+        if model_tier != "fast" and deep_timeout > 0:
+            effective_timeout = max(effective_timeout, deep_timeout)
+
         model_alias = self._resolve_alias(model_tier)
         system_prompt = ""
         user_message = ""
@@ -307,7 +331,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True,
-                timeout=timeout, env=env,
+                timeout=effective_timeout, env=env,
                 cwd="/tmp",  # Avoid loading CLAUDE.md project context
             )
             duration = time.time() - start_time
