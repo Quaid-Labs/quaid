@@ -98,6 +98,6 @@ Coverage requirements:
 ## Backlog Order
 
 Implement next in this order:
-1. Adapter/provider outage matrix expansion (provider timeout + malformed upstream response lanes).
-2. Outage-matrix expansion for simulated provider timeout and malformed upstream payload lanes.
-3. Wire budget-tuning script into nightly CI to auto-suggest threshold updates.
+1. Wire budget-tuning script into nightly CI to auto-suggest threshold updates.
+2. Stage-specific budget tuning from accumulated nightly history.
+3. Add regression assertions for timeout-lane behavior under janitor pressure.

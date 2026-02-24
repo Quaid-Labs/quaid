@@ -1080,6 +1080,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 
 ws = sys.argv[1]
 resilience_iter = int(sys.argv[2])
@@ -1291,6 +1293,78 @@ def _inject_gateway_down_failure_and_recover() -> None:
             "[e2e] ERROR: failure-injection probe unexpectedly succeeded while gateway was stopped"
         )
 
+def _inject_timeout_failure_and_verify_recovery() -> None:
+    # Simulate upstream timeout against a non-routable TEST-NET-3 address.
+    url = "http://203.0.113.1:81/v1/responses"
+    payload = {
+        "model": "openai-codex/gpt-5.3-codex",
+        "input": "timeout-failure probe",
+        "max_output_tokens": 8,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    failed_as_expected = False
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            _ = resp.read()
+    except Exception:
+        failed_as_expected = True
+    if not failed_as_expected:
+        raise SystemExit(
+            "[e2e] ERROR: failure-injection probe unexpectedly succeeded for timeout lane"
+        )
+
+def _inject_malformed_response_failure_and_verify_recovery() -> None:
+    class _BadJSONHandler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 (stdlib callback name)
+            try:
+                _ = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            except Exception:
+                pass
+            body = b'{"id":"resp_bad","status":"completed","output":INVALID_JSON}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):  # noqa: A003 (stdlib callback name)
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), _BadJSONHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = int(server.server_port)
+    url = f"http://127.0.0.1:{port}/v1/responses"
+    req = urllib.request.Request(
+        url,
+        data=b'{"model":"x","input":"malformed-response-probe"}',
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    failed_as_expected = False
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        try:
+            json.loads(raw)
+        except Exception:
+            failed_as_expected = True
+    except Exception:
+        failed_as_expected = True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+    if not failed_as_expected:
+        raise SystemExit(
+            "[e2e] ERROR: failure-injection probe unexpectedly parsed malformed upstream response"
+        )
+
 first = run_agent("Resilience probe turn 1: acknowledge with OK.")
 if not first:
     raise SystemExit("[e2e] ERROR: resilience turn 1 produced empty output")
@@ -1314,6 +1388,14 @@ _inject_gateway_down_failure_and_recover()
 post_gateway_down_injection = run_agent("Gateway-down recovery probe: acknowledge with OK.")
 if not post_gateway_down_injection:
     raise SystemExit("[e2e] ERROR: recovery probe failed after gateway-down injection")
+_inject_timeout_failure_and_verify_recovery()
+post_timeout_injection = run_agent("Timeout-failure recovery probe: acknowledge with OK.")
+if not post_timeout_injection:
+    raise SystemExit("[e2e] ERROR: recovery probe failed after timeout failure injection")
+_inject_malformed_response_failure_and_verify_recovery()
+post_malformed_injection = run_agent("Malformed-response recovery probe: acknowledge with OK.")
+if not post_malformed_injection:
+    raise SystemExit("[e2e] ERROR: recovery probe failed after malformed response injection")
 
 janitor_probe = _spawn_janitor_probe()
 pressure_turn = run_agent("Resilience probe turn 3 during janitor pressure: acknowledge with OK.")
