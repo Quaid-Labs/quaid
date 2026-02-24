@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Enforce subsystem import boundaries.
+"""Enforce subsystem import boundaries via an explicit allow matrix.
 
 Rules:
-- Non-core subsystems must not import each other directly.
-- `datastore` must not import `core` modules directly.
-- Cross-subsystem interaction should route through `core` services/contracts.
+- `core` is the composition root and may import all subsystems.
+- Non-core subsystems may only import approved dependencies.
+- `datastore` must not import `core`.
+- `lib` is utility-only; boundary imports from `lib` are disallowed unless
+  explicitly allowlisted as a composition exception.
 """
 
 from __future__ import annotations
@@ -14,11 +16,21 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SUBSYSTEMS = {"adaptors", "core", "datastore", "ingest", "orchestrator"}
+SUBSYSTEMS = {"adaptors", "core", "datastore", "ingest", "orchestrator", "lib"}
+ALLOWED_IMPORTS = {
+    "core": set(SUBSYSTEMS),
+    "datastore": {"datastore", "lib"},
+    "ingest": {"ingest", "core", "lib"},
+    "adaptors": {"adaptors", "core", "lib"},
+    "orchestrator": {"orchestrator", "core", "lib"},
+    "lib": {"lib"},
+}
 ALLOWLIST = {
     # Core composition points intentionally bind datastore implementations.
     ("core/lifecycle/datastore_runtime.py", "datastore"),
     ("core/services/memory_service.py", "datastore"),
+    # Adapter selection composition point.
+    ("lib/adapter.py", "adaptors"),
 }
 
 PY_IMPORT_RE = re.compile(r"^\s*from\s+([a-zA-Z_][\w\.]*)\s+import\s+|^\s*import\s+([a-zA-Z_][\w\.]*)")
@@ -71,23 +83,25 @@ def extract_targets(path: Path) -> list[str]:
 
 def check_file(path: Path) -> list[str]:
     src = subsystem_for(path)
-    if not src or src == "core":
+    if not src:
         return []
 
     rel = path.relative_to(ROOT).as_posix()
     violations: list[str] = []
+    allowed_targets = ALLOWED_IMPORTS.get(src, {src})
     for target in extract_targets(path):
         if target == src:
             continue
         if (rel, target) in ALLOWLIST:
             continue
-        if src == "datastore" and target == "core":
-            violations.append(f"{rel}: datastore must not import core directly")
-            continue
-        if target in {"adaptors", "datastore", "ingest", "orchestrator"}:
-            violations.append(
-                f"{rel}: {src} must not import {target} directly; route through core contracts/services"
-            )
+        if target not in allowed_targets:
+            if src == "datastore" and target == "core":
+                violations.append(f"{rel}: datastore must not import core directly")
+            else:
+                allow_desc = ", ".join(sorted(allowed_targets))
+                violations.append(
+                    f"{rel}: {src} must not import {target} directly (allowed: {allow_desc})"
+                )
     return violations
 
 
@@ -115,4 +129,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

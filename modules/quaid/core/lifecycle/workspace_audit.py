@@ -424,7 +424,7 @@ def apply_review_decisions(dry_run: bool = True,
 
     If decisions_data is provided, use it directly. Otherwise load from file.
     """
-    from datastore.facade import store_memory
+    from core.services.memory_service import get_memory_service
 
     if decisions_data is None:
         # Fallback: load from file
@@ -602,7 +602,7 @@ def apply_review_decisions(dry_run: bool = True,
                             default_owner = cfg.users.default_owner
                         except Exception:
                             default_owner = "default"
-                        result = store_memory(
+                        result = get_memory_service().store(
                             text=section_content[:2000],
                             category="fact",
                             source=f"workspace_audit:{filename}",
