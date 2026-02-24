@@ -104,6 +104,7 @@ Conversation messages
         +---> duplicates merged, contradictions resolved
         +---> snippets folded into SOUL.md / USER.md
         +---> journal distilled into core markdown
+        +---> datastore-owned maintenance routines executed via core lifecycle registry
         |
   [Retrieval]  Per-turn: query -> route datastores -> search -> rerank -> inject
         |
@@ -135,7 +136,7 @@ All three paths converge on the same extraction logic and produce identical resu
    - **Soul snippets**: Bullet-point observations for core markdown files
    - **Journal entries**: Reflective diary paragraphs
 
-3. **Fact storage** -- Each fact is stored via `memory_graph.store()`:
+3. **Fact storage** -- Each fact is stored via the core memory service (`core/services/memory_service.py`), whose default implementation delegates to memorydb:
    - Content hash computed (SHA256) for exact-dedup before embedding
    - Embedding generated via Ollama (local, no API cost)
    - Semantic dedup check against existing facts (cosine similarity > 0.95)
@@ -873,6 +874,6 @@ The `QUAID_OWNER` environment variable sets the owner identity for all operation
 
 ## Appendix: File Reference
 
-The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). In OpenClaw integration, `adaptors/openclaw/index.ts` is the entry shim, `adaptors/openclaw/adapter.ts` owns runtime integration, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
+The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). In OpenClaw integration, `adaptors/openclaw/index.ts` is the entry shim, `adaptors/openclaw/adapter.ts` owns runtime integration, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { queueDelayedRequest } from "./delayed-requests.js";
-import { createKnowledgeEngine } from "../../orchestrator/default-orchestrator.js";
+import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
 import { createDataWriteEngine } from "../../core/data-writers.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";

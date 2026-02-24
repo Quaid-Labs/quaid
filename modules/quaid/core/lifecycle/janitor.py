@@ -35,12 +35,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
-# Import datastore internals directly for janitor-only maintenance logic.
-from datastore.memorydb.memory_graph import get_graph
 from lib.config import get_db_path
 from core.runtime.logger import janitor_logger, rotate_logs
 from config import get_config
 from core.lifecycle.janitor_lifecycle import build_default_registry, RoutineContext
+from core.lifecycle.datastore_runtime import (
+    get_graph,
+    JanitorMetrics,
+    backfill_embeddings,
+    checkpoint_wal,
+    count_nodes_by_status,
+    get_update_check_cache,
+    get_last_run_time,
+    graduate_approved_to_active,
+    init_janitor_metadata,
+    list_recent_fact_texts,
+    record_health_snapshot,
+    record_janitor_run,
+    write_update_check_cache,
+    _is_benchmark_mode,
+)
 from core.llm.clients import (
     reset_token_usage,
     get_token_usage,
@@ -82,25 +96,6 @@ CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0  # Convert percent to de
 
 # Fixed values (not in config)
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
-
-
-
-from datastore.memorydb.maintenance_ops import (
-    JanitorMetrics,
-    backfill_embeddings,
-    checkpoint_wal,
-    count_nodes_by_status,
-    get_update_check_cache,
-    get_last_run_time,
-    graduate_approved_to_active,
-    init_janitor_metadata,
-    list_recent_fact_texts,
-    record_health_snapshot,
-    record_janitor_run,
-    write_update_check_cache,
-    _is_benchmark_mode,
-)
-
 def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
     """Run npm test for quaid plugin and report pass/fail counts."""
     metrics.start_task("tests")

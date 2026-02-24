@@ -32,14 +32,14 @@ Canonical module ownership moved out of plugin root:
   - `modules/quaid/core/docs/updater.py`
   - `modules/quaid/core/docs/project_updater.py`
 
-Plugin-root modules with these names are now compatibility shims only.
+Plugin-root compatibility shims were removed. Canonical ownership now lives only inside
+the boundary directories above.
 
-## Compatibility policy
-- Keep root shims to avoid breaking existing imports/CLI/tests.
-- Internal modules should import canonical paths (`core.*`, `ingest.*`, `datastore.*`) and not root shims.
-- Runtime script paths (adapter bridge, CLI wrapper, e2e harness) should call canonical module paths.
+## Import policy
+- Internal modules import canonical paths (`core.*`, `ingest.*`, `datastore.*`, `adaptors.*`, `orchestrator.*`).
+- Subsystems do not import sibling subsystems directly; cross-boundary calls go through core contracts/services.
+- Boundary rules are enforced by `modules/quaid/scripts/check-boundaries.py`.
 
 ## Consequences
 - Boundaries are now represented in filesystem layout.
-- Root files remain temporarily for compatibility, but no longer own logic.
-- Future cleanup can remove shims once external callers/tests fully migrate.
+- Boundary ownership now matches filesystem layout with no legacy root shims.

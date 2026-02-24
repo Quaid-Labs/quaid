@@ -268,8 +268,8 @@ class TestExtractFromTranscript:
         assert result["facts_stored"] == 0
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
-    @patch("ingest.extract.create_edge")
+    @patch("ingest.extract._memory.store")
+    @patch("ingest.extract._memory.create_edge")
     def test_basic_extraction(self, mock_edge, mock_store, mock_llm, mock_opus_response, workspace_dir):
         from ingest.extract import extract_from_transcript
 
@@ -289,7 +289,7 @@ class TestExtractFromTranscript:
         assert result["facts"][0]["status"] == "stored"
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_dry_run(self, mock_store, mock_llm, mock_opus_response):
         from ingest.extract import extract_from_transcript
 
@@ -306,7 +306,7 @@ class TestExtractFromTranscript:
         mock_store.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_duplicate_handling(self, mock_store, mock_llm, mock_opus_response):
         from ingest.extract import extract_from_transcript
 
@@ -348,7 +348,7 @@ class TestExtractFromTranscript:
         assert result["facts_stored"] == 0
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_skips_short_facts(self, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
 
@@ -369,7 +369,7 @@ class TestExtractFromTranscript:
         assert result["facts_stored"] == 1
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_confidence_mapping(self, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
 
@@ -392,7 +392,7 @@ class TestExtractFromTranscript:
         assert calls[1].kwargs["confidence"] == 0.3  # low
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_snippets_written(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
         from ingest.extract import extract_from_transcript
 
@@ -412,7 +412,7 @@ class TestExtractFromTranscript:
         assert snippet_file.exists()
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_journal_written(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
         from ingest.extract import extract_from_transcript
 
@@ -430,7 +430,7 @@ class TestExtractFromTranscript:
         assert journal_file.exists()
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_no_snippets_flag(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
         from ingest.extract import extract_from_transcript
 
@@ -449,7 +449,7 @@ class TestExtractFromTranscript:
         assert not snippet_file.exists()
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_no_journal_flag(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
         from ingest.extract import extract_from_transcript
 
@@ -467,7 +467,7 @@ class TestExtractFromTranscript:
         assert not journal_file.exists()
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_journal_array_fallback(self, mock_store, mock_llm):
         """LLM may return arrays instead of strings for journal entries."""
         from ingest.extract import extract_from_transcript
@@ -488,8 +488,8 @@ class TestExtractFromTranscript:
         assert result["journal"]["SOUL.md"] == "Paragraph one.\n\nParagraph two."
 
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
-    @patch("ingest.extract.create_edge")
+    @patch("ingest.extract._memory.store")
+    @patch("ingest.extract._memory.create_edge")
     def test_edge_failure_non_fatal(self, mock_edge, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
 
@@ -514,7 +514,7 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract._chunk_transcript_text")
     @patch("ingest.extract.call_deep_reasoning")
-    @patch("ingest.extract.store")
+    @patch("ingest.extract._memory.store")
     def test_chunk_carry_context_passed_to_later_chunks(self, mock_store, mock_llm, mock_chunk):
         from ingest.extract import extract_from_transcript
 

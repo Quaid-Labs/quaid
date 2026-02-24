@@ -22,6 +22,7 @@
     "test": "node test-runner.js",
     "test:all": "bash scripts/run-all-tests.sh --quick",
     "test:all:full": "bash scripts/run-all-tests.sh --full",
+    "check:boundaries": "python3 scripts/check-boundaries.py",
     "check:runtime-pairs": "node scripts/check-runtime-pairs.mjs",
     "check:runtime-pairs:strict": "node scripts/check-runtime-pairs.mjs --strict",
     "test:integration": "node test-runner.js tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts tests/delayed-requests.integration.test.ts",

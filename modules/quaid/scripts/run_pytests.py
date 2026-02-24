@@ -13,13 +13,16 @@ import argparse
 import concurrent.futures
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = ROOT / "tests"
+TMP_ROOT = ROOT / ".tmp" / "pytest-runs"
 
 INTEGRATION_MARK = "pytestmark = pytest.mark.integration"
 REGRESSION_MARK = "pytestmark = pytest.mark.regression"
@@ -63,7 +66,28 @@ def gather_files(mode: str) -> list[Path]:
     return out
 
 
-def run_one(file_path: Path, timeout_s: int, marker_expr: str | None = None) -> Result:
+def cleanup_stale_tmp_dirs(base: Path, older_than_hours: int = 24) -> None:
+    """Best-effort cleanup of stale per-run temp directories."""
+    if not base.exists():
+        return
+    cutoff = time.time() - (older_than_hours * 3600)
+    for child in base.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            if child.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(child, ignore_errors=True)
+        except Exception:
+            continue
+
+
+def run_one(
+    file_path: Path,
+    timeout_s: int,
+    marker_expr: str | None = None,
+    tmpdir: Path | None = None,
+) -> Result:
     rel = file_path.relative_to(ROOT)
     cmd = [
         sys.executable,
@@ -79,6 +103,11 @@ def run_one(file_path: Path, timeout_s: int, marker_expr: str | None = None) -> 
         cmd.extend(["-m", marker_expr])
     cmd.append(str(rel))
     t0 = time.time()
+    env = os.environ.copy()
+    if tmpdir is not None:
+        env["TMPDIR"] = str(tmpdir)
+        env["TMP"] = str(tmpdir)
+        env["TEMP"] = str(tmpdir)
     try:
         proc = subprocess.run(
             cmd,
@@ -86,6 +115,7 @@ def run_one(file_path: Path, timeout_s: int, marker_expr: str | None = None) -> 
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            env=env,
         )
         out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         status = "PASS" if proc.returncode == 0 else "FAIL"
@@ -112,6 +142,11 @@ def main() -> int:
     )
     parser.add_argument("--workers", type=int, default=max(1, min(8, (os.cpu_count() or 4) // 2)))
     parser.add_argument("--timeout", type=int, default=120, help="Per-file timeout in seconds")
+    parser.add_argument(
+        "--no-temp-cleanup",
+        action="store_true",
+        help="Disable stale temp cleanup and per-run temp sandboxing",
+    )
     args = parser.parse_args()
 
     files = gather_files(args.mode)
@@ -119,17 +154,30 @@ def main() -> int:
         print(f"[pytest:{args.mode}] no files found")
         return 0
 
+    run_tmpdir: Path | None = None
+    if not args.no_temp_cleanup:
+        TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        cleanup_stale_tmp_dirs(TMP_ROOT, older_than_hours=24)
+        run_tmpdir = Path(tempfile.mkdtemp(prefix="run-", dir=str(TMP_ROOT)))
+
     print(f"[pytest:{args.mode}] files={len(files)} workers={args.workers} timeout={args.timeout}s")
 
     results: list[Result] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
-        marker_expr = "adapter_openclaw" if args.mode == "adapter_openclaw" else None
-        fut_map = {ex.submit(run_one, f, args.timeout, marker_expr): f for f in files}
-        for fut in concurrent.futures.as_completed(fut_map):
-            res = fut.result()
-            results.append(res)
-            rel = res.file.relative_to(ROOT)
-            print(f"[{res.status:7}] {rel} ({res.duration_s:.1f}s)")
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
+            marker_expr = "adapter_openclaw" if args.mode == "adapter_openclaw" else None
+            fut_map = {
+                ex.submit(run_one, f, args.timeout, marker_expr, run_tmpdir): f
+                for f in files
+            }
+            for fut in concurrent.futures.as_completed(fut_map):
+                res = fut.result()
+                results.append(res)
+                rel = res.file.relative_to(ROOT)
+                print(f"[{res.status:7}] {rel} ({res.duration_s:.1f}s)")
+    finally:
+        if run_tmpdir is not None:
+            shutil.rmtree(run_tmpdir, ignore_errors=True)
 
     results.sort(key=lambda r: str(r.file))
     failed = [r for r in results if r.rc != 0]

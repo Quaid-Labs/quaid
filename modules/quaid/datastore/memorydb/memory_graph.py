@@ -82,7 +82,7 @@ _LOW_INFO_ENTITY_TEXT_RE = re.compile(r"[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-
 
 # Optional imports for LLM-verified dedup (graceful degradation if unavailable)
 try:
-    from core.llm.clients import call_fast_reasoning, parse_json_response
+    from lib.llm_clients import call_fast_reasoning, parse_json_response
     _HAS_LLM_CLIENTS = True
 except ImportError:
     _HAS_LLM_CLIENTS = False
@@ -1466,7 +1466,7 @@ class MemoryGraph:
         elif scoring_mode == "llm":
             # LLM-scored: use fast-reasoning model to evaluate relevance
             try:
-                from core.llm.clients import call_fast_reasoning
+                from lib.llm_clients import call_fast_reasoning
                 prompt = (
                     f"Given the query: \"{query}\"\n"
                     f"Rate how relevant this memory graph node is as a traversal candidate (0-5):\n"
@@ -1799,7 +1799,7 @@ Return ONLY a JSON array of lowercase keywords, nothing else.
 Example output: ["keyword1", "keyword2", "keyword3"]"""
 
     try:
-        from core.llm.clients import call_fast_reasoning, parse_json_response
+        from lib.llm_clients import call_fast_reasoning, parse_json_response
         response, _ = call_fast_reasoning(prompt, max_tokens=200, timeout=30)
         if not response:
             return None
@@ -2317,7 +2317,7 @@ def route_query(query: str, timeout_ms: int = 3000) -> str:
     prompt = f'Rephrase this question as a declarative statement about someone\'s personal life. Do NOT invent specific names, dates, or places. Keep it general.\n\nQuestion: "{query[:300]}"\n\nStatement:'
 
     try:
-        from core.llm.clients import call_fast_reasoning
+        from lib.llm_clients import call_fast_reasoning
         result, _ = call_fast_reasoning(
             prompt=prompt,
             max_tokens=50,
@@ -2627,7 +2627,7 @@ def _rerank_with_cross_encoder(query: str, results: List[tuple], config_retrieva
 
 def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, config_retrieval=None) -> List[tuple]:
     """Batch rerank via fast-reasoning LLM call — single call for all candidates."""
-    from core.llm.clients import call_fast_reasoning
+    from lib.llm_clients import call_fast_reasoning
 
     # Build numbered candidate list
     lines = []

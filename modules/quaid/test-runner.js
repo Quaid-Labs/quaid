@@ -1,14 +1,53 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
-import { writeFile, appendFile, mkdir } from 'node:fs/promises'
+import { writeFile, appendFile, mkdir, readFile, readdir, stat, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 const LOGS_DIR = process.env.CLAWDBOT_WORKSPACE
   ? path.join(process.env.CLAWDBOT_WORKSPACE, 'logs')
   : path.join(path.resolve(process.cwd(), '../..'), 'logs')
 const LOG_FILE = path.join(LOGS_DIR, 'test-results.jsonl')
+const LOG_KEEP_LINES = 3
+const TMP_PREFIXES = ['quaid-chat-flow-', 'quaid-bench-repro-', 'quaid-e2e-']
+const TMP_STALE_MS = 24 * 60 * 60 * 1000 // 24h
+
+async function cleanupStaleTmpArtifacts() {
+  const tmpDir = os.tmpdir()
+  const now = Date.now()
+  try {
+    const entries = await readdir(tmpDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isFile()) continue
+      if (!TMP_PREFIXES.some((p) => entry.name.startsWith(p))) continue
+      const fullPath = path.join(tmpDir, entry.name)
+      try {
+        const s = await stat(fullPath)
+        if ((now - s.mtimeMs) < TMP_STALE_MS) continue
+        await rm(fullPath, { recursive: true, force: true })
+      } catch {
+        // best-effort cleanup only
+      }
+    }
+  } catch {
+    // best-effort cleanup only
+  }
+}
+
+async function pruneLogFileIfNeeded() {
+  try {
+    if (!existsSync(LOG_FILE)) return
+    const content = await readFile(LOG_FILE, 'utf8')
+    const lines = content.trim().split('\n').filter(Boolean)
+    if (lines.length <= LOG_KEEP_LINES) return
+    const kept = lines.slice(-LOG_KEEP_LINES).join('\n') + '\n'
+    await writeFile(LOG_FILE, kept, 'utf8')
+  } catch {
+    // best-effort pruning only
+  }
+}
 
 async function runTests(vitestArgs = []) {
   const startTime = Date.now()
@@ -165,11 +204,16 @@ if (args.length > 0) {
   console.log(`🧪 Running specific tests: ${args.join(' ')}`)
 }
 
-runTests(args)
-  .then((exitCode) => {
+async function main() {
+  await cleanupStaleTmpArtifacts()
+  await pruneLogFileIfNeeded()
+  try {
+    const exitCode = await runTests(args)
     process.exit(exitCode)
-  })
-  .catch((error) => {
+  } catch (error) {
     console.error('❌ Test runner failed:', error)
     process.exit(1)
-  })
+  }
+}
+
+main()

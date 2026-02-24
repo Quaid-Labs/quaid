@@ -30,12 +30,13 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.llm.clients import call_deep_reasoning, parse_json_response
-from datastore.facade import get_graph, store_memory as store, create_edge
+from core.services.memory_service import get_memory_service
 from config import get_config
 from core.lifecycle.soul_snippets import write_journal_entry, write_snippet_entry
 from lib.runtime_context import parse_session_jsonl as _ctx_parse_session_jsonl, build_transcript as _ctx_build_transcript
 
 logger = logging.getLogger(__name__)
+_memory = get_memory_service()
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "extraction.txt"
 
@@ -334,7 +335,7 @@ def extract_from_transcript(
         fact_entry = {"text": text, "status": "pending", "edges": []}
 
         if not dry_run:
-            store_result = store(
+            store_result = _memory.store(
                 text=text,
                 category=category,
                 verified=False,
@@ -355,7 +356,7 @@ def extract_from_transcript(
             fact_id = store_result.get("id")
             if fact_id and is_technical:
                 try:
-                    graph = get_graph()
+                    graph = _memory.graph()
                     node = graph.get_node(fact_id)
                     if node:
                         attrs = node.attributes if isinstance(node.attributes, dict) else {}
@@ -392,7 +393,7 @@ def extract_from_transcript(
                     obj = edge.get("object")
                     if subj and rel and obj:
                         try:
-                            edge_result = create_edge(
+                            edge_result = _memory.create_edge(
                                 subject_name=subj,
                                 relation=rel,
                                 object_name=obj,
