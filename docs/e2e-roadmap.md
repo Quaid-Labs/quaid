@@ -136,3 +136,4 @@ Coverage requirements:
 
 Implement next in this order:
 1. Tune/commit environment-specific stage-budget thresholds from accumulated nightly history.
+   - Current state: insufficient successful `nightly` samples in local history; provisional `janitor-parallel-bench` caps documented in `docs/BENCHMARK-OPERATIONS.md`.
