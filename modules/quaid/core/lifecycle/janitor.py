@@ -1267,6 +1267,48 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # approved facts to active so they're never reprocessed by the pipeline.
         # CRITICAL: Only graduate if memory pipeline completed without errors.
         if task in ("all", "graduate") and not dry_run and _cfg.systems.memory:
+            # In benchmark mode, contradiction merge can create a new pending memory
+            # after the main review stage. Run one same-cycle catch-up review so
+            # graduation validity is evaluated on post-merge state.
+            if _is_benchmark_mode() and task == "all" and memory_pipeline_ok:
+                try:
+                    pending_counts = count_nodes_by_status(graph, ["pending"])
+                    pending_for_catchup = int(pending_counts.get("pending", 0) or 0)
+                except Exception:
+                    pending_for_catchup = 0
+                if pending_for_catchup > 0:
+                    print(
+                        "[benchmark] Pending memories remain before graduate; "
+                        "running catch-up review pass."
+                    )
+                    metrics.start_task("review_catchup")
+                    catchup_started = time.time()
+                    catchup_result = _run_memory_graph_stage("review", False)
+                    _record_stage_budget("review_catchup", catchup_started)
+                    for line in catchup_result.logs:
+                        print(f"  {line}")
+                    for err in catchup_result.errors:
+                        print(f"  {err}")
+                        metrics.add_error(err)
+                        memory_pipeline_ok = False
+                    catchup_reviewed = int(catchup_result.metrics.get("memories_reviewed", 0) or 0)
+                    catchup_deleted = int(catchup_result.metrics.get("memories_deleted", 0) or 0)
+                    catchup_fixed = int(catchup_result.metrics.get("memories_fixed", 0) or 0)
+                    applied_changes["memories_reviewed"] = int(applied_changes.get("memories_reviewed", 0) or 0) + catchup_reviewed
+                    applied_changes["memories_deleted"] = int(applied_changes.get("memories_deleted", 0) or 0) + catchup_deleted
+                    applied_changes["memories_fixed"] = int(applied_changes.get("memories_fixed", 0) or 0) + catchup_fixed
+                    applied_changes["review_carryover"] = catchup_result.metrics.get(
+                        "review_carryover", applied_changes.get("review_carryover", 0)
+                    )
+                    applied_changes["review_coverage_ratio_pct"] = catchup_result.metrics.get(
+                        "review_coverage_ratio_pct",
+                        applied_changes.get("review_coverage_ratio_pct", 100),
+                    )
+                    if _benchmark_review_gate_triggered(applied_changes, metrics):
+                        memory_pipeline_ok = False
+                        print("[benchmark] Catch-up review failed benchmark gate.")
+                    metrics.end_task("review_catchup")
+
             try:
                 pre_counts = count_nodes_by_status(graph, ["pending", "approved"])
                 pending_before = int(pre_counts.get("pending", 0) or 0)

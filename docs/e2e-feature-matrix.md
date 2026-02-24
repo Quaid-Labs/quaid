@@ -66,6 +66,13 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 13. Janitor parallel benchmark reporting (`suite=janitor-parallel-bench`)
    - Emits `/tmp/quaid-e2e-janitor-parallel-bench.json` (override `QUAID_E2E_JANITOR_PARALLEL_REPORT_PATH`).
    - Captures seeded before/after carryover signals plus janitor task duration/change/error data from `janitor-stats.json`.
+   - Enforces threshold gates for benchmark automation:
+     - `QUAID_E2E_JPB_MAX_ERRORS` (default `0`)
+     - `QUAID_E2E_JPB_MAX_WARNINGS` (default `-1`, disabled)
+     - `QUAID_E2E_JPB_MAX_CONTRADICTIONS_PENDING_AFTER` (default `0`)
+     - `QUAID_E2E_JPB_MAX_DEDUP_UNREVIEWED_AFTER` (default `0`)
+     - `QUAID_E2E_JPB_MAX_DECAY_PENDING_AFTER` (default `0`)
+     - `QUAID_E2E_JPB_MAX_STAGING_EVENTS_AFTER` (default `0`)
 
 ## Recommended Next Additions
 

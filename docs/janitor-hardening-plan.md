@@ -99,6 +99,12 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
    - Defaults: `1` in normal mode, `2` in benchmark mode.
 8. E2E janitor parallel benchmark lane
    - Added `--suite janitor-parallel-bench` to exercise seeded janitor + pre-benchmark invariants under benchmark-mode parallel settings.
+9. Benchmark-mode pending-leak guard in janitor core
+   - Added benchmark-only pre-graduate catch-up review pass when pending items remain after prior memory stages.
+   - Prevents contradiction-merge-created pending memories from leaking across benchmark cycles.
+10. Janitor-parallel lane determinism hardening
+   - Kept strict seeded pending/unreviewed depletion checks and threshold gates.
+   - Scoped brittle status-delta assertions out of `janitor-parallel-bench` where merge/review strategies are semantically valid but status transitions vary.
 
 ## E2E Coverage Mapping
 
@@ -110,5 +116,8 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
    - seeded dedup + decay-review fixture assertions (must transition out of unreviewed/pending)
    - seeded multi-owner isolation assertion (owner-scoped memories must not collapse across owners)
    - seeded RAG anchor assertion (anchor text must appear in doc_chunks after janitor)
-3. `--suite nightly`
+3. `--suite janitor-parallel-bench`
+   - benchmark-mode parallel janitor with seeded carryover + threshold-gated artifact output
+   - validates carryover depletion and error/warning thresholds with deterministic benchmark-focused assertions
+4. `--suite nightly`
    - full + resilience/load scenarios (restart, pressure, migration fixtures)

@@ -115,9 +115,21 @@ Coverage requirements:
    - `.github/workflows/ci.yml` now exposes `workflow_dispatch` inputs `run_strict_notify_lane` and `strict_notify_fixture_ready`.
    - Added `nightly-strict-notify` CI job gated by both flags so strict-delivery checks only run with prepared fixtures.
    - Job treats exit code `20` as a prerequisite skip and uploads strict lane telemetry artifacts.
+16. Janitor parallel benchmark threshold enforcement.
+   - `--suite janitor-parallel-bench` now fails on configurable regression thresholds for errors/warnings/carryover.
+   - Threshold envs:
+     - `QUAID_E2E_JPB_MAX_ERRORS` (default `0`)
+     - `QUAID_E2E_JPB_MAX_WARNINGS` (default `-1`, disabled)
+     - `QUAID_E2E_JPB_MAX_CONTRADICTIONS_PENDING_AFTER` (default `0`)
+     - `QUAID_E2E_JPB_MAX_DEDUP_UNREVIEWED_AFTER` (default `0`)
+     - `QUAID_E2E_JPB_MAX_DECAY_PENDING_AFTER` (default `0`)
+     - `QUAID_E2E_JPB_MAX_STAGING_EVENTS_AFTER` (default `0`)
+17. Janitor-parallel benchmark lane stabilization.
+   - Added benchmark-mode catch-up review before graduate in janitor core to prevent same-cycle pending leakage.
+   - Janitor-parallel E2E assertions now focus on deterministic benchmark invariants (pending/unreviewed depletion + threshold gates) instead of fragile status-delta assumptions.
+   - Added explicit janitor subprocess failure diagnostics to E2E for faster root-cause loops.
 
 ## Backlog Order
 
 Implement next in this order:
 1. Tune/commit environment-specific stage-budget thresholds from accumulated nightly history.
-2. Consume janitor parallel benchmark report in benchmark automation and enforce regression thresholds.
