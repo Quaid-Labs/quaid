@@ -39,6 +39,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Validates registry/index drift recovery (`doc_registry.last_indexed_at` refresh on seeded RAG doc).
    - Validates project-updater event consumption under concurrent live-turn pressure.
    - Supports bounded soak loops via `--resilience-loops` (nightly defaults to 2 iterations).
+   - Nightly also runs bounded janitor-stage stress passes (`--stage-item-cap 2`, repeated apply runs) and checks `janitor_runs` integrity.
 
 ## Recommended Next Additions
 
