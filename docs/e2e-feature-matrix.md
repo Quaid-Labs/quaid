@@ -41,6 +41,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - `--runtime-budget-profile auto|off|quick|deep` controls wall-clock budget gating.
    - `--runtime-budget-seconds` overrides budget in seconds.
    - Budget overrun fails run with explicit `runtime_budget_exceeded` failure reason in summary.
+   - `QUAID_E2E_STAGE_BUDGETS_JSON='{"bootstrap":120,"notify_matrix":300}'` enables per-stage duration gates.
 11. Bootstrap collision recovery
    - If worktree bootstrap fails with a workspace "already exists" collision after wipe, runner performs one forced cleanup + retry automatically.
 12. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
