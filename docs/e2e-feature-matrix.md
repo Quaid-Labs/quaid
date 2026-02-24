@@ -42,6 +42,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - `--runtime-budget-seconds` overrides budget in seconds.
    - Budget overrun fails run with explicit `runtime_budget_exceeded` failure reason in summary.
    - `QUAID_E2E_STAGE_BUDGETS_JSON='{"bootstrap":120,"notify_matrix":300}'` enables per-stage duration gates.
+   - Nightly auto-tuning can populate stage budgets from history (`QUAID_E2E_AUTO_STAGE_BUDGETS=true`).
 11. Bootstrap collision recovery
    - If worktree bootstrap fails with a workspace "already exists" collision after wipe, runner performs one forced cleanup + retry automatically.
 12. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
@@ -82,9 +83,13 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Blocker coverage plus ingest + janitor (+ seed) for benchmark checkpoint readiness.
 4. `--suite nightly`
    - Alias of `full`.
-5. `--quick-bootstrap`
+5. `--suite nightly-strict-notify`
+   - Nightly/full coverage with strict notification-delivery enforcement enabled.
+6. `--suite janitor-parallel-bench`
+   - Janitor-focused benchmark lane (seed + pre-benchmark guards + benchmark-mode parallel LLM settings).
+7. `--quick-bootstrap`
    - Skip OpenClaw source refresh/install for faster local loops.
-6. `--reuse-workspace`
+8. `--reuse-workspace`
    - Reuse existing `~/quaid/e2e-test` when possible; fallback to clean bootstrap on mismatch.
-7. `--runtime-budget-profile`, `--runtime-budget-seconds`
+9. `--runtime-budget-profile`, `--runtime-budget-seconds`
    - Enable explicit runtime regression gates for nightly and long suites.

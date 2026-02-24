@@ -97,6 +97,8 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
      - `QUAID_JANITOR_LLM_PARALLELISM`
      - `QUAID_JANITOR_LLM_PARALLELISM_<TASK>`
    - Defaults: `1` in normal mode, `2` in benchmark mode.
+8. E2E janitor parallel benchmark lane
+   - Added `--suite janitor-parallel-bench` to exercise seeded janitor + pre-benchmark invariants under benchmark-mode parallel settings.
 
 ## E2E Coverage Mapping
 
