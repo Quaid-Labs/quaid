@@ -1254,6 +1254,19 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
   }
 
+  // Install internal reset/new command hook (OpenClaw workaround for before_reset).
+  const quaidHookSrc = path.join(PLUGIN_DIR, "adaptors/openclaw/hooks/quaid-reset-signal");
+  const quaidHookDst = path.join(WORKSPACE, "hooks", "quaid-reset-signal");
+  if (fs.existsSync(path.join(quaidHookSrc, "HOOK.md")) && fs.existsSync(path.join(quaidHookSrc, "handler.js"))) {
+    fs.mkdirSync(path.join(WORKSPACE, "hooks"), { recursive: true });
+    fs.rmSync(quaidHookDst, { recursive: true, force: true });
+    fs.cpSync(quaidHookSrc, quaidHookDst, { recursive: true });
+    log.info("Installed internal hook: quaid-reset-signal");
+    spawnSync("openclaw", ["hooks", "enable", "quaid-reset-signal"], { stdio: "pipe" });
+  } else {
+    log.warn("quaid-reset-signal hook missing from plugin source");
+  }
+
   // Install Python dependency: sqlite-vec (vector search extension)
   s.start("Installing sqlite-vec...");
   try {

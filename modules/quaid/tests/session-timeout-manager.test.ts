@@ -38,7 +38,7 @@ describe('SessionTimeoutManager scheduling', () => {
     managerB.stopWorker()
   })
 
-  it('coalesces duplicate extraction signals per session', () => {
+  it('coalesces duplicate extraction signals per session and promotes reset over compaction', () => {
     const workspace = makeWorkspace('quaid-timeout-signal-')
     const manager = new SessionTimeoutManager({
       workspace,
@@ -54,6 +54,8 @@ describe('SessionTimeoutManager scheduling', () => {
     const signalDir = path.join(workspace, 'data', 'pending-extraction-signals')
     const files = fs.readdirSync(signalDir).filter((f) => f.endsWith('.json'))
     expect(files).toHaveLength(1)
+    const queued = JSON.parse(fs.readFileSync(path.join(signalDir, files[0]), 'utf8'))
+    expect(queued.label).toBe('Reset')
   })
 
   it('processes signal extraction from per-session message log', async () => {

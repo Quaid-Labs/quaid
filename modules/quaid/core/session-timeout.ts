@@ -20,6 +20,13 @@ type PendingExtractionSignal = {
   queuedAt: string;
 };
 
+function signalPriority(label: string): number {
+  const normalized = String(label || "").trim().toLowerCase();
+  if (normalized === "resetsignal" || normalized === "reset") return 3;
+  if (normalized === "compactionsignal" || normalized === "compaction") return 2;
+  return 1;
+}
+
 type TimeoutExtractor = (messages: any[], sessionId?: string, label?: string) => Promise<void>;
 type TimeoutLogger = (message: string) => void;
 
@@ -289,7 +296,26 @@ export class SessionTimeoutManager {
       fs.mkdirSync(this.pendingSignalDir, { recursive: true });
       const signalPath = this.signalPath(sessionId);
       if (fs.existsSync(signalPath)) {
-        this.writeQuaidLog("signal_queue_coalesced", sessionId, { label: signal.label, reason: "already_pending" });
+        let existingLabel = "Signal";
+        try {
+          const existing = JSON.parse(fs.readFileSync(signalPath, "utf8")) as PendingExtractionSignal;
+          existingLabel = String(existing?.label || "Signal");
+        } catch {}
+        const incomingPriority = signalPriority(signal.label);
+        const existingPriority = signalPriority(existingLabel);
+        if (incomingPriority > existingPriority) {
+          fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 0o600 });
+          this.writeQuaidLog("signal_queue_promoted", sessionId, {
+            from: existingLabel,
+            to: signal.label,
+          });
+        } else {
+          this.writeQuaidLog("signal_queue_coalesced", sessionId, {
+            label: signal.label,
+            existing_label: existingLabel,
+            reason: "already_pending",
+          });
+        }
         this.triggerWorkerTick();
         return;
       }

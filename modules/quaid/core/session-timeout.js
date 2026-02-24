@@ -1,5 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+function signalPriority(label) {
+  const normalized = String(label || "").trim().toLowerCase();
+  if (normalized === "resetsignal" || normalized === "reset") return 3;
+  if (normalized === "compactionsignal" || normalized === "compaction") return 2;
+  return 1;
+}
 function safeLog(logger, message) {
   try {
     (logger || console.log)(message);
@@ -247,7 +253,27 @@ class SessionTimeoutManager {
       fs.mkdirSync(this.pendingSignalDir, { recursive: true });
       const signalPath = this.signalPath(sessionId);
       if (fs.existsSync(signalPath)) {
-        this.writeQuaidLog("signal_queue_coalesced", sessionId, { label: signal.label, reason: "already_pending" });
+        let existingLabel = "Signal";
+        try {
+          const existing = JSON.parse(fs.readFileSync(signalPath, "utf8"));
+          existingLabel = String(existing?.label || "Signal");
+        } catch {
+        }
+        const incomingPriority = signalPriority(signal.label);
+        const existingPriority = signalPriority(existingLabel);
+        if (incomingPriority > existingPriority) {
+          fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 384 });
+          this.writeQuaidLog("signal_queue_promoted", sessionId, {
+            from: existingLabel,
+            to: signal.label
+          });
+        } else {
+          this.writeQuaidLog("signal_queue_coalesced", sessionId, {
+            label: signal.label,
+            existing_label: existingLabel,
+            reason: "already_pending"
+          });
+        }
         this.triggerWorkerTick();
         return;
       }
