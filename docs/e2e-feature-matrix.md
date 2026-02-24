@@ -29,9 +29,16 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - `suite=pre-benchmark` additionally enforces graduation invariant (`pending=0`, `approved=0`) with leftover-ID failure preview.
 8. Failure diagnostics (all suites)
    - On error, runner prints pending signals, timeout logs, notify-worker tail, gateway status, and gateway logs.
-9. Bootstrap collision recovery
+9. Machine-readable outcome summary (all suites)
+   - Writes run summary to `/tmp/quaid-e2e-last-summary.json` (override with `QUAID_E2E_SUMMARY_PATH`).
+   - Includes overall status, duration, suite/profile, stage-by-stage pass/skip/fail state, failure metadata, and runtime-budget status.
+10. Runtime budget presets
+   - `--runtime-budget-profile auto|off|quick|deep` controls wall-clock budget gating.
+   - `--runtime-budget-seconds` overrides budget in seconds.
+   - Budget overrun fails run with explicit `runtime_budget_exceeded` failure reason in summary.
+11. Bootstrap collision recovery
    - If worktree bootstrap fails with a workspace "already exists" collision after wipe, runner performs one forced cleanup + retry automatically.
-10. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
+12. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
    - Validates recovery after forced gateway restart mid-session.
    - Validates live turns under janitor pressure.
    - Validates cross-session interleaving under janitor pressure; cursor checks enforce identity when cursor files are present.
@@ -51,8 +58,8 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Add explicit runtime budget presets per profile and expose expected wall-clock bounds in output.
 2. Runtime-budget presets
    - Encode quick/deep expected wall-clock bounds and fail when exceeded.
-3. Outcome summary export
-   - Emit machine-readable nightly summary for CI dashboards and trend tracking.
+3. CI summary ingestion
+   - Consume `quaid-e2e-last-summary.json` in CI/nightly dashboards and track stage-level trend regressions.
 
 ## Runner Modes
 
@@ -68,3 +75,5 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Skip OpenClaw source refresh/install for faster local loops.
 6. `--reuse-workspace`
    - Reuse existing `~/quaid/e2e-test` when possible; fallback to clean bootstrap on mismatch.
+7. `--runtime-budget-profile`, `--runtime-budget-seconds`
+   - Enable explicit runtime regression gates for nightly and long suites.
