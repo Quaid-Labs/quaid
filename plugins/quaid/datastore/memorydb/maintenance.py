@@ -1,4 +1,8 @@
-"""Unified memory-graph datastore maintenance routine."""
+"""Unified memory-graph datastore maintenance routine.
+
+This module is datastore-owned and registered via the lifecycle registry.
+Janitor remains the orchestration layer; datastore routines own task execution.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,9 @@ def register_lifecycle_routines(registry, result_factory) -> None:
     def _run_memory_graph_maintenance(ctx):
         result = result_factory()
         try:
-            jan = importlib.import_module("janitor")
+            # Import via canonical module path. Root-level `janitor.py` no longer
+            # exists after boundary refactors.
+            jan = importlib.import_module("core.lifecycle.janitor")
             graph = ctx.graph
             subtask = str((ctx.options or {}).get("subtask") or "all").strip().lower()
             metrics = jan.JanitorMetrics()

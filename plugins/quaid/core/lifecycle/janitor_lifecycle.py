@@ -122,7 +122,7 @@ def build_default_registry() -> LifecycleRegistry:
         ("core.docs.updater", ["docs_staleness", "docs_cleanup"]),
         ("core.lifecycle.soul_snippets", ["snippets", "journal"]),
         ("core.docs.rag", ["rag"]),
-        ("memory_graph_pipeline", ["memory_graph_maintenance"]),
+        ("datastore.memorydb.maintenance", ["memory_graph_maintenance"]),
         ("datastore.memorydb.memory_graph", ["datastore_cleanup"]),
     ]
 
