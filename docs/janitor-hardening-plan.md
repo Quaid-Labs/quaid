@@ -74,6 +74,11 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
    - Checkpoint status persisted as running/completed/failed.
 5. Run-record enrichment (`janitor_runs`)
    - Added structured JSON columns for skipped tasks, carryover, stage budgets, checkpoint path, task summary.
+6. Benchmark smoke blocker fix + guardrails
+   - Fixed contradictions carryover query to use `contradictions.status='pending'` (schema-correct; removes `review_status` crash).
+   - Added regression test for contradictions carryover query path.
+   - Added benchmark-mode review gate in janitor Task 2: fail memory pipeline immediately when review coverage is incomplete or review carryover is non-zero.
+   - Added unit tests covering benchmark-mode review gate trigger/no-trigger behavior.
 
 ## E2E Coverage Mapping
 
