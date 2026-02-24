@@ -27,6 +27,7 @@ RUN_INGEST_STRESS=true
 RUN_JANITOR_SEED=true
 RUN_MEMORY_FLOW=true
 RUN_RESILIENCE=false
+RUN_JANITOR_STRESS=false
 RUN_PREBENCH_GUARDS=false
 JANITOR_TIMEOUT_SECONDS=240
 JANITOR_MODE="apply"
@@ -55,7 +56,7 @@ Options:
   --skip-llm-smoke       Skip gateway LLM smoke call
   --skip-live-events     Skip live command/timeout hook validation
   --skip-notify-matrix   Skip notification-level matrix validation (quiet/normal/debug)
-  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,smoke,integration,live,memory,notify,ingest,janitor,seed,resilience (default: full)
+  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,smoke,integration,live,memory,notify,ingest,janitor,seed,resilience,janitor-stress (default: full)
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
@@ -175,6 +176,7 @@ elif suite_has "full"; then
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
   RUN_RESILIENCE=false
+  RUN_JANITOR_STRESS=false
 else
   RUN_LLM_SMOKE=false
   RUN_INTEGRATION_TESTS=false
@@ -197,9 +199,13 @@ else
   suite_has "janitor" && RUN_JANITOR=true
   suite_has "seed" && RUN_JANITOR_SEED=true
   suite_has "resilience" && RUN_RESILIENCE=true
+  suite_has "janitor-stress" && RUN_JANITOR_STRESS=true
 fi
 
-if [[ "$NIGHTLY_MODE" == true ]]; then RUN_RESILIENCE=true; fi
+if [[ "$NIGHTLY_MODE" == true ]]; then
+  RUN_RESILIENCE=true
+  RUN_JANITOR_STRESS=true
+fi
 
 if [[ "$SKIP_JANITOR_FLAG" == true ]]; then RUN_JANITOR=false; fi
 if [[ "$SKIP_LLM_SMOKE_FLAG" == true ]]; then RUN_LLM_SMOKE=false; fi
@@ -1826,7 +1832,7 @@ PY
 fi
 
 echo "[e2e] Running janitor (${JANITOR_MODE})..."
-python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" <<'PY'
+python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" "$RUN_JANITOR_STRESS" <<'PY'
 import json
 import os
 import sqlite3
@@ -1837,6 +1843,7 @@ ws = sys.argv[1]
 timeout_seconds = int(sys.argv[2])
 mode = sys.argv[3]
 prebench_guard = str(sys.argv[4]).strip().lower() in {"1", "true", "yes", "on"}
+janitor_stress = str(sys.argv[5]).strip().lower() in {"1", "true", "yes", "on"}
 db_path = f"{ws}/data/memory.db"
 journal_path = os.path.join(ws, "journal", "SOUL.journal.md")
 snippet_path = os.path.join(ws, "SOUL.snippets.md")
@@ -2079,6 +2086,65 @@ try:
 except subprocess.TimeoutExpired:
     print(f"[e2e] Janitor run timed out after {timeout_seconds}s", file=sys.stderr)
     raise SystemExit(1)
+
+if janitor_stress and mode == "apply":
+    stress_env = dict(os.environ)
+    stress_py_parts = [f"{ws}/modules/quaid"]
+    if stress_env.get("PYTHONPATH"):
+        stress_py_parts.append(stress_env["PYTHONPATH"])
+    stress_env["PYTHONPATH"] = ":".join(stress_py_parts)
+    stress_before_runs = 0
+    stress_before_max_id = 0
+    with sqlite3.connect(db_path) as _conn:
+        _has = _conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='janitor_runs'"
+        ).fetchone() is not None
+        if _has:
+            stress_before_runs = int(
+                _conn.execute("SELECT COUNT(*) FROM janitor_runs").fetchone()[0]
+            )
+            stress_before_max_id = int(
+                _conn.execute("SELECT COALESCE(MAX(id), 0) FROM janitor_runs").fetchone()[0]
+            )
+    for _ in range(2):
+        stress_cmd = [
+            "python3",
+            "modules/quaid/core/lifecycle/janitor.py",
+            "--task",
+            "all",
+            "--apply",
+            "--force-distill",
+            "--stage-item-cap",
+            "2",
+            "--no-resume-checkpoint",
+        ]
+        subprocess.run(
+            stress_cmd,
+            cwd=ws,
+            check=True,
+            timeout=max(240, timeout_seconds),
+            env=stress_env,
+        )
+    with sqlite3.connect(db_path) as _conn:
+        stress_after_runs = int(_conn.execute("SELECT COUNT(*) FROM janitor_runs").fetchone()[0])
+        stress_failed = int(
+            _conn.execute(
+                "SELECT COUNT(*) FROM janitor_runs WHERE id > ? AND status != 'completed'",
+                (stress_before_max_id,),
+            ).fetchone()[0]
+        )
+    if (stress_after_runs - stress_before_runs) < 2:
+        print(
+            "[e2e] ERROR: janitor stress profile expected >=2 additional janitor_runs rows",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if stress_failed > 0:
+        print(
+            f"[e2e] ERROR: janitor stress profile recorded non-completed runs ({stress_failed})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 with sqlite3.connect(db_path) as conn:
     after_counts = fetch_counts(conn)
