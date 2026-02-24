@@ -57,14 +57,32 @@ E2E_FAIL_LINE=""
 E2E_FAIL_REASON=""
 
 STAGE_bootstrap="pending"
+STAGE_bootstrap_START_EPOCH=0
+STAGE_bootstrap_DURATION_SECONDS=0
 STAGE_gateway_smoke="pending"
+STAGE_gateway_smoke_START_EPOCH=0
+STAGE_gateway_smoke_DURATION_SECONDS=0
 STAGE_integration="pending"
+STAGE_integration_START_EPOCH=0
+STAGE_integration_DURATION_SECONDS=0
 STAGE_live_events="pending"
+STAGE_live_events_START_EPOCH=0
+STAGE_live_events_DURATION_SECONDS=0
 STAGE_resilience="pending"
+STAGE_resilience_START_EPOCH=0
+STAGE_resilience_DURATION_SECONDS=0
 STAGE_memory_flow="pending"
+STAGE_memory_flow_START_EPOCH=0
+STAGE_memory_flow_DURATION_SECONDS=0
 STAGE_notify_matrix="pending"
+STAGE_notify_matrix_START_EPOCH=0
+STAGE_notify_matrix_DURATION_SECONDS=0
 STAGE_ingest_stress="pending"
+STAGE_ingest_stress_START_EPOCH=0
+STAGE_ingest_stress_DURATION_SECONDS=0
 STAGE_janitor="pending"
+STAGE_janitor_START_EPOCH=0
+STAGE_janitor_DURATION_SECONDS=0
 
 SKIP_JANITOR_FLAG=false
 SKIP_LLM_SMOKE_FLAG=false
@@ -311,15 +329,34 @@ begin_stage() {
   local stage="$1"
   CURRENT_STAGE="$stage"
   set_stage_status "$stage" "running"
+  eval "STAGE_${stage}_START_EPOCH='$(date +%s)'"
+}
+
+finalize_stage_timing() {
+  local stage="$1"
+  local now
+  local start=0
+  local duration=0
+  now="$(date +%s)"
+  eval "start=\${STAGE_${stage}_START_EPOCH:-0}"
+  if [[ "$start" =~ ^[0-9]+$ && "$start" -gt 0 ]]; then
+    duration=$((now - start))
+    if [[ "$duration" -lt 0 ]]; then
+      duration=0
+    fi
+  fi
+  eval "STAGE_${stage}_DURATION_SECONDS='${duration}'"
 }
 
 pass_stage() {
   local stage="$1"
+  finalize_stage_timing "$stage"
   set_stage_status "$stage" "passed"
 }
 
 skip_stage() {
   local stage="$1"
+  finalize_stage_timing "$stage"
   set_stage_status "$stage" "skipped"
 }
 
@@ -348,14 +385,23 @@ write_e2e_summary() {
   SUMMARY_BUDGET_EXCEEDED="$RUNTIME_BUDGET_EXCEEDED" \
   SUMMARY_RUN_START="$RUN_START_EPOCH" \
   SUMMARY_STAGE_bootstrap="$STAGE_bootstrap" \
+  SUMMARY_STAGE_bootstrap_DURATION="$STAGE_bootstrap_DURATION_SECONDS" \
   SUMMARY_STAGE_gateway_smoke="$STAGE_gateway_smoke" \
+  SUMMARY_STAGE_gateway_smoke_DURATION="$STAGE_gateway_smoke_DURATION_SECONDS" \
   SUMMARY_STAGE_integration="$STAGE_integration" \
+  SUMMARY_STAGE_integration_DURATION="$STAGE_integration_DURATION_SECONDS" \
   SUMMARY_STAGE_live_events="$STAGE_live_events" \
+  SUMMARY_STAGE_live_events_DURATION="$STAGE_live_events_DURATION_SECONDS" \
   SUMMARY_STAGE_resilience="$STAGE_resilience" \
+  SUMMARY_STAGE_resilience_DURATION="$STAGE_resilience_DURATION_SECONDS" \
   SUMMARY_STAGE_memory_flow="$STAGE_memory_flow" \
+  SUMMARY_STAGE_memory_flow_DURATION="$STAGE_memory_flow_DURATION_SECONDS" \
   SUMMARY_STAGE_notify_matrix="$STAGE_notify_matrix" \
+  SUMMARY_STAGE_notify_matrix_DURATION="$STAGE_notify_matrix_DURATION_SECONDS" \
   SUMMARY_STAGE_ingest_stress="$STAGE_ingest_stress" \
+  SUMMARY_STAGE_ingest_stress_DURATION="$STAGE_ingest_stress_DURATION_SECONDS" \
   SUMMARY_STAGE_janitor="$STAGE_janitor" \
+  SUMMARY_STAGE_janitor_DURATION="$STAGE_janitor_DURATION_SECONDS" \
   python3 - <<'PY'
 import json
 import os
@@ -406,6 +452,17 @@ out = {
         "notify_matrix": os.environ["SUMMARY_STAGE_notify_matrix"],
         "ingest_stress": os.environ["SUMMARY_STAGE_ingest_stress"],
         "janitor": os.environ["SUMMARY_STAGE_janitor"],
+    },
+    "stage_durations_seconds": {
+        "bootstrap": int(os.environ["SUMMARY_STAGE_bootstrap_DURATION"]),
+        "gateway_smoke": int(os.environ["SUMMARY_STAGE_gateway_smoke_DURATION"]),
+        "integration": int(os.environ["SUMMARY_STAGE_integration_DURATION"]),
+        "live_events": int(os.environ["SUMMARY_STAGE_live_events_DURATION"]),
+        "resilience": int(os.environ["SUMMARY_STAGE_resilience_DURATION"]),
+        "memory_flow": int(os.environ["SUMMARY_STAGE_memory_flow_DURATION"]),
+        "notify_matrix": int(os.environ["SUMMARY_STAGE_notify_matrix_DURATION"]),
+        "ingest_stress": int(os.environ["SUMMARY_STAGE_ingest_stress_DURATION"]),
+        "janitor": int(os.environ["SUMMARY_STAGE_janitor_DURATION"]),
     },
 }
 out_path = os.environ["SUMMARY_OUTPUT_PATH"]
