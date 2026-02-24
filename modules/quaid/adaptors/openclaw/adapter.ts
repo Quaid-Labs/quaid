@@ -161,9 +161,6 @@ function getCaptureTimeoutMinutes(): number {
 function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retrieval"): string {
   const notifications = getMemoryConfig().notifications || {};
   const featureConfig = notifications[feature];
-  if (typeof featureConfig === "string" && featureConfig.trim()) {
-    return featureConfig.trim().toLowerCase();
-  }
   if (featureConfig && typeof featureConfig === "object" && typeof featureConfig.verbosity === "string") {
     return featureConfig.verbosity.trim().toLowerCase();
   }
