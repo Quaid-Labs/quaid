@@ -462,6 +462,29 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
         )
 
 
+def _benchmark_review_gate_triggered(applied_changes: Dict[str, Any], metrics: JanitorMetrics) -> bool:
+    """In benchmark mode, fail fast if review stage left uncovered/carryover work."""
+    if not _is_benchmark_mode():
+        return False
+    try:
+        coverage_pct = float(applied_changes.get("review_coverage_ratio_pct", 100) or 0)
+    except Exception:
+        coverage_pct = 0.0
+    try:
+        carryover = int(applied_changes.get("review_carryover", 0) or 0)
+    except Exception:
+        carryover = 0
+    if coverage_pct >= 100.0 and carryover <= 0:
+        return False
+    msg = (
+        "Benchmark mode review gate failed: "
+        f"coverage_pct={coverage_pct:.2f}, carryover={carryover}"
+    )
+    print(f"[benchmark] {msg}")
+    metrics.add_error(msg)
+    return True
+
+
 def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool = True,
                               time_budget: int = 0, force_distill: bool = False,
                               user_approved: bool = False, resume_checkpoint: bool = True):
@@ -787,6 +810,9 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             print(f"  Coverage: {applied_changes['review_coverage_ratio_pct']}%")
             if applied_changes["review_carryover"] > 0:
                 print(f"  Carryover: {applied_changes['review_carryover']}")
+            if _benchmark_review_gate_triggered(applied_changes, metrics):
+                memory_pipeline_ok = False
+                print("[benchmark] Failing memory pipeline immediately after review stage.")
             metrics.end_task("review")
             print(f"Task completed in {metrics.task_duration('review'):.2f}s\n")
 
