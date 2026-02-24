@@ -54,6 +54,27 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
 3. Add explicit backlog carryover counters in `janitor_runs` and summary notifications.
 4. Add benchmark report section: task durations, item throughput, timeout/retry counts.
 
+## Implemented In This Pass
+
+1. Pending-review coverage guard in datastore routine (`review_pending_memories`)
+   - Tracks decision coverage across `id` and `merge_ids`.
+   - Runs a targeted retry for omitted IDs.
+   - Hard-fails with explicit missing IDs if coverage is still incomplete.
+   - Emits `review_coverage_ratio` and carryover values.
+2. Deterministic regression coverage test
+   - Added test for incomplete first-pass decisions that are recovered by targeted retry.
+   - Added test for unrecoverable incomplete decisions that hard-fail.
+3. Janitor stage hardening hooks
+   - Stage item-cap plumbing (`max_items`) from janitor orchestrator into datastore maintenance routines.
+   - Carryover counters surfaced from datastore routines and included in janitor metrics/report.
+   - Stage budget reporting (budget vs elapsed) with warnings for overruns.
+4. Janitor checkpoint/heartbeat scaffolding
+   - Per-task checkpoint file with heartbeat/current stage/completed stages.
+   - Resume-aware skip for already-completed memory stages in `task=all`.
+   - Checkpoint status persisted as running/completed/failed.
+5. Run-record enrichment (`janitor_runs`)
+   - Added structured JSON columns for skipped tasks, carryover, stage budgets, checkpoint path, task summary.
+
 ## E2E Coverage Mapping
 
 1. `--suite blocker`

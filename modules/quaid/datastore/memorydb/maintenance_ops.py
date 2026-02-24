@@ -268,6 +268,7 @@ class JanitorMetrics:
         self.llm_calls = 0
         self.llm_time = 0.0
         self.errors = []
+        self.warnings = []
     
     def start_task(self, task_name: str):
         self.task_times[task_name] = {"start": time.time(), "end": None}
@@ -291,6 +292,9 @@ class JanitorMetrics:
     def add_error(self, error: str):
         self.errors.append({"time": datetime.now().isoformat(), "error": error})
 
+    def add_warning(self, warning: str):
+        self.warnings.append({"time": datetime.now().isoformat(), "warning": warning})
+
     @property
     def has_errors(self) -> bool:
         return len(self.errors) > 0
@@ -303,7 +307,9 @@ class JanitorMetrics:
             "llm_calls": self.llm_calls,
             "llm_time_seconds": round(self.llm_time, 2),
             "errors": len(self.errors),
-            "error_details": self.errors[-5:] if self.errors else []  # Last 5 errors
+            "error_details": self.errors[-5:] if self.errors else [],  # Last 5 errors
+            "warnings": len(self.warnings),
+            "warning_details": self.warnings[-10:] if self.warnings else [],
         }
 
 
@@ -403,9 +409,28 @@ def init_janitor_metadata(graph: MemoryGraph):
                 completed_at TEXT,
                 memories_processed INTEGER DEFAULT 0,
                 actions_taken INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'running' -- running, completed, failed
+                status TEXT DEFAULT 'running', -- running, completed, failed
+                skipped_tasks_json TEXT,
+                carryover_json TEXT,
+                stage_budget_json TEXT,
+                checkpoint_path TEXT,
+                task_summary_json TEXT
             )
         """)
+        existing_cols = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(janitor_runs)").fetchall()
+        }
+        required = {
+            "skipped_tasks_json": "TEXT",
+            "carryover_json": "TEXT",
+            "stage_budget_json": "TEXT",
+            "checkpoint_path": "TEXT",
+            "task_summary_json": "TEXT",
+        }
+        for col, col_type in required.items():
+            if col in existing_cols:
+                continue
+            conn.execute(f"ALTER TABLE janitor_runs ADD COLUMN {col} {col_type}")
 
 
 def get_update_check_cache(graph: MemoryGraph, max_age_hours: int = 24) -> Optional[Dict[str, Any]]:
@@ -445,15 +470,35 @@ def record_janitor_run(
     memories_processed: int,
     actions_taken: int,
     status: str,
+    skipped_tasks: Optional[List[str]] = None,
+    carryover: Optional[Dict[str, Any]] = None,
+    stage_budget: Optional[Dict[str, Any]] = None,
+    checkpoint_path: Optional[str] = None,
+    task_summary: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Persist one janitor run row."""
     with graph._get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO janitor_runs (task_name, started_at, completed_at, memories_processed, actions_taken, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO janitor_runs (
+                task_name, started_at, completed_at, memories_processed, actions_taken, status,
+                skipped_tasks_json, carryover_json, stage_budget_json, checkpoint_path, task_summary_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (task_name, started_at_iso, completed_at_iso, memories_processed, actions_taken, status),
+            (
+                task_name,
+                started_at_iso,
+                completed_at_iso,
+                memories_processed,
+                actions_taken,
+                status,
+                json.dumps(skipped_tasks or []),
+                json.dumps(carryover or {}),
+                json.dumps(stage_budget or {}),
+                checkpoint_path or "",
+                json.dumps(task_summary or {}),
+            ),
         )
 
 
@@ -731,8 +776,12 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
     return {"found": found, "embedded": embedded, "fts_rebuilt": fts_rebuilt}
 
 
-def recall_similar_pairs(graph: MemoryGraph, metrics: JanitorMetrics,
-                         since: Optional[datetime] = None) -> Dict[str, List[Dict[str, Any]]]:
+def recall_similar_pairs(
+    graph: MemoryGraph,
+    metrics: JanitorMetrics,
+    since: Optional[datetime] = None,
+    max_nodes: int = 0,
+) -> Dict[str, Any]:
     """
     Single token-recall pass that buckets pairs by similarity range.
 
@@ -743,8 +792,17 @@ def recall_similar_pairs(graph: MemoryGraph, metrics: JanitorMetrics,
     """
     metrics.start_task("recall_pass")
 
-    new_nodes = get_nodes_since(graph, since) if since else get_nodes_since(graph, None)
-    print(f"  Recall pass: {len(new_nodes)} {'new' if since else 'all'} nodes")
+    all_nodes = get_nodes_since(graph, since) if since else get_nodes_since(graph, None)
+    node_carryover = 0
+    if max_nodes and int(max_nodes) > 0 and len(all_nodes) > int(max_nodes):
+        node_carryover = len(all_nodes) - int(max_nodes)
+        new_nodes = all_nodes[: int(max_nodes)]
+    else:
+        new_nodes = all_nodes
+    print(
+        f"  Recall pass: {len(new_nodes)} {'new' if since else 'all'} nodes"
+        + (f" (carryover={node_carryover})" if node_carryover else "")
+    )
 
     seen_pairs: set = set()
     dup_candidates = []
@@ -803,7 +861,11 @@ def recall_similar_pairs(graph: MemoryGraph, metrics: JanitorMetrics,
     print(f"  Buckets: {len(dup_candidates)} dedup, {len(contradiction_candidates)} contradiction")
     metrics.end_task("recall_pass")
 
-    return {"duplicates": dup_candidates, "contradictions": contradiction_candidates}
+    return {
+        "duplicates": dup_candidates,
+        "contradictions": contradiction_candidates,
+        "node_carryover": node_carryover,
+    }
 
 
 # =============================================================================
@@ -1043,13 +1105,28 @@ JSON array only:"""
 # Task 4b: Resolve Contradictions (Opus-powered)
 # =============================================================================
 
-def resolve_contradictions_with_opus(graph: MemoryGraph, metrics: JanitorMetrics,
-                                     dry_run: bool = True) -> Dict[str, int]:
+def resolve_contradictions_with_opus(
+    graph: MemoryGraph,
+    metrics: JanitorMetrics,
+    dry_run: bool = True,
+    max_items: int = 0,
+) -> Dict[str, int]:
     """Resolve pending contradictions using Opus for deep-reasoning decisions."""
     metrics.start_task("contradiction_resolution")
-    results = {"resolved": 0, "false_positive": 0, "merged": 0, "decisions": []}
+    results = {"resolved": 0, "false_positive": 0, "merged": 0, "decisions": [], "carryover": 0}
 
-    pending = get_pending_contradictions(limit=50)
+    batch_limit = 50
+    if max_items and int(max_items) > 0:
+        batch_limit = max(1, min(int(max_items), 5000))
+    pending = get_pending_contradictions(limit=batch_limit)
+    if batch_limit:
+        with graph._get_conn() as conn:
+            total_pending = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM contradictions WHERE review_status = 'pending'"
+                ).fetchone()[0]
+            )
+        results["carryover"] = max(total_pending - len(pending), 0)
     if not pending:
         print("  No pending contradictions to resolve")
         metrics.end_task("contradiction_resolution")
@@ -1584,11 +1661,15 @@ JSON array only:"""
 # Task 2b: Review Dedup Rejections (Opus)
 # =============================================================================
 
-def review_dedup_rejections(graph: MemoryGraph, metrics: JanitorMetrics,
-                            dry_run: bool = True) -> Dict[str, int]:
+def review_dedup_rejections(
+    graph: MemoryGraph,
+    metrics: JanitorMetrics,
+    dry_run: bool = True,
+    max_items: int = 0,
+) -> Dict[str, int]:
     """Review recent dedup rejections using Opus to catch false positives."""
     metrics.start_task("dedup_review")
-    results = {"reviewed": 0, "confirmed": 0, "reversed": 0}
+    results = {"reviewed": 0, "confirmed": 0, "reversed": 0, "carryover": 0}
 
     # Auto-confirm hash_exact entries — they're identical text, no LLM needed
     with graph._get_conn() as conn:
@@ -1605,7 +1686,23 @@ def review_dedup_rejections(graph: MemoryGraph, metrics: JanitorMetrics,
         results["confirmed"] += auto_confirmed
         results["reviewed"] += auto_confirmed
 
-    pending = get_recent_dedup_rejections(hours=24, limit=50)
+    batch_limit = 50
+    if max_items and int(max_items) > 0:
+        batch_limit = max(1, min(int(max_items), 5000))
+    pending = get_recent_dedup_rejections(hours=24, limit=batch_limit)
+    if batch_limit:
+        with graph._get_conn() as conn:
+            total_pending = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM dedup_log
+                    WHERE review_status = 'unreviewed'
+                      AND decision != 'hash_exact'
+                      AND created_at > datetime('now', '-24 hours')
+                    """
+                ).fetchone()[0]
+            )
+        results["carryover"] = max(total_pending - len(pending), 0)
     if not pending:
         print("  No unreviewed dedup rejections found")
         metrics.end_task("dedup_review")
@@ -1742,13 +1839,28 @@ JSON array only:"""
 # Task 5b: Review Decayed Memories (Opus)
 # =============================================================================
 
-def review_decayed_memories(graph: MemoryGraph, metrics: JanitorMetrics,
-                            dry_run: bool = True) -> Dict[str, int]:
+def review_decayed_memories(
+    graph: MemoryGraph,
+    metrics: JanitorMetrics,
+    dry_run: bool = True,
+    max_items: int = 0,
+) -> Dict[str, int]:
     """Review memories queued for decay deletion using Opus."""
     metrics.start_task("decay_review")
-    results = {"reviewed": 0, "deleted": 0, "extended": 0, "pinned": 0}
+    results = {"reviewed": 0, "deleted": 0, "extended": 0, "pinned": 0, "carryover": 0}
 
-    pending = get_pending_decay_reviews(limit=50)
+    batch_limit = 50
+    if max_items and int(max_items) > 0:
+        batch_limit = max(1, min(int(max_items), 5000))
+    pending = get_pending_decay_reviews(limit=batch_limit)
+    if batch_limit:
+        with graph._get_conn() as conn:
+            total_pending = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM decay_review_queue WHERE status = 'pending'"
+                ).fetchone()[0]
+            )
+        results["carryover"] = max(total_pending - len(pending), 0)
     if not pending:
         print("  No pending decay reviews found")
         metrics.end_task("decay_review")
@@ -2037,8 +2149,12 @@ def apply_decay_optimized(stale: List[Dict[str, Any]], graph: MemoryGraph,
 # Memory Review (Interactive)
 # =============================================================================
 
-def review_pending_memories(graph: MemoryGraph, dry_run: bool = True,
-                            metrics: Optional[JanitorMetrics] = None) -> Dict[str, Any]:
+def review_pending_memories(
+    graph: MemoryGraph,
+    dry_run: bool = True,
+    metrics: Optional[JanitorMetrics] = None,
+    max_items: int = 0,
+) -> Dict[str, Any]:
     """
     Review all pending memories via the deep-reasoning LLM.
     Sends batches of memories for KEEP/DELETE/FIX/MERGE decisions and applies them immediately.
@@ -2046,17 +2162,35 @@ def review_pending_memories(graph: MemoryGraph, dry_run: bool = True,
     model = _cfg.janitor.opus_review.model
     max_tokens = _cfg.models.max_output('deep')
 
-    # Get all pending memories
+    # Get all pending memories (with optional per-run cap for backlog control)
     with graph._get_conn() as conn:
-        rows = conn.execute("""
+        total_pending = int(
+            conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'pending'").fetchone()[0]
+        )
+        q = """
             SELECT id, type, name, created_at, verified, confidence, source, session_id, speaker
             FROM nodes
-            WHERE status = 'pending'            ORDER BY created_at DESC
-        """).fetchall()
+            WHERE status = 'pending'
+            ORDER BY created_at DESC
+        """
+        params = []
+        if max_items and int(max_items) > 0:
+            q += " LIMIT ?"
+            params.append(int(max_items))
+        rows = conn.execute(q, params).fetchall()
 
     if not rows:
         print("No pending memories found")
-        return {"total_reviewed": 0, "kept": 0, "deleted": 0, "fixed": 0, "merged": 0}
+        return {
+            "total_reviewed": 0,
+            "total_pending": total_pending,
+            "carryover": max(total_pending, 0),
+            "review_coverage_ratio": 1.0,
+            "kept": 0,
+            "deleted": 0,
+            "fixed": 0,
+            "merged": 0,
+        }
 
     print(f"\n{'='*80}")
     print(f"MEMORY REVIEW - {len(rows)} pending memories via Opus API")
@@ -2130,6 +2264,24 @@ Respond with a JSON array only, no markdown fencing:
     batches = builder.build_batches(list(rows))
     total_batches = len(batches)
     totals = {"kept": 0, "deleted": 0, "fixed": 0, "merged": 0}
+    reviewed_ids = {str(r["id"]) for r in rows}
+    covered_ids = set()
+    missing_ids_overall = []
+
+    def _collect_covered_ids(decisions_list: List[Dict[str, Any]]) -> set[str]:
+        out = set()
+        for decision in decisions_list:
+            if not isinstance(decision, dict):
+                continue
+            did = decision.get("id")
+            if isinstance(did, str) and did:
+                out.add(did)
+            merge_ids = decision.get("merge_ids")
+            if isinstance(merge_ids, list):
+                for mid in merge_ids:
+                    if isinstance(mid, str) and mid:
+                        out.add(mid)
+        return out
 
     for batch_num, batch_rows in enumerate(batches, 1):
         # Build batch payload
@@ -2174,7 +2326,56 @@ Respond with a JSON array only, no markdown fencing:
                     _record_llm_batch_issue(metrics, f"Review batch {batch_num}: invalid JSON response")
                 continue
 
+            batch_ids = {str(r["id"]) for r in batch_rows}
+            batch_covered = _collect_covered_ids(decisions)
+            missing = sorted(batch_ids - batch_covered)
+            if missing:
+                coverage_ratio = (len(batch_ids) - len(missing)) / max(len(batch_ids), 1)
+                msg = (
+                    f"Review batch {batch_num}: incomplete decision coverage "
+                    f"({len(batch_ids)-len(missing)}/{len(batch_ids)} = {coverage_ratio:.2%}); "
+                    f"retrying missing IDs"
+                )
+                print(f"    WARNING: {msg}")
+                if metrics:
+                    metrics.add_warning(msg)
+
+                missing_payload = [item for item in batch_data if item["id"] in missing]
+                retry_prompt = (
+                    "You previously omitted decisions for some memories. "
+                    "Return exactly one decision object per memory below. "
+                    "Allowed actions: KEEP, DELETE, FIX. "
+                    "Do not use MERGE in this retry pass.\n\n"
+                    f"Memories:\n{json.dumps(missing_payload, indent=2)}\n\n"
+                    "Respond with JSON array only:\n"
+                    "[{\"id\":\"...\",\"action\":\"KEEP\"}]"
+                )
+                retry_text, retry_duration = call_llm(
+                    system_prompt=system_prompt,
+                    user_message=retry_prompt,
+                    model=model,
+                    max_tokens=max(200 * len(missing_payload), 300),
+                )
+                if metrics:
+                    metrics.add_llm_call(retry_duration)
+                retry_decisions = parse_json_response(retry_text or "")
+                if isinstance(retry_decisions, list):
+                    decisions.extend(retry_decisions)
+                    batch_covered = _collect_covered_ids(decisions)
+                    missing = sorted(batch_ids - batch_covered)
+
+            if missing:
+                missing_ids_overall.extend(missing)
+                msg = (
+                    f"Review batch {batch_num}: incomplete decision coverage after retry; "
+                    f"missing_ids={missing}"
+                )
+                if metrics:
+                    metrics.add_error(msg)
+                raise RuntimeError(msg)
+
             print(f"    Received {len(decisions)} decisions in {duration:.1f}s")
+            covered_ids.update(batch_ids)
 
             # Apply immediately
             batch_result = apply_review_decisions_from_list(graph, decisions, dry_run)
@@ -2198,8 +2399,18 @@ Respond with a JSON array only, no markdown fencing:
     print(f"\n  Review complete: {totals['kept']} kept, {totals['deleted']} deleted, "
           f"{totals['fixed']} fixed, {totals['merged']} merged")
 
+    coverage_ratio = len(covered_ids) / max(len(reviewed_ids), 1)
+    if metrics:
+        metrics.add_warning(
+            f"review coverage ratio={coverage_ratio:.4f} covered={len(covered_ids)} total={len(reviewed_ids)}"
+        )
+
     return {
         "total_reviewed": len(rows),
+        "total_pending": total_pending,
+        "carryover": max(total_pending - len(rows), 0),
+        "review_coverage_ratio": round(coverage_ratio, 4),
+        "missing_ids": missing_ids_overall,
         **totals
     }
 

@@ -26,6 +26,7 @@ RUN_INTEGRATION_TESTS=true
 RUN_INGEST_STRESS=true
 RUN_JANITOR_SEED=true
 RUN_MEMORY_FLOW=true
+RUN_PREBENCH_GUARDS=false
 JANITOR_TIMEOUT_SECONDS=240
 JANITOR_MODE="apply"
 NOTIFY_LEVEL="debug"
@@ -148,6 +149,7 @@ elif suite_has "pre-benchmark"; then
   RUN_JANITOR=true
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
+  RUN_PREBENCH_GUARDS=true
 elif suite_has "core"; then
   RUN_LLM_SMOKE=true
   RUN_INTEGRATION_TESTS=true
@@ -1424,7 +1426,7 @@ PY
 fi
 
 echo "[e2e] Running janitor (${JANITOR_MODE})..."
-python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" <<'PY'
+python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" <<'PY'
 import json
 import os
 import sqlite3
@@ -1434,6 +1436,7 @@ import sys
 ws = sys.argv[1]
 timeout_seconds = int(sys.argv[2])
 mode = sys.argv[3]
+prebench_guard = str(sys.argv[4]).strip().lower() in {"1", "true", "yes", "on"}
 db_path = f"{ws}/data/memory.db"
 journal_path = os.path.join(ws, "journal", "SOUL.journal.md")
 snippet_path = os.path.join(ws, "SOUL.snippets.md")
@@ -1566,6 +1569,29 @@ if mode == "apply":
         raise SystemExit(1)
     if snippet_exists_before and snippet_exists_after:
         print("[e2e] WARN: snippet backlog still present after janitor run.")
+    if prebench_guard:
+        pending_after = int(after_counts.get("pending", 0))
+        approved_after = int(after_counts.get("approved", 0))
+        if pending_after > 0 or approved_after > 0:
+            with sqlite3.connect(db_path) as conn:
+                leftovers = conn.execute(
+                    """
+                    SELECT id, status, substr(name,1,120)
+                    FROM nodes
+                    WHERE status IN ('pending', 'approved')
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                    """
+                ).fetchall()
+            preview = "\n".join(
+                f"  - {rid} [{status}] {text}" for rid, status, text in leftovers
+            )
+            print(
+                "[e2e] ERROR: pre-benchmark janitor invariant failed; "
+                f"pending={pending_after} approved={approved_after}\n{preview}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
 PY
 else
   echo "[e2e] Skipping janitor (suite selection/--skip-janitor)."
