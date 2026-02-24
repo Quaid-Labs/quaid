@@ -8,6 +8,7 @@ ENV_FILE="${QUAID_E2E_ENV_FILE:-${PLUGIN_ROOT}/.env.e2e}"
 
 E2E_WS="${HOME}/quaid/e2e-test"
 DEV_WS="${HOME}/quaid/dev"
+OPENCLAW_SOURCE="${HOME}/openclaw-source"
 
 PROFILE_TEST="${QUAID_E2E_PROFILE_TEST:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
 PROFILE_SRC="${QUAID_E2E_PROFILE_SRC:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
@@ -37,6 +38,7 @@ Options:
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --notify-level <lvl>   Quaid notify level for e2e (quiet|normal|verbose|debug, default: quiet)
   --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
+  --openclaw-source <p>  OpenClaw source repo path (default: ~/openclaw-source)
   -h, --help             Show this help
 USAGE
 }
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --janitor-dry-run) JANITOR_MODE="dry-run"; shift ;;
     --notify-level) NOTIFY_LEVEL="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
+    --openclaw-source) OPENCLAW_SOURCE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; usage; exit 1 ;;
   esac
@@ -226,6 +229,7 @@ echo "[e2e] Bootstrapping e2e workspace: ${E2E_WS}"
   --profile "$TMP_PROFILE" \
   --wipe \
   --auth-path "$AUTH_PATH" \
+  --openclaw-source "$OPENCLAW_SOURCE" \
   --worktree-source "$DEV_WS" \
   --worktree-test-branch "e2e-runtime"
 
@@ -301,26 +305,22 @@ else
   echo "[e2e] Skipping LLM smoke (--skip-llm-smoke)."
 fi
 
-echo "[e2e] Syncing latest dev overlay into e2e workspace..."
-rsync -a --delete \
-  --exclude ".git" \
-  --exclude "node_modules" \
-  --exclude "logs" \
-  --exclude "data" \
-  --exclude "__pycache__" \
-  "${DEV_WS}/modules/quaid/" "${E2E_WS}/plugins/quaid/"
+if [[ ! -e "${E2E_WS}/plugins/quaid" ]] && [[ -d "${E2E_WS}/modules/quaid" ]]; then
+  mkdir -p "${E2E_WS}/plugins"
+  ln -sfn ../modules/quaid "${E2E_WS}/plugins/quaid"
+fi
 
 echo "[e2e] Running Quaid integration tests..."
 for required in \
-  "${E2E_WS}/plugins/quaid/tests/session-timeout-manager.test.ts" \
-  "${E2E_WS}/plugins/quaid/tests/chat-flow.integration.test.ts"; do
+  "${E2E_WS}/modules/quaid/tests/session-timeout-manager.test.ts" \
+  "${E2E_WS}/modules/quaid/tests/chat-flow.integration.test.ts"; do
   if [[ ! -f "$required" ]]; then
     echo "[e2e] Missing required integration test file: $required" >&2
     echo "[e2e] Ensure test files are committed in ${DEV_WS} before running e2e." >&2
     exit 1
   fi
 done
-(cd "${E2E_WS}/plugins/quaid" && npx vitest run tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts --reporter=verbose)
+(cd "${E2E_WS}/modules/quaid" && npx vitest run tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts --reporter=verbose)
 
 if [[ "$RUN_JANITOR" == true ]]; then
 echo "[e2e] Running janitor (${JANITOR_MODE})..."

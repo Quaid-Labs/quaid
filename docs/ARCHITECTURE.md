@@ -120,7 +120,7 @@ Conversation messages
 
 Extraction can be triggered from any of Quaid's three interfaces:
 
-- **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/index.ts`): Two gateway hooks -- `before_compaction` (context being compacted) and `before_reset` (session ending). Both call `extractMemoriesFromMessages()`. Programmatic compaction is available via gateway RPC `sessions.compact`.
+- **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/index.ts`): Compaction extraction uses gateway hook `before_compaction` (context being compacted). Reset/new extraction is routed via OpenClaw internal workspace hooks (`command:new`, `command:reset`) that queue `ResetSignal` for Quaid processing, due to upstream typed-hook boundary issues for `before_reset` (https://github.com/openclaw/openclaw/issues/23895). Programmatic compaction is available via gateway RPC `sessions.compact`.
 - **MCP server** (`modules/quaid/core/interface/mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
 - **CLI** (`modules/quaid/ingest/extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
 
