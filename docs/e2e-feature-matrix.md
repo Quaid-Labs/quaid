@@ -56,6 +56,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Includes auth-failure injection probe (intentional invalid bearer token request + immediate recovery turn).
    - Includes gateway-down injection probe (forced gateway stop, failed request, restart, and recovery turn).
    - Includes timeout injection probe (non-routable upstream request with short timeout + recovery turn).
+   - Includes timeout injection + recovery while janitor pressure probe is active.
    - Includes malformed-upstream-response probe (invalid JSON response parse failure + recovery turn).
    - Includes source-mapping drift fixture coverage via project-updater pressure path.
    - Includes carryover trend assertion across repeated janitor stress passes.
