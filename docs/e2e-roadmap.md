@@ -51,7 +51,8 @@ Coverage requirements:
    - Benchmark-mode fail-fast gate is implemented in janitor: review stage fails immediately when coverage < 100% or review carryover > 0.
    - `pre-benchmark` now probes this path directly via benchmark-mode dry-run review + forced stage cap and requires non-zero exit.
 5. Deterministic maintenance outcomes
-   - Contradiction/dedup/decay checks on seeded fixtures (pending implementation).
+   - Seeded contradiction fixture transition assertion is implemented.
+   - Seeded dedup/decay fixture transition assertions are implemented.
 
 ## Stage 3: Nightly
 
@@ -63,15 +64,16 @@ Runner:
 Coverage requirements:
 1. Full suite pass (`nightly` currently aliases `full`).
 2. Multi-owner isolation checks (pending implementation).
+   - Seeded owner-scoped duplicate fixture now asserts janitor does not collapse distinct owners.
 3. RAG integrity assertions with seeded anchors (pending implementation).
+   - Added seeded anchor assertion: pre-benchmark now requires `doc_chunks` to contain the seeded RAG anchor text.
 4. Project artifact assertions beyond queue movement (pending implementation).
+   - Added PROJECT.md artifact assertion via docs update log delta (`projects/quaid/PROJECT.md`).
 5. Resilience checks (gateway restart mid-flow, concurrency/backpressure, migration fixtures) (pending implementation).
+   - Added gateway restart mid-session resilience check (nightly/`resilience` suite path).
+   - Remaining: deeper backpressure + migration-fixture resilience.
 
 ## Backlog Order
 
 Implement next in this order:
-1. Deterministic contradiction resolution fixture assertion.
-2. Deterministic dedup/decay fixture assertion.
-3. Multi-owner isolation E2E flow.
-4. Project artifact content assertions.
-5. RAG chunk anchor assertions.
+1. Backpressure and competing-maintenance resilience checks (janitor/docs updater pressure while live turns run).

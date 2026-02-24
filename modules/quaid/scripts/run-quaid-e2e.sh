@@ -26,12 +26,14 @@ RUN_INTEGRATION_TESTS=true
 RUN_INGEST_STRESS=true
 RUN_JANITOR_SEED=true
 RUN_MEMORY_FLOW=true
+RUN_RESILIENCE=false
 RUN_PREBENCH_GUARDS=false
 JANITOR_TIMEOUT_SECONDS=240
 JANITOR_MODE="apply"
 NOTIFY_LEVEL="debug"
 LIVE_TIMEOUT_WAIT_SECONDS=90
 E2E_SUITES="full"
+NIGHTLY_MODE=false
 E2E_SKIP_EXIT_CODE=20
 QUICK_BOOTSTRAP=false
 REUSE_WORKSPACE=false
@@ -52,7 +54,7 @@ Options:
   --skip-llm-smoke       Skip gateway LLM smoke call
   --skip-live-events     Skip live command/timeout hook validation
   --skip-notify-matrix   Skip notification-level matrix validation (quiet/normal/debug)
-  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,smoke,integration,live,memory,notify,ingest,janitor,seed (default: full)
+  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,smoke,integration,live,memory,notify,ingest,janitor,seed,resilience (default: full)
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
@@ -128,6 +130,7 @@ suite_has() {
 }
 
 if suite_has "nightly"; then
+  NIGHTLY_MODE=true
   E2E_SUITES="full"
 fi
 
@@ -168,6 +171,7 @@ elif suite_has "full"; then
   RUN_JANITOR=true
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
+  RUN_RESILIENCE=false
 else
   RUN_LLM_SMOKE=false
   RUN_INTEGRATION_TESTS=false
@@ -189,7 +193,10 @@ else
   suite_has "stress" && RUN_INGEST_STRESS=true
   suite_has "janitor" && RUN_JANITOR=true
   suite_has "seed" && RUN_JANITOR_SEED=true
+  suite_has "resilience" && RUN_RESILIENCE=true
 fi
+
+if [[ "$NIGHTLY_MODE" == true ]]; then RUN_RESILIENCE=true; fi
 
 if [[ "$SKIP_JANITOR_FLAG" == true ]]; then RUN_JANITOR=false; fi
 if [[ "$SKIP_LLM_SMOKE_FLAG" == true ]]; then RUN_LLM_SMOKE=false; fi
@@ -829,6 +836,69 @@ else
   echo "[e2e] Skipping live events (--skip-live-events)."
 fi
 
+if [[ "$RUN_RESILIENCE" == true ]]; then
+echo "[e2e] Running resilience check (gateway restart mid-session)..."
+python3 - <<'PY'
+import json
+import subprocess
+import time
+import uuid
+
+session_id = f"quaid-e2e-resilience-{uuid.uuid4().hex[:10]}"
+
+def _wait_gateway(seconds: int = 30) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        chk = subprocess.run(
+            ["bash", "-lc", "lsof -nP -iTCP:18789 -sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+        )
+        if chk.returncode == 0:
+            return
+        time.sleep(1)
+    raise SystemExit("[e2e] ERROR: gateway did not return to listening state after restart")
+
+def run_agent(message: str) -> str:
+    proc = subprocess.run(
+        ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "150", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(f"[e2e] ERROR: resilience agent call failed: {proc.stderr.strip()[:400]}")
+    out = proc.stdout.strip()
+    if not out:
+        return ""
+    try:
+        parsed = json.loads(out)
+    except Exception:
+        return out
+    if isinstance(parsed, dict):
+        if isinstance(parsed.get("response"), str):
+            return parsed["response"]
+        if isinstance(parsed.get("output"), str):
+            return parsed["output"]
+    return out
+
+first = run_agent("Resilience probe turn 1: acknowledge with OK.")
+if not first:
+    raise SystemExit("[e2e] ERROR: resilience turn 1 produced empty output")
+
+subprocess.run(["openclaw", "gateway", "restart"], check=False, capture_output=True, text=True, timeout=90)
+_wait_gateway(40)
+
+second = run_agent("Resilience probe turn 2 after forced gateway restart: acknowledge with OK.")
+if not second:
+    raise SystemExit("[e2e] ERROR: resilience turn 2 produced empty output after gateway restart")
+
+print("[e2e] Resilience check passed.")
+PY
+else
+  echo "[e2e] Skipping resilience check (suite selection)."
+fi
+
 if [[ "$RUN_MEMORY_FLOW" == true ]]; then
 echo "[e2e] Running memory flow regression checks (compact/new/recall)..."
 python3 - "$E2E_WS" <<'PY'
@@ -1314,8 +1384,22 @@ journal_path.write_text(
     "# Quaid Project\n\nSeeded e2e project doc for janitor/rag checks.\n",
     encoding="utf-8",
 )
+(project_home / "PROJECT.md").write_text(
+    "# Quaid Project\n\n"
+    "## Overview\n\nSeeded PROJECT.md for e2e artifact assertions.\n\n"
+    "### In This Directory\n"
+    "<!-- Auto-discovered — all files in this directory belong to this project -->\n"
+    "(none yet)\n\n"
+    "### External Files\n"
+    "| File | Purpose | Auto-Update |\n"
+    "|------|---------|-------------|\n\n"
+    "## Documents\n\n- projects/quaid/README.md\n",
+    encoding="utf-8",
+)
 (docs_dir / "e2e-janitor-seed.md").write_text(
-    "# Janitor E2E Seed\n\nThis document exists so rag maintenance has deterministic input.\n",
+    "# Janitor E2E Seed\n\n"
+    "This document exists so rag maintenance has deterministic input.\n\n"
+    "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224\n",
     encoding="utf-8",
 )
 
@@ -1334,8 +1418,19 @@ event = {
 
 now = dt.datetime.now()
 old_ts = (now - dt.timedelta(days=120)).isoformat()
+contradiction_marker = "e2e-seed-contradiction"
+dedup_marker = "e2e-seed-dedup"
+decay_marker = "e2e-seed-decay"
+multi_owner_marker = "e2e-seed-multi-owner"
+rag_anchor_marker = "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224"
 
-def mk_node(node_type: str, name: str, status: str = "pending", confidence: float = 0.72):
+def mk_node(
+    node_type: str,
+    name: str,
+    status: str = "pending",
+    confidence: float = 0.72,
+    owner_id: str = "quaid",
+):
     nid = str(uuid.uuid4())
     return (
         nid,
@@ -1356,7 +1451,7 @@ def mk_node(node_type: str, name: str, status: str = "pending", confidence: floa
         old_ts,
         0,
         0.0,
-        "quaid",
+        owner_id,
         "e2e-seed",
         "unknown",
         "fact",
@@ -1374,6 +1469,10 @@ rows = [
     mk_node("Fact", "The deployment host for quaid is runner-alpha", "pending", 0.74),
     mk_node("Fact", "The deployment host for quaid is runner alpha", "pending", 0.71),
     mk_node("Fact", "I prefer keeping janitor orchestration separate from datastore internals", "pending", 0.77),
+    mk_node("Fact", "I currently live in Austin, Texas", "active", 0.82),
+    mk_node("Fact", "I currently live in Bali, Indonesia", "active", 0.82),
+    mk_node("Fact", f"{multi_owner_marker}: preferred coding beverage is matcha tea", "pending", 0.79, "owner_alpha"),
+    mk_node("Fact", f"{multi_owner_marker}: preferred coding beverage is matcha tea", "pending", 0.79, "owner_beta"),
 ]
 
 with sqlite3.connect(db_path) as conn:
@@ -1402,10 +1501,44 @@ with sqlite3.connect(db_path) as conn:
             rows[0][2],
             0.97,
             "auto_reject",
-            "seed",
+            dedup_marker,
             "unreviewed",
             "quaid",
             "e2e-seed",
+            now.isoformat(),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO contradictions (
+          id, node_a_id, node_b_id, explanation, status, detected_at
+        ) VALUES (?, ?, ?, ?, 'pending', ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            rows[3][0],
+            rows[4][0],
+            f"{contradiction_marker}: seeded direct contradiction for janitor validation",
+            now.isoformat(),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO decay_review_queue (
+          id, node_id, node_text, node_type, confidence_at_queue, access_count,
+          last_accessed, verified, created_at_node, status, queued_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            rows[4][0],
+            f"{decay_marker}: I currently live in Bali, Indonesia",
+            "Fact",
+            0.11,
+            0,
+            old_ts,
+            0,
+            old_ts,
             now.isoformat(),
         ),
     )
@@ -1414,6 +1547,11 @@ print(
     json.dumps(
         {
             "seeded_nodes": len(rows),
+            "seeded_contradictions": 1,
+            "seeded_dedup_rows": 1,
+            "seeded_decay_rows": 1,
+            "seeded_multi_owner_rows": 2,
+            "seeded_rag_anchor": rag_anchor_marker,
             "snippet_path": str(snippet_path),
             "journal_path": str(journal_path),
             "staging_dir": str(staging_dir),
@@ -1441,6 +1579,12 @@ db_path = f"{ws}/data/memory.db"
 journal_path = os.path.join(ws, "journal", "SOUL.journal.md")
 snippet_path = os.path.join(ws, "SOUL.snippets.md")
 staging_dir = os.path.join(ws, "projects", "staging")
+contradiction_marker = "e2e-seed-contradiction"
+dedup_marker = "e2e-seed-dedup"
+decay_marker = "e2e-seed-decay"
+multi_owner_marker = "e2e-seed-multi-owner"
+rag_anchor_marker = "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224"
+docs_update_log_path = os.path.join(ws, "logs", "docs-update-log.json")
 
 def fetch_counts(conn):
     rows = conn.execute(
@@ -1452,20 +1596,128 @@ def fetch_counts(conn):
             out[status] = count
     return out
 
+def _load_docs_update_entries(path: str):
+    if not os.path.exists(path):
+        return []
+    try:
+        raw = json.loads(open(path, "r", encoding="utf-8").read())
+        if isinstance(raw, list):
+            return raw
+    except Exception:
+        return []
+    return []
+
 with sqlite3.connect(db_path) as conn:
     before_counts = fetch_counts(conn)
     before_chunks = conn.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_chunks'"
     ).fetchone()[0]
     before_doc_chunks = 0
+    before_anchor_chunks = 0
     if before_chunks:
         before_doc_chunks = conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
+        before_anchor_chunks = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM doc_chunks WHERE content LIKE ?",
+                (f"%{rag_anchor_marker}%",),
+            ).fetchone()[0]
+        )
     has_runs_table = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='janitor_runs'"
     ).fetchone() is not None
     before_run_id = 0
     if has_runs_table:
         before_run_id = conn.execute("SELECT COALESCE(MAX(id), 0) FROM janitor_runs").fetchone()[0]
+    has_contradictions_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='contradictions'"
+    ).fetchone() is not None
+    before_seeded_contradictions_pending = 0
+    before_seeded_contradictions_resolved = 0
+    if has_contradictions_table:
+        before_seeded_contradictions_pending = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM contradictions
+                WHERE status = 'pending' AND explanation LIKE ?
+                """,
+                (f"%{contradiction_marker}%",),
+            ).fetchone()[0]
+        )
+        before_seeded_contradictions_resolved = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM contradictions
+                WHERE status IN ('resolved', 'false_positive') AND explanation LIKE ?
+                """,
+                (f"%{contradiction_marker}%",),
+            ).fetchone()[0]
+        )
+    has_dedup_log_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dedup_log'"
+    ).fetchone() is not None
+    before_seeded_dedup_unreviewed = 0
+    before_seeded_dedup_reviewed = 0
+    if has_dedup_log_table:
+        before_seeded_dedup_unreviewed = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM dedup_log
+                WHERE review_status = 'unreviewed' AND llm_reasoning = ?
+                """,
+                (dedup_marker,),
+            ).fetchone()[0]
+        )
+        before_seeded_dedup_reviewed = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM dedup_log
+                WHERE review_status IN ('confirmed', 'reversed') AND llm_reasoning = ?
+                """,
+                (dedup_marker,),
+            ).fetchone()[0]
+        )
+    has_decay_queue_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='decay_review_queue'"
+    ).fetchone() is not None
+    before_seeded_decay_pending = 0
+    before_seeded_decay_reviewed = 0
+    if has_decay_queue_table:
+        before_seeded_decay_pending = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM decay_review_queue
+                WHERE status = 'pending' AND node_text LIKE ?
+                """,
+                (f"%{decay_marker}%",),
+            ).fetchone()[0]
+        )
+        before_seeded_decay_reviewed = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM decay_review_queue
+                WHERE status = 'reviewed' AND node_text LIKE ?
+                """,
+                (f"%{decay_marker}%",),
+            ).fetchone()[0]
+        )
+    before_multi_owner_node_count = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE name LIKE ?",
+            (f"%{multi_owner_marker}%",),
+        ).fetchone()[0]
+    )
+    before_multi_owner_distinct_owners = int(
+        conn.execute(
+            "SELECT COUNT(DISTINCT owner_id) FROM nodes WHERE name LIKE ?",
+            (f"%{multi_owner_marker}%",),
+        ).fetchone()[0]
+    )
+before_docs_update_entries = _load_docs_update_entries(docs_update_log_path)
+before_project_doc_updates = sum(
+    1 for e in before_docs_update_entries
+    if isinstance(e, dict)
+    and str(e.get("doc_path", "")) == "projects/quaid/PROJECT.md"
+)
 before_staging = len([x for x in os.listdir(staging_dir) if x.endswith(".json")]) if os.path.isdir(staging_dir) else 0
 before_seeded_staging = len([x for x in os.listdir(staging_dir) if x.endswith("-e2e-seed.json")]) if os.path.isdir(staging_dir) else 0
 snippet_exists_before = os.path.exists(snippet_path)
@@ -1529,11 +1781,18 @@ except subprocess.TimeoutExpired:
 with sqlite3.connect(db_path) as conn:
     after_counts = fetch_counts(conn)
     after_doc_chunks = 0
+    after_anchor_chunks = 0
     has_doc_chunks = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='doc_chunks'"
     ).fetchone() is not None
     if has_doc_chunks:
         after_doc_chunks = conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
+        after_anchor_chunks = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM doc_chunks WHERE content LIKE ?",
+                (f"%{rag_anchor_marker}%",),
+            ).fetchone()[0]
+        )
     has_runs_table_after = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='janitor_runs'"
     ).fetchone() is not None
@@ -1545,6 +1804,87 @@ with sqlite3.connect(db_path) as conn:
         "FROM janitor_runs WHERE id > ? ORDER BY id DESC LIMIT 1",
         (before_run_id,),
     ).fetchone()
+    after_seeded_contradictions_pending = 0
+    after_seeded_contradictions_resolved = 0
+    if has_contradictions_table:
+        after_seeded_contradictions_pending = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM contradictions
+                WHERE status = 'pending' AND explanation LIKE ?
+                """,
+                (f"%{contradiction_marker}%",),
+            ).fetchone()[0]
+        )
+        after_seeded_contradictions_resolved = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM contradictions
+                WHERE status IN ('resolved', 'false_positive') AND explanation LIKE ?
+                """,
+                (f"%{contradiction_marker}%",),
+            ).fetchone()[0]
+        )
+    after_seeded_dedup_unreviewed = 0
+    after_seeded_dedup_reviewed = 0
+    if has_dedup_log_table:
+        after_seeded_dedup_unreviewed = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM dedup_log
+                WHERE review_status = 'unreviewed' AND llm_reasoning = ?
+                """,
+                (dedup_marker,),
+            ).fetchone()[0]
+        )
+        after_seeded_dedup_reviewed = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM dedup_log
+                WHERE review_status IN ('confirmed', 'reversed') AND llm_reasoning = ?
+                """,
+                (dedup_marker,),
+            ).fetchone()[0]
+        )
+    after_seeded_decay_pending = 0
+    after_seeded_decay_reviewed = 0
+    if has_decay_queue_table:
+        after_seeded_decay_pending = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM decay_review_queue
+                WHERE status = 'pending' AND node_text LIKE ?
+                """,
+                (f"%{decay_marker}%",),
+            ).fetchone()[0]
+        )
+        after_seeded_decay_reviewed = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM decay_review_queue
+                WHERE status = 'reviewed' AND node_text LIKE ?
+                """,
+                (f"%{decay_marker}%",),
+            ).fetchone()[0]
+        )
+    after_multi_owner_node_count = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE name LIKE ?",
+            (f"%{multi_owner_marker}%",),
+        ).fetchone()[0]
+    )
+    after_multi_owner_distinct_owners = int(
+        conn.execute(
+            "SELECT COUNT(DISTINCT owner_id) FROM nodes WHERE name LIKE ?",
+            (f"%{multi_owner_marker}%",),
+        ).fetchone()[0]
+    )
+after_docs_update_entries = _load_docs_update_entries(docs_update_log_path)
+after_project_doc_updates = sum(
+    1 for e in after_docs_update_entries
+    if isinstance(e, dict)
+    and str(e.get("doc_path", "")) == "projects/quaid/PROJECT.md"
+)
 
 if not run_row:
     if mode == "dry-run":
@@ -1573,6 +1913,26 @@ summary = {
     "seeded_staging_after": after_seeded_staging,
     "doc_chunks_before": before_doc_chunks,
     "doc_chunks_after": after_doc_chunks,
+    "rag_anchor_chunks_before": before_anchor_chunks,
+    "rag_anchor_chunks_after": after_anchor_chunks,
+    "seeded_contradictions_pending_before": before_seeded_contradictions_pending,
+    "seeded_contradictions_pending_after": after_seeded_contradictions_pending,
+    "seeded_contradictions_resolved_before": before_seeded_contradictions_resolved,
+    "seeded_contradictions_resolved_after": after_seeded_contradictions_resolved,
+    "seeded_dedup_unreviewed_before": before_seeded_dedup_unreviewed,
+    "seeded_dedup_unreviewed_after": after_seeded_dedup_unreviewed,
+    "seeded_dedup_reviewed_before": before_seeded_dedup_reviewed,
+    "seeded_dedup_reviewed_after": after_seeded_dedup_reviewed,
+    "seeded_decay_pending_before": before_seeded_decay_pending,
+    "seeded_decay_pending_after": after_seeded_decay_pending,
+    "seeded_decay_reviewed_before": before_seeded_decay_reviewed,
+    "seeded_decay_reviewed_after": after_seeded_decay_reviewed,
+    "multi_owner_nodes_before": before_multi_owner_node_count,
+    "multi_owner_nodes_after": after_multi_owner_node_count,
+    "multi_owner_distinct_owners_before": before_multi_owner_distinct_owners,
+    "multi_owner_distinct_owners_after": after_multi_owner_distinct_owners,
+    "project_doc_updates_before": before_project_doc_updates,
+    "project_doc_updates_after": after_project_doc_updates,
     "snippet_exists_before": snippet_exists_before,
     "snippet_exists_after": snippet_exists_after,
     "journal_exists_before": journal_exists_before,
@@ -1600,6 +1960,13 @@ if mode == "apply":
     if after_doc_chunks < before_doc_chunks:
         print("[e2e] ERROR: rag chunk count regressed after janitor run", file=sys.stderr)
         raise SystemExit(1)
+    if after_anchor_chunks <= before_anchor_chunks:
+        print(
+            "[e2e] ERROR: rag anchor assertion failed; seeded anchor was not indexed into doc_chunks "
+            f"(before={before_anchor_chunks}, after={after_anchor_chunks})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     # Queue depth can grow from unrelated runtime traffic; verify deterministic seeded workload instead.
     if before_seeded_staging > 0 and after_seeded_staging >= before_seeded_staging:
         print("[e2e] ERROR: seeded project staging events were not consumed by janitor run", file=sys.stderr)
@@ -1607,6 +1974,76 @@ if mode == "apply":
     if snippet_exists_before and snippet_exists_after:
         print("[e2e] WARN: snippet backlog still present after janitor run.")
     if prebench_guard:
+        if before_seeded_contradictions_pending > 0:
+            if after_seeded_contradictions_pending > 0:
+                print(
+                    "[e2e] ERROR: seeded contradiction fixture remained pending after janitor run "
+                    f"(before={before_seeded_contradictions_pending}, after={after_seeded_contradictions_pending})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            resolved_delta = after_seeded_contradictions_resolved - before_seeded_contradictions_resolved
+            if resolved_delta < before_seeded_contradictions_pending:
+                print(
+                    "[e2e] ERROR: seeded contradiction fixture did not transition to resolved/false_positive as expected "
+                    f"(pending_before={before_seeded_contradictions_pending}, resolved_delta={resolved_delta})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+        if before_seeded_dedup_unreviewed > 0:
+            if after_seeded_dedup_unreviewed > 0:
+                print(
+                    "[e2e] ERROR: seeded dedup fixture remained unreviewed after janitor run "
+                    f"(before={before_seeded_dedup_unreviewed}, after={after_seeded_dedup_unreviewed})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            dedup_reviewed_delta = after_seeded_dedup_reviewed - before_seeded_dedup_reviewed
+            if dedup_reviewed_delta < before_seeded_dedup_unreviewed:
+                print(
+                    "[e2e] ERROR: seeded dedup fixture did not transition to reviewed as expected "
+                    f"(unreviewed_before={before_seeded_dedup_unreviewed}, reviewed_delta={dedup_reviewed_delta})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+        if before_seeded_decay_pending > 0:
+            if after_seeded_decay_pending > 0:
+                print(
+                    "[e2e] ERROR: seeded decay-review fixture remained pending after janitor run "
+                    f"(before={before_seeded_decay_pending}, after={after_seeded_decay_pending})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            decay_reviewed_delta = after_seeded_decay_reviewed - before_seeded_decay_reviewed
+            if decay_reviewed_delta < before_seeded_decay_pending:
+                print(
+                    "[e2e] ERROR: seeded decay-review fixture did not transition to reviewed as expected "
+                    f"(pending_before={before_seeded_decay_pending}, reviewed_delta={decay_reviewed_delta})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+        if before_multi_owner_distinct_owners >= 2:
+            if after_multi_owner_distinct_owners < 2:
+                print(
+                    "[e2e] ERROR: multi-owner isolation failed; seeded owner-scoped memories collapsed owners "
+                    f"(before_owners={before_multi_owner_distinct_owners}, after_owners={after_multi_owner_distinct_owners})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            if after_multi_owner_node_count < 2:
+                print(
+                    "[e2e] ERROR: multi-owner isolation failed; seeded owner-scoped memories were over-collapsed "
+                    f"(before_nodes={before_multi_owner_node_count}, after_nodes={after_multi_owner_node_count})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+        if after_project_doc_updates <= before_project_doc_updates:
+            print(
+                "[e2e] ERROR: project artifact assertion failed; no new PROJECT.md update log entry "
+                f"(before={before_project_doc_updates}, after={after_project_doc_updates})",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         pending_after = int(after_counts.get("pending", 0))
         approved_after = int(after_counts.get("approved", 0))
         if pending_after > 0 or approved_after > 0:
