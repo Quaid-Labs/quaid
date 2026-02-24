@@ -1478,6 +1478,43 @@ else:
     cmd.append("--apply")
 cmd.append("--force-distill")
 
+if prebench_guard:
+    # Validate benchmark-mode fail-fast review gate before full janitor apply.
+    # Stage cap=1 guarantees carryover when seeded pending backlog >1.
+    review_env = dict(os.environ)
+    review_env["QUAID_BENCHMARK_MODE"] = "1"
+    review_env["JANITOR_MAX_ITEMS_PER_STAGE"] = "1"
+    review_py_parts = [f"{ws}/modules/quaid"]
+    if review_env.get("PYTHONPATH"):
+        review_py_parts.append(review_env["PYTHONPATH"])
+    review_env["PYTHONPATH"] = ":".join(review_py_parts)
+    review_cmd = [
+        "python3",
+        "modules/quaid/core/lifecycle/janitor.py",
+        "--task",
+        "review",
+        "--dry-run",
+        "--no-resume-checkpoint",
+    ]
+    review_probe = subprocess.run(
+        review_cmd,
+        cwd=ws,
+        env=review_env,
+        capture_output=True,
+        text=True,
+        timeout=max(120, min(timeout_seconds, 240)),
+    )
+    if review_probe.returncode == 0:
+        print(
+            "[e2e] ERROR: benchmark-mode review fail-fast probe unexpectedly passed "
+            "(expected non-zero with forced carryover).",
+            file=sys.stderr,
+        )
+        print(review_probe.stdout[-1200:], file=sys.stderr)
+        print(review_probe.stderr[-1200:], file=sys.stderr)
+        raise SystemExit(1)
+    print("[e2e] Benchmark-mode review fail-fast probe behaved as expected.")
+
 try:
     env = dict(os.environ)
     py_parts = [f"{ws}/modules/quaid"]
