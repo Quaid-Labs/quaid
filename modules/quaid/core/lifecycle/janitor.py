@@ -95,7 +95,13 @@ RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 
 
 
-from datastore.memorydb.maintenance_ops import *  # noqa: F401,F403
+from datastore.memorydb.maintenance_ops import (
+    JanitorMetrics,
+    backfill_embeddings,
+    get_last_run_time,
+    init_janitor_metadata,
+    _is_benchmark_mode,
+)
 
 def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
     """Run npm test for quaid plugin and report pass/fail counts."""
