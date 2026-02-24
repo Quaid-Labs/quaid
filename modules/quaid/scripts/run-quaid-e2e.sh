@@ -46,6 +46,7 @@ SUMMARY_HISTORY_PATH="${QUAID_E2E_SUMMARY_HISTORY_PATH:-/tmp/quaid-e2e-summary-h
 SUMMARY_BUDGET_RECOMMENDATION_PATH="${QUAID_E2E_BUDGET_RECOMMENDATION_PATH:-/tmp/quaid-e2e-budget-recommendation.json}"
 RUNTIME_BUDGET_TUNE_MIN_SAMPLES="${QUAID_E2E_BUDGET_TUNE_MIN_SAMPLES:-5}"
 RUNTIME_BUDGET_TUNE_BUFFER_RATIO="${QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO:-1.2}"
+NOTIFY_REQUIRE_DELIVERY="${QUAID_E2E_NOTIFY_REQUIRE_DELIVERY:-false}"
 RUNTIME_BUDGET_PROFILE="${QUAID_E2E_RUNTIME_BUDGET_PROFILE:-auto}"
 RUNTIME_BUDGET_SECONDS="${QUAID_E2E_RUNTIME_BUDGET_SECONDS:-0}"
 RUNTIME_BUDGET_EXCEEDED="false"
@@ -551,6 +552,7 @@ cleanup() {
   write_e2e_summary "$exit_code" || true
   emit_budget_recommendation_if_nightly || true
   rm -f "$TMP_PROFILE"
+  openclaw gateway stop >/dev/null 2>&1 || true
   if [[ "$exit_code" -eq 0 && "$KEEP_ON_SUCCESS" != true ]]; then
     echo "[e2e] Success, removing ${E2E_WS}"
     rm -rf "$E2E_WS" || true
@@ -1757,6 +1759,7 @@ import time
 import uuid
 
 ws = sys.argv[1]
+strict_delivery = os.environ.get("QUAID_E2E_NOTIFY_REQUIRE_DELIVERY", "").strip().lower() == "true"
 cfg_path = os.path.join(ws, "config", "memory.json")
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
 notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
@@ -1892,11 +1895,32 @@ for level in ("quiet", "normal", "debug"):
     notify_lines = read_tail_since(notify_log_path, notify_start)
     assert_no_fatal_notify_errors(notify_lines)
     loaded = sum(1 for ln in notify_lines if "[config] Loaded from " in ln)
-    results.append({"level": level, "notify_lines": len(notify_lines), "loaded_count": loaded})
+    sent = sum(1 for ln in notify_lines if "[notify] Sent to " in ln)
+    no_last_channel = sum(1 for ln in notify_lines if "[notify] No last channel found" in ln)
+    send_failed = sum(1 for ln in notify_lines if "[notify] Send failed" in ln)
+    results.append(
+        {
+            "level": level,
+            "notify_lines": len(notify_lines),
+            "loaded_count": loaded,
+            "sent_count": sent,
+            "no_last_channel_count": no_last_channel,
+            "send_failed_count": send_failed,
+        }
+    )
     if level == "quiet" and loaded > 0:
         raise SystemExit("[e2e] ERROR: quiet level emitted extraction notifications")
     if level in ("normal", "debug") and loaded == 0:
         raise SystemExit(f"[e2e] ERROR: {level} level emitted no extraction notification activity")
+    if strict_delivery and level in ("normal", "debug"):
+        if no_last_channel > 0:
+            raise SystemExit(
+                f"[e2e] ERROR: strict notify delivery enabled and {level} had no active channel context"
+            )
+        if sent == 0:
+            raise SystemExit(
+                f"[e2e] ERROR: strict notify delivery enabled and {level} sent no notifications"
+            )
     print(f"[e2e] notify-matrix level={level} ok")
 
 print("[e2e] Notify matrix results:")
