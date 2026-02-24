@@ -117,4 +117,4 @@ Coverage requirements:
 Implement next in this order:
 1. Tune/commit environment-specific stage-budget thresholds from accumulated nightly history.
 2. Add CI/nightly workflow entry that runs `nightly-strict-notify` with stable channel fixtures.
-3. Add benchmark report extraction for janitor parallel lane (per-stage durations + carryover deltas).
+3. Consume janitor parallel benchmark report in benchmark automation and enforce regression thresholds.
