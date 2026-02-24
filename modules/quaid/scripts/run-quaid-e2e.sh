@@ -20,10 +20,22 @@ AUTH_PATH="openai-oauth"
 KEEP_ON_SUCCESS=false
 RUN_JANITOR=true
 RUN_LLM_SMOKE=true
+RUN_LIVE_EVENTS=true
+RUN_NOTIFY_MATRIX=true
+RUN_INTEGRATION_TESTS=true
+RUN_INGEST_STRESS=true
+RUN_JANITOR_SEED=true
 JANITOR_TIMEOUT_SECONDS=240
 JANITOR_MODE="apply"
-NOTIFY_LEVEL="quiet"
+NOTIFY_LEVEL="debug"
+LIVE_TIMEOUT_WAIT_SECONDS=90
+E2E_SUITES="full"
 E2E_SKIP_EXIT_CODE=20
+
+SKIP_JANITOR_FLAG=false
+SKIP_LLM_SMOKE_FLAG=false
+SKIP_LIVE_EVENTS_FLAG=false
+SKIP_NOTIFY_MATRIX_FLAG=false
 
 usage() {
   cat <<USAGE
@@ -34,9 +46,13 @@ Options:
   --keep-on-success      Do not delete ~/quaid/e2e-test after successful run
   --skip-janitor         Skip janitor phase
   --skip-llm-smoke       Skip gateway LLM smoke call
+  --skip-live-events     Skip live command/timeout hook validation
+  --skip-notify-matrix   Skip notification-level matrix validation (quiet/normal/debug)
+  --suite <csv>          Test suites to run. Values: full,smoke,integration,live,notify,ingest,janitor,seed (default: full)
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
-  --notify-level <lvl>   Quaid notify level for e2e (quiet|normal|verbose|debug, default: quiet)
+  --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
+  --notify-level <lvl>   Quaid notify level for e2e (quiet|normal|verbose|debug, default: debug)
   --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
   --openclaw-source <p>  OpenClaw source repo path (default: ~/openclaw-source)
   -h, --help             Show this help
@@ -47,10 +63,14 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --auth-path) AUTH_PATH="$2"; shift 2 ;;
     --keep-on-success) KEEP_ON_SUCCESS=true; shift ;;
-    --skip-janitor) RUN_JANITOR=false; shift ;;
-    --skip-llm-smoke) RUN_LLM_SMOKE=false; shift ;;
+    --skip-janitor) SKIP_JANITOR_FLAG=true; shift ;;
+    --skip-llm-smoke) SKIP_LLM_SMOKE_FLAG=true; shift ;;
+    --skip-live-events) SKIP_LIVE_EVENTS_FLAG=true; shift ;;
+    --skip-notify-matrix) SKIP_NOTIFY_MATRIX_FLAG=true; shift ;;
+    --suite) E2E_SUITES="$2"; shift 2 ;;
     --janitor-timeout) JANITOR_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --janitor-dry-run) JANITOR_MODE="dry-run"; shift ;;
+    --live-timeout-wait) LIVE_TIMEOUT_WAIT_SECONDS="$2"; shift 2 ;;
     --notify-level) NOTIFY_LEVEL="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
     --openclaw-source) OPENCLAW_SOURCE="$2"; shift 2 ;;
@@ -58,6 +78,54 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown arg: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+suite_has() {
+  local needle="$1"
+  local token
+  IFS=',' read -r -a _suite_tokens <<< "$E2E_SUITES"
+  for token in "${_suite_tokens[@]}"; do
+    token="$(echo "$token" | tr '[:upper:]' '[:lower:]' | xargs)"
+    [[ -z "$token" ]] && continue
+    if [[ "$token" == "$needle" || "$token" == "full" || "$token" == "all" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if suite_has "full"; then
+  RUN_LLM_SMOKE=true
+  RUN_INTEGRATION_TESTS=true
+  RUN_LIVE_EVENTS=true
+  RUN_NOTIFY_MATRIX=true
+  RUN_INGEST_STRESS=true
+  RUN_JANITOR=true
+  RUN_JANITOR_SEED=true
+else
+  RUN_LLM_SMOKE=false
+  RUN_INTEGRATION_TESTS=false
+  RUN_LIVE_EVENTS=false
+  RUN_NOTIFY_MATRIX=false
+  RUN_INGEST_STRESS=false
+  RUN_JANITOR=false
+  RUN_JANITOR_SEED=false
+
+  suite_has "smoke" && RUN_LLM_SMOKE=true
+  suite_has "integration" && RUN_INTEGRATION_TESTS=true
+  suite_has "tests" && RUN_INTEGRATION_TESTS=true
+  suite_has "live" && RUN_LIVE_EVENTS=true
+  suite_has "hooks" && RUN_LIVE_EVENTS=true
+  suite_has "notify" && RUN_NOTIFY_MATRIX=true
+  suite_has "ingest" && RUN_INGEST_STRESS=true
+  suite_has "stress" && RUN_INGEST_STRESS=true
+  suite_has "janitor" && RUN_JANITOR=true
+  suite_has "seed" && RUN_JANITOR_SEED=true
+fi
+
+if [[ "$SKIP_JANITOR_FLAG" == true ]]; then RUN_JANITOR=false; fi
+if [[ "$SKIP_LLM_SMOKE_FLAG" == true ]]; then RUN_LLM_SMOKE=false; fi
+if [[ "$SKIP_LIVE_EVENTS_FLAG" == true ]]; then RUN_LIVE_EVENTS=false; fi
+if [[ "$SKIP_NOTIFY_MATRIX_FLAG" == true ]]; then RUN_NOTIFY_MATRIX=false; fi
 
 skip_e2e() {
   local reason="$1"
@@ -161,7 +229,7 @@ cleanup() {
   rm -f "$TMP_PROFILE"
   if [[ "$exit_code" -eq 0 && "$KEEP_ON_SUCCESS" != true ]]; then
     echo "[e2e] Success, removing ${E2E_WS}"
-    rm -rf "$E2E_WS"
+    rm -rf "$E2E_WS" || true
   fi
   restore_test_gateway
   return "$exit_code"
@@ -305,11 +373,89 @@ else
   echo "[e2e] Skipping LLM smoke (--skip-llm-smoke)."
 fi
 
+HOOK_SRC="${E2E_WS}/modules/quaid/adaptors/openclaw/hooks/quaid-reset-signal"
+HOOK_DST="${E2E_WS}/hooks/quaid-reset-signal"
+if [[ -d "$HOOK_SRC" ]]; then
+  echo "[e2e] Installing workspace hook: quaid-reset-signal"
+  mkdir -p "${E2E_WS}/hooks"
+  rm -rf "$HOOK_DST"
+  cp -R "$HOOK_SRC" "$HOOK_DST"
+  openclaw hooks enable quaid-reset-signal >/dev/null 2>&1 || true
+  openclaw hooks install "$HOOK_DST" >/dev/null 2>&1 || true
+  openclaw hooks enable quaid-reset-signal >/dev/null 2>&1 || true
+else
+  echo "[e2e] Missing hook source: $HOOK_SRC" >&2
+  exit 1
+fi
+
+if ! openclaw hooks list --json | python3 - <<'PY'
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    raise SystemExit(1)
+decoder = json.JSONDecoder()
+obj = None
+for idx, ch in enumerate(raw):
+    if ch != "{":
+        continue
+    try:
+        candidate, end = decoder.raw_decode(raw[idx:])
+    except Exception:
+        continue
+    if isinstance(candidate, dict) and "hooks" in candidate:
+        obj = candidate
+if not isinstance(obj, dict):
+    raise SystemExit(1)
+hooks = obj.get("hooks") or []
+match = next((h for h in hooks if (h.get("name") == "quaid-reset-signal")), None)
+if not match:
+    raise SystemExit(1)
+if match.get("disabled"):
+    raise SystemExit(1)
+print("[e2e] Hook ready: quaid-reset-signal")
+PY
+then
+  echo "[e2e] WARN: quaid-reset-signal precheck did not pass; live event checks will validate behavior directly." >&2
+fi
+
+# Keep timeout test practical in CI/dev by forcing a short inactivity timeout.
+MEMORY_CFG="${E2E_WS}/config/memory.json"
+if [[ -f "$MEMORY_CFG" ]]; then
+  python3 - "$MEMORY_CFG" <<'PY'
+import json, sys
+p = sys.argv[1]
+obj = json.load(open(p, "r", encoding="utf-8"))
+capture = obj.setdefault("capture", {})
+capture["inactivityTimeoutMinutes"] = 0.1
+capture["inactivity_timeout_minutes"] = 0.1
+capture["autoCompactionOnTimeout"] = False
+capture["auto_compaction_on_timeout"] = False
+with open(p, "w", encoding="utf-8") as f:
+    json.dump(obj, f, indent=2)
+    f.write("\n")
+print("[e2e] Updated capture timeout for live timeout validation (~6 seconds).")
+PY
+else
+  echo "[e2e] ERROR: missing memory config: $MEMORY_CFG" >&2
+  exit 1
+fi
+
+# Reload gateway so newly installed hooks and timeout config are active.
+echo "[e2e] Restarting gateway to apply hook/config changes..."
+openclaw gateway stop >/dev/null 2>&1 || true
+start_gateway_safe
+if ! wait_for_gateway_listen 40; then
+  echo "[e2e] Gateway failed to restart after hook/config update" >&2
+  openclaw gateway status || true
+  exit 1
+fi
+
 if [[ ! -e "${E2E_WS}/plugins/quaid" ]] && [[ -d "${E2E_WS}/modules/quaid" ]]; then
   mkdir -p "${E2E_WS}/plugins"
   ln -sfn ../modules/quaid "${E2E_WS}/plugins/quaid"
 fi
 
+if [[ "$RUN_INTEGRATION_TESTS" == true ]]; then
 echo "[e2e] Running Quaid integration tests..."
 for required in \
   "${E2E_WS}/modules/quaid/tests/session-timeout-manager.test.ts" \
@@ -321,11 +467,641 @@ for required in \
   fi
 done
 (cd "${E2E_WS}/modules/quaid" && npx vitest run tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts --reporter=verbose)
+else
+  echo "[e2e] Skipping integration tests (suite selection)."
+fi
+
+if [[ "$RUN_LIVE_EVENTS" == true ]]; then
+echo "[e2e] Validating live /compact /reset /new + timeout events..."
+python3 - "$E2E_WS" "$LIVE_TIMEOUT_WAIT_SECONDS" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+
+ws = sys.argv[1]
+timeout_wait = int(sys.argv[2])
+events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
+notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
+session_id = f"quaid-e2e-live-{uuid.uuid4().hex[:12]}"
+
+def run_agent(message: str) -> None:
+    cmd = ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "180", "--json"]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"[e2e] ERROR: openclaw agent failed for message={message!r}: {proc.stderr.strip()[:400]}")
+
+def line_count(path: str) -> int:
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return sum(1 for _ in f)
+
+def read_tail_since(path: str, start: int):
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for idx, line in enumerate(f, start=1):
+            if idx > start:
+                out.append(line.strip())
+    return out
+
+def wait_for(predicate, seconds: int, label: str, start_line: int):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        lines = read_tail_since(events_path, start_line)
+        if predicate(lines):
+            return
+        time.sleep(1)
+    lines = read_tail_since(events_path, start_line)
+    preview = "\n".join(lines[-30:])
+    raise SystemExit(f"[e2e] ERROR: timed out waiting for {label}\n[e2e] recent events:\n{preview}")
+
+def assert_notify_worker_healthy(start_line: int) -> None:
+    lines = read_tail_since(notify_log_path, start_line)
+    if not lines:
+        return
+    bad = []
+    patterns = (
+        "No such file or directory: 'clawdbot'",
+        "No such file or directory: 'openclaw'",
+        "No message CLI found",
+    )
+    for ln in lines:
+        if any(p in ln for p in patterns):
+            bad.append(ln)
+    if bad:
+        preview = "\n".join(bad[-20:])
+        raise SystemExit(
+            "[e2e] ERROR: notification worker CLI failure detected.\n"
+            f"[e2e] notify-worker excerpts:\n{preview}"
+        )
+
+def resolve_session_id_from_marker(marker: str, seconds: int = 25) -> str:
+    session_dir = os.path.join(ws, "logs", "quaid", "session-messages")
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if os.path.isdir(session_dir):
+            for name in os.listdir(session_dir):
+                if not name.endswith(".jsonl"):
+                    continue
+                fp = os.path.join(session_dir, name)
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    if marker in content:
+                        return name[:-6]
+                except Exception:
+                    continue
+        time.sleep(1)
+    raise SystemExit(f"[e2e] ERROR: could not resolve runtime session_id for marker={marker}")
+
+print(f"[e2e] Live events session: {session_id}")
+notify_start = line_count(notify_log_path)
+
+timeout_marker = f"E2E_TIMEOUT_{uuid.uuid4().hex[:10]}"
+start = line_count(events_path)
+run_agent(f"E2E timeout probe marker: {timeout_marker}")
+timeout_session_id = resolve_session_id_from_marker(timeout_marker, 25)
+print(f"[e2e] Timeout runtime session_id: {timeout_session_id}")
+wait_for(
+    lambda lines: any(
+        f'"session_id":"{timeout_session_id}"' in ln
+        and (
+            '"event":"timer_fired"' in ln
+            or ('"event":"extract_begin"' in ln and '"timeout_minutes"' in ln)
+        )
+        for ln in lines
+    ),
+    timeout_wait,
+    "timeout extraction event",
+    start,
+)
+print("[e2e] Live timeout event path OK.")
+assert_notify_worker_healthy(notify_start)
+
+compact_marker = f"E2E_COMPACT_{uuid.uuid4().hex[:10]}"
+run_agent(f"E2E marker before compact: {compact_marker}")
+compact_session_id = resolve_session_id_from_marker(compact_marker, 25)
+start = line_count(events_path)
+run_agent("/compact")
+wait_for(
+    lambda lines: any(
+        f'"session_id":"{compact_session_id}"' in ln
+        and '"label":"CompactionSignal"' in ln
+        and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+        for ln in lines
+    ),
+    45,
+    "compaction signal processing",
+    start,
+)
+print("[e2e] Live compact hook path OK.")
+assert_notify_worker_healthy(notify_start)
+
+reset_marker = f"E2E_RESET_{uuid.uuid4().hex[:10]}"
+run_agent(f"E2E marker before reset: {reset_marker}")
+reset_session_id = resolve_session_id_from_marker(reset_marker, 25)
+start = line_count(events_path)
+run_agent("E2E baseline message before reset.")
+run_agent("/reset")
+wait_for(
+    lambda lines: any(
+        f'"session_id":"{reset_session_id}"' in ln
+        and '"label":"ResetSignal"' in ln
+        and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+        for ln in lines
+    ),
+    45,
+    "reset signal processing",
+    start,
+)
+print("[e2e] Live reset hook path OK.")
+assert_notify_worker_healthy(notify_start)
+
+new_marker = f"E2E_NEW_{uuid.uuid4().hex[:10]}"
+run_agent(f"E2E marker before new: {new_marker}")
+new_session_id = resolve_session_id_from_marker(new_marker, 25)
+start = line_count(events_path)
+run_agent("E2E baseline message before new.")
+run_agent("/new")
+wait_for(
+    lambda lines: any(
+        f'"session_id":"{new_session_id}"' in ln
+        and '"label":"ResetSignal"' in ln
+        and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+        for ln in lines
+    ),
+    45,
+    "new command signal processing",
+    start,
+)
+print("[e2e] Live new hook path OK.")
+assert_notify_worker_healthy(notify_start)
+PY
+else
+  echo "[e2e] Skipping live events (--skip-live-events)."
+fi
+
+if [[ "$RUN_NOTIFY_MATRIX" == true ]]; then
+echo "[e2e] Validating notification level matrix (quiet/normal/debug)..."
+python3 - "$E2E_WS" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+
+ws = sys.argv[1]
+cfg_path = os.path.join(ws, "config", "memory.json")
+events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
+notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
+
+def line_count(path: str) -> int:
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return sum(1 for _ in f)
+
+def read_tail_since(path: str, start: int):
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for idx, line in enumerate(f, start=1):
+            if idx > start:
+                out.append(line.strip())
+    return out
+
+def set_level(level: str) -> None:
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    notifications = cfg.setdefault("notifications", {})
+    notifications["level"] = level
+    if level == "quiet":
+        notifications["janitor"] = {"verbosity": "off"}
+        notifications["extraction"] = {"verbosity": "off"}
+        notifications["retrieval"] = {"verbosity": "off"}
+    elif level == "normal":
+        notifications["janitor"] = {"verbosity": "summary"}
+        notifications["extraction"] = {"verbosity": "summary"}
+        notifications["retrieval"] = {"verbosity": "off"}
+    elif level == "debug":
+        notifications["janitor"] = {"verbosity": "full"}
+        notifications["extraction"] = {"verbosity": "full"}
+        notifications["retrieval"] = {"verbosity": "full"}
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
+
+def restart_gateway() -> None:
+    subprocess.run(["openclaw", "gateway", "stop"], capture_output=True, text=True)
+    subprocess.run(["openclaw", "gateway", "install"], capture_output=True, text=True)
+    subprocess.run(["openclaw", "gateway", "restart"], capture_output=True, text=True)
+    subprocess.run(["openclaw", "gateway", "start"], capture_output=True, text=True)
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        chk = subprocess.run(
+            ["bash", "-lc", "lsof -nP -iTCP:18789 -sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+        )
+        if chk.returncode == 0:
+            return
+        time.sleep(1)
+    raise SystemExit("[e2e] ERROR: gateway did not resume listen on 127.0.0.1:18789 for notify matrix")
+
+def run_agent(session_id: str, message: str) -> None:
+    proc = subprocess.run(
+        ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "180", "--json"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[e2e] ERROR: openclaw agent failed in notify matrix level session={session_id} "
+            f"msg={message!r}: {proc.stderr.strip()[:400]}"
+        )
+
+def wait_for_reset_start(start_line: int, seconds: int = 45) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        lines = read_tail_since(events_path, start_line)
+        if any('"label":"ResetSignal"' in ln and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln) for ln in lines):
+            return
+        time.sleep(1)
+    preview = "\n".join(read_tail_since(events_path, start_line)[-30:])
+    raise SystemExit(f"[e2e] ERROR: notify matrix timed out waiting for reset extraction start\n{preview}")
+
+def assert_no_fatal_notify_errors(lines) -> None:
+    patterns = (
+        "No such file or directory: 'clawdbot'",
+        "No such file or directory: 'openclaw'",
+        "No message CLI found",
+    )
+    bad = [ln for ln in lines if any(p in ln for p in patterns)]
+    if bad:
+        raise SystemExit(
+            "[e2e] ERROR: notify matrix detected fatal notification CLI issue:\n"
+            + "\n".join(bad[-20:])
+        )
+
+results = []
+for level in ("quiet", "normal", "debug"):
+    set_level(level)
+    restart_gateway()
+    notify_start = line_count(notify_log_path)
+    events_start = line_count(events_path)
+    sid = f"quaid-e2e-notify-{level}-{uuid.uuid4().hex[:8]}"
+    marker = f"E2E_NOTIFY_LEVEL_{level}_{uuid.uuid4().hex[:6]}"
+    run_agent(sid, f"notification level marker: {marker}")
+    run_agent(sid, "/reset")
+    wait_for_reset_start(events_start, 45)
+    time.sleep(5)
+    notify_lines = read_tail_since(notify_log_path, notify_start)
+    assert_no_fatal_notify_errors(notify_lines)
+    loaded = sum(1 for ln in notify_lines if "[config] Loaded from " in ln)
+    results.append({"level": level, "notify_lines": len(notify_lines), "loaded_count": loaded})
+    if level == "quiet" and loaded > 0:
+        raise SystemExit("[e2e] ERROR: quiet level emitted extraction notifications")
+    if level in ("normal", "debug") and loaded == 0:
+        raise SystemExit(f"[e2e] ERROR: {level} level emitted no extraction notification activity")
+
+print("[e2e] Notify matrix results:")
+print(json.dumps(results, indent=2))
+print("[e2e] Notify matrix checks passed.")
+PY
+else
+  echo "[e2e] Skipping notification matrix (suite selection/flag)."
+fi
+
+if [[ "$RUN_INGEST_STRESS" == true ]]; then
+echo "[e2e] Running ingestion stress checks (facts/snippets/journal/projects)..."
+python3 - "$E2E_WS" <<'PY'
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+ws = Path(sys.argv[1])
+db_path = ws / "data" / "memory.db"
+events_path = ws / "logs" / "quaid" / "session-timeout-events.jsonl"
+project_staging = ws / "projects" / "staging"
+project_log = ws / "logs" / "project-updater.log"
+extraction_log_path = ws / "data" / "extraction-log.json"
+session_id = f"quaid-e2e-ingest-{uuid.uuid4().hex[:12]}"
+marker = f"E2E_INGEST_{uuid.uuid4().hex[:10]}"
+
+def run_agent(message: str, timeout_sec: int = 220) -> None:
+    cmd = ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", str(timeout_sec), "--json"]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"[e2e] ERROR: openclaw agent failed for message={message[:80]!r}: {proc.stderr.strip()[:500]}")
+
+def count_nodes(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()
+    return int(row[0] if row else 0)
+
+def count_staging_events() -> int:
+    if not project_staging.exists():
+        return 0
+    return len(list(project_staging.glob("*.json")))
+
+def project_log_size() -> int:
+    try:
+        return project_log.stat().st_size
+    except Exception:
+        return 0
+
+def line_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        return sum(1 for _ in f)
+
+def read_tail_since(path: Path, start: int):
+    if not path.exists():
+        return []
+    out = []
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for idx, line in enumerate(f, start=1):
+            if idx > start:
+                out.append(line.strip())
+    return out
+
+def resolve_runtime_session_id(marker_text: str, seconds: int = 35) -> str:
+    session_dir = ws / "logs" / "quaid" / "session-messages"
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if session_dir.is_dir():
+            for fp in session_dir.glob("*.jsonl"):
+                try:
+                    content = fp.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                if marker_text in content:
+                    return fp.stem
+        time.sleep(1)
+    raise SystemExit(f"[e2e] ERROR: unable to resolve runtime session_id for marker={marker_text}")
+
+def wait_for(pred, seconds: int, label: str):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if pred():
+            return
+        time.sleep(1)
+    raise SystemExit(f"[e2e] ERROR: timed out waiting for {label}")
+
+with sqlite3.connect(db_path) as conn:
+    baseline_nodes = count_nodes(conn)
+
+baseline_staging = count_staging_events()
+baseline_project_log_size = project_log_size()
+start_line = line_count(events_path)
+
+run_agent(
+    f"""{marker}
+I need you to remember project status and personal context. We are editing modules/quaid/core/lifecycle/janitor.py and modules/quaid/core/docs/project_updater.py.
+Facts:
+1) My dog is named Madu.
+2) My sister is Shannon.
+3) I work in ~/<username>/quaid/dev.
+Project summary: quaid refactor includes janitor lifecycle registry and datastore-owned maintenance.
+Journal cue: I feel focused and cautious about boundaries.
+Snippet cue: boundary ownership belongs in datastore modules.
+""",
+    timeout_sec=260,
+)
+run_agent("/compact", timeout_sec=260)
+
+runtime_session_id = resolve_runtime_session_id(marker)
+
+def extraction_seen() -> bool:
+    lines = read_tail_since(events_path, start_line)
+    return any(
+        f'"session_id":"{runtime_session_id}"' in ln
+        and (
+            ('"label":"CompactionSignal"' in ln and '"event":"signal_process_begin"' in ln)
+            or '"event":"extract_complete"' in ln
+        )
+        for ln in lines
+    )
+
+wait_for(extraction_seen, 90, "ingestion extraction completion")
+
+with sqlite3.connect(db_path) as conn:
+    after_nodes = count_nodes(conn)
+
+extraction_logged = False
+if extraction_log_path.exists():
+    try:
+        raw = json.loads(extraction_log_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            extraction_logged = runtime_session_id in raw
+    except Exception:
+        extraction_logged = False
+
+def project_activity_seen() -> bool:
+    if count_staging_events() > baseline_staging:
+        return True
+    if project_log_size() > baseline_project_log_size:
+        return True
+    return False
+
+wait_for(project_activity_seen, 45, "project event queue/update activity")
+
+print(
+    json.dumps(
+        {
+            "session_id": session_id,
+            "runtime_session_id": runtime_session_id,
+            "nodes_before": baseline_nodes,
+            "nodes_after": after_nodes,
+            "node_delta": after_nodes - baseline_nodes,
+            "extraction_logged": extraction_logged,
+            "project_staging_before": baseline_staging,
+            "project_staging_after": count_staging_events(),
+            "project_log_size_before": baseline_project_log_size,
+            "project_log_size_after": project_log_size(),
+        },
+        indent=2,
+    )
+)
+print("[e2e] Ingestion stress checks passed.")
+PY
+else
+  echo "[e2e] Skipping ingestion stress checks (suite selection)."
+fi
 
 if [[ "$RUN_JANITOR" == true ]]; then
+if [[ "$RUN_JANITOR_SEED" == true ]]; then
+echo "[e2e] Seeding janitor workload (pending memory/snippets/journal/project/rag)..."
+python3 - "$E2E_WS" <<'PY'
+import datetime as dt
+import hashlib
+import json
+import sqlite3
+import uuid
+from pathlib import Path
+
+ws = Path(__import__("sys").argv[1])
+db_path = ws / "data" / "memory.db"
+cfg_path = ws / "config" / "memory.json"
+cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+journal_dir = ws / ((cfg.get("docs") or {}).get("journal", {}).get("journalDir") or "journal")
+staging_dir = ws / ((cfg.get("projects") or {}).get("stagingDir") or "projects/staging/")
+project_home = ws / "projects" / "quaid"
+docs_dir = ws / ((cfg.get("rag") or {}).get("docsDir") or "docs")
+
+journal_dir.mkdir(parents=True, exist_ok=True)
+staging_dir.mkdir(parents=True, exist_ok=True)
+project_home.mkdir(parents=True, exist_ok=True)
+docs_dir.mkdir(parents=True, exist_ok=True)
+
+snippet_path = ws / "SOUL.snippets.md"
+snippet_path.write_text(
+    "# SOUL — Pending Snippets\n\n"
+    "## Compaction — 2026-02-20 01:01:01\n"
+    "- [REFLECTION] Boundary ownership should remain inside datastore modules.\n"
+    "- [REFLECTION] Janitor should orchestrate, not own datastore internals.\n",
+    encoding="utf-8",
+)
+
+journal_path = journal_dir / "SOUL.journal.md"
+journal_path.write_text(
+    "# SOUL Journal\n\n"
+    "## 2026-02-18 — Reset\n"
+    "I noticed the system became more coherent once maintenance ownership lived with each datastore.\n",
+    encoding="utf-8",
+)
+
+(project_home / "README.md").write_text(
+    "# Quaid Project\n\nSeeded e2e project doc for janitor/rag checks.\n",
+    encoding="utf-8",
+)
+(docs_dir / "e2e-janitor-seed.md").write_text(
+    "# Janitor E2E Seed\n\nThis document exists so rag maintenance has deterministic input.\n",
+    encoding="utf-8",
+)
+
+event = {
+    "project_hint": "quaid",
+    "files_touched": ["modules/quaid/core/lifecycle/janitor.py", "projects/quaid/README.md"],
+    "summary": "E2E seeded project event for janitor validation.",
+    "trigger": "compact",
+    "session_id": f"quaid-e2e-seed-{uuid.uuid4().hex[:8]}",
+    "timestamp": dt.datetime.now().isoformat(),
+}
+(staging_dir / f"{int(dt.datetime.now().timestamp() * 1000)}-e2e-seed.json").write_text(
+    json.dumps(event, indent=2),
+    encoding="utf-8",
+)
+
+now = dt.datetime.now()
+old_ts = (now - dt.timedelta(days=120)).isoformat()
+
+def mk_node(node_type: str, name: str, status: str = "pending", confidence: float = 0.72):
+    nid = str(uuid.uuid4())
+    return (
+        nid,
+        node_type,
+        name,
+        json.dumps({}),
+        None,
+        0,
+        0,
+        confidence,
+        "e2e-seed",
+        None,
+        "shared",
+        None,
+        None,
+        old_ts,
+        old_ts,
+        old_ts,
+        0,
+        0.0,
+        "quaid",
+        "e2e-seed",
+        "unknown",
+        "fact",
+        0.9,
+        status,
+        None,
+        hashlib.sha256(" ".join(name.lower().split()).encode("utf-8")).hexdigest(),
+        None,
+        0,
+        None,
+        None,
+    )
+
+rows = [
+    mk_node("Fact", "The deployment host for quaid is runner-alpha", "pending", 0.74),
+    mk_node("Fact", "The deployment host for quaid is runner alpha", "pending", 0.71),
+    mk_node("Fact", "I prefer keeping janitor orchestration separate from datastore internals", "pending", 0.77),
+]
+
+with sqlite3.connect(db_path) as conn:
+    conn.executemany(
+        """
+        INSERT INTO nodes (
+          id, type, name, attributes, embedding, verified, pinned, confidence, source, source_id,
+          privacy, valid_from, valid_until, created_at, updated_at, accessed_at, access_count,
+          storage_strength, owner_id, session_id, fact_type, knowledge_type, extraction_confidence,
+          status, speaker, content_hash, superseded_by, confirmation_count, last_confirmed_at, keywords
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.execute(
+        """
+        INSERT INTO dedup_log (
+          id, new_text, existing_node_id, existing_text, similarity, decision, llm_reasoning, review_status, owner_id, source, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            "The deployment host for quaid is runner alpha",
+            rows[0][0],
+            rows[0][2],
+            0.97,
+            "auto_reject",
+            "seed",
+            "unreviewed",
+            "quaid",
+            "e2e-seed",
+            now.isoformat(),
+        ),
+    )
+
+print(
+    json.dumps(
+        {
+            "seeded_nodes": len(rows),
+            "snippet_path": str(snippet_path),
+            "journal_path": str(journal_path),
+            "staging_dir": str(staging_dir),
+            "docs_dir": str(docs_dir),
+        },
+        indent=2,
+    )
+)
+PY
+fi
+
 echo "[e2e] Running janitor (${JANITOR_MODE})..."
 python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" <<'PY'
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -334,6 +1110,9 @@ ws = sys.argv[1]
 timeout_seconds = int(sys.argv[2])
 mode = sys.argv[3]
 db_path = f"{ws}/data/memory.db"
+journal_path = os.path.join(ws, "journal", "SOUL.journal.md")
+snippet_path = os.path.join(ws, "SOUL.snippets.md")
+staging_dir = os.path.join(ws, "projects", "staging")
 
 def fetch_counts(conn):
     rows = conn.execute(
@@ -347,27 +1126,49 @@ def fetch_counts(conn):
 
 with sqlite3.connect(db_path) as conn:
     before_counts = fetch_counts(conn)
+    before_chunks = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='doc_chunks'"
+    ).fetchone()[0]
+    before_doc_chunks = 0
+    if before_chunks:
+        before_doc_chunks = conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
     has_runs_table = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='janitor_runs'"
     ).fetchone() is not None
     before_run_id = 0
     if has_runs_table:
         before_run_id = conn.execute("SELECT COALESCE(MAX(id), 0) FROM janitor_runs").fetchone()[0]
+before_staging = len([x for x in os.listdir(staging_dir) if x.endswith(".json")]) if os.path.isdir(staging_dir) else 0
+before_seeded_staging = len([x for x in os.listdir(staging_dir) if x.endswith("-e2e-seed.json")]) if os.path.isdir(staging_dir) else 0
+snippet_exists_before = os.path.exists(snippet_path)
+journal_exists_before = os.path.exists(journal_path)
 
 cmd = ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "all"]
 if mode == "dry-run":
     cmd.append("--dry-run")
 else:
     cmd.append("--apply")
+cmd.append("--force-distill")
 
 try:
-    subprocess.run(cmd, cwd=ws, check=True, timeout=timeout_seconds)
+    env = dict(os.environ)
+    py_parts = [f"{ws}/modules/quaid"]
+    if env.get("PYTHONPATH"):
+        py_parts.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = ":".join(py_parts)
+    subprocess.run(cmd, cwd=ws, check=True, timeout=timeout_seconds, env=env)
 except subprocess.TimeoutExpired:
     print(f"[e2e] Janitor run timed out after {timeout_seconds}s", file=sys.stderr)
     raise SystemExit(1)
 
 with sqlite3.connect(db_path) as conn:
     after_counts = fetch_counts(conn)
+    after_doc_chunks = 0
+    has_doc_chunks = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='doc_chunks'"
+    ).fetchone() is not None
+    if has_doc_chunks:
+        after_doc_chunks = conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
     has_runs_table_after = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='janitor_runs'"
     ).fetchone() is not None
@@ -388,6 +1189,10 @@ if not run_row:
     raise SystemExit(1)
 
 run_id, task_name, status, memories_processed, actions_taken, completed_at = run_row
+after_staging = len([x for x in os.listdir(staging_dir) if x.endswith(".json")]) if os.path.isdir(staging_dir) else 0
+after_seeded_staging = len([x for x in os.listdir(staging_dir) if x.endswith("-e2e-seed.json")]) if os.path.isdir(staging_dir) else 0
+snippet_exists_after = os.path.exists(snippet_path)
+journal_exists_after = os.path.exists(journal_path)
 summary = {
     "mode": mode,
     "run_id": run_id,
@@ -397,6 +1202,16 @@ summary = {
     "actions_taken": actions_taken,
     "before": before_counts,
     "after": after_counts,
+    "staging_before": before_staging,
+    "staging_after": after_staging,
+    "seeded_staging_before": before_seeded_staging,
+    "seeded_staging_after": after_seeded_staging,
+    "doc_chunks_before": before_doc_chunks,
+    "doc_chunks_after": after_doc_chunks,
+    "snippet_exists_before": snippet_exists_before,
+    "snippet_exists_after": snippet_exists_after,
+    "journal_exists_before": journal_exists_before,
+    "journal_exists_after": journal_exists_after,
     "completed_at": completed_at,
 }
 print("[e2e] Janitor verification:")
@@ -417,9 +1232,18 @@ if mode == "apply":
         raise SystemExit(1)
     if (not had_work) and (not did_work):
         print("[e2e] Janitor apply completed with no-op workload (clean state).")
+    if after_doc_chunks < before_doc_chunks:
+        print("[e2e] ERROR: rag chunk count regressed after janitor run", file=sys.stderr)
+        raise SystemExit(1)
+    # Queue depth can grow from unrelated runtime traffic; verify deterministic seeded workload instead.
+    if before_seeded_staging > 0 and after_seeded_staging >= before_seeded_staging:
+        print("[e2e] ERROR: seeded project staging events were not consumed by janitor run", file=sys.stderr)
+        raise SystemExit(1)
+    if snippet_exists_before and snippet_exists_after:
+        print("[e2e] WARN: snippet backlog still present after janitor run.")
 PY
 else
-  echo "[e2e] Skipping janitor (--skip-janitor)."
+  echo "[e2e] Skipping janitor (suite selection/--skip-janitor)."
 fi
 
 echo "[e2e] E2E run complete."

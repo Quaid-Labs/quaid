@@ -606,11 +606,12 @@ class TestNotifyUser:
         mock_result = MagicMock()
         mock_result.returncode = 0
         try:
+            adapter._resolve_message_cli = lambda: "openclaw"
             with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
                 result = notify_user("hello world")
                 assert result is True
                 call_args = mock_run.call_args[0][0]
-                assert "clawdbot" in call_args
+                assert call_args[0] == "openclaw"
                 assert "hello world" in call_args
         finally:
             reset_adapter()

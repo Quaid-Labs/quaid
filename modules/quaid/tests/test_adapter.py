@@ -341,8 +341,8 @@ class TestOpenClawAdapter:
             "projects/*/AGENTS.md",
         ]
 
-    def test_notify_delegates_to_clawdbot(self, monkeypatch):
-        """Verify notify calls clawdbot CLI."""
+    def test_notify_delegates_to_openclaw(self, monkeypatch):
+        """Verify notify calls OpenClaw message CLI."""
         import json
         adapter = OpenClawAdapter()
 
@@ -356,12 +356,15 @@ class TestOpenClawAdapter:
         # Mock subprocess.run
         mock_result = MagicMock()
         mock_result.returncode = 0
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
         with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
             result = adapter.notify("test message")
             assert result is True
             mock_run.assert_called_once()
             cmd = mock_run.call_args[0][0]
-            assert "clawdbot" in cmd
+            assert cmd[0] == "openclaw"
+            assert "message" in cmd
+            assert "send" in cmd
             assert "test message" in cmd
 
 
@@ -570,14 +573,15 @@ class TestKeychainFallback:
 
 
 class TestNotifyEdgeCases:
-    def test_notify_clawdbot_not_found(self, monkeypatch):
-        """notify() returns False when clawdbot binary is missing."""
+    def test_notify_cli_not_found(self, monkeypatch):
+        """notify() returns False when no message CLI is available."""
         adapter = OpenClawAdapter()
         mock_info = ChannelInfo(
             channel="telegram", target="123", account_id="default",
             session_key="agent:main:main"
         )
         monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: None)
         with patch("adaptors.openclaw.adapter.subprocess.run", side_effect=FileNotFoundError):
             result = adapter.notify("test")
             assert result is False
