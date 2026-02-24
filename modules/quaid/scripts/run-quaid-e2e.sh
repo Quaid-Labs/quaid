@@ -50,6 +50,7 @@ RUNTIME_BUDGET_TUNE_BUFFER_RATIO="${QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO:-1.2}"
 NOTIFY_REQUIRE_DELIVERY="${QUAID_E2E_NOTIFY_REQUIRE_DELIVERY:-false}"
 AUTO_STAGE_BUDGETS="${QUAID_E2E_AUTO_STAGE_BUDGETS:-true}"
 AUTO_STAGE_BUDGETS_STAGES="${QUAID_E2E_AUTO_STAGE_BUDGETS_STAGES:-bootstrap,resilience,notify_matrix,janitor}"
+JANITOR_PARALLEL_REPORT_PATH="${QUAID_E2E_JANITOR_PARALLEL_REPORT_PATH:-/tmp/quaid-e2e-janitor-parallel-bench.json}"
 RUNTIME_BUDGET_PROFILE="${QUAID_E2E_RUNTIME_BUDGET_PROFILE:-auto}"
 RUNTIME_BUDGET_SECONDS="${QUAID_E2E_RUNTIME_BUDGET_SECONDS:-0}"
 STAGE_BUDGETS_JSON="${QUAID_E2E_STAGE_BUDGETS_JSON:-}"
@@ -2601,7 +2602,7 @@ PY
 fi
 
 echo "[e2e] Running janitor (${JANITOR_MODE})..."
-python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" "$RUN_JANITOR_STRESS" "$JANITOR_STRESS_PASSES" "$RUN_JANITOR_PARALLEL_BENCH" <<'PY'
+python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" "$RUN_JANITOR_STRESS" "$JANITOR_STRESS_PASSES" "$RUN_JANITOR_PARALLEL_BENCH" "$JANITOR_PARALLEL_REPORT_PATH" <<'PY'
 import json
 import os
 import sqlite3
@@ -2615,6 +2616,7 @@ prebench_guard = str(sys.argv[4]).strip().lower() in {"1", "true", "yes", "on"}
 janitor_stress = str(sys.argv[5]).strip().lower() in {"1", "true", "yes", "on"}
 janitor_stress_passes = max(1, int(sys.argv[6]))
 janitor_parallel_bench = str(sys.argv[7]).strip().lower() in {"1", "true", "yes", "on"}
+janitor_parallel_report_path = str(sys.argv[8])
 db_path = f"{ws}/data/memory.db"
 journal_path = os.path.join(ws, "journal", "SOUL.journal.md")
 snippet_path = os.path.join(ws, "SOUL.snippets.md")
@@ -2627,6 +2629,7 @@ rag_anchor_marker = "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224"
 registry_drift_doc = "docs/e2e-janitor-seed.md"
 registry_drift_doc_abs = os.path.abspath(os.path.join(ws, registry_drift_doc))
 docs_update_log_path = os.path.join(ws, "logs", "docs-update-log.json")
+janitor_stats_path = os.path.join(ws, "logs", "janitor-stats.json")
 
 def fetch_counts(conn):
     rows = conn.execute(
@@ -2648,6 +2651,17 @@ def _load_docs_update_entries(path: str):
     except Exception:
         return []
     return []
+
+def _load_json_obj(path: str):
+    if not os.path.exists(path):
+        return {}
+    try:
+        raw = json.loads(open(path, "r", encoding="utf-8").read())
+        if isinstance(raw, dict):
+            return raw
+    except Exception:
+        return {}
+    return {}
 
 with sqlite3.connect(db_path) as conn:
     before_counts = fetch_counts(conn)
@@ -3085,6 +3099,48 @@ after_project_doc_updates = sum(
     if isinstance(e, dict)
     and str(e.get("doc_path", "")) == "projects/quaid/PROJECT.md"
 )
+after_staging = len([x for x in os.listdir(staging_dir) if x.endswith(".json")]) if os.path.isdir(staging_dir) else 0
+after_seeded_staging = len([x for x in os.listdir(staging_dir) if x.endswith("-e2e-seed.json")]) if os.path.isdir(staging_dir) else 0
+janitor_stats = _load_json_obj(janitor_stats_path)
+
+if janitor_parallel_bench:
+    metrics_block = janitor_stats.get("metrics") if isinstance(janitor_stats, dict) else {}
+    if not isinstance(metrics_block, dict):
+        metrics_block = {}
+    task_durations = janitor_stats.get("task_durations") or metrics_block.get("task_durations") or {}
+    changes_applied = janitor_stats.get("changes_applied") or janitor_stats.get("changes") or {}
+    error_details = janitor_stats.get("error_details") or metrics_block.get("error_details") or []
+    warning_details = janitor_stats.get("warning_details") or metrics_block.get("warning_details") or []
+    report = {
+        "mode": mode,
+        "prebench_guard": prebench_guard,
+        "janitor_stress": janitor_stress,
+        "suite": "janitor-parallel-bench",
+        "seeded_counts_before": {
+            "contradictions_pending": before_seeded_contradictions_pending,
+            "dedup_unreviewed": before_seeded_dedup_unreviewed,
+            "decay_pending": before_seeded_decay_pending,
+            "staging_events": before_seeded_staging,
+        },
+        "seeded_counts_after": {
+            "contradictions_pending": after_seeded_contradictions_pending,
+            "dedup_unreviewed": after_seeded_dedup_unreviewed,
+            "decay_pending": after_seeded_decay_pending,
+            "staging_events": after_seeded_staging,
+        },
+        "janitor_stats_task_durations": task_durations,
+        "janitor_stats_changes": changes_applied,
+        "janitor_stats_errors": error_details,
+        "janitor_stats_warnings": warning_details,
+    }
+    try:
+        os.makedirs(os.path.dirname(janitor_parallel_report_path), exist_ok=True)
+        with open(janitor_parallel_report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+            f.write("\n")
+        print(f"[e2e] Wrote janitor parallel benchmark report: {janitor_parallel_report_path}")
+    except Exception as exc:
+        print(f"[e2e] WARN: failed writing janitor parallel benchmark report: {exc}", file=sys.stderr)
 
 if not run_row:
     if mode == "dry-run":
@@ -3094,8 +3150,6 @@ if not run_row:
     raise SystemExit(1)
 
 run_id, task_name, status, memories_processed, actions_taken, completed_at = run_row
-after_staging = len([x for x in os.listdir(staging_dir) if x.endswith(".json")]) if os.path.isdir(staging_dir) else 0
-after_seeded_staging = len([x for x in os.listdir(staging_dir) if x.endswith("-e2e-seed.json")]) if os.path.isdir(staging_dir) else 0
 snippet_exists_after = os.path.exists(snippet_path)
 journal_exists_after = os.path.exists(journal_path)
 summary = {
