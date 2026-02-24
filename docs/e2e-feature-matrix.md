@@ -35,6 +35,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Includes overall status, duration, suite/profile, stage-by-stage pass/skip/fail state, failure metadata, and runtime-budget status.
    - `modules/quaid/scripts/e2e-summary-check.py` validates status/duration and emits compact CI-friendly output.
    - `modules/quaid/scripts/e2e-budget-tune.py` recommends runtime budgets from history percentiles.
+   - Nightly mode also emits `/tmp/quaid-e2e-budget-recommendation.json` (override `QUAID_E2E_BUDGET_RECOMMENDATION_PATH`) from accumulated history.
 10. Runtime budget presets
    - `--runtime-budget-profile auto|off|quick|deep` controls wall-clock budget gating.
    - `--runtime-budget-seconds` overrides budget in seconds.
@@ -61,12 +62,12 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 
 ## Recommended Next Additions
 
-1. Nightly profile stratification
-   - Add explicit runtime budget presets per profile and expose expected wall-clock bounds in output.
-2. Runtime-budget presets
-   - Encode quick/deep expected wall-clock bounds and fail when exceeded.
-3. Stage-specific budget tuning
-   - Adjust quick/deep runtime budgets from observed nightly history per environment.
+1. Stage-specific budget tuning
+   - Recommend per-stage runtime budgets (not just whole-run budgets) from nightly history.
+2. CI artifact plumbing
+   - Upload nightly budget recommendation JSON and history snapshot as CI artifacts for long-horizon tuning.
+3. Timeout-lane pressure assertions
+   - Add explicit regression checks for timeout-failure behavior under active janitor pressure.
 
 ## Runner Modes
 
