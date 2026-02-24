@@ -94,10 +94,14 @@ Coverage requirements:
 8. Budget tuning support from history.
    - Runner appends summary history JSONL for trend tracking.
    - Added `modules/quaid/scripts/e2e-budget-tune.py` to recommend budgets from p95 + configurable buffer.
+9. Nightly budget recommendation emission.
+   - Nightly suite now runs `e2e-budget-tune.py` automatically from summary history.
+   - Emits recommendation JSON at `/tmp/quaid-e2e-budget-recommendation.json` (override with `QUAID_E2E_BUDGET_RECOMMENDATION_PATH`).
+   - Non-fatal when history is insufficient (`QUAID_E2E_BUDGET_TUNE_MIN_SAMPLES`, `QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO` control tuning).
 
 ## Backlog Order
 
 Implement next in this order:
-1. Wire budget-tuning script into nightly CI to auto-suggest threshold updates.
-2. Stage-specific budget tuning from accumulated nightly history.
-3. Add regression assertions for timeout-lane behavior under janitor pressure.
+1. Stage-specific budget tuning from accumulated nightly history.
+2. Add regression assertions for timeout-lane behavior under janitor pressure.
+3. Upload nightly budget recommendation/history as CI artifacts for trend visibility.

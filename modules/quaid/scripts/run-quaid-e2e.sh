@@ -43,6 +43,9 @@ QUICK_BOOTSTRAP=false
 REUSE_WORKSPACE=false
 SUMMARY_OUTPUT_PATH="${QUAID_E2E_SUMMARY_PATH:-/tmp/quaid-e2e-last-summary.json}"
 SUMMARY_HISTORY_PATH="${QUAID_E2E_SUMMARY_HISTORY_PATH:-/tmp/quaid-e2e-summary-history.jsonl}"
+SUMMARY_BUDGET_RECOMMENDATION_PATH="${QUAID_E2E_BUDGET_RECOMMENDATION_PATH:-/tmp/quaid-e2e-budget-recommendation.json}"
+RUNTIME_BUDGET_TUNE_MIN_SAMPLES="${QUAID_E2E_BUDGET_TUNE_MIN_SAMPLES:-5}"
+RUNTIME_BUDGET_TUNE_BUFFER_RATIO="${QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO:-1.2}"
 RUNTIME_BUDGET_PROFILE="${QUAID_E2E_RUNTIME_BUDGET_PROFILE:-auto}"
 RUNTIME_BUDGET_SECONDS="${QUAID_E2E_RUNTIME_BUDGET_SECONDS:-0}"
 RUNTIME_BUDGET_EXCEEDED="false"
@@ -507,6 +510,35 @@ restore_test_gateway() {
   fi
 }
 
+emit_budget_recommendation_if_nightly() {
+  if [[ "$NIGHTLY_MODE" != true ]]; then
+    return 0
+  fi
+  if [[ ! -f "$SUMMARY_HISTORY_PATH" ]]; then
+    echo "[e2e] WARN: no summary history found for nightly budget tuning: ${SUMMARY_HISTORY_PATH}" >&2
+    return 0
+  fi
+  local status_filter="success"
+  if [[ "$E2E_STATUS" != "success" ]]; then
+    status_filter="all"
+  fi
+  local out_dir
+  out_dir="$(dirname "$SUMMARY_BUDGET_RECOMMENDATION_PATH")"
+  mkdir -p "$out_dir"
+  if python3 "${SCRIPT_DIR}/e2e-budget-tune.py" \
+      --history "$SUMMARY_HISTORY_PATH" \
+      --suite nightly \
+      --status "$status_filter" \
+      --min-samples "$RUNTIME_BUDGET_TUNE_MIN_SAMPLES" \
+      --buffer-ratio "$RUNTIME_BUDGET_TUNE_BUFFER_RATIO" \
+      > "$SUMMARY_BUDGET_RECOMMENDATION_PATH"; then
+    echo "[e2e] Budget recommendation: ${SUMMARY_BUDGET_RECOMMENDATION_PATH}"
+  else
+    rm -f "$SUMMARY_BUDGET_RECOMMENDATION_PATH" || true
+    echo "[e2e] WARN: nightly budget recommendation unavailable (insufficient history or parser failure)." >&2
+  fi
+}
+
 cleanup() {
   local exit_code="$1"
   if [[ "$E2E_STATUS" == "running" ]]; then
@@ -517,6 +549,7 @@ cleanup() {
     fi
   fi
   write_e2e_summary "$exit_code" || true
+  emit_budget_recommendation_if_nightly || true
   rm -f "$TMP_PROFILE"
   if [[ "$exit_code" -eq 0 && "$KEEP_ON_SUCCESS" != true ]]; then
     echo "[e2e] Success, removing ${E2E_WS}"
