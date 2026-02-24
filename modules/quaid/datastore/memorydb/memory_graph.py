@@ -975,7 +975,7 @@ class MemoryGraph:
                         node_hits[node.id] = (node, 1)
 
             sorted_nodes = sorted(node_hits.values(), key=lambda x: x[1], reverse=True)
-            # Convert hit scores to 1-based rank positions for RRF compatibility
+            # Convert hit scores to 1-based rank positions for RRF
             ranked = [(node, rank) for rank, (node, _score) in enumerate(sorted_nodes[:limit], 1)]
             return ranked
 

@@ -10,6 +10,11 @@ from datastore.memorydb.memory_graph import (
     MemoryGraph,
     Node,
     store as store_memory,
+    recall as recall_memories,
+    search as search_memories,
+    stats as datastore_stats,
+    forget as forget_memory,
+    get_memory as get_memory_by_id,
     create_edge,
 )
 
@@ -18,5 +23,10 @@ __all__ = [
     "MemoryGraph",
     "Node",
     "store_memory",
+    "recall_memories",
+    "search_memories",
+    "datastore_stats",
+    "forget_memory",
+    "get_memory_by_id",
     "create_edge",
 ]

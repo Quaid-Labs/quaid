@@ -17,14 +17,14 @@ from typing import Optional, List, Dict, Any
 from core.docs.rag import DocsRAG
 from lib.runtime_context import get_workspace_dir
 
-from datastore.memorydb.memory_graph import (
-    store as _store,
-    recall as _recall,
-    search as _search,
+from datastore.facade import (
+    store_memory as _store,
+    recall_memories as _recall,
+    search_memories as _search,
     create_edge as _create_edge,
-    stats as _stats,
-    forget as _forget,
-    get_memory as _get_memory,
+    datastore_stats as _stats,
+    forget_memory as _forget,
+    get_memory_by_id as _get_memory,
 )
 
 

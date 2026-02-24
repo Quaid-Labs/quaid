@@ -146,7 +146,7 @@ def estimate_cost() -> float:
 # sequence of LLM calls (e.g., janitor pipeline, recall with retries).
 # 0 = unlimited. Checked in call_llm() after the cost cap.
 # Config should be the primary source (janitor.token_budget). Env var
-# fallback is handled by janitor runner for compatibility.
+# fallback is handled by janitor runner.
 _token_budget: int = 0
 _token_budget_used: int = 0
 

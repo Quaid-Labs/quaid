@@ -105,7 +105,7 @@ export function getKnowledgeDatastoreKeys(): KnowledgeDatastore[] {
 }
 
 export function getRoutableDatastoreKeys(): KnowledgeDatastore[] {
-  // "vector" is an aggregate compatibility store; planner should route to concrete datastores.
+  // "vector" is an aggregate store; planner should route to concrete datastores.
   return STORE_REGISTRY.map((s) => s.key).filter((k) => k !== "vector");
 }
 
