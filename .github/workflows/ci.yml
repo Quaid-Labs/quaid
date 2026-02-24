@@ -6,6 +6,17 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_strict_notify_lane:
+        description: 'Run nightly-strict-notify E2E lane (requires prepared fixture environment)'
+        required: false
+        default: false
+        type: boolean
+      strict_notify_fixture_ready:
+        description: 'Confirm strict-notify channel fixtures are prepared for this run'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: quaid-ci-${{ github.ref }}
@@ -36,7 +47,7 @@ jobs:
               - 'CONTRIBUTING.md'
               - 'SECURITY.md'
             needs_plugin:
-              - 'plugins/quaid/**'
+              - 'modules/quaid/**'
               - 'scripts/**'
               - 'install.sh'
               - 'install.ps1'
@@ -56,7 +67,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: plugins/quaid/package-lock.json
+          cache-dependency-path: modules/quaid/package-lock.json
 
       - name: Baseline docs consistency check
         run: node scripts/check-docs-consistency.mjs
@@ -76,42 +87,42 @@ jobs:
 
       - name: Install plugin deps
         if: needs.changes.outputs.needs_plugin == 'true'
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm ci
 
       - name: Runtime TS/JS pair check (strict)
         if: needs.changes.outputs.needs_plugin == 'true'
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: node scripts/check-runtime-pairs.mjs --strict
 
       - name: Boundary import check
         if: needs.changes.outputs.needs_plugin == 'true'
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm run check:boundaries
 
       - name: Python compile check
         if: needs.changes.outputs.needs_plugin == 'true'
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: python -m compileall -q .
 
       - name: TypeScript lint
         if: needs.changes.outputs.needs_plugin == 'true'
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm run lint:ts
 
       - name: Python lint
         if: needs.changes.outputs.needs_plugin == 'true'
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm run lint:py
 
       - name: TypeScript integration tests
         if: needs.changes.outputs.needs_plugin == 'true'
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm run test:integration
 
       - name: Python unit tests (isolated parallel)
         if: needs.changes.outputs.needs_plugin == 'true'
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: python scripts/run_pytests.py --mode unit --workers 4 --timeout 120
 
   full-suite:
@@ -127,7 +138,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: plugins/quaid/package-lock.json
+          cache-dependency-path: modules/quaid/package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -138,15 +149,15 @@ jobs:
         run: python -m pip install --upgrade pip pytest ruff mcp
 
       - name: Install plugin deps
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm ci
 
       - name: Boundary import check
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm run check:boundaries
 
       - name: Full suite (without bootstrap e2e lane)
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         env:
           QUAID_E2E_MATRIX_SCRIPT: /nonexistent
         run: bash scripts/run-all-tests.sh --full
@@ -163,9 +174,56 @@ jobs:
             /tmp/quaid-e2e-budget-recommendation.json
 
       - name: TypeScript lint
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm run lint:ts
 
       - name: Python lint
-        working-directory: plugins/quaid
+        working-directory: modules/quaid
         run: npm run lint:py
+
+  nightly-strict-notify:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_strict_notify_lane == true &&
+      inputs.strict_notify_fixture_ready == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Execute strict-notify lane
+        working-directory: modules/quaid
+        env:
+          QUAID_E2E_NOTIFY_REQUIRE_DELIVERY: "true"
+        run: |
+          set +e
+          bash scripts/run-quaid-e2e.sh --suite nightly-strict-notify
+          rc=$?
+          if [ "$rc" -eq 20 ]; then
+            echo "E2E strict-notify lane skipped (missing host/bootstrap prerequisites)."
+            exit 0
+          fi
+          exit "$rc"
+
+      - name: Upload strict-notify E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quaid-e2e-strict-notify
+          if-no-files-found: ignore
+          path: |
+            /tmp/quaid-e2e-last-summary.json
+            /tmp/quaid-e2e-summary-history.jsonl
+            /tmp/quaid-e2e-budget-recommendation.json
+            /tmp/quaid-e2e-janitor-parallel-bench.json
