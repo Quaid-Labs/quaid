@@ -51,6 +51,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Nightly profile stratification: `--nightly-profile quick|deep` adjusts minimum resilience loops and janitor stress passes.
    - Includes failure-injection probe (intentional malformed `/v1/responses` payload + immediate recovery turn).
    - Includes auth-failure injection probe (intentional invalid bearer token request + immediate recovery turn).
+   - Includes gateway-down injection probe (forced gateway stop, failed request, restart, and recovery turn).
    - Includes source-mapping drift fixture coverage via project-updater pressure path.
    - Includes carryover trend assertion across repeated janitor stress passes.
 
