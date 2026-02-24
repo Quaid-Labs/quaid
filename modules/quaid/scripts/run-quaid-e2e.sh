@@ -42,6 +42,7 @@ E2E_SKIP_EXIT_CODE=20
 QUICK_BOOTSTRAP=false
 REUSE_WORKSPACE=false
 SUMMARY_OUTPUT_PATH="${QUAID_E2E_SUMMARY_PATH:-/tmp/quaid-e2e-last-summary.json}"
+SUMMARY_HISTORY_PATH="${QUAID_E2E_SUMMARY_HISTORY_PATH:-/tmp/quaid-e2e-summary-history.jsonl}"
 RUNTIME_BUDGET_PROFILE="${QUAID_E2E_RUNTIME_BUDGET_PROFILE:-auto}"
 RUNTIME_BUDGET_SECONDS="${QUAID_E2E_RUNTIME_BUDGET_SECONDS:-0}"
 RUNTIME_BUDGET_EXCEEDED="false"
@@ -325,6 +326,7 @@ write_e2e_summary() {
   SUMMARY_EXIT_CODE="$exit_code" \
   SUMMARY_END_EPOCH="$end_epoch" \
   SUMMARY_OUTPUT_PATH="$SUMMARY_OUTPUT_PATH" \
+  SUMMARY_HISTORY_PATH="$SUMMARY_HISTORY_PATH" \
   SUMMARY_CURRENT_STAGE="$CURRENT_STAGE" \
   SUMMARY_E2E_STATUS="$E2E_STATUS" \
   SUMMARY_E2E_FAIL_LINE="$E2E_FAIL_LINE" \
@@ -408,6 +410,17 @@ with open(out_path, "w", encoding="utf-8") as f:
     json.dump(out, f, indent=2)
     f.write("\n")
 print(f"[e2e] Wrote summary: {out_path}")
+
+hist_path = str(os.environ.get("SUMMARY_HISTORY_PATH") or "").strip()
+if hist_path:
+    try:
+        os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+        with open(hist_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(out))
+            f.write("\n")
+        print(f"[e2e] Appended summary history: {hist_path}")
+    except Exception as exc:
+        print(f"[e2e] WARN: failed to append summary history ({hist_path}): {exc}")
 PY
 }
 
