@@ -49,6 +49,58 @@ function messageText(msg: any): string {
   return "";
 }
 
+function isInternalMaintenancePrompt(text: string): boolean {
+  const t = String(text || "").trim().toLowerCase();
+  if (!t) return false;
+  const markers = [
+    "extract memorable facts and journal entries from this conversation",
+    "given a personal memory query and memory documents",
+    "rate each document",
+    "review batch",
+    "review the following",
+    "you are reviewing",
+    "you are checking",
+    "respond with a json array",
+    "json array only:",
+    "fact a:",
+    "fact b:",
+    "candidate duplicate pairs",
+    "dedup rejections",
+    "journal entries to decide",
+    "pending soul snippets",
+  ];
+  return markers.some((m) => t.includes(m));
+}
+
+function isExtractionJsonAssistantPayload(text: string): boolean {
+  const compact = String(text || "").replace(/\s+/g, " ").trim();
+  if (!/^\{\s*"facts"\s*:\s*\[/.test(compact)) return false;
+  try {
+    const parsed = JSON.parse(compact);
+    if (!parsed || typeof parsed !== "object") return false;
+    const keys = Object.keys(parsed);
+    return keys.length > 0 && keys.every((k) => k === "facts" || k === "journal_entries" || k === "soul_snippets");
+  } catch {
+    return false;
+  }
+}
+
+function isEligibleConversationMessage(msg: any): boolean {
+  if (!msg || (msg.role !== "user" && msg.role !== "assistant")) return false;
+  const text = messageText(msg).trim();
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  if (lower.startsWith("gatewayrestart:") || lower.startsWith("system:")) return false;
+  if (isInternalMaintenancePrompt(text)) return false;
+  if (msg.role === "assistant" && isExtractionJsonAssistantPayload(text)) return false;
+  return true;
+}
+
+function filterEligibleMessages(messages: any[]): any[] {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  return messages.filter((msg: any) => isEligibleConversationMessage(msg));
+}
+
 function messageDedupKey(msg: any): string {
   const id = typeof msg?.id === "string" ? msg.id : "";
   if (id) return `id:${id}`;
@@ -145,7 +197,7 @@ export class SessionTimeoutManager {
   onAgentEnd(messages: any[], sessionId: string): void {
     if (!Array.isArray(messages) || messages.length === 0) return;
     if (!sessionId) return;
-    const incoming = messages.filter((m: any) => m && (m.role === "user" || m.role === "assistant"));
+    const incoming = filterEligibleMessages(messages);
     if (incoming.length === 0) return;
     const gatedIncoming = this.filterReplayedMessages(sessionId, incoming);
     if (gatedIncoming.length === 0) {
@@ -210,10 +262,11 @@ export class SessionTimeoutManager {
   async extractSessionFromLog(sessionId: string, label: string, fallbackMessages?: any[]): Promise<boolean> {
     if (!sessionId) return false;
     const loggedMessages = this.readSessionMessages(sessionId);
+    const fallback = filterEligibleMessages(fallbackMessages || []);
     const source = loggedMessages.length > 0
       ? "session_message_log"
-      : (Array.isArray(fallbackMessages) && fallbackMessages.length > 0 ? "fallback_event_messages" : "none");
-    const messages = loggedMessages.length > 0 ? loggedMessages : (fallbackMessages || []);
+      : (fallback.length > 0 ? "fallback_event_messages" : "none");
+    const messages = loggedMessages.length > 0 ? loggedMessages : fallback;
     if (!messages.length) {
       this.writeQuaidLog("extract_skip_empty", sessionId, { label, source });
       return false;
@@ -249,6 +302,7 @@ export class SessionTimeoutManager {
 
   async recoverStaleBuffers(): Promise<void> {
     if (this.timeoutMinutes <= 0) return;
+    this.recoverOrphanedBufferClaims();
     const now = Date.now();
     const staleMs = this.timeoutMinutes * 60 * 1000;
     for (const filePath of this.listBufferFiles()) {
@@ -258,7 +312,7 @@ export class SessionTimeoutManager {
         const payload = JSON.parse(fs.readFileSync(lockedPath, "utf8")) as TimeoutBufferPayload;
         const sid = String(payload?.sessionId || path.basename(filePath, ".json")).trim();
         const updatedAtMs = Date.parse(String(payload?.updatedAt || ""));
-        const msgs = Array.isArray(payload?.messages) ? payload.messages : [];
+        const msgs = filterEligibleMessages(Array.isArray(payload?.messages) ? payload.messages : []);
         if (!sid || msgs.length === 0) {
           try { fs.unlinkSync(lockedPath); } catch {}
           continue;
@@ -328,6 +382,7 @@ export class SessionTimeoutManager {
   }
 
   async processPendingExtractionSignals(): Promise<void> {
+    this.recoverOrphanedSignalClaims();
     for (const filePath of this.listSignalFiles()) {
       const lockedPath = this.claimSignalFile(filePath);
       if (!lockedPath) { continue; }
@@ -492,6 +547,34 @@ export class SessionTimeoutManager {
     }
   }
 
+  private listSignalClaimFiles(): string[] {
+    try {
+      if (!fs.existsSync(this.pendingSignalDir)) return [];
+      return fs.readdirSync(this.pendingSignalDir)
+        .filter((f) => /\.json\.processing\.\d+$/.test(f))
+        .map((f) => path.join(this.pendingSignalDir, f));
+    } catch {
+      return [];
+    }
+  }
+
+  private recoverOrphanedSignalClaims(): void {
+    for (const lockedPath of this.listSignalClaimFiles()) {
+      const m = lockedPath.match(/^(.*\.json)\.processing\.(\d+)$/);
+      if (!m) continue;
+      const originalPath = m[1];
+      const ownerPid = Number(m[2]);
+      if (this.isPidAlive(ownerPid)) continue;
+      try {
+        if (fs.existsSync(originalPath)) {
+          fs.unlinkSync(lockedPath);
+          continue;
+        }
+        fs.renameSync(lockedPath, originalPath);
+      } catch {}
+    }
+  }
+
   private claimSignalFile(filePath: string): string | null {
     const lockedPath = `${filePath}.processing.${process.pid}`;
     try {
@@ -545,6 +628,34 @@ export class SessionTimeoutManager {
     }
   }
 
+  private listBufferClaimFiles(): string[] {
+    try {
+      if (!fs.existsSync(this.bufferDir)) return [];
+      return fs.readdirSync(this.bufferDir)
+        .filter((f) => /\.json\.processing\.\d+$/.test(f))
+        .map((f) => path.join(this.bufferDir, f));
+    } catch {
+      return [];
+    }
+  }
+
+  private recoverOrphanedBufferClaims(): void {
+    for (const lockedPath of this.listBufferClaimFiles()) {
+      const m = lockedPath.match(/^(.*\.json)\.processing\.(\d+)$/);
+      if (!m) continue;
+      const originalPath = m[1];
+      const ownerPid = Number(m[2]);
+      if (this.isPidAlive(ownerPid)) continue;
+      try {
+        if (fs.existsSync(originalPath)) {
+          fs.unlinkSync(lockedPath);
+          continue;
+        }
+        fs.renameSync(lockedPath, originalPath);
+      } catch {}
+    }
+  }
+
   private claimBufferFile(filePath: string): string | null {
     const lockedPath = `${filePath}.processing.${process.pid}`;
     try {
@@ -572,13 +683,14 @@ export class SessionTimeoutManager {
   }
 
   private appendSessionMessages(sessionId: string, messages: any[]): void {
-    if (!messages.length) { return; }
+    const sanitized = filterEligibleMessages(messages);
+    if (!sanitized.length) { return; }
     try {
       fs.mkdirSync(this.sessionMessageLogDir, { recursive: true });
       const fp = this.sessionMessagePath(sessionId);
-      const lines = messages.map((m) => JSON.stringify(m)).join("\n");
+      const lines = sanitized.map((m) => JSON.stringify(m)).join("\n");
       fs.appendFileSync(fp, `${lines}\n`, "utf8");
-      this.writeQuaidLog("session_messages_appended", sessionId, { appended: messages.length });
+      this.writeQuaidLog("session_messages_appended", sessionId, { appended: sanitized.length });
     } catch (err: unknown) {
       this.writeQuaidLog("session_message_append_error", sessionId, { error: String((err as Error)?.message || err) });
     }
@@ -598,7 +710,7 @@ export class SessionTimeoutManager {
           if (parsed && typeof parsed === "object") { out.push(parsed); }
         } catch {}
       }
-      return out;
+      return filterEligibleMessages(out);
     } catch {
       return [];
     }
