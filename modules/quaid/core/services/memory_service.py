@@ -17,7 +17,6 @@ from datastore.facade import (
     datastore_stats,
     forget_memory,
     get_memory_by_id,
-    get_graph,
 )
 
 
@@ -94,13 +93,8 @@ class DatastoreMemoryService(MemoryServicePort):
     def stats(self) -> Dict[str, Any]:
         return datastore_stats()
 
-    def graph(self):
-        return get_graph()
-
-
 _MEMORY_SERVICE: MemoryServicePort = DatastoreMemoryService()
 
 
 def get_memory_service() -> MemoryServicePort:
     return _MEMORY_SERVICE
-

@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional
 # Ensure plugin root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.llm.clients import call_deep_reasoning, parse_json_response
+from lib.llm_clients import call_deep_reasoning, parse_json_response
 from core.services.memory_service import get_memory_service
 from config import get_config
 from core.lifecycle.soul_snippets import write_journal_entry, write_snippet_entry
@@ -351,21 +351,6 @@ def extract_from_transcript(
                 source_type=source_type,
                 is_technical=is_technical,
             )
-
-            # Ensure is_technical survives dedup/update paths.
-            fact_id = store_result.get("id")
-            if fact_id and is_technical:
-                try:
-                    graph = _memory.graph()
-                    node = graph.get_node(fact_id)
-                    if node:
-                        attrs = node.attributes if isinstance(node.attributes, dict) else {}
-                        if not attrs.get("is_technical"):
-                            attrs["is_technical"] = True
-                            node.attributes = attrs
-                            graph.update_node(node)
-                except Exception:
-                    pass
 
             if store_result.get("status") == "created":
                 fact_entry["status"] = "stored"
