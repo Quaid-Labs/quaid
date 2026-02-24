@@ -26,6 +26,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 7. Janitor end-to-end (`suite=janitor|full|core`)
    - Optional seed path (`suite=seed` or implied by `full/core`) populates pending maintenance workload.
    - Runs janitor apply/dry-run and verifies `janitor_runs` + key maintenance side effects.
+   - `suite=pre-benchmark` additionally enforces graduation invariant (`pending=0`, `approved=0`) with leftover-ID failure preview.
 8. Failure diagnostics (all suites)
    - On error, runner prints pending signals, timeout logs, notify-worker tail, gateway status, and gateway logs.
 9. Bootstrap collision recovery

@@ -38,7 +38,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from lib.config import get_db_path
 from core.runtime.logger import janitor_logger, rotate_logs
 from config import get_config
-from core.lifecycle.janitor_lifecycle import build_default_registry, RoutineContext
+from core.lifecycle.janitor_lifecycle import build_default_registry, RoutineContext, RoutineResult
 from core.lifecycle.datastore_runtime import (
     get_graph,
     JanitorMetrics,
@@ -286,7 +286,8 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
 
 def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True,
                        time_budget: int = 0, force_distill: bool = False,
-                       user_approved: bool = False, token_budget: int = 0):
+                       user_approved: bool = False, token_budget: int = 0,
+                       resume_checkpoint: bool = True):
     """Run optimized janitor task with comprehensive reporting.
 
     Args:
@@ -308,7 +309,9 @@ def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True
         return {"error": "janitor_already_running", "success": False, "applied_changes": {}, "metrics": {}}
 
     try:
-        return _run_task_optimized_inner(task, dry_run, incremental, time_budget, force_distill, user_approved)
+        return _run_task_optimized_inner(
+            task, dry_run, incremental, time_budget, force_distill, user_approved, resume_checkpoint
+        )
     finally:
         # Avoid leaking per-run budget limits across long-lived Python processes.
         reset_token_budget()
@@ -461,7 +464,7 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
 
 def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool = True,
                               time_budget: int = 0, force_distill: bool = False,
-                              user_approved: bool = False):
+                              user_approved: bool = False, resume_checkpoint: bool = True):
     """Inner implementation of run_task_optimized (with lock held)."""
     # Rotate logs at start of janitor run
     rotate_logs()
@@ -489,6 +492,99 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     if last_run:
         print(f"Last run: {last_run.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*80}\n")
+
+    # Stage-level caps/budgets and checkpoint resume (janitor bottleneck hardening).
+    try:
+        _default_stage_item_cap = int(os.environ.get("JANITOR_MAX_ITEMS_PER_STAGE", "0") or 0)
+    except Exception:
+        _default_stage_item_cap = 0
+    try:
+        _stage_item_caps = json.loads(os.environ.get("JANITOR_STAGE_ITEM_CAPS", "{}") or "{}")
+        if not isinstance(_stage_item_caps, dict):
+            _stage_item_caps = {}
+    except Exception:
+        _stage_item_caps = {}
+    try:
+        _stage_budget_caps = json.loads(os.environ.get("JANITOR_STAGE_BUDGETS", "{}") or "{}")
+        if not isinstance(_stage_budget_caps, dict):
+            _stage_budget_caps = {}
+    except Exception:
+        _stage_budget_caps = {}
+
+    def _stage_item_cap(stage_name: str) -> int:
+        raw = _stage_item_caps.get(stage_name, _default_stage_item_cap)
+        try:
+            cap = int(raw or 0)
+            return cap if cap > 0 else 0
+        except Exception:
+            return 0
+
+    def _stage_budget_cap(stage_name: str) -> int:
+        raw = _stage_budget_caps.get(stage_name, 0)
+        try:
+            cap = int(raw or 0)
+            return cap if cap > 0 else 0
+        except Exception:
+            return 0
+
+    stage_budget_report: Dict[str, Any] = {}
+    carryover_report: Dict[str, int] = {}
+
+    checkpoint_path = _logs_dir() / "janitor" / f"checkpoint-{task}.json"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_state: Dict[str, Any] = {
+        "task": task,
+        "dry_run": bool(dry_run),
+        "started_at": datetime.now().isoformat(),
+        "heartbeat_at": datetime.now().isoformat(),
+        "status": "running",
+        "current_stage": "",
+        "completed_stages": [],
+    }
+    if task == "all" and resume_checkpoint and checkpoint_path.exists():
+        try:
+            loaded = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and loaded.get("task") == task and loaded.get("status") == "running":
+                checkpoint_state.update(loaded)
+                print(
+                    "[checkpoint] Resuming janitor run with completed stages: "
+                    f"{checkpoint_state.get('completed_stages', [])}"
+                )
+        except Exception:
+            pass
+    if task == "all":
+        checkpoint_path.write_text(json.dumps(checkpoint_state, indent=2) + "\n", encoding="utf-8")
+
+    def _checkpoint_save(stage: str = "", status: Optional[str] = None, completed: bool = False) -> None:
+        if task != "all":
+            return
+        checkpoint_state["heartbeat_at"] = datetime.now().isoformat()
+        if stage:
+            checkpoint_state["current_stage"] = stage
+        if status:
+            checkpoint_state["status"] = status
+        if completed and stage:
+            done = checkpoint_state.setdefault("completed_stages", [])
+            if stage not in done:
+                done.append(stage)
+        checkpoint_path.write_text(json.dumps(checkpoint_state, indent=2) + "\n", encoding="utf-8")
+
+    def _stage_completed(stage: str) -> bool:
+        return stage in set(checkpoint_state.get("completed_stages", []) or [])
+
+    def _record_stage_budget(stage: str, started_at: float) -> None:
+        elapsed = round(time.time() - started_at, 3)
+        cap = _stage_budget_cap(stage)
+        over = bool(cap and elapsed > cap)
+        stage_budget_report[stage] = {
+            "duration_s": elapsed,
+            "budget_s": cap,
+            "over_budget": over,
+        }
+        if over:
+            msg = f"Stage '{stage}' exceeded budget ({elapsed:.1f}s > {cap}s)"
+            print(f"[budget] WARNING: {msg}")
+            metrics.add_warning(msg)
 
     def _scope_policy(scope: str) -> str:
         try:
@@ -639,6 +735,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # remaining memory tasks are skipped and graduation is blocked.
         # Infrastructure tasks (0, 0b, 1, 7, 8) still run regardless.
         def _run_memory_graph_stage(stage: str, stage_dry_run: bool) -> Any:
+            stage_cap = _stage_item_cap(stage)
             return _LIFECYCLE_REGISTRY.run(
                 "memory_graph_maintenance",
                 RoutineContext(
@@ -646,14 +743,33 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     dry_run=stage_dry_run,
                     workspace=_workspace(),
                     graph=graph,
-                    options={"subtask": stage},
+                    options={"subtask": stage, "max_items": stage_cap},
                 ),
             )
+
+        def _run_memory_stage(stage: str, stage_dry_run: bool) -> RoutineResult:
+            if task == "all" and _stage_completed(stage):
+                print(f"[Task: {stage}] SKIPPED — already completed in checkpoint")
+                return RoutineResult()
+            _checkpoint_save(stage=stage, status="running", completed=False)
+            stage_started = time.time()
+            result = _run_memory_graph_stage(stage, stage_dry_run)
+            _record_stage_budget(stage, stage_started)
+            for key, value in (result.metrics or {}).items():
+                if not str(key).endswith("_carryover"):
+                    continue
+                try:
+                    carryover_report[str(key)] = int(value or 0)
+                except Exception:
+                    continue
+            if not result.errors:
+                _checkpoint_save(stage=stage, status="running", completed=True)
+            return result
 
         if task in ("review", "all") and _system_enabled_or_skip("review", "Task 2: Review Memories") and not _skip_if_over_budget("Task 2: Review Memories", 30):
             print("[Task 2: Review Pending Memories - Opus API]")
             metrics.start_task("review")
-            lifecycle_result = _run_memory_graph_stage("review", dry_run)
+            lifecycle_result = _run_memory_stage("review", dry_run)
             for line in lifecycle_result.logs:
                 print(f"  {line}")
             for err in lifecycle_result.errors:
@@ -663,9 +779,14 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             applied_changes["memories_reviewed"] = lifecycle_result.metrics.get("memories_reviewed", 0)
             applied_changes["memories_deleted"] = lifecycle_result.metrics.get("memories_deleted", 0)
             applied_changes["memories_fixed"] = lifecycle_result.metrics.get("memories_fixed", 0)
+            applied_changes["review_carryover"] = lifecycle_result.metrics.get("review_carryover", 0)
+            applied_changes["review_coverage_ratio_pct"] = lifecycle_result.metrics.get("review_coverage_ratio_pct", 100)
             print(f"  Reviewed: {applied_changes['memories_reviewed']}")
             print(f"  {'Would delete' if dry_run else 'Deleted'}: {applied_changes['memories_deleted']}")
             print(f"  {'Would fix' if dry_run else 'Fixed'}: {applied_changes['memories_fixed']}")
+            print(f"  Coverage: {applied_changes['review_coverage_ratio_pct']}%")
+            if applied_changes["review_carryover"] > 0:
+                print(f"  Carryover: {applied_changes['review_carryover']}")
             metrics.end_task("review")
             print(f"Task completed in {metrics.task_duration('review'):.2f}s\n")
 
@@ -676,7 +797,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             else:
                 print("[Task 2a: Resolve Temporal References]")
                 metrics.start_task("temporal_resolution")
-                lifecycle_result = _run_memory_graph_stage("temporal", dry_run)
+                lifecycle_result = _run_memory_stage("temporal", dry_run)
                 for err in lifecycle_result.errors:
                     print(f"  {err}")
                     metrics.add_error(err)
@@ -694,7 +815,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             else:
                 print("[Task 2b: Review Dedup Rejections - Opus API]")
                 metrics.start_task("dedup_review")
-                lifecycle_result = _run_memory_graph_stage("dedup_review", dry_run)
+                lifecycle_result = _run_memory_stage("dedup_review", dry_run)
                 for line in lifecycle_result.logs:
                     print(f"  {line}")
                 for err in lifecycle_result.errors:
@@ -720,7 +841,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     "dedup merge operations"
                 )
                 metrics.start_task("duplicates")
-                lifecycle_result = _run_memory_graph_stage("duplicates", dry_run or (not dedup_apply_allowed))
+                lifecycle_result = _run_memory_stage("duplicates", dry_run or (not dedup_apply_allowed))
                 for err in lifecycle_result.errors:
                     print(f"  {err}")
                     metrics.add_error(err)
@@ -736,7 +857,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             else:
                 print("[Task 4: Verify Contradictions]")
                 metrics.start_task("contradictions")
-                lifecycle_result = _run_memory_graph_stage("contradictions", dry_run)
+                lifecycle_result = _run_memory_stage("contradictions", dry_run)
                 for err in lifecycle_result.errors:
                     print(f"  {err}")
                     metrics.add_error(err)
@@ -758,7 +879,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         "contradiction resolution operations"
                     )
                     metrics.start_task("contradiction_resolution")
-                    lifecycle_result = _run_memory_graph_stage(
+                    lifecycle_result = _run_memory_stage(
                         "contradictions_resolve",
                         dry_run or (not contradiction_apply_allowed),
                     )
@@ -789,7 +910,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 )
                 decay_dry_run = dry_run or (not decay_apply_allowed)
                 metrics.start_task("decay")
-                lifecycle_result = _run_memory_graph_stage("decay", decay_dry_run)
+                lifecycle_result = _run_memory_stage("decay", decay_dry_run)
                 for line in lifecycle_result.logs:
                     print(f"  {line}")
                 for err in lifecycle_result.errors:
@@ -822,7 +943,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 )
                 decay_review_dry_run = dry_run or (not decay_review_apply_allowed)
                 metrics.start_task("decay_review")
-                lifecycle_result = _run_memory_graph_stage("decay_review", decay_review_dry_run)
+                lifecycle_result = _run_memory_stage("decay_review", decay_review_dry_run)
                 for line in lifecycle_result.logs:
                     print(f"  {line}")
                 for err in lifecycle_result.errors:
@@ -1131,6 +1252,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         metrics.add_error(f"Critical error in task {task}: {str(e)}")
         memory_pipeline_ok = False
         print(f"ERROR: {e}")
+        _checkpoint_save(status="failed")
 
     # Benchmark-mode validity gate: janitor owns run validity semantics.
     if _is_benchmark_mode() and not dry_run and task in ("all", "graduate"):
@@ -1152,6 +1274,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     # Generate comprehensive report
     final_metrics = metrics.summary()
+    final_metrics["stage_budget_report"] = stage_budget_report
+    final_metrics["carryover_report"] = carryover_report
     
     print(f"{'='*80}")
     print("JANITOR PERFORMANCE REPORT")
@@ -1230,6 +1354,15 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 memories_processed=applied_changes.get("memories_reviewed", 0) + applied_changes.get("duplicates_merged", 0),
                 actions_taken=int(actions),
                 status="completed" if success else "failed",
+                skipped_tasks=list(_budget_skipped),
+                carryover=carryover_report,
+                stage_budget=stage_budget_report,
+                checkpoint_path=str(checkpoint_path) if task == "all" else "",
+                task_summary={
+                    "memory_pipeline_ok": bool(memory_pipeline_ok),
+                    "errors": int(final_metrics.get("errors", 0)),
+                    "warnings": int(final_metrics.get("warnings", 0)),
+                },
             )
         except Exception as e:
             print(f"  Warning: Failed to record janitor run: {e}")
@@ -1270,6 +1403,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         except Exception:
             pass  # Checkpoint is best-effort
 
+    _checkpoint_save(status="completed" if success else "failed")
+
     return {
         "success": success,
         "memory_pipeline_ok": memory_pipeline_ok,
@@ -1294,6 +1429,17 @@ if __name__ == "__main__":
     parser.add_argument("--token-budget", type=int, default=None,
                         help="Max total tokens (input+output) for LLM calls (0 = unlimited). "
                              "LLM calls are skipped when budget is exhausted.")
+    parser.add_argument(
+        "--stage-item-cap",
+        type=int,
+        default=0,
+        help="Optional per-stage max item cap for datastore maintenance tasks (0 = unlimited)."
+    )
+    parser.add_argument(
+        "--no-resume-checkpoint",
+        action="store_true",
+        help="Disable janitor checkpoint resume behavior for this run."
+    )
 
     args = parser.parse_args()
 
@@ -1313,6 +1459,9 @@ if __name__ == "__main__":
     if effective_token_budget > 0:
         source = "cli" if args.token_budget is not None else ("config" if config_token_budget > 0 else "env")
         print(f"[janitor] Token budget: {effective_token_budget:,} tokens (source: {source})")
+    if int(args.stage_item_cap or 0) > 0:
+        os.environ["JANITOR_MAX_ITEMS_PER_STAGE"] = str(int(args.stage_item_cap))
+        print(f"[janitor] Stage item cap: {int(args.stage_item_cap)}")
 
     # dry_run is derived from apply flags and janitor apply policy.
     dry_run, apply_policy_warning = _resolve_apply_mode(args.apply, args.approve)
@@ -1324,7 +1473,8 @@ if __name__ == "__main__":
                                 time_budget=args.time_budget,
                                 force_distill=args.force_distill,
                                 user_approved=args.approve,
-                                token_budget=effective_token_budget)
+                                token_budget=effective_token_budget,
+                                resume_checkpoint=(not args.no_resume_checkpoint))
     
     # Write stats to file for dashboard consumption
     stats_file = _logs_dir() / "janitor-stats.json"

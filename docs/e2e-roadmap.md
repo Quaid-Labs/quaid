@@ -46,6 +46,7 @@ Coverage requirements:
    - Fact/journal/snippet/project paths produce expected extraction + project activity.
 3. Janitor end-to-end
    - Seeded maintenance workload processed; janitor run recorded and key side effects present.
+   - Pre-benchmark invariant check: after janitor apply, `pending==0` and `approved==0` (fails with leftover ID preview).
 4. Janitor task safety
    - Fail-fast semantics validated for memory pipeline (pending implementation).
 5. Deterministic maintenance outcomes
