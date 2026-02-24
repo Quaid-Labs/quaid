@@ -31,8 +31,10 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - On error, runner prints pending signals, timeout logs, notify-worker tail, gateway status, and gateway logs.
 9. Machine-readable outcome summary (all suites)
    - Writes run summary to `/tmp/quaid-e2e-last-summary.json` (override with `QUAID_E2E_SUMMARY_PATH`).
+   - Appends summary history to `/tmp/quaid-e2e-summary-history.jsonl` (override with `QUAID_E2E_SUMMARY_HISTORY_PATH`).
    - Includes overall status, duration, suite/profile, stage-by-stage pass/skip/fail state, failure metadata, and runtime-budget status.
    - `modules/quaid/scripts/e2e-summary-check.py` validates status/duration and emits compact CI-friendly output.
+   - `modules/quaid/scripts/e2e-budget-tune.py` recommends runtime budgets from history percentiles.
 10. Runtime budget presets
    - `--runtime-budget-profile auto|off|quick|deep` controls wall-clock budget gating.
    - `--runtime-budget-seconds` overrides budget in seconds.
