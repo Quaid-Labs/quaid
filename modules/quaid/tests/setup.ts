@@ -7,7 +7,13 @@ import * as path from 'node:path'
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
-const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py")
+const PYTHON_SCRIPT = (() => {
+  const modernPath = path.join(WORKSPACE, "modules/quaid/datastore/memorydb/memory_graph.py")
+  if (fs.existsSync(modernPath)) return modernPath
+  // Legacy layout fallback for historical workspaces.
+  return path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py")
+})()
+const PYTHON_MODULE_ROOT = path.resolve(path.dirname(PYTHON_SCRIPT), "../..")
 
 function ensureAdapterConfig(): void {
   const payload = JSON.stringify({ adapter: { type: "standalone" } }, null, 2)
@@ -43,6 +49,9 @@ export class TestMemoryInterface {
           QUAID_DISABLE_LLM: "1",
           QUAID_HOME: WORKSPACE,
           CLAWDBOT_WORKSPACE: WORKSPACE,
+          PYTHONPATH: process.env.PYTHONPATH
+            ? `${PYTHON_MODULE_ROOT}:${process.env.PYTHONPATH}`
+            : PYTHON_MODULE_ROOT,
         },
       })
 
@@ -266,7 +275,7 @@ export class TestMemoryInterface {
   }
 
   async getRaw(memoryId: string): Promise<any> {
-    const result = await this.callPython("get", [memoryId])
+    const result = await this.callPython("get-node", [memoryId])
     return JSON.parse(result)
   }
 
@@ -334,7 +343,8 @@ export async function createTestMemory(): Promise<TestMemoryInterface> {
   return memory
 }
 
-export async function cleanupTestMemory(memory: TestMemoryInterface): Promise<void> {
+export async function cleanupTestMemory(memory?: TestMemoryInterface): Promise<void> {
+  if (!memory) return
   await memory.close()
   delete process.env.TEST_SESSION_ID
   const dbPath = memory.dbPath

@@ -24,26 +24,60 @@ function resolveStateDir() {
   return path.join(os.homedir(), ".openclaw");
 }
 
-function resolveTargetSessionId(context) {
-  const previous = context?.previousSessionEntry;
-  const current = context?.sessionEntry;
-  const previousId = String(previous?.sessionId || "").trim();
-  if (previousId) {
-    return previousId;
+function signalPriority(label) {
+  const normalized = String(label || "").trim().toLowerCase();
+  if (normalized === "resetsignal" || normalized === "reset") return 3;
+  if (normalized === "compactionsignal" || normalized === "compaction") return 2;
+  return 1;
+}
+
+function resolveAction(event) {
+  const direct = String(event?.action || "").trim().toLowerCase();
+  if (direct) return direct;
+  const type = String(event?.type || "").trim().toLowerCase();
+  if (type.startsWith("command:")) return type.slice("command:".length);
+  return "";
+}
+
+function resolveSignalLabel(action) {
+  if (action === "new" || action === "reset" || action === "restart") {
+    return "ResetSignal";
   }
-  const currentId = String(current?.sessionId || "").trim();
-  if (currentId) {
-    return currentId;
+  if (action === "compact") {
+    return "CompactionSignal";
+  }
+  return "";
+}
+
+function resolveTargetSessionId(event, context) {
+  const previous = context?.previousSessionEntry || {};
+  const current = context?.sessionEntry || {};
+  const candidates = [
+    previous?.sessionId,
+    previous?.id,
+    context?.previousSessionId,
+    current?.sessionId,
+    current?.id,
+    context?.sessionId,
+    event?.sessionId,
+    event?.session_id,
+  ];
+  for (const candidate of candidates) {
+    const id = String(candidate || "").trim();
+    if (id) return id;
   }
   return "";
 }
 
 export default async function quaidResetSignalHook(event) {
-  if (!event || event.type !== "command") return;
-  if (event.action !== "new" && event.action !== "reset") return;
+  if (!event) return;
 
   const context = event.context || {};
-  const sessionId = resolveTargetSessionId(context);
+  const action = resolveAction(event);
+  const label = resolveSignalLabel(action);
+  if (!label) return;
+
+  const sessionId = resolveTargetSessionId(event, context);
   if (!sessionId) return;
 
   const workspace = resolveWorkspaceFromContext(context);
@@ -51,10 +85,21 @@ export default async function quaidResetSignalHook(event) {
   const signalPath = path.join(signalDir, `${sessionId}.json`);
   const signal = {
     sessionId,
-    label: "ResetSignal",
+    label,
     queuedAt: new Date().toISOString(),
   };
 
   fs.mkdirSync(signalDir, { recursive: true });
+  if (fs.existsSync(signalPath)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(signalPath, "utf8"));
+      const existingLabel = String(existing?.label || "").trim();
+      if (signalPriority(existingLabel) >= signalPriority(label)) {
+        return;
+      }
+    } catch {
+      // Fall through and overwrite malformed pending signal.
+    }
+  }
   fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 0o600 });
 }

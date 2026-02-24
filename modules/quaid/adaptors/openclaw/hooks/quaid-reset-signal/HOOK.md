@@ -6,13 +6,15 @@ metadata:
     "openclaw":
       {
         "emoji": "🧠",
-        "events": ["command:new", "command:reset"]
+        "events": ["command:new", "command:reset", "command:compact"]
       }
   }
 ---
 # Quaid Reset Signal
 
-Queues a `ResetSignal` for the previous session when `/new` or `/reset` runs.
-Uses OpenClaw internal command hooks (`command:new`, `command:reset`) so it
-works even when typed plugin `before_reset` hooks are skipped across bundle
-boundaries.
+Queues extraction signals from command hooks:
+- `/new` and `/reset` => `ResetSignal`
+- `/compact` => `CompactionSignal`
+
+Uses OpenClaw internal command hooks (`command:*`) so extraction still runs
+when typed plugin lifecycle hooks are skipped across bundle boundaries.

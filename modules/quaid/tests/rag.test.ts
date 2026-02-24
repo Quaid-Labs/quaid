@@ -7,7 +7,12 @@ import * as path from 'node:path'
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
-const RAG_SCRIPT = path.join(WORKSPACE, "plugins/quaid/core/docs/rag.py")
+const RAG_SCRIPT = (() => {
+  const modernPath = path.join(WORKSPACE, "modules/quaid/core/docs/rag.py")
+  if (existsSync(modernPath)) return modernPath
+  return path.join(WORKSPACE, "plugins/quaid/core/docs/rag.py")
+})()
+const PYTHON_MODULE_ROOT = path.resolve(path.dirname(RAG_SCRIPT), "../..")
 const TEST_DB = `/tmp/test-rag-${process.pid}.db`
 const TEST_FIXTURES_DIR = '/tmp/rag-test-fixtures'
 
@@ -24,6 +29,9 @@ class TestRAGInterface {
           MOCK_EMBEDDINGS: "1",
           QUAID_HOME: WORKSPACE,
           CLAWDBOT_WORKSPACE: WORKSPACE,
+          PYTHONPATH: process.env.PYTHONPATH
+            ? `${PYTHON_MODULE_ROOT}:${process.env.PYTHONPATH}`
+            : PYTHON_MODULE_ROOT,
         },
         cwd: WORKSPACE
       })
