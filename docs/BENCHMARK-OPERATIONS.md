@@ -63,6 +63,30 @@ If E2E `janitor-parallel-bench` fails:
    - `janitor_stats_errors`
 4. Fix in `dev`, rerun the same lane, then recut checkpoint from `benchmark`.
 
+## Budget Tuning (Current Baseline)
+
+History on this machine currently has no successful `nightly` samples, so tuned budgets are not yet reliable for nightly lanes.
+For `janitor-parallel-bench` (3 successful samples), use these provisional caps:
+
+1. Total runtime budget: `479s`
+2. Stage budget `bootstrap`: `48s`
+3. Stage budget `janitor`: `394s`
+
+Example:
+```bash
+QUAID_E2E_RUNTIME_BUDGET_SECONDS=479 \
+QUAID_E2E_STAGE_BUDGETS_JSON='{"bootstrap":48,"janitor":394}' \
+bash modules/quaid/scripts/run-quaid-e2e.sh --suite janitor-parallel-bench
+```
+
+Regenerate recommendations any time sample count changes:
+```bash
+cd ~/quaid/dev/modules/quaid
+python3 scripts/e2e-budget-tune.py --suite janitor-parallel-bench --min-samples 3
+python3 scripts/e2e-budget-tune.py --suite janitor-parallel-bench --stage bootstrap --min-samples 3
+python3 scripts/e2e-budget-tune.py --suite janitor-parallel-bench --stage janitor --min-samples 3
+```
+
 ## Notes
 
 1. `janitor-parallel-bench` intentionally validates deterministic benchmark invariants (carryover depletion + threshold gates), not every semantic status-delta transition.
