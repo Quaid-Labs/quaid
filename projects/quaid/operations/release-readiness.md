@@ -16,14 +16,12 @@ Recommended framing:
 - Provider abstraction is substantially improved and testable.
 
 ### Hold for broader release until
-- `/new` and `/reset` become parallel-session safe (remove last-active fallback behavior).
 - Command API path fully replaces slash-text fallback paths.
 - Janitor modes split (`memory-maintenance` vs `workspace-editing`) to avoid incidental doc rewrites.
 - Provider matrix smoke (`openai` + `anthropic`) is part of release gating.
 
 ## Known Issues To Publish
 
-- Session targeting edge cases in parallel conversations for reset/new extraction triggers.
 - Some runtime/gateway restore flows can require a restart retry.
 - Janitor scope currently includes workspace editing unless explicitly constrained.
 - Non-OpenClaw adapter coverage is still early compared to the OpenClaw path.
@@ -39,11 +37,10 @@ Recommended framing:
 
 ## Immediate Post-Alpha Priorities
 
-1. Parallel-session-safe extraction targeting.
-2. Command-API-only control flow.
-3. Retrieval quality uplift for relationship/family queries (fact + graph parallel composition).
-4. Cloud embeddings option (lower setup friction).
-5. Graph/config UX surfaces (visualizer + dashboard).
+1. Command-API-only control flow.
+2. Retrieval quality uplift for relationship/family queries (fact + graph parallel composition).
+3. Cloud embeddings option (lower setup friction).
+4. Graph/config UX surfaces (visualizer + dashboard).
 
 ## Contributor Call
 
