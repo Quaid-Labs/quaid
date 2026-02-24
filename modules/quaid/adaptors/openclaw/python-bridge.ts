@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import * as path from "node:path";
 
 const PYTHON_BRIDGE_TIMEOUT_MS = 120_000; // 2 minutes
 
@@ -9,14 +10,21 @@ type PythonBridgeConfig = {
 };
 
 export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
+  const pluginRoot = path.join(config.workspace, "plugins", "quaid");
+  const sep = process.platform === "win32" ? ";" : ":";
+  const existingPyPath = String(process.env.PYTHONPATH || "").trim();
+  const pythonPath = existingPyPath ? `${pluginRoot}${sep}${existingPyPath}` : pluginRoot;
+
   return async function execPython(command: string, args: string[] = []): Promise<string> {
     return new Promise((resolve, reject) => {
       const proc = spawn("python3", [config.scriptPath, command, ...args], {
+        cwd: config.workspace,
         env: {
           ...process.env,
           MEMORY_DB_PATH: config.dbPath,
           QUAID_HOME: config.workspace,
           CLAWDBOT_WORKSPACE: config.workspace,
+          PYTHONPATH: pythonPath,
         },
       });
 

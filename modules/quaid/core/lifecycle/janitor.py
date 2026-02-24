@@ -93,9 +93,20 @@ CONTRADICTION_MIN_SIM = _cfg.janitor.contradiction.min_similarity  # Minimum sim
 CONTRADICTION_MAX_SIM = _cfg.janitor.contradiction.max_similarity  # Maximum similarity for contradiction checks
 CONFIDENCE_DECAY_DAYS = _cfg.decay.threshold_days  # Start decaying after this many days unused
 CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0  # Convert percent to decimal
+MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 120) * 60
 
 # Fixed values (not in config)
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
+
+
+def _default_owner_id() -> str:
+    """Resolve default owner from config with safe fallback."""
+    try:
+        return _cfg.users.default_owner
+    except Exception:
+        return "default"
+
+
 def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
     """Run npm test for quaid plugin and report pass/fail counts."""
     metrics.start_task("tests")
