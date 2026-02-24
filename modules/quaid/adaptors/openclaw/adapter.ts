@@ -2591,11 +2591,20 @@ ${recallStoreGuidance}`,
             const journalResults = results.filter(r => (r.via || "") === "journal");
             const projectResults = results.filter(r => (r.via || "") === "project");
 
-            // Check if results are low quality (all below 60% similarity)
+            // Keep low-confidence warnings conservative; avoid warning on clearly useful recalls.
             const avgSimilarity = vectorResults.length > 0
               ? vectorResults.reduce((sum, r) => sum + (r.similarity || 0), 0) / vectorResults.length
               : 0;
-            const lowQualityWarning = avgSimilarity < 0.6 && vectorResults.length > 0
+            const maxSimilarity = vectorResults.length > 0
+              ? Math.max(...vectorResults.map((r) => Number(r.similarity || 0)))
+              : 0;
+            const hasHighExtractionConfidence = vectorResults.some((r) => Number(r.extractionConfidence || 0) >= 0.8);
+            const lowQualityWarning = (
+              vectorResults.length > 0
+              && avgSimilarity < 0.45
+              && maxSimilarity < 0.55
+              && !hasHighExtractionConfidence
+            )
               ? "\n\n⚠️ Low confidence matches - consider refining query with specific names or topics.\n"
               : "";
 
@@ -3491,6 +3500,9 @@ notify_memory_extraction(
     // Uses sessionFile (JSONL on disk) when available, else event.messages.
     api.on("before_compaction", async (event: any, ctx: any) => {
       try {
+        if (isInternalQuaidSession(ctx?.sessionId)) {
+          return;
+        }
         // Prefer reading from sessionFile (all messages already on disk, runs in
         // parallel with compaction). Fall back to in-memory messages array.
         let messages: any[];
@@ -3506,6 +3518,11 @@ notify_memory_extraction(
           messages = event.messages || [];
         }
         const sessionId = ctx?.sessionId;
+        const conversationMessages = getAllConversationMessages(messages);
+        if (conversationMessages.length === 0) {
+          console.log(`[quaid] before_compaction: skip empty/internal transcript session=${sessionId || "unknown"}`);
+          return;
+        }
         console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
 
         // Wrap extraction in a promise that memory_recall can gate on.
@@ -3514,7 +3531,7 @@ notify_memory_extraction(
         const doExtraction = async () => {
           // before_compaction hook is unreliable async-wise; queue signal for worker tick.
           if (isSystemEnabled("memory")) {
-            const extractionSessionId = sessionId || extractSessionId(messages, ctx);
+            const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
             timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal");
             console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
           } else {
@@ -3522,17 +3539,17 @@ notify_memory_extraction(
           }
 
           // Auto-update docs from transcript (non-fatal)
-          const uniqueSessionId = extractSessionId(messages, ctx);
+          const uniqueSessionId = extractSessionId(conversationMessages, ctx);
 
           try {
-            await updateDocsFromTranscript(messages, "Compaction", uniqueSessionId);
+            await updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId);
           } catch (err: unknown) {
             console.error("[quaid] Compaction doc update failed:", (err as Error).message);
           }
 
           // Emit project event for background processing (non-fatal)
           try {
-            await emitProjectEvent(messages, "compact", uniqueSessionId);
+            await emitProjectEvent(conversationMessages, "compact", uniqueSessionId);
           } catch (err: unknown) {
             console.error("[quaid] Compaction project event failed:", (err as Error).message);
           }
@@ -3567,6 +3584,9 @@ notify_memory_extraction(
     // Uses sessionFile when available, falls back to in-memory messages.
     api.on("before_reset", async (event: any, ctx: any) => {
       try {
+        if (isInternalQuaidSession(ctx?.sessionId)) {
+          return;
+        }
         // Prefer sessionFile (complete transcript on disk), fall back to in-memory messages
         let messages: any[];
         if (event.sessionFile) {
@@ -3582,12 +3602,17 @@ notify_memory_extraction(
         }
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
+        const conversationMessages = getAllConversationMessages(messages);
+        if (conversationMessages.length === 0) {
+          console.log(`[quaid] before_reset: skip empty/internal transcript session=${sessionId || "unknown"}`);
+          return;
+        }
         console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
 
         const doExtraction = async () => {
           // before_reset can race with session teardown; queue signal for worker tick.
           if (isSystemEnabled("memory")) {
-            const extractionSessionId = sessionId || extractSessionId(messages, ctx);
+            const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
             timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal");
             console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
           } else {
@@ -3595,17 +3620,17 @@ notify_memory_extraction(
           }
 
           // Auto-update docs from transcript (non-fatal)
-          const uniqueSessionId = extractSessionId(messages, ctx);
+          const uniqueSessionId = extractSessionId(conversationMessages, ctx);
 
           try {
-            await updateDocsFromTranscript(messages, "Reset", uniqueSessionId);
+            await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);
           } catch (err: unknown) {
             console.error("[quaid] Reset doc update failed:", (err as Error).message);
           }
 
           // Emit project event for background processing (non-fatal)
           try {
-            await emitProjectEvent(messages, "reset", uniqueSessionId);
+            await emitProjectEvent(conversationMessages, "reset", uniqueSessionId);
           } catch (err: unknown) {
             console.error("[quaid] Reset project event failed:", (err as Error).message);
           }

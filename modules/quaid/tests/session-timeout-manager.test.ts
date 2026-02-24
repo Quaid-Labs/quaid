@@ -86,4 +86,63 @@ describe('SessionTimeoutManager scheduling', () => {
     expect(calls[0].label).toBe('Reset')
     expect(calls[0].messages).toHaveLength(2)
   })
+
+  it('filters internal/system traffic from extraction payloads', async () => {
+    const workspace = makeWorkspace('quaid-timeout-filter-')
+    const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async (messages, sessionId, label) => {
+        calls.push({ messages, sessionId, label })
+      },
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    manager.onAgentEnd([
+      { role: 'user', content: 'Given a personal memory query and memory documents', timestamp: Date.now() },
+      { role: 'assistant', content: '{"facts":[],"journal_entries":[]}', timestamp: Date.now() + 1 },
+      { role: 'user', content: 'My father is Kent', timestamp: Date.now() + 2 },
+      { role: 'assistant', content: 'Saved.', timestamp: Date.now() + 3 },
+    ], 'session-filter')
+
+    manager.queueExtractionSignal('session-filter', 'Reset')
+    await manager.processPendingExtractionSignals()
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].messages).toHaveLength(2)
+    expect(calls[0].messages[0].content).toContain('father is Kent')
+  })
+
+  it('recovers orphaned signal processing claims from dead pids', async () => {
+    const workspace = makeWorkspace('quaid-timeout-orphan-signal-')
+    const calls: Array<{ sessionId?: string; label?: string }> = []
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async (_messages, sessionId, label) => {
+        calls.push({ sessionId, label })
+      },
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    const signalDir = path.join(workspace, 'data', 'pending-extraction-signals')
+    const orphanClaim = path.join(signalDir, 'session-orphan.json.processing.99999999')
+    fs.writeFileSync(orphanClaim, JSON.stringify({
+      sessionId: 'session-orphan',
+      label: 'Reset',
+      queuedAt: new Date().toISOString(),
+    }))
+    manager.onAgentEnd([
+      { role: 'user', content: 'remember this', timestamp: Date.now() },
+      { role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
+    ], 'session-orphan')
+
+    await manager.processPendingExtractionSignals()
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].sessionId).toBe('session-orphan')
+  })
 })

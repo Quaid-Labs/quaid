@@ -2206,7 +2206,9 @@ ${recallStoreGuidance}`,
               const journalResults = results.filter((r) => (r.via || "") === "journal");
               const projectResults = results.filter((r) => (r.via || "") === "project");
               const avgSimilarity = vectorResults.length > 0 ? vectorResults.reduce((sum, r) => sum + (r.similarity || 0), 0) / vectorResults.length : 0;
-              const lowQualityWarning = avgSimilarity < 0.6 && vectorResults.length > 0 ? "\n\n\u26A0\uFE0F Low confidence matches - consider refining query with specific names or topics.\n" : "";
+              const maxSimilarity = vectorResults.length > 0 ? Math.max(...vectorResults.map((r) => Number(r.similarity || 0))) : 0;
+              const hasHighExtractionConfidence = vectorResults.some((r) => Number(r.extractionConfidence || 0) >= 0.8);
+              const lowQualityWarning = vectorResults.length > 0 && avgSimilarity < 0.45 && maxSimilarity < 0.55 && !hasHighExtractionConfidence ? "\n\n\u26A0\uFE0F Low confidence matches - consider refining query with specific names or topics.\n" : "";
               let text = `[MEMORY] Found ${results.length} results:${lowQualityWarning}
 `;
               if (vectorResults.length > 0) {
@@ -3054,6 +3056,9 @@ notify_memory_extraction(
     }
     api.on("before_compaction", async (event, ctx) => {
       try {
+        if (isInternalQuaidSession(ctx?.sessionId)) {
+          return;
+        }
         let messages;
         if (event.sessionFile) {
           try {
@@ -3067,23 +3072,28 @@ notify_memory_extraction(
           messages = event.messages || [];
         }
         const sessionId = ctx?.sessionId;
+        const conversationMessages = getAllConversationMessages(messages);
+        if (conversationMessages.length === 0) {
+          console.log(`[quaid] before_compaction: skip empty/internal transcript session=${sessionId || "unknown"}`);
+          return;
+        }
         console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
         const doExtraction = async () => {
           if (isSystemEnabled("memory")) {
-            const extractionSessionId = sessionId || extractSessionId(messages, ctx);
+            const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
             timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal");
             console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
           } else {
             console.log("[quaid] Compaction: memory extraction skipped \u2014 memory system disabled");
           }
-          const uniqueSessionId = extractSessionId(messages, ctx);
+          const uniqueSessionId = extractSessionId(conversationMessages, ctx);
           try {
-            await updateDocsFromTranscript(messages, "Compaction", uniqueSessionId);
+            await updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId);
           } catch (err) {
             console.error("[quaid] Compaction doc update failed:", err.message);
           }
           try {
-            await emitProjectEvent(messages, "compact", uniqueSessionId);
+            await emitProjectEvent(conversationMessages, "compact", uniqueSessionId);
           } catch (err) {
             console.error("[quaid] Compaction project event failed:", err.message);
           }
@@ -3111,6 +3121,9 @@ notify_memory_extraction(
     });
     api.on("before_reset", async (event, ctx) => {
       try {
+        if (isInternalQuaidSession(ctx?.sessionId)) {
+          return;
+        }
         let messages;
         if (event.sessionFile) {
           try {
@@ -3125,23 +3138,28 @@ notify_memory_extraction(
         }
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
+        const conversationMessages = getAllConversationMessages(messages);
+        if (conversationMessages.length === 0) {
+          console.log(`[quaid] before_reset: skip empty/internal transcript session=${sessionId || "unknown"}`);
+          return;
+        }
         console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
         const doExtraction = async () => {
           if (isSystemEnabled("memory")) {
-            const extractionSessionId = sessionId || extractSessionId(messages, ctx);
+            const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
             timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal");
             console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
           } else {
             console.log("[quaid] Reset: memory extraction skipped \u2014 memory system disabled");
           }
-          const uniqueSessionId = extractSessionId(messages, ctx);
+          const uniqueSessionId = extractSessionId(conversationMessages, ctx);
           try {
-            await updateDocsFromTranscript(messages, "Reset", uniqueSessionId);
+            await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);
           } catch (err) {
             console.error("[quaid] Reset doc update failed:", err.message);
           }
           try {
-            await emitProjectEvent(messages, "reset", uniqueSessionId);
+            await emitProjectEvent(conversationMessages, "reset", uniqueSessionId);
           } catch (err) {
             console.error("[quaid] Reset project event failed:", err.message);
           }
