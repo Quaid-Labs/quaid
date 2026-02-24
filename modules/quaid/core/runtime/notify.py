@@ -125,7 +125,7 @@ def notify_user(
 
     Args:
         message: Message to send
-        session_key: Ignored (kept for backward compat; adapter manages sessions)
+        session_key: Ignored (adapter manages sessions)
         dry_run: If True, print command but don't send
         channel_override: If set, send to this channel instead of the session's last channel.
 

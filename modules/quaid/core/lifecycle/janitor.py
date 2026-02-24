@@ -26,14 +26,12 @@ Usage:
 import argparse
 import hashlib
 import json
-import math
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
@@ -73,14 +71,6 @@ def _logs_dir() -> Path:
 WORKSPACE = None  # Lazy — use _workspace() instead
 _LIFECYCLE_REGISTRY = build_default_registry()
 
-# Load config values (with fallbacks for safety)
-def _get_config_value(getter, default):
-    """Safely get config value with fallback."""
-    try:
-        return getter()
-    except Exception:
-        return default
-
 # Thresholds - now loaded from config/memory.json
 _cfg = get_config()
 DUPLICATE_MIN_SIM = _cfg.janitor.dedup.similarity_threshold  # Lower bound for "might be duplicate"
@@ -98,8 +88,16 @@ RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 from datastore.memorydb.maintenance_ops import (
     JanitorMetrics,
     backfill_embeddings,
+    checkpoint_wal,
+    count_nodes_by_status,
+    get_update_check_cache,
     get_last_run_time,
+    graduate_approved_to_active,
     init_janitor_metadata,
+    list_recent_fact_texts,
+    record_health_snapshot,
+    record_janitor_run,
+    write_update_check_cache,
     _is_benchmark_mode,
 )
 
@@ -234,20 +232,14 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
     if not current:
         return None
 
-    # Check cache — skip if checked within 24h
+    # Check datastore-owned cache — skip if checked within 24h
     try:
         graph = get_graph()
-        with graph._get_conn() as conn:
-            row = conn.execute(
-                "SELECT value, updated_at FROM metadata WHERE key = 'update_check'"
-            ).fetchone()
-            if row:
-                last_check = datetime.fromisoformat(row["updated_at"])
-                if datetime.now() - last_check < timedelta(hours=24):
-                    cached = json.loads(row["value"])
-                    if cached.get("latest") and cached["latest"] != current:
-                        return cached
-                    return None
+        cached = get_update_check_cache(graph, max_age_hours=24)
+        if cached:
+            if cached.get("latest") and cached["latest"] != current:
+                return cached
+            return None
     except Exception:
         pass
 
@@ -265,15 +257,11 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         print(f"  Update check failed (network): {e}")
         return None
 
-    # Cache the result
+    # Cache the result via datastore helper
     result = {"latest": latest_tag, "current": current, "url": html_url}
     try:
         graph = get_graph()
-        with graph._get_conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, datetime('now'))",
-                ("update_check", json.dumps(result)),
-            )
+        write_update_check_cache(graph, result)
     except Exception:
         pass
 
@@ -1106,44 +1094,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task == "all":
             try:
                 health = graph.get_health_metrics()
-                total = health["total_nodes"]
-                with_emb_str = health.get("embedding_coverage", "0/0")
-                with_emb = int(with_emb_str.split("/")[0]) if "/" in str(with_emb_str) else 0
-                emb_pct = (with_emb / total * 100) if total > 0 else 0.0
-
-                # Avg confidence across all statuses
-                conf_stats = health.get("confidence_by_status", {})
-                all_counts = sum(s.get("count", 0) for s in conf_stats.values())
-                avg_conf = (sum(s.get("avg_confidence", 0) * s.get("count", 0) for s in conf_stats.values()) / all_counts) if all_counts > 0 else 0.0
-
-                # Confidence distribution buckets
-                conf_dist = {"0.0-0.3": 0, "0.3-0.5": 0, "0.5-0.7": 0, "0.7-0.9": 0, "0.9-1.0": 0}
-                with graph._get_conn() as conn:
-                    for row in conn.execute("SELECT confidence FROM nodes").fetchall():
-                        c = row["confidence"]
-                        if c < 0.3: conf_dist["0.0-0.3"] += 1
-                        elif c < 0.5: conf_dist["0.3-0.5"] += 1
-                        elif c < 0.7: conf_dist["0.5-0.7"] += 1
-                        elif c < 0.9: conf_dist["0.7-0.9"] += 1
-                        else: conf_dist["0.9-1.0"] += 1
-
-                    conn.execute("""
-                        INSERT INTO health_snapshots
-                            (total_nodes, total_edges, avg_confidence, nodes_by_status,
-                             confidence_distribution, staleness_distribution,
-                             orphan_count, embedding_coverage)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        total,
-                        health["total_edges"],
-                        round(avg_conf, 4),
-                        json.dumps({k: v.get("count", 0) for k, v in conf_stats.items()}),
-                        json.dumps(conf_dist),
-                        json.dumps(health.get("staleness_distribution", {})),
-                        health.get("orphan_nodes", 0),
-                        round(emb_pct, 1),
-                    ))
-                print(f"[Health Snapshot] Recorded: {total} nodes, {health['total_edges']} edges, avg conf {avg_conf:.3f}")
+                summary = record_health_snapshot(graph, health)
+                print(
+                    f"[Health Snapshot] Recorded: {summary['total']} nodes, "
+                    f"{summary['total_edges']} edges, avg conf {summary['avg_confidence']:.3f}"
+                )
             except Exception as e:
                 print(f"[Health Snapshot] Failed: {e}")
 
@@ -1162,11 +1117,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     print("[Final: Graduate approved → active]")
                 else:
                     print("[Task: Graduate approved → active]")
-                with graph._get_conn() as conn:
-                    cursor = conn.execute(
-                        "UPDATE nodes SET status = 'active' WHERE status = 'approved'"
-                    )
-                    graduated = cursor.rowcount
+                graduated = graduate_approved_to_active(graph)
                 applied_changes["graduated_to_active"] = graduated
                 print(f"  Graduated {graduated} memories from approved → active\n")
 
@@ -1178,13 +1129,9 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # Benchmark-mode validity gate: janitor owns run validity semantics.
     if _is_benchmark_mode() and not dry_run and task in ("all", "graduate"):
         try:
-            with graph._get_conn() as conn:
-                pending = int(conn.execute(
-                    "SELECT COUNT(*) FROM nodes WHERE status = 'pending'"
-                ).fetchone()[0] or 0)
-                approved = int(conn.execute(
-                    "SELECT COUNT(*) FROM nodes WHERE status = 'approved'"
-                ).fetchone()[0] or 0)
+            counts = count_nodes_by_status(graph, ["pending", "approved"])
+            pending = int(counts.get("pending", 0))
+            approved = int(counts.get("approved", 0))
             if pending > 0 or approved > 0:
                 msg = (
                     "Benchmark mode invalid state: "
@@ -1269,13 +1216,15 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     if not dry_run:
         try:
             actions = sum(v for v in applied_changes.values() if isinstance(v, (int, float)) and v > 0)
-            with graph._get_conn() as conn:
-                conn.execute("""
-                    INSERT INTO janitor_runs (task_name, started_at, completed_at, memories_processed, actions_taken, status)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (task, datetime.fromtimestamp(metrics.start_time).isoformat(), datetime.now().isoformat(),
-                      applied_changes.get("memories_reviewed", 0) + applied_changes.get("duplicates_merged", 0),
-                      actions, "completed" if success else "failed"))
+            record_janitor_run(
+                graph=graph,
+                task_name=task,
+                started_at_iso=datetime.fromtimestamp(metrics.start_time).isoformat(),
+                completed_at_iso=datetime.now().isoformat(),
+                memories_processed=applied_changes.get("memories_reviewed", 0) + applied_changes.get("duplicates_merged", 0),
+                actions_taken=int(actions),
+                status="completed" if success else "failed",
+            )
         except Exception as e:
             print(f"  Warning: Failed to record janitor run: {e}")
 
@@ -1285,17 +1234,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             from core.runtime.events import emit_event, process_events
 
             today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-            with graph._get_conn() as conn:
-                rows = conn.execute("""
-                    SELECT name as text
-                    FROM nodes
-                    WHERE type = 'Fact'
-                      AND created_at >= ?
-                      AND status IN ('pending', 'approved', 'active')
-                    ORDER BY created_at DESC
-                    LIMIT 25
-                """, (today_start,)).fetchall()
-            today_memories = [{"text": str(r["text"]), "category": "fact"} for r in rows]
+            today_memories = [
+                {"text": text, "category": "fact"}
+                for text in list_recent_fact_texts(graph, since_iso=today_start, limit=25)
+            ]
 
             emit_event(
                 name="janitor.run_completed",
@@ -1318,8 +1260,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # WAL checkpoint at end of run to reclaim WAL file space
     if task == "all" and not dry_run:
         try:
-            with graph._get_conn() as conn:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            checkpoint_wal(graph)
         except Exception:
             pass  # Checkpoint is best-effort
 
@@ -1350,7 +1291,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Resolve token budget precedence: CLI > config > env fallback (compat).
+    # Resolve token budget precedence: CLI > config > environment fallback.
     try:
         config_token_budget = int(getattr(_cfg.janitor, "token_budget", 0) or 0)
     except Exception:

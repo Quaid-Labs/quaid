@@ -342,7 +342,7 @@ function runStartupSelfCheck(): void {
 
   const requiredFiles = [
     path.join(WORKSPACE, "plugins", "quaid", "core", "lifecycle", "janitor.py"),
-    path.join(WORKSPACE, "plugins", "quaid", "memory_graph.py"),
+    path.join(WORKSPACE, "plugins", "quaid", "datastore", "memorydb", "memory_graph.py"),
   ];
   for (const file of requiredFiles) {
     if (!fs.existsSync(file)) {
@@ -536,7 +536,7 @@ function extractSessionId(messages: any[], ctx?: any): string {
     return ctx.sessionId;
   }
 
-  // Fallback: hash-based session ID (for backward compat with older source)
+  // Deterministic fallback when ctx.sessionId is unavailable.
   // Find first user message with timestamp
   let firstTimestamp = "";
   const filteredMessages = messages.filter((m: any) => {
@@ -723,23 +723,7 @@ function _getGatewayCredential(providers: string[]): string | undefined {
 }
 
 function _getAnthropicCredential(): string | undefined {
-  // OpenClaw adapter should only use gateway-managed credentials.
-  const apiKey = _getGatewayCredential(["anthropic"]);
-  if (apiKey) return apiKey;
-
-  // Legacy gateway auth.json (for older installs).
-  try {
-    const authPath = path.join(
-      os.homedir(), ".openclaw", "agents", "main", "agent", "auth.json"
-    );
-    if (fs.existsSync(authPath)) {
-      const data = JSON.parse(fs.readFileSync(authPath, "utf8"));
-      const key = data?.anthropic?.key;
-      if (key) return key;
-    }
-  } catch { /* auth.json not available */ }
-
-  return undefined;
+  return _getGatewayCredential(["anthropic"]);
 }
 
 function _getOpenAICredential(): string | undefined {
@@ -2104,145 +2088,6 @@ ${lines.join("\n")}
 }
 
 // ============================================================================
-// LLM-based Auto-Capture
-// ============================================================================
-
-async function classifyAndStore(text: string, speaker: string = "The user", sessionId?: string): Promise<void> {
-  // Special handling for assistant messages - extract facts ABOUT the user, not BY the assistant
-  const isAssistantMessage = speaker === "Alfie";
-  const actualSubject = isAssistantMessage ? "Quaid" : speaker;
-  
-  const systemPrompt = `You extract memorable personal facts from messages for a personal knowledge base.
-
-PURPOSE: Help an AI assistant remember useful information about the user — their preferences, relationships, decisions, and life events. It's fine to return empty if a message is purely conversational — you have permission to extract nothing when appropriate. A nightly cleanup process handles any noise.
-
-This is a PERSONAL knowledge base. System architecture, infrastructure configs, and operational rules for AI agents belong in documentation — NOT here.
-
-SPEAKER CONTEXT:
-- Speaker: ${isAssistantMessage ? "Alfie (AI assistant)" : speaker}
-- ${isAssistantMessage ? "This is the AI speaking TO Quaid. Extract facts ABOUT Quaid mentioned in the response." : "This is the human speaking. Their statements are first-person facts about themselves."}
-
-CAPTURE ONLY these fact types:
-- Personal facts: Names, relationships, jobs, birthdays, health conditions, addresses
-- Preferences: Likes, dislikes, favorites, opinions, communication styles, personal rules ("Always do X", "I prefer Z format")
-- Personal decisions: Choices Quaid made with reasoning ("decided to use X because Y")
-- Important relationships: Family, staff, contacts, business partners
-- Significant events: Major life changes, trips, health diagnoses, big decisions
-
-NOISE PATTERNS - NEVER CAPTURE:
-- System architecture: How systems are built, infrastructure details, tool configurations
-- Operational rules for AI agents: "Alfie should do X", "The janitor runs Y"
-- Hypothetical examples: "Like: 'X'", "For example", "such as", test statements
-- Conversational fragments: Questions, suggestions, worries
-- System/technical noise: Plugin paths, debugging, error messages, API keys, credentials
-- Security-related: API keys, passwords, tokens, authentication details
-- Entity stubs: Single words, device names without context
-- Meta-conversation: Discussion about AI systems, memory, capabilities, infrastructure
-- Temporal work-in-progress: "working on", "about to", "planning to"
-- Commands/requests: "Can you...", "Please..."
-- Acknowledgments: "Thanks", "Got it", "Sounds good"
-- General knowledge: Facts not specific to this person/household
-
-QUALITY RULES:
-- Completeness: Skip partial facts without context
-- Specificity: "Quaid likes spicy food" > "Quaid likes food"
-- Stability: Permanent facts > temporary states
-- Attribution: Always use "${actualSubject}" as subject, third person
-- Reality check: Only capture statements presented as TRUE facts, not examples or hypotheticals
-- NO EMBELLISHMENT: Extract ONLY what was explicitly stated. Do NOT infer, add, or embellish details.
-  If the speaker says "dinner at Shelter", do NOT add "tomorrow". If they say "a necklace", do NOT add "surprise".
-  If one sentence contains multiple facts, extract them as separate items — but each must match what was said.
-- ONE FACT PER CONCEPT: Do not split one statement into overlapping facts.
-  "My sister Kuato's husband is named Nate" = ONE fact, not three separate facts about sister/husband/brother-in-law.
-
-${isAssistantMessage ?
-  `CRITICAL: Extract facts ABOUT the user (Quaid), NOT about the assistant.
-Convert: "Your X" → "${actualSubject}'s X", "You have Y" → "${actualSubject} has Y"
-NEVER capture: "Alfie will...", "Alfie should...", system behaviors` :
-  `Rephrase "I/my/me" to "${actualSubject}".`}
-
-PRIVACY CLASSIFICATION (per fact):
-- "private": ONLY for secrets, surprises, hidden gifts, sensitive finances, health diagnoses,
-  passwords, or anything explicitly meant to be hidden from specific people.
-  Examples: "planning a surprise party for X", "salary is $X", "diagnosed with X"
-- "shared": Most facts go here. Family info, names, relationships, schedules, preferences,
-  routines, project details, household knowledge, general personal facts.
-  Examples: "dinner is at 7pm", "sister is named Kuato", "likes spicy food", "works from home"
-- "public": Widely known or non-personal facts. Examples: "Bali is in Indonesia"
-IMPORTANT: Default to "shared". Only use "private" for genuinely secret or sensitive information.
-Family names, daily routines, and preferences are "shared", NOT "private".
-
-Respond with JSON only:
-{"facts": [{"text": "specific fact", "category": "fact|preference|decision|relationship", "extraction_confidence": "high|medium|low", "keywords": "3-5 searchable terms (proper nouns, synonyms, category words)", "privacy": "private|shared|public"}]}
-
-If nothing worth capturing, respond: {"facts": []}`;
-
-  const userMessage = `${isAssistantMessage ? "Alfie (assistant)" : speaker} said: "${text.slice(0, 500)}"`;
-
-  try {
-    const llm = await callConfiguredLLM(systemPrompt, userMessage, "fast", 200);
-    const output = (llm.text || "").trim();
-    
-    // Parse JSON from response (handle potential markdown wrapping)
-    let jsonStr = output;
-    if (output.includes("```")) {
-      const match = output.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (match) { jsonStr = match[1].trim(); }
-    }
-    
-    let result: { save?: boolean; category?: string; summary?: string; facts?: any[]; extraction_confidence?: string };
-    try {
-      result = JSON.parse(jsonStr);
-    } catch {
-      // Try to extract JSON object if response has extra text
-      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          result = JSON.parse(jsonMatch[0]);
-        } catch {
-          console.log("[quaid] Could not parse extracted JSON:", jsonMatch[0].slice(0, 200));
-          return;
-        }
-      } else {
-        console.log("[quaid] Could not parse LLM response:", output.slice(0, 100));
-        return;
-      }
-    }
-
-    // Handle per-fact objects (new format) and string arrays (legacy)
-    const rawFacts = result.facts || (result.save === true ? [result.summary || text] : []);
-
-    if (rawFacts.length === 0) {
-      console.log(`[quaid] LLM: no facts extracted from: "${text.slice(0, 50)}..."`);
-      return;
-    }
-
-    for (const rawFact of rawFacts) {
-      // Support both per-fact objects and legacy string format
-      const factText = typeof rawFact === "string" ? rawFact : rawFact?.text;
-      const factCategory = typeof rawFact === "string" ? (result.category || "fact") : (rawFact?.category || "fact");
-      const factConfStr = typeof rawFact === "string" ? (result.extraction_confidence || "medium") : (rawFact?.extraction_confidence || "medium");
-      const factPrivacy = typeof rawFact === "string" ? "shared" : (rawFact?.privacy || "shared");
-      const factKeywords = typeof rawFact === "string" ? undefined : (rawFact?.keywords || undefined);
-
-      if (!factText || factText.trim().split(/\s+/).length < 3) { continue; }
-
-      const extractionConfidence = factConfStr === "high" ? 0.8 : factConfStr === "low" ? 0.3 : 0.5;
-
-      const factSourceType = isAssistantMessage ? "assistant" : "user";
-      const storeResult = await store(factText, factCategory, sessionId, extractionConfidence, resolveOwner(speaker), "auto-capture", speaker, undefined, factPrivacy, factKeywords, undefined, factSourceType);
-      if (storeResult?.status === "created") {
-        console.log(`[quaid] Auto-captured: "${factText.slice(0, 60)}..." [${factCategory}] (conf: ${extractionConfidence}, privacy: ${factPrivacy})`);
-      } else if (storeResult?.status === "duplicate") {
-        console.log(`[quaid] Skipped (duplicate): "${factText.slice(0, 40)}..."`);
-      }
-    }
-  } catch (err: unknown) {
-    console.error("[quaid] classifyAndStore error:", (err as Error).message);
-  }
-}
-
-// ============================================================================
 // Plugin Definition
 // ============================================================================
 
@@ -2288,18 +2133,7 @@ const quaidPlugin = {
       }
     });
 
-    // Register lifecycle hooks
-    // ============================================================================
-    // DEPRECATED: Automatic Memory Injection (disabled 2026-02-06)
-    // ============================================================================
-    // Reason: Automatic injection on every message produced low-quality matches.
-    // Short messages like "ok", "B", "yes" have meaningless embeddings that match
-    // random facts. The new approach is agent-driven: the agent decides when it
-    // needs personal context and uses the memory_recall tool with a crafted query.
-    //
-    // This code is preserved for potential future use with better query gating.
-    // To re-enable: set MEMORY_AUTO_INJECT=1 in environment or update config.
-    // ============================================================================
+    // Register lifecycle hooks.
     const beforeAgentStartHandler = async (event: any, ctx: any) => {
       if (isInternalQuaidSession(ctx?.sessionId)) {
         return;
@@ -2508,11 +2342,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       priority: 10
     });
 
-    // Auto-capture hook — DEPRECATED: replaced by event-based classification
-    // (compact, reset, session end). The per-message classifier was calling
-    // Haiku on every agent_end including heartbeats, causing excessive API spend.
-    // classifyAndStore() and the message filtering logic are preserved above
-    // if we ever need to re-enable this path.
+    // End-of-turn hook drives timeout scheduling and extraction signaling.
     const agentEndHandler = async (event: any, ctx: any) => {
       if (isInternalQuaidSession(ctx?.sessionId)) return;
       if (!isSystemEnabled("memory")) return;
@@ -3439,7 +3269,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
 `);
       }
 
-      const journalConfig = getMemoryConfig().docs?.journal || getMemoryConfig().docs?.soulSnippets || {};
+      const journalConfig = getMemoryConfig().docs?.journal || {};
       const journalEnabled = isSystemEnabled("journal") && journalConfig.enabled !== false;
       const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
       const extracted = await callExtractPipeline({
@@ -3630,9 +3460,8 @@ notify_memory_extraction(
       fs.writeFileSync(flagPath, new Date().toISOString());
     }
 
-    // Register compaction hook — extract memories in parallel with compaction LLM
-    // Uses sessionFile (JSONL on disk) when available (PR #13287), falls back to
-    // in-memory messages for backwards compatibility with older gateway versions.
+    // Register compaction hook — extract memories in parallel with compaction LLM.
+    // Uses sessionFile (JSONL on disk) when available, else event.messages.
     api.on("before_compaction", async (event: any, ctx: any) => {
       try {
         // Prefer reading from sessionFile (all messages already on disk, runs in

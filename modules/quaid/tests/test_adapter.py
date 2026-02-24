@@ -219,8 +219,8 @@ class TestOpenClawAdapter:
         adapter = OpenClawAdapter()
         assert adapter.quaid_home() == tmp_path
 
-    def test_quaid_home_fallback_to_clawdbot_json(self, tmp_path, monkeypatch):
-        """When CLAWDBOT_WORKSPACE unset, falls back to ~/.openclaw/clawdbot.json."""
+    def test_quaid_home_fallback_to_openclaw_json(self, tmp_path, monkeypatch):
+        """When CLAWDBOT_WORKSPACE unset, falls back to ~/.openclaw/openclaw.json."""
         monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         workspace = tmp_path / "my-workspace"
@@ -228,21 +228,19 @@ class TestOpenClawAdapter:
         cfg_dir = tmp_path / ".openclaw"
         cfg_dir.mkdir()
         import json
-        (cfg_dir / "clawdbot.json").write_text(json.dumps({
+        (cfg_dir / "openclaw.json").write_text(json.dumps({
             "agents": {"defaults": {"workspace": str(workspace)}}
         }))
         adapter = OpenClawAdapter()
         assert adapter.quaid_home() == workspace
 
-    def test_quaid_home_prefers_openclaw_json_over_legacy(self, tmp_path, monkeypatch):
-        """If both config filenames exist, prefer openclaw.json."""
+    def test_quaid_home_ignores_non_openclaw_config(self, tmp_path, monkeypatch):
+        """Only ~/.openclaw/openclaw.json is used for workspace fallback."""
         monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
 
         ws_new = tmp_path / "workspace-openclaw"
-        ws_old = tmp_path / "workspace-legacy"
         ws_new.mkdir()
-        ws_old.mkdir()
 
         cfg_dir = tmp_path / ".openclaw"
         cfg_dir.mkdir()
@@ -250,9 +248,6 @@ class TestOpenClawAdapter:
         import json
         (cfg_dir / "openclaw.json").write_text(json.dumps({
             "agents": {"defaults": {"workspace": str(ws_new)}}
-        }))
-        (cfg_dir / "clawdbot.json").write_text(json.dumps({
-            "agents": {"defaults": {"workspace": str(ws_old)}}
         }))
 
         adapter = OpenClawAdapter()
@@ -665,13 +660,8 @@ class TestSessionsEdgeCases:
         monkeypatch.setattr(adapter, "_find_sessions_json", lambda: sessions_file)
         assert adapter.get_last_channel() is None
 
-    def test_find_sessions_json_priority(self, monkeypatch, tmp_path):
-        """First candidate path wins when both exist."""
-        # Create both candidate paths
-        clawdbot_dir = tmp_path / ".clawdbot" / "agents" / "main" / "sessions"
-        clawdbot_dir.mkdir(parents=True)
-        (clawdbot_dir / "sessions.json").write_text("{}")
-
+    def test_find_sessions_json_openclaw_path(self, monkeypatch, tmp_path):
+        """OpenClaw sessions path is used when present."""
         openclaw_dir = tmp_path / ".openclaw" / "agents" / "main" / "sessions"
         openclaw_dir.mkdir(parents=True)
         (openclaw_dir / "sessions.json").write_text("{}")
@@ -680,7 +670,7 @@ class TestSessionsEdgeCases:
         adapter = OpenClawAdapter()
         result = adapter._find_sessions_json()
         assert result is not None
-        assert ".clawdbot" in str(result)  # First candidate wins
+        assert ".openclaw" in str(result)
 
     def test_find_sessions_json_both_missing(self, monkeypatch, tmp_path):
         """Both candidate paths missing returns None."""
@@ -863,15 +853,6 @@ class TestResolveAnthropicCredential:
         (agent_dir / "auth-profiles.json").write_text(json.dumps(profiles))
         cred = adapter._resolve_anthropic_credential()
         assert cred is None
-
-    def test_reads_legacy_auth_json(self, tmp_path, monkeypatch):
-        """Falls back to auth.json if no auth-profiles.json."""
-        adapter, agent_dir = self._make_adapter(tmp_path, monkeypatch)
-        import json
-        auth = {"anthropic": {"type": "api_key", "key": "sk-ant-api-legacy"}}
-        (agent_dir / "auth.json").write_text(json.dumps(auth))
-        cred = adapter._resolve_anthropic_credential()
-        assert cred == "sk-ant-api-legacy"
 
     def test_does_not_fall_through_to_env_var(self, tmp_path, monkeypatch):
         """Does not fall through to ANTHROPIC_API_KEY env var."""

@@ -20,7 +20,7 @@ os.environ["MEMORY_DB_PATH"] = ":memory:"
 
 import pytest
 
-from datastore.memorydb.memory_graph import MemoryGraph, Node, Edge, _content_hash
+from datastore.memorydb.memory_graph import MemoryGraph, Node, Edge, content_hash
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +179,7 @@ class TestLifecycleInvariants:
         graph, _ = _make_graph(tmp_path)
         text = "Quaid likes coffee every morning"
         node_id = _insert_test_node(graph, text)
-        expected_hash = _content_hash(text)
+        expected_hash = content_hash(text)
 
         with graph._get_conn() as conn:
             row = conn.execute(

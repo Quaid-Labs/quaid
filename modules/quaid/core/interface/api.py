@@ -23,8 +23,8 @@ from datastore.memorydb.memory_graph import (
     search as _search,
     create_edge as _create_edge,
     stats as _stats,
-    _forget as _internal_forget,
-    _get_memory as _internal_get_memory,
+    forget as _forget,
+    get_memory as _get_memory,
 )
 
 
@@ -225,7 +225,7 @@ def forget(
         >>> forget(query="Mars colony preferences")
         True
     """
-    return _internal_forget(query=query, node_id=node_id)
+    return _forget(query=query, node_id=node_id)
 
 
 def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
@@ -242,7 +242,7 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
         >>> mem = get_memory("a1b2c3-...")
         >>> print(mem["name"])
     """
-    return _internal_get_memory(node_id)
+    return _get_memory(node_id)
 
 
 def stats() -> Dict[str, Any]:

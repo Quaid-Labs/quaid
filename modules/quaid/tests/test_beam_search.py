@@ -920,7 +920,7 @@ class TestAdaptiveReranking:
                 assert isinstance(score, float)
 
     def test_scoring_mode_param_ignored(self, graph):
-        """scoring_mode parameter is accepted but ignored (backward compat)."""
+        """scoring_mode parameter is accepted but currently unused."""
         a = _add_node(graph, "A")
         b = _add_node(graph, "B", confidence=0.8)
         _add_edge(graph, a.id, b.id, "knows")

@@ -388,6 +388,159 @@ def init_janitor_metadata(graph: MemoryGraph):
         """)
 
 
+def get_update_check_cache(graph: MemoryGraph, max_age_hours: int = 24) -> Optional[Dict[str, Any]]:
+    """Return cached update-check payload when still fresh."""
+    with graph._get_conn() as conn:
+        row = conn.execute(
+            "SELECT value, updated_at FROM metadata WHERE key = 'update_check'"
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        updated_at = datetime.fromisoformat(str(row["updated_at"]))
+    except (ValueError, TypeError, KeyError):
+        return None
+    if datetime.now() - updated_at >= timedelta(hours=max_age_hours):
+        return None
+    try:
+        return json.loads(row["value"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def write_update_check_cache(graph: MemoryGraph, payload: Dict[str, Any]) -> None:
+    """Persist update-check payload in datastore metadata."""
+    with graph._get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+            ("update_check", json.dumps(payload)),
+        )
+
+
+def record_janitor_run(
+    graph: MemoryGraph,
+    task_name: str,
+    started_at_iso: str,
+    completed_at_iso: str,
+    memories_processed: int,
+    actions_taken: int,
+    status: str,
+) -> None:
+    """Persist one janitor run row."""
+    with graph._get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO janitor_runs (task_name, started_at, completed_at, memories_processed, actions_taken, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (task_name, started_at_iso, completed_at_iso, memories_processed, actions_taken, status),
+        )
+
+
+def count_nodes_by_status(graph: MemoryGraph, statuses: List[str]) -> Dict[str, int]:
+    """Return node counts keyed by status value."""
+    counts: Dict[str, int] = {}
+    if not statuses:
+        return counts
+    with graph._get_conn() as conn:
+        for status in statuses:
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM nodes WHERE status = ?",
+                (status,),
+            ).fetchone()
+            counts[status] = int((row["cnt"] if row and "cnt" in row.keys() else 0) or 0)
+    return counts
+
+
+def list_recent_fact_texts(graph: MemoryGraph, since_iso: str, limit: int = 25) -> List[str]:
+    """Return recent fact texts for notification payloads."""
+    with graph._get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT name AS text
+            FROM nodes
+            WHERE type = 'Fact'
+              AND created_at >= ?
+              AND status IN ('pending', 'approved', 'active')
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (since_iso, limit),
+        ).fetchall()
+    return [str(r["text"]) for r in rows]
+
+
+def graduate_approved_to_active(graph: MemoryGraph) -> int:
+    """Promote approved nodes to active. Returns affected row count."""
+    with graph._get_conn() as conn:
+        cursor = conn.execute(
+            "UPDATE nodes SET status = 'active' WHERE status = 'approved'"
+        )
+        return int(cursor.rowcount or 0)
+
+
+def checkpoint_wal(graph: MemoryGraph) -> None:
+    """Run best-effort WAL checkpoint."""
+    with graph._get_conn() as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
+def record_health_snapshot(graph: MemoryGraph, health: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist one health snapshot and return computed summary details."""
+    total = int(health.get("total_nodes", 0) or 0)
+    conf_stats = health.get("confidence_by_status", {}) or {}
+    all_counts = sum(int(s.get("count", 0) or 0) for s in conf_stats.values())
+    avg_conf = (
+        sum(float(s.get("avg_confidence", 0) or 0) * int(s.get("count", 0) or 0) for s in conf_stats.values()) / all_counts
+        if all_counts > 0
+        else 0.0
+    )
+    with_emb_str = str(health.get("embedding_coverage", "0/0"))
+    with_emb = int(with_emb_str.split("/")[0]) if "/" in with_emb_str else 0
+    emb_pct = (with_emb / total * 100) if total > 0 else 0.0
+
+    conf_dist = {"0.0-0.3": 0, "0.3-0.5": 0, "0.5-0.7": 0, "0.7-0.9": 0, "0.9-1.0": 0}
+    with graph._get_conn() as conn:
+        for row in conn.execute("SELECT confidence FROM nodes").fetchall():
+            c = float(row["confidence"] or 0)
+            if c < 0.3:
+                conf_dist["0.0-0.3"] += 1
+            elif c < 0.5:
+                conf_dist["0.3-0.5"] += 1
+            elif c < 0.7:
+                conf_dist["0.5-0.7"] += 1
+            elif c < 0.9:
+                conf_dist["0.7-0.9"] += 1
+            else:
+                conf_dist["0.9-1.0"] += 1
+
+        conn.execute(
+            """
+            INSERT INTO health_snapshots
+                (total_nodes, total_edges, avg_confidence, nodes_by_status,
+                 confidence_distribution, staleness_distribution,
+                 orphan_count, embedding_coverage)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                total,
+                int(health.get("total_edges", 0) or 0),
+                round(avg_conf, 4),
+                json.dumps({k: int(v.get("count", 0) or 0) for k, v in conf_stats.items()}),
+                json.dumps(conf_dist),
+                json.dumps(health.get("staleness_distribution", {})),
+                int(health.get("orphan_nodes", 0) or 0),
+                round(emb_pct, 1),
+            ),
+        )
+
+    return {
+        "total": total,
+        "avg_confidence": avg_conf,
+        "total_edges": int(health.get("total_edges", 0) or 0),
+    }
+
+
 def get_last_run_time(graph: MemoryGraph, task: str) -> Optional[datetime]:
     """Get the last time a specific janitor task was completed."""
     with graph._get_conn() as conn:
@@ -1276,7 +1429,7 @@ def _resolve_entity_node(graph: MemoryGraph, name: str, node_type: str,
     return new_node.id
 
 
-EDGE_BATCH_SIZE = 25  # Legacy safety cap (replaced by TokenBatchBuilder)
+EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
 
 
 def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
@@ -1775,7 +1928,7 @@ def apply_decay_optimized(stale: List[Dict[str, Any]], graph: MemoryGraph,
       - "exponential" (default): Ebbinghaus curve R = 2^(-t/half_life)
         New confidence = original_confidence * retention_factor
         Half-life scales with access count and verified status.
-      - "linear": Legacy mode — subtract flat rate per cycle.
+      - "linear": subtract flat rate per cycle.
     """
     metrics.start_task("decay_application")
     deleted = 0
@@ -1807,7 +1960,7 @@ def apply_decay_optimized(stale: List[Dict[str, Any]], graph: MemoryGraph,
             new_confidence = max(min_conf, baseline * retention)
             decay_type = f"EXP(R={retention:.3f})"
         else:
-            # Legacy linear decay
+            # Linear decay
             decay_rate = CONFIDENCE_DECAY_RATE * 0.5 if is_verified else CONFIDENCE_DECAY_RATE
             new_confidence = max(min_conf, mem["confidence"] - decay_rate)
             decay_type = "SLOW" if is_verified else "NORMAL"

@@ -638,8 +638,8 @@ class TestCrossEncoderReranking:
         assert len(reranked) == 1
         assert reranked[0][1] == 0.75  # Original score preserved
 
-    def test_blends_scores_yes_response(self):
-        """_rerank_with_cross_encoder blends scores correctly for 'yes' response."""
+    def test_blends_scores_high_grade_response(self):
+        """_rerank_with_cross_encoder blends scores correctly for high numeric grade."""
         from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
@@ -648,7 +648,7 @@ class TestCrossEncoderReranking:
         results = [(node, original_score)]
         config = RetrievalConfig()
 
-        with patch("llm_clients.call_fast_reasoning", return_value=("1. yes", 0.1)):
+        with patch("llm_clients.call_fast_reasoning", return_value=("1. 5", 0.1)):
             reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
 
         # Config default reranker_blend is 0.5
@@ -658,8 +658,8 @@ class TestCrossEncoderReranking:
         assert len(reranked) == 1
         assert abs(reranked[0][1] - expected) < 0.001
 
-    def test_blends_scores_no_response(self):
-        """_rerank_with_cross_encoder blends scores correctly for 'no' response."""
+    def test_blends_scores_zero_grade_response(self):
+        """_rerank_with_cross_encoder blends scores correctly for numeric zero grade."""
         from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
@@ -668,11 +668,10 @@ class TestCrossEncoderReranking:
         results = [(node, original_score)]
         config = RetrievalConfig()
 
-        with patch("llm_clients.call_fast_reasoning", return_value=("1. no", 0.1)):
+        with patch("llm_clients.call_fast_reasoning", return_value=("1. 0", 0.1)):
             reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
 
         # Config default reranker_blend is 0.5
-        # YES/NO maps to 5/0 grade in LLM reranker.
         # Expected: 0.5 * 0.0 + 0.5 * 0.7 = 0.35
         blend = config.reranker_blend  # 0.5 default
         expected = blend * 0.0 + (1 - blend) * original_score

@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     source_id TEXT,                         -- Message ID or file path
     
     -- Multi-user support
-    owner_id TEXT,                          -- Who owns this memory (null = shared/legacy)
+    owner_id TEXT,                          -- Who owns this memory (null = shared)
 
     -- Privacy tiers
     privacy TEXT DEFAULT 'shared' CHECK(privacy IN ('private', 'shared', 'public')),
@@ -42,8 +42,8 @@ CREATE TABLE IF NOT EXISTS nodes (
 
     -- Lifecycle
     status TEXT DEFAULT 'approved',         -- pending/active/approved
-    deleted_at TEXT DEFAULT NULL,           -- Legacy (unused, kept for migration compat)
-    deletion_reason TEXT DEFAULT NULL,      -- Legacy (unused, kept for migration compat)
+    deleted_at TEXT DEFAULT NULL,           -- Unused placeholder column
+    deletion_reason TEXT DEFAULT NULL,      -- Unused placeholder column
 
     -- Metadata
     created_at TEXT DEFAULT (datetime('now')),

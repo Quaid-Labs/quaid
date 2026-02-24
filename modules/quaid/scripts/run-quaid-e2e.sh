@@ -29,7 +29,6 @@ usage() {
 Usage: $(basename "$0") [options]
 
 Options:
-  --auth-provider <id>   Legacy provider selector (openai|anthropic)
   --auth-path <id>       Auth path for bootstrap profile (openai-oauth|openai-api|anthropic-oauth|anthropic-api; default: openai-oauth)
   --keep-on-success      Do not delete ~/quaid/e2e-test after successful run
   --skip-janitor         Skip janitor phase
@@ -44,7 +43,6 @@ USAGE
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --auth-provider) AUTH_PROVIDER="$2"; shift 2 ;;
     --auth-path) AUTH_PATH="$2"; shift 2 ;;
     --keep-on-success) KEEP_ON_SUCCESS=true; shift ;;
     --skip-janitor) RUN_JANITOR=false; shift ;;
@@ -80,14 +78,8 @@ fi
 if [[ "$AUTH_PATH" == "openai-oauth" || "$AUTH_PATH" == "openai-api" || "$AUTH_PATH" == "anthropic-oauth" || "$AUTH_PATH" == "anthropic-api" ]]; then
   true
 else
-  case "${AUTH_PROVIDER:-}" in
-    openai) AUTH_PATH="openai-oauth" ;;
-    anthropic) AUTH_PATH="anthropic-api" ;;
-    *)
-      echo "Invalid auth selection. Use --auth-path openai-oauth|openai-api|anthropic-oauth|anthropic-api (or legacy --auth-provider openai|anthropic)." >&2
-      exit 1
-      ;;
-  esac
+  echo "Invalid auth selection. Use --auth-path openai-oauth|openai-api|anthropic-oauth|anthropic-api." >&2
+  exit 1
 fi
 
 case "$NOTIFY_LEVEL" in

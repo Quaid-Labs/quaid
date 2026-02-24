@@ -3,6 +3,9 @@
 import inspect
 import os
 import sys
+import json
+import tempfile
+from pathlib import Path
 
 # Ensure plugin root is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -11,6 +14,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["MEMORY_DB_PATH"] = ":memory:"
 os.environ["QUAID_QUIET"] = "1"
 os.environ["QUAID_OWNER"] = "test-owner"
+_tmp_home = Path(tempfile.mkdtemp(prefix="quaid-mcp-test-"))
+(_tmp_home / "config").mkdir(parents=True, exist_ok=True)
+(_tmp_home / "config" / "memory.json").write_text(
+    json.dumps({"adapter": {"type": "standalone"}}), encoding="utf-8"
+)
+os.environ["QUAID_HOME"] = str(_tmp_home)
 
 import pytest
 from unittest.mock import patch, MagicMock

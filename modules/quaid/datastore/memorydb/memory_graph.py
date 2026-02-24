@@ -168,7 +168,7 @@ class Edge:
         )
 
 
-def _content_hash(text: str) -> str:
+def content_hash(text: str) -> str:
     """Compute SHA256 hash of normalized text for fast exact-dedup detection."""
     normalized = " ".join(text.lower().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
@@ -374,7 +374,7 @@ class MemoryGraph:
 
     def get_embedding(self, text: str) -> Optional[List[float]]:
         """Get embedding, checking cache first to avoid redundant Ollama calls."""
-        text_hash = _content_hash(text)
+        text_hash = content_hash(text)
         model = "unknown"
         try:
             from lib.embeddings import get_embeddings_provider
@@ -441,7 +441,7 @@ class MemoryGraph:
 
         # Compute content hash for fast dedup
         if not node.content_hash:
-            node.content_hash = _content_hash(node.name)
+            node.content_hash = content_hash(node.name)
 
         with self._get_conn() as conn:
             conn.execute("""
@@ -505,7 +505,7 @@ class MemoryGraph:
 
         # Recompute content hash if name changed
         if not node.content_hash:
-            node.content_hash = _content_hash(node.name)
+            node.content_hash = content_hash(node.name)
 
         with self._get_conn() as conn:
             result = conn.execute("""
@@ -1260,8 +1260,8 @@ class MemoryGraph:
             max_results: Early stop after this many results
             intent: Query intent (WHO, WHAT, etc.) for type boosting
             type_boosts: Node type -> multiplier map
-            scoring_mode: Ignored (kept for backward compat). Scoring is
-                always adaptive: heuristic + conditional LLM reranker.
+            scoring_mode: Currently unused. Scoring is adaptive:
+                heuristic + conditional LLM reranker.
             relations: Optional list of relations to filter by
 
         Returns:
@@ -1690,7 +1690,7 @@ _edge_keywords_cache: Optional[Dict[str, set]] = None
 _edge_keywords_all: Optional[set] = None  # Flattened set of all keywords
 
 
-def _get_edge_keywords() -> Dict[str, List[str]]:
+def get_edge_keywords() -> Dict[str, List[str]]:
     """Get all edge keywords from database.
 
     Returns:
@@ -1713,7 +1713,7 @@ def _get_edge_keywords() -> Dict[str, List[str]]:
             return {}
 
 
-def _get_all_edge_keywords_flat() -> set:
+def get_all_edge_keywords_flat() -> set:
     """Get flattened set of all edge keywords for fast lookup.
 
     Uses cache to avoid repeated DB queries.
@@ -1722,7 +1722,7 @@ def _get_all_edge_keywords_flat() -> set:
     if _edge_keywords_all is not None:
         return _edge_keywords_all
 
-    keywords = _get_edge_keywords()
+    keywords = get_edge_keywords()
     # Build in local var to avoid exposing partially-populated set to other threads
     result = set()
     for kw_list in keywords.values():
@@ -1731,14 +1731,14 @@ def _get_all_edge_keywords_flat() -> set:
     return _edge_keywords_all
 
 
-def _invalidate_edge_keywords_cache():
+def invalidate_edge_keywords_cache():
     """Clear the edge keywords cache (call after adding new keywords)."""
     global _edge_keywords_cache, _edge_keywords_all
     _edge_keywords_cache = None
     _edge_keywords_all = None
 
 
-def _store_edge_keywords(relation: str, keywords: List[str], description: str = "") -> bool:
+def store_edge_keywords(relation: str, keywords: List[str], description: str = "") -> bool:
     """Store keywords for an edge relation type.
 
     Args:
@@ -1756,14 +1756,14 @@ def _store_edge_keywords(relation: str, keywords: List[str], description: str = 
                 INSERT OR REPLACE INTO edge_keywords (relation, keywords, description, updated_at)
                 VALUES (?, ?, ?, datetime('now'))
             """, (relation, json.dumps(keywords), description))
-            _invalidate_edge_keywords_cache()
+            invalidate_edge_keywords_cache()
             return True
         except Exception as e:
             print(f"[edge_keywords] Failed to store keywords for {relation}: {e}", file=sys.stderr)
             return False
 
 
-def _generate_keywords_for_relation(relation: str) -> Optional[List[str]]:
+def generate_keywords_for_relation(relation: str) -> Optional[List[str]]:
     """Use LLM to generate trigger keywords for a relation type.
 
     Args:
@@ -1804,7 +1804,7 @@ Example output: ["keyword1", "keyword2", "keyword3"]"""
         return None
 
 
-def _ensure_keywords_for_relation(relation: str) -> bool:
+def ensure_keywords_for_relation(relation: str) -> bool:
     """Ensure keywords exist for a relation, generating if needed.
 
     Args:
@@ -1814,21 +1814,21 @@ def _ensure_keywords_for_relation(relation: str) -> bool:
         True if keywords exist (or were generated), False otherwise.
     """
     # Check if keywords already exist
-    existing = _get_edge_keywords()
+    existing = get_edge_keywords()
     if relation in existing and existing[relation]:
         return True
 
     # Generate keywords
-    keywords = _generate_keywords_for_relation(relation)
+    keywords = generate_keywords_for_relation(relation)
     if keywords:
-        _store_edge_keywords(relation, keywords, f"Auto-generated for {relation}")
+        store_edge_keywords(relation, keywords, f"Auto-generated for {relation}")
         print(f"[edge_keywords] Generated keywords for '{relation}': {keywords}", file=sys.stderr)
         return True
 
     return False
 
 
-def _should_expand_graph(query: str) -> bool:
+def should_expand_graph(query: str) -> bool:
     """Fast check: does this query benefit from graph expansion?
 
     Checks if query contains any keywords associated with edge relations.
@@ -1844,13 +1844,13 @@ def _should_expand_graph(query: str) -> bool:
     words = set(re.sub(r'[^\w\s]', '', query_lower).split())
 
     # 1. Check against edge keywords (fast set intersection)
-    all_keywords = _get_all_edge_keywords_flat()
+    all_keywords = get_all_edge_keywords_flat()
     if words & all_keywords:
         return True
 
     # 2. Check for pronouns + known person names
     # "I'm meeting Jane" - is Jane a Person node?
-    if _has_owner_pronoun(query):
+    if has_owner_pronoun(query):
         # Extract capitalized words (potential names)
         names = re.findall(r'\b[A-Z][a-z]+\b', query)
         if names:
@@ -1863,7 +1863,7 @@ def _should_expand_graph(query: str) -> bool:
     return False
 
 
-def _seed_edge_keywords_from_db() -> int:
+def seed_edge_keywords_from_db() -> int:
     """Seed keywords for all existing edge relations in the database.
 
     Returns:
@@ -1875,7 +1875,7 @@ def _seed_edge_keywords_from_db() -> int:
     relations = graph.get_known_relations()
 
     # Get existing keywords
-    existing = _get_edge_keywords()
+    existing = get_edge_keywords()
 
     seeded = 0
     for relation in relations:
@@ -1886,13 +1886,13 @@ def _seed_edge_keywords_from_db() -> int:
         if relation in ("has_fact",):
             continue
 
-        if _ensure_keywords_for_relation(relation):
+        if ensure_keywords_for_relation(relation):
             seeded += 1
 
     return seeded
 
 
-def _resolve_owner_person(owner_id: str) -> Optional[Node]:
+def resolve_owner_person(owner_id: str) -> Optional[Node]:
     """Map owner_id to their Person node using config mapping.
 
     Args:
@@ -1947,7 +1947,7 @@ def _get_owner_names() -> set:
         return set()
 
 
-def _has_owner_pronoun(query: str) -> bool:
+def has_owner_pronoun(query: str) -> bool:
     """Check if query contains pronouns or the owner's name."""
     # Strip punctuation and possessives ('s)
     cleaned = re.sub(r"'s\b", "", query.lower())
@@ -1959,7 +1959,7 @@ def _has_owner_pronoun(query: str) -> bool:
     return bool(words & owner_names)
 
 
-def _extract_entities_from_text(text: str) -> List[Node]:
+def extract_entities_from_text(text: str) -> List[Node]:
     """Extract entity names from text and look them up in the graph.
 
     Uses simple heuristics: capitalized words (proper nouns) that exist
@@ -2013,7 +2013,7 @@ def _extract_entities_from_text(text: str) -> List[Node]:
     return entities
 
 
-def _graph_aware_recall(
+def graph_aware_recall(
     query: str,
     owner_id: str = None,
     limit: int = 5,
@@ -2071,8 +2071,8 @@ def _graph_aware_recall(
         expand_relations = None  # No filter, but we'll limit below
 
     # 1. Pronoun resolution
-    if _has_owner_pronoun(query):
-        owner_person = _resolve_owner_person(owner_id)
+    if has_owner_pronoun(query):
+        owner_person = resolve_owner_person(owner_id)
         if owner_person:
             expand_from.append(owner_person.id)
             results["source_breakdown"]["pronoun_resolved"] = True
@@ -2101,7 +2101,7 @@ def _graph_aware_recall(
                         expand_from.append(person.id)
 
     # 4. Extract entities from query
-    query_entities = _extract_entities_from_text(query)
+    query_entities = extract_entities_from_text(query)
     for entity in query_entities:
         expand_from.append(entity.id)
         results["entities_found"].append({
@@ -2293,7 +2293,7 @@ def _ollama_healthy(timeout: float = 0.2) -> bool:
     return healthy
 
 
-def _route_query(query: str, timeout_ms: int = 3000) -> str:
+def route_query(query: str, timeout_ms: int = 3000) -> str:
     """HyDE (Hypothetical Document Embedding) — generate a hypothetical answer
     to the query, then use that for semantic search. The embedding of an answer
     is closer to stored facts in vector space than keywords or the raw question.
@@ -2546,7 +2546,7 @@ _INTENT_PATTERNS = {
 }
 
 
-def _classify_intent(query: str) -> Tuple[str, Dict[str, float]]:
+def classify_intent(query: str) -> Tuple[str, Dict[str, float]]:
     """Classify query intent using regex patterns.
 
     Returns:
@@ -2644,7 +2644,7 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
         if not response:
             return [(node, score) for node, score in candidates]
 
-        # Parse responses: "1. 4\n2. 0\n..." — also accept YES/NO for backward compat
+        # Parse responses: "1. 4\n2. 0\n..."
         verdicts = {}
         for line in response.strip().split("\n"):
             line = line.strip()
@@ -2655,11 +2655,6 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
             if m:
                 verdicts[int(m.group(1))] = min(int(m.group(2)), 5)
                 continue
-            # Fallback: YES/NO
-            m = re.match(r'(\d+)[.\s:)]+\s*(yes|no)', line, re.IGNORECASE)
-            if m:
-                verdicts[int(m.group(1))] = 5 if m.group(2).lower() == "yes" else 0
-
         reranked = []
         inhibited_ids = []  # Track nodes that scored poorly for storage_strength decay
         for i, (node, score) in enumerate(candidates):
@@ -2806,7 +2801,7 @@ def recall(
 
     # Classify query intent BEFORE search — used for fusion weights and type boosting
     if use_intent:
-        intent, type_boosts = _classify_intent(clean_query)
+        intent, type_boosts = classify_intent(clean_query)
     else:
         intent = "GENERAL"
         type_boosts = {}
@@ -2822,7 +2817,7 @@ def recall(
         _use_hyde = use_routing
         if not _HAS_LLM_CLIENTS:
             _use_hyde = False
-        search_query = _route_query(clean_query) if _use_hyde else clean_query
+        search_query = route_query(clean_query) if _use_hyde else clean_query
         results = graph.search_hybrid(search_query, limit=search_limit, privacy=privacy, owner_id=owner_id, current_session_id=current_session_id, compaction_time=compaction_time, intent=intent)
     else:
         search_query = clean_query  # No HyDE when embeddings unavailable
@@ -3338,7 +3333,7 @@ def store(
     graph = get_graph()
 
     # Fast exact-dedup: content hash check (before embedding, saves API calls)
-    text_hash = _content_hash(text)
+    text_hash = content_hash(text)
     if not skip_dedup:
         with graph._get_conn() as conn:
             owner_clause = "AND (owner_id = ? OR owner_id IS NULL)" if owner_id else ""
@@ -3352,7 +3347,7 @@ def store(
             """, params).fetchone()
             if existing_row:
                 existing = graph._row_to_node(existing_row)
-                _log_dedup_decision(graph, text, existing.id, existing.name,
+                log_dedup_decision(graph, text, existing.id, existing.name,
                                    1.0, "hash_exact", owner_id=owner_id, source=source)
                 # Confirmation boosting: re-extraction confirms this fact
                 existing.confirmation_count += 1
@@ -3442,7 +3437,7 @@ def store(
 
                     if sim >= auto_reject_thresh and _texts_are_near_identical(text, existing.name):
                         # Zone 1: Auto-reject (high sim AND texts are near-identical strings)
-                        _log_dedup_decision(graph, text, existing.id, existing.name,
+                        log_dedup_decision(graph, text, existing.id, existing.name,
                                            sim, "auto_reject", owner_id=owner_id, source=source)
                         # Confirmation boosting: re-extraction confirms this fact
                         existing.confirmation_count += 1
@@ -3483,7 +3478,7 @@ def store(
                                     elif subsumes == "b_subsumes_a":
                                         decision = "llm_subsume_keep"
                                     # LLM confirms duplicate or subsumption
-                                    _log_dedup_decision(graph, text, existing.id, existing.name,
+                                    log_dedup_decision(graph, text, existing.id, existing.name,
                                                        sim, decision,
                                                        llm_reasoning=llm_result.get("reasoning"),
                                                        owner_id=owner_id, source=source)
@@ -3522,17 +3517,17 @@ def store(
                                     }
                                 else:
                                     # LLM says different — log and continue checking
-                                    _log_dedup_decision(graph, text, existing.id, existing.name,
+                                    log_dedup_decision(graph, text, existing.id, existing.name,
                                                        sim, "llm_accept",
                                                        llm_reasoning=llm_result.get("reasoning"),
                                                        owner_id=owner_id, source=source)
                                     continue
                             else:
-                                # LLM unavailable — fall back to legacy threshold
+                                # LLM unavailable — use similarity threshold
                                 # But only reject if texts are near-identical strings
                                 # (embeddings can't distinguish proper noun swaps)
                                 if sim >= dedup_threshold and _texts_are_near_identical(text, existing.name):
-                                    _log_dedup_decision(graph, text, existing.id, existing.name,
+                                    log_dedup_decision(graph, text, existing.id, existing.name,
                                                        sim, "fallback_reject",
                                                        owner_id=owner_id, source=source)
                                     # Confirmation boosting: re-extraction confirms this fact
@@ -3561,10 +3556,10 @@ def store(
                                         "confirmation_count": existing.confirmation_count,
                                     }
                         else:
-                            # LLM verification disabled — use legacy threshold
+                            # LLM verification disabled — use similarity threshold
                             # But only reject if texts are near-identical strings
                             if sim >= dedup_threshold and _texts_are_near_identical(text, existing.name):
-                                _log_dedup_decision(graph, text, existing.id, existing.name,
+                                log_dedup_decision(graph, text, existing.id, existing.name,
                                                    sim, "fallback_reject",
                                                    owner_id=owner_id, source=source)
                                 # Confirmation boosting: re-extraction confirms this fact
@@ -3802,7 +3797,7 @@ def create_edge(
     }
 
 
-def _delete_edges_by_source_fact(source_fact_id: str) -> int:
+def delete_edges_by_source_fact(source_fact_id: str) -> int:
     """Delete all edges that were created from a specific fact.
 
     Args:
@@ -3820,7 +3815,7 @@ def _delete_edges_by_source_fact(source_fact_id: str) -> int:
         return result.rowcount
 
 
-def _forget(query: Optional[str] = None, node_id: Optional[str] = None) -> bool:
+def forget(query: Optional[str] = None, node_id: Optional[str] = None) -> bool:
     """Delete a memory by query or ID."""
     graph = get_graph()
 
@@ -3836,7 +3831,7 @@ def _forget(query: Optional[str] = None, node_id: Optional[str] = None) -> bool:
     return False
 
 
-def _get_memory(node_id: str) -> Optional[Dict[str, Any]]:
+def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
     """Get a single memory by ID."""
     graph = get_graph()
     node = graph.get_node(node_id)
@@ -3857,7 +3852,7 @@ def _get_memory(node_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _hard_delete_node(node_id: str) -> bool:
+def hard_delete_node(node_id: str) -> bool:
     """Hard delete a node and all related references from the database.
 
     Cleans up edges, contradictions, and decay_review_queue entries.
@@ -3878,12 +3873,12 @@ def _hard_delete_node(node_id: str) -> bool:
         return result.rowcount > 0
 
 
-def _soft_delete(node_id: str, reason: str = "manual") -> bool:
-    """Delete a memory (hard delete). Kept as soft_delete() for backward compat."""
-    return _hard_delete_node(node_id)
+def soft_delete(node_id: str, reason: str = "manual") -> bool:
+    """Delete a memory and related references from the database."""
+    return hard_delete_node(node_id)
 
 
-def _store_contradiction(node_a_id: str, node_b_id: str, explanation: str) -> Optional[str]:
+def store_contradiction(node_a_id: str, node_b_id: str, explanation: str) -> Optional[str]:
     """Store a detected contradiction between two memory nodes."""
     graph = get_graph()
     contradiction_id = str(uuid.uuid4())
@@ -3902,7 +3897,7 @@ def _store_contradiction(node_a_id: str, node_b_id: str, explanation: str) -> Op
             return None
 
 
-def _get_pending_contradictions(limit: int = 50) -> List[Dict[str, Any]]:
+def get_pending_contradictions(limit: int = 50) -> List[Dict[str, Any]]:
     """Get pending contradictions with full node context."""
     graph = get_graph()
     with graph._get_conn() as conn:
@@ -3922,7 +3917,7 @@ def _get_pending_contradictions(limit: int = 50) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _resolve_contradiction(contradiction_id: str, resolution: str, reason: str) -> bool:
+def resolve_contradiction(contradiction_id: str, resolution: str, reason: str) -> bool:
     """Mark a contradiction as resolved."""
     graph = get_graph()
     with graph._get_conn() as conn:
@@ -3935,7 +3930,7 @@ def _resolve_contradiction(contradiction_id: str, resolution: str, reason: str) 
         return result.rowcount > 0
 
 
-def _mark_contradiction_false_positive(contradiction_id: str, reason: str) -> bool:
+def mark_contradiction_false_positive(contradiction_id: str, reason: str) -> bool:
     """Mark a contradiction as a false positive."""
     graph = get_graph()
     with graph._get_conn() as conn:
@@ -3952,7 +3947,7 @@ def _mark_contradiction_false_positive(contradiction_id: str, reason: str) -> bo
 # Dedup Logging & LLM Verification
 # ==========================================================================
 
-def _log_dedup_decision(
+def log_dedup_decision(
     graph: MemoryGraph,
     new_text: str,
     existing_node_id: str,
@@ -4034,7 +4029,7 @@ def _llm_dedup_check(new_text: str, existing_text: str) -> Optional[Dict[str, An
     return None
 
 
-def _get_recent_dedup_rejections(hours: int = 24, limit: int = 50) -> List[Dict[str, Any]]:
+def get_recent_dedup_rejections(hours: int = 24, limit: int = 50) -> List[Dict[str, Any]]:
     """Get recent dedup rejections for nightly review."""
     graph = get_graph()
     cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
@@ -4050,7 +4045,7 @@ def _get_recent_dedup_rejections(hours: int = 24, limit: int = 50) -> List[Dict[
     return [dict(row) for row in rows]
 
 
-def _resolve_dedup_review(log_id: str, status: str, resolution: Optional[str] = None) -> bool:
+def resolve_dedup_review(log_id: str, status: str, resolution: Optional[str] = None) -> bool:
     """Mark a dedup log entry as reviewed. status: 'confirmed' or 'reversed'."""
     graph = get_graph()
     with graph._get_conn() as conn:
@@ -4067,7 +4062,7 @@ def _resolve_dedup_review(log_id: str, status: str, resolution: Optional[str] = 
 # Decay Review Queue
 # ==========================================================================
 
-def _queue_for_decay_review(mem: Dict[str, Any]) -> str:
+def queue_for_decay_review(mem: Dict[str, Any]) -> str:
     """Queue a memory for decay review instead of silent deletion. Returns queue ID."""
     graph = get_graph()
     queue_id = str(uuid.uuid4())
@@ -4098,7 +4093,7 @@ def _queue_for_decay_review(mem: Dict[str, Any]) -> str:
     return queue_id
 
 
-def _get_pending_decay_reviews(limit: int = 50) -> List[Dict[str, Any]]:
+def get_pending_decay_reviews(limit: int = 50) -> List[Dict[str, Any]]:
     """Get pending decay review queue items."""
     graph = get_graph()
     with graph._get_conn() as conn:
@@ -4111,7 +4106,7 @@ def _get_pending_decay_reviews(limit: int = 50) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _resolve_decay_review(queue_id: str, decision: str, reason: str) -> bool:
+def resolve_decay_review(queue_id: str, decision: str, reason: str) -> bool:
     """Mark a decay review item as reviewed. decision: 'delete', 'extend', 'pin'."""
     graph = get_graph()
     with graph._get_conn() as conn:
@@ -4124,7 +4119,7 @@ def _resolve_decay_review(queue_id: str, decision: str, reason: str) -> bool:
         return result.rowcount > 0
 
 
-def _decay_memories() -> Dict[str, Any]:
+def decay_memories() -> Dict[str, Any]:
     """Apply confidence decay to memories.
 
     Aligned with janitor semantics:
@@ -4152,7 +4147,7 @@ def _decay_memories() -> Dict[str, Any]:
         return {"decayed_count": result.rowcount}
 
 
-def _get_entity_summary(node_id: str) -> Optional[str]:
+def get_entity_summary(node_id: str) -> Optional[str]:
     """Get the stored summary for an entity node, or None if not summarized."""
     graph = get_graph()
     node = graph.get_node(node_id)
@@ -4161,7 +4156,7 @@ def _get_entity_summary(node_id: str) -> Optional[str]:
     return node.attributes.get("summary")
 
 
-def _generate_entity_summary(node_id: str, use_llm: bool = True) -> Optional[str]:
+def generate_entity_summary(node_id: str, use_llm: bool = True) -> Optional[str]:
     """Generate a summary paragraph for a Person/Place/Concept node from connected facts.
 
     Args:
@@ -4233,7 +4228,7 @@ Write a natural, flowing paragraph. Only include information from the facts abov
     return summary
 
 
-def _summarize_all_entities(owner_id: str = None, use_llm: bool = True, entity_types: List[str] = None) -> Dict[str, Any]:
+def summarize_all_entities(owner_id: str = None, use_llm: bool = True, entity_types: List[str] = None) -> Dict[str, Any]:
     """Generate summaries for all Person/Place/Concept nodes.
 
     Args:
@@ -4267,7 +4262,7 @@ def _summarize_all_entities(owner_id: str = None, use_llm: bool = True, entity_t
             stats["skipped"] += 1
             continue
 
-        summary = _generate_entity_summary(row['id'], use_llm=use_llm)
+        summary = generate_entity_summary(row['id'], use_llm=use_llm)
         if summary:
             stats["generated"] += 1
         else:
@@ -4280,47 +4275,6 @@ def initialize_db() -> None:
     """Initialize the database - just ensure schema exists."""
     graph = get_graph()  # This calls _init_db() internally
     # The initialization is already done in the constructor
-
-
-# ==========================================================================
-# Backward-compatible aliases for internal plugin use (janitor.py, etc.)
-# These allow `from memory_graph import hard_delete_node` to keep working.
-# ==========================================================================
-
-hard_delete_node = _hard_delete_node
-soft_delete = _soft_delete
-store_contradiction = _store_contradiction
-get_pending_contradictions = _get_pending_contradictions
-resolve_contradiction = _resolve_contradiction
-mark_contradiction_false_positive = _mark_contradiction_false_positive
-get_recent_dedup_rejections = _get_recent_dedup_rejections
-resolve_dedup_review = _resolve_dedup_review
-queue_for_decay_review = _queue_for_decay_review
-get_pending_decay_reviews = _get_pending_decay_reviews
-resolve_decay_review = _resolve_decay_review
-ensure_keywords_for_relation = _ensure_keywords_for_relation
-get_edge_keywords = _get_edge_keywords
-store_edge_keywords = _store_edge_keywords
-delete_edges_by_source_fact = _delete_edges_by_source_fact
-log_dedup_decision = _log_dedup_decision
-content_hash = _content_hash
-classify_intent = _classify_intent
-has_owner_pronoun = _has_owner_pronoun
-decay_memories = _decay_memories
-get_entity_summary = _get_entity_summary
-generate_entity_summary = _generate_entity_summary
-summarize_all_entities = _summarize_all_entities
-get_memory = _get_memory
-forget = _forget
-resolve_owner_person = _resolve_owner_person
-graph_aware_recall = _graph_aware_recall
-route_query = _route_query
-extract_entities_from_text = _extract_entities_from_text
-should_expand_graph = _should_expand_graph
-seed_edge_keywords_from_db = _seed_edge_keywords_from_db
-generate_keywords_for_relation = _generate_keywords_for_relation
-get_all_edge_keywords_flat = _get_all_edge_keywords_flat
-invalidate_edge_keywords_cache = _invalidate_edge_keywords_cache
 
 
 if __name__ == "__main__":
@@ -4383,7 +4337,6 @@ if __name__ == "__main__":
         store_p = subparsers.add_parser("store", help="Store a new memory")
         store_p.add_argument("text", help="Text of the memory to store")
         store_p.add_argument("--owner", default=None, help="Owner ID")
-        store_p.add_argument("--type", dest="node_type", default=None, help="Node type (unused, kept for compat)")
         store_p.add_argument("--category", default="fact", help="Category (default: fact)")
         store_p.add_argument("--source", default=None, help="Source of the memory")
         store_p.add_argument("--verified", action="store_true", help="Mark as verified")
@@ -4418,10 +4371,6 @@ if __name__ == "__main__":
         # --- get-node ---
         get_node_p = subparsers.add_parser("get-node", help="Get a memory node by ID")
         get_node_p.add_argument("id", help="Node ID")
-
-        # --- get (backward compat alias for get-node) ---
-        get_p = subparsers.add_parser("get", help="Get a memory node by ID (alias for get-node)")
-        get_p.add_argument("id", help="Node ID")
 
         # --- get-edges ---
         get_edges_p = subparsers.add_parser("get-edges", help="Get edges for a node")
@@ -4552,14 +4501,14 @@ if __name__ == "__main__":
             if args.dry_run:
                 print(f"Would backfill {len(rows)} content hashes:")
                 for row in rows:
-                    h = _content_hash(row["name"])
+                    h = content_hash(row["name"])
                     print(f"  ID {row['id']}: {row['name'][:60]}... -> {h[:16]}...")
                 print(f"\nTotal: {len(rows)} (dry run, no changes made)")
             else:
                 count = 0
                 with graph._get_conn() as conn:
                     for row in rows:
-                        h = _content_hash(row["name"])
+                        h = content_hash(row["name"])
                         conn.execute(
                             "UPDATE nodes SET content_hash = ? WHERE id = ?",
                             (h, row["id"])
@@ -4671,9 +4620,9 @@ if __name__ == "__main__":
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)
 
-        elif args.command in ("get-node", "get"):
+        elif args.command == "get-node":
             node_id = args.id
-            result = _get_memory(node_id)
+            result = get_memory(node_id)
             if result:
                 print(json.dumps(result, indent=2))
             else:
@@ -4681,21 +4630,21 @@ if __name__ == "__main__":
                 sys.exit(1)
 
         elif args.command == "delete":
-            if _soft_delete(args.id, args.reason):
+            if soft_delete(args.id, args.reason):
                 print(f"Deleted memory: {args.id}")
             else:
                 print(f"Memory not found: {args.id}")  # Print to stdout, don't error
 
         elif args.command == "forget":
             if args.node_id:
-                if _forget(node_id=args.node_id):
+                if forget(node_id=args.node_id):
                     print(f"Permanently deleted: {args.node_id}")
                 else:
                     print("Memory not found", file=sys.stderr)
                     sys.exit(1)
             elif args.query:
                 query = " ".join(args.query)
-                if _forget(query=query):
+                if forget(query=query):
                     print(f"Deleted memory matching: {query}")
                 else:
                     print("No matching memory found", file=sys.stderr)
@@ -4756,7 +4705,7 @@ if __name__ == "__main__":
         elif args.command == "search-graph-aware":
             query = " ".join(args.query)
 
-            results = _graph_aware_recall(query, owner_id=args.owner, limit=args.limit, graph_depth=args.depth)
+            results = graph_aware_recall(query, owner_id=args.owner, limit=args.limit, graph_depth=args.depth)
 
             if args.json:
                 print(json.dumps(results, indent=2))
@@ -4794,7 +4743,7 @@ if __name__ == "__main__":
             subcmd = args.subcmd or "list"
 
             if subcmd == "list":
-                keywords = _get_edge_keywords()
+                keywords = get_edge_keywords()
                 if not keywords:
                     print("No edge keywords stored yet. Run 'edge-keywords seed' to generate.")
                 else:
@@ -4804,18 +4753,18 @@ if __name__ == "__main__":
 
             elif subcmd == "seed":
                 print("Seeding keywords for existing edge relations...")
-                count = _seed_edge_keywords_from_db()
+                count = seed_edge_keywords_from_db()
                 print(f"Generated keywords for {count} relations")
 
             elif subcmd == "check":
                 test_query = " ".join(args.query)
-                result = _should_expand_graph(test_query)
+                result = should_expand_graph(test_query)
                 print(f"Query: \"{test_query}\"")
                 print(f"Should expand graph: {result}")
 
             elif subcmd == "add":
                 keywords = [k.strip().lower() for k in args.keywords.split(",")]
-                if _store_edge_keywords(args.relation, keywords):
+                if store_edge_keywords(args.relation, keywords):
                     print(f"Stored keywords for '{args.relation}': {keywords}")
                 else:
                     print(f"Failed to store keywords for '{args.relation}'")
@@ -4823,16 +4772,16 @@ if __name__ == "__main__":
 
             elif subcmd == "generate":
                 print(f"Generating keywords for '{args.relation}'...")
-                keywords = _generate_keywords_for_relation(args.relation)
+                keywords = generate_keywords_for_relation(args.relation)
                 if keywords:
-                    _store_edge_keywords(args.relation, keywords)
+                    store_edge_keywords(args.relation, keywords)
                     print(f"Generated and stored: {keywords}")
                 else:
                     print("Failed to generate keywords")
                     sys.exit(1)
 
         elif args.command == "decay":
-            result = _decay_memories()
+            result = decay_memories()
             print(f"Decayed {result['decayed_count']} memories")
 
         elif args.command == "create-edge":
@@ -4850,7 +4799,7 @@ if __name__ == "__main__":
                     sys.exit(1)
 
         elif args.command == "delete-edges-by-fact":
-            count = _delete_edges_by_source_fact(args.fact_id)
+            count = delete_edges_by_source_fact(args.fact_id)
             print(f"Deleted {count} edges linked to fact {args.fact_id}")
 
         elif args.command == "get-edges":
@@ -5075,7 +5024,7 @@ if __name__ == "__main__":
                             print(f"  Reason:   {s['llm_reasoning'][:120]}")
 
         elif args.command == "summarize-entity":
-            summary = _generate_entity_summary(args.node_id, use_llm=not args.no_llm)
+            summary = generate_entity_summary(args.node_id, use_llm=not args.no_llm)
             if summary:
                 node = get_graph().get_node(args.node_id)
                 node_name = node.name if node else args.node_id
@@ -5090,7 +5039,7 @@ if __name__ == "__main__":
             entity_types = None
             if args.types:
                 entity_types = [t.strip() for t in args.types.split(",")]
-            stats = _summarize_all_entities(
+            stats = summarize_all_entities(
                 owner_id=args.owner,
                 use_llm=not args.no_llm,
                 entity_types=entity_types

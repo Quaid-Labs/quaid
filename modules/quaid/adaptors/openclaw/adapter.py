@@ -29,15 +29,8 @@ class OpenClawAdapter(QuaidAdapter):
         if env:
             return Path(env)
         # Fallback: resolve workspace from gateway config when env vars are absent.
-        # Support both current (~/.openclaw/openclaw.json) and legacy
-        # (~/.openclaw/clawdbot.json) filenames for compatibility.
-        cfg_candidates = [
-            Path.home() / ".openclaw" / "openclaw.json",
-            Path.home() / ".openclaw" / "clawdbot.json",
-        ]
-        for cfg_path in cfg_candidates:
-            if not cfg_path.exists():
-                continue
+        cfg_path = Path.home() / ".openclaw" / "openclaw.json"
+        if cfg_path.exists():
             try:
                 with open(cfg_path) as f:
                     cfg = json.load(f)
@@ -55,10 +48,10 @@ class OpenClawAdapter(QuaidAdapter):
                 if ws:
                     return Path(ws)
             except (json.JSONDecodeError, KeyError):
-                continue
+                pass
         raise RuntimeError(
             "CLAWDBOT_WORKSPACE environment variable is not set and "
-            "could not resolve workspace from ~/.openclaw/openclaw.json or ~/.openclaw/clawdbot.json. "
+            "could not resolve workspace from ~/.openclaw/openclaw.json. "
             "Set CLAWDBOT_WORKSPACE or configure adapter.type=standalone in config/memory.json."
         )
 
@@ -246,7 +239,6 @@ class OpenClawAdapter(QuaidAdapter):
 
         Resolution chain:
         1. Gateway auth-profiles.json (lastGood.anthropic -> profile token/key)
-        2. Gateway auth.json (anthropic.key - legacy)
         """
         openclaw_dir = self._get_agent_config_dir()
 
@@ -264,18 +256,6 @@ class OpenClawAdapter(QuaidAdapter):
                     token = profile.get("token") or profile.get("key")
                     if token:
                         return token
-            except (json.JSONDecodeError, IOError, OSError):
-                pass
-
-        # 2. Legacy auth.json
-        auth_path = openclaw_dir / "auth.json"
-        if auth_path.exists():
-            try:
-                with open(auth_path) as f:
-                    data = json.load(f)
-                key = data.get("anthropic", {}).get("key")
-                if key:
-                    return key
             except (json.JSONDecodeError, IOError, OSError):
                 pass
 
@@ -319,14 +299,8 @@ class OpenClawAdapter(QuaidAdapter):
 
     def _find_sessions_json(self) -> Optional[Path]:
         """Find the agent sessions.json file."""
-        candidates = [
-            Path.home() / ".clawdbot" / "agents" / "main" / "sessions" / "sessions.json",
-            Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json",
-        ]
-        for p in candidates:
-            if p.exists():
-                return p
-        return None
+        p = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
+        return p if p.exists() else None
 
     @staticmethod
     def _keychain_lookup(service: str, account: str) -> Optional[str]:

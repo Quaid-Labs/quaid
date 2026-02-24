@@ -179,10 +179,10 @@ class TestStatusLifecycle:
 class TestContentHashConsistency:
     """content_hash from memory_graph should be importable via public API."""
 
-    def test_public_alias_matches_internal(self):
-        """content_hash (public) and _content_hash (internal) are the same function."""
-        from datastore.memorydb.memory_graph import content_hash, _content_hash
-        assert content_hash is _content_hash
+    def test_content_hash_callable(self):
+        """content_hash is exposed and callable."""
+        from datastore.memorydb.memory_graph import content_hash
+        assert callable(content_hash)
 
     def test_content_hash_deterministic(self):
         """Same input produces same hash."""

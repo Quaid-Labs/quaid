@@ -154,7 +154,7 @@ class TestBackfillHashes:
     """Tests for content hash backfill functionality."""
 
     def test_backfill_sets_hashes(self, tmp_path):
-        from datastore.memorydb.memory_graph import Node, _content_hash
+        from datastore.memorydb.memory_graph import Node, content_hash
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             # Manually insert a node WITHOUT content_hash
@@ -177,7 +177,7 @@ class TestBackfillHashes:
                 ).fetchall()
             count = 0
             for row in rows:
-                h = _content_hash(row["name"])
+                h = content_hash(row["name"])
                 with graph._get_conn() as conn:
                     conn.execute(
                         "UPDATE nodes SET content_hash = ? WHERE id = ?",
@@ -189,10 +189,10 @@ class TestBackfillHashes:
             # Verify hash is set
             with graph._get_conn() as conn:
                 row = conn.execute("SELECT content_hash FROM nodes WHERE id = 'test-123'").fetchone()
-                assert row["content_hash"] == _content_hash("Quaid likes coffee")
+                assert row["content_hash"] == content_hash("Quaid likes coffee")
 
     def test_backfill_skips_already_hashed(self, tmp_path):
-        from datastore.memorydb.memory_graph import Node, _content_hash
+        from datastore.memorydb.memory_graph import Node, content_hash
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes espresso coffee", owner_id="quaid")

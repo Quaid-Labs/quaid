@@ -228,7 +228,7 @@ These files load on EVERY API call, EVERY turn. Tokens are precious. Keep them f
    - Queryable facts (phone numbers, dates, preferences) → should be in Memory DB
 
 2. **OUTDATED INFO** - Facts that are no longer true
-   - Old system states, deprecated features, wrong information
+   - Old system states, retired features, wrong information
 
 3. **MISPLACED CONTENT** - Content in wrong file
    - Personality stuff in TOOLS.md → should be in SOUL.md
@@ -416,7 +416,7 @@ def apply_review_decisions(dry_run: bool = True,
 
     Actions:
     - MOVE_TO_PROJECT: Detect project content, queue for agent review (no files modified)
-    - MOVE_TO_DOCS: Legacy — extract section, write to docs/, replace with pointer
+    - MOVE_TO_DOCS: Extract section, write to docs/, replace with pointer
     - MOVE_TO_MEMORY: Extract facts, store in memory DB, remove section
     - TRIM: Remove section (with backup)
     - FLAG_BLOAT: Just log warning
@@ -560,7 +560,7 @@ def apply_review_decisions(dry_run: bool = True,
                     stats["project_detected"] = stats.get("project_detected", 0) + 1
 
                 elif action == "MOVE_TO_DOCS":
-                    # Legacy fallback — prefer MOVE_TO_PROJECT for project content
+                    # Prefer MOVE_TO_PROJECT for project content
                     target = decision.get("target", f"docs/{section.lower().replace(' ', '-')}.md")
                     target_path = (_workspace_dir() / target).resolve()
                     # Prevent path traversal from LLM-controlled target

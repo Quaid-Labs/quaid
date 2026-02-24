@@ -721,11 +721,11 @@ def migrate_snippets_to_journal() -> int:
 
 
 # =============================================================================
-# Legacy functions preserved for backward compat
+# Snippet-file review helpers
 # =============================================================================
 
 def read_snippets_file(filename: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """Read a .snippets.md file and parse its sections (legacy format).
+    """Read a .snippets.md file and parse its sections.
 
     Returns (raw_content, sections) where each section is:
     {"header": "## Compaction — 2026-02-10 14:30:22", "snippets": ["text1", "text2"]}
@@ -873,7 +873,7 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
 
 
 def _clear_processed_snippets(filename: str, processed_texts: List[str]) -> None:
-    """Remove processed snippets from a .snippets.md file (legacy compat)."""
+    """Remove processed snippets from a .snippets.md file."""
     base_name = filename.removesuffix('.md')
     snippets_path = _workspace_dir() / f"{base_name}.snippets.md"
 
@@ -920,9 +920,8 @@ def _clear_processed_snippets(filename: str, processed_texts: List[str]) -> None
         logger.info(f"Cleaned {base_name}.snippets.md: removed {len(processed_texts)} processed snippets")
 
 
-# Legacy alias preserved for backward compat with old snippet-based review
 def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
-    """Build Opus prompt for reviewing soul snippets (legacy format)."""
+    """Build Opus prompt for reviewing soul snippets."""
     file_sections = []
     for filename, data in all_snippets.items():
         parent_content = data["parent_content"]
@@ -1024,7 +1023,7 @@ def apply_decisions(
     all_snippets: Dict[str, Dict[str, Any]],
     dry_run: bool = True
 ) -> Dict[str, Any]:
-    """Apply Opus decisions to parent files (legacy snippet-based review)."""
+    """Apply Opus decisions to parent files."""
     stats = {"folded": 0, "rewritten": 0, "discarded": 0, "errors": []}
     processed_snippets: Dict[str, List[str]] = {}
     valid_actions = {"FOLD", "REWRITE", "DISCARD"}

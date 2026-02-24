@@ -44,32 +44,32 @@ def _make_graph(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _content_hash
+# content_hash
 # ---------------------------------------------------------------------------
 
 class TestContentHash:
-    """Tests for _content_hash() utility function."""
+    """Tests for content_hash() utility function."""
 
     def test_deterministic(self):
-        from datastore.memorydb.memory_graph import _content_hash
-        assert _content_hash("hello world") == _content_hash("hello world")
+        from datastore.memorydb.memory_graph import content_hash
+        assert content_hash("hello world") == content_hash("hello world")
 
     def test_case_insensitive(self):
-        from datastore.memorydb.memory_graph import _content_hash
-        assert _content_hash("Hello World") == _content_hash("hello world")
+        from datastore.memorydb.memory_graph import content_hash
+        assert content_hash("Hello World") == content_hash("hello world")
 
     def test_whitespace_normalized(self):
-        from datastore.memorydb.memory_graph import _content_hash
-        assert _content_hash("hello  world") == _content_hash("hello world")
-        assert _content_hash("  hello world  ") == _content_hash("hello world")
+        from datastore.memorydb.memory_graph import content_hash
+        assert content_hash("hello  world") == content_hash("hello world")
+        assert content_hash("  hello world  ") == content_hash("hello world")
 
     def test_different_texts_different_hashes(self):
-        from datastore.memorydb.memory_graph import _content_hash
-        assert _content_hash("quaid likes coffee") != _content_hash("quaid likes tea")
+        from datastore.memorydb.memory_graph import content_hash
+        assert content_hash("quaid likes coffee") != content_hash("quaid likes tea")
 
     def test_returns_sha256_hex(self):
-        from datastore.memorydb.memory_graph import _content_hash
-        h = _content_hash("test")
+        from datastore.memorydb.memory_graph import content_hash
+        h = content_hash("test")
         assert len(h) == 64  # SHA256 hex is 64 chars
         assert all(c in "0123456789abcdef" for c in h)
 
@@ -82,17 +82,17 @@ class TestContentHashOnInsert:
     """Tests for content_hash being set on node insert."""
 
     def test_add_node_sets_content_hash(self, tmp_path):
-        from datastore.memorydb.memory_graph import Node, _content_hash
+        from datastore.memorydb.memory_graph import Node, content_hash
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes coffee", owner_id="quaid")
             graph.add_node(node)
             retrieved = graph.get_node(node.id)
             assert retrieved.content_hash is not None
-            assert retrieved.content_hash == _content_hash("Quaid likes coffee")
+            assert retrieved.content_hash == content_hash("Quaid likes coffee")
 
     def test_update_node_sets_content_hash(self, tmp_path):
-        from datastore.memorydb.memory_graph import Node, _content_hash
+        from datastore.memorydb.memory_graph import Node, content_hash
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes coffee", owner_id="quaid")
@@ -102,7 +102,7 @@ class TestContentHashOnInsert:
             node.content_hash = None  # Force recompute
             graph.update_node(node)
             retrieved = graph.get_node(node.id)
-            assert retrieved.content_hash == _content_hash("Quaid loves espresso")
+            assert retrieved.content_hash == content_hash("Quaid loves espresso")
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ class TestContentHashDedup:
 
     def test_exact_duplicate_caught_by_hash(self, tmp_path):
         """Identical text (after normalization) is caught by hash before cosine."""
-        from datastore.memorydb.memory_graph import store, get_graph, _content_hash, MemoryGraph
+        from datastore.memorydb.memory_graph import store, get_graph, content_hash, MemoryGraph
         db_file = tmp_path / "dedup_test.db"
         with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             with patch("datastore.memorydb.memory_graph.get_graph") as mock_get:

@@ -122,7 +122,7 @@ class OpusReviewConfig:
 class JanitorConfig:
     enabled: bool = True
     dry_run: bool = False
-    apply_mode: str = "auto"  # Legacy master mode: auto | ask | dry_run
+    apply_mode: str = "auto"  # master mode: auto | ask | dry_run
     token_budget: int = 0  # Max total LLM tokens per janitor run (0 = unlimited)
     approval_policies: Dict[str, str] = field(default_factory=lambda: {
         "core_markdown_writes": "ask",
@@ -142,7 +142,7 @@ class TraversalConfig:
     use_beam: bool = True  # Use BEAM search instead of BFS
     beam_width: int = 5  # Top-B candidates per hop level
     max_depth: int = 2  # Maximum traversal depth
-    scoring_mode: str = "heuristic"  # Ignored (kept for backward compat). Scoring is adaptive.
+    scoring_mode: str = "heuristic"
     hop_decay: float = 0.7  # Score decay per hop (0.7^depth)
 
 
@@ -295,12 +295,9 @@ class FeatureNotificationConfig:
 
     @staticmethod
     def from_config(value) -> 'FeatureNotificationConfig':
-        """Parse from config — accepts string (legacy verbosity) or dict (full config)."""
+        """Parse per-feature notification config."""
         if value is None:
             return FeatureNotificationConfig()
-        if isinstance(value, str):
-            # Legacy format: just a verbosity string like "summary"
-            return FeatureNotificationConfig(verbosity=value)
         if isinstance(value, dict):
             return FeatureNotificationConfig(
                 verbosity=value.get('verbosity', None),
@@ -316,12 +313,11 @@ class NotificationsConfig:
     level: str = "normal"
 
     # Per-feature settings (verbosity override + channel routing).
-    # Accepts either a string ("summary") for legacy verbosity, or a dict with verbosity + channel.
     janitor: FeatureNotificationConfig = field(default_factory=FeatureNotificationConfig)
     extraction: FeatureNotificationConfig = field(default_factory=FeatureNotificationConfig)
     retrieval: FeatureNotificationConfig = field(default_factory=FeatureNotificationConfig)
 
-    # Legacy fields (still respected if set)
+    # Notification presentation controls
     full_text: bool = False             # Show full text in notifications (no truncation)
     show_processing_start: bool = True  # Notify user when extraction starts
 
@@ -664,10 +660,7 @@ def _load_config_inner() -> MemoryConfig:
     )
 
     # Parse journal config — use raw_config to preserve camelCase keys
-    # Fallback: read 'soulSnippets' if 'journal' key absent (backward compat)
     raw_journal = raw_config.get('docs', {}).get('journal', {})
-    if not raw_journal:
-        raw_journal = raw_config.get('docs', {}).get('soulSnippets', {})
     _default_targets = ["SOUL.md", "USER.md", "MEMORY.md"]
     journal = JournalConfig(
         enabled=raw_journal.get('enabled', True),
