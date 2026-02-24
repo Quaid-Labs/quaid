@@ -17,13 +17,25 @@ def register_lifecycle_routines(registry, result_factory) -> None:
         try:
             graph = ctx.graph
             subtask = str((ctx.options or {}).get("subtask") or "all").strip().lower()
+            max_items = int((ctx.options or {}).get("max_items") or 0)
             metrics = ops.JanitorMetrics()
 
             if subtask == "review":
-                r = ops.review_pending_memories(graph, dry_run=ctx.dry_run, metrics=metrics)
+                r = ops.review_pending_memories(
+                    graph,
+                    dry_run=ctx.dry_run,
+                    metrics=metrics,
+                    max_items=max_items,
+                )
                 result.metrics["memories_reviewed"] = int(r.get("total_reviewed", 0))
                 result.metrics["memories_deleted"] = int(r.get("deleted", 0))
                 result.metrics["memories_fixed"] = int(r.get("fixed", 0))
+                result.metrics["review_carryover"] = int(r.get("carryover", 0))
+                result.metrics["review_coverage_ratio_pct"] = int(round(float(r.get("review_coverage_ratio", 1.0)) * 100))
+                if r.get("missing_ids"):
+                    result.errors.append(
+                        f"Review returned missing decision coverage ids={r.get('missing_ids')}"
+                    )
                 return result
 
             if subtask == "temporal":
@@ -33,14 +45,17 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 return result
 
             if subtask == "dedup_review":
-                r = ops.review_dedup_rejections(graph, metrics, dry_run=ctx.dry_run)
+                r = ops.review_dedup_rejections(
+                    graph, metrics, dry_run=ctx.dry_run, max_items=max_items
+                )
                 result.metrics["dedup_reviewed"] = int(r.get("reviewed", 0))
                 result.metrics["dedup_confirmed"] = int(r.get("confirmed", 0))
                 result.metrics["dedup_reversed"] = int(r.get("reversed", 0))
+                result.metrics["dedup_review_carryover"] = int(r.get("carryover", 0))
                 return result
 
             if subtask == "duplicates":
-                pair_buckets = ops.recall_similar_pairs(graph, metrics, since=None)
+                pair_buckets = ops.recall_similar_pairs(graph, metrics, since=None, max_nodes=max_items)
                 dups = ops.find_duplicates_from_pairs(pair_buckets.get("duplicates", []), metrics)
                 merges_applied = 0
                 merged_ids = set()
@@ -57,14 +72,16 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                             merged_ids.add(dup["id_b"])
                             merges_applied += 1
                 result.metrics["duplicates_merged"] = merges_applied
+                result.metrics["duplicates_carryover"] = int(pair_buckets.get("node_carryover", 0))
                 return result
 
             if subtask == "contradictions":
-                pair_buckets = ops.recall_similar_pairs(graph, metrics, since=None)
+                pair_buckets = ops.recall_similar_pairs(graph, metrics, since=None, max_nodes=max_items)
                 contradictions = ops.find_contradictions_from_pairs(
                     pair_buckets.get("contradictions", []), metrics, dry_run=ctx.dry_run
                 )
                 result.metrics["contradictions_found"] = len(contradictions)
+                result.metrics["contradictions_carryover"] = int(pair_buckets.get("node_carryover", 0))
                 result.data["contradiction_findings"] = [
                     {
                         "text_a": c.get("text_a", ""),
@@ -76,10 +93,13 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 return result
 
             if subtask == "contradictions_resolve":
-                r = ops.resolve_contradictions_with_opus(graph, metrics, dry_run=ctx.dry_run)
+                r = ops.resolve_contradictions_with_opus(
+                    graph, metrics, dry_run=ctx.dry_run, max_items=max_items
+                )
                 result.metrics["contradictions_resolved"] = int(r.get("resolved", 0))
                 result.metrics["contradictions_false_positive"] = int(r.get("false_positive", 0))
                 result.metrics["contradictions_merged"] = int(r.get("merged", 0))
+                result.metrics["contradictions_resolve_carryover"] = int(r.get("carryover", 0))
                 if r.get("decisions"):
                     result.data["contradiction_decisions"] = list(r["decisions"][:50])
                 return result
@@ -94,11 +114,14 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 return result
 
             if subtask == "decay_review":
-                r = ops.review_decayed_memories(graph, metrics, dry_run=ctx.dry_run)
+                r = ops.review_decayed_memories(
+                    graph, metrics, dry_run=ctx.dry_run, max_items=max_items
+                )
                 result.metrics["decay_reviewed"] = int(r.get("reviewed", 0))
                 result.metrics["decay_review_deleted"] = int(r.get("deleted", 0))
                 result.metrics["decay_review_extended"] = int(r.get("extended", 0))
                 result.metrics["decay_review_pinned"] = int(r.get("pinned", 0))
+                result.metrics["decay_review_carryover"] = int(r.get("carryover", 0))
                 return result
 
             result.errors.append(f"Unknown memory_graph_maintenance subtask: {subtask}")
