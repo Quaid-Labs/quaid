@@ -31,15 +31,20 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - On error, runner prints pending signals, timeout logs, notify-worker tail, gateway status, and gateway logs.
 9. Bootstrap collision recovery
    - If worktree bootstrap fails with a workspace "already exists" collision after wipe, runner performs one forced cleanup + retry automatically.
+10. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
+   - Validates recovery after forced gateway restart mid-session.
+   - Validates live turns under janitor pressure.
+   - Validates cross-session interleaving under janitor pressure with per-session cursor presence/identity checks.
+   - Validates gateway restart during janitor apply-write path (`cleanup`) still records completed `janitor_runs`.
 
 ## Recommended Next Additions
 
-1. Cross-session concurrency matrix
-   - Multiple concurrent sessions plus janitor/docs updater pressure in one run.
-2. Restart during janitor write window
-   - Force gateway restart while janitor writes run metadata; verify run record integrity.
-3. Registry/index migration drift fixtures
+1. Registry/index migration drift fixtures
    - Seed docs registry + RAG metadata drift and assert self-heal behavior.
+2. Cross-session project-updater pressure
+   - Verify staging-event processing and project artifacts remain correct while concurrent live turns run.
+3. Nightly soak profile
+   - Repeat resilience checks in bounded loops to catch intermittent regressions.
 
 ## Runner Modes
 
