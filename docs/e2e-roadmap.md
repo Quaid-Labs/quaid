@@ -80,6 +80,6 @@ Coverage requirements:
 ## Backlog Order
 
 Implement next in this order:
-1. Cross-session project-updater pressure matrix (staging event consumption under concurrent live turns).
-2. Nightly long-run soak profile (repeat resilience block N times with bounded runtime).
-3. Parallel janitor-stage stress profile (bounded stage caps + carryover invariants across repeated runs).
+1. Nightly long-run soak profile (repeat resilience block N times with bounded runtime).
+2. Parallel janitor-stage stress profile (bounded stage caps + carryover invariants across repeated runs).
+3. Registry/doc-chunk path-mismatch migration fixture (absolute vs workspace-relative source paths).
