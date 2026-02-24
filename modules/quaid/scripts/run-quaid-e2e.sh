@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -25,12 +25,15 @@ RUN_NOTIFY_MATRIX=true
 RUN_INTEGRATION_TESTS=true
 RUN_INGEST_STRESS=true
 RUN_JANITOR_SEED=true
+RUN_MEMORY_FLOW=true
 JANITOR_TIMEOUT_SECONDS=240
 JANITOR_MODE="apply"
 NOTIFY_LEVEL="debug"
 LIVE_TIMEOUT_WAIT_SECONDS=90
 E2E_SUITES="full"
 E2E_SKIP_EXIT_CODE=20
+QUICK_BOOTSTRAP=false
+REUSE_WORKSPACE=false
 
 SKIP_JANITOR_FLAG=false
 SKIP_LLM_SMOKE_FLAG=false
@@ -48,15 +51,43 @@ Options:
   --skip-llm-smoke       Skip gateway LLM smoke call
   --skip-live-events     Skip live command/timeout hook validation
   --skip-notify-matrix   Skip notification-level matrix validation (quiet/normal/debug)
-  --suite <csv>          Test suites to run. Values: full,smoke,integration,live,notify,ingest,janitor,seed (default: full)
+  --suite <csv>          Test suites to run. Values: full,core,nightly,smoke,integration,live,memory,notify,ingest,janitor,seed (default: full)
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
   --notify-level <lvl>   Quaid notify level for e2e (quiet|normal|verbose|debug, default: debug)
   --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
   --openclaw-source <p>  OpenClaw source repo path (default: ~/openclaw-source)
+  --quick-bootstrap      Skip OpenClaw source refresh/install during bootstrap (faster local loops)
+  --reuse-workspace      Reuse existing ~/quaid/e2e-test workspace when possible (fast path)
   -h, --help             Show this help
 USAGE
+}
+
+emit_failure_diagnostics() {
+  local code="${1:-1}"
+  local line="${2:-unknown}"
+  set +e
+  echo "[e2e] FAILURE: command failed at line=${line} exit_code=${code}" >&2
+  echo "[e2e] ---- diagnostics begin ----" >&2
+  echo "[e2e] workspace=${E2E_WS}" >&2
+  echo "[e2e] auth_path=${AUTH_PATH} suites=${E2E_SUITES}" >&2
+  if [[ -d "${E2E_WS}" ]]; then
+    echo "[e2e] pending signal files:" >&2
+    find "${E2E_WS}/data/pending-extraction-signals" -maxdepth 2 -type f 2>/dev/null | sed -n '1,40p' >&2 || true
+    echo "[e2e] timeout events tail:" >&2
+    tail -n 80 "${E2E_WS}/logs/quaid/session-timeout-events.jsonl" 2>/dev/null >&2 || true
+    echo "[e2e] timeout log tail:" >&2
+    tail -n 80 "${E2E_WS}/logs/quaid/session-timeout.log" 2>/dev/null >&2 || true
+    echo "[e2e] notify-worker tail:" >&2
+    tail -n 80 "${E2E_WS}/logs/notify-worker.log" 2>/dev/null >&2 || true
+  fi
+  echo "[e2e] openclaw gateway status:" >&2
+  openclaw gateway status >&2 || true
+  echo "[e2e] openclaw logs tail:" >&2
+  openclaw logs --plain --limit 120 >&2 || true
+  echo "[e2e] ---- diagnostics end ----" >&2
+  set -e
 }
 
 while [[ $# -gt 0 ]]; do
@@ -74,6 +105,8 @@ while [[ $# -gt 0 ]]; do
     --notify-level) NOTIFY_LEVEL="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
     --openclaw-source) OPENCLAW_SOURCE="$2"; shift 2 ;;
+    --quick-bootstrap) QUICK_BOOTSTRAP=true; shift ;;
+    --reuse-workspace) REUSE_WORKSPACE=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; usage; exit 1 ;;
   esac
@@ -93,7 +126,20 @@ suite_has() {
   return 1
 }
 
-if suite_has "full"; then
+if suite_has "nightly"; then
+  E2E_SUITES="full"
+fi
+
+if suite_has "core"; then
+  RUN_LLM_SMOKE=true
+  RUN_INTEGRATION_TESTS=true
+  RUN_LIVE_EVENTS=true
+  RUN_NOTIFY_MATRIX=false
+  RUN_INGEST_STRESS=true
+  RUN_JANITOR=true
+  RUN_JANITOR_SEED=true
+  RUN_MEMORY_FLOW=true
+elif suite_has "full"; then
   RUN_LLM_SMOKE=true
   RUN_INTEGRATION_TESTS=true
   RUN_LIVE_EVENTS=true
@@ -101,6 +147,7 @@ if suite_has "full"; then
   RUN_INGEST_STRESS=true
   RUN_JANITOR=true
   RUN_JANITOR_SEED=true
+  RUN_MEMORY_FLOW=true
 else
   RUN_LLM_SMOKE=false
   RUN_INTEGRATION_TESTS=false
@@ -109,6 +156,7 @@ else
   RUN_INGEST_STRESS=false
   RUN_JANITOR=false
   RUN_JANITOR_SEED=false
+  RUN_MEMORY_FLOW=false
 
   suite_has "smoke" && RUN_LLM_SMOKE=true
   suite_has "integration" && RUN_INTEGRATION_TESTS=true
@@ -116,6 +164,7 @@ else
   suite_has "live" && RUN_LIVE_EVENTS=true
   suite_has "hooks" && RUN_LIVE_EVENTS=true
   suite_has "notify" && RUN_NOTIFY_MATRIX=true
+  suite_has "memory" && RUN_MEMORY_FLOW=true
   suite_has "ingest" && RUN_INGEST_STRESS=true
   suite_has "stress" && RUN_INGEST_STRESS=true
   suite_has "janitor" && RUN_JANITOR=true
@@ -235,6 +284,14 @@ cleanup() {
   return "$exit_code"
 }
 
+on_err() {
+  local code="$1"
+  local line="$2"
+  emit_failure_diagnostics "$code" "$line"
+  exit "$code"
+}
+
+trap 'on_err $? $LINENO' ERR
 trap 'cleanup $?' EXIT
 
 echo "[e2e] Stopping any running gateway..."
@@ -292,14 +349,64 @@ with open(profile_path, "w", encoding="utf-8") as f:
     json.dump(obj, f, indent=2)
 PY
 
+run_bootstrap() {
+  local do_wipe="$1"
+  local -a args
+  local bootstrap_log=""
+  local rc=0
+  args=(
+    "${BOOTSTRAP_ROOT}/scripts/bootstrap-local.sh"
+    --profile "$TMP_PROFILE"
+    --auth-path "$AUTH_PATH"
+    --openclaw-source "$OPENCLAW_SOURCE"
+    --worktree-source "$DEV_WS"
+    --worktree-test-branch "e2e-runtime"
+  )
+  if [[ "$do_wipe" == "true" ]]; then
+    args+=(--wipe)
+  fi
+  if [[ "$QUICK_BOOTSTRAP" == true ]]; then
+    args+=(--no-openclaw-refresh --no-openclaw-install)
+  fi
+  bootstrap_log="$(mktemp -t quaid-e2e-bootstrap.log.XXXXXX)"
+  if "${args[@]}" 2>&1 | tee "$bootstrap_log"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ "$rc" -eq 0 ]]; then
+    rm -f "$bootstrap_log"
+    return 0
+  fi
+
+  # Rare race: workspace path can be recreated between wipe and worktree add.
+  # Retry once after explicit cleanup when the failure is this specific collision.
+  if [[ "$do_wipe" == "true" ]] && rg -q "already exists" "$bootstrap_log"; then
+    echo "[e2e] Bootstrap hit workspace collision; retrying once after cleanup." >&2
+    rm -rf "$E2E_WS"
+    if git -C "$DEV_WS" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      git -C "$DEV_WS" worktree prune >/dev/null 2>&1 || true
+    fi
+    if "${args[@]}" 2>&1 | tee "$bootstrap_log"; then
+      rm -f "$bootstrap_log"
+      return 0
+    fi
+    rc=$?
+  fi
+  echo "[e2e] bootstrap log preserved at: $bootstrap_log" >&2
+  return "$rc"
+}
+
+  if [[ "$REUSE_WORKSPACE" == true && -d "$E2E_WS" ]]; then
+  echo "[e2e] Reusing existing e2e workspace: ${E2E_WS}"
+  if ! run_bootstrap false; then
+    echo "[e2e] Reuse bootstrap failed; falling back to clean bootstrap (--wipe)." >&2
+    run_bootstrap true
+  fi
+else
 echo "[e2e] Bootstrapping e2e workspace: ${E2E_WS}"
-"${BOOTSTRAP_ROOT}/scripts/bootstrap-local.sh" \
-  --profile "$TMP_PROFILE" \
-  --wipe \
-  --auth-path "$AUTH_PATH" \
-  --openclaw-source "$OPENCLAW_SOURCE" \
-  --worktree-source "$DEV_WS" \
-  --worktree-test-branch "e2e-runtime"
+run_bootstrap true
+fi
 
 echo "[e2e] Starting gateway on e2e workspace..."
 start_gateway_safe
@@ -540,36 +647,16 @@ def assert_notify_worker_healthy(start_line: int) -> None:
             f"[e2e] notify-worker excerpts:\n{preview}"
         )
 
-def resolve_session_id_from_marker(marker: str, seconds: int = 25) -> str:
-    session_dir = os.path.join(ws, "logs", "quaid", "session-messages")
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        if os.path.isdir(session_dir):
-            for name in os.listdir(session_dir):
-                if not name.endswith(".jsonl"):
-                    continue
-                fp = os.path.join(session_dir, name)
-                try:
-                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
-                        content = f.read()
-                    if marker in content:
-                        return name[:-6]
-                except Exception:
-                    continue
-        time.sleep(1)
-    raise SystemExit(f"[e2e] ERROR: could not resolve runtime session_id for marker={marker}")
-
 print(f"[e2e] Live events session: {session_id}")
 notify_start = line_count(notify_log_path)
 
 timeout_marker = f"E2E_TIMEOUT_{uuid.uuid4().hex[:10]}"
 start = line_count(events_path)
 run_agent(f"E2E timeout probe marker: {timeout_marker}")
-timeout_session_id = resolve_session_id_from_marker(timeout_marker, 25)
-print(f"[e2e] Timeout runtime session_id: {timeout_session_id}")
+print(f"[e2e] Timeout runtime session_id: {session_id}")
 wait_for(
     lambda lines: any(
-        f'"session_id":"{timeout_session_id}"' in ln
+        f'"session_id":"{session_id}"' in ln
         and (
             '"event":"timer_fired"' in ln
             or ('"event":"extract_begin"' in ln and '"timeout_minutes"' in ln)
@@ -585,12 +672,11 @@ assert_notify_worker_healthy(notify_start)
 
 compact_marker = f"E2E_COMPACT_{uuid.uuid4().hex[:10]}"
 run_agent(f"E2E marker before compact: {compact_marker}")
-compact_session_id = resolve_session_id_from_marker(compact_marker, 25)
 start = line_count(events_path)
 run_agent("/compact")
 wait_for(
     lambda lines: any(
-        f'"session_id":"{compact_session_id}"' in ln
+        f'"session_id":"{session_id}"' in ln
         and '"label":"CompactionSignal"' in ln
         and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
         for ln in lines
@@ -602,16 +688,13 @@ wait_for(
 print("[e2e] Live compact hook path OK.")
 assert_notify_worker_healthy(notify_start)
 
-reset_marker = f"E2E_RESET_{uuid.uuid4().hex[:10]}"
-run_agent(f"E2E marker before reset: {reset_marker}")
-reset_session_id = resolve_session_id_from_marker(reset_marker, 25)
+# Reset can race session teardown, so validate by event window (not marker lookup).
 start = line_count(events_path)
 run_agent("E2E baseline message before reset.")
 run_agent("/reset")
 wait_for(
     lambda lines: any(
-        f'"session_id":"{reset_session_id}"' in ln
-        and '"label":"ResetSignal"' in ln
+        '"label":"ResetSignal"' in ln
         and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
         for ln in lines
     ),
@@ -622,16 +705,13 @@ wait_for(
 print("[e2e] Live reset hook path OK.")
 assert_notify_worker_healthy(notify_start)
 
-new_marker = f"E2E_NEW_{uuid.uuid4().hex[:10]}"
-run_agent(f"E2E marker before new: {new_marker}")
-new_session_id = resolve_session_id_from_marker(new_marker, 25)
+# /new path uses same reset signal semantics; validate by event window.
 start = line_count(events_path)
 run_agent("E2E baseline message before new.")
 run_agent("/new")
 wait_for(
     lambda lines: any(
-        f'"session_id":"{new_session_id}"' in ln
-        and '"label":"ResetSignal"' in ln
+        '"label":"ResetSignal"' in ln
         and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
         for ln in lines
     ),
@@ -641,9 +721,169 @@ wait_for(
 )
 print("[e2e] Live new hook path OK.")
 assert_notify_worker_healthy(notify_start)
+
+# Postconditions: no stale lock claims and no internal extraction prompts
+# persisted as session messages in a clean e2e workspace.
+pending_dir = os.path.join(ws, "data", "pending-extraction-signals")
+if os.path.isdir(pending_dir):
+    # Claims are ephemeral lock files; allow a short drain window and only fail
+    # if claims remain stale beyond the threshold (likely true orphaned locks).
+    deadline = time.time() + 25
+    stale = []
+    while time.time() < deadline:
+        now = time.time()
+        stale = []
+        for name in os.listdir(pending_dir):
+            if ".processing." not in name:
+                continue
+            fp = os.path.join(pending_dir, name)
+            try:
+                age = now - os.path.getmtime(fp)
+            except FileNotFoundError:
+                continue
+            if age >= 120:
+                stale.append((name, int(age)))
+        if not stale:
+            break
+        time.sleep(1)
+    if stale:
+        raise SystemExit(
+            "[e2e] ERROR: live events left stale pending signal claim files:\n"
+            + "\n".join(f"{name} age_s={age}" for name, age in stale[:20])
+        )
+
+internal_markers = (
+    "Extract memorable facts and journal entries from this conversation:",
+    "Given a personal memory query and memory documents",
+)
+session_dir = os.path.join(ws, "logs", "quaid", "session-messages")
+if os.path.isdir(session_dir):
+    contaminated = []
+    for name in os.listdir(session_dir):
+        if not name.endswith(".jsonl"):
+            continue
+        fp = os.path.join(session_dir, name)
+        try:
+            content = open(fp, "r", encoding="utf-8", errors="replace").read()
+        except Exception:
+            continue
+        if any(marker in content for marker in internal_markers):
+            contaminated.append(name)
+    if contaminated:
+        raise SystemExit(
+            "[e2e] ERROR: internal extraction/ranking prompts leaked into session-message logs:\n"
+            + "\n".join(contaminated[:20])
+        )
 PY
 else
   echo "[e2e] Skipping live events (--skip-live-events)."
+fi
+
+if [[ "$RUN_MEMORY_FLOW" == true ]]; then
+echo "[e2e] Running memory flow regression checks (compact/new/recall)..."
+python3 - "$E2E_WS" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+
+ws = sys.argv[1]
+events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
+session_id = f"quaid-e2e-memory-{uuid.uuid4().hex[:12]}"
+
+def line_count(path: str) -> int:
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return sum(1 for _ in f)
+
+def read_tail_since(path: str, start: int):
+    if not os.path.exists(path):
+        return []
+    out = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for idx, line in enumerate(f, start=1):
+            if idx > start:
+                out.append(line.strip())
+    return out
+
+def run_agent(message: str, timeout_sec: int = 220) -> str:
+    proc = subprocess.run(
+        ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", str(timeout_sec), "--json"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[e2e] ERROR: openclaw agent failed message={message!r}: {proc.stderr.strip()[:500]}"
+        )
+    out = proc.stdout.strip()
+    if not out:
+        return ""
+    # Keep parser permissive: output can be non-JSON in some gateway fallback paths.
+    try:
+        parsed = json.loads(out)
+    except Exception:
+        return out
+    if isinstance(parsed, dict):
+        if isinstance(parsed.get("response"), str):
+            return parsed["response"]
+        if isinstance(parsed.get("output"), str):
+            return parsed["output"]
+    return out
+
+def wait_for_reset_signal(start_line: int, seconds: int = 60) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        lines = read_tail_since(events_path, start_line)
+        if any(
+            f'"session_id":"{session_id}"' in ln
+            and '"label":"ResetSignal"' in ln
+            and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+            for ln in lines
+        ):
+            return
+        time.sleep(1)
+    preview = "\n".join(read_tail_since(events_path, start_line)[-30:])
+    raise SystemExit(
+        "[e2e] ERROR: timed out waiting for reset extraction in memory flow\n"
+        + preview
+    )
+
+# Seed facts and force compaction extraction.
+run_agent("Please remember this exactly: my mother is Wendy and my father is Kent.")
+run_agent("/compact", timeout_sec=260)
+
+# Trigger reset path (same hook path used by /new).
+start_line = line_count(events_path)
+run_agent("/new", timeout_sec=260)
+wait_for_reset_signal(start_line, 60)
+
+# Validate recall behavior from new session.
+answer = run_agent(
+    "What are my parents' names? Answer with exactly two names and no caveats.",
+    timeout_sec=260,
+)
+answer_l = answer.lower()
+if "wendy" not in answer_l or "kent" not in answer_l:
+    raise SystemExit(
+        "[e2e] ERROR: memory flow recall did not return expected parent names.\n"
+        f"[e2e] answer={answer[:800]}"
+    )
+
+bad_markers = ("low-confidence", "low confidence", "outdated", "stale")
+if any(marker in answer_l for marker in bad_markers):
+    raise SystemExit(
+        "[e2e] ERROR: memory flow answer included stale/low-confidence hedge language.\n"
+        f"[e2e] answer={answer[:800]}"
+    )
+
+print("[e2e] Memory flow regression checks passed.")
+PY
+else
+  echo "[e2e] Skipping memory flow checks (suite selection)."
 fi
 
 if [[ "$RUN_NOTIFY_MATRIX" == true ]]; then
@@ -717,7 +957,7 @@ def restart_gateway() -> None:
 
 def run_agent(session_id: str, message: str) -> None:
     proc = subprocess.run(
-        ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "180", "--json"],
+        ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "90", "--json"],
         capture_output=True,
         text=True,
     )
@@ -752,6 +992,7 @@ def assert_no_fatal_notify_errors(lines) -> None:
 
 results = []
 for level in ("quiet", "normal", "debug"):
+    print(f"[e2e] notify-matrix level={level} start")
     set_level(level)
     restart_gateway()
     notify_start = line_count(notify_log_path)
@@ -770,6 +1011,7 @@ for level in ("quiet", "normal", "debug"):
         raise SystemExit("[e2e] ERROR: quiet level emitted extraction notifications")
     if level in ("normal", "debug") and loaded == 0:
         raise SystemExit(f"[e2e] ERROR: {level} level emitted no extraction notification activity")
+    print(f"[e2e] notify-matrix level={level} ok")
 
 print("[e2e] Notify matrix results:")
 print(json.dumps(results, indent=2))
