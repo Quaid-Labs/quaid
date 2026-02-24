@@ -119,7 +119,7 @@ def build_default_registry() -> LifecycleRegistry:
     registry = LifecycleRegistry()
 
     module_specs: List[tuple[str, List[str]]] = [
-        ("core.lifecycle.workspace_audit", ["workspace"]),
+        ("adaptors.openclaw.maintenance", ["workspace"]),
         ("core.docs.updater", ["docs_staleness", "docs_cleanup"]),
         ("core.lifecycle.soul_snippets", ["snippets", "journal"]),
         ("core.docs.rag", ["rag"]),
