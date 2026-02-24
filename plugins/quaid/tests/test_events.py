@@ -2,7 +2,7 @@ import json
 import sys
 import types
 
-from events import emit_event, get_event_registry, get_event_capability, list_events, process_events
+from core.runtime.events import emit_event, get_event_registry, get_event_capability, list_events, process_events
 from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
 
 
@@ -76,7 +76,7 @@ def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
     transcript = tmp_path / "transcript.txt"
     transcript.write_text("session transcript", encoding="utf-8")
 
-    import events
+    import core.runtime.events as events
     called = {}
 
     def _fake_run(path, label, session_id=None):

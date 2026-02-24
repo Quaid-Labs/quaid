@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from llm_clients import call_deep_reasoning, parse_json_response
+from core.llm.clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from lib.runtime_context import get_workspace_dir, get_bootstrap_markdown_globs
 
@@ -437,7 +437,7 @@ def apply_review_decisions(dry_run: bool = True,
 
     If decisions_data is provided, use it directly. Otherwise load from file.
     """
-    from datastore_maintenance import store_memory
+    from datastore.facade import store_memory
 
     if decisions_data is None:
         # Fallback: load from file

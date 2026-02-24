@@ -9,7 +9,7 @@ Usage:
   python3 notify.py --check  # Just show last channel info
 
 Programmatic:
-  from notify import notify_user, get_last_channel
+  from core.runtime.notify import notify_user, get_last_channel
 
   info = get_last_channel()
   if info:

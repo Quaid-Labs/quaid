@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import get_config
-from llm_clients import call_deep_reasoning, call_fast_reasoning
+from core.llm.clients import call_deep_reasoning, call_fast_reasoning
 from lib.runtime_context import get_workspace_dir
 
 def _workspace() -> Path:
@@ -124,7 +124,7 @@ def log_doc_update(
         try:
             cfg = get_config()
             if cfg.docs.notify_on_update:
-                from events import queue_delayed_notification
+                from core.runtime.events import queue_delayed_notification
                 message = (
                     "[Quaid] 📋 Auto-Documentation Update\n"
                     f"Updated: `{Path(doc_path).name}`\n"
@@ -715,7 +715,7 @@ def update_doc_from_diffs(
     # For borderline cases (low-confidence "significant"), use Haiku as a cheap gate
     if classification["confidence"] < 0.6:
         try:
-            from llm_clients import call_fast_reasoning
+            from core.llm.clients import call_fast_reasoning
             gate_prompt = (
                 f"Does this code diff require updating the documentation at {doc_path}?\n"
                 f"Doc purpose: {purpose}\n\n"

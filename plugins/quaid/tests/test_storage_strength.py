@@ -336,7 +336,7 @@ class TestMigration:
         # Create DB with old schema (no storage_strength)
         with sqlite3.connect(db_file) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
-            schema_path = Path(__file__).parent.parent / "schema.sql"
+            schema_path = Path(__file__).parent.parent / "datastore/memorydb/schema.sql"
             schema = schema_path.read_text()
             conn.executescript(schema)
             # Drop storage_strength to simulate old schema

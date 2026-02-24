@@ -17,14 +17,14 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 
 ### High Priority (now resolved in this pass)
 1. Adapter-owned Python datastore bridge calls in handlers
-- File: `plugins/quaid/adapters/openclaw/adapter.ts`
+- File: `plugins/quaid/adaptors/openclaw/adapter.ts`
 - Previous evidence: direct `callPython("search"|"store"|"create-edge"|...)` calls.
 - Resolution: introduced `plugins/quaid/core/datastore-bridge.ts` and migrated handler calls to `datastoreBridge`.
 - Risk: adapter knows datastore verbs and payload shape, reducing portability.
 - Follow-up: move to richer core ports (`runRecall`, `runWrite`, `runStats`, `runForget`) with host-agnostic envelopes.
 
 2. Adapter-owned transcript docs update logic
-- File: `plugins/quaid/adapters/openclaw/adapter.ts`
+- File: `plugins/quaid/adaptors/openclaw/adapter.ts`
 - Previous evidence: full stale-doc check + transcript update orchestration in adapter.
 - Resolution: moved orchestration into `plugins/quaid/docs_ingest.py`; adapter now calls `callDocsIngestPipeline(...)`.
 - Risk: ingestion policy drift by adapter/runtime.
@@ -63,7 +63,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - janitor now emits `janitor.run_completed` lifecycle event with metrics/change payload
   - event handler in `events.py` owns delayed notification queueing for summary/digest
   - `notify.py` exposes formatter helpers so delivery transport stays outside janitor
-  - adapter runtime Python execution moved into adapter-local bridge module (`adapters/openclaw/python-bridge.ts`)
+  - adapter runtime Python execution moved into adapter-local bridge module (`adaptors/openclaw/python-bridge.ts`)
     so `adapter.ts` no longer defines/exports raw bridge command execution logic
   - `api.stats()` now routes via datastore interface function `memory_graph.stats()` rather than direct
     `get_graph().get_stats()` call in API layer
@@ -127,7 +127,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 - Delayed notification flow unified through event bus:
   - `plugins/quaid/events.py` added `queue_delayed_notification(...)`
   - `plugins/quaid/janitor.py` now uses event bus for delayed messages
-  - `plugins/quaid/adapters/openclaw/adapter.ts` no longer flushes delayed notification files
+  - `plugins/quaid/adaptors/openclaw/adapter.ts` no longer flushes delayed notification files
   - removed legacy `flushDelayedNotificationsToRequestQueue(...)` helper from delayed-request bridge
   - updated delayed-request integration test to validate canonical queue/resolve/clear lifecycle
 - MCP API boundary enforced:
@@ -141,7 +141,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
     `plugins/quaid/api.py`, tightening facade boundaries for external callers
 - Orchestrator store implementation moved out:
   - `plugins/quaid/orchestrator/default-orchestrator.ts` uses injected store callbacks
-  - `plugins/quaid/adapters/openclaw/adapter.ts` supplies journal/project store handlers
+  - `plugins/quaid/adaptors/openclaw/adapter.ts` supplies journal/project store handlers
   - removed unused legacy deps (`path`, `fs`, `callDocsRag`) from orchestrator facade contract to tighten boundary surface
 - Janitor lifecycle ownership expanded:
   - `plugins/quaid/janitor_lifecycle.py` is now orchestration-only: it loads module-owned routine registrars

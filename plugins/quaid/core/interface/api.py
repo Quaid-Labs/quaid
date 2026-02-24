@@ -5,7 +5,7 @@ This module wraps the internal memory_graph functions with simplified
 signatures suitable for plugin integrators and external callers.
 
 Usage:
-    from api import store, recall, search, create_edge, forget, get_memory
+    from core.interface.api import store, recall, search, create_edge, forget, get_memory
 
     result = store("User prefers dark mode", owner_id="quaid")
     memories = recall("UI preferences?", owner_id="quaid")

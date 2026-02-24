@@ -12,7 +12,7 @@ Quaid currently uses a 5+1 zone architecture:
 - `orchestrator`: strategy selection and cross-zone flow control (separate from adapter)
 - `lifecycle`: maintenance/quality flows (janitor, decay, contradiction sweeps, review jobs)
 
-During rapid refactors, `adapters/openclaw/adapter.ts` accumulated logic that belonged to `ingestor` and `core`.
+During rapid refactors, `adaptors/openclaw/adapter.ts` accumulated logic that belonged to `ingestor` and `core`.
 
 ## Findings
 
@@ -37,7 +37,7 @@ During rapid refactors, `adapters/openclaw/adapter.ts` accumulated logic that be
 
 ### Fixed in this pass (phase 2/3)
 4. **Orchestrator moved out of adapter tree**
-- Problem: orchestration lived under `adapters/openclaw/knowledge/orchestrator.ts`, which blurred adapter vs core boundaries.
+- Problem: orchestration lived under `adaptors/openclaw/knowledge/orchestrator.ts`, which blurred adapter vs core boundaries.
 - Fix: moved to `orchestrator/default-orchestrator.ts`; adapter now imports this core/orchestrator surface.
 
 5. **Project catalog parsing moved from adapter to core**
@@ -51,7 +51,7 @@ During rapid refactors, `adapters/openclaw/adapter.ts` accumulated logic that be
 
 ### Remaining boundary leaks (phase 4 queue)
 1. **Doc/project ingestion still partly lives in adapter**
-- File: `adapters/openclaw/adapter.ts` (`updateDocsFromTranscript`, staleness/update flow)
+- File: `adaptors/openclaw/adapter.ts` (`updateDocsFromTranscript`, staleness/update flow)
 - Desired: move to ingestor service/module, adapter calls a single ingestor entrypoint.
 
 2. **Datastore bridge calls embedded in adapter tool handlers**

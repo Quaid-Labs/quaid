@@ -39,7 +39,7 @@ Quaid exposes its knowledge layer through three interfaces: an **MCP server** (w
     |MCP Server|      | extract  |       +-------+-------+
     | (stdio)  |      | .py CLI  |       | adapters/     |
     |          |      |          |       | openclaw/     |
-    |          |      |          |       | adapters/openclaw/index.ts      |
+    |          |      |          |       | adaptors/openclaw/index.ts      |
     +----+-----+      +----+-----+       | (TS plugin)   |
          |                 |             +-------+-------+
          +--------+--------+--------------------+
@@ -119,7 +119,7 @@ Conversation messages
 
 Extraction can be triggered from any of Quaid's three interfaces:
 
-- **OpenClaw plugin** (`adapters/openclaw/index.ts`): Two gateway hooks -- `before_compaction` (context being compacted) and `before_reset` (session ending). Both call `extractMemoriesFromMessages()`. Programmatic compaction is available via gateway RPC `sessions.compact`.
+- **OpenClaw plugin** (`adaptors/openclaw/index.ts`): Two gateway hooks -- `before_compaction` (context being compacted) and `before_reset` (session ending). Both call `extractMemoriesFromMessages()`. Programmatic compaction is available via gateway RPC `sessions.compact`.
 - **MCP server** (`mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
 - **CLI** (`extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
 
@@ -873,6 +873,6 @@ The `QUAID_OWNER` environment variable sets the owner identity for all operation
 
 ## Appendix: File Reference
 
-The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). In OpenClaw integration, `adapters/openclaw/index.ts` is a lightweight entry shim, while `adapters/openclaw/adapter.ts` + `adapters/openclaw/knowledge/orchestrator.ts` hold the runtime tool/hook logic and recall orchestration. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
+The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). In OpenClaw integration, `adaptors/openclaw/index.ts` is a lightweight entry shim, while `adaptors/openclaw/adapter.ts` + `adaptors/openclaw/knowledge/orchestrator.ts` hold the runtime tool/hook logic and recall orchestration. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

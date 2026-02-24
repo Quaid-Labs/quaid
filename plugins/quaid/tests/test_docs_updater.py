@@ -458,8 +458,8 @@ class TestClassifyDocChange:
         """Schema change → significant."""
         from core.docs.updater import classify_doc_change
         diff = (
-            "--- a/schema.sql\n"
-            "+++ b/schema.sql\n"
+            "--- a/datastore/memorydb/datastore/memorydb/schema.sql\n"
+            "+++ b/datastore/memorydb/schema.sql\n"
             "+CREATE TABLE new_table (\n"
             "+    id INTEGER PRIMARY KEY\n"
             "+);\n"
@@ -472,8 +472,8 @@ class TestClassifyDocChange:
         """ALTER TABLE → significant."""
         from core.docs.updater import classify_doc_change
         diff = (
-            "--- a/schema.sql\n"
-            "+++ b/schema.sql\n"
+            "--- a/datastore/memorydb/datastore/memorydb/schema.sql\n"
+            "+++ b/datastore/memorydb/schema.sql\n"
             "+ALTER TABLE users ADD COLUMN email TEXT;\n"
         )
         result = classify_doc_change(diff)
@@ -600,8 +600,8 @@ class TestClassifyDocChange:
         """Destructive operations (DROP/DELETE/REMOVE) → significant."""
         from core.docs.updater import classify_doc_change
         diff = (
-            "--- a/schema.sql\n"
-            "+++ b/schema.sql\n"
+            "--- a/datastore/memorydb/datastore/memorydb/schema.sql\n"
+            "+++ b/datastore/memorydb/schema.sql\n"
             "+DROP TABLE old_table;\n"
             "+DELETE FROM configs WHERE obsolete = 1;\n"
         )

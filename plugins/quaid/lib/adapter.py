@@ -501,7 +501,7 @@ def get_adapter() -> QuaidAdapter:
 
     kind = _read_adapter_type_from_config()
     if kind == "openclaw":
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         _adapter = OpenClawAdapter()
     elif kind == "standalone":
         _adapter = StandaloneAdapter()
@@ -536,7 +536,7 @@ def reset_adapter() -> None:
         pass
     # Clear cached model names so they re-resolve from new config/adapter
     try:
-        import llm_clients
+        import core.llm.clients as llm_clients
         llm_clients._models_loaded = False
         llm_clients._fast_reasoning_model = ""
         llm_clients._deep_reasoning_model = ""

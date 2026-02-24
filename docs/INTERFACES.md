@@ -11,7 +11,7 @@ This document defines Quaid's external interface model for host adapters and run
 
 ## Surfaces
 
-- `OpenClaw adapter` (`plugins/quaid/adapters/openclaw/adapter.ts`): richest integration path, lifecycle hooks + tools.
+- `OpenClaw adapter` (`plugins/quaid/adaptors/openclaw/adapter.ts`): richest integration path, lifecycle hooks + tools.
 - `MCP server` (`plugins/quaid/mcp_server.py`): host-agnostic RPC tools.
 - `CLI wrapper` (`plugins/quaid/quaid`): operational entrypoint to Python modules.
 

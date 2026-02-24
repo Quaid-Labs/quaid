@@ -21,7 +21,7 @@ from lib.providers import (
     MockEmbeddingsProvider,
     MODEL_TIERS,
 )
-from adapters.openclaw.providers import GatewayLLMProvider
+from adaptors.openclaw.providers import GatewayLLMProvider
 
 
 # ---------------------------------------------------------------------------

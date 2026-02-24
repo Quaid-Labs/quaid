@@ -244,7 +244,7 @@ def _handle_janitor_run_completed(event: Event) -> Dict[str, Any]:
     today_memories = payload.get("today_memories") if isinstance(payload.get("today_memories"), list) else []
     try:
         from config import get_config
-        from notify import format_janitor_summary_message, format_daily_memories_message
+        from core.runtime.notify import format_janitor_summary_message, format_daily_memories_message
 
         cfg = get_config()
         queued = 0

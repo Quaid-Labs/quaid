@@ -29,8 +29,8 @@ from typing import Any, Dict, List, Optional
 # Ensure plugin root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_clients import call_deep_reasoning, parse_json_response
-from datastore_maintenance import get_graph, store_memory as store, create_edge
+from core.llm.clients import call_deep_reasoning, parse_json_response
+from datastore.facade import get_graph, store_memory as store, create_edge
 from config import get_config
 from core.lifecycle.soul_snippets import write_journal_entry, write_snippet_entry
 from lib.runtime_context import parse_session_jsonl as _ctx_parse_session_jsonl, build_transcript as _ctx_build_transcript

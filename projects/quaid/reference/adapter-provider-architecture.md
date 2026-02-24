@@ -19,7 +19,7 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 ## Runtime Flow (OpenClaw)
 
 1. Quaid code requests an LLM tier (`high` or `low`).
-2. `adapters/openclaw/index.ts` resolves effective provider + model via config:
+2. `adaptors/openclaw/index.ts` resolves effective provider + model via config:
    - `models.llmProvider`
    - `models.deepReasoning` / `models.fastReasoning`
    - `models.providerModelClasses`
@@ -38,13 +38,13 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 
 ## Key Files
 
-- `plugins/quaid/adapters/openclaw/index.ts`
+- `plugins/quaid/adaptors/openclaw/index.ts`
   - tier/provider resolution
   - extraction hooks (`agent_end`, `command`, `before_compaction`, `before_reset`)
   - gateway-bound LLM calls
-- `plugins/quaid/adapters/openclaw/providers.py`
+- `plugins/quaid/adaptors/openclaw/providers.py`
   - `GatewayLLMProvider` bridge to `/plugins/quaid/llm`
-- `plugins/quaid/adapters/openclaw/adapter.py`
+- `plugins/quaid/adaptors/openclaw/adapter.py`
   - OpenClaw adapter for paths, notifications, session metadata, gateway credential context
 - `plugins/quaid/lib/adapter.py`
   - adapter interface and selection

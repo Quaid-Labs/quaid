@@ -27,11 +27,11 @@ sys.stdout = sys.stderr
 os.environ["QUAID_QUIET"] = "1"
 
 # Ensure plugin root is importable
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from mcp.server.fastmcp import FastMCP
 
-from api import (
+from core.interface.api import (
     store,
     recall,
     search,
@@ -465,7 +465,7 @@ def memory_provider() -> str:
 @mcp.tool()
 def memory_capabilities() -> dict:
     """Return read/write/event capabilities for runtime orchestration."""
-    from events import get_event_registry
+    from core.runtime.events import get_event_registry
     return {
         "owner_id": OWNER_ID,
         "recall": {
@@ -514,7 +514,7 @@ def memory_event_emit(
         dispatch: auto|immediate|queued. In auto mode, active events are processed
             immediately while passive events stay queued for async handling.
     """
-    from events import emit_event, process_events, get_event_capability
+    from core.runtime.events import emit_event, process_events, get_event_capability
     import json as _json2
 
     try:
@@ -564,7 +564,7 @@ def memory_event_list(status: str = "pending", limit: int = 20) -> dict:
         status: pending|processed|failed|all.
         limit: Max events to return.
     """
-    from events import list_events
+    from core.runtime.events import list_events
     return {"events": list_events(status=status, limit=max(1, min(limit, 200)))}
 
 
@@ -576,7 +576,7 @@ def memory_event_process(limit: int = 20, names_csv: str = "") -> dict:
         limit: Max events to process.
         names_csv: Optional comma-separated event names to process.
     """
-    from events import process_events
+    from core.runtime.events import process_events
     names = [x.strip() for x in (names_csv or "").split(",") if x.strip()]
     return process_events(limit=max(1, min(limit, 200)), names=names)
 
@@ -587,7 +587,7 @@ def memory_event_capabilities() -> dict:
 
     Includes per-event delivery_mode (active|passive) for orchestration.
     """
-    from events import get_event_registry
+    from core.runtime.events import get_event_registry
     return {"events": get_event_registry()}
 
 

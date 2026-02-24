@@ -25,8 +25,8 @@ from lib.providers import (
     ClaudeCodeLLMProvider,
     TestLLMProvider,
 )
-from adapters.openclaw.adapter import OpenClawAdapter
-from adapters.openclaw.providers import GatewayLLMProvider
+from adaptors.openclaw.adapter import OpenClawAdapter
+from adaptors.openclaw.providers import GatewayLLMProvider
 
 
 def _write_adapter_config(tmp_path: Path, adapter_type: str) -> None:
@@ -361,7 +361,7 @@ class TestOpenClawAdapter:
         # Mock subprocess.run
         mock_result = MagicMock()
         mock_result.returncode = 0
-        with patch("adapters.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
             result = adapter.notify("test message")
             assert result is True
             mock_run.assert_called_once()
@@ -583,7 +583,7 @@ class TestNotifyEdgeCases:
             session_key="agent:main:main"
         )
         monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
-        with patch("adapters.openclaw.adapter.subprocess.run", side_effect=FileNotFoundError):
+        with patch("adaptors.openclaw.adapter.subprocess.run", side_effect=FileNotFoundError):
             result = adapter.notify("test")
             assert result is False
 
@@ -597,7 +597,7 @@ class TestNotifyEdgeCases:
         monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
         mock_result = MagicMock()
         mock_result.returncode = 0
-        with patch("adapters.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
             adapter.notify("test", channel_override="discord")
             cmd = mock_run.call_args[0][0]
             assert "--channel" in cmd
@@ -614,7 +614,7 @@ class TestNotifyEdgeCases:
         monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
         mock_result = MagicMock()
         mock_result.returncode = 0
-        with patch("adapters.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
             adapter.notify("test")
             cmd = mock_run.call_args[0][0]
             assert "--account" in cmd
@@ -631,7 +631,7 @@ class TestNotifyEdgeCases:
         monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
         mock_result = MagicMock()
         mock_result.returncode = 0
-        with patch("adapters.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
             adapter.notify("test")
             cmd = mock_run.call_args[0][0]
             assert "--account" not in cmd
@@ -937,7 +937,7 @@ class TestLogRotation:
 
     def test_rotate_creates_archive_dir(self, standalone, tmp_path):
         """rotate_logs() creates archive/ dir if it doesn't exist."""
-        from logger import rotate_logs, _log_dir, _archive_dir
+        from core.runtime.logger import rotate_logs, _log_dir, _archive_dir
 
         # Create a log file with content
         log_dir = tmp_path / "logs"
@@ -956,7 +956,7 @@ class TestLogRotation:
 
     def test_rotate_moves_log_to_archive(self, standalone, tmp_path):
         """rotate_logs() actually moves logs into archive/."""
-        from logger import rotate_logs
+        from core.runtime.logger import rotate_logs
         from datetime import datetime
 
         log_dir = tmp_path / "logs"
@@ -992,7 +992,7 @@ class TestAdapterIntegration:
 
     def test_notify_delegates_through_adapter(self, standalone, capsys):
         """notify.py should route through adapter.notify()."""
-        from notify import notify_user
+        from core.runtime.notify import notify_user
         # StandaloneAdapter prints to stderr
         notify_user("adapter test")
         captured = capsys.readouterr()

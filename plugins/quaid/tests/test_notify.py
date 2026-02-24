@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-from notify import (
+from core.runtime.notify import (
     notify_memory_recall,
     notify_memory_extraction,
     notify_janitor_summary,
@@ -41,7 +41,7 @@ def _make_channel_info():
 
 def _patch_notify_user():
     """Patch notify_user to capture the message instead of sending."""
-    return patch("notify.notify_user", return_value=True)
+    return patch("core.runtime.notify.notify_user", return_value=True)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ class TestNotifyMemoryRecall:
             assert "Graph Discoveries" in msg
             assert "Direct Matches" not in msg
 
-    @patch("notify._notify_full_text", return_value=False)
+    @patch("core.runtime.notify._notify_full_text", return_value=False)
     def test_long_text_truncated(self, _mock_ft):
         """Memory text longer than 120 chars is truncated."""
         long_text = "A" * 200
@@ -262,7 +262,7 @@ class TestNotifyMemoryExtraction:
             msg = mock_send.call_args[0][0]
             assert "Lori parent_of Quaid" in msg
 
-    @patch("notify._notify_full_text", return_value=False)
+    @patch("core.runtime.notify._notify_full_text", return_value=False)
     def test_long_detail_text_truncated(self, _mock_ft):
         """Fact text in details is truncated at 80 chars."""
         details = [
@@ -399,7 +399,7 @@ class TestNotifyDocUpdate:
             msg = mock_send.call_args[0][0]
             assert "Added new section" in msg
 
-    @patch("notify._notify_full_text", return_value=False)
+    @patch("core.runtime.notify._notify_full_text", return_value=False)
     def test_summary_truncated(self, _mock_ft):
         """Long summary is truncated to 200 chars."""
         long_summary = "A" * 300
@@ -511,7 +511,7 @@ class TestGetLastChannel:
         sessions_file.write_text(json.dumps(sessions))
 
         from lib.adapter import set_adapter, reset_adapter
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         # Patch the internal method to point to our test file
         adapter._find_sessions_json = lambda: sessions_file
@@ -530,7 +530,7 @@ class TestGetLastChannel:
         sessions_file.write_text(json.dumps({"other_session": {}}))
 
         from lib.adapter import set_adapter, reset_adapter
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         adapter._find_sessions_json = lambda: sessions_file
         set_adapter(adapter)
@@ -548,7 +548,7 @@ class TestGetLastChannel:
         sessions_file.write_text(json.dumps(sessions))
 
         from lib.adapter import set_adapter, reset_adapter
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         adapter._find_sessions_json = lambda: sessions_file
         set_adapter(adapter)
@@ -568,7 +568,7 @@ class TestNotifyUser:
     def test_no_channel_returns_false(self):
         """OpenClaw adapter with no channel info returns False."""
         from lib.adapter import set_adapter, reset_adapter
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         adapter._find_sessions_json = lambda: None
         set_adapter(adapter)
@@ -580,14 +580,14 @@ class TestNotifyUser:
     def test_dry_run_does_not_call_subprocess(self):
         """dry_run prints command but doesn't execute."""
         from lib.adapter import set_adapter, reset_adapter, ChannelInfo
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         mock_info = ChannelInfo(channel="telegram", target="123",
                                 account_id="default", session_key="test")
         adapter.get_last_channel = lambda s="": mock_info
         set_adapter(adapter)
         try:
-            with patch("adapters.openclaw.adapter.subprocess.run") as mock_run:
+            with patch("adaptors.openclaw.adapter.subprocess.run") as mock_run:
                 result = notify_user("test message", dry_run=True)
                 assert result is True
                 mock_run.assert_not_called()
@@ -597,7 +597,7 @@ class TestNotifyUser:
     def test_successful_send(self):
         """Successful subprocess call returns True."""
         from lib.adapter import set_adapter, reset_adapter, ChannelInfo
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         mock_info = ChannelInfo(channel="telegram", target="123",
                                 account_id="default", session_key="test")
@@ -606,7 +606,7 @@ class TestNotifyUser:
         mock_result = MagicMock()
         mock_result.returncode = 0
         try:
-            with patch("adapters.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+            with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
                 result = notify_user("hello world")
                 assert result is True
                 call_args = mock_run.call_args[0][0]
@@ -618,7 +618,7 @@ class TestNotifyUser:
     def test_failed_send(self):
         """Failed subprocess call returns False."""
         from lib.adapter import set_adapter, reset_adapter, ChannelInfo
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         mock_info = ChannelInfo(channel="telegram", target="123",
                                 account_id="default", session_key="test")
@@ -628,7 +628,7 @@ class TestNotifyUser:
         mock_result.returncode = 1
         mock_result.stderr = "connection refused"
         try:
-            with patch("adapters.openclaw.adapter.subprocess.run", return_value=mock_result):
+            with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result):
                 result = notify_user("hello world")
                 assert result is False
         finally:
@@ -638,14 +638,14 @@ class TestNotifyUser:
         """Subprocess timeout returns False."""
         import subprocess as _subprocess
         from lib.adapter import set_adapter, reset_adapter, ChannelInfo as _CI
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         mock_info = _CI(channel="telegram", target="123",
                         account_id="default", session_key="test")
         adapter.get_last_channel = lambda s="": mock_info
         set_adapter(adapter)
         try:
-            with patch("adapters.openclaw.adapter.subprocess.run",
+            with patch("adaptors.openclaw.adapter.subprocess.run",
                        side_effect=_subprocess.TimeoutExpired("cmd", 30)):
                 result = notify_user("hello world")
                 assert result is False
@@ -655,7 +655,7 @@ class TestNotifyUser:
     def test_non_default_account(self):
         """Non-default account ID adds --account flag."""
         from lib.adapter import set_adapter, reset_adapter, ChannelInfo as _CI
-        from adapters.openclaw.adapter import OpenClawAdapter
+        from adaptors.openclaw.adapter import OpenClawAdapter
         adapter = OpenClawAdapter()
         info = _CI(channel="whatsapp", target="999",
                    account_id="work", session_key="test")
@@ -664,7 +664,7 @@ class TestNotifyUser:
         mock_result = MagicMock()
         mock_result.returncode = 0
         try:
-            with patch("adapters.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+            with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
                 notify_user("test")
                 call_args = mock_run.call_args[0][0]
                 assert "--account" in call_args

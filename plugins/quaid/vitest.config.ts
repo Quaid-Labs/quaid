@@ -9,7 +9,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html'],
       all: true,
-      include: ['adapters/openclaw/**/*.{ts,js}', 'core/**/*.{ts,js}'],
+      include: ['adaptors/openclaw/**/*.{ts,js}', 'core/**/*.{ts,js}'],
       exclude: ['tests/**/*', 'node_modules/**/*', '__pycache__/**/*', '**/*.d.ts', 'test-runner.js'],
       thresholds: {
         lines: 10,

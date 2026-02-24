@@ -85,11 +85,11 @@ Write request
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `adapters/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
-| `adapters/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
-| `adapters/openclaw/knowledge/orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
+| `adaptors/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
+| `adaptors/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
+| `adaptors/openclaw/knowledge/orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
 | `core/data-writers.ts` | Canonical write routing/dispatch | `createDataWriteEngine()`, `writeData()`, DataWriter registry/specs |
-| `adapters/openclaw/index.js` / `adapter.js` / `knowledge/orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
+| `adaptors/openclaw/index.js` / `adapter.js` / `knowledge/orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
 
 ### CI / Release Guard Scripts
 
@@ -400,7 +400,7 @@ The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The snake_c
 ### TypeScript / Gateway
 
 #### TS/JS Sync
-`adapters/openclaw/index.ts` is source of truth, `adapters/openclaw/index.js` must match manually. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
+`adaptors/openclaw/index.ts` is source of truth, `adaptors/openclaw/index.js` must match manually. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
 
 #### Gateway Stale Process
 `clawdbot gateway restart` does not reliably kill the old process. The reliable sequence is:

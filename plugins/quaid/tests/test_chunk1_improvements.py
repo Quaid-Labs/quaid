@@ -605,21 +605,21 @@ class TestPromptCaching:
     """Prompt caching via cache_control in system messages."""
 
     def test_get_token_usage_includes_cache_read_tokens(self):
-        from llm_clients import get_token_usage, reset_token_usage
+        from core.llm.clients import get_token_usage, reset_token_usage
         reset_token_usage()
         usage = get_token_usage()
         assert "cache_read_tokens" in usage
         assert isinstance(usage["cache_read_tokens"], int)
 
     def test_get_token_usage_includes_cache_creation_tokens(self):
-        from llm_clients import get_token_usage, reset_token_usage
+        from core.llm.clients import get_token_usage, reset_token_usage
         reset_token_usage()
         usage = get_token_usage()
         assert "cache_creation_tokens" in usage
         assert isinstance(usage["cache_creation_tokens"], int)
 
     def test_reset_token_usage_zeroes_cache_counters(self):
-        import llm_clients
+        import core.llm.clients as llm_clients
         llm_clients._usage_cache_read_tokens = 100
         llm_clients._usage_cache_creation_tokens = 200
         llm_clients.reset_token_usage()
@@ -628,7 +628,7 @@ class TestPromptCaching:
         assert usage["cache_creation_tokens"] == 0
 
     def test_reset_token_usage_zeroes_all_counters(self):
-        import llm_clients
+        import core.llm.clients as llm_clients
         llm_clients._usage_input_tokens = 500
         llm_clients._usage_output_tokens = 300
         llm_clients._usage_calls = 5
@@ -644,7 +644,7 @@ class TestPromptCaching:
 
     def test_call_llm_passes_system_and_user_to_provider(self):
         """call_llm should pass system+user messages to the provider."""
-        import llm_clients
+        import core.llm.clients as llm_clients
         from lib.adapter import TestAdapter, set_adapter
         adapter = TestAdapter(Path(os.environ.get("QUAID_HOME", "/tmp")))
         set_adapter(adapter)
@@ -661,7 +661,7 @@ class TestPromptCaching:
 
     def test_call_llm_accumulates_tokens(self):
         """Token counts from provider LLMResult should be accumulated."""
-        import llm_clients
+        import core.llm.clients as llm_clients
         from lib.adapter import TestAdapter, set_adapter
         adapter = TestAdapter(Path(os.environ.get("QUAID_HOME", "/tmp")))
         set_adapter(adapter)
@@ -684,52 +684,52 @@ class TestReviewDecision:
     """ReviewDecision validation and fuzzy matching."""
 
     def test_valid_action_keep(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         d = ReviewDecision(action="KEEP")
         assert d.action == "KEEP"
 
     def test_valid_action_reject(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         d = ReviewDecision(action="REJECT")
         assert d.action == "REJECT"
 
     def test_valid_action_fix(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         d = ReviewDecision(action="FIX")
         assert d.action == "FIX"
 
     def test_valid_action_merge(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         d = ReviewDecision(action="MERGE")
         assert d.action == "MERGE"
 
     def test_fuzzy_match_kee_to_keep(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         d = ReviewDecision(action="KEE")
         assert d.action == "KEEP"
 
     def test_fuzzy_match_rej_to_reject(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         d = ReviewDecision(action="REJ")
         assert d.action == "REJECT"
 
     def test_fuzzy_match_fix_lowercase(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         d = ReviewDecision(action="fix")
         assert d.action == "FIX"
 
     def test_fuzzy_match_mer_to_merge(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         d = ReviewDecision(action="MER")
         assert d.action == "MERGE"
 
     def test_invalid_action_raises(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         with pytest.raises(ValueError, match="Invalid review action"):
             ReviewDecision(action="UNKNOWN")
 
     def test_invalid_action_too_short_raises(self):
-        from llm_clients import ReviewDecision
+        from core.llm.clients import ReviewDecision
         with pytest.raises(ValueError, match="Invalid review action"):
             ReviewDecision(action="XY")
 
@@ -738,53 +738,53 @@ class TestDedupDecision:
     """DedupDecision validation and bool coercion."""
 
     def test_valid_pair(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         d = DedupDecision(pair=1, is_same=True)
         assert d.pair == 1
         assert d.is_same is True
 
     def test_pair_zero_raises(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         with pytest.raises(ValueError, match="Invalid pair index"):
             DedupDecision(pair=0, is_same=True)
 
     def test_pair_negative_raises(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         with pytest.raises(ValueError, match="Invalid pair index"):
             DedupDecision(pair=-1, is_same=True)
 
     def test_is_same_string_true(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         d = DedupDecision(pair=1, is_same="true")
         assert d.is_same is True
 
     def test_is_same_string_yes(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         d = DedupDecision(pair=1, is_same="yes")
         assert d.is_same is True
 
     def test_is_same_string_1(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         d = DedupDecision(pair=1, is_same="1")
         assert d.is_same is True
 
     def test_is_same_string_false(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         d = DedupDecision(pair=1, is_same="false")
         assert d.is_same is False
 
     def test_is_same_string_no(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         d = DedupDecision(pair=1, is_same="no")
         assert d.is_same is False
 
     def test_is_same_int_coercion(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         d = DedupDecision(pair=1, is_same=1)
         assert d.is_same is True
 
     def test_pair_large_valid(self):
-        from llm_clients import DedupDecision
+        from core.llm.clients import DedupDecision
         d = DedupDecision(pair=999, is_same=False)
         assert d.pair == 999
 
@@ -793,38 +793,38 @@ class TestContradictionResult:
     """ContradictionResult validation and bool coercion."""
 
     def test_valid_contradiction(self):
-        from llm_clients import ContradictionResult
+        from core.llm.clients import ContradictionResult
         c = ContradictionResult(pair=1, contradicts=True, explanation="direct conflict")
         assert c.pair == 1
         assert c.contradicts is True
 
     def test_pair_zero_raises(self):
-        from llm_clients import ContradictionResult
+        from core.llm.clients import ContradictionResult
         with pytest.raises(ValueError, match="Invalid pair index"):
             ContradictionResult(pair=0, contradicts=True)
 
     def test_pair_negative_raises(self):
-        from llm_clients import ContradictionResult
+        from core.llm.clients import ContradictionResult
         with pytest.raises(ValueError, match="Invalid pair index"):
             ContradictionResult(pair=-1, contradicts=False)
 
     def test_contradicts_string_true(self):
-        from llm_clients import ContradictionResult
+        from core.llm.clients import ContradictionResult
         c = ContradictionResult(pair=1, contradicts="true")
         assert c.contradicts is True
 
     def test_contradicts_string_yes(self):
-        from llm_clients import ContradictionResult
+        from core.llm.clients import ContradictionResult
         c = ContradictionResult(pair=1, contradicts="yes")
         assert c.contradicts is True
 
     def test_contradicts_string_false(self):
-        from llm_clients import ContradictionResult
+        from core.llm.clients import ContradictionResult
         c = ContradictionResult(pair=1, contradicts="false")
         assert c.contradicts is False
 
     def test_contradicts_int_coercion(self):
-        from llm_clients import ContradictionResult
+        from core.llm.clients import ContradictionResult
         c = ContradictionResult(pair=2, contradicts=0)
         assert c.contradicts is False
 
@@ -833,47 +833,47 @@ class TestDecayDecision:
     """DecayDecision validation and fuzzy matching."""
 
     def test_valid_delete(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         d = DecayDecision(id="abc", action="delete")
         assert d.action == "delete"
 
     def test_valid_extend(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         d = DecayDecision(id="abc", action="extend")
         assert d.action == "extend"
 
     def test_valid_pin(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         d = DecayDecision(id="abc", action="pin")
         assert d.action == "pin"
 
     def test_fuzzy_del_to_delete(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         d = DecayDecision(id="abc", action="del")
         assert d.action == "delete"
 
     def test_fuzzy_ext_to_extend(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         d = DecayDecision(id="abc", action="ext")
         assert d.action == "extend"
 
     def test_fuzzy_pin_prefix(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         d = DecayDecision(id="abc", action="pin_it")
         assert d.action == "pin"
 
     def test_invalid_action_raises(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         with pytest.raises(ValueError, match="Invalid decay action"):
             DecayDecision(id="abc", action="freeze")
 
     def test_case_insensitive(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         d = DecayDecision(id="abc", action="DELETE")
         assert d.action == "delete"
 
     def test_case_insensitive_extend(self):
-        from llm_clients import DecayDecision
+        from core.llm.clients import DecayDecision
         d = DecayDecision(id="abc", action="Extend")
         assert d.action == "extend"
 
@@ -882,7 +882,7 @@ class TestValidateLlmOutput:
     """validate_llm_output function tests."""
 
     def test_valid_list_returns_instances(self):
-        from llm_clients import validate_llm_output, ReviewDecision
+        from core.llm.clients import validate_llm_output, ReviewDecision
         parsed = [
             {"action": "KEEP", "reasoning": "looks good"},
             {"action": "REJECT", "reasoning": "not a fact"},
@@ -893,12 +893,12 @@ class TestValidateLlmOutput:
         assert results[1].action == "REJECT"
 
     def test_none_returns_empty_list(self):
-        from llm_clients import validate_llm_output, ReviewDecision
+        from core.llm.clients import validate_llm_output, ReviewDecision
         results = validate_llm_output(None, ReviewDecision)
         assert results == []
 
     def test_non_list_returns_single_item(self):
-        from llm_clients import validate_llm_output, ReviewDecision
+        from core.llm.clients import validate_llm_output, ReviewDecision
         parsed = {"action": "FIX", "reasoning": "typo", "fixed_text": "corrected"}
         results = validate_llm_output(parsed, ReviewDecision)
         assert len(results) == 1
@@ -906,7 +906,7 @@ class TestValidateLlmOutput:
         assert results[0].fixed_text == "corrected"
 
     def test_skips_invalid_items(self):
-        from llm_clients import validate_llm_output, ReviewDecision
+        from core.llm.clients import validate_llm_output, ReviewDecision
         parsed = [
             {"action": "KEEP"},
             {"action": "TOTALLY_INVALID_ACTION_XYZ"},  # Should be skipped
@@ -918,7 +918,7 @@ class TestValidateLlmOutput:
         assert results[1].action == "REJECT"
 
     def test_case_insensitive_key_mapping(self):
-        from llm_clients import validate_llm_output, ReviewDecision
+        from core.llm.clients import validate_llm_output, ReviewDecision
         parsed = [{"Action": "KEEP", "Reasoning": "fine"}]
         results = validate_llm_output(parsed, ReviewDecision)
         assert len(results) == 1
@@ -926,7 +926,7 @@ class TestValidateLlmOutput:
         assert results[0].reasoning == "fine"
 
     def test_skips_non_dict_items(self):
-        from llm_clients import validate_llm_output, DedupDecision
+        from core.llm.clients import validate_llm_output, DedupDecision
         parsed = [
             {"pair": 1, "is_same": True},
             "not a dict",
@@ -938,7 +938,7 @@ class TestValidateLlmOutput:
         assert len(results) == 2
 
     def test_dedup_decision_validation(self):
-        from llm_clients import validate_llm_output, DedupDecision
+        from core.llm.clients import validate_llm_output, DedupDecision
         parsed = [
             {"pair": 1, "is_same": "true", "reasoning": "same fact"},
             {"pair": 2, "is_same": "false"},
@@ -949,7 +949,7 @@ class TestValidateLlmOutput:
         assert results[1].is_same is False
 
     def test_contradiction_result_validation(self):
-        from llm_clients import validate_llm_output, ContradictionResult
+        from core.llm.clients import validate_llm_output, ContradictionResult
         parsed = [
             {"pair": 1, "contradicts": True, "explanation": "opposite facts"},
             {"pair": 2, "contradicts": False},
@@ -960,7 +960,7 @@ class TestValidateLlmOutput:
         assert results[1].contradicts is False
 
     def test_decay_decision_validation(self):
-        from llm_clients import validate_llm_output, DecayDecision
+        from core.llm.clients import validate_llm_output, DecayDecision
         parsed = [
             {"id": "node-1", "action": "delete", "reason": "stale"},
             {"id": "node-2", "action": "extend", "reason": "still relevant"},
@@ -970,7 +970,7 @@ class TestValidateLlmOutput:
         assert len(results) == 3
 
     def test_validate_with_invalid_pair_index_skips(self):
-        from llm_clients import validate_llm_output, DedupDecision
+        from core.llm.clients import validate_llm_output, DedupDecision
         parsed = [
             {"pair": 0, "is_same": True},  # Invalid: pair must be >= 1
             {"pair": 1, "is_same": True},
@@ -980,7 +980,7 @@ class TestValidateLlmOutput:
         assert results[0].pair == 1
 
     def test_validate_with_missing_required_fields_skips(self):
-        from llm_clients import validate_llm_output, ReviewDecision
+        from core.llm.clients import validate_llm_output, ReviewDecision
         parsed = [
             {"reasoning": "no action field"},  # Missing required 'action'
             {"action": "KEEP"},
@@ -990,20 +990,20 @@ class TestValidateLlmOutput:
         assert results[0].action == "KEEP"
 
     def test_validate_hyphenated_keys(self):
-        from llm_clients import validate_llm_output, DedupDecision
+        from core.llm.clients import validate_llm_output, DedupDecision
         parsed = [{"pair": 1, "is-same": True}]
         results = validate_llm_output(parsed, DedupDecision)
         assert len(results) == 1
         assert results[0].is_same is True
 
     def test_validate_empty_list_returns_empty(self):
-        from llm_clients import validate_llm_output, ReviewDecision
+        from core.llm.clients import validate_llm_output, ReviewDecision
         results = validate_llm_output([], ReviewDecision)
         assert results == []
 
     def test_validate_fuzzy_action_via_validate(self):
         """Fuzzy matching should work through validate_llm_output too."""
-        from llm_clients import validate_llm_output, ReviewDecision
+        from core.llm.clients import validate_llm_output, ReviewDecision
         parsed = [{"action": "KEE"}]
         results = validate_llm_output(parsed, ReviewDecision)
         assert len(results) == 1

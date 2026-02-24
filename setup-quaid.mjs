@@ -1266,7 +1266,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Initialize database
   s.start("Initializing database...");
   const dbPath = path.join(DATA_DIR, "memory.db");
-  const schemaPath = path.join(PLUGIN_DIR, "schema.sql");
+  const schemaPath = path.join(PLUGIN_DIR, "datastore/memorydb/schema.sql");
   if (fs.existsSync(schemaPath)) {
     const initScript = `
 import sqlite3
@@ -1405,8 +1405,8 @@ import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from memory_graph import store
-from llm_clients import call_deep_reasoning, parse_json_response
+from datastore.memorydb.memory_graph import store
+from core.llm.clients import call_deep_reasoning, parse_json_response
 files = ${JSON.stringify(mdFiles)}
 total = 0
 for fname in files:

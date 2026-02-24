@@ -6,7 +6,7 @@ import {
   queueDelayedRequest,
   resolveDelayedRequests,
   clearResolvedRequests,
-} from "../adapters/openclaw/delayed-requests.js";
+} from "../adaptors/openclaw/delayed-requests.js";
 
 function makeWorkspace(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

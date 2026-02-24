@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib.adapter import StandaloneAdapter, ChannelInfo
-from adapters.openclaw.adapter import OpenClawAdapter
+from adaptors.openclaw.adapter import OpenClawAdapter
 
 
 def _assert_common_contract(adapter):

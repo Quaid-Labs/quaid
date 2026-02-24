@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from llm_clients import call_deep_reasoning, parse_json_response
+from core.llm.clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from lib.markdown import strip_protected_regions as _strip_protected_regions
 from lib.runtime_context import get_workspace_dir

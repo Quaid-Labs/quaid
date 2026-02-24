@@ -53,7 +53,7 @@ has_vitest() {
 # 1) Build/syntax checks
 run_stage "Runtime TS/JS pair sync check (strict)" npm run check:runtime-pairs:strict
 run_stage "Python compile check" python3 -m compileall -q .
-run_stage "JavaScript syntax check" node --check adapters/openclaw/index.js
+run_stage "JavaScript syntax check" node --check adaptors/openclaw/index.js
 run_stage "JavaScript syntax check (timeout manager)" node --check core/session-timeout.js
 run_optional_repo_checks
 

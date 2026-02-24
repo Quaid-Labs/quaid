@@ -67,10 +67,10 @@ from datastore.memorydb.memory_graph import (
 from lib.config import get_db_path
 from lib.tokens import extract_key_tokens as _lib_extract_key_tokens, STOPWORDS as _LIB_STOPWORDS, estimate_tokens
 from lib.archive import archive_node as _archive_node
-from logger import janitor_logger, rotate_logs
+from core.runtime.logger import janitor_logger, rotate_logs
 from config import get_config
 from core.lifecycle.janitor_lifecycle import build_default_registry, RoutineContext
-from llm_clients import (call_fast_reasoning, call_deep_reasoning, call_llm,
+from core.llm.clients import (call_fast_reasoning, call_deep_reasoning, call_llm,
                          parse_json_response, reset_token_usage, get_token_usage,
                          estimate_cost, set_token_budget, reset_token_budget,
                          is_token_budget_exhausted,
@@ -2662,7 +2662,7 @@ def _queue_delayed_notification(
     if not message:
         return
     try:
-        from events import queue_delayed_notification as _queue_event_delayed_notification
+        from core.runtime.events import queue_delayed_notification as _queue_event_delayed_notification
         result = _queue_event_delayed_notification(
             message,
             kind=kind,
@@ -3652,7 +3652,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # Queue user notifications through lifecycle event bus (only for full runs, not dry-run)
     if task == "all" and not dry_run:
         try:
-            from events import emit_event, process_events
+            from core.runtime.events import emit_event, process_events
 
             today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
             with graph._get_conn() as conn:

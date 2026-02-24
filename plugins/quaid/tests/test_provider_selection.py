@@ -28,8 +28,8 @@ from lib.providers import (
     OllamaEmbeddingsProvider,
     MockEmbeddingsProvider,
 )
-from adapters.openclaw.adapter import OpenClawAdapter
-from adapters.openclaw.providers import GatewayLLMProvider
+from adaptors.openclaw.adapter import OpenClawAdapter
+from adaptors.openclaw.providers import GatewayLLMProvider
 
 
 # ---------------------------------------------------------------------------

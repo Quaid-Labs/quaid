@@ -1120,7 +1120,7 @@ step6_install() {
             python3 -c "
 import sqlite3
 conn = sqlite3.connect('${DATA_DIR}/memory.db')
-with open('${PLUGIN_DIR}/schema.sql') as f:
+with open('${PLUGIN_DIR}/datastore/memorydb/schema.sql') as f:
     conn.executescript(f.read())
 conn.close()
 print('[+] Database updated')
@@ -1130,7 +1130,7 @@ print('[+] Database updated')
         python3 -c "
 import sqlite3
 conn = sqlite3.connect('${DATA_DIR}/memory.db')
-with open('${PLUGIN_DIR}/schema.sql') as f:
+with open('${PLUGIN_DIR}/datastore/memorydb/schema.sql') as f:
     conn.executescript(f.read())
 conn.close()
 print('[+] Database initialized')
@@ -1510,8 +1510,8 @@ import os, sys
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 
-from memory_graph import store
-from llm_clients import call_deep_reasoning, parse_json_response
+from datastore.memorydb.memory_graph import store
+from core.llm.clients import call_deep_reasoning, parse_json_response
 
 files = [f for f in ['SOUL.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'AGENTS.md']
          if os.path.exists(os.path.join('${WORKSPACE_ROOT}', f))]

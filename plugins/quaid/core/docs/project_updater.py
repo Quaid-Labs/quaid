@@ -449,7 +449,7 @@ def _notify_user(project_name: str, updates_applied: List[str], trigger: str) ->
         return
 
     try:
-        from events import queue_delayed_notification
+        from core.runtime.events import queue_delayed_notification
         for doc_path in updates_applied:
             message = (
                 "[Quaid] 📋 Project Documentation Update\n"

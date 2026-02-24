@@ -14,7 +14,7 @@ os.environ.setdefault("MEMORY_DB_PATH", ":memory:")
 
 import pytest
 
-from llm_clients import (
+from core.llm.clients import (
     parse_json_response,
     reset_token_usage,
     get_token_usage,
@@ -90,7 +90,7 @@ class TestTokenUsage:
     """Tests for token usage and cost estimation."""
 
     def test_reset_token_usage_zeroes_counters(self):
-        import llm_clients
+        import core.llm.clients as llm_clients
         # Set some usage
         llm_clients._usage_input_tokens = 1000
         llm_clients._usage_output_tokens = 500
@@ -110,7 +110,7 @@ class TestTokenUsage:
         assert "api_calls" in usage
 
     def test_get_token_usage_accumulation(self):
-        import llm_clients
+        import core.llm.clients as llm_clients
         reset_token_usage()
         llm_clients._usage_input_tokens = 100
         llm_clients._usage_output_tokens = 50
@@ -126,7 +126,7 @@ class TestTokenUsage:
         assert cost == 0.0
 
     def test_estimate_cost_with_usage(self):
-        import llm_clients
+        import core.llm.clients as llm_clients
         reset_token_usage()
         llm_clients._usage_input_tokens = 1_000_000
         llm_clients._usage_output_tokens = 1_000_000
@@ -152,7 +152,7 @@ class TestCallLowReasoning:
 
     def test_raises_on_provider_error(self, test_adapter):
         """call_fast_reasoning raises RuntimeError on provider/config failure."""
-        with patch("llm_clients.call_llm", side_effect=RuntimeError("no provider")):
+        with patch("core.llm.clients.call_llm", side_effect=RuntimeError("no provider")):
             with pytest.raises(RuntimeError, match="no provider"):
                 call_fast_reasoning("test prompt")
 
@@ -169,7 +169,7 @@ class TestCallHighReasoning:
 
     def test_raises_on_provider_error(self, test_adapter):
         """call_deep_reasoning raises RuntimeError on provider/config failure."""
-        with patch("llm_clients.call_llm", side_effect=RuntimeError("no provider")):
+        with patch("core.llm.clients.call_llm", side_effect=RuntimeError("no provider")):
             with pytest.raises(RuntimeError, match="no provider"):
                 call_deep_reasoning("test prompt")
 
@@ -183,7 +183,7 @@ class TestCallLlmProvider:
 
     def test_delegates_to_provider(self, test_adapter):
         """call_llm should route through the adapter's LLM provider."""
-        import llm_clients
+        import core.llm.clients as llm_clients
         reset_token_usage()
         result, duration = llm_clients.call_llm("system", "user", max_tokens=100)
         assert result is not None
@@ -191,7 +191,7 @@ class TestCallLlmProvider:
 
     def test_tracks_token_usage(self, test_adapter):
         """call_llm should accumulate token usage from LLMResult."""
-        import llm_clients
+        import core.llm.clients as llm_clients
         reset_token_usage()
         llm_clients.call_llm("system", "user", max_tokens=100)
         usage = get_token_usage()
@@ -202,7 +202,7 @@ class TestCallLlmProvider:
 
     def test_cost_cap_abort(self, test_adapter, monkeypatch):
         """call_llm should abort when cost cap is exceeded."""
-        import llm_clients
+        import core.llm.clients as llm_clients
         monkeypatch.setenv("JANITOR_COST_CAP", "0.001")
         # Simulate high usage
         llm_clients._usage_by_model = {"claude-opus-4-6": {"input": 1_000_000, "output": 1_000_000}}
@@ -216,7 +216,7 @@ class TestCallLlmProvider:
 
     def test_model_tier_routing(self, test_adapter):
         """Haiku model should route as 'low' tier, others as 'high'."""
-        import llm_clients
+        import core.llm.clients as llm_clients
         # Explicitly set the low model name so test doesn't depend on config file
         llm_clients._models_loaded = True
         llm_clients._fast_reasoning_model = "claude-haiku-4-5"
@@ -231,7 +231,7 @@ class TestCallLlmProvider:
 
     def test_retries_on_provider_error(self, test_adapter):
         """call_llm should retry on transient provider errors."""
-        import llm_clients
+        import core.llm.clients as llm_clients
         from lib.providers import TestLLMProvider
 
         call_count = [0]

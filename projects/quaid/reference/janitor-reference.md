@@ -1,6 +1,6 @@
 # Janitor (Sandman) Reference
 <!-- PURPOSE: Complete reference for nightly janitor pipeline: task list, schedule, thresholds, fail-fast, edge normalization, cost tracking -->
-<!-- SOURCES: janitor.py, workspace_audit.py, adapters/openclaw/index.ts, lib/adapter.py, lib/providers.py -->
+<!-- SOURCES: janitor.py, workspace_audit.py, adaptors/openclaw/index.ts, lib/adapter.py, lib/providers.py -->
 
 Nightly memory maintenance pipeline. Cleans, decays, deduplicates, detects contradictions, and maintains memory quality.
 

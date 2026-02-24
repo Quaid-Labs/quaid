@@ -54,7 +54,7 @@ case "$CMD" in
 
   # MCP server
   mcp-server|mcp)
-    exec python3 "$SCRIPT_DIR/mcp_server.py" "$@"
+    exec python3 "$SCRIPT_DIR/core/interface/mcp_server.py" "$@"
     ;;
 
   # Docs subsystem

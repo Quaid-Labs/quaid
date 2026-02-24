@@ -57,21 +57,21 @@ def _import_mcp_server():
     mock_rag.return_value = mock_rag_instance
 
     # Patch at the api/docs_rag module level, then force reimport of mcp_server
-    # so its `from api import store, ...` binds to the mocked functions.
-    with patch("api.store", mock_api.store), \
-         patch("api.extract_transcript", mock_api.extract_transcript), \
-         patch("api.recall", mock_api.recall), \
-         patch("api.search", mock_api.search), \
-         patch("api.get_memory", mock_api.get_memory), \
-         patch("api.forget", mock_api.forget), \
-         patch("api.create_edge", mock_api.create_edge), \
-         patch("api.stats", mock_api.stats), \
-         patch("api.projects_search_docs", mock_api.projects_search_docs), \
+    # so its `from core.interface.api import store, ...` binds to the mocked functions.
+    with patch("core.interface.api.store", mock_api.store), \
+         patch("core.interface.api.extract_transcript", mock_api.extract_transcript), \
+         patch("core.interface.api.recall", mock_api.recall), \
+         patch("core.interface.api.search", mock_api.search), \
+         patch("core.interface.api.get_memory", mock_api.get_memory), \
+         patch("core.interface.api.forget", mock_api.forget), \
+         patch("core.interface.api.create_edge", mock_api.create_edge), \
+         patch("core.interface.api.stats", mock_api.stats), \
+         patch("core.interface.api.projects_search_docs", mock_api.projects_search_docs), \
          patch("core.docs.rag.DocsRAG", mock_rag):
         # Force reimport so mcp_server binds to mocked names
-        if "mcp_server" in sys.modules:
-            del sys.modules["mcp_server"]
-        import mcp_server
+        if "core.interface.mcp_server" in sys.modules:
+            del sys.modules["core.interface.mcp_server"]
+        import core.interface.mcp_server as mcp_server
         return mcp_server, mock_api, mock_graph, mock_rag_instance
 
 

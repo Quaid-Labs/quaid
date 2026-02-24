@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from adapters.openclaw.providers import GatewayLLMProvider
+from adaptors.openclaw.providers import GatewayLLMProvider
 from lib.adapter import ChannelInfo, QuaidAdapter, _read_env_file
 
 

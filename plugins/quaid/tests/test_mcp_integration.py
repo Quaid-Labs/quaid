@@ -51,9 +51,9 @@ def _make_graph(tmp_path):
 
 def _get_mcp_module():
     """Import (or re-import) mcp_server module."""
-    if "mcp_server" in sys.modules:
-        del sys.modules["mcp_server"]
-    import mcp_server
+    if "core.interface.mcp_server" in sys.modules:
+        del sys.modules["core.interface.mcp_server"]
+    import core.interface.mcp_server as mcp_server
     return mcp_server
 
 
@@ -329,7 +329,7 @@ class TestMcpOwnerIsolation:
 # Protocol Tests — MCP JSON-RPC over stdio subprocess
 # ---------------------------------------------------------------------------
 
-MCP_SERVER_PATH = os.path.join(os.path.dirname(__file__), "..", "mcp_server.py")
+MCP_SERVER_PATH = os.path.join(os.path.dirname(__file__), "..", "core", "interface", "mcp_server.py")
 
 
 def _make_server_env(db_path):
