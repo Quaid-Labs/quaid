@@ -1,6 +1,7 @@
 # Quaid E2E Feature Matrix
 
 This matrix tracks what `modules/quaid/scripts/run-quaid-e2e.sh` validates today and what should be expanded next.
+For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 
 ## Automated Now
 
@@ -47,9 +48,13 @@ This matrix tracks what `modules/quaid/scripts/run-quaid-e2e.sh` validates today
 
 1. `--suite core`
    - Benchmark-ready correctness path: smoke + integration + live + memory + ingest + janitor (+ seed), skips notify matrix.
-2. `--suite nightly`
+2. `--suite blocker`
+   - High-signal lifecycle path: integration + live + memory + notify.
+3. `--suite pre-benchmark`
+   - Blocker coverage plus ingest + janitor (+ seed) for benchmark checkpoint readiness.
+4. `--suite nightly`
    - Alias of `full`.
-3. `--quick-bootstrap`
+5. `--quick-bootstrap`
    - Skip OpenClaw source refresh/install for faster local loops.
-4. `--reuse-workspace`
+6. `--reuse-workspace`
    - Reuse existing `~/quaid/e2e-test` when possible; fallback to clean bootstrap on mismatch.

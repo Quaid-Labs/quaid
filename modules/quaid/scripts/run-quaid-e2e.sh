@@ -51,7 +51,7 @@ Options:
   --skip-llm-smoke       Skip gateway LLM smoke call
   --skip-live-events     Skip live command/timeout hook validation
   --skip-notify-matrix   Skip notification-level matrix validation (quiet/normal/debug)
-  --suite <csv>          Test suites to run. Values: full,core,nightly,smoke,integration,live,memory,notify,ingest,janitor,seed (default: full)
+  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,smoke,integration,live,memory,notify,ingest,janitor,seed (default: full)
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
@@ -130,7 +130,25 @@ if suite_has "nightly"; then
   E2E_SUITES="full"
 fi
 
-if suite_has "core"; then
+if suite_has "blocker"; then
+  RUN_LLM_SMOKE=false
+  RUN_INTEGRATION_TESTS=true
+  RUN_LIVE_EVENTS=true
+  RUN_NOTIFY_MATRIX=true
+  RUN_INGEST_STRESS=false
+  RUN_JANITOR=false
+  RUN_JANITOR_SEED=false
+  RUN_MEMORY_FLOW=true
+elif suite_has "pre-benchmark"; then
+  RUN_LLM_SMOKE=true
+  RUN_INTEGRATION_TESTS=true
+  RUN_LIVE_EVENTS=true
+  RUN_NOTIFY_MATRIX=true
+  RUN_INGEST_STRESS=true
+  RUN_JANITOR=true
+  RUN_JANITOR_SEED=true
+  RUN_MEMORY_FLOW=true
+elif suite_has "core"; then
   RUN_LLM_SMOKE=true
   RUN_INTEGRATION_TESTS=true
   RUN_LIVE_EVENTS=true
@@ -596,7 +614,10 @@ session_id = f"quaid-e2e-live-{uuid.uuid4().hex[:12]}"
 
 def run_agent(message: str) -> None:
     cmd = ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "180", "--json"]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"[e2e] ERROR: openclaw agent timed out for message={message!r}")
     if proc.returncode != 0:
         raise SystemExit(f"[e2e] ERROR: openclaw agent failed for message={message!r}: {proc.stderr.strip()[:400]}")
 
@@ -722,6 +743,33 @@ wait_for(
 print("[e2e] Live new hook path OK.")
 assert_notify_worker_healthy(notify_start)
 
+# Ensure session cursor bookkeeping is active for replay safety.
+cursor_dir = os.path.join(ws, "data", "session-cursors")
+cursor_path = os.path.join(cursor_dir, f"{session_id}.json")
+deadline = time.time() + 20
+cursor_payload = None
+while time.time() < deadline:
+    if os.path.exists(cursor_path):
+        try:
+            with open(cursor_path, "r", encoding="utf-8", errors="replace") as f:
+                cursor_payload = json.load(f)
+        except Exception:
+            cursor_payload = None
+        if isinstance(cursor_payload, dict):
+            break
+    time.sleep(1)
+if not isinstance(cursor_payload, dict):
+    raise SystemExit(
+        f"[e2e] ERROR: session cursor was not written for live events session ({session_id})"
+    )
+if str(cursor_payload.get("sessionId") or "") != session_id:
+    raise SystemExit(
+        f"[e2e] ERROR: session cursor sessionId mismatch: {cursor_payload.get('sessionId')!r} != {session_id!r}"
+    )
+if not cursor_payload.get("lastMessageKey"):
+    raise SystemExit("[e2e] ERROR: session cursor missing lastMessageKey")
+print("[e2e] Live session cursor progression OK.")
+
 # Postconditions: no stale lock claims and no internal extraction prompts
 # persisted as session messages in a clean e2e workspace.
 pending_dir = os.path.join(ws, "data", "pending-extraction-signals")
@@ -810,11 +858,17 @@ def read_tail_since(path: str, start: int):
     return out
 
 def run_agent(message: str, timeout_sec: int = 220) -> str:
-    proc = subprocess.run(
-        ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", str(timeout_sec), "--json"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", str(timeout_sec), "--json"],
+            capture_output=True,
+            text=True,
+            timeout=max(timeout_sec + 60, 180),
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(
+            f"[e2e] ERROR: openclaw agent timed out message={message!r}"
+        )
     if proc.returncode != 0:
         raise SystemExit(
             f"[e2e] ERROR: openclaw agent failed message={message!r}: {proc.stderr.strip()[:500]}"
@@ -939,10 +993,10 @@ def set_level(level: str) -> None:
         f.write("\n")
 
 def restart_gateway() -> None:
-    subprocess.run(["openclaw", "gateway", "stop"], capture_output=True, text=True)
-    subprocess.run(["openclaw", "gateway", "install"], capture_output=True, text=True)
-    subprocess.run(["openclaw", "gateway", "restart"], capture_output=True, text=True)
-    subprocess.run(["openclaw", "gateway", "start"], capture_output=True, text=True)
+    subprocess.run(["openclaw", "gateway", "stop"], capture_output=True, text=True, timeout=60)
+    subprocess.run(["openclaw", "gateway", "install"], capture_output=True, text=True, timeout=60)
+    subprocess.run(["openclaw", "gateway", "restart"], capture_output=True, text=True, timeout=60)
+    subprocess.run(["openclaw", "gateway", "start"], capture_output=True, text=True, timeout=60)
     deadline = time.time() + 30
     while time.time() < deadline:
         chk = subprocess.run(
@@ -955,17 +1009,43 @@ def restart_gateway() -> None:
         time.sleep(1)
     raise SystemExit("[e2e] ERROR: gateway did not resume listen on 127.0.0.1:18789 for notify matrix")
 
-def run_agent(session_id: str, message: str) -> None:
-    proc = subprocess.run(
-        ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "90", "--json"],
+def ensure_gateway_ready() -> None:
+    chk = subprocess.run(
+        ["bash", "-lc", "lsof -nP -iTCP:18789 -sTCP:LISTEN"],
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0:
-        raise SystemExit(
-            f"[e2e] ERROR: openclaw agent failed in notify matrix level session={session_id} "
-            f"msg={message!r}: {proc.stderr.strip()[:400]}"
+    if chk.returncode == 0:
+        return
+    restart_gateway()
+
+def run_agent(session_id: str, message: str) -> None:
+    attempts = 2
+    last_err = ""
+    for attempt in range(1, attempts + 1):
+        ensure_gateway_ready()
+        try:
+            proc = subprocess.run(
+                ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "90", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            last_err = (
+                f"[e2e] openclaw agent timed out in notify matrix level session={session_id} "
+                f"msg={message!r} attempt={attempt}/{attempts}"
+            )
+            restart_gateway()
+            continue
+        if proc.returncode == 0:
+            return
+        last_err = (
+            f"[e2e] openclaw agent failed in notify matrix level session={session_id} "
+            f"msg={message!r} attempt={attempt}/{attempts}: {proc.stderr.strip()[:400]}"
         )
+        restart_gateway()
+    raise SystemExit(last_err or "[e2e] ERROR: notify matrix agent call failed")
 
 def wait_for_reset_start(start_line: int, seconds: int = 45) -> None:
     deadline = time.time() + seconds
@@ -1044,7 +1124,10 @@ marker = f"E2E_INGEST_{uuid.uuid4().hex[:10]}"
 
 def run_agent(message: str, timeout_sec: int = 220) -> None:
     cmd = ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", str(timeout_sec), "--json"]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=max(timeout_sec + 60, 180))
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"[e2e] ERROR: openclaw agent timed out for message={message[:80]!r}")
     if proc.returncode != 0:
         raise SystemExit(f"[e2e] ERROR: openclaw agent failed for message={message[:80]!r}: {proc.stderr.strip()[:500]}")
 
