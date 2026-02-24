@@ -41,6 +41,25 @@ JANITOR_STRESS_PASSES=2
 E2E_SKIP_EXIT_CODE=20
 QUICK_BOOTSTRAP=false
 REUSE_WORKSPACE=false
+SUMMARY_OUTPUT_PATH="${QUAID_E2E_SUMMARY_PATH:-/tmp/quaid-e2e-last-summary.json}"
+RUNTIME_BUDGET_PROFILE="${QUAID_E2E_RUNTIME_BUDGET_PROFILE:-auto}"
+RUNTIME_BUDGET_SECONDS="${QUAID_E2E_RUNTIME_BUDGET_SECONDS:-0}"
+RUNTIME_BUDGET_EXCEEDED="false"
+RUN_START_EPOCH="$(date +%s)"
+CURRENT_STAGE="init"
+E2E_STATUS="running"
+E2E_FAIL_LINE=""
+E2E_FAIL_REASON=""
+
+STAGE_bootstrap="pending"
+STAGE_gateway_smoke="pending"
+STAGE_integration="pending"
+STAGE_live_events="pending"
+STAGE_resilience="pending"
+STAGE_memory_flow="pending"
+STAGE_notify_matrix="pending"
+STAGE_ingest_stress="pending"
+STAGE_janitor="pending"
 
 SKIP_JANITOR_FLAG=false
 SKIP_LLM_SMOKE_FLAG=false
@@ -65,6 +84,8 @@ Options:
   --nightly-profile <p>  Nightly profile: quick|deep (default: quick)
   --resilience-loops <n> Number of resilience-suite iterations (default: 1; nightly defaults to 2)
   --notify-level <lvl>   Quaid notify level for e2e (quiet|normal|verbose|debug, default: debug)
+  --runtime-budget-profile <p> Runtime budget profile: auto|off|quick|deep (default: auto)
+  --runtime-budget-seconds <n>  Explicit runtime budget override in seconds (0 disables override)
   --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
   --openclaw-source <p>  OpenClaw source repo path (default: ~/openclaw-source)
   --quick-bootstrap      Skip OpenClaw source refresh/install during bootstrap (faster local loops)
@@ -114,6 +135,8 @@ while [[ $# -gt 0 ]]; do
     --nightly-profile) NIGHTLY_PROFILE="$2"; shift 2 ;;
     --resilience-loops) RESILIENCE_LOOPS="$2"; shift 2 ;;
     --notify-level) NOTIFY_LEVEL="$2"; shift 2 ;;
+    --runtime-budget-profile) RUNTIME_BUDGET_PROFILE="$2"; shift 2 ;;
+    --runtime-budget-seconds) RUNTIME_BUDGET_SECONDS="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
     --openclaw-source) OPENCLAW_SOURCE="$2"; shift 2 ;;
     --quick-bootstrap) QUICK_BOOTSTRAP=true; shift ;;
@@ -224,6 +247,14 @@ if [[ "$NIGHTLY_PROFILE" != "quick" && "$NIGHTLY_PROFILE" != "deep" ]]; then
   echo "Invalid --nightly-profile: $NIGHTLY_PROFILE (expected quick|deep)" >&2
   exit 1
 fi
+if [[ "$RUNTIME_BUDGET_PROFILE" != "auto" && "$RUNTIME_BUDGET_PROFILE" != "off" && "$RUNTIME_BUDGET_PROFILE" != "quick" && "$RUNTIME_BUDGET_PROFILE" != "deep" ]]; then
+  echo "Invalid --runtime-budget-profile: $RUNTIME_BUDGET_PROFILE (expected auto|off|quick|deep)" >&2
+  exit 1
+fi
+if ! [[ "$RUNTIME_BUDGET_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --runtime-budget-seconds: $RUNTIME_BUDGET_SECONDS (expected non-negative integer)" >&2
+  exit 1
+fi
 if [[ "$NIGHTLY_MODE" == true ]]; then
   if [[ "$NIGHTLY_PROFILE" == "deep" ]]; then
     if [[ "$RESILIENCE_LOOPS" -lt 4 ]]; then RESILIENCE_LOOPS=4; fi
@@ -233,9 +264,25 @@ if [[ "$NIGHTLY_MODE" == true ]]; then
     if [[ "$JANITOR_STRESS_PASSES" -lt 2 ]]; then JANITOR_STRESS_PASSES=2; fi
   fi
 fi
+if [[ "$RUNTIME_BUDGET_PROFILE" == "auto" ]]; then
+  if [[ "$NIGHTLY_MODE" == true ]]; then
+    RUNTIME_BUDGET_PROFILE="$NIGHTLY_PROFILE"
+  else
+    RUNTIME_BUDGET_PROFILE="off"
+  fi
+fi
+if [[ "$RUNTIME_BUDGET_SECONDS" -eq 0 ]]; then
+  case "$RUNTIME_BUDGET_PROFILE" in
+    quick) RUNTIME_BUDGET_SECONDS=1500 ;; # 25m
+    deep) RUNTIME_BUDGET_SECONDS=3600 ;;  # 60m
+    off) RUNTIME_BUDGET_SECONDS=0 ;;
+  esac
+fi
 
 skip_e2e() {
   local reason="$1"
+  E2E_STATUS="skipped"
+  E2E_FAIL_REASON="$reason"
   echo "[e2e] SKIP_REASON:${reason}" >&2
   echo "[e2e] SKIP: bootstrap e2e prerequisites are not available in this environment." >&2
   echo "[e2e] To enable e2e auth-path tests:" >&2
@@ -245,7 +292,123 @@ skip_e2e() {
   echo "[e2e]      - openai-api: OPENAI_API_KEY" >&2
   echo "[e2e]      - anthropic-api: ANTHROPIC_API_KEY" >&2
   echo "[e2e]      - openai-oauth / anthropic-oauth: valid bootstrap auth profiles/tokens" >&2
+  write_e2e_summary "$E2E_SKIP_EXIT_CODE" || true
   exit "$E2E_SKIP_EXIT_CODE"
+}
+
+set_stage_status() {
+  local stage="$1"
+  local status="$2"
+  eval "STAGE_${stage}='${status}'"
+}
+
+begin_stage() {
+  local stage="$1"
+  CURRENT_STAGE="$stage"
+  set_stage_status "$stage" "running"
+}
+
+pass_stage() {
+  local stage="$1"
+  set_stage_status "$stage" "passed"
+}
+
+skip_stage() {
+  local stage="$1"
+  set_stage_status "$stage" "skipped"
+}
+
+write_e2e_summary() {
+  local exit_code="${1:-0}"
+  local end_epoch
+  end_epoch="$(date +%s)"
+  SUMMARY_EXIT_CODE="$exit_code" \
+  SUMMARY_END_EPOCH="$end_epoch" \
+  SUMMARY_OUTPUT_PATH="$SUMMARY_OUTPUT_PATH" \
+  SUMMARY_CURRENT_STAGE="$CURRENT_STAGE" \
+  SUMMARY_E2E_STATUS="$E2E_STATUS" \
+  SUMMARY_E2E_FAIL_LINE="$E2E_FAIL_LINE" \
+  SUMMARY_E2E_FAIL_REASON="$E2E_FAIL_REASON" \
+  SUMMARY_AUTH_PATH="$AUTH_PATH" \
+  SUMMARY_SUITES="$E2E_SUITES" \
+  SUMMARY_NIGHTLY_MODE="$NIGHTLY_MODE" \
+  SUMMARY_NIGHTLY_PROFILE="$NIGHTLY_PROFILE" \
+  SUMMARY_RESILIENCE_LOOPS="$RESILIENCE_LOOPS" \
+  SUMMARY_JANITOR_MODE="$JANITOR_MODE" \
+  SUMMARY_JANITOR_TIMEOUT="$JANITOR_TIMEOUT_SECONDS" \
+  SUMMARY_NOTIFY_LEVEL="$NOTIFY_LEVEL" \
+  SUMMARY_BUDGET_PROFILE="$RUNTIME_BUDGET_PROFILE" \
+  SUMMARY_BUDGET_SECONDS="$RUNTIME_BUDGET_SECONDS" \
+  SUMMARY_BUDGET_EXCEEDED="$RUNTIME_BUDGET_EXCEEDED" \
+  SUMMARY_RUN_START="$RUN_START_EPOCH" \
+  SUMMARY_STAGE_bootstrap="$STAGE_bootstrap" \
+  SUMMARY_STAGE_gateway_smoke="$STAGE_gateway_smoke" \
+  SUMMARY_STAGE_integration="$STAGE_integration" \
+  SUMMARY_STAGE_live_events="$STAGE_live_events" \
+  SUMMARY_STAGE_resilience="$STAGE_resilience" \
+  SUMMARY_STAGE_memory_flow="$STAGE_memory_flow" \
+  SUMMARY_STAGE_notify_matrix="$STAGE_notify_matrix" \
+  SUMMARY_STAGE_ingest_stress="$STAGE_ingest_stress" \
+  SUMMARY_STAGE_janitor="$STAGE_janitor" \
+  python3 - <<'PY'
+import json
+import os
+from datetime import datetime, timezone
+
+start = int(os.environ["SUMMARY_RUN_START"])
+end = int(os.environ["SUMMARY_END_EPOCH"])
+status = os.environ["SUMMARY_E2E_STATUS"]
+if status == "running":
+    status = "success" if int(os.environ["SUMMARY_EXIT_CODE"]) == 0 else "failed"
+failure_stage = os.environ["SUMMARY_CURRENT_STAGE"] if status == "failed" else ""
+failure_line = os.environ["SUMMARY_E2E_FAIL_LINE"] if status == "failed" else ""
+failure_reason = os.environ["SUMMARY_E2E_FAIL_REASON"] if status == "failed" else ""
+out = {
+    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    "status": status,
+    "exit_code": int(os.environ["SUMMARY_EXIT_CODE"]),
+    "duration_seconds": max(0, end - start),
+    "auth_path": os.environ["SUMMARY_AUTH_PATH"],
+    "suite": os.environ["SUMMARY_SUITES"],
+    "nightly": {
+        "enabled": os.environ["SUMMARY_NIGHTLY_MODE"].lower() == "true",
+        "profile": os.environ["SUMMARY_NIGHTLY_PROFILE"],
+        "resilience_loops": int(os.environ["SUMMARY_RESILIENCE_LOOPS"]),
+    },
+    "janitor": {
+        "mode": os.environ["SUMMARY_JANITOR_MODE"],
+        "timeout_seconds": int(os.environ["SUMMARY_JANITOR_TIMEOUT"]),
+    },
+    "notify_level": os.environ["SUMMARY_NOTIFY_LEVEL"],
+    "runtime_budget": {
+        "profile": os.environ["SUMMARY_BUDGET_PROFILE"],
+        "seconds": int(os.environ["SUMMARY_BUDGET_SECONDS"]),
+        "exceeded": os.environ["SUMMARY_BUDGET_EXCEEDED"].lower() == "true",
+    },
+    "failure": {
+        "stage": failure_stage,
+        "line": failure_line,
+        "reason": failure_reason,
+    },
+    "stages": {
+        "bootstrap": os.environ["SUMMARY_STAGE_bootstrap"],
+        "gateway_smoke": os.environ["SUMMARY_STAGE_gateway_smoke"],
+        "integration": os.environ["SUMMARY_STAGE_integration"],
+        "live_events": os.environ["SUMMARY_STAGE_live_events"],
+        "resilience": os.environ["SUMMARY_STAGE_resilience"],
+        "memory_flow": os.environ["SUMMARY_STAGE_memory_flow"],
+        "notify_matrix": os.environ["SUMMARY_STAGE_notify_matrix"],
+        "ingest_stress": os.environ["SUMMARY_STAGE_ingest_stress"],
+        "janitor": os.environ["SUMMARY_STAGE_janitor"],
+    },
+}
+out_path = os.environ["SUMMARY_OUTPUT_PATH"]
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(out, f, indent=2)
+    f.write("\n")
+print(f"[e2e] Wrote summary: {out_path}")
+PY
 }
 
 if [[ -f "$ENV_FILE" ]]; then
@@ -333,6 +496,14 @@ restore_test_gateway() {
 
 cleanup() {
   local exit_code="$1"
+  if [[ "$E2E_STATUS" == "running" ]]; then
+    if [[ "$exit_code" -eq 0 ]]; then
+      E2E_STATUS="success"
+    elif [[ "$E2E_STATUS" != "failed" ]]; then
+      E2E_STATUS="failed"
+    fi
+  fi
+  write_e2e_summary "$exit_code" || true
   rm -f "$TMP_PROFILE"
   if [[ "$exit_code" -eq 0 && "$KEEP_ON_SUCCESS" != true ]]; then
     echo "[e2e] Success, removing ${E2E_WS}"
@@ -345,6 +516,9 @@ cleanup() {
 on_err() {
   local code="$1"
   local line="$2"
+  E2E_STATUS="failed"
+  E2E_FAIL_LINE="$line"
+  E2E_FAIL_REASON="err_trap"
   emit_failure_diagnostics "$code" "$line"
   exit "$code"
 }
@@ -354,6 +528,7 @@ trap 'cleanup $?' EXIT
 
 echo "[e2e] Stopping any running gateway..."
 openclaw gateway stop || true
+begin_stage "bootstrap"
 
 echo "[e2e] Building temp e2e profile at: $TMP_PROFILE"
 python3 - "$PROFILE_SRC" "$TMP_PROFILE" "$E2E_WS" <<'PY'
@@ -473,8 +648,10 @@ if ! wait_for_gateway_listen 40; then
   openclaw gateway status || true
   exit 1
 fi
+pass_stage "bootstrap"
 
 if [[ "$RUN_LLM_SMOKE" == true ]]; then
+begin_stage "gateway_smoke"
 echo "[e2e] Running gateway LLM smoke call..."
 if ! python3 - <<'PY'
 import json
@@ -534,7 +711,9 @@ then
   openclaw logs --plain --limit 220 2>/dev/null | rg -n "No API key found|OAuth token refresh failed|Auth store:|All models failed|api_error|rate_limit|authentication_error|invalid x-api-key" | tail -n 40 || true
   exit 1
 fi
+pass_stage "gateway_smoke"
 else
+  skip_stage "gateway_smoke"
   echo "[e2e] Skipping LLM smoke (--skip-llm-smoke)."
 fi
 
@@ -621,6 +800,7 @@ if [[ ! -e "${E2E_WS}/plugins/quaid" ]] && [[ -d "${E2E_WS}/modules/quaid" ]]; t
 fi
 
 if [[ "$RUN_INTEGRATION_TESTS" == true ]]; then
+begin_stage "integration"
 echo "[e2e] Running Quaid integration tests..."
 for required in \
   "${E2E_WS}/modules/quaid/tests/session-timeout-manager.test.ts" \
@@ -632,11 +812,14 @@ for required in \
   fi
 done
 (cd "${E2E_WS}/modules/quaid" && npx vitest run tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts --reporter=verbose)
+pass_stage "integration"
 else
+  skip_stage "integration"
   echo "[e2e] Skipping integration tests (suite selection)."
 fi
 
 if [[ "$RUN_LIVE_EVENTS" == true ]]; then
+begin_stage "live_events"
 echo "[e2e] Validating live /compact /reset /new + timeout events..."
 python3 - "$E2E_WS" "$LIVE_TIMEOUT_WAIT_SECONDS" <<'PY'
 import json
@@ -864,11 +1047,14 @@ if os.path.isdir(session_dir):
             + "\n".join(contaminated[:20])
         )
 PY
+pass_stage "live_events"
 else
+  skip_stage "live_events"
   echo "[e2e] Skipping live events (--skip-live-events)."
 fi
 
 if [[ "$RUN_RESILIENCE" == true ]]; then
+begin_stage "resilience"
 for ((res_i=1; res_i<=RESILIENCE_LOOPS; res_i++)); do
 echo "[e2e] Running resilience check (iteration ${res_i}/${RESILIENCE_LOOPS})..."
 python3 - "$E2E_WS" "$res_i" <<'PY'
@@ -1217,11 +1403,14 @@ if str(row[0]) != "cleanup" or str(row[1]) != "completed":
 print("[e2e] Resilience check passed.")
 PY
 done
+pass_stage "resilience"
 else
+  skip_stage "resilience"
   echo "[e2e] Skipping resilience check (suite selection)."
 fi
 
 if [[ "$RUN_MEMORY_FLOW" == true ]]; then
+begin_stage "memory_flow"
 echo "[e2e] Running memory flow regression checks (compact/new/recall)..."
 python3 - "$E2E_WS" <<'PY'
 import json
@@ -1330,11 +1519,14 @@ if any(marker in answer_l for marker in bad_markers):
 
 print("[e2e] Memory flow regression checks passed.")
 PY
+pass_stage "memory_flow"
 else
+  skip_stage "memory_flow"
   echo "[e2e] Skipping memory flow checks (suite selection)."
 fi
 
 if [[ "$RUN_NOTIFY_MATRIX" == true ]]; then
+begin_stage "notify_matrix"
 echo "[e2e] Validating notification level matrix (quiet/normal/debug)..."
 python3 - "$E2E_WS" <<'PY'
 import json
@@ -1491,11 +1683,14 @@ print("[e2e] Notify matrix results:")
 print(json.dumps(results, indent=2))
 print("[e2e] Notify matrix checks passed.")
 PY
+pass_stage "notify_matrix"
 else
+  skip_stage "notify_matrix"
   echo "[e2e] Skipping notification matrix (suite selection/flag)."
 fi
 
 if [[ "$RUN_INGEST_STRESS" == true ]]; then
+begin_stage "ingest_stress"
 echo "[e2e] Running ingestion stress checks (facts/snippets/journal/projects)..."
 python3 - "$E2E_WS" <<'PY'
 import json
@@ -1656,11 +1851,14 @@ print(
 )
 print("[e2e] Ingestion stress checks passed.")
 PY
+pass_stage "ingest_stress"
 else
+  skip_stage "ingest_stress"
   echo "[e2e] Skipping ingestion stress checks (suite selection)."
 fi
 
 if [[ "$RUN_JANITOR" == true ]]; then
+begin_stage "janitor"
 if [[ "$RUN_JANITOR_SEED" == true ]]; then
 echo "[e2e] Seeding janitor workload (pending memory/snippets/journal/project/rag)..."
 python3 - "$E2E_WS" <<'PY'
@@ -2672,8 +2870,23 @@ if mode == "apply":
             )
             raise SystemExit(1)
 PY
+pass_stage "janitor"
 else
+  skip_stage "janitor"
   echo "[e2e] Skipping janitor (suite selection/--skip-janitor)."
+fi
+
+if [[ "$RUNTIME_BUDGET_SECONDS" -gt 0 ]]; then
+  elapsed_now=$(( $(date +%s) - RUN_START_EPOCH ))
+  if [[ "$elapsed_now" -gt "$RUNTIME_BUDGET_SECONDS" ]]; then
+    RUNTIME_BUDGET_EXCEEDED="true"
+    E2E_STATUS="failed"
+    E2E_FAIL_REASON="runtime_budget_exceeded"
+    E2E_FAIL_LINE="budget-check"
+    CURRENT_STAGE="runtime_budget"
+    echo "[e2e] ERROR: runtime budget exceeded (elapsed=${elapsed_now}s budget=${RUNTIME_BUDGET_SECONDS}s profile=${RUNTIME_BUDGET_PROFILE})" >&2
+    exit 1
+  fi
 fi
 
 echo "[e2e] E2E run complete."

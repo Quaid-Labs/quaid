@@ -84,10 +84,17 @@ Coverage requirements:
    - Added nightly profile stratification (`--nightly-profile quick|deep`):
      quick => baseline nightly loops/stress; deep => heavier resilience loops + stress passes.
    - Added failure-injection overlap probe (malformed `/v1/responses` payload must fail, followed by successful normal turn).
+6. Nightly outcome summary export.
+   - Runner now writes machine-readable run summary to `/tmp/quaid-e2e-last-summary.json` (override with `QUAID_E2E_SUMMARY_PATH`).
+   - Summary includes stage status map, suite/profile metadata, timing, and failure stage/line/reason.
+7. Runtime budget presets.
+   - Added profile-based runtime budgets (`quick|deep`) with enforcement.
+   - `--runtime-budget-profile auto` maps to nightly profile; non-nightly defaults to `off`.
+   - `--runtime-budget-seconds` overrides the profile budget directly.
 
 ## Backlog Order
 
 Implement next in this order:
-1. Nightly outcome summary export (machine-readable run profile + pass/fail counters).
-2. Runtime budget presets with explicit expected wall-clock targets per nightly profile.
-3. Adapter/provider outage matrix expansion (auth failure + timeout + malformed response lanes).
+1. Adapter/provider outage matrix expansion (auth failure + timeout + malformed response lanes).
+2. CI ingestion of summary artifact for trend tracking/regression gating.
+3. Stage-specific budget tuning from historical nightly runtimes.
