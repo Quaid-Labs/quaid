@@ -96,5 +96,5 @@ Coverage requirements:
 
 Implement next in this order:
 1. Adapter/provider outage matrix expansion (timeout + malformed upstream response lanes).
-2. CI ingestion of summary artifact for trend tracking/regression gating.
-3. Stage-specific budget tuning from historical nightly runtimes.
+2. Stage-specific budget tuning from historical nightly runtimes.
+3. Outage-matrix expansion for simulated provider timeout and malformed upstream payload lanes.
