@@ -21,6 +21,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 5. Notification matrix (`suite=notify|full`)
    - Verifies behavior across `quiet`, `normal`, `debug`.
    - Detects fatal notify CLI wiring errors.
+   - Optional strict mode: `QUAID_E2E_NOTIFY_REQUIRE_DELIVERY=true` requires active channel context and successful normal/debug sends.
 6. Ingestion stress (`suite=ingest|full|core`)
    - Injects mixed fact/journal/snippet/project content, runs compaction path, verifies extraction/project activity.
 7. Janitor end-to-end (`suite=janitor|full|core`)
