@@ -925,6 +925,23 @@ def _spawn_janitor_probe() -> subprocess.Popen:
         text=True,
     )
 
+def _parse_last_json_blob(text: str):
+    if not text:
+        return None
+    raw = text.strip()
+    decoder = json.JSONDecoder()
+    last = None
+    for i, ch in enumerate(raw):
+        if ch != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(raw[i:])
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            last = obj
+    return last
+
 first = run_agent("Resilience probe turn 1: acknowledge with OK.")
 if not first:
     raise SystemExit("[e2e] ERROR: resilience turn 1 produced empty output")
@@ -989,6 +1006,64 @@ for sid in (sid_a, sid_b):
         raise SystemExit(
             f"[e2e] ERROR: cursor sessionId mismatch sid={sid} got={payload.get('sessionId')!r}"
         )
+
+staging_dir = os.path.join(ws, "projects", "staging")
+os.makedirs(staging_dir, exist_ok=True)
+evt_path = os.path.join(staging_dir, f"{int(time.time() * 1000)}-e2e-resilience-project.json")
+evt_payload = {
+    "project_hint": "quaid",
+    "files_touched": ["projects/quaid/README.md", "modules/quaid/core/docs/project_updater.py"],
+    "summary": "Resilience matrix queued project updater event.",
+    "trigger": "compact",
+    "session_id": f"quaid-e2e-resilience-project-{uuid.uuid4().hex[:8]}",
+    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+}
+with open(evt_path, "w", encoding="utf-8") as f:
+    f.write(json.dumps(evt_payload, indent=2))
+
+updater_env = dict(os.environ)
+updater_py_path = updater_env.get("PYTHONPATH", "")
+updater_env["PYTHONPATH"] = "modules/quaid" + (f":{updater_py_path}" if updater_py_path else "")
+updater_probe = subprocess.Popen(
+    ["python3", "modules/quaid/core/docs/project_updater.py", "process-all"],
+    cwd=".",
+    env=updater_env,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+for sid, msg in [
+    (sid_a, "Project-updater pressure probe A: acknowledge with OK."),
+    (sid_b, "Project-updater pressure probe B: acknowledge with OK."),
+]:
+    out = run_agent_for(sid, msg)
+    if not out:
+        updater_probe.kill()
+        raise SystemExit(f"[e2e] ERROR: empty output during project-updater pressure probe sid={sid}")
+
+try:
+    u_out, u_err = updater_probe.communicate(timeout=180)
+except subprocess.TimeoutExpired:
+    updater_probe.kill()
+    raise SystemExit("[e2e] ERROR: project-updater pressure probe timed out")
+if updater_probe.returncode != 0:
+    raise SystemExit(
+        "[e2e] ERROR: project-updater pressure probe failed\n"
+        f"{(u_out or '')[-600:]}\n{(u_err or '')[-600:]}"
+    )
+parsed = _parse_last_json_blob(u_out or "")
+if not isinstance(parsed, dict):
+    raise SystemExit("[e2e] ERROR: could not parse project-updater process-all result JSON")
+if int(parsed.get("processed", 0) or 0) < 1:
+    raise SystemExit(
+        "[e2e] ERROR: project-updater pressure probe did not process queued event "
+        f"(result={parsed})"
+    )
+if int(parsed.get("errors", 0) or 0) > 0:
+    raise SystemExit(
+        "[e2e] ERROR: project-updater pressure probe reported errors "
+        f"(result={parsed})"
+    )
 
 cleanup_env = dict(os.environ)
 cleanup_py_path = cleanup_env.get("PYTHONPATH", "")
