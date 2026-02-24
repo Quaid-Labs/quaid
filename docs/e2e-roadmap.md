@@ -72,11 +72,13 @@ Coverage requirements:
 5. Resilience checks (gateway restart mid-flow, concurrency/backpressure, migration fixtures).
    - Added gateway restart mid-session resilience check (nightly/`resilience` suite path).
    - Added concurrent pressure probe (janitor review dry-run while live turn executes).
+   - Added cross-session concurrency matrix probe (two session IDs interleaved under janitor pressure with cursor validation).
+   - Added gateway restart during janitor run-write probe (cleanup apply run must still record a completed `janitor_runs` row).
    - Added migration-fixture resilience probe (legacy `janitor_runs` schema auto-migrates before run write).
 
 ## Backlog Order
 
 Implement next in this order:
-1. Cross-session concurrency matrix (multiple simultaneous sessions + janitor + project updater).
-2. Gateway restart during janitor write window.
-3. Seeded migration fixture for docs registry + RAG index metadata drift.
+1. Seeded migration fixture for docs registry + RAG index metadata drift.
+2. Cross-session project-updater pressure matrix (staging event consumption under concurrent live turns).
+3. Nightly long-run soak profile (repeat resilience block N times with bounded runtime).
