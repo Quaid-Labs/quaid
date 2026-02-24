@@ -104,10 +104,17 @@ Coverage requirements:
 11. Stage-specific budget tuning primitives.
    - E2E summary now records `stage_durations_seconds` for each stage.
    - `e2e-budget-tune.py --stage <name>` supports per-stage recommendation generation from summary history.
+12. Nightly auto stage-budget tuning.
+   - Nightly can auto-derive `QUAID_E2E_STAGE_BUDGETS_JSON` from history when explicit stage budgets are not provided.
+   - Controlled by `QUAID_E2E_AUTO_STAGE_BUDGETS` and `QUAID_E2E_AUTO_STAGE_BUDGETS_STAGES`.
+13. Dedicated strict-notify nightly lane.
+   - Added `--suite nightly-strict-notify` which runs nightly/full with strict delivery gating enabled.
+14. Janitor parallel benchmark lane.
+   - Added `--suite janitor-parallel-bench` to run seeded janitor guards in benchmark mode with bounded LLM parallelism defaults.
 
 ## Backlog Order
 
 Implement next in this order:
-1. Tune stage-specific budget thresholds in nightly from accumulated history.
-2. Enable strict notification-delivery mode in a dedicated nightly lane with stable channel fixtures.
-3. Add janitor parallelism benchmark lane (task-level + datastore-subtask concurrency) with invariant regression checks.
+1. Tune/commit environment-specific stage-budget thresholds from accumulated nightly history.
+2. Add CI/nightly workflow entry that runs `nightly-strict-notify` with stable channel fixtures.
+3. Add benchmark report extraction for janitor parallel lane (per-stage durations + carryover deltas).

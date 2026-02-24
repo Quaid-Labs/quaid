@@ -29,6 +29,7 @@ RUN_MEMORY_FLOW=true
 RUN_RESILIENCE=false
 RUN_JANITOR_STRESS=false
 RUN_PREBENCH_GUARDS=false
+RUN_JANITOR_PARALLEL_BENCH=false
 JANITOR_TIMEOUT_SECONDS=240
 JANITOR_MODE="apply"
 NOTIFY_LEVEL="debug"
@@ -47,6 +48,8 @@ SUMMARY_BUDGET_RECOMMENDATION_PATH="${QUAID_E2E_BUDGET_RECOMMENDATION_PATH:-/tmp
 RUNTIME_BUDGET_TUNE_MIN_SAMPLES="${QUAID_E2E_BUDGET_TUNE_MIN_SAMPLES:-5}"
 RUNTIME_BUDGET_TUNE_BUFFER_RATIO="${QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO:-1.2}"
 NOTIFY_REQUIRE_DELIVERY="${QUAID_E2E_NOTIFY_REQUIRE_DELIVERY:-false}"
+AUTO_STAGE_BUDGETS="${QUAID_E2E_AUTO_STAGE_BUDGETS:-true}"
+AUTO_STAGE_BUDGETS_STAGES="${QUAID_E2E_AUTO_STAGE_BUDGETS_STAGES:-bootstrap,resilience,notify_matrix,janitor}"
 RUNTIME_BUDGET_PROFILE="${QUAID_E2E_RUNTIME_BUDGET_PROFILE:-auto}"
 RUNTIME_BUDGET_SECONDS="${QUAID_E2E_RUNTIME_BUDGET_SECONDS:-0}"
 STAGE_BUDGETS_JSON="${QUAID_E2E_STAGE_BUDGETS_JSON:-}"
@@ -101,7 +104,7 @@ Options:
   --skip-llm-smoke       Skip gateway LLM smoke call
   --skip-live-events     Skip live command/timeout hook validation
   --skip-notify-matrix   Skip notification-level matrix validation (quiet/normal/debug)
-  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,smoke,integration,live,memory,notify,ingest,janitor,seed,resilience,janitor-stress (default: full)
+  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,nightly-strict-notify,janitor-parallel-bench,smoke,integration,live,memory,notify,ingest,janitor,seed,resilience,janitor-stress (default: full)
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
@@ -188,6 +191,11 @@ if suite_has "nightly"; then
   NIGHTLY_MODE=true
   E2E_SUITES="full"
 fi
+if suite_has "nightly-strict-notify"; then
+  NIGHTLY_MODE=true
+  NOTIFY_REQUIRE_DELIVERY="true"
+  E2E_SUITES="full"
+fi
 
 if suite_has "blocker"; then
   RUN_LLM_SMOKE=false
@@ -208,6 +216,17 @@ elif suite_has "pre-benchmark"; then
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
   RUN_PREBENCH_GUARDS=true
+elif suite_has "janitor-parallel-bench"; then
+  RUN_LLM_SMOKE=false
+  RUN_INTEGRATION_TESTS=false
+  RUN_LIVE_EVENTS=false
+  RUN_NOTIFY_MATRIX=false
+  RUN_INGEST_STRESS=false
+  RUN_JANITOR=true
+  RUN_JANITOR_SEED=true
+  RUN_MEMORY_FLOW=false
+  RUN_PREBENCH_GUARDS=true
+  RUN_JANITOR_PARALLEL_BENCH=true
 elif suite_has "core"; then
   RUN_LLM_SMOKE=true
   RUN_INTEGRATION_TESTS=true
@@ -256,6 +275,10 @@ fi
 if [[ "$NIGHTLY_MODE" == true ]]; then
   RUN_RESILIENCE=true
   RUN_JANITOR_STRESS=true
+fi
+if [[ "$AUTO_STAGE_BUDGETS" != "true" && "$AUTO_STAGE_BUDGETS" != "false" ]]; then
+  echo "Invalid QUAID_E2E_AUTO_STAGE_BUDGETS: $AUTO_STAGE_BUDGETS (expected true|false)" >&2
+  exit 1
 fi
 
 if [[ "$SKIP_JANITOR_FLAG" == true ]]; then RUN_JANITOR=false; fi
@@ -327,6 +350,64 @@ if [[ "$RUNTIME_BUDGET_SECONDS" -eq 0 ]]; then
     off) RUNTIME_BUDGET_SECONDS=0 ;;
   esac
 fi
+
+autotune_stage_budgets_from_history() {
+  if [[ "$NIGHTLY_MODE" != true || "$AUTO_STAGE_BUDGETS" != "true" ]]; then
+    return 0
+  fi
+  if [[ -n "$STAGE_BUDGETS_JSON" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$SUMMARY_HISTORY_PATH" ]]; then
+    return 0
+  fi
+  local tuned
+  tuned="$(python3 - "$SUMMARY_HISTORY_PATH" "$AUTO_STAGE_BUDGETS_STAGES" "$RUNTIME_BUDGET_TUNE_MIN_SAMPLES" "$RUNTIME_BUDGET_TUNE_BUFFER_RATIO" "${SCRIPT_DIR}/e2e-budget-tune.py" <<'PY'
+import json
+import subprocess
+import sys
+
+hist, stages_csv, min_samples_raw, buffer_raw, tuner_script = sys.argv[1:6]
+stages = [s.strip() for s in stages_csv.split(",") if s.strip()]
+try:
+    min_samples = int(min_samples_raw)
+except Exception:
+    min_samples = 5
+try:
+    buffer = float(buffer_raw)
+except Exception:
+    buffer = 1.2
+out = {}
+for stage in stages:
+    cmd = [
+        "python3",
+        tuner_script,
+        "--history", hist,
+        "--suite", "nightly",
+        "--status", "success",
+        "--stage", stage,
+        "--min-samples", str(max(min_samples, 1)),
+        "--buffer-ratio", str(max(buffer, 1.0)),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        continue
+    try:
+        payload = json.loads(proc.stdout or "{}")
+        val = int(payload.get("recommended_budget_seconds") or 0)
+        if val > 0:
+            out[stage] = val
+    except Exception:
+        continue
+print(json.dumps(out, separators=(",", ":")))
+PY
+)"
+  if [[ -n "$tuned" && "$tuned" != "{}" ]]; then
+    STAGE_BUDGETS_JSON="$tuned"
+    echo "[e2e] Auto-tuned stage budgets from history: ${STAGE_BUDGETS_JSON}"
+  fi
+}
+autotune_stage_budgets_from_history
 
 skip_e2e() {
   local reason="$1"
@@ -2520,7 +2601,7 @@ PY
 fi
 
 echo "[e2e] Running janitor (${JANITOR_MODE})..."
-python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" "$RUN_JANITOR_STRESS" "$JANITOR_STRESS_PASSES" <<'PY'
+python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" "$RUN_JANITOR_STRESS" "$JANITOR_STRESS_PASSES" "$RUN_JANITOR_PARALLEL_BENCH" <<'PY'
 import json
 import os
 import sqlite3
@@ -2533,6 +2614,7 @@ mode = sys.argv[3]
 prebench_guard = str(sys.argv[4]).strip().lower() in {"1", "true", "yes", "on"}
 janitor_stress = str(sys.argv[5]).strip().lower() in {"1", "true", "yes", "on"}
 janitor_stress_passes = max(1, int(sys.argv[6]))
+janitor_parallel_bench = str(sys.argv[7]).strip().lower() in {"1", "true", "yes", "on"}
 db_path = f"{ws}/data/memory.db"
 journal_path = os.path.join(ws, "journal", "SOUL.journal.md")
 snippet_path = os.path.join(ws, "SOUL.snippets.md")
@@ -2778,6 +2860,9 @@ try:
     if env.get("PYTHONPATH"):
         py_parts.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = ":".join(py_parts)
+    if janitor_parallel_bench:
+        env["QUAID_BENCHMARK_MODE"] = "1"
+        env.setdefault("QUAID_JANITOR_LLM_PARALLELISM", "2")
     subprocess.run(cmd, cwd=ws, check=True, timeout=timeout_seconds, env=env)
 except subprocess.TimeoutExpired:
     print(f"[e2e] Janitor run timed out after {timeout_seconds}s", file=sys.stderr)
