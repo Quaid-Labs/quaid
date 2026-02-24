@@ -1749,6 +1749,35 @@ before_seeded_staging = len([x for x in os.listdir(staging_dir) if x.endswith("-
 snippet_exists_before = os.path.exists(snippet_path)
 journal_exists_before = os.path.exists(journal_path)
 
+if prebench_guard and has_runs_table:
+    # Migration-fixture resilience probe:
+    # emulate legacy janitor_runs schema (without JSON enrichment columns)
+    # and require janitor init path to migrate it in-place before write.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE janitor_runs RENAME TO janitor_runs_legacy_backup")
+        conn.execute(
+            """
+            CREATE TABLE janitor_runs (
+              id INTEGER PRIMARY KEY,
+              task_name TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              completed_at TEXT,
+              memories_processed INTEGER DEFAULT 0,
+              actions_taken INTEGER DEFAULT 0,
+              status TEXT DEFAULT 'running'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO janitor_runs (id, task_name, started_at, completed_at, memories_processed, actions_taken, status)
+            SELECT id, task_name, started_at, completed_at, memories_processed, actions_taken, status
+            FROM janitor_runs_legacy_backup
+            """
+        )
+        conn.execute("DROP TABLE janitor_runs_legacy_backup")
+    print("[e2e] Applied janitor_runs legacy-schema migration probe.")
+
 cmd = ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "all"]
 if mode == "dry-run":
     cmd.append("--dry-run")
@@ -1830,6 +1859,9 @@ with sqlite3.connect(db_path) as conn:
         "FROM janitor_runs WHERE id > ? ORDER BY id DESC LIMIT 1",
         (before_run_id,),
     ).fetchone()
+    janitor_runs_cols = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(janitor_runs)").fetchall()
+    }
     after_seeded_contradictions_pending = 0
     after_seeded_contradictions_resolved = 0
     if has_contradictions_table:
@@ -1973,6 +2005,21 @@ if status != "completed":
     raise SystemExit(1)
 
 if mode == "apply":
+    required_janitor_cols = {
+        "skipped_tasks_json",
+        "carryover_json",
+        "stage_budget_json",
+        "checkpoint_path",
+        "task_summary_json",
+    }
+    missing_cols = sorted(required_janitor_cols - janitor_runs_cols)
+    if missing_cols:
+        print(
+            "[e2e] ERROR: janitor migration resilience probe failed; missing janitor_runs columns: "
+            + ",".join(missing_cols),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     # Require evidence of work only when there was work to do.
     # Clean installs can legitimately produce a no-op janitor run.
     changed_buckets = before_counts != after_counts
