@@ -91,10 +91,13 @@ Coverage requirements:
    - Added profile-based runtime budgets (`quick|deep`) with enforcement.
    - `--runtime-budget-profile auto` maps to nightly profile; non-nightly defaults to `off`.
    - `--runtime-budget-seconds` overrides the profile budget directly.
+8. Budget tuning support from history.
+   - Runner appends summary history JSONL for trend tracking.
+   - Added `modules/quaid/scripts/e2e-budget-tune.py` to recommend budgets from p95 + configurable buffer.
 
 ## Backlog Order
 
 Implement next in this order:
 1. Adapter/provider outage matrix expansion (provider timeout + malformed upstream response lanes).
-2. Stage-specific budget tuning from historical nightly runtimes.
-3. Outage-matrix expansion for simulated provider timeout and malformed upstream payload lanes.
+2. Outage-matrix expansion for simulated provider timeout and malformed upstream payload lanes.
+3. Wire budget-tuning script into nightly CI to auto-suggest threshold updates.
