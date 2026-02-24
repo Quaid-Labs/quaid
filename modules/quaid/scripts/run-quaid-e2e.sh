@@ -1562,6 +1562,7 @@ dedup_marker = "e2e-seed-dedup"
 decay_marker = "e2e-seed-decay"
 multi_owner_marker = "e2e-seed-multi-owner"
 rag_anchor_marker = "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224"
+registry_drift_doc = "docs/e2e-janitor-seed.md"
 
 def mk_node(
     node_type: str,
@@ -1615,6 +1616,41 @@ rows = [
 ]
 
 with sqlite3.connect(db_path) as conn:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS doc_registry (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          file_path TEXT NOT NULL UNIQUE,
+          project TEXT NOT NULL DEFAULT 'default',
+          asset_type TEXT NOT NULL DEFAULT 'doc',
+          title TEXT,
+          description TEXT,
+          tags TEXT DEFAULT '[]',
+          state TEXT NOT NULL DEFAULT 'active',
+          auto_update INTEGER DEFAULT 0,
+          source_files TEXT,
+          last_indexed_at TEXT,
+          last_modified_at TEXT,
+          registered_at TEXT NOT NULL DEFAULT (datetime('now')),
+          registered_by TEXT DEFAULT 'system'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO doc_registry (
+          file_path, project, asset_type, title, description, tags, state,
+          auto_update, source_files, last_indexed_at, last_modified_at, registered_by
+        ) VALUES (?, 'quaid', 'doc', 'Janitor E2E Seed', 'seed drift fixture', '[]', 'active', 0, NULL, ?, ?, 'e2e-seed')
+        ON CONFLICT(file_path) DO UPDATE SET
+          project='quaid',
+          state='active',
+          last_indexed_at=excluded.last_indexed_at,
+          last_modified_at=excluded.last_modified_at,
+          registered_by='e2e-seed'
+        """,
+        (registry_drift_doc, old_ts, old_ts),
+    )
     conn.executemany(
         """
         INSERT INTO nodes (
@@ -1691,6 +1727,7 @@ print(
             "seeded_decay_rows": 1,
             "seeded_multi_owner_rows": 2,
             "seeded_rag_anchor": rag_anchor_marker,
+            "seeded_registry_drift_doc": registry_drift_doc,
             "snippet_path": str(snippet_path),
             "journal_path": str(journal_path),
             "staging_dir": str(staging_dir),
@@ -1723,6 +1760,7 @@ dedup_marker = "e2e-seed-dedup"
 decay_marker = "e2e-seed-decay"
 multi_owner_marker = "e2e-seed-multi-owner"
 rag_anchor_marker = "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224"
+registry_drift_doc = "docs/e2e-janitor-seed.md"
 docs_update_log_path = os.path.join(ws, "logs", "docs-update-log.json")
 
 def fetch_counts(conn):
@@ -1851,6 +1889,16 @@ with sqlite3.connect(db_path) as conn:
             (f"%{multi_owner_marker}%",),
         ).fetchone()[0]
     )
+    has_doc_registry_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='doc_registry'"
+    ).fetchone() is not None
+    before_registry_last_indexed = ""
+    if has_doc_registry_table:
+        row = conn.execute(
+            "SELECT COALESCE(last_indexed_at, '') FROM doc_registry WHERE file_path = ?",
+            (registry_drift_doc,),
+        ).fetchone()
+        before_registry_last_indexed = str((row[0] if row else "") or "")
 before_docs_update_entries = _load_docs_update_entries(docs_update_log_path)
 before_project_doc_updates = sum(
     1 for e in before_docs_update_entries
@@ -2050,6 +2098,13 @@ with sqlite3.connect(db_path) as conn:
             (f"%{multi_owner_marker}%",),
         ).fetchone()[0]
     )
+    after_registry_last_indexed = ""
+    if has_doc_registry_table:
+        row = conn.execute(
+            "SELECT COALESCE(last_indexed_at, '') FROM doc_registry WHERE file_path = ?",
+            (registry_drift_doc,),
+        ).fetchone()
+        after_registry_last_indexed = str((row[0] if row else "") or "")
 after_docs_update_entries = _load_docs_update_entries(docs_update_log_path)
 after_project_doc_updates = sum(
     1 for e in after_docs_update_entries
@@ -2102,6 +2157,8 @@ summary = {
     "multi_owner_nodes_after": after_multi_owner_node_count,
     "multi_owner_distinct_owners_before": before_multi_owner_distinct_owners,
     "multi_owner_distinct_owners_after": after_multi_owner_distinct_owners,
+    "registry_last_indexed_before": before_registry_last_indexed,
+    "registry_last_indexed_after": after_registry_last_indexed,
     "project_doc_updates_before": before_project_doc_updates,
     "project_doc_updates_after": after_project_doc_updates,
     "snippet_exists_before": snippet_exists_before,
@@ -2230,6 +2287,20 @@ if mode == "apply":
                 file=sys.stderr,
             )
             raise SystemExit(1)
+        if has_doc_registry_table:
+            if not after_registry_last_indexed:
+                print(
+                    "[e2e] ERROR: registry drift assertion failed; last_indexed_at missing after janitor run",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            if after_registry_last_indexed == before_registry_last_indexed:
+                print(
+                    "[e2e] ERROR: registry drift assertion failed; last_indexed_at did not refresh "
+                    f"(value={after_registry_last_indexed!r})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
         pending_after = int(after_counts.get("pending", 0))
         approved_after = int(after_counts.get("approved", 0))
         if pending_after > 0 or approved_after > 0:
