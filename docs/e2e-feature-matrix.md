@@ -36,11 +36,12 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Validates live turns under janitor pressure.
    - Validates cross-session interleaving under janitor pressure with per-session cursor presence/identity checks.
    - Validates gateway restart during janitor apply-write path (`cleanup`) still records completed `janitor_runs`.
+   - Validates registry/index drift recovery (`doc_registry.last_indexed_at` refresh on seeded RAG doc).
 
 ## Recommended Next Additions
 
 1. Registry/index migration drift fixtures
-   - Seed docs registry + RAG metadata drift and assert self-heal behavior.
+   - Extend beyond timestamp drift to registry/doc_chunks path mismatches and stale source mappings.
 2. Cross-session project-updater pressure
    - Verify staging-event processing and project artifacts remain correct while concurrent live turns run.
 3. Nightly soak profile
