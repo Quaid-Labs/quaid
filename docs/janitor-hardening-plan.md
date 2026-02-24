@@ -49,10 +49,17 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
 
 ## Concrete Next Implementations
 
-1. Add per-task runtime budgets + structured timeout result reporting in janitor metrics.
-2. Add deterministic contradiction/dedup/decay fixture E2E checks in `pre-benchmark`.
-3. Add explicit backlog carryover counters in `janitor_runs` and summary notifications.
-4. Add benchmark report section: task durations, item throughput, timeout/retry counts.
+1. Evaluate and increase safe janitor parallelism for benchmark throughput.
+   - Profile task-level critical path and identify routines eligible for parallel execution.
+   - Add bounded worker-pool execution for independent maintenance routines with deterministic ordering constraints.
+   - Add correctness gates: no regression in pending/approved invariants, no cross-owner contamination, no duplicate run-record writes.
+2. Evaluate maintenance sub-task parallelism inside datastore routines.
+   - Focus on review/dedup/contradiction/decay batch concurrency where reads are independent.
+   - Keep write phases serialized where needed to preserve sqlite integrity and deterministic outcomes.
+3. Add per-task runtime budgets + structured timeout result reporting in janitor metrics.
+4. Add deterministic contradiction/dedup/decay fixture E2E checks in `pre-benchmark`.
+5. Add explicit backlog carryover counters in `janitor_runs` and summary notifications.
+6. Add benchmark report section: task durations, item throughput, timeout/retry counts.
 
 ## Implemented In This Pass
 

@@ -111,3 +111,4 @@ Implement next in this order:
 1. Enforce stage-specific budget gates in nightly from accumulated history.
 2. Upload nightly budget recommendation/history as CI artifacts for trend visibility.
 3. Enable strict notification-delivery mode in a dedicated nightly lane with stable channel fixtures.
+4. Add janitor parallelism benchmark lane (task-level + datastore-subtask concurrency) with invariant regression checks.

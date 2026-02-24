@@ -151,6 +151,17 @@ jobs:
           QUAID_E2E_MATRIX_SCRIPT: /nonexistent
         run: bash scripts/run-all-tests.sh --full
 
+      - name: Upload E2E telemetry artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quaid-e2e-telemetry
+          if-no-files-found: ignore
+          path: |
+            /tmp/quaid-e2e-last-summary.json
+            /tmp/quaid-e2e-summary-history.jsonl
+            /tmp/quaid-e2e-budget-recommendation.json
+
       - name: TypeScript lint
         working-directory: plugins/quaid
         run: npm run lint:ts
