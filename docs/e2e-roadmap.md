@@ -98,10 +98,13 @@ Coverage requirements:
    - Nightly suite now runs `e2e-budget-tune.py` automatically from summary history.
    - Emits recommendation JSON at `/tmp/quaid-e2e-budget-recommendation.json` (override with `QUAID_E2E_BUDGET_RECOMMENDATION_PATH`).
    - Non-fatal when history is insufficient (`QUAID_E2E_BUDGET_TUNE_MIN_SAMPLES`, `QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO` control tuning).
+10. Strict notification-delivery assertions.
+   - Notify matrix now tracks sent/failure/no-channel counters per level.
+   - Optional strict mode (`QUAID_E2E_NOTIFY_REQUIRE_DELIVERY=true`) fails when normal/debug have no active channel context or no successful sends.
 
 ## Backlog Order
 
 Implement next in this order:
 1. Stage-specific budget tuning from accumulated nightly history.
 2. Upload nightly budget recommendation/history as CI artifacts for trend visibility.
-3. Add cross-agent/notification fanout assertions in live-events suite (debug vs quiet expectations).
+3. Enable strict notification-delivery mode in a dedicated nightly lane with stable channel fixtures.
