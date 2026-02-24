@@ -95,6 +95,6 @@ Coverage requirements:
 ## Backlog Order
 
 Implement next in this order:
-1. Adapter/provider outage matrix expansion (timeout + malformed upstream response lanes).
+1. Adapter/provider outage matrix expansion (provider timeout + malformed upstream response lanes).
 2. Stage-specific budget tuning from historical nightly runtimes.
 3. Outage-matrix expansion for simulated provider timeout and malformed upstream payload lanes.
