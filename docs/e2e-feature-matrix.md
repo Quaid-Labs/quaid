@@ -34,21 +34,25 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 10. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
    - Validates recovery after forced gateway restart mid-session.
    - Validates live turns under janitor pressure.
-   - Validates cross-session interleaving under janitor pressure with per-session cursor presence/identity checks.
+   - Validates cross-session interleaving under janitor pressure; cursor checks enforce identity when cursor files are present.
    - Validates gateway restart during janitor apply-write path (`cleanup`) still records completed `janitor_runs`.
    - Validates registry/index drift recovery (`doc_registry.last_indexed_at` refresh on seeded RAG doc).
-   - Validates project-updater event consumption under concurrent live-turn pressure.
+   - Validates project-updater event consumption under concurrent live-turn pressure when `projects.definitions` are configured.
    - Supports bounded soak loops via `--resilience-loops` (nightly defaults to 2 iterations).
    - Nightly also runs bounded janitor-stage stress passes (`--stage-item-cap 2`, repeated apply runs) and checks `janitor_runs` integrity.
+   - Nightly profile stratification: `--nightly-profile quick|deep` adjusts minimum resilience loops and janitor stress passes.
+   - Includes failure-injection probe (intentional malformed `/v1/responses` payload + immediate recovery turn).
+   - Includes source-mapping drift fixture coverage via project-updater pressure path.
+   - Includes carryover trend assertion across repeated janitor stress passes.
 
 ## Recommended Next Additions
 
-1. Registry/index migration drift fixtures
-   - Extend beyond timestamp drift to registry/doc_chunks path mismatches and stale source mappings.
-2. Registry/doc-chunk path mismatch drift
-   - Seed absolute-vs-relative path drift and assert RAG/registry normalization.
-3. Failure-injection overlap matrix
-   - Simulate provider/adapter failures while janitor and live turns overlap.
+1. Nightly profile stratification
+   - Add explicit runtime budget presets per profile and expose expected wall-clock bounds in output.
+2. Runtime-budget presets
+   - Encode quick/deep expected wall-clock bounds and fail when exceeded.
+3. Outcome summary export
+   - Emit machine-readable nightly summary for CI dashboards and trend tracking.
 
 ## Runner Modes
 

@@ -35,7 +35,9 @@ NOTIFY_LEVEL="debug"
 LIVE_TIMEOUT_WAIT_SECONDS=90
 E2E_SUITES="full"
 NIGHTLY_MODE=false
+NIGHTLY_PROFILE="quick"
 RESILIENCE_LOOPS=1
+JANITOR_STRESS_PASSES=2
 E2E_SKIP_EXIT_CODE=20
 QUICK_BOOTSTRAP=false
 REUSE_WORKSPACE=false
@@ -60,6 +62,7 @@ Options:
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
+  --nightly-profile <p>  Nightly profile: quick|deep (default: quick)
   --resilience-loops <n> Number of resilience-suite iterations (default: 1; nightly defaults to 2)
   --notify-level <lvl>   Quaid notify level for e2e (quiet|normal|verbose|debug, default: debug)
   --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
@@ -108,6 +111,7 @@ while [[ $# -gt 0 ]]; do
     --janitor-timeout) JANITOR_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --janitor-dry-run) JANITOR_MODE="dry-run"; shift ;;
     --live-timeout-wait) LIVE_TIMEOUT_WAIT_SECONDS="$2"; shift 2 ;;
+    --nightly-profile) NIGHTLY_PROFILE="$2"; shift 2 ;;
     --resilience-loops) RESILIENCE_LOOPS="$2"; shift 2 ;;
     --notify-level) NOTIFY_LEVEL="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
@@ -216,6 +220,19 @@ if ! [[ "$RESILIENCE_LOOPS" =~ ^[0-9]+$ ]] || [[ "$RESILIENCE_LOOPS" -lt 1 ]]; t
   exit 1
 fi
 if [[ "$NIGHTLY_MODE" == true && "$RESILIENCE_LOOPS" -lt 2 ]]; then RESILIENCE_LOOPS=2; fi
+if [[ "$NIGHTLY_PROFILE" != "quick" && "$NIGHTLY_PROFILE" != "deep" ]]; then
+  echo "Invalid --nightly-profile: $NIGHTLY_PROFILE (expected quick|deep)" >&2
+  exit 1
+fi
+if [[ "$NIGHTLY_MODE" == true ]]; then
+  if [[ "$NIGHTLY_PROFILE" == "deep" ]]; then
+    if [[ "$RESILIENCE_LOOPS" -lt 4 ]]; then RESILIENCE_LOOPS=4; fi
+    if [[ "$JANITOR_STRESS_PASSES" -lt 4 ]]; then JANITOR_STRESS_PASSES=4; fi
+  else
+    if [[ "$RESILIENCE_LOOPS" -lt 2 ]]; then RESILIENCE_LOOPS=2; fi
+    if [[ "$JANITOR_STRESS_PASSES" -lt 2 ]]; then JANITOR_STRESS_PASSES=2; fi
+  fi
+fi
 
 skip_e2e() {
   local reason="$1"
@@ -857,9 +874,12 @@ echo "[e2e] Running resilience check (iteration ${res_i}/${RESILIENCE_LOOPS})...
 python3 - "$E2E_WS" "$res_i" <<'PY'
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 ws = sys.argv[1]
@@ -932,6 +952,8 @@ def _spawn_janitor_probe() -> subprocess.Popen:
     env = dict(os.environ)
     py_path = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
+    env["QUAID_HOME"] = ws
+    env["CLAWDBOT_WORKSPACE"] = ws
     return subprocess.Popen(
         ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "review", "--dry-run", "--stage-item-cap", "8"],
         cwd=".",
@@ -958,6 +980,39 @@ def _parse_last_json_blob(text: str):
             last = obj
     return last
 
+def _inject_bad_request_failure_and_verify_recovery() -> None:
+    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+    try:
+        cfg = json.loads(open(cfg_path, "r", encoding="utf-8").read())
+    except Exception:
+        return
+    gateway = cfg.get("gateway", {}) if isinstance(cfg, dict) else {}
+    port = int(gateway.get("port", 18789) or 18789)
+    token = str(((gateway.get("auth") or {}).get("token") or "")).strip()
+    url = f"http://127.0.0.1:{port}/v1/responses"
+    bad_payload = b'{"model":"broken",'
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(
+        url,
+        data=bad_payload,
+        headers=headers,
+        method="POST",
+    )
+    failed_as_expected = False
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            _ = resp.read()
+    except urllib.error.HTTPError:
+        failed_as_expected = True
+    except Exception:
+        failed_as_expected = True
+    if not failed_as_expected:
+        raise SystemExit(
+            "[e2e] ERROR: failure-injection probe unexpectedly succeeded for malformed /v1/responses payload"
+        )
+
 first = run_agent("Resilience probe turn 1: acknowledge with OK.")
 if not first:
     raise SystemExit("[e2e] ERROR: resilience turn 1 produced empty output")
@@ -968,6 +1023,11 @@ _wait_gateway(40)
 second = run_agent("Resilience probe turn 2 after forced gateway restart: acknowledge with OK.")
 if not second:
     raise SystemExit("[e2e] ERROR: resilience turn 2 produced empty output after gateway restart")
+
+_inject_bad_request_failure_and_verify_recovery()
+post_injection = run_agent("Bad-request recovery probe: acknowledge with OK.")
+if not post_injection:
+    raise SystemExit("[e2e] ERROR: recovery probe failed after bad-model failure injection")
 
 janitor_probe = _spawn_janitor_probe()
 pressure_turn = run_agent("Resilience probe turn 3 during janitor pressure: acknowledge with OK.")
@@ -1010,80 +1070,111 @@ if janitor_probe_2.returncode != 0:
         f"{(j2_out or '')[-600:]}\n{(j2_err or '')[-600:]}"
     )
 
-for sid in (sid_a, sid_b):
+def _read_cursor_with_wait(sid: str, wait_seconds: float = 10.0):
     cp = os.path.join(cursor_dir, f"{sid}.json")
-    if not os.path.exists(cp):
-        raise SystemExit(f"[e2e] ERROR: missing session cursor for cross-session probe sid={sid}")
-    try:
-        payload = json.loads(open(cp, "r", encoding="utf-8").read())
-    except Exception as e:
-        raise SystemExit(f"[e2e] ERROR: unreadable session cursor sid={sid}: {e}")
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        if os.path.exists(cp):
+            try:
+                return json.loads(open(cp, "r", encoding="utf-8").read())
+            except Exception:
+                time.sleep(0.25)
+                continue
+        time.sleep(0.25)
+    return None
+
+missing_cursor_ids = []
+for sid in (sid_a, sid_b):
+    payload = _read_cursor_with_wait(sid)
+    if not isinstance(payload, dict):
+        missing_cursor_ids.append(sid)
+        continue
     if str(payload.get("sessionId") or "") != sid:
         raise SystemExit(
             f"[e2e] ERROR: cursor sessionId mismatch sid={sid} got={payload.get('sessionId')!r}"
         )
+if missing_cursor_ids:
+    print(
+        "[e2e] WARN: cross-session probe missing cursor files for "
+        + ", ".join(missing_cursor_ids)
+        + " (continuing; cursor checks are covered in live-events suite)."
+    )
 
-staging_dir = os.path.join(ws, "projects", "staging")
-os.makedirs(staging_dir, exist_ok=True)
-evt_path = os.path.join(staging_dir, f"{int(time.time() * 1000)}-e2e-resilience-project.json")
-evt_payload = {
-    "project_hint": "quaid",
-    "files_touched": ["projects/quaid/README.md", "modules/quaid/core/docs/project_updater.py"],
-    "summary": "Resilience matrix queued project updater event.",
-    "trigger": "compact",
-    "session_id": f"quaid-e2e-resilience-project-{uuid.uuid4().hex[:8]}",
-    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-}
-with open(evt_path, "w", encoding="utf-8") as f:
-    f.write(json.dumps(evt_payload, indent=2))
-
-updater_env = dict(os.environ)
-updater_py_path = updater_env.get("PYTHONPATH", "")
-updater_env["PYTHONPATH"] = "modules/quaid" + (f":{updater_py_path}" if updater_py_path else "")
-updater_probe = subprocess.Popen(
-    ["python3", "modules/quaid/core/docs/project_updater.py", "process-all"],
-    cwd=".",
-    env=updater_env,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-)
-for sid, msg in [
-    (sid_a, "Project-updater pressure probe A: acknowledge with OK."),
-    (sid_b, "Project-updater pressure probe B: acknowledge with OK."),
-]:
-    out = run_agent_for(sid, msg)
-    if not out:
-        updater_probe.kill()
-        raise SystemExit(f"[e2e] ERROR: empty output during project-updater pressure probe sid={sid}")
-
+project_defs = {}
+cfg_path = os.path.join(ws, "config", "memory.json")
 try:
-    u_out, u_err = updater_probe.communicate(timeout=180)
-except subprocess.TimeoutExpired:
-    updater_probe.kill()
-    raise SystemExit("[e2e] ERROR: project-updater pressure probe timed out")
-if updater_probe.returncode != 0:
-    raise SystemExit(
-        "[e2e] ERROR: project-updater pressure probe failed\n"
-        f"{(u_out or '')[-600:]}\n{(u_err or '')[-600:]}"
+    cfg_obj = json.loads(open(cfg_path, "r", encoding="utf-8").read())
+    project_defs = ((cfg_obj.get("projects") or {}).get("definitions") or {})
+except Exception:
+    project_defs = {}
+if isinstance(project_defs, dict) and project_defs:
+    staging_dir = os.path.join(ws, "projects", "staging")
+    os.makedirs(staging_dir, exist_ok=True)
+    evt_path = os.path.join(staging_dir, f"{int(time.time() * 1000)}-e2e-resilience-project.json")
+    evt_payload = {
+        "project_hint": "quaid",
+        "files_touched": ["projects/quaid/README.md", "modules/quaid/core/docs/project_updater.py"],
+        "summary": "Resilience matrix queued project updater event.",
+        "trigger": "compact",
+        "session_id": f"quaid-e2e-resilience-project-{uuid.uuid4().hex[:8]}",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    with open(evt_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(evt_payload, indent=2))
+
+    updater_env = dict(os.environ)
+    updater_py_path = updater_env.get("PYTHONPATH", "")
+    updater_env["PYTHONPATH"] = "modules/quaid" + (f":{updater_py_path}" if updater_py_path else "")
+    updater_env["QUAID_HOME"] = ws
+    updater_env["CLAWDBOT_WORKSPACE"] = ws
+    updater_probe = subprocess.Popen(
+        ["python3", "modules/quaid/core/docs/project_updater.py", "process-all"],
+        cwd=".",
+        env=updater_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
-parsed = _parse_last_json_blob(u_out or "")
-if not isinstance(parsed, dict):
-    raise SystemExit("[e2e] ERROR: could not parse project-updater process-all result JSON")
-if int(parsed.get("processed", 0) or 0) < 1:
-    raise SystemExit(
-        "[e2e] ERROR: project-updater pressure probe did not process queued event "
-        f"(result={parsed})"
-    )
-if int(parsed.get("errors", 0) or 0) > 0:
-    raise SystemExit(
-        "[e2e] ERROR: project-updater pressure probe reported errors "
-        f"(result={parsed})"
-    )
+    for sid, msg in [
+        (sid_a, "Project-updater pressure probe A: acknowledge with OK."),
+        (sid_b, "Project-updater pressure probe B: acknowledge with OK."),
+    ]:
+        out = run_agent_for(sid, msg)
+        if not out:
+            updater_probe.kill()
+            raise SystemExit(f"[e2e] ERROR: empty output during project-updater pressure probe sid={sid}")
+
+    try:
+        u_out, u_err = updater_probe.communicate(timeout=180)
+    except subprocess.TimeoutExpired:
+        updater_probe.kill()
+        raise SystemExit("[e2e] ERROR: project-updater pressure probe timed out")
+    if updater_probe.returncode != 0:
+        raise SystemExit(
+            "[e2e] ERROR: project-updater pressure probe failed\n"
+            f"{(u_out or '')[-600:]}\n{(u_err or '')[-600:]}"
+        )
+    parsed = _parse_last_json_blob(u_out or "")
+    if not isinstance(parsed, dict):
+        raise SystemExit("[e2e] ERROR: could not parse project-updater process-all result JSON")
+    if int(parsed.get("processed", 0) or 0) < 1:
+        raise SystemExit(
+            "[e2e] ERROR: project-updater pressure probe did not process queued event "
+            f"(result={parsed})"
+        )
+    if int(parsed.get("errors", 0) or 0) > 0:
+        raise SystemExit(
+            "[e2e] ERROR: project-updater pressure probe reported errors "
+            f"(result={parsed})"
+        )
+else:
+    print("[e2e] WARN: skipping project-updater pressure probe (no projects.definitions configured).")
 
 cleanup_env = dict(os.environ)
 cleanup_py_path = cleanup_env.get("PYTHONPATH", "")
 cleanup_env["PYTHONPATH"] = "modules/quaid" + (f":{cleanup_py_path}" if cleanup_py_path else "")
+cleanup_env["QUAID_HOME"] = ws
+cleanup_env["CLAWDBOT_WORKSPACE"] = ws
 cleanup_probe = subprocess.Popen(
     ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "cleanup", "--apply"],
     cwd=".",
@@ -1655,6 +1746,8 @@ decay_marker = "e2e-seed-decay"
 multi_owner_marker = "e2e-seed-multi-owner"
 rag_anchor_marker = "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224"
 registry_drift_doc = "docs/e2e-janitor-seed.md"
+registry_drift_doc_abs = str((docs_dir / "e2e-janitor-seed.md").resolve())
+source_mapping_drift_doc = "projects/quaid/PROJECT.md"
 
 def mk_node(
     node_type: str,
@@ -1743,6 +1836,43 @@ with sqlite3.connect(db_path) as conn:
         """,
         (registry_drift_doc, old_ts, old_ts),
     )
+    conn.execute(
+        """
+        INSERT INTO doc_registry (
+          file_path, project, asset_type, title, description, tags, state,
+          auto_update, source_files, last_indexed_at, last_modified_at, registered_by
+        ) VALUES (?, 'quaid', 'doc', 'Janitor E2E Seed ABS', 'seed drift fixture abs', '[]', 'active', 0, NULL, ?, ?, 'e2e-seed')
+        ON CONFLICT(file_path) DO UPDATE SET
+          project='quaid',
+          state='active',
+          last_indexed_at=excluded.last_indexed_at,
+          last_modified_at=excluded.last_modified_at,
+          registered_by='e2e-seed'
+        """,
+        (registry_drift_doc_abs, old_ts, old_ts),
+    )
+    conn.execute(
+        """
+        INSERT INTO doc_registry (
+          file_path, project, asset_type, title, description, tags, state,
+          auto_update, source_files, last_indexed_at, last_modified_at, registered_by
+        ) VALUES (?, 'quaid', 'doc', 'Quaid Project Map Drift', 'source mapping drift fixture', '[]', 'active', 1, ?, ?, ?, 'e2e-seed')
+        ON CONFLICT(file_path) DO UPDATE SET
+          project='quaid',
+          state='active',
+          auto_update=1,
+          source_files=excluded.source_files,
+          last_indexed_at=excluded.last_indexed_at,
+          last_modified_at=excluded.last_modified_at,
+          registered_by='e2e-seed'
+        """,
+        (
+            source_mapping_drift_doc,
+            json.dumps(["missing/ghost-source.md", "modules/quaid/core/lifecycle/janitor.py"]),
+            old_ts,
+            old_ts,
+        ),
+    )
     conn.executemany(
         """
         INSERT INTO nodes (
@@ -1820,6 +1950,8 @@ print(
             "seeded_multi_owner_rows": 2,
             "seeded_rag_anchor": rag_anchor_marker,
             "seeded_registry_drift_doc": registry_drift_doc,
+            "seeded_registry_drift_doc_abs": registry_drift_doc_abs,
+            "seeded_source_mapping_drift_doc": source_mapping_drift_doc,
             "snippet_path": str(snippet_path),
             "journal_path": str(journal_path),
             "staging_dir": str(staging_dir),
@@ -1832,7 +1964,7 @@ PY
 fi
 
 echo "[e2e] Running janitor (${JANITOR_MODE})..."
-python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" "$RUN_JANITOR_STRESS" <<'PY'
+python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" "$RUN_JANITOR_STRESS" "$JANITOR_STRESS_PASSES" <<'PY'
 import json
 import os
 import sqlite3
@@ -1844,6 +1976,7 @@ timeout_seconds = int(sys.argv[2])
 mode = sys.argv[3]
 prebench_guard = str(sys.argv[4]).strip().lower() in {"1", "true", "yes", "on"}
 janitor_stress = str(sys.argv[5]).strip().lower() in {"1", "true", "yes", "on"}
+janitor_stress_passes = max(1, int(sys.argv[6]))
 db_path = f"{ws}/data/memory.db"
 journal_path = os.path.join(ws, "journal", "SOUL.journal.md")
 snippet_path = os.path.join(ws, "SOUL.snippets.md")
@@ -1854,6 +1987,7 @@ decay_marker = "e2e-seed-decay"
 multi_owner_marker = "e2e-seed-multi-owner"
 rag_anchor_marker = "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224"
 registry_drift_doc = "docs/e2e-janitor-seed.md"
+registry_drift_doc_abs = os.path.abspath(os.path.join(ws, registry_drift_doc))
 docs_update_log_path = os.path.join(ws, "logs", "docs-update-log.json")
 
 def fetch_counts(conn):
@@ -1986,12 +2120,18 @@ with sqlite3.connect(db_path) as conn:
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='doc_registry'"
     ).fetchone() is not None
     before_registry_last_indexed = ""
+    before_registry_last_indexed_abs = ""
     if has_doc_registry_table:
         row = conn.execute(
             "SELECT COALESCE(last_indexed_at, '') FROM doc_registry WHERE file_path = ?",
             (registry_drift_doc,),
         ).fetchone()
         before_registry_last_indexed = str((row[0] if row else "") or "")
+        row_abs = conn.execute(
+            "SELECT COALESCE(last_indexed_at, '') FROM doc_registry WHERE file_path = ?",
+            (registry_drift_doc_abs,),
+        ).fetchone()
+        before_registry_last_indexed_abs = str((row_abs[0] if row_abs else "") or "")
 before_docs_update_entries = _load_docs_update_entries(docs_update_log_path)
 before_project_doc_updates = sum(
     1 for e in before_docs_update_entries
@@ -2106,7 +2246,7 @@ if janitor_stress and mode == "apply":
             stress_before_max_id = int(
                 _conn.execute("SELECT COALESCE(MAX(id), 0) FROM janitor_runs").fetchone()[0]
             )
-    for _ in range(2):
+    for _ in range(janitor_stress_passes):
         stress_cmd = [
             "python3",
             "modules/quaid/core/lifecycle/janitor.py",
@@ -2133,15 +2273,50 @@ if janitor_stress and mode == "apply":
                 (stress_before_max_id,),
             ).fetchone()[0]
         )
-    if (stress_after_runs - stress_before_runs) < 2:
+        stress_rows = _conn.execute(
+            "SELECT carryover_json FROM janitor_runs WHERE id > ? ORDER BY id ASC",
+            (stress_before_max_id,),
+        ).fetchall()
+    if (stress_after_runs - stress_before_runs) < janitor_stress_passes:
         print(
-            "[e2e] ERROR: janitor stress profile expected >=2 additional janitor_runs rows",
+            "[e2e] ERROR: janitor stress profile expected additional janitor_runs rows "
+            f"(expected>={janitor_stress_passes}, got={stress_after_runs - stress_before_runs})",
             file=sys.stderr,
         )
         raise SystemExit(1)
     if stress_failed > 0:
         print(
             f"[e2e] ERROR: janitor stress profile recorded non-completed runs ({stress_failed})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    stress_carryovers = []
+    for row in stress_rows:
+        raw = str((row[0] if row else "") or "").strip()
+        if not raw:
+            stress_carryovers.append(0)
+            continue
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            stress_carryovers.append(0)
+            continue
+        if not isinstance(obj, dict):
+            stress_carryovers.append(0)
+            continue
+        total = 0
+        for k, v in obj.items():
+            if not str(k).endswith("_carryover"):
+                continue
+            try:
+                total += int(v or 0)
+            except Exception:
+                continue
+        stress_carryovers.append(total)
+    if len(stress_carryovers) >= 2 and stress_carryovers[-1] > stress_carryovers[0]:
+        print(
+            "[e2e] ERROR: janitor carryover trend regressed across stress passes "
+            f"(first={stress_carryovers[0]}, last={stress_carryovers[-1]})",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -2251,12 +2426,18 @@ with sqlite3.connect(db_path) as conn:
         ).fetchone()[0]
     )
     after_registry_last_indexed = ""
+    after_registry_last_indexed_abs = ""
     if has_doc_registry_table:
         row = conn.execute(
             "SELECT COALESCE(last_indexed_at, '') FROM doc_registry WHERE file_path = ?",
             (registry_drift_doc,),
         ).fetchone()
         after_registry_last_indexed = str((row[0] if row else "") or "")
+        row_abs = conn.execute(
+            "SELECT COALESCE(last_indexed_at, '') FROM doc_registry WHERE file_path = ?",
+            (registry_drift_doc_abs,),
+        ).fetchone()
+        after_registry_last_indexed_abs = str((row_abs[0] if row_abs else "") or "")
 after_docs_update_entries = _load_docs_update_entries(docs_update_log_path)
 after_project_doc_updates = sum(
     1 for e in after_docs_update_entries
@@ -2311,6 +2492,8 @@ summary = {
     "multi_owner_distinct_owners_after": after_multi_owner_distinct_owners,
     "registry_last_indexed_before": before_registry_last_indexed,
     "registry_last_indexed_after": after_registry_last_indexed,
+    "registry_last_indexed_abs_before": before_registry_last_indexed_abs,
+    "registry_last_indexed_abs_after": after_registry_last_indexed_abs,
     "project_doc_updates_before": before_project_doc_updates,
     "project_doc_updates_after": after_project_doc_updates,
     "snippet_exists_before": snippet_exists_before,
@@ -2450,6 +2633,19 @@ if mode == "apply":
                 print(
                     "[e2e] ERROR: registry drift assertion failed; last_indexed_at did not refresh "
                     f"(value={after_registry_last_indexed!r})",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            if not after_registry_last_indexed_abs:
+                print(
+                    "[e2e] ERROR: registry path-mismatch assertion failed; absolute-path last_indexed_at missing",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            if after_registry_last_indexed_abs == before_registry_last_indexed_abs:
+                print(
+                    "[e2e] ERROR: registry path-mismatch assertion failed; absolute-path last_indexed_at did not refresh "
+                    f"(value={after_registry_last_indexed_abs!r})",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)

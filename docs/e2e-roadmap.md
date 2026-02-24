@@ -72,16 +72,22 @@ Coverage requirements:
 5. Resilience checks (gateway restart mid-flow, concurrency/backpressure, migration fixtures).
    - Added gateway restart mid-session resilience check (nightly/`resilience` suite path).
    - Added concurrent pressure probe (janitor review dry-run while live turn executes).
-   - Added cross-session concurrency matrix probe (two session IDs interleaved under janitor pressure with cursor validation).
+   - Added cross-session concurrency matrix probe (two session IDs interleaved under janitor pressure; warns when cursor files are unavailable in non-live suites).
    - Added gateway restart during janitor run-write probe (cleanup apply run must still record a completed `janitor_runs` row).
    - Added migration-fixture resilience probe (legacy `janitor_runs` schema auto-migrates before run write).
    - Added registry/index drift fixture probe (`doc_registry.last_indexed_at` for seeded doc must refresh after janitor RAG).
+   - Added registry/doc-chunk path-mismatch drift probe (both relative and absolute registry paths must refresh).
+   - Added source-mapping drift fixture (`doc_registry.source_files` includes missing path) exercised under project-updater pressure path when projects are configured.
    - Added bounded soak mode for resilience checks (`--resilience-loops`, nightly defaults to 2 iterations).
    - Added bounded janitor-stage stress profile (nightly includes extra capped janitor apply passes with run-record integrity checks).
+   - Added janitor carryover trend assertion across stress passes (final carryover must not exceed initial stress carryover).
+   - Added nightly profile stratification (`--nightly-profile quick|deep`):
+     quick => baseline nightly loops/stress; deep => heavier resilience loops + stress passes.
+   - Added failure-injection overlap probe (malformed `/v1/responses` payload must fail, followed by successful normal turn).
 
 ## Backlog Order
 
 Implement next in this order:
-1. Registry/doc-chunk path-mismatch migration fixture (absolute vs workspace-relative source paths).
-2. Failure-injection matrix for adapter/provider outages during janitor + live-turn overlap.
-3. Nightly profile stratification (quick vs deep resilience modes with separate budgets).
+1. Nightly outcome summary export (machine-readable run profile + pass/fail counters).
+2. Runtime budget presets with explicit expected wall-clock targets per nightly profile.
+3. Adapter/provider outage matrix expansion (auth failure + timeout + malformed response lanes).
