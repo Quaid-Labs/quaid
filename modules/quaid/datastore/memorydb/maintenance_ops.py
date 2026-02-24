@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
@@ -238,6 +239,7 @@ LR_BATCH_TIMEOUT = 120  # Timeout for batched calls (longer than single-pair def
 MAX_CONSECUTIVE_FAILURES = 3  # Stop batching after N consecutive failures
 LLM_TIMEOUT = 30  # Timeout for individual LLM calls
 MAX_EXECUTION_TIME = _cfg.janitor.task_timeout_minutes * 60  # From config (seconds)
+MAX_PARALLEL_WORKERS = 8
 
 
 def _is_benchmark_mode() -> bool:
@@ -257,6 +259,59 @@ def _record_llm_batch_issue(metrics: "JanitorMetrics", message: str) -> None:
         print(f"    WARN: {message} (non-fatal in benchmark mode)")
         return
     metrics.add_error(message)
+
+
+def _parallel_key(task_name: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9]+", "_", (task_name or "").strip().upper())
+    return clean.strip("_")
+
+
+def _llm_parallel_workers(task_name: str) -> int:
+    """Resolve LLM batch parallelism for a task from env + benchmark defaults.
+
+    Precedence:
+    1. QUAID_JANITOR_LLM_PARALLELISM_<TASK>
+    2. QUAID_JANITOR_LLM_PARALLELISM
+    3. benchmark default: 2, non-benchmark default: 1
+    """
+    scoped_key = _parallel_key(task_name)
+    scoped = os.environ.get(f"QUAID_JANITOR_LLM_PARALLELISM_{scoped_key}", "").strip()
+    global_raw = os.environ.get("QUAID_JANITOR_LLM_PARALLELISM", "").strip()
+    raw = scoped or global_raw
+    default_workers = 2 if _is_benchmark_mode() else 1
+    if not raw:
+        return default_workers
+    try:
+        value = int(raw)
+    except Exception:
+        return default_workers
+    return max(1, min(value, MAX_PARALLEL_WORKERS))
+
+
+def _run_llm_batches_parallel(
+    batches: List[list],
+    task_name: str,
+    runner,
+) -> List[Dict[str, Any]]:
+    """Run batch LLM calls with bounded parallelism; preserve output order."""
+    if not batches:
+        return []
+    workers = min(_llm_parallel_workers(task_name), len(batches))
+    if workers <= 1:
+        out = []
+        for idx, batch in enumerate(batches, 1):
+            out.append(runner(idx, batch))
+        return out
+    out: List[Optional[Dict[str, Any]]] = [None] * len(batches)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(runner, idx, batch): idx for idx, batch in enumerate(batches, 1)}
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                out[idx - 1] = fut.result()
+            except Exception as exc:
+                out[idx - 1] = {"batch_num": idx, "error": str(exc), "response": None, "duration": 0.0}
+    return [item if item is not None else {"batch_num": i + 1, "error": "missing-result"} for i, item in enumerate(out)]
 
 
 class JanitorMetrics:
@@ -1145,7 +1200,7 @@ def resolve_contradictions_with_opus(
     )
     batches = builder.build_batches(pending)
     total_batches = len(batches)
-    for batch_num, batch in enumerate(batches, 1):
+    def _invoke_batch(batch_num: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         numbered = []
         for i, c in enumerate(batch):
             numbered.append(
@@ -1182,10 +1237,20 @@ Respond with a JSON array of {len(batch)} objects:
 
 JSON array only:"""
 
-        resolution_prompt_tag = f"[prompt:{_prompt_hash(prompt)}] "
-        response, duration = call_deep_reasoning(prompt, max_tokens=300 * len(batch))
-        metrics.add_llm_call(duration)
+        return {
+            "batch_num": batch_num,
+            "batch": batch,
+            "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
+            "response_duration": call_deep_reasoning(prompt, max_tokens=300 * len(batch)),
+        }
 
+    llm_results = _run_llm_batches_parallel(batches, "contradiction_resolution", _invoke_batch)
+    for result in llm_results:
+        batch_num = int(result.get("batch_num", 0) or 0)
+        batch = result.get("batch") or []
+        prompt_tag = str(result.get("prompt_tag") or "")
+        response, duration = result.get("response_duration", (None, 0.0))
+        metrics.add_llm_call(float(duration or 0.0))
         if not response:
             _record_llm_batch_issue(metrics, f"Contradiction resolution batch {batch_num} failed")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (no response)")
@@ -1207,7 +1272,7 @@ JSON array only:"""
 
             c = batch[idx - 1]
             action = item.get("action", "").upper()
-            reason = resolution_prompt_tag + item.get("reason", "")
+            reason = prompt_tag + item.get("reason", "")
             decision_row = {
                 "id": c["id"],
                 "action": action,
@@ -1721,7 +1786,7 @@ def review_dedup_rejections(
     )
     batches = builder.build_batches(pending)
     total_batches = len(batches)
-    for batch_num, batch in enumerate(batches, 1):
+    def _invoke_batch(batch_num: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         numbered = []
         for i, entry in enumerate(batch):
             numbered.append(
@@ -1766,10 +1831,20 @@ Respond with a JSON array of {len(batch)} objects:
 
 JSON array only:"""
 
-        dedup_prompt_tag = f"[prompt:{_prompt_hash(prompt)}] "
-        response, duration = call_deep_reasoning(prompt, max_tokens=200 * len(batch))
-        metrics.add_llm_call(duration)
+        return {
+            "batch_num": batch_num,
+            "batch": batch,
+            "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
+            "response_duration": call_deep_reasoning(prompt, max_tokens=200 * len(batch)),
+        }
 
+    llm_results = _run_llm_batches_parallel(batches, "dedup_review", _invoke_batch)
+    for result in llm_results:
+        batch_num = int(result.get("batch_num", 0) or 0)
+        batch = result.get("batch") or []
+        dedup_prompt_tag = str(result.get("prompt_tag") or "")
+        response, duration = result.get("response_duration", (None, 0.0))
+        metrics.add_llm_call(float(duration or 0.0))
         if not response:
             _record_llm_batch_issue(metrics, f"Dedup review batch {batch_num} failed")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (no response)")
@@ -1876,7 +1951,7 @@ def review_decayed_memories(
     )
     batches = builder.build_batches(pending)
     total_batches = len(batches)
-    for batch_num, batch in enumerate(batches, 1):
+    def _invoke_batch(batch_num: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         numbered = []
         for i, entry in enumerate(batch):
             numbered.append(
@@ -1912,10 +1987,20 @@ Respond with a JSON array of {len(batch)} objects:
 
 JSON array only:"""
 
-        decay_prompt_tag = f"[prompt:{_prompt_hash(prompt)}] "
-        response, duration = call_deep_reasoning(prompt, max_tokens=200 * len(batch))
-        metrics.add_llm_call(duration)
+        return {
+            "batch_num": batch_num,
+            "batch": batch,
+            "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
+            "response_duration": call_deep_reasoning(prompt, max_tokens=200 * len(batch)),
+        }
 
+    llm_results = _run_llm_batches_parallel(batches, "decay_review", _invoke_batch)
+    for result in llm_results:
+        batch_num = int(result.get("batch_num", 0) or 0)
+        batch = result.get("batch") or []
+        decay_prompt_tag = str(result.get("prompt_tag") or "")
+        response, duration = result.get("response_duration", (None, 0.0))
+        metrics.add_llm_call(float(duration or 0.0))
         if not response:
             _record_llm_batch_issue(metrics, f"Decay review batch {batch_num} failed")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (no response)")
@@ -2283,8 +2368,8 @@ Respond with a JSON array only, no markdown fencing:
                         out.add(mid)
         return out
 
+    batch_requests: List[Dict[str, Any]] = []
     for batch_num, batch_rows in enumerate(batches, 1):
-        # Build batch payload
         batch_data = []
         for row in batch_rows:
             batch_data.append({
@@ -2295,21 +2380,41 @@ Respond with a JSON array only, no markdown fencing:
                 "source": row["source"],
                 "speaker": row["speaker"] if "speaker" in row.keys() else None
             })
-
         user_message = f"Review batch {batch_num}/{total_batches} ({len(batch_data)} memories):\n\n{json.dumps(batch_data, indent=2)}"
-
         print(f"\n  Batch {batch_num}/{total_batches} ({len(batch_data)} memories)...")
+        batch_requests.append(
+            {
+                "batch_rows": batch_rows,
+                "batch_data": batch_data,
+                "user_message": user_message,
+                "batch_max_tokens": 200 * len(batch_data),
+            }
+        )
+
+    def _invoke_review_batch(batch_num: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        response_text, duration = call_llm(
+            system_prompt=system_prompt,
+            user_message=payload["user_message"],
+            model=model,
+            max_tokens=payload["batch_max_tokens"],
+        )
+        return {
+            "batch_num": batch_num,
+            "batch_rows": payload["batch_rows"],
+            "batch_data": payload["batch_data"],
+            "response_text": response_text,
+            "duration": duration,
+        }
+
+    llm_results = _run_llm_batches_parallel(batch_requests, "review_pending", _invoke_review_batch)
+    for result in llm_results:
+        batch_num = int(result.get("batch_num", 0) or 0)
+        batch_rows = result.get("batch_rows") or []
+        batch_data = result.get("batch_data") or []
+        response_text = result.get("response_text")
+        duration = float(result.get("duration", 0.0) or 0.0)
 
         try:
-            # Scale output tokens with batch size: ~200 tokens per item
-            # Builder guarantees batch size fits in max_tokens via output_tokens_per_item
-            batch_max_tokens = 200 * len(batch_data)
-            response_text, duration = call_llm(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                model=model,
-                max_tokens=batch_max_tokens
-            )
             if metrics:
                 metrics.add_llm_call(duration)
 
@@ -2377,7 +2482,7 @@ Respond with a JSON array only, no markdown fencing:
             print(f"    Received {len(decisions)} decisions in {duration:.1f}s")
             covered_ids.update(batch_ids)
 
-            # Apply immediately
+            # Apply in deterministic batch order.
             batch_result = apply_review_decisions_from_list(graph, decisions, dry_run)
             totals["kept"] += batch_result["kept"]
             totals["deleted"] += batch_result["deleted"]

@@ -86,6 +86,17 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
    - Added regression test for contradictions carryover query path.
    - Added benchmark-mode review gate in janitor Task 2: fail memory pipeline immediately when review coverage is incomplete or review carryover is non-zero.
    - Added unit tests covering benchmark-mode review gate trigger/no-trigger behavior.
+7. LLM batch parallelism for datastore-owned maintenance reviews
+   - Added bounded parallel batch dispatch helper in `datastore/memorydb/maintenance_ops.py`.
+   - Parallelized Opus-heavy routines while preserving deterministic apply order:
+     - `review_pending_memories`
+     - `resolve_contradictions_with_opus`
+     - `review_dedup_rejections`
+     - `review_decayed_memories`
+   - Added env controls:
+     - `QUAID_JANITOR_LLM_PARALLELISM`
+     - `QUAID_JANITOR_LLM_PARALLELISM_<TASK>`
+   - Defaults: `1` in normal mode, `2` in benchmark mode.
 
 ## E2E Coverage Mapping
 
