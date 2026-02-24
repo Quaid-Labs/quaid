@@ -71,9 +71,10 @@ Coverage requirements:
    - Added PROJECT.md artifact assertion via docs update log delta (`projects/quaid/PROJECT.md`).
 5. Resilience checks (gateway restart mid-flow, concurrency/backpressure, migration fixtures) (pending implementation).
    - Added gateway restart mid-session resilience check (nightly/`resilience` suite path).
-   - Remaining: deeper backpressure + migration-fixture resilience.
+   - Added concurrent pressure probe (janitor review dry-run while live turn executes).
+   - Remaining: migration-fixture resilience.
 
 ## Backlog Order
 
 Implement next in this order:
-1. Backpressure and competing-maintenance resilience checks (janitor/docs updater pressure while live turns run).
+1. Migration-fixture resilience checks.
