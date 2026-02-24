@@ -610,6 +610,7 @@ echo "[e2e] Validating live /compact /reset /new + timeout events..."
 python3 - "$E2E_WS" "$LIVE_TIMEOUT_WAIT_SECONDS" <<'PY'
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -838,13 +839,17 @@ fi
 
 if [[ "$RUN_RESILIENCE" == true ]]; then
 echo "[e2e] Running resilience check (gateway restart mid-session)..."
-python3 - <<'PY'
+python3 - "$E2E_WS" <<'PY'
 import json
+import os
 import subprocess
+import sys
 import time
 import uuid
 
+ws = sys.argv[1]
 session_id = f"quaid-e2e-resilience-{uuid.uuid4().hex[:10]}"
+cursor_dir = os.path.join(ws, "data", "session-cursors")
 
 def _wait_gateway(seconds: int = 30) -> None:
     deadline = time.time() + seconds
@@ -882,6 +887,44 @@ def run_agent(message: str) -> str:
             return parsed["output"]
     return out
 
+def run_agent_for(sid: str, message: str) -> str:
+    proc = subprocess.run(
+        ["openclaw", "agent", "--session-id", sid, "--message", message, "--timeout", "150", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[e2e] ERROR: resilience agent call failed (sid={sid}): {proc.stderr.strip()[:400]}"
+        )
+    out = proc.stdout.strip()
+    if not out:
+        return ""
+    try:
+        parsed = json.loads(out)
+    except Exception:
+        return out
+    if isinstance(parsed, dict):
+        if isinstance(parsed.get("response"), str):
+            return parsed["response"]
+        if isinstance(parsed.get("output"), str):
+            return parsed["output"]
+    return out
+
+def _spawn_janitor_probe() -> subprocess.Popen:
+    env = dict(os.environ)
+    py_path = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
+    return subprocess.Popen(
+        ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "review", "--dry-run", "--stage-item-cap", "8"],
+        cwd=".",
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
 first = run_agent("Resilience probe turn 1: acknowledge with OK.")
 if not first:
     raise SystemExit("[e2e] ERROR: resilience turn 1 produced empty output")
@@ -893,17 +936,7 @@ second = run_agent("Resilience probe turn 2 after forced gateway restart: acknow
 if not second:
     raise SystemExit("[e2e] ERROR: resilience turn 2 produced empty output after gateway restart")
 
-env = dict(__import__("os").environ)
-py_path = env.get("PYTHONPATH", "")
-env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
-janitor_probe = subprocess.Popen(
-    ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "review", "--dry-run", "--stage-item-cap", "8"],
-    cwd=".",
-    env=env,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-)
+janitor_probe = _spawn_janitor_probe()
 pressure_turn = run_agent("Resilience probe turn 3 during janitor pressure: acknowledge with OK.")
 if not pressure_turn:
     janitor_probe.kill()
@@ -917,6 +950,86 @@ if janitor_probe.returncode != 0:
     raise SystemExit(
         "[e2e] ERROR: janitor pressure probe failed during resilience test\n"
         f"{(j_out or '')[-600:]}\n{(j_err or '')[-600:]}"
+    )
+
+sid_a = f"quaid-e2e-resilience-a-{uuid.uuid4().hex[:6]}"
+sid_b = f"quaid-e2e-resilience-b-{uuid.uuid4().hex[:6]}"
+janitor_probe_2 = _spawn_janitor_probe()
+for sid, msg in [
+    (sid_a, "Cross-session probe A turn 1: acknowledge with OK."),
+    (sid_b, "Cross-session probe B turn 1: acknowledge with OK."),
+    (sid_a, "Cross-session probe A turn 2: acknowledge with OK."),
+    (sid_b, "Cross-session probe B turn 2: acknowledge with OK."),
+]:
+    out = run_agent_for(sid, msg)
+    if not out:
+        janitor_probe_2.kill()
+        raise SystemExit(f"[e2e] ERROR: empty output in cross-session probe sid={sid}")
+
+try:
+    j2_out, j2_err = janitor_probe_2.communicate(timeout=180)
+except subprocess.TimeoutExpired:
+    janitor_probe_2.kill()
+    raise SystemExit("[e2e] ERROR: janitor cross-session pressure probe timed out")
+if janitor_probe_2.returncode != 0:
+    raise SystemExit(
+        "[e2e] ERROR: janitor cross-session pressure probe failed\n"
+        f"{(j2_out or '')[-600:]}\n{(j2_err or '')[-600:]}"
+    )
+
+for sid in (sid_a, sid_b):
+    cp = os.path.join(cursor_dir, f"{sid}.json")
+    if not os.path.exists(cp):
+        raise SystemExit(f"[e2e] ERROR: missing session cursor for cross-session probe sid={sid}")
+    try:
+        payload = json.loads(open(cp, "r", encoding="utf-8").read())
+    except Exception as e:
+        raise SystemExit(f"[e2e] ERROR: unreadable session cursor sid={sid}: {e}")
+    if str(payload.get("sessionId") or "") != sid:
+        raise SystemExit(
+            f"[e2e] ERROR: cursor sessionId mismatch sid={sid} got={payload.get('sessionId')!r}"
+        )
+
+cleanup_env = dict(os.environ)
+cleanup_py_path = cleanup_env.get("PYTHONPATH", "")
+cleanup_env["PYTHONPATH"] = "modules/quaid" + (f":{cleanup_py_path}" if cleanup_py_path else "")
+cleanup_probe = subprocess.Popen(
+    ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "cleanup", "--apply"],
+    cwd=".",
+    env=cleanup_env,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+time.sleep(1.2)
+subprocess.run(["openclaw", "gateway", "restart"], check=False, capture_output=True, text=True, timeout=90)
+_wait_gateway(40)
+try:
+    c_out, c_err = cleanup_probe.communicate(timeout=180)
+except subprocess.TimeoutExpired:
+    cleanup_probe.kill()
+    raise SystemExit("[e2e] ERROR: janitor cleanup write-window probe timed out")
+if cleanup_probe.returncode != 0:
+    raise SystemExit(
+        "[e2e] ERROR: janitor cleanup write-window probe failed\n"
+        f"{(c_out or '')[-600:]}\n{(c_err or '')[-600:]}"
+    )
+db_path = os.path.join(ws, "data", "memory.db")
+with sqlite3.connect(db_path) as conn:
+    row = conn.execute(
+        """
+        SELECT task_name, status
+        FROM janitor_runs
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+if not row:
+    raise SystemExit("[e2e] ERROR: no janitor_runs row found after cleanup write-window probe")
+if str(row[0]) != "cleanup" or str(row[1]) != "completed":
+    raise SystemExit(
+        "[e2e] ERROR: janitor write-window probe recorded unexpected run state "
+        f"(task={row[0]!r}, status={row[1]!r})"
     )
 
 print("[e2e] Resilience check passed.")
