@@ -4,10 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SessionTimeoutManager } from "../core/session-timeout.js";
 
-function signalLabelForAction(actionRaw: unknown): "CompactionSignal" | "NewSignal" | "ResetSignal" | null {
+function signalLabelForAction(actionRaw: unknown): "CompactionSignal" | "ResetSignal" | null {
   const action = String(actionRaw || "").trim().toLowerCase().replace(/^\//, "");
   if (action === "compact") return "CompactionSignal";
-  if (action === "new") return "NewSignal";
+  if (action === "new") return "ResetSignal";
   if (action === "reset" || action === "restart") return "ResetSignal";
   return null;
 }
@@ -66,7 +66,7 @@ describe("chat flow integration", () => {
 
     expect(calls).toHaveLength(4);
     expect(calls.map((c) => c.label)).toEqual([
-      "NewSignal",
+      "ResetSignal",
       "ResetSignal",
       "ResetSignal",
       "CompactionSignal",

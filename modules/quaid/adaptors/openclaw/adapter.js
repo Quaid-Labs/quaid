@@ -582,19 +582,6 @@ function isInternalMaintenancePrompt(text) {
   ];
   return markers.some((m) => s.includes(m));
 }
-function getActiveSessionFileFromSessionsJson() {
-  try {
-    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
-    const raw = fs.readFileSync(sessionsPath, "utf8");
-    const data = JSON.parse(raw);
-    const entry = data?.["agent:main:main"] || data?.active;
-    const sessionFile = entry?.sessionFile;
-    const sessionId = entry?.sessionId || (typeof sessionFile === "string" ? path.basename(sessionFile).split(".jsonl")[0] : void 0);
-    return { sessionId, sessionFile };
-  } catch {
-    return {};
-  }
-}
 function resolveSessionKeyForCompaction(sessionId) {
   try {
     const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
@@ -1990,17 +1977,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const timeoutSessionId = ctx?.sessionId || extractSessionId(messages, ctx);
       timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
-      if (isResetBootstrapOnlyConversation(conversationMessages)) {
-        const active = getActiveSessionFileFromSessionsJson();
-        const bootstrapTargetSessionId = String(active.sessionId || "").trim();
-        if (bootstrapTargetSessionId && bootstrapTargetSessionId !== timeoutSessionId) {
-          console.log(
-            `[quaid][agent_end] bootstrap-only session=${timeoutSessionId || "unknown"}; queue ResetSignal for prior_session=${bootstrapTargetSessionId}`
-          );
-          timeoutManager.queueExtractionSignal(bootstrapTargetSessionId, "ResetSignal");
-        }
-        return;
-      }
     };
     console.log("[quaid] Registering agent_end hook for auto-capture");
     api.on("agent_end", agentEndHandler, {

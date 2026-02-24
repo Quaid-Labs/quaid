@@ -29,7 +29,7 @@ class MockAdapter(StandaloneAdapter):
     """Mock adapter that deterministically maps slash commands to extraction signals."""
 
     COMMAND_TO_SIGNAL: Dict[str, str] = {
-        "new": "NewSignal",
+        "new": "ResetSignal",
         "reset": "ResetSignal",
         "restart": "ResetSignal",
         "compact": "CompactionSignal",
@@ -106,7 +106,7 @@ class MockCore:
 
 def test_mock_adapter_signal_mapping(tmp_path: Path) -> None:
     adapter = MockAdapter(home=tmp_path)
-    assert adapter.command_signal("/new") == "NewSignal"
+    assert adapter.command_signal("/new") == "ResetSignal"
     assert adapter.command_signal("/reset now") == "ResetSignal"
     assert adapter.command_signal("/restart") == "ResetSignal"
     assert adapter.command_signal("/compact") == "CompactionSignal"
