@@ -247,6 +247,18 @@ def _is_benchmark_mode() -> bool:
     }
 
 
+def _record_llm_batch_issue(metrics: "JanitorMetrics", message: str) -> None:
+    """Record transient LLM batch issues.
+
+    In benchmark mode, these are treated as warnings so one bad JSON/provider
+    response does not invalidate the whole run.
+    """
+    if _is_benchmark_mode():
+        print(f"    WARN: {message} (non-fatal in benchmark mode)")
+        return
+    metrics.add_error(message)
+
+
 class JanitorMetrics:
     """Track timing and performance metrics."""
     
@@ -1098,13 +1110,13 @@ JSON array only:"""
         metrics.add_llm_call(duration)
 
         if not response:
-            metrics.add_error(f"Contradiction resolution batch {batch_num} failed")
+            _record_llm_batch_issue(metrics, f"Contradiction resolution batch {batch_num} failed")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (no response)")
             continue
 
         parsed = parse_json_response(response)
         if not isinstance(parsed, list):
-            metrics.add_error(f"Contradiction resolution batch {batch_num}: invalid JSON")
+            _record_llm_batch_issue(metrics, f"Contradiction resolution batch {batch_num}: invalid JSON")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (invalid JSON)")
             continue
 
@@ -1662,13 +1674,13 @@ JSON array only:"""
         metrics.add_llm_call(duration)
 
         if not response:
-            metrics.add_error(f"Dedup review batch {batch_num} failed")
+            _record_llm_batch_issue(metrics, f"Dedup review batch {batch_num} failed")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (no response)")
             continue
 
         parsed = parse_json_response(response)
         if not isinstance(parsed, list):
-            metrics.add_error(f"Dedup review batch {batch_num}: invalid JSON")
+            _record_llm_batch_issue(metrics, f"Dedup review batch {batch_num}: invalid JSON")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (invalid JSON)")
             continue
 
@@ -1793,13 +1805,13 @@ JSON array only:"""
         metrics.add_llm_call(duration)
 
         if not response:
-            metrics.add_error(f"Decay review batch {batch_num} failed")
+            _record_llm_batch_issue(metrics, f"Decay review batch {batch_num} failed")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (no response)")
             continue
 
         parsed = parse_json_response(response)
         if not isinstance(parsed, list):
-            metrics.add_error(f"Decay review batch {batch_num}: invalid JSON")
+            _record_llm_batch_issue(metrics, f"Decay review batch {batch_num}: invalid JSON")
             print(f"    Batch {batch_num}/{total_batches}: FAILED (invalid JSON)")
             continue
 
@@ -2152,14 +2164,14 @@ Respond with a JSON array only, no markdown fencing:
             if not response_text:
                 print(f"    API returned empty response, skipping batch")
                 if metrics:
-                    metrics.add_error(f"Review batch {batch_num}: empty API response")
+                    _record_llm_batch_issue(metrics, f"Review batch {batch_num}: empty API response")
                 continue
 
             decisions = parse_json_response(response_text)
             if not isinstance(decisions, list):
                 print(f"    Failed to parse response as JSON array, skipping batch")
                 if metrics:
-                    metrics.add_error(f"Review batch {batch_num}: invalid JSON response")
+                    _record_llm_batch_issue(metrics, f"Review batch {batch_num}: invalid JSON response")
                 continue
 
             print(f"    Received {len(decisions)} decisions in {duration:.1f}s")
@@ -2180,7 +2192,7 @@ Respond with a JSON array only, no markdown fencing:
         except Exception as e:
             print(f"    Batch {batch_num} failed: {e}")
             if metrics:
-                metrics.add_error(f"Review batch {batch_num}: {e}")
+                _record_llm_batch_issue(metrics, f"Review batch {batch_num}: {e}")
             continue
 
     print(f"\n  Review complete: {totals['kept']} kept, {totals['deleted']} deleted, "
