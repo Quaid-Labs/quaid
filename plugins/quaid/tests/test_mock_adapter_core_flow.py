@@ -16,7 +16,7 @@ pytestmark = pytest.mark.integration
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import memory_graph
+import datastore.memorydb.memory_graph as memory_graph
 from lib.adapter import StandaloneAdapter
 
 
@@ -117,10 +117,10 @@ def test_mock_core_persists_fact_and_graph_on_reset_signal(tmp_path: Path) -> No
     db_file = tmp_path / "memory.db"
     os.environ["MEMORY_DB_PATH"] = str(db_file)
 
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-         patch("memory_graph.route_query", side_effect=lambda q: q):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+         patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
         graph = memory_graph.MemoryGraph(db_path=db_file)
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             adapter = MockAdapter(home=tmp_path)
             core = MockCore(owner_id="quaid")
             session_id = "session-mock-1"

@@ -32,7 +32,7 @@ function _resolveWorkspace() {
   return process.cwd();
 }
 const WORKSPACE = _resolveWorkspace();
-const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/memory_graph.py");
+const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(WORKSPACE, "plugins/quaid/ingest/extract.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");

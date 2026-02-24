@@ -23,7 +23,7 @@ os.environ.setdefault("MOCK_EMBEDDINGS", "1")
 
 import pytest
 
-from memory_graph import MemoryGraph, Node, Edge
+from datastore.memorydb.memory_graph import MemoryGraph, Node, Edge
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ def _disable_external_reranker(monkeypatch):
     this symbol per-test and still exercise reranking behavior deterministically.
     """
     monkeypatch.setattr(
-        "memory_graph._rerank_with_cross_encoder",
+        "datastore.memorydb.memory_graph._rerank_with_cross_encoder",
         lambda query, candidates, config_retrieval=None: candidates,
     )
 
@@ -793,7 +793,7 @@ class TestAdaptiveReranking:
         _add_edge(graph, a.id, b.id, "knows")
 
         # beam_width=5, only 1 candidate — should NOT call reranker
-        with patch("memory_graph._rerank_with_cross_encoder") as mock_rerank:
+        with patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder") as mock_rerank:
             results = graph.beam_search_graph(
                 query="test query",
                 start_id=a.id,
@@ -814,7 +814,7 @@ class TestAdaptiveReranking:
             _add_edge(graph, a.id, n.id, "knows")
 
         # beam_width=3, 6 candidates — should call reranker
-        with patch("memory_graph._rerank_with_cross_encoder") as mock_rerank:
+        with patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder") as mock_rerank:
             # Return the same candidates unchanged (passthrough)
             mock_rerank.side_effect = lambda q, candidates, config_retrieval=None: candidates
 
@@ -838,7 +838,7 @@ class TestAdaptiveReranking:
             _add_edge(graph, a.id, n.id, "knows")
 
         # Reranker throws — should fall back gracefully
-        with patch("memory_graph._rerank_with_cross_encoder", side_effect=Exception("API down")):
+        with patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder", side_effect=Exception("API down")):
             results = graph.beam_search_graph(
                 query="test query",
                 start_id=a.id,
@@ -878,7 +878,7 @@ class TestAdaptiveReranking:
                     reranked.append((node, 0.01))  # Demote
             return reranked
 
-        with patch("memory_graph._rerank_with_cross_encoder", side_effect=promote_med_node):
+        with patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder", side_effect=promote_med_node):
             results = graph.beam_search_graph(
                 query="test query",
                 start_id=a.id,
@@ -903,7 +903,7 @@ class TestAdaptiveReranking:
             captured_args["candidates"] = candidates
             return candidates  # passthrough
 
-        with patch("memory_graph._rerank_with_cross_encoder", side_effect=capture_rerank):
+        with patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder", side_effect=capture_rerank):
             graph.beam_search_graph(
                 query="what is the weather",
                 start_id=a.id,

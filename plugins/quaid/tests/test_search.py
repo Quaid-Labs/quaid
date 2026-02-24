@@ -27,10 +27,10 @@ def _fake_get_embedding(text):
 
 def _make_graph_with_data(tmp_path, items=None):
     """Create a MemoryGraph with seeded nodes."""
-    from memory_graph import MemoryGraph, Node
+    from datastore.memorydb.memory_graph import MemoryGraph, Node
 
     db_file = tmp_path / "search_test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
 
         if items is None:
@@ -65,7 +65,7 @@ class TestSearchFTS:
 
     def test_returns_ranked_results(self, tmp_path):
         """BM25-ranked results include matching nodes with rank positions."""
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_fts("Quaid", limit=10)
             assert len(results) > 0
@@ -75,20 +75,20 @@ class TestSearchFTS:
                 assert rank >= 1  # 1-based rank position
 
     def test_empty_query_returns_empty(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_fts("")
             assert results == []
 
     def test_stopword_only_query_returns_empty(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             # "the is a" are all stopwords
             results = graph.search_fts("the is a")
             assert results == []
 
     def test_returns_matching_nodes(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_fts("coffee", limit=5)
             assert len(results) > 0
@@ -97,7 +97,7 @@ class TestSearchFTS:
             assert any("coffee" in t.lower() for t in texts)
 
     def test_limit_respected(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_fts("Quaid", limit=2)
             assert len(results) <= 2
@@ -108,7 +108,7 @@ class TestSearchFTS:
             ("Alice likes tea and crumpets", "Fact", "alice"),
             ("Quaid likes espresso coffee strongly", "Fact", "quaid"),
         ]
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path, items=items)
             results = graph.search_fts("likes", owner_id="quaid")
             # Should only return quaid's node
@@ -117,7 +117,7 @@ class TestSearchFTS:
 
     def test_short_words_filtered(self, tmp_path):
         """Words under 3 chars are filtered out."""
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             # "is" and "a" are short + stopwords
             results = graph.search_fts("is a")
@@ -133,15 +133,15 @@ class TestSearchSemantic:
 
     def test_returns_empty_when_no_embedding(self, tmp_path):
         """When get_embedding returns None, search_semantic returns []."""
-        with patch("memory_graph._lib_get_embedding", return_value=None):
-            from memory_graph import MemoryGraph
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", return_value=None):
+            from datastore.memorydb.memory_graph import MemoryGraph
             db_file = tmp_path / "empty_embed.db"
             graph = MemoryGraph(db_path=db_file)
             results = graph.search_semantic("anything")
             assert results == []
 
     def test_returns_results_sorted_by_similarity(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_semantic("Quaid coffee", limit=5, min_similarity=0.0)
             if len(results) >= 2:
@@ -149,8 +149,8 @@ class TestSearchSemantic:
                 assert sims == sorted(sims, reverse=True)
 
     def test_min_similarity_filters(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph._lib_has_vec", return_value=False):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=False):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_semantic("Quaid coffee", min_similarity=0.999)
             # Brute-force path enforces strict threshold filtering.
@@ -159,13 +159,13 @@ class TestSearchSemantic:
 
     def test_owner_id_filter(self, tmp_path):
         """Owner filter includes shared/public nodes from other owners (by design)."""
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         items_raw = [
             ("Bob enjoys tennis sport games", "Fact", "bob", "private"),
             ("Quaid enjoys surfing water sport", "Fact", "quaid", "shared"),
         ]
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            from memory_graph import MemoryGraph
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            from datastore.memorydb.memory_graph import MemoryGraph
             db_file = tmp_path / "owner_test.db"
             graph = MemoryGraph(db_path=db_file)
             for text, node_type, owner, priv in items_raw:
@@ -184,7 +184,7 @@ class TestSearchSemantic:
                     assert node.privacy in ("shared", "public")
 
     def test_limit_respected(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_semantic("Quaid", limit=2, min_similarity=0.0)
             assert len(results) <= 2
@@ -198,7 +198,7 @@ class TestSearchHybrid:
     """Tests for MemoryGraph.search_hybrid()."""
 
     def test_returns_results(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_hybrid("Quaid coffee", limit=5)
             # Should return some results (combining semantic + FTS)
@@ -206,14 +206,14 @@ class TestSearchHybrid:
 
     def test_merges_semantic_and_fts(self, tmp_path):
         """Hybrid should return at least as many as either individual search."""
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             hybrid = graph.search_hybrid("Quaid coffee", limit=10)
             # Just verify it runs and returns a list
             assert isinstance(hybrid, list)
 
     def test_limit_respected(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_hybrid("Quaid", limit=3)
             # search_hybrid returns up to limit*2 for downstream MMR/filtering
@@ -221,7 +221,7 @@ class TestSearchHybrid:
 
     def test_hybrid_returns_quality_scores(self, tmp_path):
         """Results should carry quality scores (cosine similarity) for threshold filtering."""
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_hybrid("Quaid coffee", limit=10)
             if len(results) >= 1:
@@ -238,13 +238,13 @@ class TestHasOwnerPronoun:
     """Tests for has_owner_pronoun()."""
 
     def test_my_is_owner_pronoun(self):
-        from memory_graph import has_owner_pronoun
+        from datastore.memorydb.memory_graph import has_owner_pronoun
         assert has_owner_pronoun("my favorite color") is True
 
     def test_no_pronoun(self):
-        from memory_graph import has_owner_pronoun
+        from datastore.memorydb.memory_graph import has_owner_pronoun
         assert has_owner_pronoun("the weather today") is False
 
     def test_i_pronoun(self):
-        from memory_graph import has_owner_pronoun
+        from datastore.memorydb.memory_graph import has_owner_pronoun
         assert has_owner_pronoun("I like coffee") is True

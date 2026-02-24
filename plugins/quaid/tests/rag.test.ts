@@ -7,7 +7,7 @@ import * as path from 'node:path'
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
-const RAG_SCRIPT = path.join(WORKSPACE, "plugins/quaid/docs_rag.py")
+const RAG_SCRIPT = path.join(WORKSPACE, "plugins/quaid/core/docs/rag.py")
 const TEST_DB = `/tmp/test-rag-${process.pid}.db`
 const TEST_FIXTURES_DIR = '/tmp/rag-test-fixtures'
 

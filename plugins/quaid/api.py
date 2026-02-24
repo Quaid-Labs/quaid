@@ -17,7 +17,7 @@ from typing import Optional, List, Dict, Any
 from core.docs.rag import DocsRAG
 from lib.runtime_context import get_workspace_dir
 
-from memory_graph import (
+from datastore.memorydb.memory_graph import (
     store as _store,
     recall as _recall,
     search as _search,

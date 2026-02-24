@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-import docs_ingest
+import ingest.docs_ingest as docs_ingest
 
 
 def _cfg(workspace_enabled: bool = True, auto_update: bool = True, max_docs: int = 3):

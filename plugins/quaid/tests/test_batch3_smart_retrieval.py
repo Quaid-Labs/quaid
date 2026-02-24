@@ -31,9 +31,9 @@ def _fake_get_embedding(text):
 
 
 def _make_graph(tmp_path):
-    from memory_graph import MemoryGraph
+    from datastore.memorydb.memory_graph import MemoryGraph
     db_file = tmp_path / "batch3_test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph
 
@@ -46,48 +46,48 @@ class TestClassifyIntent:
     """Tests for classify_intent() query classification."""
 
     def test_who_query(self):
-        from memory_graph import classify_intent
+        from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("who is Quaid's wife?")
         assert intent == "WHO"
         assert "Person" in boosts
         assert boosts["Person"] > 1.0
 
     def test_when_query(self):
-        from memory_graph import classify_intent
+        from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("when is Quaid's birthday?")
         assert intent == "WHEN"
         assert "Event" in boosts
 
     def test_where_query(self):
-        from memory_graph import classify_intent
+        from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("where does Quaid live?")
         assert intent == "WHERE"
         assert "Place" in boosts
 
     def test_preference_query(self):
-        from memory_graph import classify_intent
+        from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("Quaid's favorite food preferences")
         assert intent == "PREFERENCE"
         assert "Preference" in boosts
 
     def test_relation_query(self):
-        from memory_graph import classify_intent
+        from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("how is Levi related to Hauser as siblings")
         assert intent == "RELATION"
 
     def test_general_query(self):
-        from memory_graph import classify_intent
+        from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("coffee espresso beans")
         assert intent == "GENERAL"
         assert boosts == {}
 
     def test_what_query(self):
-        from memory_graph import classify_intent
+        from datastore.memorydb.memory_graph import classify_intent
         intent, boosts = classify_intent("what is Quaid working on?")
         assert intent == "WHAT"
 
     def test_returns_tuple(self):
-        from memory_graph import classify_intent
+        from datastore.memorydb.memory_graph import classify_intent
         result = classify_intent("random query")
         assert isinstance(result, tuple)
         assert len(result) == 2
@@ -101,7 +101,7 @@ class TestTemporalValidity:
     """Tests for temporal validity filtering in _compute_composite_score()."""
 
     def test_expired_fact_penalized(self):
-        from memory_graph import _compute_composite_score, Node
+        from datastore.memorydb.memory_graph import _compute_composite_score, Node
         node = Node.create(type="Fact", name="Quaid lives in Texas")
         node.accessed_at = datetime.now().isoformat()
         node.valid_until = (datetime.now() - timedelta(days=30)).isoformat()
@@ -113,7 +113,7 @@ class TestTemporalValidity:
         assert score < score_current
 
     def test_future_fact_heavily_penalized(self):
-        from memory_graph import _compute_composite_score, Node
+        from datastore.memorydb.memory_graph import _compute_composite_score, Node
         node = Node.create(type="Fact", name="Quaid will move to Japan")
         node.accessed_at = datetime.now().isoformat()
         node.valid_from = (datetime.now() + timedelta(days=30)).isoformat()
@@ -125,7 +125,7 @@ class TestTemporalValidity:
         assert score < score_current - 0.3
 
     def test_valid_fact_no_penalty(self):
-        from memory_graph import _compute_composite_score, Node
+        from datastore.memorydb.memory_graph import _compute_composite_score, Node
         node = Node.create(type="Fact", name="Quaid is a software engineer")
         node.accessed_at = datetime.now().isoformat()
         node.valid_from = (datetime.now() - timedelta(days=365)).isoformat()
@@ -138,7 +138,7 @@ class TestTemporalValidity:
         assert abs(score - score_no_dates) < 0.01  # Nearly identical
 
     def test_no_temporal_fields_no_penalty(self):
-        from memory_graph import _compute_composite_score, Node
+        from datastore.memorydb.memory_graph import _compute_composite_score, Node
         node = Node.create(type="Fact", name="Quaid likes coffee espresso")
         node.accessed_at = datetime.now().isoformat()
         # No valid_from or valid_until
@@ -154,8 +154,8 @@ class TestBackfillHashes:
     """Tests for content hash backfill functionality."""
 
     def test_backfill_sets_hashes(self, tmp_path):
-        from memory_graph import Node, _content_hash
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, _content_hash
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             # Manually insert a node WITHOUT content_hash
             import sqlite3
@@ -192,8 +192,8 @@ class TestBackfillHashes:
                 assert row["content_hash"] == _content_hash("Quaid likes coffee")
 
     def test_backfill_skips_already_hashed(self, tmp_path):
-        from memory_graph import Node, _content_hash
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, _content_hash
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes espresso coffee", owner_id="quaid")
             graph.add_node(node)  # This sets content_hash automatically

@@ -5,7 +5,7 @@ routines should import datastore internals directly from
 `datastore.memorydb.*`, not through this facade.
 """
 
-from memory_graph import (
+from datastore.memorydb.memory_graph import (
     get_graph,
     MemoryGraph,
     Node,

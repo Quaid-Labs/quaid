@@ -71,8 +71,8 @@ class TestGetMonitoredFiles:
         }
         cfg = _make_config_with_core_md(files=files)
 
-        with patch("workspace_audit.get_config", return_value=cfg):
-            from workspace_audit import get_monitored_files
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg):
+            from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert "AGENTS.md" in result
             assert "SOUL.md" in result
@@ -81,9 +81,9 @@ class TestGetMonitoredFiles:
 
     def test_fallback_when_config_missing(self):
         """When config loading fails and no gateway globs, falls back to hardcoded list."""
-        with patch("workspace_audit.get_config", side_effect=Exception("config not found")), \
-             patch("workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
-            from workspace_audit import get_monitored_files
+        with patch("core.lifecycle.workspace_audit.get_config", side_effect=Exception("config not found")), \
+             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
+            from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             # Fallback should have the standard files
             assert "AGENTS.md" in result
@@ -99,18 +99,18 @@ class TestGetMonitoredFiles:
         """Empty files dict in config with no gateway globs triggers fallback."""
         cfg = _make_config_with_core_md(files={})
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
-             patch("workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
-            from workspace_audit import get_monitored_files
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
+            from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             # Empty files + no bootstrap → falls through to fallback
             assert "AGENTS.md" in result
 
     def test_fallback_has_correct_max_lines(self):
         """Hardcoded fallback has sensible maxLines defaults."""
-        with patch("workspace_audit.get_config", side_effect=Exception("err")), \
-             patch("workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
-            from workspace_audit import get_monitored_files
+        with patch("core.lifecycle.workspace_audit.get_config", side_effect=Exception("err")), \
+             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
+            from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert result["SOUL.md"]["maxLines"] == 80
             assert result["IDENTITY.md"]["maxLines"] == 20
@@ -123,9 +123,9 @@ class TestGetMonitoredFiles:
         cfg.docs = MagicMock(spec=[])  # spec=[] means no attributes
         del cfg.docs.core_markdown
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
-             patch("workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
-            from workspace_audit import get_monitored_files
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
+            from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert "AGENTS.md" in result  # fallback
 
@@ -135,10 +135,10 @@ class TestGetMonitoredFiles:
             "SOUL.md": {"purpose": "Personality", "maxLines": 80},
         })
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
-             patch("workspace_audit._get_gateway_bootstrap_globs",
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs",
                    return_value=["projects/*/TOOLS.md"]):
-            from workspace_audit import get_monitored_files
+            from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert "SOUL.md" in result
             # Should include any matching project TOOLS.md files
@@ -164,9 +164,9 @@ class TestCheckBloat:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import check_bloat
+            from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
             assert stats["SOUL.md"]["lines"] == 50
@@ -185,9 +185,9 @@ class TestCheckBloat:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import check_bloat
+            from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
             assert stats["SOUL.md"]["lines"] == 100
@@ -203,9 +203,9 @@ class TestCheckBloat:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import check_bloat
+            from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
             assert stats["TODO.md"]["lines"] == 150
@@ -219,9 +219,9 @@ class TestCheckBloat:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import check_bloat
+            from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
             assert stats["MISSING.md"]["lines"] == 0
@@ -236,9 +236,9 @@ class TestCheckBloat:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import check_bloat
+            from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
             assert stats["SOUL.md"]["purpose"] == "Personality, vibe, values"
@@ -260,9 +260,9 @@ class TestCheckBloat:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import check_bloat
+            from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
             assert stats["SOUL.md"]["over_limit"] is True
@@ -279,9 +279,9 @@ class TestCheckBloat:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import check_bloat
+            from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
             assert stats["NOTES.md"]["maxLines"] == 999
@@ -305,9 +305,9 @@ class TestGetFileLineCounts:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import get_file_line_counts
+            from core.lifecycle.workspace_audit import get_file_line_counts
             counts = get_file_line_counts()
             assert counts["A.md"] == 10
             assert counts["B.md"] == 25
@@ -319,9 +319,9 @@ class TestGetFileLineCounts:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import get_file_line_counts
+            from core.lifecycle.workspace_audit import get_file_line_counts
             counts = get_file_line_counts()
             assert "GHOST.md" not in counts
 
@@ -334,9 +334,9 @@ class TestGetFileLineCounts:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from workspace_audit import get_file_line_counts
+            from core.lifecycle.workspace_audit import get_file_line_counts
             counts = get_file_line_counts()
             # "".splitlines() returns [] so len is 0
             assert counts["EMPTY.md"] == 0
@@ -350,7 +350,7 @@ class TestBuildReviewPrompt:
     """Tests for build_review_prompt()."""
 
     def test_includes_file_purposes(self):
-        from workspace_audit import build_review_prompt
+        from core.lifecycle.workspace_audit import build_review_prompt
         files_config = {
             "SOUL.md": {"purpose": "Personality and vibe", "maxLines": 80},
             "TOOLS.md": {"purpose": "API documentation", "maxLines": 350},
@@ -363,7 +363,7 @@ class TestBuildReviewPrompt:
         assert "API documentation" in prompt
 
     def test_includes_action_types(self):
-        from workspace_audit import build_review_prompt
+        from core.lifecycle.workspace_audit import build_review_prompt
         prompt = build_review_prompt({"X.md": {"purpose": "test", "maxLines": 10}})
         assert "KEEP" in prompt
         assert "MOVE_TO_PROJECT" in prompt
@@ -372,7 +372,7 @@ class TestBuildReviewPrompt:
         assert "FLAG_BLOAT" in prompt
 
     def test_includes_json_format(self):
-        from workspace_audit import build_review_prompt
+        from core.lifecycle.workspace_audit import build_review_prompt
         prompt = build_review_prompt({"X.md": {"purpose": "test", "maxLines": 10}})
         assert "file_stats" in prompt
         assert "decisions" in prompt
@@ -395,10 +395,10 @@ class TestDetectChangedFiles:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path), \
-             patch("workspace_audit.load_last_mtimes", return_value={}):
-            from workspace_audit import detect_changed_files
+             patch("core.lifecycle.workspace_audit.load_last_mtimes", return_value={}):
+            from core.lifecycle.workspace_audit import detect_changed_files
             changed = detect_changed_files()
             assert "A.md" in changed
             assert "B.md" in changed
@@ -414,10 +414,10 @@ class TestDetectChangedFiles:
 
         current_mtime = (tmp_path / "A.md").stat().st_mtime
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _adapter_patch(tmp_path), \
-             patch("workspace_audit.load_last_mtimes", return_value={"A.md": current_mtime}):
-            from workspace_audit import detect_changed_files
+             patch("core.lifecycle.workspace_audit.load_last_mtimes", return_value={"A.md": current_mtime}):
+            from core.lifecycle.workspace_audit import detect_changed_files
             changed = detect_changed_files()
             assert "A.md" not in changed
 
@@ -431,7 +431,7 @@ class TestProjectReviewQueue:
 
     def test_queue_creates_file(self, tmp_path):
         """Queueing a review creates the JSON file."""
-        from workspace_audit import _queue_project_review
+        from core.lifecycle.workspace_audit import _queue_project_review
         (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
         with _adapter_patch(tmp_path):
@@ -455,7 +455,7 @@ class TestProjectReviewQueue:
 
     def test_queue_appends_to_existing(self, tmp_path):
         """Multiple queues accumulate in the same file."""
-        from workspace_audit import _queue_project_review
+        from core.lifecycle.workspace_audit import _queue_project_review
         (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
         with _adapter_patch(tmp_path):
@@ -469,7 +469,7 @@ class TestProjectReviewQueue:
 
     def test_queue_handles_corrupt_file(self, tmp_path):
         """If existing file is corrupt, starts fresh (doesn't crash)."""
-        from workspace_audit import _queue_project_review
+        from core.lifecycle.workspace_audit import _queue_project_review
         (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
         pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
@@ -482,7 +482,7 @@ class TestProjectReviewQueue:
 
     def test_get_returns_pending(self, tmp_path):
         """get_pending_project_reviews returns queued items without deleting."""
-        from workspace_audit import _queue_project_review, get_pending_project_reviews
+        from core.lifecycle.workspace_audit import _queue_project_review, get_pending_project_reviews
         (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
         with _adapter_patch(tmp_path):
@@ -495,14 +495,14 @@ class TestProjectReviewQueue:
 
     def test_get_returns_empty_for_missing_file(self, tmp_path):
         """get_pending_project_reviews returns [] if no file."""
-        from workspace_audit import get_pending_project_reviews
+        from core.lifecycle.workspace_audit import get_pending_project_reviews
 
         with _adapter_patch(tmp_path):
             assert get_pending_project_reviews() == []
 
     def test_get_returns_empty_for_corrupt_file(self, tmp_path):
         """get_pending_project_reviews returns [] if file is corrupt."""
-        from workspace_audit import get_pending_project_reviews
+        from core.lifecycle.workspace_audit import get_pending_project_reviews
         (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
         pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
@@ -512,7 +512,7 @@ class TestProjectReviewQueue:
 
     def test_clear_deletes_file(self, tmp_path):
         """clear_pending_project_reviews removes the file."""
-        from workspace_audit import _queue_project_review, clear_pending_project_reviews
+        from core.lifecycle.workspace_audit import _queue_project_review, clear_pending_project_reviews
         (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
         with _adapter_patch(tmp_path):
@@ -524,14 +524,14 @@ class TestProjectReviewQueue:
 
     def test_clear_idempotent(self, tmp_path):
         """clear_pending_project_reviews is safe on missing file."""
-        from workspace_audit import clear_pending_project_reviews
+        from core.lifecycle.workspace_audit import clear_pending_project_reviews
 
         with _adapter_patch(tmp_path):
             clear_pending_project_reviews()  # Should not raise
 
     def test_queue_rejects_unknown_kwargs(self):
         """_queue_project_review raises TypeError on unknown keyword args."""
-        from workspace_audit import _queue_project_review
+        from core.lifecycle.workspace_audit import _queue_project_review
 
         with pytest.raises(TypeError):
             _queue_project_review(
@@ -547,36 +547,36 @@ class TestSectionOverlapsProtected:
     """Tests for the section-range protected region check."""
 
     def test_no_overlap(self):
-        from workspace_audit import _section_overlaps_protected
+        from core.lifecycle.workspace_audit import _section_overlaps_protected
         # Protected: [100, 200], section: [0, 50]
         assert not _section_overlaps_protected(0, 50, [(100, 200)])
 
     def test_section_inside_protected(self):
-        from workspace_audit import _section_overlaps_protected
+        from core.lifecycle.workspace_audit import _section_overlaps_protected
         # Protected: [0, 200], section: [50, 100]
         assert _section_overlaps_protected(50, 100, [(0, 200)])
 
     def test_protected_inside_section(self):
-        from workspace_audit import _section_overlaps_protected
+        from core.lifecycle.workspace_audit import _section_overlaps_protected
         # Protected: [50, 100], section: [0, 200]
         assert _section_overlaps_protected(0, 200, [(50, 100)])
 
     def test_partial_overlap_start(self):
-        from workspace_audit import _section_overlaps_protected
+        from core.lifecycle.workspace_audit import _section_overlaps_protected
         # Protected: [50, 150], section: [0, 100]
         assert _section_overlaps_protected(0, 100, [(50, 150)])
 
     def test_partial_overlap_end(self):
-        from workspace_audit import _section_overlaps_protected
+        from core.lifecycle.workspace_audit import _section_overlaps_protected
         # Protected: [0, 100], section: [50, 200]
         assert _section_overlaps_protected(50, 200, [(0, 100)])
 
     def test_adjacent_no_overlap(self):
-        from workspace_audit import _section_overlaps_protected
+        from core.lifecycle.workspace_audit import _section_overlaps_protected
         # Protected: [0, 50], section: [50, 100] — adjacent but not overlapping
         assert not _section_overlaps_protected(50, 100, [(0, 50)])
 
     def test_multiple_ranges_one_overlaps(self):
-        from workspace_audit import _section_overlaps_protected
+        from core.lifecycle.workspace_audit import _section_overlaps_protected
         # Two protected ranges, second one overlaps
         assert _section_overlaps_protected(150, 250, [(0, 50), (200, 300)])

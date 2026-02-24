@@ -35,9 +35,9 @@ def _fake_get_embedding(text):
 
 def _make_graph(tmp_path):
     """Create a MemoryGraph backed by a temp SQLite file."""
-    from memory_graph import MemoryGraph
+    from datastore.memorydb.memory_graph import MemoryGraph
     db_file = tmp_path / "test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph, db_file
 
@@ -50,23 +50,23 @@ class TestConfirmationBoostingNodeFields:
     """Node dataclass fields for confirmation boosting."""
 
     def test_node_confirmation_count_default_zero(self):
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         node = Node.create(type="Fact", name="Test fact about something")
         assert node.confirmation_count == 0
 
     def test_node_last_confirmed_at_default_none(self):
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         node = Node.create(type="Fact", name="Test fact about something")
         assert node.last_confirmed_at is None
 
     def test_node_confirmation_count_settable(self):
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         node = Node.create(type="Fact", name="Test fact about something",
                            confirmation_count=5)
         assert node.confirmation_count == 5
 
     def test_node_last_confirmed_at_settable(self):
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         ts = "2026-02-08T10:00:00"
         node = Node.create(type="Fact", name="Test fact about something",
                            last_confirmed_at=ts)
@@ -77,7 +77,7 @@ class TestConfirmationBonusInCompositeScore:
     """_compute_composite_score with confirmation_count."""
 
     def test_confirmation_count_0_no_bonus(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Test fact about something")
         node.confirmation_count = 0
         node.accessed_at = datetime.now().isoformat()
@@ -91,7 +91,7 @@ class TestConfirmationBonusInCompositeScore:
         assert abs(score_0 - score_0b) < 0.01
 
     def test_confirmation_count_1_adds_001(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Test fact about something")
         node.confirmation_count = 0
         base = _compute_composite_score(node, 0.8)
@@ -101,7 +101,7 @@ class TestConfirmationBonusInCompositeScore:
         assert abs(diff - 0.01) < 0.001
 
     def test_confirmation_count_5_adds_005(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Test fact about something")
         node.confirmation_count = 0
         base = _compute_composite_score(node, 0.8)
@@ -111,7 +111,7 @@ class TestConfirmationBonusInCompositeScore:
         assert abs(diff - 0.05) < 0.001
 
     def test_confirmation_count_10_capped_at_005(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Test fact about something")
         node.confirmation_count = 0
         base = _compute_composite_score(node, 0.8)
@@ -122,7 +122,7 @@ class TestConfirmationBonusInCompositeScore:
         assert abs(diff - 0.05) < 0.001
 
     def test_confirmation_count_100_still_capped_at_005(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Test fact about something")
         node.confirmation_count = 0
         base = _compute_composite_score(node, 0.8)
@@ -136,12 +136,12 @@ class TestConfirmationOnDuplicateStore:
     """Confirmation count increments when store() detects a duplicate."""
 
     def test_hash_exact_dedup_increments_confirmation(self, tmp_path):
-        from memory_graph import store
+        from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
         text = "Quaid has a pet cat named Richter"
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph._HAS_CONFIG", False):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
             r1 = store(text, owner_id="quaid")
             assert r1["status"] == "created"
             r2 = store(text, owner_id="quaid")
@@ -152,12 +152,12 @@ class TestConfirmationOnDuplicateStore:
             assert node.storage_strength == pytest.approx(0.03, abs=0.005)
 
     def test_hash_exact_dedup_boosts_confidence(self, tmp_path):
-        from memory_graph import store
+        from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
         text = "Quaid enjoys morning espresso coffee"
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph._HAS_CONFIG", False):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
             r1 = store(text, owner_id="quaid", confidence=0.5)
             r2 = store(text, owner_id="quaid")
             # Confidence should be boosted by 0.02 (from 0.5 to 0.52)
@@ -165,12 +165,12 @@ class TestConfirmationOnDuplicateStore:
             assert node.confidence == pytest.approx(0.52, abs=0.01)
 
     def test_confirmation_confidence_capped_at_095(self, tmp_path):
-        from memory_graph import store
+        from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
         text = "Quaid is a software developer engineer"
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph._HAS_CONFIG", False):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
             store(text, owner_id="quaid", confidence=0.94)
             # Re-store triggers +0.02, but should cap at 0.95
             store(text, owner_id="quaid")
@@ -187,7 +187,7 @@ class TestWhenTemporalBoost:
     """_compute_composite_score with intent='WHEN' and temporal metadata."""
 
     def test_general_intent_no_temporal_bonus(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         # Use same node, compare GENERAL vs WHEN to isolate the temporal_data_bonus
         # (temporal_penalty is independent of intent, so it cancels out)
         # valid_from in past, valid_until in future -> no temporal_penalty
@@ -200,7 +200,7 @@ class TestWhenTemporalBoost:
         assert abs((score_when - score_general) - 0.10) < 0.001
 
     def test_when_intent_no_temporal_metadata_no_bonus(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Quaid likes coffee a lot")
         # No valid_from, no valid_until, no created_at
         node.valid_from = None
@@ -212,7 +212,7 @@ class TestWhenTemporalBoost:
         assert abs(score - base) < 0.001
 
     def test_when_intent_valid_from_only_adds_005(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Quaid started working in January")
         node.valid_from = "2025-01-15"
         node.valid_until = None
@@ -228,7 +228,7 @@ class TestWhenTemporalBoost:
         assert abs(diff - 0.05) < 0.001
 
     def test_when_intent_valid_until_only_adds_005(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         # Use future valid_until to avoid temporal_penalty for expired facts
         node = Node.create(type="Fact", name="Quaid finished the project December")
         node.valid_from = None
@@ -245,7 +245,7 @@ class TestWhenTemporalBoost:
         assert abs(diff - 0.05) < 0.001
 
     def test_when_intent_both_valid_from_and_until_adds_010(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         # valid_from in past, valid_until in future -> no temporal_penalty
         node = Node.create(type="Fact", name="Quaid is in Bali now for a while")
         node.valid_from = "2026-01-01"
@@ -262,7 +262,7 @@ class TestWhenTemporalBoost:
         assert abs(diff - 0.10) < 0.001
 
     def test_when_intent_created_at_only_adds_005(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Quaid mentioned something today")
         node.valid_from = None
         node.valid_until = None
@@ -278,7 +278,7 @@ class TestWhenTemporalBoost:
         assert abs(diff - 0.05) < 0.001
 
     def test_when_intent_both_fields_override_created_at_bonus(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         # Both valid_from and valid_until -> 0.10, not stacked 0.05+0.05
         # Use valid_from in past, valid_until in future to avoid temporal penalty
         node = Node.create(type="Fact", name="Quaid is in Bali for a period")
@@ -297,7 +297,7 @@ class TestWhenTemporalBoost:
         assert abs(diff - 0.10) < 0.001
 
     def test_when_intent_score_capped_at_1(self):
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="Some temporal fact here")
         node.valid_from = "2025-01-01"
         node.valid_until = "2025-12-31"
@@ -319,15 +319,15 @@ class TestDebugFlag:
     @pytest.fixture(autouse=True)
     def _mock_reranker(self):
         """Disable reranker for all debug flag tests (not testing reranker here)."""
-        with patch("memory_graph._rerank_with_cross_encoder", side_effect=lambda q, r, c=None: r):
+        with patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder", side_effect=lambda q, r, c=None: r):
             yield
 
     def test_recall_debug_false_no_debug_keys(self, tmp_path):
-        from memory_graph import store, recall
+        from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             store("Quaid likes espresso coffee beverages",
                   owner_id="quaid", skip_dedup=True)
             results = recall("Quaid likes espresso coffee beverages",
@@ -337,11 +337,11 @@ class TestDebugFlag:
                 assert "_debug" not in r
 
     def test_recall_debug_true_has_debug_keys(self, tmp_path):
-        from memory_graph import store, recall
+        from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             store("Quaid likes espresso coffee beverages",
                   owner_id="quaid", skip_dedup=True)
             results = recall("Quaid likes espresso coffee beverages",
@@ -353,11 +353,11 @@ class TestDebugFlag:
             assert any("_debug" in r for r in direct_results)
 
     def test_debug_dict_has_expected_keys(self, tmp_path):
-        from memory_graph import store, recall
+        from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             store("Quaid likes espresso coffee beverages",
                   owner_id="quaid", skip_dedup=True)
             results = recall("Quaid likes espresso coffee beverages",
@@ -374,11 +374,11 @@ class TestDebugFlag:
             assert expected_keys.issubset(set(debug.keys()))
 
     def test_debug_dict_value_types(self, tmp_path):
-        from memory_graph import store, recall
+        from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             store("Quaid likes espresso coffee beverages",
                   owner_id="quaid", skip_dedup=True)
             results = recall("Quaid likes espresso coffee beverages",
@@ -398,11 +398,11 @@ class TestDebugFlag:
 
     def test_debug_default_is_false(self, tmp_path):
         """recall() defaults to debug=False."""
-        from memory_graph import store, recall
+        from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             store("Quaid likes espresso coffee beverages",
                   owner_id="quaid", skip_dedup=True)
             # Call without debug parameter
@@ -414,11 +414,11 @@ class TestDebugFlag:
 
     def test_debug_composite_score_matches_similarity(self, tmp_path):
         """The _debug composite_score should match the reported similarity."""
-        from memory_graph import store, recall
+        from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             store("Quaid likes espresso coffee beverages",
                   owner_id="quaid", skip_dedup=True)
             results = recall("Quaid likes espresso coffee beverages",
@@ -439,8 +439,8 @@ class TestTemporalContradictionCandidates:
 
     def test_contradiction_candidates_include_temporal_fields(self, tmp_path):
         """recall_similar_pairs includes temporal fields in contradiction candidates."""
-        from janitor import recall_similar_pairs, JanitorMetrics, CONTRADICTION_MIN_SIM
-        from memory_graph import Node
+        from core.lifecycle.janitor import recall_similar_pairs, JanitorMetrics, CONTRADICTION_MIN_SIM
+        from datastore.memorydb.memory_graph import Node
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
@@ -476,7 +476,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_prompt_includes_temporal_context(self):
         """batch_contradiction_check formats temporal validity in the prompt."""
-        from janitor import batch_contradiction_check, JanitorMetrics
+        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid lives in Austin",
@@ -494,7 +494,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": false}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         assert len(captured_prompts) == 1
@@ -505,7 +505,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_prompt_includes_temporal_succession_instruction(self):
         """The contradiction prompt explicitly mentions temporal succession."""
-        from janitor import batch_contradiction_check, JanitorMetrics
+        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid lives in Austin TX",
@@ -520,7 +520,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": false}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         prompt = captured_prompts[0]
@@ -528,7 +528,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_prompt_shows_recorded_dates(self):
         """The prompt should show recorded dates for each fact."""
-        from janitor import batch_contradiction_check, JanitorMetrics
+        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid weighs 180 pounds",
@@ -543,7 +543,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": false}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         prompt = captured_prompts[0]
@@ -552,7 +552,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_no_temporal_shows_unknown(self):
         """When created_at is missing, prompt shows 'unknown'."""
-        from janitor import batch_contradiction_check, JanitorMetrics
+        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid has a cat pet",
@@ -566,7 +566,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": true, "explanation": "direct contradiction"}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         prompt = captured_prompts[0]
@@ -574,7 +574,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_skips_valid_info_when_absent(self):
         """When no valid_from/valid_until, no [valid: ...] annotation appears."""
-        from janitor import batch_contradiction_check, JanitorMetrics
+        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid eats meat regularly",
@@ -589,7 +589,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": true, "explanation": "contradiction"}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         prompt = captured_prompts[0]

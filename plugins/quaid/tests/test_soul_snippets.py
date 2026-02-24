@@ -58,8 +58,8 @@ def mock_config():
 
 class TestWriteJournalEntry:
     def test_creates_journal_file(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry
             result = write_journal_entry(
                 "SOUL.md",
                 "Something beautiful happened today.",
@@ -75,8 +75,8 @@ class TestWriteJournalEntry:
         assert "Something beautiful happened today." in content
 
     def test_dedup_by_date_and_trigger(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry
             write_journal_entry("SOUL.md", "First entry.", "Compaction", "2026-02-10")
             result = write_journal_entry("SOUL.md", "Second entry.", "Compaction", "2026-02-10")
         assert result is False  # Duplicate date+trigger
@@ -85,8 +85,8 @@ class TestWriteJournalEntry:
         assert "Second entry." not in content
 
     def test_different_trigger_same_date_allowed(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry
             write_journal_entry("SOUL.md", "Compaction entry.", "Compaction", "2026-02-10")
             result = write_journal_entry("SOUL.md", "Reset entry.", "Reset", "2026-02-10")
         assert result is True
@@ -95,14 +95,14 @@ class TestWriteJournalEntry:
         assert "Reset entry." in content
 
     def test_empty_content_skipped(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry
             result = write_journal_entry("SOUL.md", "", "Compaction", "2026-02-10")
         assert result is False
 
     def test_newest_at_top(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry
             write_journal_entry("SOUL.md", "Earlier entry.", "Reset", "2026-02-09")
             write_journal_entry("SOUL.md", "Later entry.", "Compaction", "2026-02-10")
         content = (workspace_dir / "journal" / "SOUL.journal.md").read_text()
@@ -114,8 +114,8 @@ class TestWriteJournalEntry:
 class TestJournalMaxEntriesCap:
     def test_archives_when_exceeded(self, workspace_dir, mock_config):
         mock_config.docs.journal.max_entries_per_file = 3
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry
             for i in range(4):
                 write_journal_entry("SOUL.md", f"Entry {i}.", "Compaction", f"2026-02-{10+i:02d}")
 
@@ -135,8 +135,8 @@ class TestJournalMaxEntriesCap:
 
 class TestReadJournalFile:
     def test_no_file_returns_empty(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import read_journal_file
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import read_journal_file
             content, entries = read_journal_file("SOUL.md")
         assert content == ""
         assert entries == []
@@ -152,8 +152,8 @@ class TestReadJournalFile:
             "## 2026-02-09 — Compaction\n"
             "Today I noticed patterns in how I respond.\n"
         )
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import read_journal_file
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import read_journal_file
             content, entries = read_journal_file("SOUL.md")
         assert len(entries) == 2
         assert entries[0]["date"] == "2026-02-10"
@@ -169,8 +169,8 @@ class TestReadJournalFile:
 
 class TestArchiveSystem:
     def test_monthly_grouping(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _archive_oldest_entries
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _archive_oldest_entries
             entries = [
                 {"date": "2026-01-15", "trigger": "Compaction", "content": "January entry."},
                 {"date": "2026-02-10", "trigger": "Reset", "content": "February entry."},
@@ -184,8 +184,8 @@ class TestArchiveSystem:
         assert "February entry." in (archive_dir / "SOUL-2026-02.md").read_text()
 
     def test_archive_dedup(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _archive_oldest_entries
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _archive_oldest_entries
             entries = [
                 {"date": "2026-01-15", "trigger": "Compaction", "content": "Entry."},
             ]
@@ -206,8 +206,8 @@ class TestArchiveSystem:
             "## 2026-02-09 — Compaction\n"
             "Archive this entry.\n"
         )
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import archive_entries
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import archive_entries
             archive_entries("SOUL.md", [
                 {"date": "2026-02-09", "trigger": "Compaction", "content": "Archive this entry."}
             ])
@@ -224,28 +224,28 @@ class TestArchiveSystem:
 
 class TestDistillationState:
     def test_state_file_created(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _save_distillation_state, _get_distillation_state
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _save_distillation_state, _get_distillation_state
             _save_distillation_state({"SOUL.md": {"last_distilled": "2026-02-10", "entries_distilled": 3}})
             state = _get_distillation_state()
         assert state["SOUL.md"]["last_distilled"] == "2026-02-10"
         assert state["SOUL.md"]["entries_distilled"] == 3
 
     def test_distillation_due_when_no_state(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _is_distillation_due
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _is_distillation_due
             assert _is_distillation_due("SOUL.md") is True
 
     def test_distillation_not_due_when_recent(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _save_distillation_state, _is_distillation_due
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _save_distillation_state, _is_distillation_due
             today = datetime.now().strftime("%Y-%m-%d")
             _save_distillation_state({"SOUL.md": {"last_distilled": today}})
             assert _is_distillation_due("SOUL.md") is False
 
     def test_distillation_due_after_interval(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _save_distillation_state, _is_distillation_due
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _save_distillation_state, _is_distillation_due
             old_date = (datetime.now() - timedelta(days=8)).strftime("%Y-%m-%d")
             _save_distillation_state({"SOUL.md": {"last_distilled": old_date}})
             assert _is_distillation_due("SOUL.md") is True
@@ -258,8 +258,8 @@ class TestDistillationState:
 
 class TestDistillation:
     def test_build_distillation_prompt(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import build_distillation_prompt
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import build_distillation_prompt
             entries = [
                 {"date": "2026-02-10", "trigger": "Reset", "content": "A deep reflection."},
             ]
@@ -272,8 +272,8 @@ class TestDistillation:
     def test_apply_distillation_additions(self, workspace_dir, mock_config):
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.\n")
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import apply_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import apply_distillation
             result = {
                 "additions": [{"text": "I value trust deeply.", "after_section": "END"}],
                 "edits": [],
@@ -286,8 +286,8 @@ class TestDistillation:
     def test_apply_distillation_edits(self, workspace_dir, mock_config):
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n\nI am a simple bot.\n")
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import apply_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import apply_distillation
             result = {
                 "additions": [],
                 "edits": [{"old_text": "I am a simple bot.", "new_text": "I am Alfie, and I grow.", "reason": "More accurate"}],
@@ -302,8 +302,8 @@ class TestDistillation:
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n\nOriginal content.\n")
         original = parent.read_text()
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import apply_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import apply_distillation
             result = {
                 "additions": [{"text": "New insight.", "after_section": "END"}],
                 "edits": [{"old_text": "Original content.", "new_text": "Modified.", "reason": "test"}],
@@ -314,7 +314,7 @@ class TestDistillation:
         # Dry run: file should NOT be changed
         assert parent.read_text() == original
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_full_distillation_dry_run(self, mock_opus, workspace_dir, mock_config):
         """End-to-end dry run with mocked Opus response."""
         journal_dir = workspace_dir / "journal"
@@ -335,8 +335,8 @@ class TestDistillation:
             "captured_dates": ["2026-02-10"],
         }), 1.5)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True, force_distill=True)
 
         assert result["total_entries"] == 1
@@ -344,7 +344,7 @@ class TestDistillation:
         # Dry run: parent file should NOT be changed
         assert "curiosity" not in (workspace_dir / "SOUL.md").read_text()
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_full_distillation_apply(self, mock_opus, workspace_dir, mock_config):
         """End-to-end apply with mocked Opus response."""
         journal_dir = workspace_dir / "journal"
@@ -365,8 +365,8 @@ class TestDistillation:
             "captured_dates": ["2026-02-10"],
         }), 1.5)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=False, force_distill=True)
 
         assert result["additions"] == 1
@@ -377,8 +377,8 @@ class TestDistillation:
     def test_apply_distillation_edits_plus_additions(self, workspace_dir, mock_config):
         """Regression: edits must not be lost when additions are also applied."""
         (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n\n## Identity\nI am old text.\n")
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import apply_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import apply_distillation
             result = apply_distillation("SOUL.md", {
                 "edits": [{"old_text": "I am old text.", "new_text": "I am new text."}],
                 "additions": [{"text": "I grow every day.", "after_section": "END"}],
@@ -395,8 +395,8 @@ class TestDistillation:
 
     def test_apply_distillation_missing_file(self, workspace_dir, mock_config):
         """apply_distillation returns error when target file doesn't exist."""
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import apply_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import apply_distillation
             stats = apply_distillation("NONEXISTENT.md", {
                 "additions": [{"text": "Won't be inserted.", "after_section": "END"}],
             }, dry_run=False)
@@ -406,8 +406,8 @@ class TestDistillation:
     def test_apply_distillation_edit_not_found(self, workspace_dir, mock_config):
         """apply_distillation records error when old_text doesn't match."""
         (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import apply_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
                 "edits": [{"old_text": "text that does not exist", "new_text": "replacement"}],
             }, dry_run=False)
@@ -418,8 +418,8 @@ class TestDistillation:
     def test_apply_distillation_empty_edit_skipped(self, workspace_dir, mock_config):
         """apply_distillation silently skips edits with empty old_text or new_text."""
         (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import apply_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
                 "edits": [
                     {"old_text": "", "new_text": "replacement"},
@@ -431,7 +431,7 @@ class TestDistillation:
         # File unchanged
         assert "I am Alfie." in (workspace_dir / "SOUL.md").read_text()
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_distillation_interval_gated(self, mock_opus, workspace_dir, mock_config):
         """force_distill=False respects interval — skips when not due."""
         journal_dir = workspace_dir / "journal"
@@ -442,8 +442,8 @@ class TestDistillation:
         (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         # Set distillation state to today (not due yet)
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _save_distillation_state, run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _save_distillation_state, run_journal_distillation
             today = datetime.now().strftime("%Y-%m-%d")
             _save_distillation_state({"SOUL.md": {"last_distilled": today}})
             result = run_journal_distillation(dry_run=True, force_distill=False)
@@ -452,7 +452,7 @@ class TestDistillation:
         mock_opus.assert_not_called()
         assert result["total_entries"] == 0
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_distillation_interval_gated_when_due(self, mock_opus, workspace_dir, mock_config):
         """force_distill=False proceeds when interval has elapsed."""
         journal_dir = workspace_dir / "journal"
@@ -469,8 +469,8 @@ class TestDistillation:
         }), 1.0)
 
         # Set distillation state to 10 days ago (due)
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _save_distillation_state, run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _save_distillation_state, run_journal_distillation
             old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
             _save_distillation_state({"SOUL.md": {"last_distilled": old_date}})
             result = run_journal_distillation(dry_run=True, force_distill=False)
@@ -478,7 +478,7 @@ class TestDistillation:
         mock_opus.assert_called_once()
         assert result["total_entries"] >= 1
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_distillation_opus_empty_response(self, mock_opus, workspace_dir, mock_config):
         """Distillation handles empty Opus response gracefully."""
         journal_dir = workspace_dir / "journal"
@@ -490,14 +490,14 @@ class TestDistillation:
 
         mock_opus.return_value = ("", 0.5)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True, force_distill=True)
 
         assert len(result["errors"]) >= 1
         assert "no response" in result["errors"][0].lower()
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_distillation_opus_unparseable_json(self, mock_opus, workspace_dir, mock_config):
         """Distillation handles unparseable Opus JSON gracefully."""
         journal_dir = workspace_dir / "journal"
@@ -509,14 +509,14 @@ class TestDistillation:
 
         mock_opus.return_value = ("This is not JSON at all {{{broken", 0.5)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True, force_distill=True)
 
         assert len(result["errors"]) >= 1
         assert "parse" in result["errors"][0].lower()
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_distillation_parent_file_missing(self, mock_opus, workspace_dir, mock_config):
         """Distillation skips files where the parent markdown doesn't exist."""
         journal_dir = workspace_dir / "journal"
@@ -526,8 +526,8 @@ class TestDistillation:
         )
         # Note: NOT creating SOUL.md
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True, force_distill=True)
 
         # Opus should NOT be called since parent file is missing
@@ -543,8 +543,8 @@ class TestDistillation:
 class TestWriteJournalEdgeCases:
     def test_date_defaults_to_today(self, workspace_dir, mock_config):
         """write_journal_entry with date_str=None defaults to today."""
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry
             result = write_journal_entry("SOUL.md", "Auto-dated entry.", "Compaction")
         assert result is True
         content = (workspace_dir / "journal" / "SOUL.journal.md").read_text()
@@ -553,15 +553,15 @@ class TestWriteJournalEdgeCases:
 
     def test_whitespace_only_content_skipped(self, workspace_dir, mock_config):
         """write_journal_entry rejects whitespace-only content."""
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry
             result = write_journal_entry("SOUL.md", "   \n  \t  ", "Compaction", "2026-02-10")
         assert result is False
 
     def test_entry_content_with_header_like_text(self, workspace_dir, mock_config):
         """Entry body containing ## date pattern must not break parser."""
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import write_journal_entry, read_journal_file
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import write_journal_entry, read_journal_file
             # Write an entry whose body contains something that looks like a header
             write_journal_entry("SOUL.md",
                 "I remembered that on ## 2025-01-01 — something happened.\nBut that was a memory, not a new entry.",
@@ -585,8 +585,8 @@ class TestReadJournalEdgeCases:
             "## 2026-02-09 — Compaction\n"
             "This one has content.\n"
         )
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import read_journal_file
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import read_journal_file
             _, entries = read_journal_file("SOUL.md")
         # Only the entry with content should be returned
         assert len(entries) == 1
@@ -600,8 +600,8 @@ class TestReadJournalEdgeCases:
             "## 2026-02-10 — Reset\n"
             "Entry without title header.\n"
         )
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import read_journal_file
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import read_journal_file
             _, entries = read_journal_file("SOUL.md")
         assert len(entries) == 1
         assert entries[0]["content"] == "Entry without title header."
@@ -617,8 +617,8 @@ class TestArchiveAllEntries:
             "## 2026-02-10 — Reset\n"
             "Only entry.\n"
         )
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import archive_entries
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import archive_entries
             archive_entries("SOUL.md", [
                 {"date": "2026-02-10", "trigger": "Reset", "content": "Only entry."}
             ])
@@ -634,18 +634,18 @@ class TestArchiveAllEntries:
 class TestDistillationStateEdgeCases:
     def test_corrupt_state_json(self, workspace_dir, mock_config):
         """Corrupt state JSON returns empty dict."""
-        with patch("soul_snippets.get_config", return_value=mock_config):
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
             journal_dir = workspace_dir / "journal"
             journal_dir.mkdir()
             (journal_dir / ".distillation-state.json").write_text("NOT VALID JSON{{{")
-            from soul_snippets import _get_distillation_state
+            from core.lifecycle.soul_snippets import _get_distillation_state
             state = _get_distillation_state()
         assert state == {}
 
     def test_corrupt_date_triggers_distillation(self, workspace_dir, mock_config):
         """Invalid date string in state triggers distillation (safe fallback)."""
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import _save_distillation_state, _is_distillation_due
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import _save_distillation_state, _is_distillation_due
             _save_distillation_state({"SOUL.md": {"last_distilled": "not-a-date"}})
             assert _is_distillation_due("SOUL.md") is True
 
@@ -653,7 +653,7 @@ class TestDistillationStateEdgeCases:
 class TestInsertIntoFileEdgeCases:
     def test_section_not_found_appends_to_end(self, workspace_dir):
         """_insert_into_file appends at end when section heading is not found."""
-        from soul_snippets import _insert_into_file
+        from core.lifecycle.soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.\n")
         result = _insert_into_file("SOUL.md", "Appended text.", "NonexistentSection")
@@ -665,7 +665,7 @@ class TestInsertIntoFileEdgeCases:
 
     def test_end_insert_no_trailing_newline(self, workspace_dir):
         """_insert_into_file handles files without trailing newline."""
-        from soul_snippets import _insert_into_file
+        from core.lifecycle.soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.")  # No trailing newline
         result = _insert_into_file("SOUL.md", "New line.", "END")
@@ -687,8 +687,8 @@ class TestMigrationFromSnippets:
             "- I noticed something about trust.\n"
             "- The way we work together feels natural.\n"
         )
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import migrate_snippets_to_journal
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import migrate_snippets_to_journal
             migrated = migrate_snippets_to_journal()
         assert migrated == 2
         # Old file should be deleted
@@ -702,14 +702,14 @@ class TestMigrationFromSnippets:
 
     def test_empty_snippets_file_deleted(self, workspace_dir, mock_config):
         (workspace_dir / "SOUL.snippets.md").write_text("")
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import migrate_snippets_to_journal
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import migrate_snippets_to_journal
             migrate_snippets_to_journal()
         assert not (workspace_dir / "SOUL.snippets.md").exists()
 
     def test_no_snippets_files_noop(self, workspace_dir, mock_config):
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import migrate_snippets_to_journal
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import migrate_snippets_to_journal
             migrated = migrate_snippets_to_journal()
         assert migrated == 0
 
@@ -723,8 +723,8 @@ class TestMigrationFromSnippets:
             "## Reset — 2026-02-09 10:00:00\n"
             "- Earlier insight.\n"
         )
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import migrate_snippets_to_journal, read_journal_file
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import migrate_snippets_to_journal, read_journal_file
             migrated = migrate_snippets_to_journal()
             _, entries = read_journal_file("SOUL.md")
 
@@ -744,8 +744,8 @@ class TestMigrationFromSnippets:
 class TestDisabledConfig:
     def test_disabled_skips(self, workspace_dir, mock_config):
         mock_config.docs.journal.enabled = False
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=True)
         assert result.get("skipped") is True
 
@@ -757,13 +757,13 @@ class TestDisabledConfig:
 
 class TestLegacyReadSnippetsFile:
     def test_no_file_returns_empty(self, workspace_dir):
-        from soul_snippets import read_snippets_file
+        from core.lifecycle.soul_snippets import read_snippets_file
         content, sections = read_snippets_file("SOUL.md")
         assert content == ""
         assert sections == []
 
     def test_parses_single_section(self, workspace_dir):
-        from soul_snippets import read_snippets_file
+        from core.lifecycle.soul_snippets import read_snippets_file
         (workspace_dir / "SOUL.snippets.md").write_text(
             "# SOUL — Pending Snippets\n\n"
             "## Compaction — 2026-02-10 14:30:22\n"
@@ -777,7 +777,7 @@ class TestLegacyReadSnippetsFile:
 
 class TestLegacyApplyDecisions:
     def test_discard_counts(self, workspace_dir, mock_config):
-        from soul_snippets import apply_decisions
+        from core.lifecycle.soul_snippets import apply_decisions
         all_snippets = {
             "SOUL.md": {
                 "parent_content": "# SOUL\nExisting content.",
@@ -792,7 +792,7 @@ class TestLegacyApplyDecisions:
         assert stats["discarded"] == 1
 
     def test_fold_inserts_text(self, workspace_dir, mock_config):
-        from soul_snippets import apply_decisions
+        from core.lifecycle.soul_snippets import apply_decisions
         parent_path = workspace_dir / "SOUL.md"
         parent_path.write_text("# SOUL\n\nI am Alfie.\n")
         snippets_path = workspace_dir / "SOUL.snippets.md"
@@ -816,7 +816,7 @@ class TestLegacyApplyDecisions:
         assert "I value trust above all." in parent_path.read_text()
 
     def test_invalid_snippet_index_error(self, workspace_dir):
-        from soul_snippets import apply_decisions
+        from core.lifecycle.soul_snippets import apply_decisions
         all_snippets = {
             "SOUL.md": {"parent_content": "", "snippets": ["one"], "config": {}}
         }
@@ -825,7 +825,7 @@ class TestLegacyApplyDecisions:
         assert len(stats["errors"]) == 1
 
     def test_unknown_action_defaults_to_discard(self, workspace_dir):
-        from soul_snippets import apply_decisions
+        from core.lifecycle.soul_snippets import apply_decisions
         all_snippets = {
             "SOUL.md": {"parent_content": "# SOUL\n", "snippets": ["A snippet."], "config": {}}
         }
@@ -841,7 +841,7 @@ class TestLegacyApplyDecisions:
 
 class TestInsertIntoFile:
     def test_section_targeted_insert(self, workspace_dir):
-        from soul_snippets import _insert_into_file
+        from core.lifecycle.soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n\n## Identity\n\nI am Alfie.\n\n## Values\n\nI care about truth.\n")
         result = _insert_into_file("SOUL.md", "I am also curious.", "Identity")
@@ -853,19 +853,19 @@ class TestInsertIntoFile:
         assert identity_pos < snippet_pos < values_pos
 
     def test_maxlines_blocks_insert(self, workspace_dir):
-        from soul_snippets import _insert_into_file
+        from core.lifecycle.soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n" + "line\n" * 9)  # 10 lines
         result = _insert_into_file("SOUL.md", "Should not appear.", "END", max_lines=10)
         assert result is False
 
     def test_missing_file_returns_false(self, workspace_dir):
-        from soul_snippets import _insert_into_file
+        from core.lifecycle.soul_snippets import _insert_into_file
         result = _insert_into_file("NONEXISTENT.md", "text", "END")
         assert result is False
 
     def test_hash_prefixed_text_gets_bullet(self, workspace_dir):
-        from soul_snippets import _insert_into_file
+        from core.lifecycle.soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n\nContent.\n")
         _insert_into_file("SOUL.md", "# My heading-like text", "END")
@@ -881,7 +881,7 @@ class TestInsertIntoFile:
 
 class TestBackupFile:
     def test_creates_backup(self, workspace_dir):
-        from soul_snippets import backup_file
+        from core.lifecycle.soul_snippets import backup_file
         src = workspace_dir / "SOUL.md"
         src.write_text("# SOUL\nOriginal content.")
         result = backup_file("SOUL.md")
@@ -889,7 +889,7 @@ class TestBackupFile:
         assert Path(result).exists()
 
     def test_no_file_returns_none(self, workspace_dir):
-        from soul_snippets import backup_file
+        from core.lifecycle.soul_snippets import backup_file
         result = backup_file("NONEXISTENT.md")
         assert result is None
 
@@ -933,13 +933,13 @@ class TestConfigParsing:
 class TestSnippetReview:
     def test_no_snippets_returns_zero(self, workspace_dir, mock_config):
         """No .snippets.md files returns zero total."""
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
         assert result["total_snippets"] == 0
         assert result["folded"] == 0
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_dry_run_does_not_modify(self, mock_opus, workspace_dir, mock_config):
         """Dry run reviews snippets but does not modify parent files."""
         # Create a snippets file
@@ -957,8 +957,8 @@ class TestSnippetReview:
             ]
         }), 1.0)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
@@ -966,7 +966,7 @@ class TestSnippetReview:
         # Dry run: parent file should NOT be changed
         assert "trust" not in (workspace_dir / "SOUL.md").read_text()
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_apply_folds_into_parent(self, mock_opus, workspace_dir, mock_config):
         """Apply mode folds snippets into parent file and cleans up."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -983,8 +983,8 @@ class TestSnippetReview:
             ]
         }), 1.0)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=False)
 
         assert result["folded"] == 1
@@ -993,8 +993,8 @@ class TestSnippetReview:
     def test_disabled_skips(self, workspace_dir, mock_config):
         """Snippets disabled returns skipped."""
         mock_config.docs.journal.snippets_enabled = False
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
         assert result.get("skipped") is True
         assert result["reason"] == "snippets_disabled"
@@ -1002,12 +1002,12 @@ class TestSnippetReview:
     def test_enabled_false_disables_snippets(self, workspace_dir, mock_config):
         """enabled=False also disables snippets (snippets depend on enabled)."""
         mock_config.docs.journal.enabled = False
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
         assert result.get("skipped") is True
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_opus_empty_response(self, mock_opus, workspace_dir, mock_config):
         """Empty Opus response returns error, doesn't crash."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -1018,14 +1018,14 @@ class TestSnippetReview:
         (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = ("", 0.5)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
         assert len(result["errors"]) >= 1
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_opus_unparseable_json(self, mock_opus, workspace_dir, mock_config):
         """Unparseable Opus response returns error gracefully."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -1036,14 +1036,14 @@ class TestSnippetReview:
         (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = ("This is not JSON {{{broken", 0.5)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
         assert len(result["errors"]) >= 1
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_opus_empty_decisions(self, mock_opus, workspace_dir, mock_config):
         """Opus returns valid JSON but empty decisions list."""
         (workspace_dir / "SOUL.snippets.md").write_text(
@@ -1054,8 +1054,8 @@ class TestSnippetReview:
         (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = (json.dumps({"decisions": []}), 0.5)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         assert result["total_snippets"] == 1
@@ -1076,8 +1076,8 @@ class TestDualSystem:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- Active snippet that should remain.\n"
         )
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_journal_distillation
             run_journal_distillation(dry_run=True)
 
         # Snippet file should still exist (not migrated away)
@@ -1101,8 +1101,8 @@ class TestDualSystem:
             "A reflective journal entry.\n"
         )
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import read_snippets_file, read_journal_file
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import read_snippets_file, read_journal_file
 
             _, snippets = read_snippets_file("SOUL.md")
             _, journal_entries = read_journal_file("SOUL.md")

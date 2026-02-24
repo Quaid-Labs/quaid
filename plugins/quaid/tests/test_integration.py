@@ -40,9 +40,9 @@ def _fake_get_embedding(text):
 
 def _make_graph(tmp_path):
     """Create a MemoryGraph backed by a temp SQLite file."""
-    from memory_graph import MemoryGraph
+    from datastore.memorydb.memory_graph import MemoryGraph
     db_file = tmp_path / "test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph, db_file
 
@@ -56,12 +56,12 @@ class TestStoreRecallRoundTrip:
 
     def test_store_then_recall_finds_fact(self, tmp_path):
         """A stored fact should be retrievable via recall."""
-        from memory_graph import store, recall
+        from datastore.memorydb.memory_graph import store, recall
 
         graph, db_file = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             result = store(
                 text="Quaid's favorite color is blue",
                 category="preference",
@@ -84,12 +84,12 @@ class TestStoreRecallRoundTrip:
 
     def test_store_with_edge_creates_both(self, tmp_path):
         """Storing a fact and then creating an edge should link them."""
-        from memory_graph import store, create_edge
+        from datastore.memorydb.memory_graph import store, create_edge
 
         graph, db_file = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             # Store two facts
             r1 = store(text="Quaid lives in Bali", owner_id="quaid", skip_dedup=True)
             r2 = store(text="Bali is in Indonesia", owner_id="quaid", skip_dedup=True)
@@ -118,12 +118,12 @@ class TestStatusLifecycle:
 
     def test_deleted_fact_not_in_recall(self, tmp_path):
         """A deleted fact should not appear in recall results."""
-        from memory_graph import store, recall, soft_delete
+        from datastore.memorydb.memory_graph import store, recall, soft_delete
 
         graph, db_file = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             result = store(
                 text="Quaid has a cat named Whiskers",
                 category="fact",
@@ -147,12 +147,12 @@ class TestStatusLifecycle:
 
     def test_active_fact_in_recall(self, tmp_path):
         """An active fact should appear in recall results."""
-        from memory_graph import store, recall
+        from datastore.memorydb.memory_graph import store, recall
 
         graph, db_file = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             result = store(
                 text="Quaid has a dog named Rex",
                 category="fact",
@@ -181,19 +181,19 @@ class TestContentHashConsistency:
 
     def test_public_alias_matches_internal(self):
         """content_hash (public) and _content_hash (internal) are the same function."""
-        from memory_graph import content_hash, _content_hash
+        from datastore.memorydb.memory_graph import content_hash, _content_hash
         assert content_hash is _content_hash
 
     def test_content_hash_deterministic(self):
         """Same input produces same hash."""
-        from memory_graph import content_hash
+        from datastore.memorydb.memory_graph import content_hash
         h1 = content_hash("test fact")
         h2 = content_hash("test fact")
         assert h1 == h2
 
     def test_content_hash_differs_for_different_input(self):
         """Different input produces different hash."""
-        from memory_graph import content_hash
+        from datastore.memorydb.memory_graph import content_hash
         h1 = content_hash("fact one")
         h2 = content_hash("fact two")
         assert h1 != h2
@@ -216,9 +216,9 @@ class TestProtectedRegionsLib:
         assert len(ranges) == 1
 
     def test_workspace_audit_alias_is_same_function(self):
-        """workspace_audit._strip_protected_regions is the lib version."""
+        """core.lifecycle.workspace_audit._strip_protected_regions is the lib version."""
         from lib.markdown import strip_protected_regions
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         assert _strip_protected_regions is strip_protected_regions
 
     def test_section_overlaps_from_lib(self):
@@ -247,7 +247,7 @@ class TestModuleExports:
 
     def test_all_aliases_in_all(self):
         """Every backward-compat alias should be in __all__."""
-        import memory_graph
+        import datastore.memorydb.memory_graph as memory_graph
         all_exports = set(memory_graph.__all__)
 
         # These are the backward-compat aliases that production code imports
@@ -267,13 +267,13 @@ class TestModuleExports:
 
     def test_all_entries_exist(self):
         """Every name in __all__ should be a real attribute on the module."""
-        import memory_graph
+        import datastore.memorydb.memory_graph as memory_graph
         for name in memory_graph.__all__:
             assert hasattr(memory_graph, name), f"{name} in __all__ but not defined"
 
     def test_internal_functions_not_in_all(self):
         """Underscore-prefixed functions should not be in __all__."""
-        import memory_graph
+        import datastore.memorydb.memory_graph as memory_graph
         underscore = [n for n in memory_graph.__all__ if n.startswith("_")]
         assert not underscore, f"Internal names in __all__: {underscore}"
 
@@ -287,12 +287,12 @@ class TestDedupMergeRecall:
 
     def test_content_hash_dedup_blocks_exact_duplicate(self, tmp_path):
         """Storing the exact same text twice should be blocked by content hash."""
-        from memory_graph import store
+        from datastore.memorydb.memory_graph import store
 
         graph, db_file = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             r1 = store(text="Quaid likes coffee", owner_id="quaid")
             r2 = store(text="Quaid likes coffee", owner_id="quaid")
             # Second store should return existing node (dedup)
@@ -310,7 +310,7 @@ class TestBootstrapConfigIntegration:
 
     def test_gateway_config_parsed_correctly(self):
         """_get_gateway_bootstrap_globs reads the hook config."""
-        from workspace_audit import _get_gateway_bootstrap_globs
+        from core.lifecycle.workspace_audit import _get_gateway_bootstrap_globs
         mock_config = {
             "hooks": {
                 "internal": {
@@ -324,10 +324,10 @@ class TestBootstrapConfigIntegration:
             }
         }
         with patch("builtins.open", create=True) as mock_open, \
-             patch("workspace_audit.Path") as mock_path:
+             patch("core.lifecycle.workspace_audit.Path") as mock_path:
             mock_path.home.return_value.__truediv__ = lambda self, x: Path("/fake/.openclaw") / x if "openclaw" in str(x) else self
             # Simpler: just patch the function internals
-            import workspace_audit
+            import core.lifecycle.workspace_audit as workspace_audit
             original = workspace_audit._get_gateway_bootstrap_globs
 
             def patched():
@@ -341,7 +341,7 @@ class TestBootstrapConfigIntegration:
 
     def test_disabled_hook_returns_empty(self):
         """Disabled bootstrap hook returns no patterns."""
-        from workspace_audit import _get_gateway_bootstrap_globs
+        from core.lifecycle.workspace_audit import _get_gateway_bootstrap_globs
         mock_config = json.dumps({
             "hooks": {
                 "internal": {
@@ -356,7 +356,7 @@ class TestBootstrapConfigIntegration:
         })
 
         import io
-        with patch("workspace_audit.Path") as mock_path:
+        with patch("core.lifecycle.workspace_audit.Path") as mock_path:
             mock_home = MagicMock()
             mock_path.home.return_value = mock_home
             config_path = MagicMock()

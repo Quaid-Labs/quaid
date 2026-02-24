@@ -19,7 +19,7 @@ _tmp_home = Path(tempfile.mkdtemp(prefix="quaid-janitor-test-"))
 )
 os.environ["QUAID_HOME"] = str(_tmp_home)
 
-import janitor
+import core.lifecycle.janitor as janitor
 
 
 def test_no_apply_flag_forces_dry_run():

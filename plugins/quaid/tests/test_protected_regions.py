@@ -60,14 +60,14 @@ class TestStripProtectedRegions:
     """Tests for the core _strip_protected_regions helper function."""
 
     def test_no_protected_blocks(self):
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = "# Header\n\nSome content.\n\n## Section\nMore content.\n"
         stripped, ranges = _strip_protected_regions(content)
         assert stripped == content
         assert ranges == []
 
     def test_single_protected_block(self):
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected -->\n"
@@ -81,7 +81,7 @@ class TestStripProtectedRegions:
         assert len(ranges) == 1
 
     def test_multiple_protected_blocks(self):
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected -->\nBlock 1\n<!-- /protected -->\n\n"
@@ -97,7 +97,7 @@ class TestStripProtectedRegions:
         assert len(ranges) == 2
 
     def test_empty_protected_block(self):
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected --><!-- /protected -->\n\n"
@@ -109,7 +109,7 @@ class TestStripProtectedRegions:
 
     def test_protected_block_with_whitespace_in_markers(self):
         """Markers with extra whitespace are still recognized."""
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "# Header\n\n"
             "<!--  protected  -->\n"
@@ -124,7 +124,7 @@ class TestStripProtectedRegions:
 
     def test_malformed_missing_close_tag(self):
         """Missing close tag means the open tag is not matched — content is preserved."""
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected -->\n"
@@ -138,7 +138,7 @@ class TestStripProtectedRegions:
 
     def test_malformed_missing_open_tag(self):
         """Close tag without open tag has no effect."""
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "# Header\n\n"
             "Some content.\n"
@@ -151,7 +151,7 @@ class TestStripProtectedRegions:
 
     def test_multiline_protected_content(self):
         """Protected blocks can span many lines."""
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected -->\n"
@@ -170,14 +170,14 @@ class TestStripProtectedRegions:
         assert "After." in stripped
 
     def test_empty_content(self):
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         stripped, ranges = _strip_protected_regions("")
         assert stripped == ""
         assert ranges == []
 
     def test_protected_ranges_are_correct_positions(self):
         """Verify that returned ranges correspond to actual positions in original content."""
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = "ABC<!-- protected -->XYZ<!-- /protected -->DEF"
         stripped, ranges = _strip_protected_regions(content)
         assert stripped == "ABCDEF"
@@ -193,25 +193,25 @@ class TestStripProtectedRegions:
 
 class TestIsPositionProtected:
     def test_position_inside(self):
-        from workspace_audit import _is_position_protected
+        from core.lifecycle.workspace_audit import _is_position_protected
         ranges = [(10, 50)]
         assert _is_position_protected(10, ranges) is True
         assert _is_position_protected(25, ranges) is True
         assert _is_position_protected(49, ranges) is True
 
     def test_position_outside(self):
-        from workspace_audit import _is_position_protected
+        from core.lifecycle.workspace_audit import _is_position_protected
         ranges = [(10, 50)]
         assert _is_position_protected(5, ranges) is False
         assert _is_position_protected(50, ranges) is False
         assert _is_position_protected(100, ranges) is False
 
     def test_empty_ranges(self):
-        from workspace_audit import _is_position_protected
+        from core.lifecycle.workspace_audit import _is_position_protected
         assert _is_position_protected(10, []) is False
 
     def test_multiple_ranges(self):
-        from workspace_audit import _is_position_protected
+        from core.lifecycle.workspace_audit import _is_position_protected
         ranges = [(10, 20), (50, 60)]
         assert _is_position_protected(15, ranges) is True
         assert _is_position_protected(55, ranges) is True
@@ -228,7 +228,7 @@ class TestWorkspaceAuditProtectedRegions:
 
     def test_review_strips_protected_from_opus_input(self, tmp_path):
         """Protected content should be stripped before sending to Opus for review."""
-        from workspace_audit import _read_file_contents, _strip_protected_regions
+        from core.lifecycle.workspace_audit import _read_file_contents, _strip_protected_regions
 
         content = (
             "# SOUL\n\n"
@@ -285,9 +285,9 @@ class TestWorkspaceAuditProtectedRegions:
             ]
         }
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _wa_adapter_patch(tmp_path):
-            from workspace_audit import apply_review_decisions
+            from core.lifecycle.workspace_audit import apply_review_decisions
             stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
 
         result_content = (tmp_path / "SOUL.md").read_text()
@@ -328,9 +328,9 @@ class TestWorkspaceAuditProtectedRegions:
             ]
         }
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _wa_adapter_patch(tmp_path):
-            from workspace_audit import apply_review_decisions
+            from core.lifecycle.workspace_audit import apply_review_decisions
             stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
 
         result_content = (tmp_path / "USER.md").read_text()
@@ -396,8 +396,8 @@ class TestSoulSnippetsProtectedRegions:
             "I am also curious.\n"
         )
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import apply_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import apply_distillation
             result = {
                 "edits": [
                     {
@@ -438,7 +438,7 @@ class TestSoulSnippetsProtectedRegions:
             "I care about truth.\n"
         )
 
-        from soul_snippets import _insert_into_file
+        from core.lifecycle.soul_snippets import _insert_into_file
         result = _insert_into_file("SOUL.md", "New identity snippet.", "Identity")
 
         content = parent.read_text()
@@ -463,7 +463,7 @@ class TestSoulSnippetsProtectedRegions:
             "Something else.\n"
         )
 
-        from soul_snippets import _insert_into_file
+        from core.lifecycle.soul_snippets import _insert_into_file
         result = _insert_into_file("SOUL.md", "I also value honesty.", "Values")
 
         assert result is True
@@ -477,8 +477,8 @@ class TestSoulSnippetsProtectedRegions:
 
     def test_distillation_prompt_strips_protected(self, snippets_workspace_dir, mock_config):
         """build_distillation_prompt should not include protected content."""
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import build_distillation_prompt
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import build_distillation_prompt
             parent_content = (
                 "# SOUL\n\n"
                 "Visible stuff.\n\n"
@@ -498,7 +498,7 @@ class TestSoulSnippetsProtectedRegions:
 
     def test_review_prompt_strips_protected(self, snippets_workspace_dir, mock_config):
         """build_review_prompt (legacy) should not include protected content in parent."""
-        from soul_snippets import build_review_prompt
+        from core.lifecycle.soul_snippets import build_review_prompt
 
         all_snippets = {
             "SOUL.md": {
@@ -517,7 +517,7 @@ class TestSoulSnippetsProtectedRegions:
         assert "Visible." in prompt
         assert "Also visible." in prompt
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_full_distillation_respects_protected(self, mock_opus, snippets_workspace_dir, mock_config):
         """End-to-end distillation: Opus should not see protected content, and edits
         targeting protected content should be silently skipped."""
@@ -547,8 +547,8 @@ class TestSoulSnippetsProtectedRegions:
             "captured_dates": ["2026-02-10"],
         }), 1.5)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_journal_distillation
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=False, force_distill=True)
 
         assert result["additions"] == 1
@@ -558,7 +558,7 @@ class TestSoulSnippetsProtectedRegions:
         # Addition was made in unprotected section
         assert "I embrace change." in content
 
-    @patch("soul_snippets.call_deep_reasoning")
+    @patch("core.lifecycle.soul_snippets.call_deep_reasoning")
     def test_snippet_review_with_protected_parent(self, mock_opus, snippets_workspace_dir, mock_config):
         """Snippet review should not expose protected content to Opus."""
         (snippets_workspace_dir / "SOUL.snippets.md").write_text(
@@ -581,8 +581,8 @@ class TestSoulSnippetsProtectedRegions:
             ]
         }), 1.0)
 
-        with patch("soul_snippets.get_config", return_value=mock_config):
-            from soul_snippets import run_soul_snippets_review
+        with patch("core.lifecycle.soul_snippets.get_config", return_value=mock_config):
+            from core.lifecycle.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         # Verify Opus was called and the prompt did not contain protected content
@@ -602,7 +602,7 @@ class TestProtectedRegionEdgeCases:
 
     def test_entire_file_protected(self, snippets_workspace_dir):
         """If the entire file is protected, everything is stripped."""
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = "<!-- protected -->\n# Everything\nAll protected.\n<!-- /protected -->"
         stripped, ranges = _strip_protected_regions(content)
         assert stripped == ""
@@ -610,7 +610,7 @@ class TestProtectedRegionEdgeCases:
 
     def test_adjacent_protected_blocks(self, snippets_workspace_dir):
         """Two protected blocks right next to each other."""
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "Before.\n"
             "<!-- protected -->Block A<!-- /protected -->"
@@ -626,7 +626,7 @@ class TestProtectedRegionEdgeCases:
 
     def test_protected_block_with_html_comments_inside(self, snippets_workspace_dir):
         """Protected block containing other HTML comments."""
-        from workspace_audit import _strip_protected_regions
+        from core.lifecycle.workspace_audit import _strip_protected_regions
         content = (
             "Visible.\n"
             "<!-- protected -->\n"
@@ -658,9 +658,9 @@ class TestProtectedRegionEdgeCases:
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        with patch("workspace_audit.get_config", return_value=cfg), \
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              _wa_adapter_patch(tmp_path):
-            from workspace_audit import check_bloat
+            from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
         # Bloat check counts raw lines, not stripped lines

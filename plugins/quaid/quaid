@@ -80,13 +80,13 @@ case "$CMD" in
     exec python3 "$SCRIPT_DIR/core/docs/project_updater.py" "$@"
     ;;
 
-  # Everything else goes to memory_graph.py
+# Everything else goes to memory_graph.py
 search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|search-all|search-fts|backfill-hashes|health|event)
-    exec python3 "$SCRIPT_DIR/memory_graph.py" "$CMD" "$@"
+    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
     ;;
 
   doctor)
-    exec python3 "$SCRIPT_DIR/memory_graph.py" health "$@"
+    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" health "$@"
     ;;
 
   config)

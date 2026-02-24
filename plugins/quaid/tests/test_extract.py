@@ -102,7 +102,7 @@ def mock_opus_response():
 
 class TestBuildTranscript:
     def test_basic_transcript(self):
-        from extract import build_transcript
+        from ingest.extract import build_transcript
 
         messages = [
             {"role": "user", "content": "Hello there"},
@@ -113,7 +113,7 @@ class TestBuildTranscript:
         assert "Assistant: Hi! How can I help?" in result
 
     def test_filters_system_messages(self):
-        from extract import build_transcript
+        from ingest.extract import build_transcript
 
         messages = [
             {"role": "system", "content": "You are a helpful assistant"},
@@ -124,7 +124,7 @@ class TestBuildTranscript:
         assert "User: Hi" in result
 
     def test_does_not_filter_gateway_restart_in_standalone(self):
-        from extract import build_transcript
+        from ingest.extract import build_transcript
 
         messages = [
             {"role": "user", "content": "GatewayRestart: reloaded"},
@@ -135,7 +135,7 @@ class TestBuildTranscript:
         assert "User: Hello" in result
 
     def test_does_not_filter_heartbeat_in_standalone(self):
-        from extract import build_transcript
+        from ingest.extract import build_transcript
 
         messages = [
             {"role": "user", "content": "HEARTBEAT check HEARTBEAT_OK"},
@@ -146,7 +146,7 @@ class TestBuildTranscript:
         assert "User: Real message" in result
 
     def test_strips_channel_prefix(self):
-        from extract import build_transcript
+        from ingest.extract import build_transcript
 
         messages = [
             {"role": "user", "content": "[Telegram user@12345] Hello"},
@@ -155,7 +155,7 @@ class TestBuildTranscript:
         assert result == "User: Hello"
 
     def test_strips_message_id(self):
-        from extract import build_transcript
+        from ingest.extract import build_transcript
 
         messages = [
             {"role": "user", "content": "Hello\n[message_id: 42]"},
@@ -165,11 +165,11 @@ class TestBuildTranscript:
         assert "User: Hello" in result
 
     def test_empty_messages(self):
-        from extract import build_transcript
+        from ingest.extract import build_transcript
         assert build_transcript([]) == ""
 
     def test_skips_empty_content(self):
-        from extract import build_transcript
+        from ingest.extract import build_transcript
 
         messages = [
             {"role": "user", "content": ""},
@@ -185,7 +185,7 @@ class TestBuildTranscript:
 
 class TestParseSessionJsonl:
     def test_direct_format(self, tmp_path):
-        from extract import parse_session_jsonl
+        from ingest.extract import parse_session_jsonl
 
         jsonl_file = tmp_path / "session.jsonl"
         lines = [
@@ -199,7 +199,7 @@ class TestParseSessionJsonl:
         assert "Assistant: I'll remember that!" in result
 
     def test_wrapped_format(self, tmp_path):
-        from extract import parse_session_jsonl
+        from ingest.extract import parse_session_jsonl
 
         jsonl_file = tmp_path / "session.jsonl"
         lines = [
@@ -213,7 +213,7 @@ class TestParseSessionJsonl:
         assert "Assistant: Hi" in result
 
     def test_multi_part_content(self, tmp_path):
-        from extract import parse_session_jsonl
+        from ingest.extract import parse_session_jsonl
 
         jsonl_file = tmp_path / "session.jsonl"
         lines = [
@@ -225,7 +225,7 @@ class TestParseSessionJsonl:
         assert "Part 1 Part 2" in result
 
     def test_skips_non_message_lines(self, tmp_path):
-        from extract import parse_session_jsonl
+        from ingest.extract import parse_session_jsonl
 
         jsonl_file = tmp_path / "session.jsonl"
         lines = [
@@ -240,7 +240,7 @@ class TestParseSessionJsonl:
         assert "User: Hello" in result
 
     def test_empty_file(self, tmp_path):
-        from extract import parse_session_jsonl
+        from ingest.extract import parse_session_jsonl
 
         jsonl_file = tmp_path / "session.jsonl"
         jsonl_file.write_text("")
@@ -255,23 +255,23 @@ class TestParseSessionJsonl:
 
 class TestExtractFromTranscript:
     def test_empty_transcript(self):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         result = extract_from_transcript("", owner_id="test")
         assert result["facts_stored"] == 0
         assert result["facts_skipped"] == 0
 
     def test_empty_whitespace_transcript(self):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         result = extract_from_transcript("   \n  \n  ", owner_id="test")
         assert result["facts_stored"] == 0
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
-    @patch("extract.create_edge")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
+    @patch("ingest.extract.create_edge")
     def test_basic_extraction(self, mock_edge, mock_store, mock_llm, mock_opus_response, workspace_dir):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 2.5)
         mock_store.return_value = {"id": "node-1", "status": "created"}
@@ -288,10 +288,10 @@ class TestExtractFromTranscript:
         assert len(result["facts"]) == 2
         assert result["facts"][0]["status"] == "stored"
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_dry_run(self, mock_store, mock_llm, mock_opus_response):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
 
@@ -305,10 +305,10 @@ class TestExtractFromTranscript:
         assert result["facts_stored"] == 2
         mock_store.assert_not_called()
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_duplicate_handling(self, mock_store, mock_llm, mock_opus_response):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
         mock_store.return_value = {"status": "duplicate", "existing_text": "Already stored"}
@@ -321,9 +321,9 @@ class TestExtractFromTranscript:
         assert result["facts_skipped"] == 2
         assert result["facts_stored"] == 0
 
-    @patch("extract.call_deep_reasoning")
+    @patch("ingest.extract.call_deep_reasoning")
     def test_no_response(self, mock_llm):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (None, 1.0)
 
@@ -334,9 +334,9 @@ class TestExtractFromTranscript:
 
         assert result["facts_stored"] == 0
 
-    @patch("extract.call_deep_reasoning")
+    @patch("ingest.extract.call_deep_reasoning")
     def test_unparseable_response(self, mock_llm):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = ("This is not JSON at all", 1.0)
 
@@ -347,10 +347,10 @@ class TestExtractFromTranscript:
 
         assert result["facts_stored"] == 0
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_skips_short_facts(self, mock_store, mock_llm):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
             "facts": [
@@ -368,10 +368,10 @@ class TestExtractFromTranscript:
         assert result["facts_skipped"] == 1
         assert result["facts_stored"] == 1
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_confidence_mapping(self, mock_store, mock_llm):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
             "facts": [
@@ -391,10 +391,10 @@ class TestExtractFromTranscript:
         assert calls[0].kwargs["confidence"] == 0.9  # high
         assert calls[1].kwargs["confidence"] == 0.3  # low
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_snippets_written(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -411,10 +411,10 @@ class TestExtractFromTranscript:
         snippet_file = workspace_dir / "SOUL.snippets.md"
         assert snippet_file.exists()
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_journal_written(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -429,10 +429,10 @@ class TestExtractFromTranscript:
         journal_file = workspace_dir / "journal" / "SOUL.journal.md"
         assert journal_file.exists()
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_no_snippets_flag(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -448,10 +448,10 @@ class TestExtractFromTranscript:
         snippet_file = workspace_dir / "SOUL.snippets.md"
         assert not snippet_file.exists()
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_no_journal_flag(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (mock_opus_response, 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -466,11 +466,11 @@ class TestExtractFromTranscript:
         journal_file = workspace_dir / "journal" / "SOUL.journal.md"
         assert not journal_file.exists()
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_journal_array_fallback(self, mock_store, mock_llm):
         """LLM may return arrays instead of strings for journal entries."""
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
             "facts": [],
@@ -487,11 +487,11 @@ class TestExtractFromTranscript:
 
         assert result["journal"]["SOUL.md"] == "Paragraph one.\n\nParagraph two."
 
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
-    @patch("extract.create_edge")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
+    @patch("ingest.extract.create_edge")
     def test_edge_failure_non_fatal(self, mock_edge, mock_store, mock_llm):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
             "facts": [{
@@ -512,11 +512,11 @@ class TestExtractFromTranscript:
         assert result["facts_stored"] == 1
         assert result["edges_created"] == 0
 
-    @patch("extract._chunk_transcript_text")
-    @patch("extract.call_deep_reasoning")
-    @patch("extract.store")
+    @patch("ingest.extract._chunk_transcript_text")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.store")
     def test_chunk_carry_context_passed_to_later_chunks(self, mock_store, mock_llm, mock_chunk):
-        from extract import extract_from_transcript
+        from ingest.extract import extract_from_transcript
 
         mock_chunk.return_value = [
             "User: Maya said she changed jobs.",
@@ -557,7 +557,7 @@ class TestExtractFromTranscript:
 
 class TestFormatHumanSummary:
     def test_basic_summary(self):
-        from extract import _format_human_summary
+        from ingest.extract import _format_human_summary
 
         result = {
             "facts_stored": 3,
@@ -578,7 +578,7 @@ class TestFormatHumanSummary:
         assert "Edges created: 2" in summary
 
     def test_dry_run_prefix(self):
-        from extract import _format_human_summary
+        from ingest.extract import _format_human_summary
 
         result = {
             "facts_stored": 1, "facts_skipped": 0, "edges_created": 0,
@@ -595,7 +595,7 @@ class TestFormatHumanSummary:
 
 class TestLoadPrompt:
     def test_prompt_loads(self):
-        from extract import _load_extraction_prompt
+        from ingest.extract import _load_extraction_prompt
 
         prompt = _load_extraction_prompt()
         assert "memory extraction system" in prompt.lower()
@@ -605,7 +605,7 @@ class TestLoadPrompt:
         assert "journal_entries" in prompt
 
     def test_prompt_has_json_schema(self):
-        from extract import _load_extraction_prompt
+        from ingest.extract import _load_extraction_prompt
 
         prompt = _load_extraction_prompt()
         assert '"facts"' in prompt
@@ -619,19 +619,19 @@ class TestLoadPrompt:
 
 class TestGetOwnerId:
     def test_override(self):
-        from extract import _get_owner_id
+        from ingest.extract import _get_owner_id
         assert _get_owner_id("custom") == "custom"
 
     def test_fallback_default(self):
-        from extract import _get_owner_id
+        from ingest.extract import _get_owner_id
         # With config mocked to fail
-        with patch("extract.get_config", side_effect=Exception("no config")):
+        with patch("ingest.extract.get_config", side_effect=Exception("no config")):
             assert _get_owner_id(None) == "default"
 
 
 class TestChunkCarryContext:
     def test_prefers_high_confidence_and_caps_size(self):
-        from extract import _build_chunk_carry_context
+        from ingest.extract import _build_chunk_carry_context
 
         facts = [
             {"text": "A high confidence technical migration happened", "category": "fact", "source": "user", "extraction_confidence": "high"},
@@ -652,7 +652,7 @@ class TestCLI:
     def test_help(self):
         import subprocess
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent.parent / "extract.py"), "--help"],
+            [sys.executable, str(Path(__file__).parent.parent / "ingest" / "extract.py"), "--help"],
             capture_output=True, text=True,
         )
         # argparse --help exits 0
@@ -662,7 +662,7 @@ class TestCLI:
     def test_missing_file(self):
         import subprocess
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).parent.parent / "extract.py"), "/nonexistent/file.txt"],
+            [sys.executable, str(Path(__file__).parent.parent / "ingest" / "extract.py"), "/nonexistent/file.txt"],
             capture_output=True, text=True,
             env={**os.environ, "MEMORY_DB_PATH": ":memory:", "QUAID_QUIET": "1"},
         )
@@ -678,18 +678,18 @@ class TestChunkMessages:
     """Test _chunk_messages() — never splits a single message."""
 
     def test_empty(self):
-        from extract import _chunk_messages
+        from ingest.extract import _chunk_messages
         assert _chunk_messages([]) == []
 
     def test_single_message_under_threshold(self):
-        from extract import _chunk_messages
+        from ingest.extract import _chunk_messages
         msgs = [{"role": "user", "content": "hello world"}]
         chunks = _chunk_messages(msgs, max_chars=1000)
         assert len(chunks) == 1
         assert chunks[0] == msgs
 
     def test_multiple_messages_under_threshold(self):
-        from extract import _chunk_messages
+        from ingest.extract import _chunk_messages
         msgs = [
             {"role": "user", "content": "a" * 100},
             {"role": "assistant", "content": "b" * 100},
@@ -699,7 +699,7 @@ class TestChunkMessages:
         assert len(chunks[0]) == 2
 
     def test_splits_at_threshold(self):
-        from extract import _chunk_messages
+        from ingest.extract import _chunk_messages
         msgs = [
             {"role": "user", "content": "a" * 500},
             {"role": "assistant", "content": "b" * 500},
@@ -714,14 +714,14 @@ class TestChunkMessages:
 
     def test_single_huge_message_not_split(self):
         """A single message larger than threshold stays in one chunk."""
-        from extract import _chunk_messages
+        from ingest.extract import _chunk_messages
         msgs = [{"role": "user", "content": "x" * 50000}]
         chunks = _chunk_messages(msgs, max_chars=1000)
         assert len(chunks) == 1
         assert chunks[0] == msgs
 
     def test_multipart_content(self):
-        from extract import _chunk_messages
+        from ingest.extract import _chunk_messages
         msgs = [{"role": "user", "content": [{"text": "hello"}, {"text": "world"}]}]
         chunks = _chunk_messages(msgs, max_chars=1000)
         assert len(chunks) == 1
@@ -731,14 +731,14 @@ class TestChunkTranscriptText:
     """Test _chunk_transcript_text() — splits at turn boundaries."""
 
     def test_short_transcript(self):
-        from extract import _chunk_transcript_text
+        from ingest.extract import _chunk_transcript_text
         text = "User: hello\n\nAssistant: hi"
         chunks = _chunk_transcript_text(text, max_chars=1000)
         assert len(chunks) == 1
         assert chunks[0] == text
 
     def test_splits_at_double_newline(self):
-        from extract import _chunk_transcript_text
+        from ingest.extract import _chunk_transcript_text
         turns = ["User: " + "a" * 200, "Assistant: " + "b" * 200, "User: " + "c" * 200]
         text = "\n\n".join(turns)
         chunks = _chunk_transcript_text(text, max_chars=300)
@@ -749,6 +749,6 @@ class TestChunkTranscriptText:
         assert "c" * 200 in rejoined
 
     def test_empty_transcript(self):
-        from extract import _chunk_transcript_text
+        from ingest.extract import _chunk_transcript_text
         chunks = _chunk_transcript_text("", max_chars=1000)
         assert chunks == [""]

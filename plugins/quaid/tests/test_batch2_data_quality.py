@@ -36,9 +36,9 @@ def _fake_get_embedding(text):
 
 def _make_graph(tmp_path):
     """Create a fresh MemoryGraph."""
-    from memory_graph import MemoryGraph
+    from datastore.memorydb.memory_graph import MemoryGraph
     db_file = tmp_path / "batch2_test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph
 
@@ -51,24 +51,24 @@ class TestContentHash:
     """Tests for _content_hash() utility function."""
 
     def test_deterministic(self):
-        from memory_graph import _content_hash
+        from datastore.memorydb.memory_graph import _content_hash
         assert _content_hash("hello world") == _content_hash("hello world")
 
     def test_case_insensitive(self):
-        from memory_graph import _content_hash
+        from datastore.memorydb.memory_graph import _content_hash
         assert _content_hash("Hello World") == _content_hash("hello world")
 
     def test_whitespace_normalized(self):
-        from memory_graph import _content_hash
+        from datastore.memorydb.memory_graph import _content_hash
         assert _content_hash("hello  world") == _content_hash("hello world")
         assert _content_hash("  hello world  ") == _content_hash("hello world")
 
     def test_different_texts_different_hashes(self):
-        from memory_graph import _content_hash
+        from datastore.memorydb.memory_graph import _content_hash
         assert _content_hash("quaid likes coffee") != _content_hash("quaid likes tea")
 
     def test_returns_sha256_hex(self):
-        from memory_graph import _content_hash
+        from datastore.memorydb.memory_graph import _content_hash
         h = _content_hash("test")
         assert len(h) == 64  # SHA256 hex is 64 chars
         assert all(c in "0123456789abcdef" for c in h)
@@ -82,8 +82,8 @@ class TestContentHashOnInsert:
     """Tests for content_hash being set on node insert."""
 
     def test_add_node_sets_content_hash(self, tmp_path):
-        from memory_graph import Node, _content_hash
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, _content_hash
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes coffee", owner_id="quaid")
             graph.add_node(node)
@@ -92,8 +92,8 @@ class TestContentHashOnInsert:
             assert retrieved.content_hash == _content_hash("Quaid likes coffee")
 
     def test_update_node_sets_content_hash(self, tmp_path):
-        from memory_graph import Node, _content_hash
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, _content_hash
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes coffee", owner_id="quaid")
             graph.add_node(node)
@@ -114,10 +114,10 @@ class TestContentHashDedup:
 
     def test_exact_duplicate_caught_by_hash(self, tmp_path):
         """Identical text (after normalization) is caught by hash before cosine."""
-        from memory_graph import store, get_graph, _content_hash, MemoryGraph
+        from datastore.memorydb.memory_graph import store, get_graph, _content_hash, MemoryGraph
         db_file = tmp_path / "dedup_test.db"
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            with patch("memory_graph.get_graph") as mock_get:
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            with patch("datastore.memorydb.memory_graph.get_graph") as mock_get:
                 graph = MemoryGraph(db_path=db_file)
                 mock_get.return_value = graph
                 # Store first
@@ -130,10 +130,10 @@ class TestContentHashDedup:
 
     def test_case_variation_caught_by_hash(self, tmp_path):
         """Case-different text with same words is caught by hash."""
-        from memory_graph import store, get_graph, MemoryGraph
+        from datastore.memorydb.memory_graph import store, get_graph, MemoryGraph
         db_file = tmp_path / "dedup_case.db"
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            with patch("memory_graph.get_graph") as mock_get:
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            with patch("datastore.memorydb.memory_graph.get_graph") as mock_get:
                 graph = MemoryGraph(db_path=db_file)
                 mock_get.return_value = graph
                 r1 = store("Quaid enjoys espresso coffee", owner_id="quaid", status="approved")
@@ -157,7 +157,7 @@ class TestEmbeddingCache:
             call_count[0] += 1
             return _fake_get_embedding(text)
 
-        with patch("memory_graph._lib_get_embedding", side_effect=_counting_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_counting_embedding):
             graph = _make_graph(tmp_path)
             # First call — should hit Ollama
             e1 = graph.get_embedding("test text for caching")
@@ -179,7 +179,7 @@ class TestEmbeddingCache:
             call_count[0] += 1
             return _fake_get_embedding(text)
 
-        with patch("memory_graph._lib_get_embedding", side_effect=_counting_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_counting_embedding):
             graph = _make_graph(tmp_path)
             graph.get_embedding("text one for cache test")
             graph.get_embedding("text two for cache test")
@@ -194,8 +194,8 @@ class TestEmbeddingCache:
             return _fake_get_embedding(text)
 
         db_file = tmp_path / "cache_persist.db"
-        with patch("memory_graph._lib_get_embedding", side_effect=_counting_embedding):
-            from memory_graph import MemoryGraph
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_counting_embedding):
+            from datastore.memorydb.memory_graph import MemoryGraph
             graph1 = MemoryGraph(db_path=db_file)
             graph1.get_embedding("persistent cache test text")
             assert call_count[0] == 1
@@ -214,8 +214,8 @@ class TestFactVersioning:
     """Tests for supersede_node() and get_fact_history()."""
 
     def test_supersede_marks_old_node(self, tmp_path):
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             old = Node.create(type="Fact", name="Quaid lives in Texas", owner_id="quaid")
             new = Node.create(type="Fact", name="Quaid lives in Bali", owner_id="quaid")
@@ -231,8 +231,8 @@ class TestFactVersioning:
             assert old_retrieved.valid_until is not None
 
     def test_superseded_node_excluded_from_search(self, tmp_path):
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             old = Node.create(type="Fact", name="Quaid lives in Texas state", owner_id="quaid", status="approved")
             new = Node.create(type="Fact", name="Quaid lives in Bali Indonesia", owner_id="quaid", status="approved")
@@ -247,8 +247,8 @@ class TestFactVersioning:
             assert new.id in result_ids
 
     def test_get_fact_history_single(self, tmp_path):
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes coffee", owner_id="quaid")
             graph.add_node(node)
@@ -257,8 +257,8 @@ class TestFactVersioning:
             assert history[0].id == node.id
 
     def test_get_fact_history_chain(self, tmp_path):
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             v1 = Node.create(type="Fact", name="Quaid lives in Austin", owner_id="quaid")
             v2 = Node.create(type="Fact", name="Quaid lives in Bali", owner_id="quaid")
@@ -277,8 +277,8 @@ class TestFactVersioning:
 
     def test_double_supersede_noop(self, tmp_path):
         """Superseding an already-superseded node should be a no-op."""
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             old = Node.create(type="Fact", name="Quaid lives in Texas", owner_id="quaid")
             new1 = Node.create(type="Fact", name="Quaid lives in Bali", owner_id="quaid")
@@ -299,7 +299,7 @@ class TestHealthMetrics:
     """Tests for MemoryGraph.get_health_metrics()."""
 
     def test_returns_expected_keys(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             metrics = graph.get_health_metrics()
             expected_keys = {
@@ -312,7 +312,7 @@ class TestHealthMetrics:
             assert expected_keys == set(metrics.keys())
 
     def test_empty_db_returns_zeroes(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             metrics = graph.get_health_metrics()
             assert metrics["total_nodes"] == 0
@@ -321,8 +321,8 @@ class TestHealthMetrics:
             assert metrics["orphan_nodes"] == 0
 
     def test_counts_with_data(self, tmp_path):
-        from memory_graph import Node, Edge
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, Edge
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             n1 = Node.create(type="Fact", name="Quaid likes coffee drinks", owner_id="quaid", status="approved")
             n2 = Node.create(type="Fact", name="Quaid lives in Bali Indonesia", owner_id="quaid", status="approved")
@@ -344,8 +344,8 @@ class TestHealthMetrics:
             assert metrics["confidence_by_status"]["approved"]["count"] == 2
 
     def test_superseded_counted(self, tmp_path):
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             old = Node.create(type="Fact", name="Quaid lives in Texas state", owner_id="quaid")
             new = Node.create(type="Fact", name="Quaid lives in Bali Indonesia", owner_id="quaid")
@@ -356,8 +356,8 @@ class TestHealthMetrics:
             assert metrics["superseded_facts"] == 1
 
     def test_staleness_distribution(self, tmp_path):
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes coffee espresso", owner_id="quaid")
             graph.add_node(node)
@@ -366,7 +366,7 @@ class TestHealthMetrics:
             assert metrics["staleness_distribution"]["0-7d"] == 1
 
     def test_embedding_cache_counted(self, tmp_path):
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             graph.get_embedding("cache test text for metrics")
             metrics = graph.get_health_metrics()

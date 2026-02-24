@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 pytestmark = pytest.mark.regression
 
-from memory_graph import MemoryGraph, Node, recall
+from datastore.memorydb.memory_graph import MemoryGraph, Node, recall
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ GOLDEN_FACTS = [
 def golden_graph(tmp_path):
     """Create a graph with golden facts for testing recall quality."""
     db_file = tmp_path / "golden.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
         for text, category, owner in GOLDEN_FACTS:
             node = Node.create(
@@ -160,9 +160,9 @@ GOLDEN_QUERIES = [
 
 def _run_recall(graph, query, limit=5):
     """Run recall() with all external dependencies mocked."""
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-         patch("memory_graph.get_graph", return_value=graph), \
-         patch("memory_graph.route_query", side_effect=lambda q: q):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+         patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+         patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
         return recall(
             query,
             limit=limit,
@@ -218,9 +218,9 @@ class TestGoldenRecall:
     def test_owner_filtering(self, golden_graph):
         """Recall with wrong owner should return fewer or no results."""
         graph, db_file = golden_graph
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph.route_query", side_effect=lambda q: q):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
             results = recall(
                 "Quaid coffee",
                 limit=5,

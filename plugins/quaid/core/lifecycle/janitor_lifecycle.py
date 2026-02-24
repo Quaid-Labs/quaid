@@ -123,7 +123,7 @@ def build_default_registry() -> LifecycleRegistry:
         ("core.lifecycle.soul_snippets", ["snippets", "journal"]),
         ("core.docs.rag", ["rag"]),
         ("memory_graph_pipeline", ["memory_graph_maintenance"]),
-        ("memory_graph", ["datastore_cleanup"]),
+        ("datastore.memorydb.memory_graph", ["datastore_cleanup"]),
     ]
 
     for module_name, routines in module_specs:

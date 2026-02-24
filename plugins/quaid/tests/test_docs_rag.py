@@ -14,7 +14,7 @@ os.environ["MEMORY_DB_PATH"] = ":memory:"
 
 import pytest
 
-from docs_rag import DocsRAG
+from core.docs.rag import DocsRAG
 
 
 # ---------------------------------------------------------------------------
@@ -181,9 +181,9 @@ class TestDocsSearchFiltering:
         normalized = rag._normalize_docs_filter(raw)
         assert normalized == ["alpha.md", "beta.md"]
 
-    @patch("docs_rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
-    @patch("docs_rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
-    @patch("docs_rag._lib_cosine_similarity", return_value=0.95)
+    @patch("core.docs.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("core.docs.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("core.docs.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_filters_by_docs_arg(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)
         db = sqlite3.connect(rag.db_path)
@@ -204,9 +204,9 @@ class TestDocsSearchFiltering:
         assert len(results) == 1
         assert results[0]["source"].endswith("alpha.md")
 
-    @patch("docs_rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
-    @patch("docs_rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
-    @patch("docs_rag._lib_cosine_similarity", return_value=0.95)
+    @patch("core.docs.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("core.docs.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("core.docs.rag._lib_cosine_similarity", return_value=0.95)
     def test_search_docs_filters_by_project_and_docs(self, _sim, _unpack, _embed, tmp_path):
         rag = _make_rag(tmp_path)
         db = sqlite3.connect(rag.db_path)

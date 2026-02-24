@@ -34,9 +34,9 @@ def _fake_get_embedding(text):
 
 
 def _make_graph(tmp_path):
-    from memory_graph import MemoryGraph
+    from datastore.memorydb.memory_graph import MemoryGraph
     db_file = tmp_path / "batch4_test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph
 
@@ -49,13 +49,13 @@ class TestEbbinghausRetention:
     """Tests for _ebbinghaus_retention() exponential decay function."""
 
     def test_zero_days_full_retention(self):
-        from janitor import _ebbinghaus_retention
+        from core.lifecycle.janitor import _ebbinghaus_retention
         r = _ebbinghaus_retention(0.0, 0, False)
         assert abs(r - 1.0) < 0.001  # R=2^0 = 1.0
 
     def test_half_life_gives_50_percent(self):
         """At t = half_life, retention should be exactly 0.5."""
-        from janitor import _ebbinghaus_retention
+        from core.lifecycle.janitor import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r = _ebbinghaus_retention(60.0, 0, False, cfg)
@@ -63,7 +63,7 @@ class TestEbbinghausRetention:
 
     def test_double_half_life_gives_25_percent(self):
         """At t = 2*half_life, retention should be 0.25."""
-        from janitor import _ebbinghaus_retention
+        from core.lifecycle.janitor import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r = _ebbinghaus_retention(120.0, 0, False, cfg)
@@ -71,7 +71,7 @@ class TestEbbinghausRetention:
 
     def test_access_count_extends_half_life(self):
         """Higher access count = slower decay (longer half-life)."""
-        from janitor import _ebbinghaus_retention
+        from core.lifecycle.janitor import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r_zero = _ebbinghaus_retention(60.0, 0, False, cfg)
@@ -83,7 +83,7 @@ class TestEbbinghausRetention:
 
     def test_verified_doubles_half_life(self):
         """Verified facts should decay 2x slower."""
-        from janitor import _ebbinghaus_retention
+        from core.lifecycle.janitor import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r_normal = _ebbinghaus_retention(60.0, 0, False, cfg)
@@ -94,7 +94,7 @@ class TestEbbinghausRetention:
 
     def test_combined_access_and_verified(self):
         """Access count + verified should compound."""
-        from janitor import _ebbinghaus_retention
+        from core.lifecycle.janitor import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r_base = _ebbinghaus_retention(90.0, 0, False, cfg)
@@ -106,7 +106,7 @@ class TestEbbinghausRetention:
 
     def test_very_old_memory_low_retention(self):
         """After many half-lives, retention should be near zero."""
-        from janitor import _ebbinghaus_retention
+        from core.lifecycle.janitor import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r = _ebbinghaus_retention(600.0, 0, False, cfg)  # 10 half-lives
@@ -114,7 +114,7 @@ class TestEbbinghausRetention:
 
     def test_monotonically_decreasing(self):
         """Retention should decrease as time increases."""
-        from janitor import _ebbinghaus_retention
+        from core.lifecycle.janitor import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         prev = 1.0
@@ -132,11 +132,11 @@ class TestApplyDecayExponential:
     """Tests for apply_decay_optimized() with exponential mode."""
 
     def test_exponential_mode_decays_old_memory(self, tmp_path):
-        from janitor import apply_decay_optimized, JanitorMetrics
-        from memory_graph import MemoryGraph
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.memory_graph import MemoryGraph
 
         metrics = JanitorMetrics()
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = MemoryGraph(db_path=tmp_path / "decay.db")
 
         # Simulate a stale memory accessed 90 days ago with 0 accesses
@@ -149,7 +149,7 @@ class TestApplyDecayExponential:
             "verified": False,
         }]
 
-        with patch("janitor._cfg") as mock_cfg:
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg:
             mock_cfg.decay.review_queue_enabled = False
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.minimum_confidence = 0.1
@@ -162,11 +162,11 @@ class TestApplyDecayExponential:
             assert result["deleted"] == 0
 
     def test_linear_mode_fallback(self, tmp_path):
-        from janitor import apply_decay_optimized, JanitorMetrics
-        from memory_graph import MemoryGraph
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.memory_graph import MemoryGraph
 
         metrics = JanitorMetrics()
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = MemoryGraph(db_path=tmp_path / "linear.db")
 
         stale = [{
@@ -178,8 +178,8 @@ class TestApplyDecayExponential:
             "verified": False,
         }]
 
-        with patch("janitor._cfg") as mock_cfg, \
-             patch("janitor.CONFIDENCE_DECAY_RATE", 0.10):
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
+             patch("core.lifecycle.janitor.CONFIDENCE_DECAY_RATE", 0.10):
             mock_cfg.decay.review_queue_enabled = False
             mock_cfg.decay.mode = "linear"
             mock_cfg.decay.minimum_confidence = 0.1
@@ -197,8 +197,8 @@ class TestMultiHopTraversal:
     """Tests for get_related_bidirectional() with multi-hop support."""
 
     def test_depth_1_returns_immediate_neighbors(self, tmp_path):
-        from memory_graph import Node, Edge
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, Edge
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             a = Node.create(type="Person", name="Quaid test person", owner_id="quaid")
             b = Node.create(type="Person", name="Melina test person", owner_id="quaid")
@@ -215,8 +215,8 @@ class TestMultiHopTraversal:
             assert c.id not in result_ids  # c is 2 hops away
 
     def test_depth_2_returns_two_hops(self, tmp_path):
-        from memory_graph import Node, Edge
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, Edge
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             a = Node.create(type="Person", name="Quaid multi hop", owner_id="quaid")
             b = Node.create(type="Person", name="Melina multi hop", owner_id="quaid")
@@ -234,8 +234,8 @@ class TestMultiHopTraversal:
 
     def test_cycle_detection(self, tmp_path):
         """Cycles in the graph should not cause infinite loops."""
-        from memory_graph import Node, Edge
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, Edge
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             a = Node.create(type="Person", name="Person A cycle test", owner_id="quaid")
             b = Node.create(type="Person", name="Person B cycle test", owner_id="quaid")
@@ -253,8 +253,8 @@ class TestMultiHopTraversal:
 
     def test_early_stopping(self, tmp_path):
         """max_results should limit results."""
-        from memory_graph import Node, Edge
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, Edge
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             # Create a star graph: center -> 10 leaves
             center = Node.create(type="Person", name="Center node star graph", owner_id="quaid")
@@ -269,8 +269,8 @@ class TestMultiHopTraversal:
 
     def test_depth_tracking(self, tmp_path):
         """Each result should report correct hop depth."""
-        from memory_graph import Node, Edge
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, Edge
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             a = Node.create(type="Person", name="Root node depth test", owner_id="quaid")
             b = Node.create(type="Person", name="Hop one depth test", owner_id="quaid")
@@ -292,8 +292,8 @@ class TestMultiHopTraversal:
 
     def test_bidirectional_finds_inbound(self, tmp_path):
         """Should find nodes pointing TO the start node."""
-        from memory_graph import Node, Edge
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node, Edge
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             a = Node.create(type="Person", name="Target node inbound", owner_id="quaid")
             b = Node.create(type="Person", name="Source node inbound", owner_id="quaid")
@@ -319,8 +319,8 @@ class TestAccessTracking:
     """Tests for _update_access() and recall integration."""
 
     def test_update_access_increments_count(self, tmp_path):
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Test fact for access tracking", owner_id="quaid")
             graph.add_node(node)
@@ -337,9 +337,9 @@ class TestAccessTracking:
             assert after.access_count == initial_count + 1
 
     def test_update_access_updates_timestamp(self, tmp_path):
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         import time as _time
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Timestamp tracking fact test", owner_id="quaid")
             graph.add_node(node)
@@ -352,8 +352,8 @@ class TestAccessTracking:
             assert new_accessed >= old_accessed
 
     def test_multiple_access_accumulate(self, tmp_path):
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Multi access test fact tracking", owner_id="quaid")
             graph.add_node(node)
@@ -374,8 +374,8 @@ class TestParallelSearch:
 
     def test_hybrid_search_returns_results(self, tmp_path):
         """search_hybrid still works with ThreadPoolExecutor."""
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes espresso coffee drink", owner_id="quaid", status="approved")
             graph.add_node(node, embed=True)
@@ -385,8 +385,8 @@ class TestParallelSearch:
 
     def test_hybrid_handles_semantic_failure(self, tmp_path):
         """If semantic search fails, hybrid should still return FTS results."""
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes espresso coffee beans dark", owner_id="quaid", status="approved")
             graph.add_node(node, embed=True)
@@ -403,8 +403,8 @@ class TestParallelSearch:
 
     def test_hybrid_handles_fts_failure(self, tmp_path):
         """If FTS search fails, hybrid should still return semantic results."""
-        from memory_graph import Node
-        with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             graph = _make_graph(tmp_path)
             node = Node.create(type="Fact", name="Quaid likes espresso coffee strongly", owner_id="quaid", status="approved")
             graph.add_node(node, embed=True)

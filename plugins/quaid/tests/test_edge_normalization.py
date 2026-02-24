@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from janitor import (
+from core.lifecycle.janitor import (
     _normalize_edge, _INVERSE_MAP, _SYNONYM_MAP, _SYMMETRIC_RELATIONS,
     _SEED_RELATIONS,
 )

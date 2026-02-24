@@ -36,22 +36,22 @@ def _fake_get_embedding(text):
 
 
 def _make_graph(tmp_path, db_name="coverage_test.db"):
-    from memory_graph import MemoryGraph
+    from datastore.memorydb.memory_graph import MemoryGraph
     db_file = tmp_path / db_name
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph, db_file
 
 
 def _make_node(graph, name="Test fact", **kwargs):
-    from memory_graph import Node
+    from datastore.memorydb.memory_graph import Node
     defaults = dict(
         type="Fact", name=name, confidence=0.8,
         owner_id="quaid", status="active",
     )
     defaults.update(kwargs)
     node = Node.create(**defaults)
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph.add_node(node)
     return node
 
@@ -65,11 +65,11 @@ class TestHardDeleteNode:
 
     def test_deletes_node(self, tmp_path):
         """Basic: node is removed from nodes table."""
-        from memory_graph import hard_delete_node
+        from datastore.memorydb.memory_graph import hard_delete_node
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Fact to delete")
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             result = hard_delete_node(node.id)
 
         assert result is True
@@ -77,17 +77,17 @@ class TestHardDeleteNode:
 
     def test_returns_false_for_nonexistent(self, tmp_path):
         """Returns False when node_id doesn't exist."""
-        from memory_graph import hard_delete_node
+        from datastore.memorydb.memory_graph import hard_delete_node
         graph, _ = _make_graph(tmp_path)
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             result = hard_delete_node("nonexistent-id")
 
         assert result is False
 
     def test_cleans_up_edges(self, tmp_path):
         """Edges referencing the node (source or target) are deleted."""
-        from memory_graph import hard_delete_node
+        from datastore.memorydb.memory_graph import hard_delete_node
         graph, _ = _make_graph(tmp_path)
         node_a = _make_node(graph, "Source node")
         node_b = _make_node(graph, "Target node")
@@ -103,7 +103,7 @@ class TestHardDeleteNode:
                 ("e2", node_c.id, node_a.id, "caused_by")
             )
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             hard_delete_node(node_a.id)
 
         with graph._get_conn() as conn:
@@ -113,7 +113,7 @@ class TestHardDeleteNode:
 
     def test_cleans_up_contradictions(self, tmp_path):
         """Contradiction entries referencing the node are deleted."""
-        from memory_graph import hard_delete_node
+        from datastore.memorydb.memory_graph import hard_delete_node
         graph, _ = _make_graph(tmp_path)
         node_a = _make_node(graph, "Contradicting fact A")
         node_b = _make_node(graph, "Contradicting fact B")
@@ -124,7 +124,7 @@ class TestHardDeleteNode:
                 ("c1", node_a.id, node_b.id, "They conflict")
             )
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             hard_delete_node(node_a.id)
 
         with graph._get_conn() as conn:
@@ -134,7 +134,7 @@ class TestHardDeleteNode:
 
     def test_cleans_up_decay_review_queue(self, tmp_path):
         """Decay review queue entries for the node are deleted."""
-        from memory_graph import hard_delete_node
+        from datastore.memorydb.memory_graph import hard_delete_node
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Decaying fact")
 
@@ -144,7 +144,7 @@ class TestHardDeleteNode:
                 ("drq1", node.id, node.name, 0.15)
             )
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             hard_delete_node(node.id)
 
         with graph._get_conn() as conn:
@@ -154,7 +154,7 @@ class TestHardDeleteNode:
 
     def test_cleans_up_vec_nodes(self, tmp_path):
         """vec_nodes entries for the node are deleted."""
-        from memory_graph import hard_delete_node
+        from datastore.memorydb.memory_graph import hard_delete_node
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Fact with embedding")
 
@@ -168,7 +168,7 @@ class TestHardDeleteNode:
             except Exception:
                 has_vec = False
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             hard_delete_node(node.id)
 
         if has_vec:
@@ -180,7 +180,7 @@ class TestHardDeleteNode:
 
     def test_no_orphan_edges_after_delete(self, tmp_path):
         """After deletion, no edges reference nonexistent nodes."""
-        from memory_graph import hard_delete_node
+        from datastore.memorydb.memory_graph import hard_delete_node
         graph, _ = _make_graph(tmp_path)
         node_a = _make_node(graph, "Node A")
         node_b = _make_node(graph, "Node B")
@@ -196,7 +196,7 @@ class TestHardDeleteNode:
                 ("e2", node_b.id, node_c.id, "related_to")
             )
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             hard_delete_node(node_b.id)
 
         with graph._get_conn() as conn:
@@ -245,13 +245,13 @@ class TestApplyDecayOptimizedReal:
 
     def test_decay_updates_confidence_in_db(self, tmp_path):
         """Non-dry-run actually updates confidence in the database."""
-        from janitor import apply_decay_optimized, JanitorMetrics
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         mem = self._make_stale_mem(graph, "Old fact about dogs", days_ago=90, confidence=0.8)
 
-        with patch("janitor._cfg") as mock_cfg:
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -269,14 +269,14 @@ class TestApplyDecayOptimizedReal:
 
     def test_ebbinghaus_produces_correct_retention(self, tmp_path):
         """Retention formula: R = 2^(-t/half_life)."""
-        from janitor import apply_decay_optimized, JanitorMetrics
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         # 60 days ago, 0 accesses, base half-life 60 → retention = 0.5
         mem = self._make_stale_mem(graph, "Exactly half-life old fact", days_ago=60, confidence=0.8)
 
-        with patch("janitor._cfg") as mock_cfg:
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -291,7 +291,7 @@ class TestApplyDecayOptimizedReal:
 
     def test_storage_strength_extends_half_life(self, tmp_path):
         """High storage_strength → slower decay (longer half-life)."""
-        from janitor import apply_decay_optimized, JanitorMetrics
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
@@ -301,7 +301,7 @@ class TestApplyDecayOptimizedReal:
         mem_strong = self._make_stale_mem(graph, "Strongly encoded fact", days_ago=90,
                                            confidence=0.8, storage_strength=5.0)
 
-        with patch("janitor._cfg") as mock_cfg:
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -318,16 +318,16 @@ class TestApplyDecayOptimizedReal:
 
     def test_below_min_confidence_deletes(self, tmp_path):
         """Memories decayed below minimum confidence are deleted (when review_queue disabled)."""
-        from janitor import apply_decay_optimized, JanitorMetrics
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         # Very old, very low confidence → will drop below minimum
         mem = self._make_stale_mem(graph, "Nearly forgotten fact", days_ago=365, confidence=0.15)
 
-        with patch("janitor._cfg") as mock_cfg, \
-             patch("janitor._archive_node", return_value=True), \
-             patch("janitor.hard_delete_node") as mock_delete:
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
+             patch("core.lifecycle.janitor._archive_node", return_value=True), \
+             patch("core.lifecycle.janitor.hard_delete_node") as mock_delete:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -341,14 +341,14 @@ class TestApplyDecayOptimizedReal:
 
     def test_below_min_queued_when_review_enabled(self, tmp_path):
         """Memories below minimum are queued for review when review_queue_enabled."""
-        from janitor import apply_decay_optimized, JanitorMetrics
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         mem = self._make_stale_mem(graph, "Needs review fact", days_ago=365, confidence=0.15)
 
-        with patch("janitor._cfg") as mock_cfg, \
-             patch("janitor.queue_for_decay_review") as mock_queue:
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
+             patch("core.lifecycle.janitor.queue_for_decay_review") as mock_queue:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -362,14 +362,14 @@ class TestApplyDecayOptimizedReal:
 
     def test_linear_mode_subtracts_flat_rate(self, tmp_path):
         """Linear mode applies flat -RATE decay."""
-        from janitor import apply_decay_optimized, JanitorMetrics
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         mem = self._make_stale_mem(graph, "Linear decay fact", days_ago=90, confidence=0.8)
 
-        with patch("janitor._cfg") as mock_cfg, \
-             patch("janitor.CONFIDENCE_DECAY_RATE", 0.10):
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
+             patch("core.lifecycle.janitor.CONFIDENCE_DECAY_RATE", 0.10):
             mock_cfg.decay.mode = "linear"
             mock_cfg.decay.minimum_confidence = 0.1
             mock_cfg.decay.review_queue_enabled = False
@@ -381,14 +381,14 @@ class TestApplyDecayOptimizedReal:
 
     def test_verified_decays_slower_linear(self, tmp_path):
         """Verified facts decay at half rate in linear mode."""
-        from janitor import apply_decay_optimized, JanitorMetrics
+        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         mem = self._make_stale_mem(graph, "Verified fact", days_ago=90, confidence=0.8, verified=True)
 
-        with patch("janitor._cfg") as mock_cfg, \
-             patch("janitor.CONFIDENCE_DECAY_RATE", 0.10):
+        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
+             patch("core.lifecycle.janitor.CONFIDENCE_DECAY_RATE", 0.10):
             mock_cfg.decay.mode = "linear"
             mock_cfg.decay.minimum_confidence = 0.1
             mock_cfg.decay.review_queue_enabled = False
@@ -409,7 +409,7 @@ class TestDecayMemoriesCli:
 
     def test_decays_old_active_memories(self, tmp_path):
         """Memories accessed 30+ days ago get -0.10 confidence."""
-        from memory_graph import decay_memories
+        from datastore.memorydb.memory_graph import decay_memories
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Old active memory", confidence=0.8, status="active")
 
@@ -417,7 +417,7 @@ class TestDecayMemoriesCli:
         with graph._get_conn() as conn:
             conn.execute("UPDATE nodes SET accessed_at = ? WHERE id = ?", (old_date, node.id))
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             result = decay_memories()
 
         assert result["decayed_count"] == 1
@@ -426,7 +426,7 @@ class TestDecayMemoriesCli:
 
     def test_skips_recently_accessed(self, tmp_path):
         """Memories accessed <30 days ago are not decayed."""
-        from memory_graph import decay_memories
+        from datastore.memorydb.memory_graph import decay_memories
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Recent memory", confidence=0.8, status="active")
 
@@ -434,7 +434,7 @@ class TestDecayMemoriesCli:
         with graph._get_conn() as conn:
             conn.execute("UPDATE nodes SET accessed_at = ? WHERE id = ?", (recent, node.id))
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             result = decay_memories()
 
         assert result["decayed_count"] == 0
@@ -443,7 +443,7 @@ class TestDecayMemoriesCli:
 
     def test_skips_pinned_memories(self, tmp_path):
         """Pinned memories are never decayed."""
-        from memory_graph import decay_memories
+        from datastore.memorydb.memory_graph import decay_memories
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Pinned memory", confidence=0.8, status="active")
 
@@ -452,14 +452,14 @@ class TestDecayMemoriesCli:
             conn.execute("UPDATE nodes SET accessed_at = ?, pinned = 1 WHERE id = ?",
                          (old_date, node.id))
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             result = decay_memories()
 
         assert result["decayed_count"] == 0
 
     def test_skips_pending_status(self, tmp_path):
         """Memories with pending status are not decayed."""
-        from memory_graph import decay_memories
+        from datastore.memorydb.memory_graph import decay_memories
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Pending memory", confidence=0.8, status="pending")
 
@@ -467,14 +467,14 @@ class TestDecayMemoriesCli:
         with graph._get_conn() as conn:
             conn.execute("UPDATE nodes SET accessed_at = ? WHERE id = ?", (old_date, node.id))
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             result = decay_memories()
 
         assert result["decayed_count"] == 0
 
     def test_skips_verified_memories(self, tmp_path):
         """Verified memories are not decayed."""
-        from memory_graph import decay_memories
+        from datastore.memorydb.memory_graph import decay_memories
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Verified memory", confidence=0.8, status="active")
 
@@ -483,14 +483,14 @@ class TestDecayMemoriesCli:
             conn.execute("UPDATE nodes SET accessed_at = ?, verified = 1 WHERE id = ?",
                          (old_date, node.id))
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             result = decay_memories()
 
         assert result["decayed_count"] == 0
 
     def test_wont_decay_below_floor(self, tmp_path):
         """Confidence won't drop below 0.1 (the WHERE clause prevents it)."""
-        from memory_graph import decay_memories
+        from datastore.memorydb.memory_graph import decay_memories
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Low confidence memory", confidence=0.12, status="active")
 
@@ -498,7 +498,7 @@ class TestDecayMemoriesCli:
         with graph._get_conn() as conn:
             conn.execute("UPDATE nodes SET accessed_at = ? WHERE id = ?", (old_date, node.id))
 
-        with patch("memory_graph.get_graph", return_value=graph):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
             result = decay_memories()
 
         assert result["decayed_count"] == 1
@@ -686,7 +686,7 @@ class TestDocsRegistryGc:
             "ollama": {"url": "http://localhost:11434", "embeddingModel": "nomic-embed-text"}
         }))
 
-        from docs_registry import DocsRegistry
+        from core.docs.registry import DocsRegistry
         from config import reload_config
         reload_config()
         return DocsRegistry(db_path=tmp_path / "gc_test.db")

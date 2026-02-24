@@ -20,7 +20,7 @@ os.environ["MEMORY_DB_PATH"] = ":memory:"
 
 import pytest
 
-from memory_graph import MemoryGraph, Node, Edge, _content_hash
+from datastore.memorydb.memory_graph import MemoryGraph, Node, Edge, _content_hash
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ def _make_graph(tmp_path):
         return [float(b) / 255.0 for b in h] * 8  # 128-dim
 
     db_file = tmp_path / "test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph, db_file
 

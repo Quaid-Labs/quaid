@@ -37,16 +37,16 @@ def _fake_get_embedding(text):
 
 def _make_graph(tmp_path):
     """Create a MemoryGraph backed by a temp SQLite file."""
-    from memory_graph import MemoryGraph
+    from datastore.memorydb.memory_graph import MemoryGraph
     db_file = tmp_path / "test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph, db_file
 
 
 def _make_node(graph, name, owner_id="quaid", knowledge_type="fact", confidence=0.5, **kwargs):
     """Create and add a node to the graph with a fake embedding."""
-    from memory_graph import Node
+    from datastore.memorydb.memory_graph import Node
     node = Node.create(
         type=kwargs.get("type", "Fact"),
         name=name,
@@ -57,7 +57,7 @@ def _make_node(graph, name, owner_id="quaid", knowledge_type="fact", confidence=
         owner_id=owner_id,
         status=kwargs.get("status", "approved"),
     )
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph.add_node(node)
     return node
 
@@ -72,25 +72,25 @@ class TestKnowledgeTypeNode:
 
     def test_node_defaults_to_fact(self):
         """Node dataclass defaults knowledge_type to 'fact'."""
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         node = Node.create(type="Fact", name="test fact")
         assert node.knowledge_type == "fact"
 
     def test_node_create_with_belief(self):
         """Node can be created with knowledge_type='belief'."""
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         node = Node.create(type="Fact", name="I think the earth is round", knowledge_type="belief")
         assert node.knowledge_type == "belief"
 
     def test_node_create_with_preference(self):
         """Node can be created with knowledge_type='preference'."""
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         node = Node.create(type="Preference", name="Quaid prefers dark coffee", knowledge_type="preference")
         assert node.knowledge_type == "preference"
 
     def test_node_create_with_experience(self):
         """Node can be created with knowledge_type='experience'."""
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         node = Node.create(type="Fact", name="Quaid visited Tokyo last year", knowledge_type="experience")
         assert node.knowledge_type == "experience"
 
@@ -173,7 +173,7 @@ class TestKnowledgeTypeComposite:
 
     def test_belief_reduces_confidence_bonus(self):
         """knowledge_type='belief' reduces confidence_bonus by 0.7x."""
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node_fact = Node.create(type="Fact", name="fact", confidence=0.8, knowledge_type="fact")
         node_fact.accessed_at = datetime.now().isoformat()
         node_fact.access_count = 0
@@ -189,7 +189,7 @@ class TestKnowledgeTypeComposite:
 
     def test_preference_reduces_confidence_bonus(self):
         """knowledge_type='preference' reduces confidence_bonus by 0.9x."""
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node_fact = Node.create(type="Fact", name="fact", confidence=0.8, knowledge_type="fact")
         node_fact.accessed_at = datetime.now().isoformat()
         node_fact.access_count = 0
@@ -205,7 +205,7 @@ class TestKnowledgeTypeComposite:
 
     def test_fact_leaves_confidence_bonus_unchanged(self):
         """knowledge_type='fact' does not alter confidence_bonus."""
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node = Node.create(type="Fact", name="fact", confidence=0.8, knowledge_type="fact")
         node.accessed_at = datetime.now().isoformat()
         node.access_count = 0
@@ -221,7 +221,7 @@ class TestKnowledgeTypeComposite:
 
     def test_belief_penalty_is_less_than_preference_penalty(self):
         """Belief has a larger confidence_bonus reduction (0.7x) than preference (0.9x)."""
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node_belief = Node.create(type="Fact", name="belief", confidence=0.8, knowledge_type="belief")
         node_belief.accessed_at = datetime.now().isoformat()
         node_belief.access_count = 0
@@ -237,7 +237,7 @@ class TestKnowledgeTypeComposite:
 
     def test_experience_leaves_confidence_bonus_unchanged(self):
         """knowledge_type='experience' does not alter confidence_bonus (same as 'fact')."""
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         node_fact = Node.create(type="Fact", name="fact", confidence=0.8, knowledge_type="fact")
         node_fact.accessed_at = datetime.now().isoformat()
         node_fact.access_count = 0
@@ -257,10 +257,10 @@ class TestKnowledgeTypeStore:
 
     def test_store_accepts_knowledge_type_parameter(self, tmp_path):
         """store() accepts knowledge_type and passes it to created node."""
-        from memory_graph import store
+        from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             result = store("Quaid believes in kindness and empathy",
                            owner_id="quaid", skip_dedup=True, knowledge_type="belief")
             node = graph.get_node(result["id"])
@@ -268,10 +268,10 @@ class TestKnowledgeTypeStore:
 
     def test_store_defaults_knowledge_type_to_fact(self, tmp_path):
         """store() defaults knowledge_type to 'fact' when not specified."""
-        from memory_graph import store
+        from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             result = store("Quaid has a dog named Rex",
                            owner_id="quaid", skip_dedup=True)
             node = graph.get_node(result["id"])
@@ -279,10 +279,10 @@ class TestKnowledgeTypeStore:
 
     def test_store_with_preference_knowledge_type(self, tmp_path):
         """store() with knowledge_type='preference' creates node with correct type."""
-        from memory_graph import store
+        from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             result = store("Quaid prefers morning walks over evening runs",
                            owner_id="quaid", skip_dedup=True, knowledge_type="preference")
             node = graph.get_node(result["id"])
@@ -290,10 +290,10 @@ class TestKnowledgeTypeStore:
 
     def test_store_with_experience_knowledge_type(self, tmp_path):
         """store() with knowledge_type='experience' creates node with correct type."""
-        from memory_graph import store
+        from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             result = store("Quaid traveled through Southeast Asia in 2024",
                            owner_id="quaid", skip_dedup=True, knowledge_type="experience")
             node = graph.get_node(result["id"])
@@ -480,8 +480,8 @@ class TestEntityAliasInRecall:
 
         graph.resolve_alias = tracked_resolve
 
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
             # recall() will call resolve_alias as part of its pipeline
             recall_fn("Tell me about sol", owner_id="quaid",
@@ -544,13 +544,13 @@ class TestCrossEncoderReranking:
 
     def test_empty_results_returns_empty(self):
         """_rerank_with_cross_encoder with empty results returns empty."""
-        from memory_graph import _rerank_with_cross_encoder
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder
         result = _rerank_with_cross_encoder("test query", [])
         assert result == []
 
     def test_fallback_on_connection_error(self):
         """_rerank_with_cross_encoder falls back to original scores on transport error."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         node = Node.create(type="Fact", name="Quaid lives in Bali")
@@ -566,7 +566,7 @@ class TestCrossEncoderReranking:
 
     def test_fallback_on_api_error(self):
         """_rerank_with_cross_encoder falls back to original scores on LLM API error."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         node = Node.create(type="Fact", name="Quaid lives in Bali")
@@ -581,7 +581,7 @@ class TestCrossEncoderReranking:
 
     def test_llm_batches_all_candidates(self):
         """LLM reranker sends all candidates in a single call."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         nodes = [
@@ -605,7 +605,7 @@ class TestCrossEncoderReranking:
 
     def test_llm_parses_various_formats(self):
         """LLM reranker handles different response formats."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         nodes = [
@@ -625,7 +625,7 @@ class TestCrossEncoderReranking:
 
     def test_llm_null_response_fallback(self):
         """LLM reranker falls back when LLM returns None."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         node = Node.create(type="Fact", name="Test fact")
@@ -640,7 +640,7 @@ class TestCrossEncoderReranking:
 
     def test_blends_scores_yes_response(self):
         """_rerank_with_cross_encoder blends scores correctly for 'yes' response."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         node = Node.create(type="Fact", name="Quaid lives in Bali")
@@ -660,7 +660,7 @@ class TestCrossEncoderReranking:
 
     def test_blends_scores_no_response(self):
         """_rerank_with_cross_encoder blends scores correctly for 'no' response."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         node = Node.create(type="Fact", name="Quaid plays guitar")
@@ -681,7 +681,7 @@ class TestCrossEncoderReranking:
 
     def test_only_reranks_top_k(self):
         """_rerank_with_cross_encoder only reranks top-K candidates, rest passed through."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         config = RetrievalConfig(reranker_top_k=2)
@@ -701,7 +701,7 @@ class TestCrossEncoderReranking:
 
     def test_sorts_by_blended_score(self):
         """_rerank_with_cross_encoder sorts reranked results by blended score."""
-        from memory_graph import _rerank_with_cross_encoder, Node
+        from datastore.memorydb.memory_graph import _rerank_with_cross_encoder, Node
         from config import RetrievalConfig
 
         config = RetrievalConfig()
@@ -731,9 +731,9 @@ class TestRerankerInRecall:
         mock_cfg = MagicMock()
         mock_cfg.retrieval = config
 
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph._rerank_with_cross_encoder") as mock_rerank, \
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder") as mock_rerank, \
              patch("config.get_config", return_value=mock_cfg):
             mock_rerank.return_value = []  # Should not be called
             recall_fn = __import__("memory_graph").recall
@@ -751,9 +751,9 @@ class TestRerankerInRecall:
         mock_cfg = MagicMock()
         mock_cfg.retrieval = config
 
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("memory_graph._rerank_with_cross_encoder", wraps=lambda q, r, c=None: r) as mock_rerank, \
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder", wraps=lambda q, r, c=None: r) as mock_rerank, \
              patch("config.get_config", return_value=mock_cfg):
             recall_fn = __import__("memory_graph").recall
             recall_fn("Quaid cat", owner_id="quaid",
@@ -771,7 +771,7 @@ class TestMultiPassRetrieval:
 
     def _build_low_quality_results(self):
         """Build results where top score < 0.70 and count < limit."""
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         node = Node.create(type="Fact", name="Some marginally relevant fact")
         node.accessed_at = datetime.now().isoformat()
         node.access_count = 0
@@ -793,8 +793,8 @@ class TestMultiPassRetrieval:
 
         graph.search_hybrid = counting_search_hybrid
 
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
             # Use a query that will produce low-quality results
             recall_fn("Where does Quaid live", owner_id="quaid",
@@ -820,8 +820,8 @@ class TestMultiPassRetrieval:
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Douglas Quaid has a cat named Richter")
 
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
             results = recall_fn("Quaid cat Richter", owner_id="quaid",
                                 use_routing=False, min_similarity=0.01)
@@ -838,8 +838,8 @@ class TestMultiPassRetrieval:
             _make_node(graph, f"Some tangentially related fact number {i}")
         _make_node(graph, "Quaid lives in Bali Indonesia")
 
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
             results = recall_fn("Where does Douglas Quaid live in Bali",
                                 owner_id="quaid",
@@ -854,7 +854,7 @@ class TestMultiPassRetrieval:
 
     def test_multi_pass_does_not_trigger_when_top_high(self, tmp_path):
         """Multi-pass doesn't trigger when top result >= 0.70."""
-        from memory_graph import Node, _compute_composite_score
+        from datastore.memorydb.memory_graph import Node, _compute_composite_score
         # Directly test the condition: scored_results[0][1] < 0.70
         node = Node.create(type="Fact", name="High quality match")
         node.accessed_at = datetime.now().isoformat()
@@ -866,7 +866,7 @@ class TestMultiPassRetrieval:
 
     def test_multi_pass_does_not_trigger_when_enough_results(self):
         """Multi-pass doesn't trigger when results >= limit."""
-        from memory_graph import Node
+        from datastore.memorydb.memory_graph import Node
         results = [
             (Node.create(type="Fact", name=f"Result {i}"), 0.60)
             for i in range(5)
@@ -892,8 +892,8 @@ class TestMultiPassRetrieval:
 
         graph.search_hybrid = failing_second_search
 
-        with patch("memory_graph.get_graph", return_value=graph), \
-             patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             recall_fn = __import__("memory_graph").recall
             # Should not raise even if multi-pass search fails
             results = recall_fn("Tell me about Quaid and Richter",

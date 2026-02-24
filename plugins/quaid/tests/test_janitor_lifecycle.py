@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-from janitor_lifecycle import RoutineContext, build_default_registry
+from core.lifecycle.janitor_lifecycle import RoutineContext, build_default_registry
 
 
 class _FakeRag:
@@ -33,7 +33,7 @@ def test_rag_lifecycle_runs_and_returns_metrics(monkeypatch, tmp_path):
     (tmp_path / "projects" / "demo").mkdir(parents=True, exist_ok=True)
 
     fake_rag = _FakeRag()
-    monkeypatch.setattr("docs_rag.DocsRAG", lambda: fake_rag)
+    monkeypatch.setattr("core.docs.rag.DocsRAG", lambda: fake_rag)
 
     docs_registry_mod = ModuleType("docs_registry")
 
@@ -71,7 +71,7 @@ def test_rag_lifecycle_handles_missing_routine():
 
 
 def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
-    monkeypatch.setattr("workspace_audit.run_workspace_check", lambda dry_run: {
+    monkeypatch.setattr("core.lifecycle.workspace_audit.run_workspace_check", lambda dry_run: {
         "phase": "apply",
         "moved_to_docs": 3,
         "moved_to_memory": 1,
@@ -98,7 +98,7 @@ def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
 def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
     calls = {"journal": []}
 
-    monkeypatch.setattr("soul_snippets.run_soul_snippets_review", lambda dry_run: {
+    monkeypatch.setattr("core.lifecycle.soul_snippets.run_soul_snippets_review", lambda dry_run: {
         "folded": 4,
         "rewritten": 2,
         "discarded": 1,
@@ -108,7 +108,7 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
         calls["journal"].append((dry_run, force_distill))
         return {"additions": 3, "edits": 1, "total_entries": 9}
 
-    monkeypatch.setattr("soul_snippets.run_journal_distillation", _run_journal_distillation)
+    monkeypatch.setattr("core.lifecycle.soul_snippets.run_journal_distillation", _run_journal_distillation)
 
     registry = build_default_registry()
 
@@ -133,21 +133,21 @@ def test_docs_lifecycle_staleness_and_cleanup(monkeypatch, tmp_path):
     calls = {"updated": [], "cleaned": []}
 
     monkeypatch.setattr(
-        "docs_updater.get_doc_purposes",
+        "core.docs.updater.get_doc_purposes",
         lambda: {"README.md": "summary", "projects/x/NOTES.md": "notes"},
     )
-    monkeypatch.setattr("docs_updater.check_staleness", lambda: {
+    monkeypatch.setattr("core.docs.updater.check_staleness", lambda: {
         "README.md": SimpleNamespace(gap_hours=2.5, stale_sources=["src/a.ts"]),
         "projects/x/NOTES.md": SimpleNamespace(gap_hours=1.0, stale_sources=["src/b.ts"]),
     })
-    monkeypatch.setattr("docs_updater.update_doc_from_diffs", lambda doc_path, purpose, stale_sources, dry_run: (
+    monkeypatch.setattr("core.docs.updater.update_doc_from_diffs", lambda doc_path, purpose, stale_sources, dry_run: (
         calls["updated"].append((doc_path, purpose, tuple(stale_sources), dry_run)) or True
     ))
-    monkeypatch.setattr("docs_updater.check_cleanup_needed", lambda: {
+    monkeypatch.setattr("core.docs.updater.check_cleanup_needed", lambda: {
         "README.md": SimpleNamespace(reason="updates", updates_since_cleanup=5, growth_ratio=1.0),
         "projects/x/NOTES.md": SimpleNamespace(reason="growth", updates_since_cleanup=1, growth_ratio=2.2),
     })
-    monkeypatch.setattr("docs_updater.cleanup_doc", lambda doc_path, purpose, dry_run: (
+    monkeypatch.setattr("core.docs.updater.cleanup_doc", lambda doc_path, purpose, dry_run: (
         calls["cleaned"].append((doc_path, purpose, dry_run)) or True
     ))
 

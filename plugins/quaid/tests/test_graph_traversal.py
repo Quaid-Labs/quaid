@@ -20,7 +20,7 @@ os.environ["MEMORY_DB_PATH"] = _TEST_DB
 import pytest
 from unittest.mock import patch
 
-from memory_graph import MemoryGraph, Node, Edge
+from datastore.memorydb.memory_graph import MemoryGraph, Node, Edge
 
 
 # ---------------------------------------------------------------------------

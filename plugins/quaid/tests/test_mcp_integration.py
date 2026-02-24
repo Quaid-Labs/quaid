@@ -1,6 +1,6 @@
 """Integration tests for mcp_server.py — real DB, mocked embeddings.
 
-These tests verify the full stack: MCP tool functions → api.py → memory_graph.py → SQLite.
+These tests verify the full stack: MCP tool functions → api.py → memory datastore → SQLite.
 Unit tests (test_mcp_server.py) mock the API layer; these tests use a real database.
 """
 
@@ -42,9 +42,9 @@ def _fake_get_embedding(text):
 
 def _make_graph(tmp_path):
     """Create a MemoryGraph backed by a temp SQLite file."""
-    from memory_graph import MemoryGraph
+    from datastore.memorydb.memory_graph import MemoryGraph
     db_file = tmp_path / "test.db"
-    with patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
         graph = MemoryGraph(db_path=db_file)
     return graph, db_file
 
@@ -64,14 +64,14 @@ def _integration_patches(graph):
     including api.py (which binds get_graph at import time) — use our test graph.
 
     Patches:
-      - memory_graph._graph → our test graph (real DB, temp file)
+      - datastore.memorydb.memory_graph._graph → our test graph (real DB, temp file)
       - _lib_get_embedding → deterministic fake embeddings
       - _HAS_LLM_CLIENTS → False (skip HyDE, reranker, all LLM calls)
       - adapter → TestAdapter (LLM calls use canned responses, no real API)
       - config → reloaded from test adapter's paths (test-appropriate defaults)
     """
     from contextlib import ExitStack
-    import memory_graph as mg
+    import datastore.memorydb.memory_graph as mg
     from lib.adapter import TestAdapter, set_adapter, reset_adapter
     from config import reload_config
 
@@ -80,8 +80,8 @@ def _integration_patches(graph):
     old_graph = mg._graph
     mg._graph = graph
     stack.callback(lambda: setattr(mg, "_graph", old_graph))
-    stack.enter_context(patch("memory_graph._lib_get_embedding", side_effect=_fake_get_embedding))
-    stack.enter_context(patch("memory_graph._HAS_LLM_CLIENTS", False))
+    stack.enter_context(patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding))
+    stack.enter_context(patch("datastore.memorydb.memory_graph._HAS_LLM_CLIENTS", False))
     # Use TestAdapter so any LLM calls (reranker, HyDE) use canned responses
     test_home = graph.db_path.parent if hasattr(graph, 'db_path') else Path("/tmp")
     test_adapter = TestAdapter(test_home)
@@ -280,7 +280,7 @@ class TestMcpDocsSearch:
         graph, db_file = _make_graph(tmp_path)
         mod = _get_mcp_module()
         with _integration_patches(graph), \
-             patch("docs_rag.DB_PATH", db_file):
+             patch("core.docs.rag.DB_PATH", db_file):
             # No docs indexed, should return dict with empty chunks list
             results = mod.projects_search("anything")
             assert isinstance(results, dict)

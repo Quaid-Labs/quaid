@@ -7,7 +7,7 @@ import * as path from 'node:path'
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
-const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/memory_graph.py")
+const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py")
 
 function ensureAdapterConfig(): void {
   const payload = JSON.stringify({ adapter: { type: "standalone" } }, null, 2)
