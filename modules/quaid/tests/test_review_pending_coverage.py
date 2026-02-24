@@ -84,3 +84,30 @@ def test_review_pending_memories_raises_on_incomplete_coverage_after_retry(tmp_p
     with graph._get_conn() as conn:
         pending = conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'pending'").fetchone()[0]
     assert pending == 2
+
+
+def test_review_pending_memories_accepts_wrapped_decisions_payload(tmp_path):
+    graph = _make_graph(tmp_path)
+    n1 = _add_pending_fact(graph, "My mother is Wendy")
+    n2 = _add_pending_fact(graph, "My father is Kent")
+    metrics = JanitorMetrics()
+
+    wrapped = {
+        "decisions": [
+            {"memory_id": n1.id, "decision": "APPROVE"},
+            {"memory_id": n2.id, "decision": "APPROVE"},
+        ]
+    }
+
+    with patch("datastore.memorydb.maintenance_ops.call_llm", return_value=(json.dumps(wrapped), 0.1)):
+        result = review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
+
+    assert result["total_reviewed"] == 2
+    assert result["review_coverage_ratio"] == 1.0
+    assert result["missing_ids"] == []
+
+    with graph._get_conn() as conn:
+        approved = conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'approved'").fetchone()[0]
+        pending = conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'pending'").fetchone()[0]
+    assert approved == 2
+    assert pending == 0
