@@ -137,3 +137,17 @@ Coverage requirements:
 Implement next in this order:
 1. Tune/commit environment-specific stage-budget thresholds from accumulated nightly history.
    - Current state: insufficient successful `nightly` samples in local history; provisional `janitor-parallel-bench` caps documented in `docs/BENCHMARK-OPERATIONS.md`.
+
+## Sweep Loop (Boundary + Bugs)
+
+For each hardening cycle, run this loop:
+
+1. Boundary scan:
+   - `python3 modules/quaid/scripts/check-boundaries.py`
+2. Bug sweep:
+   - `python3 modules/quaid/scripts/run_pytests.py --mode unit --workers 4 --timeout 120`
+   - `npm --prefix modules/quaid run -s lint:ts`
+   - `npm --prefix modules/quaid run -s lint:py`
+3. E2E regression lane:
+   - `bash modules/quaid/scripts/run-quaid-e2e.sh --suite blocker --quick-bootstrap --reuse-workspace`
+4. Fix findings immediately, rerun the same loop, then commit.
