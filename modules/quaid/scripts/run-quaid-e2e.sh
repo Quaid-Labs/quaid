@@ -1435,6 +1435,11 @@ pressure_turn = run_agent("Resilience probe turn 3 during janitor pressure: ackn
 if not pressure_turn:
     janitor_probe.kill()
     raise SystemExit("[e2e] ERROR: resilience turn 3 failed/empty during janitor pressure")
+_inject_timeout_failure_and_verify_recovery()
+post_pressure_timeout = run_agent("Timeout-failure recovery probe under janitor pressure: acknowledge with OK.")
+if not post_pressure_timeout:
+    janitor_probe.kill()
+    raise SystemExit("[e2e] ERROR: recovery probe failed after timeout failure under janitor pressure")
 try:
     j_out, j_err = janitor_probe.communicate(timeout=180)
 except subprocess.TimeoutExpired:

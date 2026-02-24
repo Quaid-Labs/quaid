@@ -103,5 +103,5 @@ Coverage requirements:
 
 Implement next in this order:
 1. Stage-specific budget tuning from accumulated nightly history.
-2. Add regression assertions for timeout-lane behavior under janitor pressure.
-3. Upload nightly budget recommendation/history as CI artifacts for trend visibility.
+2. Upload nightly budget recommendation/history as CI artifacts for trend visibility.
+3. Add cross-agent/notification fanout assertions in live-events suite (debug vs quiet expectations).
