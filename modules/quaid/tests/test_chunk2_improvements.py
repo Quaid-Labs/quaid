@@ -482,7 +482,7 @@ class TestEntityAliasInRecall:
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            recall_fn = __import__("memory_graph").recall
+            recall_fn = __import__("datastore.memorydb.memory_graph", fromlist=["recall"]).recall
             # recall() will call resolve_alias as part of its pipeline
             recall_fn("Tell me about sol", owner_id="quaid",
                       use_routing=False, min_similarity=0.01)
@@ -557,7 +557,7 @@ class TestCrossEncoderReranking:
         results = [(node, 0.85)]
         config = RetrievalConfig()
 
-        with patch("llm_clients.call_fast_reasoning", side_effect=ConnectionError("no server")):
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=ConnectionError("no server")):
             reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
 
         # Should keep original score
@@ -573,7 +573,7 @@ class TestCrossEncoderReranking:
         results = [(node, 0.85)]
         config = RetrievalConfig()
 
-        with patch("llm_clients.call_fast_reasoning", side_effect=Exception("API error")):
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=Exception("API error")):
             reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
 
         assert len(reranked) == 1
@@ -590,9 +590,10 @@ class TestCrossEncoderReranking:
         ]
         config = RetrievalConfig()
 
-        response = "1. YES\n2. NO\n3. YES\n4. NO\n5. YES"
+        # Current reranker expects numeric 0-5 grades.
+        response = "1. 5\n2. 0\n3. 5\n4. 0\n5. 5"
 
-        with patch("llm_clients.call_fast_reasoning", return_value=(response, 0.5)) as mock_call:
+        with patch("lib.llm_clients.call_fast_reasoning", return_value=(response, 0.5)) as mock_call:
             reranked = _rerank_with_cross_encoder("test query", nodes, config)
 
         # Single call for all 5 candidates
@@ -618,7 +619,7 @@ class TestCrossEncoderReranking:
         # Mixed formats: "1. YES", "2: no", "3) Yes"
         response = "1. YES\n2: no\n3) Yes"
 
-        with patch("llm_clients.call_fast_reasoning", return_value=(response, 0.5)):
+        with patch("lib.llm_clients.call_fast_reasoning", return_value=(response, 0.5)):
             reranked = _rerank_with_cross_encoder("test", nodes, config)
 
         assert len(reranked) == 3
@@ -632,7 +633,7 @@ class TestCrossEncoderReranking:
         results = [(node, 0.75)]
         config = RetrievalConfig()
 
-        with patch("llm_clients.call_fast_reasoning", return_value=(None, 0.0)):
+        with patch("lib.llm_clients.call_fast_reasoning", return_value=(None, 0.0)):
             reranked = _rerank_with_cross_encoder("test", results, config)
 
         assert len(reranked) == 1
@@ -648,7 +649,7 @@ class TestCrossEncoderReranking:
         results = [(node, original_score)]
         config = RetrievalConfig()
 
-        with patch("llm_clients.call_fast_reasoning", return_value=("1. 5", 0.1)):
+        with patch("lib.llm_clients.call_fast_reasoning", return_value=("1. 5", 0.1)):
             reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
 
         # Config default reranker_blend is 0.5
@@ -668,7 +669,7 @@ class TestCrossEncoderReranking:
         results = [(node, original_score)]
         config = RetrievalConfig()
 
-        with patch("llm_clients.call_fast_reasoning", return_value=("1. 0", 0.1)):
+        with patch("lib.llm_clients.call_fast_reasoning", return_value=("1. 0", 0.1)):
             reranked = _rerank_with_cross_encoder("where does Quaid live", results, config)
 
         # Config default reranker_blend is 0.5
@@ -690,7 +691,7 @@ class TestCrossEncoderReranking:
             for i in range(5)
         ]
 
-        with patch("llm_clients.call_fast_reasoning", return_value=("1. yes\n2. yes", 0.1)) as mock_call:
+        with patch("lib.llm_clients.call_fast_reasoning", return_value=("1. yes\n2. yes", 0.1)) as mock_call:
             reranked = _rerank_with_cross_encoder("test query", nodes, config)
 
         # Top-K candidates are batched into one fast-reasoning call.
@@ -708,11 +709,12 @@ class TestCrossEncoderReranking:
         node_low = Node.create(type="Fact", name="Irrelevant fact")
         results = [(node_low, 0.9), (node_high, 0.5)]  # Original order: low first
 
-        with patch("llm_clients.call_fast_reasoning", return_value=("1. no\n2. yes", 0.1)):
+        with patch("lib.llm_clients.call_fast_reasoning", return_value=("1. 0\n2. 5", 0.1)):
             reranked = _rerank_with_cross_encoder("test query", results, config)
 
-        # After reranking: node_high (yes: 0.6*1+0.4*0.5=0.8) should be first
-        # node_low (no: 0.6*0.3+0.4*0.9=0.54) should be second
+        # With blend=0.5:
+        # node_high: 0.5*1.0 + 0.5*0.5 = 0.75
+        # node_low:  0.5*0.0 + 0.5*0.9 = 0.45
         assert reranked[0][0].name == "Very relevant fact"
         assert reranked[1][0].name == "Irrelevant fact"
 
@@ -735,7 +737,7 @@ class TestRerankerInRecall:
              patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder") as mock_rerank, \
              patch("config.get_config", return_value=mock_cfg):
             mock_rerank.return_value = []  # Should not be called
-            recall_fn = __import__("memory_graph").recall
+            recall_fn = __import__("datastore.memorydb.memory_graph", fromlist=["recall"]).recall
             recall_fn("Quaid cat", owner_id="quaid",
                       use_routing=False, min_similarity=0.01)
             mock_rerank.assert_not_called()
@@ -754,7 +756,7 @@ class TestRerankerInRecall:
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("datastore.memorydb.memory_graph._rerank_with_cross_encoder", wraps=lambda q, r, c=None: r) as mock_rerank, \
              patch("config.get_config", return_value=mock_cfg):
-            recall_fn = __import__("memory_graph").recall
+            recall_fn = __import__("datastore.memorydb.memory_graph", fromlist=["recall"]).recall
             recall_fn("Quaid cat", owner_id="quaid",
                       use_routing=False, min_similarity=0.01)
             mock_rerank.assert_called_once()
@@ -794,7 +796,7 @@ class TestMultiPassRetrieval:
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            recall_fn = __import__("memory_graph").recall
+            recall_fn = __import__("datastore.memorydb.memory_graph", fromlist=["recall"]).recall
             # Use a query that will produce low-quality results
             recall_fn("Where does Quaid live", owner_id="quaid",
                       use_routing=False, min_similarity=0.01, limit=10)
@@ -821,7 +823,7 @@ class TestMultiPassRetrieval:
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            recall_fn = __import__("memory_graph").recall
+            recall_fn = __import__("datastore.memorydb.memory_graph", fromlist=["recall"]).recall
             results = recall_fn("Quaid cat Richter", owner_id="quaid",
                                 use_routing=False, min_similarity=0.01)
 
@@ -839,7 +841,7 @@ class TestMultiPassRetrieval:
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            recall_fn = __import__("memory_graph").recall
+            recall_fn = __import__("datastore.memorydb.memory_graph", fromlist=["recall"]).recall
             results = recall_fn("Where does Douglas Quaid live in Bali",
                                 owner_id="quaid",
                                 use_routing=False, min_similarity=0.01,
@@ -893,7 +895,7 @@ class TestMultiPassRetrieval:
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
-            recall_fn = __import__("memory_graph").recall
+            recall_fn = __import__("datastore.memorydb.memory_graph", fromlist=["recall"]).recall
             # Should not raise even if multi-pass search fails
             results = recall_fn("Tell me about Quaid and Richter",
                                 owner_id="quaid",
