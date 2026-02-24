@@ -51,6 +51,12 @@ NOTIFY_REQUIRE_DELIVERY="${QUAID_E2E_NOTIFY_REQUIRE_DELIVERY:-false}"
 AUTO_STAGE_BUDGETS="${QUAID_E2E_AUTO_STAGE_BUDGETS:-true}"
 AUTO_STAGE_BUDGETS_STAGES="${QUAID_E2E_AUTO_STAGE_BUDGETS_STAGES:-bootstrap,resilience,notify_matrix,janitor}"
 JANITOR_PARALLEL_REPORT_PATH="${QUAID_E2E_JANITOR_PARALLEL_REPORT_PATH:-/tmp/quaid-e2e-janitor-parallel-bench.json}"
+JPB_MAX_ERRORS="${QUAID_E2E_JPB_MAX_ERRORS:-0}"
+JPB_MAX_WARNINGS="${QUAID_E2E_JPB_MAX_WARNINGS:--1}"
+JPB_MAX_CONTRADICTIONS_PENDING_AFTER="${QUAID_E2E_JPB_MAX_CONTRADICTIONS_PENDING_AFTER:-0}"
+JPB_MAX_DEDUP_UNREVIEWED_AFTER="${QUAID_E2E_JPB_MAX_DEDUP_UNREVIEWED_AFTER:-0}"
+JPB_MAX_DECAY_PENDING_AFTER="${QUAID_E2E_JPB_MAX_DECAY_PENDING_AFTER:-0}"
+JPB_MAX_STAGING_EVENTS_AFTER="${QUAID_E2E_JPB_MAX_STAGING_EVENTS_AFTER:-0}"
 RUNTIME_BUDGET_PROFILE="${QUAID_E2E_RUNTIME_BUDGET_PROFILE:-auto}"
 RUNTIME_BUDGET_SECONDS="${QUAID_E2E_RUNTIME_BUDGET_SECONDS:-0}"
 STAGE_BUDGETS_JSON="${QUAID_E2E_STAGE_BUDGETS_JSON:-}"
@@ -2631,6 +2637,15 @@ registry_drift_doc_abs = os.path.abspath(os.path.join(ws, registry_drift_doc))
 docs_update_log_path = os.path.join(ws, "logs", "docs-update-log.json")
 janitor_stats_path = os.path.join(ws, "logs", "janitor-stats.json")
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return int(default)
+
 def fetch_counts(conn):
     rows = conn.execute(
         "SELECT status, COUNT(*) FROM nodes GROUP BY status"
@@ -2877,9 +2892,29 @@ try:
     if janitor_parallel_bench:
         env["QUAID_BENCHMARK_MODE"] = "1"
         env.setdefault("QUAID_JANITOR_LLM_PARALLELISM", "2")
-    subprocess.run(cmd, cwd=ws, check=True, timeout=timeout_seconds, env=env)
+    subprocess.run(
+        cmd,
+        cwd=ws,
+        check=True,
+        timeout=timeout_seconds,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 except subprocess.TimeoutExpired:
     print(f"[e2e] Janitor run timed out after {timeout_seconds}s", file=sys.stderr)
+    raise SystemExit(1)
+except subprocess.CalledProcessError as exc:
+    print(
+        f"[e2e] ERROR: janitor run failed with exit code {exc.returncode}",
+        file=sys.stderr,
+    )
+    if exc.stdout:
+        print("[e2e] janitor stdout (tail):", file=sys.stderr)
+        print(exc.stdout[-2000:], file=sys.stderr)
+    if exc.stderr:
+        print("[e2e] janitor stderr (tail):", file=sys.stderr)
+        print(exc.stderr[-2000:], file=sys.stderr)
     raise SystemExit(1)
 
 if janitor_stress and mode == "apply":
@@ -3132,6 +3167,14 @@ if janitor_parallel_bench:
         "janitor_stats_changes": changes_applied,
         "janitor_stats_errors": error_details,
         "janitor_stats_warnings": warning_details,
+        "thresholds": {
+            "max_errors": _env_int("QUAID_E2E_JPB_MAX_ERRORS", 0),
+            "max_warnings": _env_int("QUAID_E2E_JPB_MAX_WARNINGS", -1),
+            "max_contradictions_pending_after": _env_int("QUAID_E2E_JPB_MAX_CONTRADICTIONS_PENDING_AFTER", 0),
+            "max_dedup_unreviewed_after": _env_int("QUAID_E2E_JPB_MAX_DEDUP_UNREVIEWED_AFTER", 0),
+            "max_decay_pending_after": _env_int("QUAID_E2E_JPB_MAX_DECAY_PENDING_AFTER", 0),
+            "max_staging_events_after": _env_int("QUAID_E2E_JPB_MAX_STAGING_EVENTS_AFTER", 0),
+        },
     }
     try:
         os.makedirs(os.path.dirname(janitor_parallel_report_path), exist_ok=True)
@@ -3141,6 +3184,47 @@ if janitor_parallel_bench:
         print(f"[e2e] Wrote janitor parallel benchmark report: {janitor_parallel_report_path}")
     except Exception as exc:
         print(f"[e2e] WARN: failed writing janitor parallel benchmark report: {exc}", file=sys.stderr)
+
+    thresholds = report["thresholds"]
+    violations = []
+    errors_count = len(error_details)
+    warnings_count = len(warning_details)
+    if errors_count > int(thresholds["max_errors"]):
+        violations.append(
+            f"errors={errors_count} > max_errors={thresholds['max_errors']}"
+        )
+    if int(thresholds["max_warnings"]) >= 0 and warnings_count > int(thresholds["max_warnings"]):
+        violations.append(
+            f"warnings={warnings_count} > max_warnings={thresholds['max_warnings']}"
+        )
+    if after_seeded_contradictions_pending > int(thresholds["max_contradictions_pending_after"]):
+        violations.append(
+            "seeded contradictions pending after="
+            f"{after_seeded_contradictions_pending} > "
+            f"max_contradictions_pending_after={thresholds['max_contradictions_pending_after']}"
+        )
+    if after_seeded_dedup_unreviewed > int(thresholds["max_dedup_unreviewed_after"]):
+        violations.append(
+            "seeded dedup unreviewed after="
+            f"{after_seeded_dedup_unreviewed} > "
+            f"max_dedup_unreviewed_after={thresholds['max_dedup_unreviewed_after']}"
+        )
+    if after_seeded_decay_pending > int(thresholds["max_decay_pending_after"]):
+        violations.append(
+            "seeded decay pending after="
+            f"{after_seeded_decay_pending} > "
+            f"max_decay_pending_after={thresholds['max_decay_pending_after']}"
+        )
+    if after_seeded_staging > int(thresholds["max_staging_events_after"]):
+        violations.append(
+            f"seeded staging events after={after_seeded_staging} > "
+            f"max_staging_events_after={thresholds['max_staging_events_after']}"
+        )
+    if violations:
+        print("[e2e] ERROR: janitor-parallel-bench threshold violations detected:", file=sys.stderr)
+        for violation in violations:
+            print(f"[e2e] ERROR:   - {violation}", file=sys.stderr)
+        raise SystemExit(1)
 
 if not run_row:
     if mode == "dry-run":
@@ -3256,7 +3340,7 @@ if mode == "apply":
                 )
                 raise SystemExit(1)
             resolved_delta = after_seeded_contradictions_resolved - before_seeded_contradictions_resolved
-            if resolved_delta < before_seeded_contradictions_pending:
+            if (not janitor_parallel_bench) and resolved_delta < before_seeded_contradictions_pending:
                 print(
                     "[e2e] ERROR: seeded contradiction fixture did not transition to resolved/false_positive as expected "
                     f"(pending_before={before_seeded_contradictions_pending}, resolved_delta={resolved_delta})",
@@ -3272,7 +3356,7 @@ if mode == "apply":
                 )
                 raise SystemExit(1)
             dedup_reviewed_delta = after_seeded_dedup_reviewed - before_seeded_dedup_reviewed
-            if dedup_reviewed_delta < before_seeded_dedup_unreviewed:
+            if (not janitor_parallel_bench) and dedup_reviewed_delta < before_seeded_dedup_unreviewed:
                 print(
                     "[e2e] ERROR: seeded dedup fixture did not transition to reviewed as expected "
                     f"(unreviewed_before={before_seeded_dedup_unreviewed}, reviewed_delta={dedup_reviewed_delta})",
@@ -3288,14 +3372,14 @@ if mode == "apply":
                 )
                 raise SystemExit(1)
             decay_reviewed_delta = after_seeded_decay_reviewed - before_seeded_decay_reviewed
-            if decay_reviewed_delta < before_seeded_decay_pending:
+            if (not janitor_parallel_bench) and decay_reviewed_delta < before_seeded_decay_pending:
                 print(
                     "[e2e] ERROR: seeded decay-review fixture did not transition to reviewed as expected "
                     f"(pending_before={before_seeded_decay_pending}, reviewed_delta={decay_reviewed_delta})",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
-        if before_multi_owner_distinct_owners >= 2:
+        if (not janitor_parallel_bench) and before_multi_owner_distinct_owners >= 2:
             if after_multi_owner_distinct_owners < 2:
                 print(
                     "[e2e] ERROR: multi-owner isolation failed; seeded owner-scoped memories collapsed owners "
@@ -3310,7 +3394,7 @@ if mode == "apply":
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
-        if after_project_doc_updates <= before_project_doc_updates:
+        if (not janitor_parallel_bench) and after_project_doc_updates <= before_project_doc_updates:
             print(
                 "[e2e] ERROR: project artifact assertion failed; no new PROJECT.md update log entry "
                 f"(before={before_project_doc_updates}, after={after_project_doc_updates})",
