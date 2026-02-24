@@ -128,6 +128,9 @@ Coverage requirements:
    - Added benchmark-mode catch-up review before graduate in janitor core to prevent same-cycle pending leakage.
    - Janitor-parallel E2E assertions now focus on deterministic benchmark invariants (pending/unreviewed depletion + threshold gates) instead of fragile status-delta assumptions.
    - Added explicit janitor subprocess failure diagnostics to E2E for faster root-cause loops.
+18. Canonical checkpoint cut tooling.
+   - Added `scripts/cut-benchmark-checkpoint.sh` to sync `~/quaid/dev` -> `~/quaid/benchmark-checkpoint` with stable exclusions and metadata output.
+   - Removes ad-hoc rsync drift and gives benchmark lane a single canonical cut command.
 
 ## Backlog Order
 
