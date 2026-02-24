@@ -6,11 +6,9 @@ import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { queueDelayedRequest } from "./delayed-requests.js";
 import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
-import { createDataWriteEngine } from "../../core/data-writers.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 import { createPythonBridgeExecutor } from "./python-bridge.js";
-const PLUGIN_DIR = __dirname;
 function _resolveWorkspace() {
   const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
   if (envWorkspace) {
@@ -313,7 +311,7 @@ function runStartupSelfCheck() {
     if (paidProviders.has(deep.provider)) {
       console.warn(`[quaid][billing] paid provider active for deep reasoning: ${deep.provider}/${deep.model}`);
     }
-  } catch (err) {
+  } catch (_err) {
     errors.push(`deep reasoning model resolution failed: ${String(err?.message || err)}`);
   }
   try {
@@ -323,8 +321,8 @@ function runStartupSelfCheck() {
     if (paidProviders.has(fast.provider)) {
       console.warn(`[quaid][billing] paid provider active for fast reasoning: ${fast.provider}/${fast.model}`);
     }
-  } catch (err) {
-    errors.push(`fast reasoning model resolution failed: ${String(err?.message || err)}`);
+  } catch (err2) {
+    errors.push(`fast reasoning model resolution failed: ${String(err2?.message || err2)}`);
   }
   try {
     const cfg = getMemoryConfig();
@@ -332,8 +330,8 @@ function runStartupSelfCheck() {
     if (!Number.isFinite(maxResults) || maxResults <= 0) {
       errors.push(`invalid retrieval.maxResults=${String(cfg?.retrieval?.maxResults)}`);
     }
-  } catch (err) {
-    errors.push(`config load failed: ${String(err?.message || err)}`);
+  } catch (err2) {
+    errors.push(`config load failed: ${String(err2?.message || err2)}`);
   }
   const requiredFiles = [
     path.join(WORKSPACE, "plugins", "quaid", "core", "lifecycle", "janitor.py"),
@@ -372,24 +370,6 @@ function resolveExtractionTrigger(label) {
     return "reset";
   }
   return "unknown";
-}
-function triggerLabelFromType(trigger) {
-  if (trigger === "compaction") {
-    return "Compaction";
-  }
-  if (trigger === "recovery") {
-    return "Recovery";
-  }
-  if (trigger === "timeout") {
-    return "Timeout";
-  }
-  if (trigger === "new") {
-    return "New";
-  }
-  if (trigger === "reset") {
-    return "Reset";
-  }
-  return "Unknown";
 }
 const configSchema = Type.Object({
   autoCapture: Type.Optional(Type.Boolean({ default: false })),
@@ -651,7 +631,7 @@ function maybeForceCompactionAfterTimeout(sessionId) {
     } else {
       console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
     }
-  } catch (err) {
+  } catch (_err) {
     console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
   }
 }
@@ -742,17 +722,17 @@ function _ensureGatewaySessionOverride(tier, resolved) {
   const storePath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
   const sessionKey = `agent:main:quaid-llm-${tier}`;
   const now = Date.now();
-  let store2 = {};
+  let store = {};
   try {
     if (fs.existsSync(storePath)) {
-      store2 = JSON.parse(fs.readFileSync(storePath, "utf8")) || {};
+      store = JSON.parse(fs.readFileSync(storePath, "utf8")) || {};
     }
   } catch {
-    store2 = {};
+    store = {};
   }
-  const prev = store2[sessionKey] && typeof store2[sessionKey] === "object" ? store2[sessionKey] : {};
+  const prev = store[sessionKey] && typeof store[sessionKey] === "object" ? store[sessionKey] : {};
   const sessionId = `quaid-${tier}-${now}`;
-  store2[sessionKey] = {
+  store[sessionKey] = {
     ...prev,
     sessionId,
     updatedAt: now,
@@ -760,7 +740,7 @@ function _ensureGatewaySessionOverride(tier, resolved) {
     modelOverride: resolved.model
   };
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(store2, null, 2), { mode: 384 });
+  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { mode: 384 });
   return sessionKey;
 }
 async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 6e5) {
@@ -797,18 +777,18 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
       }),
       signal: AbortSignal.timeout(timeoutMs)
     });
-  } catch (err) {
+  } catch (err2) {
     const durationMs2 = Date.now() - started;
     console.error(
-      `[quaid][llm] gateway_fetch_error tier=${modelTier} duration_ms=${durationMs2} error=${err?.name || "Error"}:${err?.message || String(err)}`
+      `[quaid][llm] gateway_fetch_error tier=${modelTier} duration_ms=${durationMs2} error=${err2?.name || "Error"}:${err2?.message || String(err2)}`
     );
-    throw err;
+    throw err2;
   }
   const rawBody = await gatewayRes.text();
   let data = null;
   try {
     data = rawBody ? JSON.parse(rawBody) : {};
-  } catch (err) {
+  } catch (_err) {
     const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
     console.error(
       `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
@@ -820,8 +800,8 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
     console.error(
       `[quaid][llm] gateway_http_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
     );
-    const err = data?.error?.message || data?.message || `Gateway OpenResponses error ${gatewayRes.status}`;
-    throw new Error(err);
+    const err2 = data?.error?.message || data?.message || `Gateway OpenResponses error ${gatewayRes.status}`;
+    throw new Error(err2);
   }
   const text = typeof data.output_text === "string" ? data.output_text : Array.isArray(data.output) ? data.output.flatMap((o) => Array.isArray(o?.content) ? o.content : []).filter((c) => (c?.type === "output_text" || c?.type === "text") && typeof c?.text === "string").map((c) => c.text).join("\n") : "";
   const durationMs = Date.now() - started;
@@ -870,13 +850,13 @@ function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON
         reject(new Error(`${label} error: ${stderr || stdout}`));
       }
     });
-    proc.on("error", (err) => {
+    proc.on("error", (err2) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      reject(err);
+      reject(err2);
     });
   });
 }
@@ -932,11 +912,11 @@ async function callExtractPipeline(opts) {
           reject(new Error(`extract error: ${stderr || stdout}`));
         }
       });
-      proc.on("error", (err) => {
+      proc.on("error", (err2) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        reject(err);
+        reject(err2);
       });
     });
     return JSON.parse(output || "{}");
@@ -984,14 +964,6 @@ async function callDocsRegistry(command, args = []) {
     QUAID_HOME: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE
   });
-}
-async function callProjectUpdater(command, args = []) {
-  const apiKey = _getAnthropicCredential();
-  return _spawnWithTimeout(PROJECT_UPDATER, command, args, "project_updater", {
-    QUAID_HOME: WORKSPACE,
-    CLAWDBOT_WORKSPACE: WORKSPACE,
-    ...apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}
-  }, 3e5);
 }
 const projectCatalogReader = createProjectCatalogReader({
   workspace: WORKSPACE,
@@ -1146,8 +1118,8 @@ ${transcript.slice(0, 4e3)}`,
       } catch {
       }
     }
-  } catch (err) {
-    console.error("[quaid] Quick project summary failed:", err.message);
+  } catch (err2) {
+    console.error("[quaid] Quick project summary failed:", err2.message);
   }
   return { project_name: null, text: transcript.slice(0, 500) };
 }
@@ -1194,8 +1166,8 @@ async function emitProjectEvent(messages, trigger, sessionId) {
       fs.closeSync(logFd);
     }
     console.log(`[quaid] Emitted project event: ${trigger} -> ${summary.project_name || "unknown"}`);
-  } catch (err) {
-    console.error("[quaid] Failed to emit project event:", err.message);
+  } catch (err2) {
+    console.error("[quaid] Failed to emit project event:", err2.message);
   }
 }
 function buildTranscript(messages) {
@@ -1292,8 +1264,8 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
       return;
     }
     console.log(`[quaid] ${label}: docs ingest finished (${elapsed}s)`);
-  } catch (err) {
-    console.error(`[quaid] ${label} doc update failed:`, err.message);
+  } catch (err2) {
+    console.error(`[quaid] ${label} doc update failed:`, err2.message);
   } finally {
     try {
       fs.unlinkSync(tmpPath);
@@ -1395,7 +1367,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
           via: "graph"
         });
       }
-    } catch (parseErr) {
+    } catch (_parseErr) {
       console.log("[quaid] JSON parse failed, trying line format");
       for (const line of output.split("\n")) {
         if (line.startsWith("[direct]")) {
@@ -1420,8 +1392,8 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
       }
     }
     return results;
-  } catch (err) {
-    console.error("[quaid] recall error:", err.message);
+  } catch (err2) {
+    console.error("[quaid] recall error:", err2.message);
     return [];
   }
 }
@@ -1580,168 +1552,18 @@ function normalizeKnowledgeDatastores(datastores, expandGraph) {
   return knowledgeEngine.normalizeKnowledgeDatastores(datastores, expandGraph);
 }
 const recallStoreGuidance = knowledgeEngine.renderKnowledgeDatastoreGuidanceForAgents();
-async function routeKnowledgeDatastores(query, expandGraph) {
-  return knowledgeEngine.routeKnowledgeDatastores(query, expandGraph);
-}
 async function totalRecall(query, limit, opts) {
   return knowledgeEngine.totalRecall(query, limit, opts);
 }
 async function total_recall(query, limit, opts) {
   return knowledgeEngine.total_recall(query, limit, opts);
 }
-function parseStoreOutput(output) {
-  const storedMatch = output.match(/Stored: (.+)/);
-  if (storedMatch) {
-    return { id: storedMatch[1], status: "created" };
-  }
-  const dupMatchNew = output.match(/Duplicate \(similarity: ([\d.]+)\) \[([^\]]+)\]: (.+)/);
-  if (dupMatchNew) {
-    return {
-      id: dupMatchNew[2],
-      status: "duplicate",
-      similarity: parseFloat(dupMatchNew[1]),
-      existingText: dupMatchNew[3]
-    };
-  }
-  const dupMatch = output.match(/Duplicate \(similarity: ([\d.]+)\): (.+)/);
-  if (dupMatch) {
-    return {
-      status: "duplicate",
-      similarity: parseFloat(dupMatch[1]),
-      existingText: dupMatch[2]
-    };
-  }
-  const updatedMatch = output.match(/Updated existing: (.+)/);
-  if (updatedMatch) {
-    return { id: updatedMatch[1], status: "updated" };
-  }
-  return null;
-}
-const dataWriteEngine = createDataWriteEngine({
-  writers: [
-    {
-      spec: {
-        datastore: "vector",
-        description: "Fact and preference writes to memory_graph store()",
-        actions: [{ key: "store_fact", description: "Store or deduplicate a fact node" }]
-      },
-      write: async (envelope) => {
-        const payload = envelope.payload;
-        if (!payload?.text || !String(payload.text).trim()) {
-          return { status: "failed", error: "Vector writer requires non-empty text payload" };
-        }
-        const args = [
-          payload.text,
-          "--category",
-          payload.category || "fact",
-          "--owner",
-          payload.owner || resolveOwner(),
-          "--confidence",
-          String(payload.extractionConfidence ?? 0.5),
-          "--extraction-confidence",
-          String(payload.extractionConfidence ?? 0.5)
-        ];
-        if (payload.sessionId) args.push("--session-id", payload.sessionId);
-        if (payload.source) args.push("--source", payload.source);
-        if (payload.speaker) args.push("--speaker", payload.speaker);
-        if (payload.status) args.push("--status", payload.status);
-        if (payload.privacy) args.push("--privacy", payload.privacy);
-        if (payload.keywords) args.push("--keywords", payload.keywords);
-        if (payload.knowledgeType) args.push("--knowledge-type", payload.knowledgeType);
-        if (payload.sourceType) args.push("--source-type", payload.sourceType);
-        if (payload.isTechnical) args.push("--is-technical");
-        const output = await datastoreBridge.store(args);
-        const parsed = parseStoreOutput(output);
-        if (!parsed) {
-          return { status: "failed", error: "Unrecognized store output", details: { output: output.slice(0, 200) } };
-        }
-        return { status: parsed.status, id: parsed.id, details: parsed };
-      }
-    },
-    {
-      spec: {
-        datastore: "graph",
-        description: "Relationship edge writes to memory graph",
-        actions: [{ key: "create_edge", description: "Create relationship edge between subject and object" }]
-      },
-      write: async (envelope) => {
-        const payload = envelope.payload;
-        if (!payload?.subject || !payload?.relation || !payload?.object || !payload?.sourceFactId) {
-          return { status: "failed", error: "Graph writer requires subject/relation/object/sourceFactId" };
-        }
-        const args = [
-          payload.subject,
-          payload.relation,
-          payload.object,
-          "--source-fact-id",
-          payload.sourceFactId,
-          "--owner",
-          payload.owner || resolveOwner(),
-          "--json"
-        ];
-        if (payload.createMissing !== false) {
-          args.push("--create-missing");
-        }
-        const output = await datastoreBridge.createEdge(args);
-        const parsed = JSON.parse(output || "{}");
-        const status = String(parsed?.status || "").toLowerCase();
-        if (status === "created") {
-          return { status: "created", details: parsed };
-        }
-        if (status === "duplicate" || status === "exists") {
-          return { status: "duplicate", details: parsed };
-        }
-        if (status) {
-          return { status: "skipped", details: parsed };
-        }
-        return { status: "failed", error: "Unrecognized create-edge output", details: { output: output.slice(0, 200) } };
-      }
-    }
-  ]
-});
-async function store(text, category = "fact", sessionId, extractionConfidence = 0.5, owner = resolveOwner(), source, speaker, status, privacy, keywords, knowledgeType, sourceType, isTechnical) {
-  try {
-    const writeResult = await dataWriteEngine.writeData({
-      datastore: "vector",
-      action: "store_fact",
-      payload: {
-        text,
-        category,
-        sessionId,
-        extractionConfidence,
-        owner,
-        source,
-        speaker,
-        status,
-        privacy,
-        keywords,
-        knowledgeType,
-        sourceType,
-        isTechnical
-      }
-    });
-    if (writeResult.status === "failed") {
-      console.error("[quaid] store error:", writeResult.error || "unknown writer failure");
-      return null;
-    }
-    const details = writeResult.details || {};
-    return {
-      id: writeResult.id || details.id,
-      status: writeResult.status,
-      similarity: details.similarity,
-      existingText: details.existingText
-    };
-  } catch (err) {
-    console.error("[quaid] store error:", err.message);
-    return null;
-  }
-}
 async function getStats() {
   try {
     const output = await datastoreBridge.stats();
     return JSON.parse(output);
-  } catch (err) {
-    console.error("[quaid] stats error:", err.message);
+  } catch (err2) {
+    console.error("[quaid] stats error:", err2.message);
     return null;
   }
 }
@@ -1801,8 +1623,8 @@ const quaidPlugin = {
           env: buildPythonEnv()
         });
         console.log("[quaid] Datastore initialization complete");
-      } catch (err) {
-        console.error("[quaid] Datastore initialization failed:", err.message);
+      } catch (err2) {
+        console.error("[quaid] Datastore initialization failed:", err2.message);
       }
     }
     void getStats().then((stats) => {
@@ -1858,8 +1680,8 @@ ${header}${journalContent}` : `${header}${journalContent}`;
               console.log(`[quaid] Full soul mode: injected ${journalFiles.length} journal files`);
             }
           }
-        } catch (err) {
-          console.log(`[quaid] Journal injection failed (non-fatal): ${err.message}`);
+        } catch (err2) {
+          console.log(`[quaid] Journal injection failed (non-fatal): ${err2.message}`);
         }
       }
       const autoInjectEnabled = process.env.MEMORY_AUTO_INJECT === "1" || getMemoryConfig().retrieval?.autoInject === true;
@@ -2000,13 +1822,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         void (async () => {
           try {
             await updateDocsFromTranscript(conversationMessages, transcriptTrigger, timeoutSessionId);
-          } catch (err) {
-            console.error(`[quaid] ${transcriptTrigger} doc update fallback failed:`, err.message);
+          } catch (err2) {
+            console.error(`[quaid] ${transcriptTrigger} doc update fallback failed:`, err2.message);
           }
           try {
             await emitProjectEvent(conversationMessages, trigger, timeoutSessionId);
-          } catch (err) {
-            console.error(`[quaid] ${transcriptTrigger} project event fallback failed:`, err.message);
+          } catch (err2) {
+            console.error(`[quaid] ${transcriptTrigger} project event fallback failed:`, err2.message);
           }
         })();
       }
@@ -2295,11 +2117,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   projectCount: projectResults.length
                 }
               };
-            } catch (err) {
-              console.error("[quaid] memory_recall error:", err);
+            } catch (err2) {
+              console.error("[quaid] memory_recall error:", err2);
               return {
-                content: [{ type: "text", text: `Error recalling memories: ${String(err)}` }],
-                details: { error: String(err) }
+                content: [{ type: "text", text: `Error recalling memories: ${String(err2)}` }],
+                details: { error: String(err2) }
               };
             }
           }
@@ -2329,11 +2151,11 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
                 content: [{ type: "text", text: `Noted for memory extraction: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}" \u2014 will be processed with full quality review at next compaction.` }],
                 details: { action: "queued", sessionId }
               };
-            } catch (err) {
-              console.error("[quaid] memory_store error:", err);
+            } catch (err2) {
+              console.error("[quaid] memory_store error:", err2);
               return {
-                content: [{ type: "text", text: `Error queuing memory note: ${String(err)}` }],
-                details: { error: String(err) }
+                content: [{ type: "text", text: `Error queuing memory note: ${String(err2)}` }],
+                details: { error: String(err2) }
               };
             }
           }
@@ -2371,11 +2193,11 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
                 content: [{ type: "text", text: "Provide query or memoryId." }],
                 details: { error: "missing_param" }
               };
-            } catch (err) {
-              console.error("[quaid] memory_forget error:", err);
+            } catch (err2) {
+              console.error("[quaid] memory_forget error:", err2);
               return {
-                content: [{ type: "text", text: `Error deleting memory: ${String(err)}` }],
-                details: { error: String(err) }
+                content: [{ type: "text", text: `Error deleting memory: ${String(err2)}` }],
+                details: { error: String(err2) }
               };
             }
           }
@@ -2479,11 +2301,11 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text }],
               details: { query, limit }
             };
-          } catch (err) {
-            console.error("[quaid] projects_search error:", err);
+          } catch (err2) {
+            console.error("[quaid] projects_search error:", err2);
             return {
-              content: [{ type: "text", text: `Error searching docs: ${String(err)}` }],
-              details: { error: String(err) }
+              content: [{ type: "text", text: `Error searching docs: ${String(err2)}` }],
+              details: { error: String(err2) }
             };
           }
         }
@@ -2504,10 +2326,10 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || "Document not found." }],
               details: { identifier }
             };
-          } catch (err) {
+          } catch (err2) {
             return {
-              content: [{ type: "text", text: `Error: ${String(err)}` }],
-              details: { error: String(err) }
+              content: [{ type: "text", text: `Error: ${String(err2)}` }],
+              details: { error: String(err2) }
             };
           }
         }
@@ -2535,10 +2357,10 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || "No documents found." }],
               details: { project: params?.project }
             };
-          } catch (err) {
+          } catch (err2) {
             return {
-              content: [{ type: "text", text: `Error: ${String(err)}` }],
-              details: { error: String(err) }
+              content: [{ type: "text", text: `Error: ${String(err2)}` }],
+              details: { error: String(err2) }
             };
           }
         }
@@ -2580,10 +2402,10 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || "Registered." }],
               details: { file_path: params.file_path }
             };
-          } catch (err) {
+          } catch (err2) {
             return {
-              content: [{ type: "text", text: `Error: ${String(err)}` }],
-              details: { error: String(err) }
+              content: [{ type: "text", text: `Error: ${String(err2)}` }],
+              details: { error: String(err2) }
             };
           }
         }
@@ -2616,10 +2438,10 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || `Project '${params.name}' created.` }],
               details: { name: params.name }
             };
-          } catch (err) {
+          } catch (err2) {
             return {
-              content: [{ type: "text", text: `Error: ${String(err)}` }],
-              details: { error: String(err) }
+              content: [{ type: "text", text: `Error: ${String(err2)}` }],
+              details: { error: String(err2) }
             };
           }
         }
@@ -2637,10 +2459,10 @@ notify_docs_search(data['query'], data['results'])
               content: [{ type: "text", text: output || "No projects defined." }],
               details: {}
             };
-          } catch (err) {
+          } catch (err2) {
             return {
-              content: [{ type: "text", text: `Error: ${String(err)}` }],
-              details: { error: String(err) }
+              content: [{ type: "text", text: `Error: ${String(err2)}` }],
+              details: { error: String(err2) }
             };
           }
         }
@@ -2735,11 +2557,11 @@ ${factsOutput || "No facts found."}` }],
               content: [{ type: "text", text: 'Provide action: "list" or "load" (with session_id).' }],
               details: { error: "invalid_action" }
             };
-          } catch (err) {
-            console.error("[quaid] session_recall error:", err);
+          } catch (err2) {
+            console.error("[quaid] session_recall error:", err2);
             return {
-              content: [{ type: "text", text: `Error: ${String(err)}` }],
-              details: { error: String(err) }
+              content: [{ type: "text", text: `Error: ${String(err2)}` }],
+              details: { error: String(err2) }
             };
           }
         }
@@ -2851,8 +2673,8 @@ ${factsOutput || "No facts found."}` }],
       });
       if (hasRestart) {
         console.log(`[quaid][extract] ${label}: detected GatewayRestart marker; scheduling recovery scan`);
-        void checkForUnextractedSessions().catch((err) => {
-          console.error("[quaid] Recovery scan error:", err);
+        void checkForUnextractedSessions().catch((err2) => {
+          console.error("[quaid] Recovery scan error:", err2);
         });
       }
       const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
@@ -3047,8 +2869,8 @@ notify_memory_extraction(
           console.log(`[quaid] Recovering unextracted session ${sessionId} (${messages.length} messages)`);
           await extractMemoriesFromMessages(messages, "Recovery", sessionId);
           recovered++;
-        } catch (err) {
-          console.error(`[quaid] Recovery failed for session ${sessionId}:`, err.message);
+        } catch (err2) {
+          console.error(`[quaid] Recovery failed for session ${sessionId}:`, err2.message);
         }
       }
       console.log(`[quaid] Recovery scan complete: ${recovered} sessions recovered`);
@@ -3089,13 +2911,13 @@ notify_memory_extraction(
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
           try {
             await updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId);
-          } catch (err) {
-            console.error("[quaid] Compaction doc update failed:", err.message);
+          } catch (err2) {
+            console.error("[quaid] Compaction doc update failed:", err2.message);
           }
           try {
             await emitProjectEvent(conversationMessages, "compact", uniqueSessionId);
-          } catch (err) {
-            console.error("[quaid] Compaction project event failed:", err.message);
+          } catch (err2) {
+            console.error("[quaid] Compaction project event failed:", err2.message);
           }
           if (isSystemEnabled("memory") && uniqueSessionId) {
             const logPath = getInjectionLogPath(uniqueSessionId);
@@ -3112,8 +2934,8 @@ notify_memory_extraction(
         };
         extractionPromise = (extractionPromise || Promise.resolve()).catch(() => {
         }).then(() => doExtraction());
-      } catch (err) {
-        console.error("[quaid] before_compaction hook failed:", err);
+      } catch (err2) {
+        console.error("[quaid] before_compaction hook failed:", err2);
       }
     }, {
       name: "compaction-memory-extraction",
@@ -3155,13 +2977,13 @@ notify_memory_extraction(
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
           try {
             await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);
-          } catch (err) {
-            console.error("[quaid] Reset doc update failed:", err.message);
+          } catch (err2) {
+            console.error("[quaid] Reset doc update failed:", err2.message);
           }
           try {
             await emitProjectEvent(conversationMessages, "reset", uniqueSessionId);
-          } catch (err) {
-            console.error("[quaid] Reset project event failed:", err.message);
+          } catch (err2) {
+            console.error("[quaid] Reset project event failed:", err2.message);
           }
           console.log(`[quaid][reset] extraction_end session=${sessionId || "unknown"}`);
         };
@@ -3172,8 +2994,8 @@ notify_memory_extraction(
           console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
           throw doErr;
         });
-      } catch (err) {
-        console.error("[quaid] before_reset hook failed:", err);
+      } catch (err2) {
+        console.error("[quaid] before_reset hook failed:", err2);
       }
     }, {
       name: "reset-memory-extraction",
@@ -3210,12 +3032,12 @@ notify_memory_extraction(
           const data = await callConfiguredLLM(system_prompt, user_message, tier, max_tokens, 6e5);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(data));
-        } catch (err) {
-          console.error(`[quaid] LLM proxy error: ${String(err)}`);
-          const msg = String(err?.message || err);
+        } catch (err2) {
+          console.error(`[quaid] LLM proxy error: ${String(err2)}`);
+          const msg = String(err2?.message || err2);
           const status = msg.includes("No ") || msg.includes("Unsupported provider") || msg.includes("ReasoningModelClasses") ? 503 : 502;
           res.writeHead(status, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: `LLM proxy error: ${String(err)}` }));
+          res.end(JSON.stringify({ error: `LLM proxy error: ${String(err2)}` }));
         }
       }
     });
@@ -3237,16 +3059,16 @@ notify_memory_extraction(
             try {
               const content = fs.readFileSync(enhancedLogPath, "utf8");
               logData = JSON.parse(content);
-            } catch (err) {
-              console.error(`[quaid] Failed to read enhanced log: ${String(err)}`);
+            } catch (err2) {
+              console.error(`[quaid] Failed to read enhanced log: ${String(err2)}`);
             }
           }
           if (!logData && fs.existsSync(tempLogPath)) {
             try {
               const content = fs.readFileSync(tempLogPath, "utf8");
               logData = JSON.parse(content);
-            } catch (err) {
-              console.error(`[quaid] Failed to read temp log: ${String(err)}`);
+            } catch (err2) {
+              console.error(`[quaid] Failed to read temp log: ${String(err2)}`);
             }
           }
           if (!logData) {
@@ -3270,8 +3092,8 @@ notify_memory_extraction(
             "Access-Control-Allow-Headers": "Content-Type"
           });
           res.end(JSON.stringify(responseData, null, 2));
-        } catch (err) {
-          console.error(`[quaid] HTTP endpoint error: ${String(err)}`);
+        } catch (err2) {
+          console.error(`[quaid] HTTP endpoint error: ${String(err2)}`);
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Internal server error" }));
         }

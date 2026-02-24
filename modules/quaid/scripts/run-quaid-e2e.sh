@@ -757,7 +757,17 @@ cleanup() {
   openclaw gateway stop >/dev/null 2>&1 || true
   if [[ "$exit_code" -eq 0 && "$KEEP_ON_SUCCESS" != true ]]; then
     echo "[e2e] Success, removing ${E2E_WS}"
-    rm -rf "$E2E_WS" || true
+    local attempt=1
+    while [[ -d "$E2E_WS" && "$attempt" -le 3 ]]; do
+      rm -rf "$E2E_WS" 2>/dev/null || true
+      if [[ -d "$E2E_WS" ]]; then
+        sleep 1
+      fi
+      attempt=$((attempt + 1))
+    done
+    if [[ -d "$E2E_WS" ]]; then
+      echo "[e2e] WARN: workspace cleanup incomplete: ${E2E_WS}" >&2
+    fi
   fi
   restore_test_gateway
   return "$exit_code"

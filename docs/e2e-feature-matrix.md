@@ -45,7 +45,9 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Nightly auto-tuning can populate stage budgets from history (`QUAID_E2E_AUTO_STAGE_BUDGETS=true`).
 11. Bootstrap collision recovery
    - If worktree bootstrap fails with a workspace "already exists" collision after wipe, runner performs one forced cleanup + retry automatically.
-12. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
+12. Workspace teardown reliability
+   - Successful runs now retry workspace deletion (`~/quaid/e2e-test`) to handle transient file-creation races during shutdown.
+13. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
    - Validates recovery after forced gateway restart mid-session.
    - Validates live turns under janitor pressure.
    - Validates cross-session interleaving under janitor pressure; cursor checks enforce identity when cursor files are present.
@@ -63,7 +65,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Includes malformed-upstream-response probe (invalid JSON response parse failure + recovery turn).
    - Includes source-mapping drift fixture coverage via project-updater pressure path.
    - Includes carryover trend assertion across repeated janitor stress passes.
-13. Janitor parallel benchmark reporting (`suite=janitor-parallel-bench`)
+14. Janitor parallel benchmark reporting (`suite=janitor-parallel-bench`)
    - Emits `/tmp/quaid-e2e-janitor-parallel-bench.json` (override `QUAID_E2E_JANITOR_PARALLEL_REPORT_PATH`).
    - Captures seeded before/after carryover signals plus janitor task duration/change/error data from `janitor-stats.json`.
    - Enforces threshold gates for benchmark automation:
