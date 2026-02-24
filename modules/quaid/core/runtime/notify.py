@@ -18,7 +18,6 @@ Programmatic:
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -52,32 +51,18 @@ def _check_janitor_health() -> Optional[str]:
     janitor isn't running — e.g. misconfigured heartbeat, missing API key, etc.
     """
     try:
-        from lib.config import get_db_path
-        import sqlite3
         from datetime import datetime, timedelta
+        from datastore.facade import get_graph, get_last_successful_janitor_completed_at
 
-        db_path = get_db_path()
-        if not os.path.exists(db_path):
-            return None
-
-        conn = sqlite3.connect(db_path, timeout=2)
-        try:
-            row = conn.execute(
-                "SELECT MAX(completed_at) FROM janitor_runs WHERE status = 'completed'"
-            ).fetchone()
-        except sqlite3.OperationalError:
-            return None  # Table doesn't exist yet (fresh install)
-        finally:
-            conn.close()
-
-        if not row or not row[0]:
+        last_completed_at = get_last_successful_janitor_completed_at(get_graph())
+        if not last_completed_at:
             return (
                 "⚠️ **Janitor has never run.** New memories are pending review.\n"
                 "Make sure the janitor is scheduled in your HEARTBEAT.md.\n"
                 "It must be triggered by your bot."
             )
 
-        last_run = datetime.fromisoformat(row[0])
+        last_run = datetime.fromisoformat(last_completed_at)
         hours_ago = (datetime.now() - last_run).total_seconds() / 3600
 
         if hours_ago > 72:

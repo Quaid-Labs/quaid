@@ -557,6 +557,20 @@ def get_last_run_time(graph: MemoryGraph, task: str) -> Optional[datetime]:
     return None
 
 
+def get_last_successful_janitor_completed_at(graph: MemoryGraph) -> Optional[str]:
+    """Return ISO timestamp of most recent successful janitor run, if any."""
+    try:
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                "SELECT MAX(completed_at) AS completed_at FROM janitor_runs WHERE status = 'completed'"
+            ).fetchone()
+        if row and row["completed_at"]:
+            return str(row["completed_at"])
+    except Exception:
+        return None
+    return None
+
+
 def get_nodes_since(graph: MemoryGraph, since: Optional[datetime] = None) -> List[Node]:
     """Get nodes created since a specific datetime. Includes pending, active, and approved memories."""
     if not since:

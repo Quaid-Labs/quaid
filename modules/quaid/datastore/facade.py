@@ -17,6 +17,9 @@ from datastore.memorydb.memory_graph import (
     get_memory as get_memory_by_id,
     create_edge,
 )
+from datastore.memorydb.maintenance_ops import (
+    get_last_successful_janitor_completed_at,
+)
 
 __all__ = [
     "get_graph",
@@ -28,5 +31,6 @@ __all__ = [
     "datastore_stats",
     "forget_memory",
     "get_memory_by_id",
+    "get_last_successful_janitor_completed_at",
     "create_edge",
 ]
