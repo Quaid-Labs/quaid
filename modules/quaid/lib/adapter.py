@@ -536,7 +536,7 @@ def reset_adapter() -> None:
         pass
     # Clear cached model names so they re-resolve from new config/adapter
     try:
-        import core.llm.clients as llm_clients
+        import lib.llm_clients as llm_clients
         llm_clients._models_loaded = False
         llm_clients._fast_reasoning_model = ""
         llm_clients._deep_reasoning_model = ""

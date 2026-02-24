@@ -84,6 +84,11 @@ jobs:
         working-directory: plugins/quaid
         run: node scripts/check-runtime-pairs.mjs --strict
 
+      - name: Boundary import check
+        if: needs.changes.outputs.needs_plugin == 'true'
+        working-directory: plugins/quaid
+        run: npm run check:boundaries
+
       - name: Python compile check
         if: needs.changes.outputs.needs_plugin == 'true'
         working-directory: plugins/quaid
@@ -135,6 +140,10 @@ jobs:
       - name: Install plugin deps
         working-directory: plugins/quaid
         run: npm ci
+
+      - name: Boundary import check
+        working-directory: plugins/quaid
+        run: npm run check:boundaries
 
       - name: Full suite (without bootstrap e2e lane)
         working-directory: plugins/quaid

@@ -5,7 +5,7 @@ Groups memories by domain to reduce O(n²) contradiction checking.
 """
 
 from typing import Dict, List, Set
-from datastore.facade import Node, MemoryGraph, get_graph
+from datastore.memorydb.memory_graph import Node, MemoryGraph, get_graph
 from lib.llm_clients import call_fast_reasoning
 
 # Define semantic clusters

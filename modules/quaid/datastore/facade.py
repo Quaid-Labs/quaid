@@ -7,8 +7,6 @@ routines should import datastore internals directly from
 
 from datastore.memorydb.memory_graph import (
     get_graph,
-    MemoryGraph,
-    Node,
     store as store_memory,
     recall as recall_memories,
     search as search_memories,
@@ -17,20 +15,14 @@ from datastore.memorydb.memory_graph import (
     get_memory as get_memory_by_id,
     create_edge,
 )
-from datastore.memorydb.maintenance_ops import (
-    get_last_successful_janitor_completed_at,
-)
 
 __all__ = [
     "get_graph",
-    "MemoryGraph",
-    "Node",
     "store_memory",
     "recall_memories",
     "search_memories",
     "datastore_stats",
     "forget_memory",
     "get_memory_by_id",
-    "get_last_successful_janitor_completed_at",
     "create_edge",
 ]

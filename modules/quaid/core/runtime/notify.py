@@ -52,7 +52,10 @@ def _check_janitor_health() -> Optional[str]:
     """
     try:
         from datetime import datetime, timedelta
-        from datastore.facade import get_graph, get_last_successful_janitor_completed_at
+        from core.lifecycle.datastore_runtime import (
+            get_graph,
+            get_last_successful_janitor_completed_at,
+        )
 
         last_completed_at = get_last_successful_janitor_completed_at(get_graph())
         if not last_completed_at:
