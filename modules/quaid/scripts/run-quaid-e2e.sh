@@ -49,6 +49,7 @@ RUNTIME_BUDGET_TUNE_BUFFER_RATIO="${QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO:-1.2}"
 NOTIFY_REQUIRE_DELIVERY="${QUAID_E2E_NOTIFY_REQUIRE_DELIVERY:-false}"
 RUNTIME_BUDGET_PROFILE="${QUAID_E2E_RUNTIME_BUDGET_PROFILE:-auto}"
 RUNTIME_BUDGET_SECONDS="${QUAID_E2E_RUNTIME_BUDGET_SECONDS:-0}"
+STAGE_BUDGETS_JSON="${QUAID_E2E_STAGE_BUDGETS_JSON:-}"
 RUNTIME_BUDGET_EXCEEDED="false"
 RUN_START_EPOCH="$(date +%s)"
 CURRENT_STAGE="init"
@@ -273,6 +274,31 @@ fi
 if [[ "$RUNTIME_BUDGET_PROFILE" != "auto" && "$RUNTIME_BUDGET_PROFILE" != "off" && "$RUNTIME_BUDGET_PROFILE" != "quick" && "$RUNTIME_BUDGET_PROFILE" != "deep" ]]; then
   echo "Invalid --runtime-budget-profile: $RUNTIME_BUDGET_PROFILE (expected auto|off|quick|deep)" >&2
   exit 1
+fi
+if [[ -n "$STAGE_BUDGETS_JSON" ]]; then
+  if ! python3 - "$STAGE_BUDGETS_JSON" <<'PY'
+import json
+import re
+import sys
+raw = sys.argv[1]
+try:
+    obj = json.loads(raw)
+except Exception:
+    raise SystemExit(1)
+if not isinstance(obj, dict):
+    raise SystemExit(1)
+for k, v in obj.items():
+    if not isinstance(k, str):
+        raise SystemExit(1)
+    if not re.match(r"^[a-z_]+$", k):
+        raise SystemExit(1)
+    if not isinstance(v, int) or v < 0:
+        raise SystemExit(1)
+PY
+  then
+    echo "Invalid QUAID_E2E_STAGE_BUDGETS_JSON (expected JSON object of {stage:int_seconds})" >&2
+    exit 1
+  fi
 fi
 if ! [[ "$RUNTIME_BUDGET_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "Invalid --runtime-budget-seconds: $RUNTIME_BUDGET_SECONDS (expected non-negative integer)" >&2
@@ -594,6 +620,37 @@ emit_budget_recommendation_if_nightly() {
   else
     rm -f "$SUMMARY_BUDGET_RECOMMENDATION_PATH" || true
     echo "[e2e] WARN: nightly budget recommendation unavailable (insufficient history or parser failure)." >&2
+  fi
+}
+
+enforce_stage_budgets() {
+  if [[ -z "$STAGE_BUDGETS_JSON" ]]; then
+    return 0
+  fi
+  local violations=0
+  while IFS=' ' read -r stage budget; do
+    [[ -z "$stage" || -z "$budget" ]] && continue
+    local var_name="STAGE_${stage}_DURATION_SECONDS"
+    local duration=0
+    eval "duration=\${${var_name}:-0}"
+    if [[ "$duration" -gt "$budget" ]]; then
+      echo "[e2e] ERROR: stage budget exceeded (stage=${stage} duration=${duration}s budget=${budget}s)" >&2
+      violations=1
+    fi
+  done < <(python3 - "$STAGE_BUDGETS_JSON" <<'PY'
+import json
+import sys
+obj = json.loads(sys.argv[1])
+for k, v in obj.items():
+    print(f"{k} {int(v)}")
+PY
+)
+  if [[ "$violations" -ne 0 ]]; then
+    E2E_STATUS="failed"
+    E2E_FAIL_REASON="stage_budget_exceeded"
+    E2E_FAIL_LINE="stage-budget-check"
+    CURRENT_STAGE="runtime_budget"
+    exit 1
   fi
 }
 
@@ -3189,5 +3246,6 @@ if [[ "$RUNTIME_BUDGET_SECONDS" -gt 0 ]]; then
     exit 1
   fi
 fi
+enforce_stage_budgets
 
 echo "[e2e] E2E run complete."
