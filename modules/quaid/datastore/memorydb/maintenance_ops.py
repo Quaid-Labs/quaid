@@ -1123,7 +1123,7 @@ def resolve_contradictions_with_opus(
         with graph._get_conn() as conn:
             total_pending = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM contradictions WHERE review_status = 'pending'"
+                    "SELECT COUNT(*) FROM contradictions WHERE status = 'pending'"
                 ).fetchone()[0]
             )
         results["carryover"] = max(total_pending - len(pending), 0)
