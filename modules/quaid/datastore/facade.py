@@ -6,7 +6,6 @@ routines should import datastore internals directly from
 """
 
 from datastore.memorydb.memory_graph import (
-    get_graph,
     store as store_memory,
     recall as recall_memories,
     search as search_memories,
@@ -17,7 +16,6 @@ from datastore.memorydb.memory_graph import (
 )
 
 __all__ = [
-    "get_graph",
     "store_memory",
     "recall_memories",
     "search_memories",

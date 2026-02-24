@@ -141,6 +141,7 @@ All three paths converge on the same extraction logic and produce identical resu
    - Embedding generated via Ollama (local, no API cost)
    - Semantic dedup check against existing facts (cosine similarity > 0.95)
    - If duplicate found: confirmation count incremented, confidence boosted
+   - Datastore-owned dedup paths preserve metadata flags like `source_type` and `is_technical`
    - If new: stored with `status="pending"`, awaiting janitor review
 
 4. **Edge creation** -- Edges are normalized via `_normalize_edge()` and stored with `source_fact_id` linking back to the originating fact. Entity nodes are created on-the-fly if they don't exist.
@@ -837,7 +838,7 @@ MCP Client (Claude Desktop, Cursor, etc.)
     v
 core/interface/mcp_server.py (FastMCP)
     |
-    +-- memory_extract  -> ingest/extract.py -> core/llm/clients.py + datastore/memorydb/memory_graph.py
+    +-- memory_extract  -> ingest/extract.py -> lib/llm_clients.py + core/services/memory_service.py
     +-- memory_store    -> core/interface/api.py
     +-- memory_recall   -> core/interface/api.py
     +-- memory_search   -> core/interface/api.py

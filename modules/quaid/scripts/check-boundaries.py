@@ -94,6 +94,11 @@ def check_file(path: Path) -> list[str]:
             continue
         if (rel, target) in ALLOWLIST:
             continue
+        if src == "core" and target == "datastore":
+            violations.append(
+                f"{rel}: core must not import datastore directly unless allowlisted composition point"
+            )
+            continue
         if target not in allowed_targets:
             if src == "datastore" and target == "core":
                 violations.append(f"{rel}: datastore must not import core directly")

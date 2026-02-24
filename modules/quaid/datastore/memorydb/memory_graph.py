@@ -3342,6 +3342,17 @@ def store(
 
     graph = get_graph()
 
+    def _apply_metadata_flags(existing: Node) -> None:
+        """Persist source/technical metadata on dedup-update paths."""
+        if not (source_type or is_technical):
+            return
+        attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
+        if source_type and not attrs.get("source_type"):
+            attrs["source_type"] = source_type
+        if is_technical:
+            attrs["is_technical"] = True
+        existing.attributes = attrs
+
     # Fast exact-dedup: content hash check (before embedding, saves API calls)
     text_hash = content_hash(text)
     if not skip_dedup:
@@ -3365,6 +3376,7 @@ def store(
                 existing.confidence = min(existing.confidence + 0.02, 0.95)
                 # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                 existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                _apply_metadata_flags(existing)
                 if update_if_dup and verified and not existing.verified:
                     existing.verified = True
                     existing.confidence = 0.9
@@ -3455,6 +3467,7 @@ def store(
                         existing.confidence = min(existing.confidence + 0.02, 0.95)
                         # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                         existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                        _apply_metadata_flags(existing)
                         if update_if_dup and verified and not existing.verified:
                             existing.verified = True
                             existing.confidence = 0.9
@@ -3498,6 +3511,7 @@ def store(
                                     existing.confidence = min(existing.confidence + 0.02, 0.95)
                                     # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                                     existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                                    _apply_metadata_flags(existing)
                                     if update_if_dup and verified and not existing.verified:
                                         existing.verified = True
                                         existing.confidence = 0.9
@@ -3546,6 +3560,7 @@ def store(
                                     existing.confidence = min(existing.confidence + 0.02, 0.95)
                                     # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                                     existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                                    _apply_metadata_flags(existing)
                                     if update_if_dup and verified and not existing.verified:
                                         existing.verified = True
                                         existing.confidence = 0.9
@@ -3578,6 +3593,7 @@ def store(
                                 existing.confidence = min(existing.confidence + 0.02, 0.95)
                                 # Bjork: re-encoding strengthens storage (smaller than retrieval increment)
                                 existing.storage_strength = min(10.0, existing.storage_strength + 0.03)
+                                _apply_metadata_flags(existing)
                                 if update_if_dup and verified and not existing.verified:
                                     existing.verified = True
                                     existing.confidence = 0.9

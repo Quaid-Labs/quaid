@@ -60,8 +60,9 @@ Write request
 | `core/runtime/notify.py` | User notifications via adapter/runtime context | `notify_user()`, retrieval/extraction/janitor/doc notifications |
 | `core/runtime/logger.py` | Structured JSONL logger with rotation | `Logger`, `rotate_logs()`, `memory_logger`, `janitor_logger` |
 | `core/interface/mcp_server.py` | MCP server surface | `memory_extract`, `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `projects_search`, `session_recall` |
-| `core/interface/api.py` | Public API facade | `store()`, `recall()`, `search()`, `create_edge()`, `forget()`, `get_memory()`, `get_graph()` |
-| `core/llm/clients.py` | LLM client wrapper with prompt parsing/usage tracking | `call_deep_reasoning()`, `call_fast_reasoning()`, `call_llm()`, `parse_json_response()` |
+| `core/interface/api.py` | Public API facade | `store()`, `recall()`, `search()`, `create_edge()`, `forget()`, `get_memory()`, `stats()`, `extract_transcript()`, `projects_search_docs()` |
+| `lib/llm_clients.py` | Canonical LLM client wrapper with prompt parsing/usage tracking | `call_deep_reasoning()`, `call_fast_reasoning()`, `call_llm()`, `parse_json_response()` |
+| `core/llm/clients.py` | Compatibility alias to canonical LLM client module | module alias to `lib.llm_clients` |
 | `ingest/extract.py` | Extraction module — transcript to memories | `extract_from_transcript()`, `parse_session_jsonl()`, `build_transcript()` |
 | `ingest/docs_ingest.py` | Ingest pipeline for docs from transcript/source mapping | ingest orchestration helpers |
 | `datastore/memorydb/semantic_clustering.py` | Semantic clustering for contradiction candidate reduction | `classify_node_semantic_cluster()`, `get_memory_clusters()` |
@@ -489,6 +490,8 @@ Architectural constraints that must not be broken. Violating these causes data c
 **Pending facts are visible to recall.** Facts with `status=pending` are returned by the retrieval pipeline. The janitor improves quality (review, dedup, contradiction resolution) but does not gate visibility. Any change that filters out pending facts from recall will cause newly extracted memories to be invisible until the next janitor run.
 
 **Content hash dedup happens before embedding.** `store()` checks `content_hash` (SHA256) first for exact dedup, then generates the embedding, then checks semantic similarity. Reordering these steps wastes embedding compute on exact duplicates.
+
+**Datastore owns metadata preservation on dedup paths.** `store()` applies metadata flags (`source_type`, `is_technical`) on duplicate/update paths too. Ingest/API layers should not mutate graph internals after write.
 
 ---
 
