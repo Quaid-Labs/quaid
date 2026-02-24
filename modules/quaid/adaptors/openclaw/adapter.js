@@ -55,22 +55,48 @@ for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECT
 let _cachedNodeCount = null;
 let _nodeCountTimestamp = 0;
 const NODE_COUNT_CACHE_MS = 5 * 60 * 1e3;
+let _cachedDatastoreStats = null;
+let _datastoreStatsTimestamp = 0;
+function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
+  const now = Date.now();
+  if (_cachedDatastoreStats && now - _datastoreStatsTimestamp < maxAgeMs) {
+    return _cachedDatastoreStats;
+  }
+  try {
+    const output = execSync(`python3 "${PYTHON_SCRIPT}" stats`, {
+      encoding: "utf-8",
+      timeout: 5e3,
+      env: {
+        ...process.env,
+        MEMORY_DB_PATH: DB_PATH,
+        QUAID_HOME: WORKSPACE,
+        CLAWDBOT_WORKSPACE: WORKSPACE
+      }
+    });
+    const parsed = JSON.parse(output);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    _cachedDatastoreStats = parsed;
+    _datastoreStatsTimestamp = now;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 function getActiveNodeCount() {
   const now = Date.now();
   if (_cachedNodeCount !== null && now - _nodeCountTimestamp < NODE_COUNT_CACHE_MS) {
     return _cachedNodeCount;
   }
-  try {
-    const result = execSync(
-      `sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM nodes WHERE status='active'"`,
-      { encoding: "utf-8", timeout: 5e3 }
-    );
-    _cachedNodeCount = parseInt(result.trim(), 10) || 100;
+  const stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
+  const active = Number(stats?.by_status?.active ?? 0);
+  if (Number.isFinite(active) && active > 0) {
+    _cachedNodeCount = active;
     _nodeCountTimestamp = now;
     return _cachedNodeCount;
-  } catch {
-    return _cachedNodeCount ?? 100;
   }
+  return _cachedNodeCount ?? 100;
 }
 function computeDynamicK() {
   const nodeCount = getActiveNodeCount();
@@ -1014,15 +1040,12 @@ function queueDelayedLlmRequest(message, kind = "janitor", priority = "normal") 
 }
 function getJanitorHealthIssue() {
   try {
-    if (!fs.existsSync(DB_PATH)) return null;
-    const out = execSync(
-      `sqlite3 "${DB_PATH}" "SELECT MAX(completed_at) FROM janitor_runs WHERE status='completed'"`,
-      { encoding: "utf-8", timeout: 4e3 }
-    ).trim();
-    if (!out) {
+    const stats = getDatastoreStatsSync(60 * 1e3);
+    const completedAt = String(stats?.last_janitor_completed_at || "").trim();
+    if (!completedAt) {
       return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
     }
-    const ts = Date.parse(out);
+    const ts = Date.parse(completedAt);
     if (Number.isNaN(ts)) return null;
     const hours = (Date.now() - ts) / (1e3 * 60 * 60);
     if (hours > 72) {

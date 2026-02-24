@@ -1552,6 +1552,7 @@ class MemoryGraph:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get database statistics."""
+        last_janitor_completed_at = ""
         with self._get_conn() as conn:
             total_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
             edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
@@ -1564,6 +1565,14 @@ class MemoryGraph:
             status_counts = dict(conn.execute(
                 "SELECT status, COUNT(*) FROM nodes GROUP BY status"
             ).fetchall())
+            try:
+                row = conn.execute(
+                    "SELECT MAX(completed_at) AS completed_at FROM janitor_runs WHERE status = 'completed'"
+                ).fetchone()
+                if row and row["completed_at"]:
+                    last_janitor_completed_at = str(row["completed_at"])
+            except Exception:
+                pass
 
         return {
             "total_nodes": total_count,
@@ -1571,7 +1580,8 @@ class MemoryGraph:
             "by_type": type_counts,
             "by_status": status_counts,
             "verified": verified_count,
-            "unverified": total_count - verified_count
+            "unverified": total_count - verified_count,
+            "last_janitor_completed_at": last_janitor_completed_at,
         }
 
     def get_health_metrics(self) -> Dict[str, Any]:
