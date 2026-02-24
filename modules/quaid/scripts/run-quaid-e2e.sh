@@ -34,6 +34,7 @@ NOTIFY_LEVEL="debug"
 LIVE_TIMEOUT_WAIT_SECONDS=90
 E2E_SUITES="full"
 NIGHTLY_MODE=false
+RESILIENCE_LOOPS=1
 E2E_SKIP_EXIT_CODE=20
 QUICK_BOOTSTRAP=false
 REUSE_WORKSPACE=false
@@ -58,6 +59,7 @@ Options:
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
+  --resilience-loops <n> Number of resilience-suite iterations (default: 1; nightly defaults to 2)
   --notify-level <lvl>   Quaid notify level for e2e (quiet|normal|verbose|debug, default: debug)
   --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
   --openclaw-source <p>  OpenClaw source repo path (default: ~/openclaw-source)
@@ -105,6 +107,7 @@ while [[ $# -gt 0 ]]; do
     --janitor-timeout) JANITOR_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --janitor-dry-run) JANITOR_MODE="dry-run"; shift ;;
     --live-timeout-wait) LIVE_TIMEOUT_WAIT_SECONDS="$2"; shift 2 ;;
+    --resilience-loops) RESILIENCE_LOOPS="$2"; shift 2 ;;
     --notify-level) NOTIFY_LEVEL="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
     --openclaw-source) OPENCLAW_SOURCE="$2"; shift 2 ;;
@@ -202,6 +205,11 @@ if [[ "$SKIP_JANITOR_FLAG" == true ]]; then RUN_JANITOR=false; fi
 if [[ "$SKIP_LLM_SMOKE_FLAG" == true ]]; then RUN_LLM_SMOKE=false; fi
 if [[ "$SKIP_LIVE_EVENTS_FLAG" == true ]]; then RUN_LIVE_EVENTS=false; fi
 if [[ "$SKIP_NOTIFY_MATRIX_FLAG" == true ]]; then RUN_NOTIFY_MATRIX=false; fi
+if ! [[ "$RESILIENCE_LOOPS" =~ ^[0-9]+$ ]] || [[ "$RESILIENCE_LOOPS" -lt 1 ]]; then
+  echo "Invalid --resilience-loops: $RESILIENCE_LOOPS (expected positive integer)" >&2
+  exit 1
+fi
+if [[ "$NIGHTLY_MODE" == true && "$RESILIENCE_LOOPS" -lt 2 ]]; then RESILIENCE_LOOPS=2; fi
 
 skip_e2e() {
   local reason="$1"
@@ -838,8 +846,9 @@ else
 fi
 
 if [[ "$RUN_RESILIENCE" == true ]]; then
-echo "[e2e] Running resilience check (gateway restart mid-session)..."
-python3 - "$E2E_WS" <<'PY'
+for ((res_i=1; res_i<=RESILIENCE_LOOPS; res_i++)); do
+echo "[e2e] Running resilience check (iteration ${res_i}/${RESILIENCE_LOOPS})..."
+python3 - "$E2E_WS" "$res_i" <<'PY'
 import json
 import os
 import subprocess
@@ -848,6 +857,7 @@ import time
 import uuid
 
 ws = sys.argv[1]
+resilience_iter = int(sys.argv[2])
 session_id = f"quaid-e2e-resilience-{uuid.uuid4().hex[:10]}"
 cursor_dir = os.path.join(ws, "data", "session-cursors")
 
@@ -1109,6 +1119,7 @@ if str(row[0]) != "cleanup" or str(row[1]) != "completed":
 
 print("[e2e] Resilience check passed.")
 PY
+done
 else
   echo "[e2e] Skipping resilience check (suite selection)."
 fi
