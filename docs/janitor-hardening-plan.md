@@ -86,5 +86,9 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
    - lifecycle + memory continuity + notification policy
 2. `--suite pre-benchmark`
    - blocker + ingest + janitor + benchmark-mode fail-fast review probe
+   - seeded contradiction fixture assertion (must transition out of pending)
+   - seeded dedup + decay-review fixture assertions (must transition out of unreviewed/pending)
+   - seeded multi-owner isolation assertion (owner-scoped memories must not collapse across owners)
+   - seeded RAG anchor assertion (anchor text must appear in doc_chunks after janitor)
 3. `--suite nightly`
    - full + resilience/load scenarios (restart, pressure, migration fixtures)
