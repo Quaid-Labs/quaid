@@ -111,10 +111,13 @@ Coverage requirements:
    - Added `--suite nightly-strict-notify` which runs nightly/full with strict delivery gating enabled.
 14. Janitor parallel benchmark lane.
    - Added `--suite janitor-parallel-bench` to run seeded janitor guards in benchmark mode with bounded LLM parallelism defaults.
+15. CI workflow entry for strict-notify lane.
+   - `.github/workflows/ci.yml` now exposes `workflow_dispatch` inputs `run_strict_notify_lane` and `strict_notify_fixture_ready`.
+   - Added `nightly-strict-notify` CI job gated by both flags so strict-delivery checks only run with prepared fixtures.
+   - Job treats exit code `20` as a prerequisite skip and uploads strict lane telemetry artifacts.
 
 ## Backlog Order
 
 Implement next in this order:
 1. Tune/commit environment-specific stage-budget thresholds from accumulated nightly history.
-2. Add CI/nightly workflow entry that runs `nightly-strict-notify` with stable channel fixtures.
-3. Consume janitor parallel benchmark report in benchmark automation and enforce regression thresholds.
+2. Consume janitor parallel benchmark report in benchmark automation and enforce regression thresholds.
