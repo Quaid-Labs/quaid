@@ -553,6 +553,13 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     stage_budget_report: Dict[str, Any] = {}
     carryover_report: Dict[str, int] = {}
 
+    # Benchmark runs execute janitor in repeated per-chunk cycles. Reusing a
+    # prior "running" checkpoint across cycles can skip early stages (e.g. review)
+    # and invalidate the run. Keep benchmark cycles deterministic and isolated.
+    if _is_benchmark_mode() and task == "all" and resume_checkpoint:
+        print("[checkpoint] Benchmark mode: disabling checkpoint resume for this cycle")
+        resume_checkpoint = False
+
     checkpoint_path = _logs_dir() / "janitor" / f"checkpoint-{task}.json"
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_state: Dict[str, Any] = {
@@ -1259,6 +1266,30 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # After all processing (review, dedup, contradiction, edges), promote
         # approved facts to active so they're never reprocessed by the pipeline.
         # CRITICAL: Only graduate if memory pipeline completed without errors.
+        if task in ("all", "graduate") and not dry_run and _cfg.systems.memory:
+            try:
+                pre_counts = count_nodes_by_status(graph, ["pending", "approved"])
+                pending_before = int(pre_counts.get("pending", 0) or 0)
+            except Exception:
+                pending_before = 0
+
+            # Hard invariant: in benchmark mode, if pending exists before graduate,
+            # review must have actually processed items in this janitor cycle.
+            # This catches accidental stage skips from stale checkpoints/budget paths.
+            if (
+                _is_benchmark_mode()
+                and task == "all"
+                and pending_before > 0
+                and int(applied_changes.get("memories_reviewed", 0) or 0) <= 0
+            ):
+                msg = (
+                    "Benchmark mode invalid pipeline: pending memories exist before graduate "
+                    f"(pending={pending_before}) but review processed 0 items in this cycle"
+                )
+                print(f"[benchmark] {msg}")
+                metrics.add_error(msg)
+                memory_pipeline_ok = False
+
         if task in ("all", "graduate") and not dry_run and _cfg.systems.memory:
             if task == "all" and not memory_pipeline_ok:
                 error_count = len(metrics.errors)
