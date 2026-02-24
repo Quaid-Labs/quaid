@@ -14,14 +14,12 @@ import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { queueDelayedRequest } from "./delayed-requests.js";
 import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
-import { createDataWriteEngine } from "../../core/data-writers.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 import { createPythonBridgeExecutor } from "./python-bridge.js";
 
 
 // Configuration
-const PLUGIN_DIR = __dirname;
 function _resolveWorkspace(): string {
   const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
   if (envWorkspace) {
@@ -349,7 +347,7 @@ function runStartupSelfCheck(): void {
     if (paidProviders.has(deep.provider)) {
       console.warn(`[quaid][billing] paid provider active for deep reasoning: ${deep.provider}/${deep.model}`);
     }
-  } catch (err: unknown) {
+  } catch (_err: unknown) {
     errors.push(`deep reasoning model resolution failed: ${String((err as Error)?.message || err)}`);
   }
 
@@ -400,15 +398,6 @@ function resolveExtractionTrigger(label: string): ExtractionTrigger {
   if (normalized.includes("new")) { return "new"; }
   if (normalized.includes("reset")) { return "reset"; }
   return "unknown";
-}
-
-function triggerLabelFromType(trigger: ExtractionTrigger): string {
-  if (trigger === "compaction") { return "Compaction"; }
-  if (trigger === "recovery") { return "Recovery"; }
-  if (trigger === "timeout") { return "Timeout"; }
-  if (trigger === "new") { return "New"; }
-  if (trigger === "reset") { return "Reset"; }
-  return "Unknown";
 }
 
 // Config schema
@@ -721,7 +710,7 @@ function maybeForceCompactionAfterTimeout(sessionId?: string): void {
     } else {
       console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
     }
-  } catch (err: unknown) {
+  } catch (_err: unknown) {
     console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String((err as Error)?.message || err)}`);
   }
 }
@@ -908,7 +897,7 @@ async function callConfiguredLLM(
   let data: any = null;
   try {
     data = rawBody ? JSON.parse(rawBody) : {};
-  } catch (err: unknown) {
+  } catch (_err: unknown) {
     const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
     console.error(
       `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
@@ -1093,13 +1082,6 @@ async function callDocsRegistry(command: string, args: string[] = []): Promise<s
   return _spawnWithTimeout(DOCS_REGISTRY, command, args, "docs_registry", {
     QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
   });
-}
-
-async function callProjectUpdater(command: string, args: string[] = []): Promise<string> {
-  const apiKey = _getAnthropicCredential();
-  return _spawnWithTimeout(PROJECT_UPDATER, command, args, "project_updater", {
-    QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE, ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
-  }, 300_000); // 5 min for Opus calls
 }
 
 // ============================================================================
@@ -1466,18 +1448,6 @@ type MemoryResult = {
 
 type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
 
-type GraphAwareSearchResult = {
-  directResults: MemoryResult[];
-  graphResults: MemoryResult[];
-  entitiesFound: Array<{ id: string; name: string; type: string }>;
-  sourceBreakdown: {
-    vectorCount: number;
-    graphCount: number;
-    pronounResolved: boolean;
-    ownerPerson: string | null;
-  };
-};
-
 function isLowInformationEntityNode(result: MemoryResult): boolean {
   if ((result.via || "vector") === "graph" || result.category === "graph") return false;
   const category = String(result.category || "").toLowerCase();
@@ -1629,7 +1599,7 @@ async function recall(
         });
       }
 
-    } catch (parseErr: unknown) {
+    } catch (_parseErr: unknown) {
       // Fallback: parse line-by-line output format if JSON parsing fails
       console.log("[quaid] JSON parse failed, trying line format");
       for (const line of output.split("\n")) {
@@ -1799,10 +1769,6 @@ function normalizeKnowledgeDatastores(datastores: unknown, expandGraph: boolean)
 }
 const recallStoreGuidance = knowledgeEngine.renderKnowledgeDatastoreGuidanceForAgents();
 
-async function routeKnowledgeDatastores(query: string, expandGraph: boolean): Promise<KnowledgeDatastore[]> {
-  return knowledgeEngine.routeKnowledgeDatastores(query, expandGraph);
-}
-
 async function totalRecall(
   query: string,
   limit: number,
@@ -1866,201 +1832,6 @@ interface RecallOptions {
 // Note: extractionPromise is declared inside register() — this function is
 // defined below inside register() as well, so it has access to it.
 // (Moved into register() closure when used)
-
-type StoreResult = {
-  id?: string;
-  status: "created" | "duplicate" | "updated" | "failed";
-  similarity?: number;
-  existingText?: string;
-};
-
-type StoreWritePayload = {
-  text: string;
-  category: string;
-  sessionId?: string;
-  extractionConfidence: number;
-  owner: string;
-  source?: string;
-  speaker?: string;
-  status?: string;
-  privacy?: string;
-  keywords?: string;
-  knowledgeType?: string;
-  sourceType?: string;
-  isTechnical?: boolean;
-};
-
-type CreateEdgeWritePayload = {
-  subject: string;
-  relation: string;
-  object: string;
-  sourceFactId: string;
-  owner: string;
-  createMissing?: boolean;
-};
-
-function parseStoreOutput(output: string): StoreResult | null {
-  const storedMatch = output.match(/Stored: (.+)/);
-  if (storedMatch) {
-    return { id: storedMatch[1], status: "created" };
-  }
-
-  const dupMatchNew = output.match(/Duplicate \(similarity: ([\d.]+)\) \[([^\]]+)\]: (.+)/);
-  if (dupMatchNew) {
-    return {
-      id: dupMatchNew[2],
-      status: "duplicate",
-      similarity: parseFloat(dupMatchNew[1]),
-      existingText: dupMatchNew[3],
-    };
-  }
-
-  const dupMatch = output.match(/Duplicate \(similarity: ([\d.]+)\): (.+)/);
-  if (dupMatch) {
-    return {
-      status: "duplicate",
-      similarity: parseFloat(dupMatch[1]),
-      existingText: dupMatch[2],
-    };
-  }
-
-  const updatedMatch = output.match(/Updated existing: (.+)/);
-  if (updatedMatch) {
-    return { id: updatedMatch[1], status: "updated" };
-  }
-
-  return null;
-}
-
-const dataWriteEngine = createDataWriteEngine({
-  writers: [
-    {
-      spec: {
-        datastore: "vector",
-        description: "Fact and preference writes to memory_graph store()",
-        actions: [{ key: "store_fact", description: "Store or deduplicate a fact node" }],
-      },
-      write: async (envelope) => {
-        const payload = envelope.payload as StoreWritePayload;
-        if (!payload?.text || !String(payload.text).trim()) {
-          return { status: "failed", error: "Vector writer requires non-empty text payload" };
-        }
-        const args = [
-          payload.text,
-          "--category", payload.category || "fact",
-          "--owner", payload.owner || resolveOwner(),
-          "--confidence", String(payload.extractionConfidence ?? 0.5),
-          "--extraction-confidence", String(payload.extractionConfidence ?? 0.5),
-        ];
-        if (payload.sessionId) args.push("--session-id", payload.sessionId);
-        if (payload.source) args.push("--source", payload.source);
-        if (payload.speaker) args.push("--speaker", payload.speaker);
-        if (payload.status) args.push("--status", payload.status);
-        if (payload.privacy) args.push("--privacy", payload.privacy);
-        if (payload.keywords) args.push("--keywords", payload.keywords);
-        if (payload.knowledgeType) args.push("--knowledge-type", payload.knowledgeType);
-        if (payload.sourceType) args.push("--source-type", payload.sourceType);
-        if (payload.isTechnical) args.push("--is-technical");
-        const output = await datastoreBridge.store(args);
-        const parsed = parseStoreOutput(output);
-        if (!parsed) {
-          return { status: "failed", error: "Unrecognized store output", details: { output: output.slice(0, 200) } };
-        }
-        return { status: parsed.status, id: parsed.id, details: parsed as unknown as Record<string, unknown> };
-      },
-    },
-    {
-      spec: {
-        datastore: "graph",
-        description: "Relationship edge writes to memory graph",
-        actions: [{ key: "create_edge", description: "Create relationship edge between subject and object" }],
-      },
-      write: async (envelope) => {
-        const payload = envelope.payload as CreateEdgeWritePayload;
-        if (!payload?.subject || !payload?.relation || !payload?.object || !payload?.sourceFactId) {
-          return { status: "failed", error: "Graph writer requires subject/relation/object/sourceFactId" };
-        }
-        const args = [
-          payload.subject,
-          payload.relation,
-          payload.object,
-          "--source-fact-id", payload.sourceFactId,
-          "--owner", payload.owner || resolveOwner(),
-          "--json",
-        ];
-        if (payload.createMissing !== false) {
-          args.push("--create-missing");
-        }
-        const output = await datastoreBridge.createEdge(args);
-        const parsed = JSON.parse(output || "{}");
-        const status = String(parsed?.status || "").toLowerCase();
-        if (status === "created") {
-          return { status: "created", details: parsed };
-        }
-        if (status === "duplicate" || status === "exists") {
-          return { status: "duplicate", details: parsed };
-        }
-        if (status) {
-          return { status: "skipped", details: parsed };
-        }
-        return { status: "failed", error: "Unrecognized create-edge output", details: { output: output.slice(0, 200) } };
-      },
-    },
-  ],
-});
-
-async function store(
-  text: string,
-  category: string = "fact",
-  sessionId?: string,
-  extractionConfidence: number = 0.5,
-  owner: string = resolveOwner(),
-  source?: string,
-  speaker?: string,
-  status?: string,
-  privacy?: string,
-  keywords?: string,
-  knowledgeType?: string,
-  sourceType?: string,
-  isTechnical?: boolean
-): Promise<StoreResult | null> {
-  try {
-    const writeResult = await dataWriteEngine.writeData({
-      datastore: "vector",
-      action: "store_fact",
-      payload: {
-        text,
-        category,
-        sessionId,
-        extractionConfidence,
-        owner,
-        source,
-        speaker,
-        status,
-        privacy,
-        keywords,
-        knowledgeType,
-        sourceType,
-        isTechnical,
-      } as StoreWritePayload,
-    });
-
-    if (writeResult.status === "failed") {
-      console.error("[quaid] store error:", writeResult.error || "unknown writer failure");
-      return null;
-    }
-    const details = (writeResult.details || {}) as StoreResult;
-    return {
-      id: writeResult.id || details.id,
-      status: writeResult.status as StoreResult["status"],
-      similarity: details.similarity,
-      existingText: details.existingText,
-    };
-  } catch (err: unknown) {
-    console.error("[quaid] store error:", (err as Error).message);
-    return null;
-  }
-}
 
 async function getStats(): Promise<object | null> {
   try {
