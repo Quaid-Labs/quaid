@@ -153,7 +153,6 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     ;;
 
   *)
-    # Try memory_graph.py as fallback
-    exec python3 "$SCRIPT_DIR/memory_graph.py" "$CMD" "$@"
+    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
     ;;
 esac
