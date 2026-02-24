@@ -1199,6 +1199,45 @@ def _inject_bad_request_failure_and_verify_recovery() -> None:
             "[e2e] ERROR: failure-injection probe unexpectedly succeeded for malformed /v1/responses payload"
         )
 
+def _inject_auth_failure_and_verify_recovery() -> None:
+    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+    try:
+        cfg = json.loads(open(cfg_path, "r", encoding="utf-8").read())
+    except Exception:
+        return
+    gateway = cfg.get("gateway", {}) if isinstance(cfg, dict) else {}
+    port = int(gateway.get("port", 18789) or 18789)
+    url = f"http://127.0.0.1:{port}/v1/responses"
+    payload = {
+        "model": "openai-codex/gpt-5.3-codex",
+        "input": "auth-failure probe",
+        "max_output_tokens": 8,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer e2e-invalid-token",
+        },
+        method="POST",
+    )
+    failed_as_expected = False
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            _ = resp.read()
+    except urllib.error.HTTPError as e:
+        if int(getattr(e, "code", 0) or 0) in (401, 403):
+            failed_as_expected = True
+        else:
+            failed_as_expected = True
+    except Exception:
+        failed_as_expected = True
+    if not failed_as_expected:
+        raise SystemExit(
+            "[e2e] ERROR: failure-injection probe unexpectedly succeeded for invalid auth token"
+        )
+
 first = run_agent("Resilience probe turn 1: acknowledge with OK.")
 if not first:
     raise SystemExit("[e2e] ERROR: resilience turn 1 produced empty output")
@@ -1214,6 +1253,10 @@ _inject_bad_request_failure_and_verify_recovery()
 post_injection = run_agent("Bad-request recovery probe: acknowledge with OK.")
 if not post_injection:
     raise SystemExit("[e2e] ERROR: recovery probe failed after bad-model failure injection")
+_inject_auth_failure_and_verify_recovery()
+post_auth_injection = run_agent("Auth-failure recovery probe: acknowledge with OK.")
+if not post_auth_injection:
+    raise SystemExit("[e2e] ERROR: recovery probe failed after auth failure injection")
 
 janitor_probe = _spawn_janitor_probe()
 pressure_turn = run_agent("Resilience probe turn 3 during janitor pressure: acknowledge with OK.")
