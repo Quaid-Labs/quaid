@@ -189,6 +189,8 @@ python3 run_locomo.py --full-context  # Full-context baseline (no knowledge laye
 
 Requirements: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` (for GPT-4o-mini judge) environment variables. Ollama running locally for embeddings. A full evaluation run costs approximately $85 across all configurations.
 
+For operational benchmark handoff (E2E admission gates + checkpoint cut workflow), see `docs/BENCHMARK-OPERATIONS.md`.
+
 ---
 
 ## References
