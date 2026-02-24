@@ -12,7 +12,7 @@ This document defines Quaid's external interface model for host adapters and run
 ## Surfaces
 
 - `OpenClaw adapter` (`modules/quaid/adaptors/openclaw/adapter.ts`): richest integration path, lifecycle hooks + tools.
-- `MCP server` (`modules/quaid/mcp_server.py`): host-agnostic RPC tools.
+- `MCP server` (`modules/quaid/core/interface/mcp_server.py`): host-agnostic RPC tools.
 - `CLI wrapper` (`modules/quaid/quaid`): operational entrypoint to Python modules.
 
 ## Capability Discovery
@@ -26,7 +26,7 @@ This document defines Quaid's external interface model for host adapters and run
 
 ### Event Capabilities
 
-- Source: `modules/quaid/events.py` (`get_event_registry()`)
+- Source: `modules/quaid/core/runtime/events.py` (`get_event_registry()`)
 - Discovery:
   - MCP: `memory_event_capabilities`
   - CLI: `quaid event capabilities`
@@ -53,7 +53,7 @@ New datastores should register DataWriters rather than adding direct write calls
 
 ## Event Contract
 
-- Source: `modules/quaid/events.py`
+- Source: `modules/quaid/core/runtime/events.py`
 - Core functions:
   - `emit_event(name, payload, source, session_id, owner_id, priority)`
   - `list_events(status, limit)`

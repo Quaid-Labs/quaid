@@ -439,7 +439,7 @@ class TestTemporalContradictionCandidates:
 
     def test_contradiction_candidates_include_temporal_fields(self, tmp_path):
         """recall_similar_pairs includes temporal fields in contradiction candidates."""
-        from core.lifecycle.janitor import recall_similar_pairs, JanitorMetrics, CONTRADICTION_MIN_SIM
+        from datastore.memorydb.maintenance_ops import recall_similar_pairs, JanitorMetrics, CONTRADICTION_MIN_SIM
         from datastore.memorydb.memory_graph import Node
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
@@ -476,7 +476,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_prompt_includes_temporal_context(self):
         """batch_contradiction_check formats temporal validity in the prompt."""
-        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid lives in Austin",
@@ -494,7 +494,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": false}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("datastore.memorydb.maintenance_ops.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         assert len(captured_prompts) == 1
@@ -505,7 +505,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_prompt_includes_temporal_succession_instruction(self):
         """The contradiction prompt explicitly mentions temporal succession."""
-        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid lives in Austin TX",
@@ -520,7 +520,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": false}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("datastore.memorydb.maintenance_ops.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         prompt = captured_prompts[0]
@@ -528,7 +528,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_prompt_shows_recorded_dates(self):
         """The prompt should show recorded dates for each fact."""
-        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid weighs 180 pounds",
@@ -543,7 +543,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": false}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("datastore.memorydb.maintenance_ops.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         prompt = captured_prompts[0]
@@ -552,7 +552,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_no_temporal_shows_unknown(self):
         """When created_at is missing, prompt shows 'unknown'."""
-        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid has a cat pet",
@@ -566,7 +566,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": true, "explanation": "direct contradiction"}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("datastore.memorydb.maintenance_ops.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         prompt = captured_prompts[0]
@@ -574,7 +574,7 @@ class TestTemporalContradictionCandidates:
 
     def test_batch_contradiction_skips_valid_info_when_absent(self):
         """When no valid_from/valid_until, no [valid: ...] annotation appears."""
-        from core.lifecycle.janitor import batch_contradiction_check, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import batch_contradiction_check, JanitorMetrics
 
         pairs = [{
             "id_a": "a1", "text_a": "Quaid eats meat regularly",
@@ -589,7 +589,7 @@ class TestTemporalContradictionCandidates:
             return ('[{"pair": 1, "contradicts": true, "explanation": "contradiction"}]', 0.1)
 
         metrics = JanitorMetrics()
-        with patch("core.lifecycle.janitor.call_fast_reasoning", side_effect=mock_llm):
+        with patch("datastore.memorydb.maintenance_ops.call_fast_reasoning", side_effect=mock_llm):
             batch_contradiction_check(pairs, metrics)
 
         prompt = captured_prompts[0]

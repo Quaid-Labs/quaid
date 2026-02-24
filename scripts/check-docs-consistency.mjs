@@ -27,7 +27,7 @@ const checks = [
     require: [
       'projects_search',
       'adaptors/openclaw/adapter.ts',
-      'adaptors/openclaw/knowledge/orchestrator.ts',
+      'adaptors/openclaw/maintenance.py',
       'route datastores',
     ],
     forbid: [
@@ -39,7 +39,7 @@ const checks = [
     require: [
       'projects_search',
       'adaptors/openclaw/adapter.ts',
-      'adaptors/openclaw/knowledge/orchestrator.ts',
+      'orchestrator/default-orchestrator.ts',
       'total_recall planning pass',
     ],
     forbid: [

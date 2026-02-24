@@ -37,16 +37,16 @@ Quaid exposes its knowledge layer through three interfaces: an **MCP server** (w
           v                  v                agent turn)
     +----------+      +----------+               |
     |MCP Server|      | extract  |       +-------+-------+
-    | (stdio)  |      | .py CLI  |       | adapters/     |
+    | (stdio)  |      | .py CLI  |       | adaptors/     |
     |          |      |          |       | openclaw/     |
-    |          |      |          |       | adaptors/openclaw/index.ts      |
+    |          |      |          |       | index.ts      |
     +----+-----+      +----+-----+       | (TS plugin)   |
          |                 |             +-------+-------+
          +--------+--------+--------------------+
                   |
            +------v------+           +----------+
            |  Python API  |           | Retrieval|
-           | (api.py)     |           | Pipeline |
+           | (core/interface/api.py)  | Pipeline |
            +--------------+           +----------+
                   |                        |
                   +------ SQLite DB -------+
@@ -80,7 +80,7 @@ Read-path routing (`total_recall`) is paired with a canonical write-path in core
 
 Quaid also exposes a queue-backed event bus for adapter-independent orchestration:
 
-- Event queue and handlers are implemented in `modules/quaid/events.py`.
+- Event queue and handlers are implemented in `modules/quaid/core/runtime/events.py`.
 - Adapter lifecycle hooks emit events like `session.new`, `session.reset`, and `session.compaction`.
 - CLI and MCP both support emitting/listing/processing events so orchestration can be tested and automated outside gateway hooks.
 - Event capabilities are discoverable via a registry (`event capabilities`, `memory_event_capabilities`) so orchestration can adapt strategy based on what this runtime supports.
@@ -119,9 +119,9 @@ Conversation messages
 
 Extraction can be triggered from any of Quaid's three interfaces:
 
-- **OpenClaw plugin** (`adaptors/openclaw/index.ts`): Two gateway hooks -- `before_compaction` (context being compacted) and `before_reset` (session ending). Both call `extractMemoriesFromMessages()`. Programmatic compaction is available via gateway RPC `sessions.compact`.
-- **MCP server** (`mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
-- **CLI** (`extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
+- **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/index.ts`): Two gateway hooks -- `before_compaction` (context being compacted) and `before_reset` (session ending). Both call `extractMemoriesFromMessages()`. Programmatic compaction is available via gateway RPC `sessions.compact`.
+- **MCP server** (`modules/quaid/core/interface/mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
+- **CLI** (`modules/quaid/ingest/extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
 
 All three paths converge on the same extraction logic and produce identical results.
 
@@ -434,7 +434,7 @@ In practice, extraction (write) and retrieval (read) can run simultaneously. The
 
 ## 5. Janitor Pipeline (Nightly Maintenance)
 
-The janitor (`janitor.py`) runs 17 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
+The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 17 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
 
 ### Execution Order
 
@@ -462,7 +462,7 @@ The task numbering is historical -- tasks were added over time and the numbers r
 
 | Task | Purpose | LLM? |
 |------|---------|------|
-| workspace | Core markdown bloat monitoring + deep-reasoning LLM review | High |
+| workspace | OpenClaw adaptor-registered core markdown bloat monitoring + deep-reasoning LLM review | High |
 | docs_staleness | Auto-update stale docs from git diffs (fast-reasoning pre-filter + deep-reasoning update) | Both |
 | docs_cleanup | Clean bloated docs based on churn metrics | Low |
 | snippets | Review soul snippets: FOLD (merge into file), REWRITE, or DISCARD | High |
@@ -651,11 +651,11 @@ docs_registry.py find-project path/to/file.py   # Which project owns this file?
 docs_registry.py discover --project myproject    # Auto-discover docs in project dir
 ```
 
-**Doc Auto-Update** (`docs_updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
+**Doc Auto-Update** (`core/docs/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
 1. **Low-reasoning pre-filter**: Classifies git diffs as "trivial" (whitespace, comments) or "significant" (logic changes). Trivial diffs skip the expensive update step.
 2. **High-reasoning update**: Reads the stale doc + relevant diffs, proposes targeted edits.
 
-**RAG Search** (`docs_rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
+**RAG Search** (`core/docs/rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
 
 **Project Updater** (`project_updater.py`): Processes file change events and refreshes project documentation. Integrates with Claude Code hooks (PostToolUse tracks edited files, PreCompact stages update events).
 
@@ -785,7 +785,7 @@ On OpenClaw plugin boot, Quaid now runs a strict startup preflight before regist
 
 - Resolves both `deep` and `fast` reasoning model/provider pairs from config + gateway defaults
 - Validates key runtime config values (for example `retrieval.maxResults > 0`)
-- Verifies required runtime files exist (`janitor.py`, `memory_graph.py`)
+- Verifies required runtime files exist (`core/lifecycle/janitor.py`, `datastore/memorydb/memory_graph.py`)
 
 If preflight fails, plugin initialization aborts with explicit error details instead of degrading silently during later calls.
 
@@ -818,13 +818,13 @@ Every LLM call accumulates into per-run counters (`_usage_input_tokens`, `_usage
 
 ### Notifications
 
-Quaid includes a notification system (`notify.py`) that sends status updates for extraction, retrieval, janitor runs, and documentation changes. Notifications support four verbosity levels (quiet, normal, verbose, debug) with per-feature overrides, and are routed to the user's last active communication channel. To change the notification level, ask your agent or edit `config/memory.json`. For full details on verbosity presets, channel routing, and per-feature configuration, see [AI-REFERENCE.md](AI-REFERENCE.md).
+Quaid includes a notification system (`modules/quaid/core/runtime/notify.py`) that sends status updates for extraction, retrieval, janitor runs, and documentation changes. Notifications support four verbosity levels (quiet, normal, verbose, debug) with per-feature overrides, and are routed to the user's last active communication channel. To change the notification level, ask your agent or edit `config/memory.json`. For full details on verbosity presets, channel routing, and per-feature configuration, see [AI-REFERENCE.md](AI-REFERENCE.md).
 
 ---
 
 ## 10. MCP Server
 
-The MCP server (`mcp_server.py`) exposes Quaid's knowledge layer as tools over the [Model Context Protocol](https://modelcontextprotocol.io) stdio transport. This is the primary integration path for clients that support MCP (Claude Desktop, Claude Code, Cursor, Windsurf, etc.).
+The MCP server (`modules/quaid/core/interface/mcp_server.py`) exposes Quaid's knowledge layer as tools over the [Model Context Protocol](https://modelcontextprotocol.io) stdio transport. This is the primary integration path for clients that support MCP (Claude Desktop, Claude Code, Cursor, Windsurf, etc.).
 
 ### Architecture
 
@@ -834,17 +834,17 @@ MCP Client (Claude Desktop, Cursor, etc.)
     | JSON-RPC over stdio
     |
     v
-mcp_server.py (FastMCP)
+core/interface/mcp_server.py (FastMCP)
     |
-    +-- memory_extract  -> extract.py -> llm_clients + memory_graph
-    +-- memory_store    -> api.store()
-    +-- memory_recall   -> api.recall()
-    +-- memory_search   -> api.search()
-    +-- memory_get      -> api.get_memory()
-    +-- memory_forget   -> api.forget()
-    +-- memory_create_edge -> api.create_edge()
-    +-- memory_stats    -> api.get_graph().stats()
-    +-- projects_search -> docs_rag.search()
+    +-- memory_extract  -> ingest/extract.py -> core/llm/clients.py + datastore/memorydb/memory_graph.py
+    +-- memory_store    -> core/interface/api.py
+    +-- memory_recall   -> core/interface/api.py
+    +-- memory_search   -> core/interface/api.py
+    +-- memory_get      -> core/interface/api.py
+    +-- memory_forget   -> core/interface/api.py
+    +-- memory_create_edge -> core/interface/api.py
+    +-- memory_stats    -> core/interface/api.py
+    +-- projects_search -> core/docs/rag.py
 ```
 
 ### Tools
@@ -873,6 +873,6 @@ The `QUAID_OWNER` environment variable sets the owner identity for all operation
 
 ## Appendix: File Reference
 
-The plugin lives in `modules/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). In OpenClaw integration, `adaptors/openclaw/index.ts` is a lightweight entry shim, while `adaptors/openclaw/adapter.ts` + `adaptors/openclaw/knowledge/orchestrator.ts` hold the runtime tool/hook logic and recall orchestration. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
+The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). In OpenClaw integration, `adaptors/openclaw/index.ts` is the entry shim, `adaptors/openclaw/adapter.ts` owns runtime integration, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

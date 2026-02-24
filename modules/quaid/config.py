@@ -240,10 +240,6 @@ class JournalConfig:
     archive_after_distillation: bool = True
 
 
-# Backward compat alias
-SoulSnippetsConfig = JournalConfig
-
-
 @dataclass
 class DocsConfig:
     auto_update_on_compact: bool = True
@@ -255,11 +251,6 @@ class DocsConfig:
     doc_purposes: Dict[str, str] = field(default_factory=dict)
     core_markdown: CoreMarkdownConfig = field(default_factory=CoreMarkdownConfig)
     journal: JournalConfig = field(default_factory=JournalConfig)
-
-    @property
-    def soul_snippets(self) -> JournalConfig:
-        """Backward compat alias for journal config."""
-        return self.journal
 
 
 @dataclass

@@ -11,7 +11,6 @@ Key optimizations:
 
 Tasks:
 1. Find near-duplicates (85-94% similarity range) - candidates for merge  
-2. Extract edges/relationships from fact text
 3. Decay confidence on old unused facts
 4. Detect potential contradictions (optimized)
 
@@ -21,7 +20,6 @@ Run modes:
 
 Usage:
   python3 janitor_optimized.py --task duplicates
-  python3 janitor_optimized.py --task edges --apply
   python3 janitor_optimized.py --task all --dry-run
 """
 
@@ -40,41 +38,18 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
 # Import datastore internals directly for janitor-only maintenance logic.
-from datastore.memorydb.memory_graph import (
-    get_graph,
-    MemoryGraph,
-    Node,
-    Edge,
-    store as store_memory,
-    store_contradiction,
-    get_pending_contradictions,
-    resolve_contradiction,
-    mark_contradiction_false_positive,
-    soft_delete,
-    get_recent_dedup_rejections,
-    resolve_dedup_review,
-    queue_for_decay_review,
-    get_pending_decay_reviews,
-    resolve_decay_review,
-    ensure_keywords_for_relation,
-    get_edge_keywords,
-    delete_edges_by_source_fact,
-    create_edge,
-    content_hash,
-    hard_delete_node,
-    store_edge_keywords,
-)
+from datastore.memorydb.memory_graph import get_graph
 from lib.config import get_db_path
-from lib.tokens import extract_key_tokens as _lib_extract_key_tokens, STOPWORDS as _LIB_STOPWORDS, estimate_tokens
-from lib.archive import archive_node as _archive_node
 from core.runtime.logger import janitor_logger, rotate_logs
 from config import get_config
 from core.lifecycle.janitor_lifecycle import build_default_registry, RoutineContext
-from core.llm.clients import (call_fast_reasoning, call_deep_reasoning, call_llm,
-                         parse_json_response, reset_token_usage, get_token_usage,
-                         estimate_cost, set_token_budget, reset_token_budget,
-                         is_token_budget_exhausted,
-                         DEEP_REASONING_TIMEOUT, FAST_REASONING_TIMEOUT)
+from core.llm.clients import (
+    reset_token_usage,
+    get_token_usage,
+    estimate_cost,
+    set_token_budget,
+    reset_token_budget,
+)
 from lib.runtime_context import (
     get_workspace_dir,
     get_data_dir,
@@ -120,15 +95,7 @@ RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 
 
 
-# Datastore-owned maintenance intelligence.
-# Janitor remains orchestration, scheduling, logging, and notification.
-from datastore.memorydb import maintenance_ops as _maintenance_ops
-
-# Re-export datastore-owned maintenance symbols for backward compatibility.
-for _name in dir(_maintenance_ops):
-    if _name.startswith("__"):
-        continue
-    globals()[_name] = getattr(_maintenance_ops, _name)
+from datastore.memorydb.maintenance_ops import *  # noqa: F401,F403
 
 def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
     """Run npm test for quaid plugin and report pass/fail counts."""
@@ -596,7 +563,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         "dedup_review": "memory", "duplicates": "memory", "contradictions": "memory",
         "decay": "memory", "decay_review": "memory",
         # Journal system
-        "snippets": "journal", "soul_snippets": "journal", "journal": "journal",
+        "snippets": "journal", "journal": "journal",
         # Projects system
         "docs_staleness": "projects", "docs_cleanup": "projects", "rag": "projects",
         # Workspace system
@@ -1002,7 +969,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             print(f"Task completed in {metrics.task_duration('docs_cleanup'):.2f}s\n")
 
         # --- Task 1d-snippets: Soul Snippets Review (Opus API, nightly) ---
-        if task in ("snippets", "soul_snippets", "all") and _system_enabled_or_skip("snippets", "Task 1d-snippets: Snippets") and not _skip_if_over_budget("Task 1d-snippets: Snippets", 30):
+        if task in ("snippets", "all") and _system_enabled_or_skip("snippets", "Task 1d-snippets: Snippets") and not _skip_if_over_budget("Task 1d-snippets: Snippets", 30):
             print("[Task 1d-snippets: Soul Snippets Review]")
             metrics.start_task("snippets")
             snippets_apply_allowed = _can_apply_scope(
@@ -1049,102 +1016,6 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             applied_changes["journal_entries_distilled"] = lifecycle_result.metrics.get("journal_entries_distilled", 0)
             metrics.end_task("journal")
             print(f"Task completed in {metrics.task_duration('journal'):.2f}s\n")
-
-        # --- Task 6: Extract Edges (DEPRECATED) ---
-        # As of Feb 2026, edges are now created at extraction time (index.ts) when facts
-        # are first captured. The janitor review (Task 2) handles edge updates for FIX
-        # operations. This task is kept for backward compatibility with --task edges,
-        # but is skipped by default in --task all runs.
-        if task == "edges":
-            # Manual run - still execute for backward compatibility
-            print("[Task 6: Extract Edges (DEPRECATED - manual run)]")
-            _errors_before_edges = len(metrics.errors)
-            use_full_scan = not incremental  # --full-scan broadens candidate discovery
-            candidates = find_edge_candidates_optimized(graph, metrics, full_scan=use_full_scan)
-            print(f"Found {len(candidates)} facts without edges"
-                  f"{' (full scan)' if use_full_scan else ' (pattern-filtered)'}\n")
-
-            relations_list = _build_relations_list(graph)
-            print(f"  Known relations: {relations_list}\n")
-
-            metrics.start_task("edges_extraction")
-            extracted = 0
-            skipped = 0
-            no_edge = 0
-
-            # Process in token-aware batches via Opus
-            edge_builder = TokenBatchBuilder(
-                model_tier='deep',
-                prompt_overhead_tokens=estimate_tokens(relations_list) + 500,
-                tokens_per_item_fn=lambda f: estimate_tokens(f.get("text", "")) + 30,
-                max_items=100
-            )
-            edge_batches = edge_builder.build_batches(candidates)
-            total_batches = len(edge_batches)
-            consecutive_failures = 0
-
-            for batch_num, batch in enumerate(edge_batches, 1):
-                print(f"  Batch {batch_num}/{total_batches} ({len(batch)} facts)...")
-
-                extractions = batch_extract_edges(batch, graph, metrics,
-                                                  relations_list=relations_list)
-
-                # Check for total batch failure
-                if all(e is None for e in extractions):
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        print(f"  3 consecutive batch failures, stopping edge extraction")
-                        metrics.add_error("Edge extraction stopped: 3 consecutive failures")
-                        memory_pipeline_ok = False
-                        break
-                else:
-                    consecutive_failures = 0
-
-                for i, extraction in enumerate(extractions):
-                    if extraction is None:
-                        no_edge += 1
-                        continue
-
-                    subj = extraction["subject"]
-                    rel = extraction["relation"]
-                    obj = extraction["object"]
-                    print(f"    {'Would create' if dry_run else 'Creating'}: "
-                          f"{subj} --[{rel}]--> {obj}")
-
-                    if not dry_run:
-                        owner = batch[i].get("owner_id", _default_owner_id())
-                        source_id = _resolve_entity_node(
-                            graph, subj, extraction["subject_type"], owner_id=owner)
-                        target_id = _resolve_entity_node(
-                            graph, obj, extraction["object_type"], owner_id=owner)
-
-                        if source_id and target_id:
-                            edge = Edge.create(source_id, target_id, rel)
-                            graph.add_edge(edge)
-                            extracted += 1
-                            # Refresh relations list if a new type was introduced
-                            if rel not in relations_list:
-                                relations_list = _build_relations_list(graph)
-                                print(f"    New relation type: {rel}")
-                                # Generate keywords for the new relation type
-                                if ensure_keywords_for_relation(rel):
-                                    print(f"    Generated keywords for '{rel}'")
-                        else:
-                            skipped += 1
-                            print(f"    Skipped (could not resolve entities)")
-
-            metrics.end_task("edges_extraction")
-            applied_changes["edges_created"] = extracted
-            print(f"\nEdge extraction: {extracted} created, {no_edge} no-edge, {skipped} skipped")
-            print(f"Task completed in {metrics.task_duration('edges_discovery') + metrics.task_duration('edges_extraction'):.2f}s\n")
-
-            # Check if edge extraction added errors
-            if len(metrics.errors) > _errors_before_edges:
-                memory_pipeline_ok = False
-
-        # Skip Task 6 when running "all" (deprecated)
-        elif task == "all":
-            print("[Task 6: Extract Edges] SKIPPED — deprecated (edges created at extraction time)\n")
 
         # --- Task 7: RAG Reindex + Project Discovery (Ollama embeddings) ---
         if task in ("rag", "all") and _system_enabled_or_skip("rag", "Task 7: RAG Reindex") and not _skip_if_over_budget("Task 7: RAG Reindex", 15):
@@ -1456,7 +1327,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Memory Janitor (Optimized)")
-    parser.add_argument("--task", choices=["embeddings", "workspace", "docs_staleness", "docs_cleanup", "snippets", "soul_snippets", "journal", "review", "dedup_review", "duplicates", "contradictions", "decay", "decay_review", "graduate", "edges", "rag", "tests", "cleanup", "update_check", "all"],
+    parser.add_argument("--task", choices=["embeddings", "workspace", "docs_staleness", "docs_cleanup", "snippets", "journal", "review", "dedup_review", "duplicates", "contradictions", "decay", "decay_review", "graduate", "rag", "tests", "cleanup", "update_check", "all"],
                        default="all", help="Task to run")
     parser.add_argument("--apply", action="store_true", help="Apply changes (default: dry-run)")
     parser.add_argument("--approve", action="store_true",

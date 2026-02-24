@@ -118,7 +118,7 @@ class TestMergeConfidenceInheritance:
     """Merged node inherits max confidence from originals."""
 
     def test_inherits_max_confidence(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid likes morning coffee routines", confidence=0.7)
         node_b = _store_and_get(graph, "Quaid enjoys morning coffee every day", confidence=0.95)
@@ -135,7 +135,7 @@ class TestMergeConfidenceInheritance:
         assert merged.confidence == 0.95
 
     def test_does_not_hardcode_09(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid has a pet cat named Richter", confidence=0.3)
         node_b = _store_and_get(graph, "Quaid owns a cat called Richter", confidence=0.4)
@@ -153,7 +153,7 @@ class TestMergeConfidenceInheritance:
         assert merged.confidence == pytest.approx(0.4, abs=0.01)
 
     def test_three_way_merge_inherits_max(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid works from his home office", confidence=0.6)
         node_b = _store_and_get(graph, "Quaid works remotely from home", confidence=0.85)
@@ -179,7 +179,7 @@ class TestMergeConfirmationCount:
     """Merged node sums confirmation_count from originals."""
 
     def test_sums_confirmation_counts(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid drinks espresso in morning", confirmation_count=3)
         node_b = _store_and_get(graph, "Quaid has espresso every morning", confirmation_count=5)
@@ -196,7 +196,7 @@ class TestMergeConfirmationCount:
         assert merged.confirmation_count == 8  # 3 + 5
 
     def test_does_not_reset_to_zero(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid lives in Portland Oregon", confirmation_count=7)
         node_b = _store_and_get(graph, "Quaid resides in Portland Oregon", confirmation_count=0)
@@ -221,7 +221,7 @@ class TestMergeStorageStrength:
     """Merged node inherits max storage_strength from originals."""
 
     def test_inherits_max_storage_strength(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid uses FastAPI for backend work", storage_strength=0.15)
         node_b = _store_and_get(graph, "Quaid builds backends with FastAPI", storage_strength=0.42)
@@ -246,7 +246,7 @@ class TestMergeStatus:
     """Merged node gets status='active', not 'approved'."""
 
     def test_merged_status_is_active(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid prefers dark mode editors", status="active")
         node_b = _store_and_get(graph, "Quaid likes dark mode in editors", status="active")
@@ -263,7 +263,7 @@ class TestMergeStatus:
         assert merged.status == "active"
 
     def test_merged_status_not_approved(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid has a Mac mini M4", status="approved")
         node_b = _store_and_get(graph, "Quaid uses Mac mini M4 computer", status="approved")
@@ -289,7 +289,7 @@ class TestMergeEdgeMigration:
     """Edges are migrated to merged node, not deleted."""
 
     def test_source_edges_migrated(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid is a software developer engineer")
         target_node = _make_node(graph, "Python")
@@ -309,7 +309,7 @@ class TestMergeEdgeMigration:
         assert any(e["source_id"] == merged_id and e["target_id"] == target_node.id for e in edges)
 
     def test_target_edges_migrated(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Richter is Quaid pet cat friend")
         source_node = _make_node(graph, "Douglas Quaid")
@@ -329,7 +329,7 @@ class TestMergeEdgeMigration:
         assert any(e["source_id"] == source_node.id and e["target_id"] == merged_id for e in edges)
 
     def test_source_fact_edges_migrated(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid likes hiking in the mountains")
         entity1 = _make_node(graph, "Douglas Quaid")
@@ -354,7 +354,7 @@ class TestMergeEdgeMigration:
         assert rows[0]["source_fact_id"] == merged_id
 
     def test_original_edges_cleaned_up(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid speaks English and Spanish")
         node_b = _store_and_get(graph, "Quaid is bilingual English Spanish")
@@ -388,7 +388,7 @@ class TestMergeEdgeMigrationAdvanced:
 
     def test_bidirectional_edges_between_originals_no_self_loop(self, tmp_path):
         """Merging nodes with edges to each other must not create self-loops."""
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid mentors junior developers")
         node_b = _store_and_get(graph, "Junior developers learn from Quaid")
@@ -412,7 +412,7 @@ class TestMergeEdgeMigrationAdvanced:
 
     def test_multiple_relations_to_same_target_preserved(self, tmp_path):
         """Different relations from merged nodes to same target are all preserved."""
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid knows Python programming language")
         node_b = _store_and_get(graph, "Quaid uses Python for daily work")
@@ -437,7 +437,7 @@ class TestMergeEdgeMigrationAdvanced:
 
     def test_duplicate_same_relation_deduped(self, tmp_path):
         """Same relation from two originals to same target yields exactly one edge."""
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid knows how to use FastAPI")
         node_b = _store_and_get(graph, "Quaid is skilled with FastAPI")
@@ -463,7 +463,7 @@ class TestMergeEdgeMigrationAdvanced:
 
     def test_contradictions_and_decay_queue_cleaned(self, tmp_path):
         """Merge cleans up contradictions and decay_review_queue for originals."""
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid prefers tea over coffee")
         node_b = _store_and_get(graph, "Quaid likes tea more than coffee")
@@ -500,7 +500,7 @@ class TestMergeEdgeMigrationAdvanced:
 
     def test_missing_originals_still_creates_merge(self, tmp_path):
         """Merge with non-existent original IDs still creates the merged node."""
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
@@ -526,7 +526,7 @@ class TestMergeOwnerInheritance:
     """Merged node inherits owner from originals, not hardcoded."""
 
     def test_inherits_owner_from_originals(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "TestUser prefers Python for scripting", owner_id="testuser")
         node_b = _store_and_get(graph, "TestUser likes Python for scripts", owner_id="testuser")
@@ -543,7 +543,7 @@ class TestMergeOwnerInheritance:
         assert merged.owner_id == "testuser"
 
     def test_does_not_hardcode_solomon(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Alice prefers tea over coffee morning", owner_id="alice")
         node_b = _store_and_get(graph, "Alice likes tea instead of coffee", owner_id="alice")
@@ -569,7 +569,7 @@ class TestMergeCreatedAt:
     """Merged node preserves the earliest created_at."""
 
     def test_preserves_earliest_created_at(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         early = "2025-01-15T10:00:00"
         late = "2026-02-10T14:00:00"
@@ -596,7 +596,7 @@ class TestMergeOriginalsDeleted:
     """Original nodes are deleted after merge."""
 
     def test_originals_deleted(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid has two cats at home")
         node_b = _store_and_get(graph, "Quaid owns two pet cats at home")
@@ -625,7 +625,7 @@ class TestMergeDryRun:
     """Dry run returns None and doesn't modify anything."""
 
     def test_dry_run_no_changes(self, tmp_path):
-        from core.lifecycle.janitor import _merge_nodes_into
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
         graph, _ = _make_graph(tmp_path)
         node_a = _store_and_get(graph, "Quaid reads science fiction books")
         node_b = _store_and_get(graph, "Quaid enjoys reading sci-fi novels")
@@ -650,18 +650,18 @@ class TestDefaultOwnerId:
     """_default_owner_id() reads from config with fallback."""
 
     def test_returns_config_value(self):
-        from core.lifecycle.janitor import _default_owner_id
+        from datastore.memorydb.maintenance_ops import _default_owner_id
         # Should return the config value (which is "quaid" in test env)
         result = _default_owner_id()
         assert isinstance(result, str)
         assert len(result) > 0
 
     def test_fallback_on_error(self):
-        from core.lifecycle.janitor import _default_owner_id
+        from datastore.memorydb.maintenance_ops import _default_owner_id
         mock_cfg = MagicMock()
         mock_cfg.users.default_owner = None  # Triggers except branch
         # Force attribute access to raise
         mock_cfg.users = MagicMock(spec=[])  # spec=[] means no attributes
-        with patch("core.lifecycle.janitor._cfg", mock_cfg):
+        with patch("datastore.memorydb.maintenance_ops._cfg", mock_cfg):
             result = _default_owner_id()
             assert result == "default"

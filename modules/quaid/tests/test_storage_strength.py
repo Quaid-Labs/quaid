@@ -222,7 +222,7 @@ class TestEbbinghausWithStorageStrength:
     """Tests for _ebbinghaus_retention() with storage_strength parameter."""
 
     def test_zero_storage_strength_matches_old_behavior(self):
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r_old = _ebbinghaus_retention(60.0, 0, False, cfg)
@@ -230,7 +230,7 @@ class TestEbbinghausWithStorageStrength:
         assert abs(r_old - r_new) < 0.0001
 
     def test_storage_strength_extends_half_life(self):
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
 
@@ -243,7 +243,7 @@ class TestEbbinghausWithStorageStrength:
         assert abs(r_two - 0.707) < 0.01
 
     def test_max_storage_strength_gives_6x_half_life(self):
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.0)
 
@@ -253,7 +253,7 @@ class TestEbbinghausWithStorageStrength:
         assert abs(r - 0.5) < 0.001
 
     def test_storage_strength_stacks_with_verified(self):
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.0)
 
@@ -262,7 +262,7 @@ class TestEbbinghausWithStorageStrength:
         assert abs(r - 0.5) < 0.001
 
     def test_storage_strength_stacks_with_access_count(self):
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
 
@@ -421,7 +421,7 @@ class TestStaleMemoriesStorageStrength:
                 (stale_date, node.id)
             )
 
-        from core.lifecycle.janitor import find_stale_memories_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import find_stale_memories_optimized, JanitorMetrics
         metrics = JanitorMetrics()
         stale = find_stale_memories_optimized(graph, metrics)
 

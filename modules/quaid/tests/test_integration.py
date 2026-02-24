@@ -204,7 +204,7 @@ class TestContentHashConsistency:
 # ---------------------------------------------------------------------------
 
 class TestProtectedRegionsLib:
-    """lib/markdown.py functions match workspace_audit backward-compat aliases."""
+    """lib/markdown.py protected-region helpers behave as expected."""
 
     def test_strip_protected_from_lib(self):
         """lib.markdown.strip_protected_regions works correctly."""
@@ -214,12 +214,6 @@ class TestProtectedRegionsLib:
         assert "secret" not in stripped
         assert "visible" in stripped
         assert len(ranges) == 1
-
-    def test_workspace_audit_alias_is_same_function(self):
-        """core.lifecycle.workspace_audit._strip_protected_regions is the lib version."""
-        from lib.markdown import strip_protected_regions
-        from core.lifecycle.workspace_audit import _strip_protected_regions
-        assert _strip_protected_regions is strip_protected_regions
 
     def test_section_overlaps_from_lib(self):
         """lib.markdown.section_overlaps_protected works correctly."""
@@ -308,62 +302,15 @@ class TestDedupMergeRecall:
 class TestBootstrapConfigIntegration:
     """Workspace audit discovers bootstrap files from gateway config."""
 
-    def test_gateway_config_parsed_correctly(self):
-        """_get_gateway_bootstrap_globs reads the hook config."""
-        from core.lifecycle.workspace_audit import _get_gateway_bootstrap_globs
-        mock_config = {
-            "hooks": {
-                "internal": {
-                    "entries": {
-                        "bootstrap-extra-files": {
-                            "enabled": True,
-                            "paths": ["projects/*/TOOLS.md", "projects/*/AGENTS.md"]
-                        }
-                    }
-                }
-            }
-        }
-        with patch("builtins.open", create=True) as mock_open, \
-             patch("core.lifecycle.workspace_audit.Path") as mock_path:
-            mock_path.home.return_value.__truediv__ = lambda self, x: Path("/fake/.openclaw") / x if "openclaw" in str(x) else self
-            # Simpler: just patch the function internals
-            import core.lifecycle.workspace_audit as workspace_audit
-            original = workspace_audit._get_gateway_bootstrap_globs
+    def test_workspace_audit_uses_runtime_globs(self):
+        """workspace_audit delegates bootstrap discovery to runtime context helper."""
+        from core.lifecycle.workspace_audit import get_monitored_files
+        from config import MemoryConfig, DocsConfig, CoreMarkdownConfig
 
-            def patched():
-                # Simulate reading the config
-                hook = mock_config["hooks"]["internal"]["entries"]["bootstrap-extra-files"]
-                return hook.get("paths") or hook.get("patterns") or hook.get("files") or []
-
-            with patch.object(workspace_audit, "_get_gateway_bootstrap_globs", patched):
-                result = workspace_audit._get_gateway_bootstrap_globs()
-                assert result == ["projects/*/TOOLS.md", "projects/*/AGENTS.md"]
-
-    def test_disabled_hook_returns_empty(self):
-        """Disabled bootstrap hook returns no patterns."""
-        from core.lifecycle.workspace_audit import _get_gateway_bootstrap_globs
-        mock_config = json.dumps({
-            "hooks": {
-                "internal": {
-                    "entries": {
-                        "bootstrap-extra-files": {
-                            "enabled": False,
-                            "paths": ["projects/*/TOOLS.md"]
-                        }
-                    }
-                }
-            }
-        })
-
-        import io
-        with patch("core.lifecycle.workspace_audit.Path") as mock_path:
-            mock_home = MagicMock()
-            mock_path.home.return_value = mock_home
-            config_path = MagicMock()
-            mock_home.__truediv__ = MagicMock(return_value=config_path)
-            config_path.__truediv__ = MagicMock(return_value=config_path)
-            config_path.exists.return_value = True
-
-            with patch("builtins.open", return_value=io.StringIO(mock_config)):
-                result = _get_gateway_bootstrap_globs()
-                assert result == []
+        cfg = MemoryConfig(docs=DocsConfig(core_markdown=CoreMarkdownConfig(files={})))
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs",
+                   return_value=["projects/*/AGENTS.md"]), \
+             patch("glob.glob", return_value=[]):
+            result = get_monitored_files()
+            assert "AGENTS.md" in result

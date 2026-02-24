@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.lifecycle.janitor import _resolve_relative_date
+from datastore.memorydb.maintenance_ops import _resolve_relative_date
 
 
 class TestTomorrowResolution:

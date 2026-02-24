@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.llm.clients import call_deep_reasoning, parse_json_response
 from config import get_config
-from lib.markdown import strip_protected_regions as _strip_protected_regions
+from lib.markdown import strip_protected_regions
 from lib.runtime_context import get_workspace_dir
 
 # Configuration
@@ -535,7 +535,7 @@ def build_distillation_prompt(filename: str, parent_content: str,
     last_distilled = state.get(filename, {}).get("last_distilled", "never")
 
     # Strip protected regions before showing to Opus
-    visible_content, _ = _strip_protected_regions(parent_content)
+    visible_content, _ = strip_protected_regions(parent_content)
     truncated = visible_content[:4000]
     truncation_note = ""
     if len(visible_content) > 4000:
@@ -610,7 +610,7 @@ def apply_distillation(filename: str, result: Dict[str, Any],
     content = file_path.read_text(encoding='utf-8')
 
     # Detect protected regions so we can skip edits within them
-    _, protected_ranges = _strip_protected_regions(content)
+    _, protected_ranges = strip_protected_regions(content)
 
     # Apply edits first (before additions change line positions)
     for edit in result.get("edits", []):
@@ -821,7 +821,7 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
             return False
 
     # Detect protected regions
-    _, protected_ranges = _strip_protected_regions(content)
+    _, protected_ranges = strip_protected_regions(content)
 
     # Always format as a bullet point (strip leading # to prevent heading injection)
     clean_text = text.lstrip('#').strip() if text.startswith('#') else text
@@ -935,7 +935,7 @@ def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
         snippet_list = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(snippets))
 
         # Strip protected regions before showing to Opus
-        visible_content, _ = _strip_protected_regions(parent_content)
+        visible_content, _ = strip_protected_regions(parent_content)
         truncated = visible_content[:3000]
         truncation_note = ""
         if len(visible_content) > 3000:

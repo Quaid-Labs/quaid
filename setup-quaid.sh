@@ -506,10 +506,6 @@ conn.close()
     # Check if plugin source exists (release tarball or existing install)
     if [[ -d "${SCRIPT_DIR}/modules/quaid" ]]; then
         info "Plugin source found in release package"
-    elif [[ -d "${SCRIPT_DIR}/plugins/quaid" ]]; then
-        info "Plugin source found in release package (legacy layout)"
-    elif [[ -d "${SCRIPT_DIR}/quaid" ]]; then
-        info "Plugin source found in release package (flat layout)"
     elif [[ -d "${PLUGIN_DIR}" ]] && [[ -n "$(ls -A "${PLUGIN_DIR}" 2>/dev/null)" ]]; then
         info "Plugin source found at existing install"
     else
@@ -1093,12 +1089,8 @@ step6_install() {
         mkdir -p "${PLUGIN_DIR}"
         if [[ -d "${SCRIPT_DIR}/modules/quaid" ]]; then
             cp -R "${SCRIPT_DIR}/modules/quaid/"* "${PLUGIN_DIR}/"
-        elif [[ -d "${SCRIPT_DIR}/plugins/quaid" ]]; then
-            cp -R "${SCRIPT_DIR}/plugins/quaid/"* "${PLUGIN_DIR}/"
-        elif [[ -d "${SCRIPT_DIR}/quaid" ]]; then
-            cp -R "${SCRIPT_DIR}/quaid/"* "${PLUGIN_DIR}/"
         else
-            error "Plugin source not found. Expected at ${SCRIPT_DIR}/modules/quaid/ or ${SCRIPT_DIR}/quaid/"
+            error "Plugin source not found. Expected at ${SCRIPT_DIR}/modules/quaid/"
             exit 1
         fi
     else

@@ -49,13 +49,13 @@ class TestEbbinghausRetention:
     """Tests for _ebbinghaus_retention() exponential decay function."""
 
     def test_zero_days_full_retention(self):
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         r = _ebbinghaus_retention(0.0, 0, False)
         assert abs(r - 1.0) < 0.001  # R=2^0 = 1.0
 
     def test_half_life_gives_50_percent(self):
         """At t = half_life, retention should be exactly 0.5."""
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r = _ebbinghaus_retention(60.0, 0, False, cfg)
@@ -63,7 +63,7 @@ class TestEbbinghausRetention:
 
     def test_double_half_life_gives_25_percent(self):
         """At t = 2*half_life, retention should be 0.25."""
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r = _ebbinghaus_retention(120.0, 0, False, cfg)
@@ -71,7 +71,7 @@ class TestEbbinghausRetention:
 
     def test_access_count_extends_half_life(self):
         """Higher access count = slower decay (longer half-life)."""
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r_zero = _ebbinghaus_retention(60.0, 0, False, cfg)
@@ -83,7 +83,7 @@ class TestEbbinghausRetention:
 
     def test_verified_doubles_half_life(self):
         """Verified facts should decay 2x slower."""
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r_normal = _ebbinghaus_retention(60.0, 0, False, cfg)
@@ -94,7 +94,7 @@ class TestEbbinghausRetention:
 
     def test_combined_access_and_verified(self):
         """Access count + verified should compound."""
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r_base = _ebbinghaus_retention(90.0, 0, False, cfg)
@@ -106,7 +106,7 @@ class TestEbbinghausRetention:
 
     def test_very_old_memory_low_retention(self):
         """After many half-lives, retention should be near zero."""
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         r = _ebbinghaus_retention(600.0, 0, False, cfg)  # 10 half-lives
@@ -114,7 +114,7 @@ class TestEbbinghausRetention:
 
     def test_monotonically_decreasing(self):
         """Retention should decrease as time increases."""
-        from core.lifecycle.janitor import _ebbinghaus_retention
+        from datastore.memorydb.maintenance_ops import _ebbinghaus_retention
         from config import DecayConfig
         cfg = DecayConfig(base_half_life_days=60.0, access_bonus_factor=0.15)
         prev = 1.0
@@ -132,7 +132,7 @@ class TestApplyDecayExponential:
     """Tests for apply_decay_optimized() with exponential mode."""
 
     def test_exponential_mode_decays_old_memory(self, tmp_path):
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         from datastore.memorydb.memory_graph import MemoryGraph
 
         metrics = JanitorMetrics()
@@ -149,7 +149,7 @@ class TestApplyDecayExponential:
             "verified": False,
         }]
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg:
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg:
             mock_cfg.decay.review_queue_enabled = False
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.minimum_confidence = 0.1
@@ -162,7 +162,7 @@ class TestApplyDecayExponential:
             assert result["deleted"] == 0
 
     def test_linear_mode_fallback(self, tmp_path):
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         from datastore.memorydb.memory_graph import MemoryGraph
 
         metrics = JanitorMetrics()
@@ -178,8 +178,8 @@ class TestApplyDecayExponential:
             "verified": False,
         }]
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
-             patch("core.lifecycle.janitor.CONFIDENCE_DECAY_RATE", 0.10):
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg, \
+             patch("datastore.memorydb.maintenance_ops.CONFIDENCE_DECAY_RATE", 0.10):
             mock_cfg.decay.review_queue_enabled = False
             mock_cfg.decay.mode = "linear"
             mock_cfg.decay.minimum_confidence = 0.1

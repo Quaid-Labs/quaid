@@ -52,22 +52,22 @@ def _make_config_with_core_md(files=None):
 
 
 # =============================================================================
-# _strip_protected_regions tests
+# strip_protected_regions tests
 # =============================================================================
 
 
 class TestStripProtectedRegions:
-    """Tests for the core _strip_protected_regions helper function."""
+    """Tests for the core strip_protected_regions helper function."""
 
     def test_no_protected_blocks(self):
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = "# Header\n\nSome content.\n\n## Section\nMore content.\n"
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert stripped == content
         assert ranges == []
 
     def test_single_protected_block(self):
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected -->\n"
@@ -75,13 +75,13 @@ class TestStripProtectedRegions:
             "<!-- /protected -->\n\n"
             "Visible content.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert "Secret stuff." not in stripped
         assert "Visible content." in stripped
         assert len(ranges) == 1
 
     def test_multiple_protected_blocks(self):
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected -->\nBlock 1\n<!-- /protected -->\n\n"
@@ -89,7 +89,7 @@ class TestStripProtectedRegions:
             "<!-- protected -->\nBlock 2\n<!-- /protected -->\n\n"
             "End content.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert "Block 1" not in stripped
         assert "Block 2" not in stripped
         assert "Middle content." in stripped
@@ -97,19 +97,19 @@ class TestStripProtectedRegions:
         assert len(ranges) == 2
 
     def test_empty_protected_block(self):
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected --><!-- /protected -->\n\n"
             "Content after.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert "Content after." in stripped
         assert len(ranges) == 1
 
     def test_protected_block_with_whitespace_in_markers(self):
         """Markers with extra whitespace are still recognized."""
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "# Header\n\n"
             "<!--  protected  -->\n"
@@ -117,41 +117,41 @@ class TestStripProtectedRegions:
             "<!--  /protected  -->\n\n"
             "Visible.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert "Protected stuff." not in stripped
         assert "Visible." in stripped
         assert len(ranges) == 1
 
     def test_malformed_missing_close_tag(self):
         """Missing close tag means the open tag is not matched — content is preserved."""
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected -->\n"
             "No close tag here.\n"
             "Still visible.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         # No complete block, so nothing should be stripped
         assert stripped == content
         assert ranges == []
 
     def test_malformed_missing_open_tag(self):
         """Close tag without open tag has no effect."""
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "# Header\n\n"
             "Some content.\n"
             "<!-- /protected -->\n"
             "More content.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert stripped == content
         assert ranges == []
 
     def test_multiline_protected_content(self):
         """Protected blocks can span many lines."""
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "# Header\n\n"
             "<!-- protected -->\n"
@@ -163,23 +163,23 @@ class TestStripProtectedRegions:
             "<!-- /protected -->\n\n"
             "After.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert "Line 1" not in stripped
         assert "Line 2" not in stripped
         assert "Protected Section" not in stripped
         assert "After." in stripped
 
     def test_empty_content(self):
-        from core.lifecycle.workspace_audit import _strip_protected_regions
-        stripped, ranges = _strip_protected_regions("")
+        from lib.markdown import strip_protected_regions
+        stripped, ranges = strip_protected_regions("")
         assert stripped == ""
         assert ranges == []
 
     def test_protected_ranges_are_correct_positions(self):
         """Verify that returned ranges correspond to actual positions in original content."""
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = "ABC<!-- protected -->XYZ<!-- /protected -->DEF"
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert stripped == "ABCDEF"
         assert len(ranges) == 1
         start, end = ranges[0]
@@ -187,35 +187,35 @@ class TestStripProtectedRegions:
 
 
 # =============================================================================
-# _is_position_protected tests
+# is_position_protected tests
 # =============================================================================
 
 
 class TestIsPositionProtected:
     def test_position_inside(self):
-        from core.lifecycle.workspace_audit import _is_position_protected
+        from lib.markdown import is_position_protected
         ranges = [(10, 50)]
-        assert _is_position_protected(10, ranges) is True
-        assert _is_position_protected(25, ranges) is True
-        assert _is_position_protected(49, ranges) is True
+        assert is_position_protected(10, ranges) is True
+        assert is_position_protected(25, ranges) is True
+        assert is_position_protected(49, ranges) is True
 
     def test_position_outside(self):
-        from core.lifecycle.workspace_audit import _is_position_protected
+        from lib.markdown import is_position_protected
         ranges = [(10, 50)]
-        assert _is_position_protected(5, ranges) is False
-        assert _is_position_protected(50, ranges) is False
-        assert _is_position_protected(100, ranges) is False
+        assert is_position_protected(5, ranges) is False
+        assert is_position_protected(50, ranges) is False
+        assert is_position_protected(100, ranges) is False
 
     def test_empty_ranges(self):
-        from core.lifecycle.workspace_audit import _is_position_protected
-        assert _is_position_protected(10, []) is False
+        from lib.markdown import is_position_protected
+        assert is_position_protected(10, []) is False
 
     def test_multiple_ranges(self):
-        from core.lifecycle.workspace_audit import _is_position_protected
+        from lib.markdown import is_position_protected
         ranges = [(10, 20), (50, 60)]
-        assert _is_position_protected(15, ranges) is True
-        assert _is_position_protected(55, ranges) is True
-        assert _is_position_protected(30, ranges) is False
+        assert is_position_protected(15, ranges) is True
+        assert is_position_protected(55, ranges) is True
+        assert is_position_protected(30, ranges) is False
 
 
 # =============================================================================
@@ -228,7 +228,7 @@ class TestWorkspaceAuditProtectedRegions:
 
     def test_review_strips_protected_from_opus_input(self, tmp_path):
         """Protected content should be stripped before sending to Opus for review."""
-        from core.lifecycle.workspace_audit import _read_file_contents, _strip_protected_regions
+        from core.lifecycle.workspace_audit import _read_file_contents, strip_protected_regions
 
         content = (
             "# SOUL\n\n"
@@ -244,7 +244,7 @@ class TestWorkspaceAuditProtectedRegions:
         with _wa_adapter_patch(tmp_path):
             files_content = _read_file_contents(["SOUL.md"])
 
-        stripped, ranges = _strip_protected_regions(files_content["SOUL.md"])
+        stripped, ranges = strip_protected_regions(files_content["SOUL.md"])
         assert "Do not review this." not in stripped
         assert "I am Alfie." in stripped
         assert "I care about truth." in stripped
@@ -373,7 +373,6 @@ def mock_config():
         distillation_interval_days=7,
         archive_after_distillation=True,
     )
-    mock_cfg.docs.soul_snippets = mock_cfg.docs.journal
     mock_cfg.docs.core_markdown.files = {
         "SOUL.md": {"purpose": "Personality and identity", "maxLines": 80},
         "USER.md": {"purpose": "About the user", "maxLines": 150},
@@ -602,22 +601,22 @@ class TestProtectedRegionEdgeCases:
 
     def test_entire_file_protected(self, snippets_workspace_dir):
         """If the entire file is protected, everything is stripped."""
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = "<!-- protected -->\n# Everything\nAll protected.\n<!-- /protected -->"
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert stripped == ""
         assert len(ranges) == 1
 
     def test_adjacent_protected_blocks(self, snippets_workspace_dir):
         """Two protected blocks right next to each other."""
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "Before.\n"
             "<!-- protected -->Block A<!-- /protected -->"
             "<!-- protected -->Block B<!-- /protected -->\n"
             "After.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert "Block A" not in stripped
         assert "Block B" not in stripped
         assert "Before." in stripped
@@ -626,7 +625,7 @@ class TestProtectedRegionEdgeCases:
 
     def test_protected_block_with_html_comments_inside(self, snippets_workspace_dir):
         """Protected block containing other HTML comments."""
-        from core.lifecycle.workspace_audit import _strip_protected_regions
+        from lib.markdown import strip_protected_regions
         content = (
             "Visible.\n"
             "<!-- protected -->\n"
@@ -635,7 +634,7 @@ class TestProtectedRegionEdgeCases:
             "<!-- /protected -->\n"
             "Also visible.\n"
         )
-        stripped, ranges = _strip_protected_regions(content)
+        stripped, ranges = strip_protected_regions(content)
         assert "regular comment" not in stripped
         assert "Protected content." not in stripped
         assert "Visible." in stripped

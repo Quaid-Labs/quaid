@@ -1,5 +1,11 @@
 # Knowledge Layer — Operational Guide
 
+## Operator Interrupt Policy
+
+- If the operator sends a new request while you are in the middle of an active task, do not immediately switch tasks.
+- Queue the new request and complete the current task first.
+- Only switch immediately when the operator uses explicit interruption language (for example: `wait`).
+
 ## Three Layers
 
 ### Layer 1: Core Markdown (Always Loaded)

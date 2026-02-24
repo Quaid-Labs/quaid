@@ -472,7 +472,6 @@ async function step1_preflight() {
   s.start("Locating plugin source...");
   const pluginSrc = [
     path.join(__dirname, "modules", "quaid"),
-    path.join(__dirname, "plugins", "quaid"),
     PLUGIN_DIR,
   ].find(p => {
     try {

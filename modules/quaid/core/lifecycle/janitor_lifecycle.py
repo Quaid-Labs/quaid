@@ -42,9 +42,21 @@ class LifecycleRoutine(Protocol):
 class LifecycleRegistry:
     def __init__(self) -> None:
         self._routines: Dict[str, LifecycleRoutine] = {}
+        self._owners: Dict[str, str] = {}
 
-    def register(self, name: str, routine: LifecycleRoutine) -> None:
+    def register(self, name: str, routine: LifecycleRoutine, owner: str = "unknown") -> None:
+        existing = self._routines.get(name)
+        if existing is not None:
+            existing_owner = self._owners.get(name, "unknown")
+            # Allow exact idempotent re-registration from same owner.
+            if existing is routine and existing_owner == owner:
+                return
+            raise ValueError(
+                f"Lifecycle routine '{name}' already registered by '{existing_owner}', "
+                f"cannot re-register from '{owner}'"
+            )
         self._routines[name] = routine
+        self._owners[name] = owner
 
     def has(self, name: str) -> bool:
         return name in self._routines
@@ -107,7 +119,15 @@ def _register_module_routines(
         return
 
     try:
-        registrar(registry, RoutineResult)
+        class _ScopedRegistry:
+            def __init__(self, base: LifecycleRegistry, owner: str) -> None:
+                self._base = base
+                self._owner = owner
+
+            def register(self, name: str, routine: LifecycleRoutine) -> None:
+                self._base.register(name, routine, owner=self._owner)
+
+        registrar(_ScopedRegistry(registry, module_name), RoutineResult)
     except Exception as exc:
         msg = f"Lifecycle registration failed: {module_name}: {exc}"
         for routine_name in expected_routines:
@@ -150,7 +170,16 @@ def build_default_registry() -> LifecycleRegistry:
     except Exception:
         pass
 
+    # Preserve order, prevent duplicate module registrations in one build pass.
+    seen_modules = set()
+    deduped_specs: List[tuple[str, List[str]]] = []
     for module_name, routines in module_specs:
+        if module_name in seen_modules:
+            continue
+        seen_modules.add(module_name)
+        deduped_specs.append((module_name, routines))
+
+    for module_name, routines in deduped_specs:
         _register_module_routines(registry, module_name, routines)
 
     return registry

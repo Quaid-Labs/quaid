@@ -82,7 +82,7 @@ class TestGetMonitoredFiles:
     def test_fallback_when_config_missing(self):
         """When config loading fails and no gateway globs, falls back to hardcoded list."""
         with patch("core.lifecycle.workspace_audit.get_config", side_effect=Exception("config not found")), \
-             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]):
             from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             # Fallback should have the standard files
@@ -100,7 +100,7 @@ class TestGetMonitoredFiles:
         cfg = _make_config_with_core_md(files={})
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]):
             from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             # Empty files + no bootstrap → falls through to fallback
@@ -109,7 +109,7 @@ class TestGetMonitoredFiles:
     def test_fallback_has_correct_max_lines(self):
         """Hardcoded fallback has sensible maxLines defaults."""
         with patch("core.lifecycle.workspace_audit.get_config", side_effect=Exception("err")), \
-             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]):
             from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert result["SOUL.md"]["maxLines"] == 80
@@ -124,7 +124,7 @@ class TestGetMonitoredFiles:
         del cfg.docs.core_markdown
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs", return_value=[]):
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs", return_value=[]):
             from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
             assert "AGENTS.md" in result  # fallback
@@ -136,7 +136,7 @@ class TestGetMonitoredFiles:
         })
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             patch("core.lifecycle.workspace_audit._get_gateway_bootstrap_globs",
+             patch("core.lifecycle.workspace_audit.get_bootstrap_markdown_globs",
                    return_value=["projects/*/TOOLS.md"]):
             from core.lifecycle.workspace_audit import get_monitored_files
             result = get_monitored_files()
@@ -540,43 +540,43 @@ class TestProjectReviewQueue:
 
 
 # ---------------------------------------------------------------------------
-# _section_overlaps_protected
+# section_overlaps_protected
 # ---------------------------------------------------------------------------
 
 class TestSectionOverlapsProtected:
     """Tests for the section-range protected region check."""
 
     def test_no_overlap(self):
-        from core.lifecycle.workspace_audit import _section_overlaps_protected
+        from lib.markdown import section_overlaps_protected
         # Protected: [100, 200], section: [0, 50]
-        assert not _section_overlaps_protected(0, 50, [(100, 200)])
+        assert not section_overlaps_protected(0, 50, [(100, 200)])
 
     def test_section_inside_protected(self):
-        from core.lifecycle.workspace_audit import _section_overlaps_protected
+        from lib.markdown import section_overlaps_protected
         # Protected: [0, 200], section: [50, 100]
-        assert _section_overlaps_protected(50, 100, [(0, 200)])
+        assert section_overlaps_protected(50, 100, [(0, 200)])
 
     def test_protected_inside_section(self):
-        from core.lifecycle.workspace_audit import _section_overlaps_protected
+        from lib.markdown import section_overlaps_protected
         # Protected: [50, 100], section: [0, 200]
-        assert _section_overlaps_protected(0, 200, [(50, 100)])
+        assert section_overlaps_protected(0, 200, [(50, 100)])
 
     def test_partial_overlap_start(self):
-        from core.lifecycle.workspace_audit import _section_overlaps_protected
+        from lib.markdown import section_overlaps_protected
         # Protected: [50, 150], section: [0, 100]
-        assert _section_overlaps_protected(0, 100, [(50, 150)])
+        assert section_overlaps_protected(0, 100, [(50, 150)])
 
     def test_partial_overlap_end(self):
-        from core.lifecycle.workspace_audit import _section_overlaps_protected
+        from lib.markdown import section_overlaps_protected
         # Protected: [0, 100], section: [50, 200]
-        assert _section_overlaps_protected(50, 200, [(0, 100)])
+        assert section_overlaps_protected(50, 200, [(0, 100)])
 
     def test_adjacent_no_overlap(self):
-        from core.lifecycle.workspace_audit import _section_overlaps_protected
+        from lib.markdown import section_overlaps_protected
         # Protected: [0, 50], section: [50, 100] — adjacent but not overlapping
-        assert not _section_overlaps_protected(50, 100, [(0, 50)])
+        assert not section_overlaps_protected(50, 100, [(0, 50)])
 
     def test_multiple_ranges_one_overlaps(self):
-        from core.lifecycle.workspace_audit import _section_overlaps_protected
+        from lib.markdown import section_overlaps_protected
         # Two protected ranges, second one overlaps
-        assert _section_overlaps_protected(150, 250, [(0, 50), (200, 300)])
+        assert section_overlaps_protected(150, 250, [(0, 50), (200, 300)])

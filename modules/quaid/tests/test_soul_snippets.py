@@ -42,7 +42,6 @@ def mock_config():
         archive_after_distillation=True,
     )
     # Backward compat property
-    mock_cfg.docs.soul_snippets = mock_cfg.docs.journal
     mock_cfg.docs.core_markdown.files = {
         "SOUL.md": {"purpose": "Personality and identity", "maxLines": 80},
         "USER.md": {"purpose": "About the user", "maxLines": 150},
@@ -914,15 +913,6 @@ class TestConfigParsing:
         docs = DocsConfig()
         assert hasattr(docs, 'journal')
         assert docs.journal.enabled is True
-
-    def test_backward_compat_alias(self):
-        from config import DocsConfig
-        docs = DocsConfig()
-        assert docs.soul_snippets is docs.journal
-
-    def test_soul_snippets_config_alias(self):
-        from config import SoulSnippetsConfig, JournalConfig
-        assert SoulSnippetsConfig is JournalConfig
 
 
 # =============================================================================

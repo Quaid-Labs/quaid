@@ -130,20 +130,7 @@ def clear_pending_project_reviews() -> None:
 
 
 # Protected region helpers — canonical implementation in lib/markdown.py
-from lib.markdown import strip_protected_regions, is_position_protected, section_overlaps_protected
-
-# Backward-compat aliases (tests and soul_snippets.py import these names)
-_strip_protected_regions = strip_protected_regions
-_is_position_protected = is_position_protected
-_section_overlaps_protected = section_overlaps_protected
-
-
-def _get_gateway_bootstrap_globs() -> List[str]:
-    """Get bootstrap file glob patterns via the active adapter.
-
-    Kept as a backward-compatible function name for older callers/tests.
-    """
-    return get_bootstrap_markdown_globs()
+from lib.markdown import strip_protected_regions, section_overlaps_protected
 
 
 # Default maxLines for bootstrap files (project-level TOOLS.md, AGENTS.md, etc.)
@@ -181,7 +168,7 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
         logger.warning(f"Could not load coreMarkdown config: {e}")
 
     # Discover bootstrap files from gateway config (single source of truth)
-    for glob_pattern in _get_gateway_bootstrap_globs():
+    for glob_pattern in get_bootstrap_markdown_globs():
         # Reject absolute paths and traversal patterns to prevent escaping workspace
         if glob_pattern.startswith("/") or ".." in glob_pattern:
             logger.warning(f"Skipping unsafe bootstrap glob: {glob_pattern}")
@@ -482,7 +469,7 @@ def apply_review_decisions(dry_run: bool = True,
         content = filepath.read_text()
 
         # Detect protected regions so we can skip operations within them
-        _, protected_ranges = _strip_protected_regions(content)
+        _, protected_ranges = strip_protected_regions(content)
 
         # First pass: resolve positions in original content (before any modifications)
         # Then apply in reverse order to avoid position corruption
@@ -532,7 +519,7 @@ def apply_review_decisions(dry_run: bool = True,
                 end_pos = len(content)
 
             # Skip sections that overlap with protected regions
-            if _section_overlaps_protected(start_pos, end_pos, protected_ranges):
+            if section_overlaps_protected(start_pos, end_pos, protected_ranges):
                 print(f"  Skipping protected section: {section} in {filename}")
                 continue
 
@@ -734,7 +721,7 @@ def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
     # Strip protected regions before sending to Opus for review
     user_parts = [f"Review the following {len(files_content)} core markdown files:\n"]
     for filename, content in files_content.items():
-        stripped_content, _ = _strip_protected_regions(content)
+        stripped_content, _ = strip_protected_regions(content)
         line_count = len(stripped_content.splitlines())
         max_lines = files_config.get(filename, {}).get("maxLines", "N/A")
         purpose = files_config.get(filename, {}).get("purpose", "Unknown")
@@ -783,17 +770,6 @@ def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
         save_mtimes(get_file_mtimes())
 
     return {"phase": "apply", "bloat_stats": bloat_stats, **stats}
-
-
-def register_lifecycle_routines(registry, result_factory) -> None:
-    """Backward-compat shim.
-
-    Workspace lifecycle registration is now adaptor-owned under
-    `adaptors.openclaw.maintenance`.
-    """
-    from adaptors.openclaw.maintenance import register_lifecycle_routines as _register
-
-    _register(registry, result_factory)
 
 
 if __name__ == "__main__":

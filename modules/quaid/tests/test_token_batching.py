@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("MEMORY_DB_PATH", "/tmp/test-token-batch.db")
 
 from lib.tokens import estimate_tokens
-from core.lifecycle.janitor import TokenBatchBuilder
+from datastore.memorydb.maintenance_ops import TokenBatchBuilder
 
 
 # ---------------------------------------------------------------------------

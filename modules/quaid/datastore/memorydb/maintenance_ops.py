@@ -40,7 +40,7 @@ from datastore.memorydb.memory_graph import (
     store_edge_keywords,
 )
 from lib.config import get_db_path
-from lib.tokens import extract_key_tokens as _lib_extract_key_tokens, STOPWORDS as _LIB_STOPWORDS, estimate_tokens
+from lib.tokens import extract_key_tokens as _lib_extract_key_tokens, estimate_tokens
 from lib.archive import archive_node as _archive_node
 from core.runtime.logger import janitor_logger, rotate_logs
 from config import get_config
@@ -101,9 +101,6 @@ def _owner_full_name() -> str:
     except Exception:
         pass
     return "the user"
-
-# Stopwords — imported from shared lib (kept as alias for backward compat)
-_STOPWORDS = _LIB_STOPWORDS
 
 
 def _default_owner_id() -> str:
@@ -2334,5 +2331,3 @@ def apply_review_decisions(graph: MemoryGraph, decisions_file: str, dry_run: boo
 # =============================================================================
 # Task 8: Run Unit Tests
 # =============================================================================
-
-

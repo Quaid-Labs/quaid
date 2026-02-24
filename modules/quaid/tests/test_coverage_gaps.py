@@ -245,13 +245,13 @@ class TestApplyDecayOptimizedReal:
 
     def test_decay_updates_confidence_in_db(self, tmp_path):
         """Non-dry-run actually updates confidence in the database."""
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         mem = self._make_stale_mem(graph, "Old fact about dogs", days_ago=90, confidence=0.8)
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg:
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -269,14 +269,14 @@ class TestApplyDecayOptimizedReal:
 
     def test_ebbinghaus_produces_correct_retention(self, tmp_path):
         """Retention formula: R = 2^(-t/half_life)."""
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         # 60 days ago, 0 accesses, base half-life 60 → retention = 0.5
         mem = self._make_stale_mem(graph, "Exactly half-life old fact", days_ago=60, confidence=0.8)
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg:
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -291,7 +291,7 @@ class TestApplyDecayOptimizedReal:
 
     def test_storage_strength_extends_half_life(self, tmp_path):
         """High storage_strength → slower decay (longer half-life)."""
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
@@ -301,7 +301,7 @@ class TestApplyDecayOptimizedReal:
         mem_strong = self._make_stale_mem(graph, "Strongly encoded fact", days_ago=90,
                                            confidence=0.8, storage_strength=5.0)
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg:
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -318,16 +318,16 @@ class TestApplyDecayOptimizedReal:
 
     def test_below_min_confidence_deletes(self, tmp_path):
         """Memories decayed below minimum confidence are deleted (when review_queue disabled)."""
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         # Very old, very low confidence → will drop below minimum
         mem = self._make_stale_mem(graph, "Nearly forgotten fact", days_ago=365, confidence=0.15)
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
-             patch("core.lifecycle.janitor._archive_node", return_value=True), \
-             patch("core.lifecycle.janitor.hard_delete_node") as mock_delete:
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg, \
+             patch("datastore.memorydb.maintenance_ops._archive_node", return_value=True), \
+             patch("datastore.memorydb.maintenance_ops.hard_delete_node") as mock_delete:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -341,14 +341,14 @@ class TestApplyDecayOptimizedReal:
 
     def test_below_min_queued_when_review_enabled(self, tmp_path):
         """Memories below minimum are queued for review when review_queue_enabled."""
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         mem = self._make_stale_mem(graph, "Needs review fact", days_ago=365, confidence=0.15)
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
-             patch("core.lifecycle.janitor.queue_for_decay_review") as mock_queue:
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg, \
+             patch("datastore.memorydb.maintenance_ops.queue_for_decay_review") as mock_queue:
             mock_cfg.decay.mode = "exponential"
             mock_cfg.decay.base_half_life_days = 60.0
             mock_cfg.decay.access_bonus_factor = 0.15
@@ -362,14 +362,14 @@ class TestApplyDecayOptimizedReal:
 
     def test_linear_mode_subtracts_flat_rate(self, tmp_path):
         """Linear mode applies flat -RATE decay."""
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         mem = self._make_stale_mem(graph, "Linear decay fact", days_ago=90, confidence=0.8)
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
-             patch("core.lifecycle.janitor.CONFIDENCE_DECAY_RATE", 0.10):
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg, \
+             patch("datastore.memorydb.maintenance_ops.CONFIDENCE_DECAY_RATE", 0.10):
             mock_cfg.decay.mode = "linear"
             mock_cfg.decay.minimum_confidence = 0.1
             mock_cfg.decay.review_queue_enabled = False
@@ -381,14 +381,14 @@ class TestApplyDecayOptimizedReal:
 
     def test_verified_decays_slower_linear(self, tmp_path):
         """Verified facts decay at half rate in linear mode."""
-        from core.lifecycle.janitor import apply_decay_optimized, JanitorMetrics
+        from datastore.memorydb.maintenance_ops import apply_decay_optimized, JanitorMetrics
         graph, _ = _make_graph(tmp_path)
         metrics = JanitorMetrics()
 
         mem = self._make_stale_mem(graph, "Verified fact", days_ago=90, confidence=0.8, verified=True)
 
-        with patch("core.lifecycle.janitor._cfg") as mock_cfg, \
-             patch("core.lifecycle.janitor.CONFIDENCE_DECAY_RATE", 0.10):
+        with patch("datastore.memorydb.maintenance_ops._cfg") as mock_cfg, \
+             patch("datastore.memorydb.maintenance_ops.CONFIDENCE_DECAY_RATE", 0.10):
             mock_cfg.decay.mode = "linear"
             mock_cfg.decay.minimum_confidence = 0.1
             mock_cfg.decay.review_queue_enabled = False
