@@ -1291,7 +1291,6 @@ JSON array only:"""
                 results["resolved"] += 1
                 batch_resolved += 1
                 results["decisions"].append(decision_row)
-                _append_decision_log("contradiction_resolution", decision_row)
 
             elif action == "KEEP_B":
                 if dry_run:
@@ -1302,7 +1301,6 @@ JSON array only:"""
                 results["resolved"] += 1
                 batch_resolved += 1
                 results["decisions"].append(decision_row)
-                _append_decision_log("contradiction_resolution", decision_row)
 
             elif action == "KEEP_BOTH":
                 if dry_run:
@@ -1312,7 +1310,6 @@ JSON array only:"""
                 results["false_positive"] += 1
                 batch_resolved += 1
                 results["decisions"].append(decision_row)
-                _append_decision_log("contradiction_resolution", decision_row)
 
             elif action == "MERGE":
                 merged_text = item.get("merged_text", "")
@@ -1358,7 +1355,6 @@ JSON array only:"""
                     results["merged"] += 1
                     batch_resolved += 1
                     results["decisions"].append(decision_row)
-                    _append_decision_log("contradiction_resolution", decision_row)
 
         print(f"    Batch {batch_num}/{total_batches}: {batch_resolved} resolved ({duration:.1f}s)")
 
@@ -2353,6 +2349,39 @@ Respond with a JSON array only, no markdown fencing:
     covered_ids = set()
     missing_ids_overall = []
 
+    def _normalize_review_decisions(payload: Any) -> List[Dict[str, Any]]:
+        """Normalize wrapped/aliased review payloads into decision dicts."""
+        cur = payload
+        if isinstance(cur, dict):
+            for key in ("decisions", "reviews", "results", "items", "data", "memories"):
+                maybe = cur.get(key)
+                if isinstance(maybe, list):
+                    cur = maybe
+                    break
+
+        if not isinstance(cur, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        for item in cur:
+            if not isinstance(item, dict):
+                continue
+            out = dict(item)
+            if not out.get("id") and isinstance(out.get("memory_id"), str):
+                out["id"] = out["memory_id"]
+            if not out.get("action") and isinstance(out.get("decision"), str):
+                out["action"] = out["decision"]
+            action = str(out.get("action", "")).upper().strip()
+            if action in {"APPROVE", "CONFIRM"}:
+                action = "KEEP"
+            elif action in {"REJECT", "REMOVE"}:
+                action = "DELETE"
+            elif action == "UPDATE":
+                action = "FIX"
+            out["action"] = action
+            normalized.append(out)
+        return normalized
+
     def _collect_covered_ids(decisions_list: List[Dict[str, Any]]) -> set[str]:
         out = set()
         for decision in decisions_list:
@@ -2424,8 +2453,9 @@ Respond with a JSON array only, no markdown fencing:
                     _record_llm_batch_issue(metrics, f"Review batch {batch_num}: empty API response")
                 continue
 
-            decisions = parse_json_response(response_text)
-            if not isinstance(decisions, list):
+            decisions_raw = parse_json_response(response_text)
+            decisions = _normalize_review_decisions(decisions_raw)
+            if not decisions:
                 print(f"    Failed to parse response as JSON array, skipping batch")
                 if metrics:
                     _record_llm_batch_issue(metrics, f"Review batch {batch_num}: invalid JSON response")
@@ -2463,8 +2493,9 @@ Respond with a JSON array only, no markdown fencing:
                 )
                 if metrics:
                     metrics.add_llm_call(retry_duration)
-                retry_decisions = parse_json_response(retry_text or "")
-                if isinstance(retry_decisions, list):
+                retry_raw = parse_json_response(retry_text or "")
+                retry_decisions = _normalize_review_decisions(retry_raw)
+                if retry_decisions:
                     decisions.extend(retry_decisions)
                     batch_covered = _collect_covered_ids(decisions)
                     missing = sorted(batch_ids - batch_covered)
