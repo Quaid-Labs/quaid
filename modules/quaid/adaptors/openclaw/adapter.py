@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,13 +17,30 @@ class OpenClawAdapter(QuaidAdapter):
     """Adapter for running inside the OpenClaw gateway.
 
     - Home dir: CLAWDBOT_WORKSPACE env or ${QUAID_WORKSPACE}/
-    - Notifications: clawdbot message send CLI
+    - Notifications: openclaw message send CLI
     - Credentials: env var -> workspace .env
     - Sessions: ~/.openclaw/sessions/
     - Filtering: HEARTBEAT, GatewayRestart, System: messages
     """
 
     _MAIN_SESSION_KEY = "agent:main:main"
+
+    def _resolve_message_cli(self) -> Optional[str]:
+        """Resolve message CLI binary path for notification delivery."""
+        explicit = os.environ.get("QUAID_MESSAGE_CLI", "").strip()
+        if explicit:
+            return explicit
+
+        candidates = [
+            shutil.which("openclaw"),
+            "/opt/homebrew/bin/openclaw",
+            shutil.which("clawdbot"),
+            "/opt/homebrew/bin/clawdbot",
+        ]
+        for candidate in candidates:
+            if candidate and Path(candidate).exists():
+                return candidate
+        return None
 
     def quaid_home(self) -> Path:
         env = os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
@@ -66,10 +84,14 @@ class OpenClawAdapter(QuaidAdapter):
             return False
 
         effective_channel = channel_override or info.channel
+        message_cli = self._resolve_message_cli()
+        if not message_cli:
+            print("[notify] No message CLI found (expected openclaw)", file=sys.stderr)
+            return False
 
         def _send(channel: str) -> bool:
             cmd = [
-                "clawdbot", "message", "send",
+                message_cli, "message", "send",
                 "--channel", channel,
                 "--target", info.target,
                 "--message", message,

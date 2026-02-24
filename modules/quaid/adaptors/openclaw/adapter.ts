@@ -44,6 +44,7 @@ function _resolveWorkspace(): string {
   return process.cwd();
 }
 const WORKSPACE = _resolveWorkspace();
+const PYTHON_PLUGIN_ROOT = path.join(WORKSPACE, "plugins", "quaid");
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(WORKSPACE, "plugins/quaid/ingest/extract.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
@@ -74,6 +75,20 @@ const NODE_COUNT_CACHE_MS = 5 * 60 * 1000; // 5 minutes
 let _cachedDatastoreStats: Record<string, any> | null = null;
 let _datastoreStatsTimestamp = 0;
 
+function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+  const sep = process.platform === "win32" ? ";" : ":";
+  const existing = String(process.env.PYTHONPATH || "").trim();
+  const pyPath = existing ? `${PYTHON_PLUGIN_ROOT}${sep}${existing}` : PYTHON_PLUGIN_ROOT;
+  return {
+    ...process.env,
+    MEMORY_DB_PATH: DB_PATH,
+    QUAID_HOME: WORKSPACE,
+    CLAWDBOT_WORKSPACE: WORKSPACE,
+    PYTHONPATH: pyPath,
+    ...extra,
+  };
+}
+
 function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<string, any> | null {
   const now = Date.now();
   if (_cachedDatastoreStats && (now - _datastoreStatsTimestamp) < maxAgeMs) {
@@ -83,12 +98,7 @@ function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<s
     const output = execSync(`python3 "${PYTHON_SCRIPT}" stats`, {
       encoding: "utf-8",
       timeout: 5000,
-      env: {
-        ...process.env,
-        MEMORY_DB_PATH: DB_PATH,
-        QUAID_HOME: WORKSPACE,
-        CLAWDBOT_WORKSPACE: WORKSPACE,
-      },
+      env: buildPythonEnv(),
     });
     const parsed = JSON.parse(output);
     if (!parsed || typeof parsed !== "object") {
@@ -155,7 +165,7 @@ function getCaptureTimeoutMinutes(): number {
   const capture = getMemoryConfig().capture || {};
   const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
   const num = Number(raw);
-  return Number.isFinite(num) ? Math.max(0, Math.floor(num)) : 120;
+  return Number.isFinite(num) ? Math.max(0, num) : 120;
 }
 
 function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retrieval"): string {
@@ -622,6 +632,23 @@ function getAllConversationMessages(messages: any[]): any[] {
   });
 }
 
+function detectLifecycleCommandSignal(messages: any[]): "ResetSignal" | "CompactionSignal" | null {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  const last = messages[messages.length - 1];
+  const prev = messages.length > 1 ? messages[messages.length - 2] : null;
+  const candidate = last?.role === "user" ? last : (prev?.role === "user" ? prev : null);
+  if (!candidate) return null;
+  const text = getMessageText(candidate).trim().toLowerCase();
+  if (!text) return null;
+  const normalized = text.replace(/\[\[[^\]]+\]\]\s*/g, "").trim();
+  const m = normalized.match(/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/);
+  if (!m) return null;
+  const command = `/${m[1]}`;
+  if (command === "/new" || command === "/reset" || command === "/restart") return "ResetSignal";
+  if (command === "/compact") return "CompactionSignal";
+  return null;
+}
+
 function isInternalMaintenancePrompt(text: string): boolean {
   const t = String(text || "").trim();
   if (!t) return false;
@@ -929,7 +956,7 @@ function _spawnWithTimeout(
   return new Promise((resolve, reject) => {
     const proc = spawn("python3", [script, command, ...args], {
       cwd: WORKSPACE,
-      env: { ...process.env, ...env },
+      env: buildPythonEnv(env),
     });
     let stdout = "";
     let stderr = "";
@@ -991,12 +1018,7 @@ async function callExtractPipeline(opts: {
     const output = await new Promise<string>((resolve, reject) => {
       const proc = spawn("python3", [EXTRACT_SCRIPT, ...args], {
         cwd: WORKSPACE,
-        env: {
-          ...process.env,
-          MEMORY_DB_PATH: DB_PATH,
-          QUAID_HOME: WORKSPACE,
-          CLAWDBOT_WORKSPACE: WORKSPACE,
-        },
+        env: buildPythonEnv(),
       });
 
       let stdout = "";
@@ -1107,12 +1129,7 @@ function spawnNotifyScript(scriptBody: string): void {
   const proc = spawn('python3', [tmpFile], {
     detached: true,
     stdio: ['ignore', notifyLogFd, notifyLogFd],
-    env: {
-      ...process.env,
-      MEMORY_DB_PATH: DB_PATH,
-      QUAID_HOME: WORKSPACE,
-      CLAWDBOT_WORKSPACE: WORKSPACE,
-    },
+    env: buildPythonEnv(),
   });
   fs.closeSync(notifyLogFd);
   proc.unref();
@@ -1306,7 +1323,7 @@ async function emitProjectEvent(messages: any[], trigger: string, sessionId?: st
         detached: true,
         stdio: ["ignore", logFd, logFd],
         cwd: WORKSPACE,
-        env: { ...process.env, QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE, ...(bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {}) },
+        env: buildPythonEnv({ ...(bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {}) }),
       });
       proc.unref();
     } finally {
@@ -2118,15 +2135,14 @@ const quaidPlugin = {
 
     // Check if database needs seeding
     if (!fs.existsSync(DB_PATH)) {
-      console.log("[quaid] Database not found, running initial seed...");
+      console.log("[quaid] Database not found, initializing datastore...");
       try {
-        const seedScript = path.join(WORKSPACE, "plugins/quaid/seed.py");
-        execSync(`python3 ${seedScript}`, {
-          env: { ...process.env, MEMORY_DB_PATH: DB_PATH },
+        execSync(`python3 "${PYTHON_SCRIPT}" init`, {
+          env: buildPythonEnv(),
         });
-        console.log("[quaid] Initial seed complete");
+        console.log("[quaid] Datastore initialization complete");
       } catch (err: unknown) {
-        console.error("[quaid] Seed failed:", (err as Error).message);
+        console.error("[quaid] Datastore initialization failed:", (err as Error).message);
       }
     }
 
@@ -2360,6 +2376,25 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
       timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
+      const commandSignal = detectLifecycleCommandSignal(conversationMessages);
+      if (commandSignal && timeoutSessionId) {
+        timeoutManager.queueExtractionSignal(timeoutSessionId, commandSignal);
+        void timeoutManager.processPendingExtractionSignals();
+        const trigger = commandSignal === "CompactionSignal" ? "compact" : "reset";
+        const transcriptTrigger = trigger === "compact" ? "Compaction" : "Reset";
+        void (async () => {
+          try {
+            await updateDocsFromTranscript(conversationMessages, transcriptTrigger, timeoutSessionId);
+          } catch (err: unknown) {
+            console.error(`[quaid] ${transcriptTrigger} doc update fallback failed:`, (err as Error).message);
+          }
+          try {
+            await emitProjectEvent(conversationMessages, trigger, timeoutSessionId);
+          } catch (err: unknown) {
+            console.error(`[quaid] ${transcriptTrigger} project event fallback failed:`, (err as Error).message);
+          }
+        })();
+      }
 
     };
 
