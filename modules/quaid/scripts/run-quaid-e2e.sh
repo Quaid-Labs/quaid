@@ -893,6 +893,32 @@ second = run_agent("Resilience probe turn 2 after forced gateway restart: acknow
 if not second:
     raise SystemExit("[e2e] ERROR: resilience turn 2 produced empty output after gateway restart")
 
+env = dict(__import__("os").environ)
+py_path = env.get("PYTHONPATH", "")
+env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
+janitor_probe = subprocess.Popen(
+    ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "review", "--dry-run", "--stage-item-cap", "8"],
+    cwd=".",
+    env=env,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+pressure_turn = run_agent("Resilience probe turn 3 during janitor pressure: acknowledge with OK.")
+if not pressure_turn:
+    janitor_probe.kill()
+    raise SystemExit("[e2e] ERROR: resilience turn 3 failed/empty during janitor pressure")
+try:
+    j_out, j_err = janitor_probe.communicate(timeout=180)
+except subprocess.TimeoutExpired:
+    janitor_probe.kill()
+    raise SystemExit("[e2e] ERROR: janitor pressure probe timed out")
+if janitor_probe.returncode != 0:
+    raise SystemExit(
+        "[e2e] ERROR: janitor pressure probe failed during resilience test\n"
+        f"{(j_out or '')[-600:]}\n{(j_err or '')[-600:]}"
+    )
+
 print("[e2e] Resilience check passed.")
 PY
 else
