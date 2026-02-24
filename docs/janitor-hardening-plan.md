@@ -85,6 +85,6 @@ Scope: improve both benchmark stability (repeatable throughput/latency) and live
 1. `--suite blocker`
    - lifecycle + memory continuity + notification policy
 2. `--suite pre-benchmark`
-   - blocker + ingest + janitor + deterministic maintenance fixtures (next)
+   - blocker + ingest + janitor + benchmark-mode fail-fast review probe
 3. `--suite nightly`
    - full + resilience/load scenarios (restart, pressure, migration fixtures)

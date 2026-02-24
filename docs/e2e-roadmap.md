@@ -49,7 +49,7 @@ Coverage requirements:
    - Pre-benchmark invariant check: after janitor apply, `pending==0` and `approved==0` (fails with leftover ID preview).
 4. Janitor task safety
    - Benchmark-mode fail-fast gate is implemented in janitor: review stage fails immediately when coverage < 100% or review carryover > 0.
-   - E2E assertion for this specific injected-failure path is pending implementation.
+   - `pre-benchmark` now probes this path directly via benchmark-mode dry-run review + forced stage cap and requires non-zero exit.
 5. Deterministic maintenance outcomes
    - Contradiction/dedup/decay checks on seeded fixtures (pending implementation).
 
@@ -70,9 +70,8 @@ Coverage requirements:
 ## Backlog Order
 
 Implement next in this order:
-1. Janitor fail-fast memory task E2E assertion (injected benchmark-mode partial-coverage/carryover case).
-2. Deterministic contradiction resolution fixture assertion.
-3. Deterministic dedup/decay fixture assertion.
-4. Multi-owner isolation E2E flow.
-5. Project artifact content assertions.
-6. RAG chunk anchor assertions.
+1. Deterministic contradiction resolution fixture assertion.
+2. Deterministic dedup/decay fixture assertion.
+3. Multi-owner isolation E2E flow.
+4. Project artifact content assertions.
+5. RAG chunk anchor assertions.
