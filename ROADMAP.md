@@ -5,6 +5,12 @@ It reflects broad areas of active focus, not delivery guarantees.
 
 ## Current Focus
 
+- **Top priority after release: multi-user + group conversation memory**
+  - Partition memory by user/group identity with explicit routing and ownership guarantees.
+  - Support context muxing: fast context switching between participants and conversations.
+  - Add intelligent mixed-recall policies for shared/group threads without cross-user leakage.
+  - Harden datastore contracts so per-user and per-group stores remain modular and swappable.
+
 - **Reliability and correctness**
   - Continue hardening extraction, recall, and janitor paths.
   - Reduce failure ambiguity with better diagnostics and test isolation.

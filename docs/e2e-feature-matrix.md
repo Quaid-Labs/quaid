@@ -34,16 +34,12 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
 
 ## Recommended Next Additions
 
-1. Contradiction resolution assertions
-   - Seed contradictory facts and assert janitor resolves status transitions deterministically.
-2. Decay and dedup assertions
-   - Seed stale + duplicate facts and assert expected confidence/status changes after janitor.
-3. Projects artifact assertions
-   - Assert specific project updater outputs (not just queue/log movement).
-4. RAG integrity assertions
-   - Assert specific seeded docs are present in `doc_chunks` and retrievable post-janitor.
-5. Multi-owner isolation assertions
-   - Seed multiple owners and ensure recall/maintenance boundaries remain owner-scoped.
+1. Cross-session concurrency matrix
+   - Multiple concurrent sessions plus janitor/docs updater pressure in one run.
+2. Restart during janitor write window
+   - Force gateway restart while janitor writes run metadata; verify run record integrity.
+3. Registry/index migration drift fixtures
+   - Seed docs registry + RAG metadata drift and assert self-heal behavior.
 
 ## Runner Modes
 

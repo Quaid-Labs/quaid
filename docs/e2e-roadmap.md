@@ -63,18 +63,20 @@ Runner:
 
 Coverage requirements:
 1. Full suite pass (`nightly` currently aliases `full`).
-2. Multi-owner isolation checks (pending implementation).
+2. Multi-owner isolation checks.
    - Seeded owner-scoped duplicate fixture now asserts janitor does not collapse distinct owners.
-3. RAG integrity assertions with seeded anchors (pending implementation).
+3. RAG integrity assertions with seeded anchors.
    - Added seeded anchor assertion: pre-benchmark now requires `doc_chunks` to contain the seeded RAG anchor text.
-4. Project artifact assertions beyond queue movement (pending implementation).
+4. Project artifact assertions beyond queue movement.
    - Added PROJECT.md artifact assertion via docs update log delta (`projects/quaid/PROJECT.md`).
-5. Resilience checks (gateway restart mid-flow, concurrency/backpressure, migration fixtures) (pending implementation).
+5. Resilience checks (gateway restart mid-flow, concurrency/backpressure, migration fixtures).
    - Added gateway restart mid-session resilience check (nightly/`resilience` suite path).
    - Added concurrent pressure probe (janitor review dry-run while live turn executes).
-   - Remaining: migration-fixture resilience.
+   - Added migration-fixture resilience probe (legacy `janitor_runs` schema auto-migrates before run write).
 
 ## Backlog Order
 
 Implement next in this order:
-1. Migration-fixture resilience checks.
+1. Cross-session concurrency matrix (multiple simultaneous sessions + janitor + project updater).
+2. Gateway restart during janitor write window.
+3. Seeded migration fixture for docs registry + RAG index metadata drift.
