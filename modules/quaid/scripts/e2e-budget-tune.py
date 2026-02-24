@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
         default=1.2,
         help="Safety multiplier on percentile baseline (default: 1.2)",
     )
+    p.add_argument(
+        "--stage",
+        default="",
+        help="Optional stage key for stage-specific tuning (example: janitor, notify_matrix)",
+    )
     return p.parse_args()
 
 
@@ -87,11 +92,21 @@ def main() -> int:
         filtered.append(r)
 
     durations: List[int] = []
+    stage = str(args.stage or "").strip()
     for r in filtered:
-        try:
-            d = int(r.get("duration_seconds") or 0)
-        except Exception:
-            d = 0
+        d = 0
+        if stage:
+            try:
+                stage_map = r.get("stage_durations_seconds") or {}
+                if isinstance(stage_map, dict):
+                    d = int(stage_map.get(stage) or 0)
+            except Exception:
+                d = 0
+        else:
+            try:
+                d = int(r.get("duration_seconds") or 0)
+            except Exception:
+                d = 0
         if d > 0:
             durations.append(d)
 
@@ -99,7 +114,7 @@ def main() -> int:
         raise SystemExit(
             "[e2e-budget] ERROR: insufficient samples "
             f"(have={len(durations)} need>={args.min_samples}) "
-            f"for suite={args.suite} status={args.status}"
+            f"for suite={args.suite} status={args.status} stage={stage or 'total'}"
         )
 
     durations.sort()
@@ -113,6 +128,7 @@ def main() -> int:
         "history_path": str(history_path),
         "suite": args.suite,
         "status_filter": args.status,
+        "metric": f"stage:{stage}" if stage else "total_duration",
         "samples": len(durations),
         "duration_seconds": {
             "p50": p50,

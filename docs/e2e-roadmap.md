@@ -101,10 +101,13 @@ Coverage requirements:
 10. Strict notification-delivery assertions.
    - Notify matrix now tracks sent/failure/no-channel counters per level.
    - Optional strict mode (`QUAID_E2E_NOTIFY_REQUIRE_DELIVERY=true`) fails when normal/debug have no active channel context or no successful sends.
+11. Stage-specific budget tuning primitives.
+   - E2E summary now records `stage_durations_seconds` for each stage.
+   - `e2e-budget-tune.py --stage <name>` supports per-stage recommendation generation from summary history.
 
 ## Backlog Order
 
 Implement next in this order:
-1. Stage-specific budget tuning from accumulated nightly history.
+1. Enforce stage-specific budget gates in nightly from accumulated history.
 2. Upload nightly budget recommendation/history as CI artifacts for trend visibility.
 3. Enable strict notification-delivery mode in a dedicated nightly lane with stable channel fixtures.
