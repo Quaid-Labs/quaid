@@ -25,6 +25,7 @@ Recommended framing:
 - Some runtime/gateway restore flows can require a restart retry.
 - Janitor scope currently includes workspace editing unless explicitly constrained.
 - Non-OpenClaw adapter coverage is still early compared to the OpenClaw path.
+- OpenClaw typed plugin hooks can miss `before_reset` across bundle boundaries (upstream: https://github.com/openclaw/openclaw/issues/23895). Quaid mitigates reset/new extraction via internal workspace command hooks (`command:new`, `command:reset`) while compaction remains on `before_compaction`.
 
 ## Notification Posture (Alpha)
 
