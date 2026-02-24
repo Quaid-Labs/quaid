@@ -103,7 +103,7 @@ if [[ "$MODE" == "full" ]]; then
     echo "[tests] Bootstrap E2E auth matrix"
     echo "================================================================"
     echo "[tests] SKIP: matrix script not found/executable at $E2E_MATRIX_SCRIPT"
-    echo "[tests] Hint: set QUAID_E2E_MATRIX_SCRIPT to plugins/quaid/scripts/run-quaid-e2e-matrix.sh"
+    echo "[tests] Hint: set QUAID_E2E_MATRIX_SCRIPT to modules/quaid/scripts/run-quaid-e2e-matrix.sh"
     echo "[tests] Hint: set QUAID_E2E_PATHS to override auth lanes"
   fi
 fi

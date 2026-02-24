@@ -80,7 +80,7 @@ Read-path routing (`total_recall`) is paired with a canonical write-path in core
 
 Quaid also exposes a queue-backed event bus for adapter-independent orchestration:
 
-- Event queue and handlers are implemented in `plugins/quaid/events.py`.
+- Event queue and handlers are implemented in `modules/quaid/events.py`.
 - Adapter lifecycle hooks emit events like `session.new`, `session.reset`, and `session.compaction`.
 - CLI and MCP both support emitting/listing/processing events so orchestration can be tested and automated outside gateway hooks.
 - Event capabilities are discoverable via a registry (`event capabilities`, `memory_event_capabilities`) so orchestration can adapt strategy based on what this runtime supports.
@@ -873,6 +873,6 @@ The `QUAID_OWNER` environment variable sets the owner identity for all operation
 
 ## Appendix: File Reference
 
-The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). In OpenClaw integration, `adaptors/openclaw/index.ts` is a lightweight entry shim, while `adaptors/openclaw/adapter.ts` + `adaptors/openclaw/knowledge/orchestrator.ts` hold the runtime tool/hook logic and recall orchestration. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
+The plugin lives in `modules/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). In OpenClaw integration, `adaptors/openclaw/index.ts` is a lightweight entry shim, while `adaptors/openclaw/adapter.ts` + `adaptors/openclaw/knowledge/orchestrator.ts` hold the runtime tool/hook logic and recall orchestration. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

@@ -72,7 +72,7 @@ Default behavior should favor automatic extraction.
 ## Operational Commands (Operator Reference)
 
 ```bash
-cd plugins/quaid
+cd modules/quaid
 
 # Recall and inspection
 python3 memory_graph.py search "query" --owner quaid --limit 50 --min-similarity 0.6

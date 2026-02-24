@@ -40,4 +40,4 @@ If provider resolution fails:
 1. Check OpenClaw auth profiles and `lastGood` profile mapping.
 1. Re-run release/runtime checks:
    - `bash scripts/release-check.sh`
-   - `node plugins/quaid/scripts/check-runtime-pairs.mjs --strict`
+   - `node modules/quaid/scripts/check-runtime-pairs.mjs --strict`

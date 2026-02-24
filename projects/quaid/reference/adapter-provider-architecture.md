@@ -24,7 +24,7 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
    - `models.deepReasoning` / `models.fastReasoning`
    - `models.providerModelClasses`
 3. If tier model is `default`, provider model pair comes from `providerModelClasses` for the effective provider.
-4. Resolved call goes through OpenClaw plugin endpoint (`/plugins/quaid/llm`) and gateway auth.
+4. Resolved call goes through OpenClaw plugin endpoint (`/modules/quaid/llm`) and gateway auth.
 5. Gateway provider (OAuth/API) executes the model call.
 
 ## Provider Resolution Rules
@@ -38,17 +38,17 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 
 ## Key Files
 
-- `plugins/quaid/adaptors/openclaw/index.ts`
+- `modules/quaid/adaptors/openclaw/index.ts`
   - tier/provider resolution
   - extraction hooks (`agent_end`, `command`, `before_compaction`, `before_reset`)
   - gateway-bound LLM calls
-- `plugins/quaid/adaptors/openclaw/providers.py`
-  - `GatewayLLMProvider` bridge to `/plugins/quaid/llm`
-- `plugins/quaid/adaptors/openclaw/adapter.py`
+- `modules/quaid/adaptors/openclaw/providers.py`
+  - `GatewayLLMProvider` bridge to `/modules/quaid/llm`
+- `modules/quaid/adaptors/openclaw/adapter.py`
   - OpenClaw adapter for paths, notifications, session metadata, gateway credential context
-- `plugins/quaid/lib/adapter.py`
+- `modules/quaid/lib/adapter.py`
   - adapter interface and selection
-- `plugins/quaid/lib/providers.py`
+- `modules/quaid/lib/providers.py`
   - provider abstractions + implementations
 
 ## Config Contract

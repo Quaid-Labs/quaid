@@ -11,7 +11,7 @@ The root markdown files. Loaded every turn. Your foundation.
 ### Layer 2: RAG Documentation (`projects/`)
 Detailed technical docs, searchable semantically:
 ```bash
-python3 plugins/quaid/docs_rag.py search "query"
+python3 modules/quaid/docs_rag.py search "query"
 ```
 - Project docs under `projects/<project>/` are auto-indexed nightly
 - **Use for:** Implementation details, system architecture, reference docs
@@ -20,7 +20,7 @@ python3 plugins/quaid/docs_rag.py search "query"
 ### Layer 3: Memory Database
 Personal facts about Quaid's world — people, places, preferences, relationships:
 ```bash
-python3 plugins/quaid/memory_graph.py search "query" --owner quaid
+python3 modules/quaid/memory_graph.py search "query" --owner quaid
 ```
 - ~424 facts (620 total nodes) with semantic embeddings (qwen3-embedding:8b)
 - Graph edges connect entities (parent_of, has_pet, lives_at)

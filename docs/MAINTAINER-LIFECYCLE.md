@@ -43,7 +43,7 @@ bash scripts/release-check.sh
 2. Run CI-validating checks if release-impacting changes are large:
 
 ```bash
-cd plugins/quaid
+cd modules/quaid
 npm run test:all
 ```
 

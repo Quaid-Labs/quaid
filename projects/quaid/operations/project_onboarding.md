@@ -58,7 +58,7 @@ and register files.
 Search the memory graph for any previously mentioned projects:
 
 ```bash
-cd plugins/quaid && python3 memory_graph.py search "project" --owner <OWNER> --limit 10
+cd modules/quaid && python3 memory_graph.py search "project" --owner <OWNER> --limit 10
 ```
 
 If results mention specific project names or paths, note them.
@@ -113,7 +113,7 @@ For each project the user wants to register:
 For each confirmed project:
 
 ```bash
-cd plugins/quaid
+cd modules/quaid
 
 # Register the project
 python3 docs_registry.py create-project <name> \

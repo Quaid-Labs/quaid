@@ -7,7 +7,7 @@ Nightly memory maintenance pipeline. Cleans, decays, deduplicates, detects contr
 ## Schedule
 - **Cron name:** `sandman`
 - **Time:** 4:30 AM Asia/Makassar (WITA)
-- **Script:** `plugins/quaid/janitor.py`
+- **Script:** `modules/quaid/janitor.py`
 - **Logs:** `logs/janitor.log` (structured JSON)
 - **Stats:** `data/janitor-stats.json` (run metrics + API cost)
 - **Session:** `isolated` (dedicated session per run, not main Alfie session)

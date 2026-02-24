@@ -471,6 +471,7 @@ async function step1_preflight() {
   // --- Plugin source ---
   s.start("Locating plugin source...");
   const pluginSrc = [
+    path.join(__dirname, "modules", "quaid"),
     path.join(__dirname, "plugins", "quaid"),
     PLUGIN_DIR,
   ].find(p => {
@@ -480,7 +481,7 @@ async function step1_preflight() {
   });
   if (!pluginSrc) {
     s.stop(C.red("Plugin source not found"), 2);
-    bail(`Expected at ${path.join(__dirname, "plugins", "quaid")} or ${PLUGIN_DIR}`);
+    bail(`Expected at ${path.join(__dirname, "modules", "quaid")} or ${PLUGIN_DIR}`);
   }
   s.stop(C.green("Plugin source found"));
 

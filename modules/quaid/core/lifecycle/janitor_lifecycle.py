@@ -8,6 +8,7 @@ logic and register their routines here.
 from __future__ import annotations
 
 import importlib
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -117,7 +118,7 @@ def _register_module_routines(
 def build_default_registry() -> LifecycleRegistry:
     registry = LifecycleRegistry()
 
-    module_specs = [
+    module_specs: List[tuple[str, List[str]]] = [
         ("core.lifecycle.workspace_audit", ["workspace"]),
         ("core.docs.updater", ["docs_staleness", "docs_cleanup"]),
         ("core.lifecycle.soul_snippets", ["snippets", "journal"]),
@@ -125,6 +126,29 @@ def build_default_registry() -> LifecycleRegistry:
         ("datastore.memorydb.maintenance", ["memory_graph_maintenance"]),
         ("datastore.memorydb.memory_graph", ["datastore_cleanup"]),
     ]
+
+    # Extension hook for external/plugin datastores:
+    # comma-separated module list in env, each module must expose
+    # `register_lifecycle_routines(registry, result_factory)`.
+    extra_modules_raw = os.environ.get("QUAID_LIFECYCLE_MODULES", "").strip()
+    if extra_modules_raw:
+        for module_name in [m.strip() for m in extra_modules_raw.split(",") if m.strip()]:
+            module_specs.append((module_name, []))
+
+    # Optional config hook:
+    # config.lifecycle.modules = ["my_datastore.lifecycle", ...]
+    try:
+        from config import get_config  # local import avoids hard dependency at module import
+
+        cfg = get_config()
+        cfg_modules = list(getattr(getattr(cfg, "lifecycle", None), "modules", []) or [])
+        for module_name in cfg_modules:
+            name = str(module_name).strip()
+            if not name:
+                continue
+            module_specs.append((name, []))
+    except Exception:
+        pass
 
     for module_name, routines in module_specs:
         _register_module_routines(registry, module_name, routines)

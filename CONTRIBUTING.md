@@ -28,7 +28,7 @@ AI-assisted contributions are welcome, with explicit accountability.
 
 ```bash
 git clone https://github.com/Steadman-Labs/quaid.git
-cd quaid/plugins/quaid
+cd quaid/modules/quaid
 npm ci
 python3 -m pip install pytest ruff
 ```
@@ -43,7 +43,7 @@ pre-commit install
 
 ## Validation
 
-From `plugins/quaid`:
+From `modules/quaid`:
 
 ```bash
 npm run check:runtime-pairs:strict

@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-The plugin accumulated boundary-owned modules at `plugins/quaid/*.py`, which blurred ownership and encouraged cross-layer imports.
+The plugin accumulated boundary-owned modules at `modules/quaid/*.py`, which blurred ownership and encouraged cross-layer imports.
 
 The target architecture is explicit directory ownership:
 - `ingest/` for transcript/document ingestion orchestration
@@ -17,20 +17,20 @@ The target architecture is explicit directory ownership:
 Canonical module ownership moved out of plugin root:
 
 - Ingest:
-  - `plugins/quaid/ingest/extract.py`
-  - `plugins/quaid/ingest/docs_ingest.py`
+  - `modules/quaid/ingest/extract.py`
+  - `modules/quaid/ingest/docs_ingest.py`
 
 - Core lifecycle:
-  - `plugins/quaid/core/lifecycle/janitor.py`
-  - `plugins/quaid/core/lifecycle/janitor_lifecycle.py`
-  - `plugins/quaid/core/lifecycle/workspace_audit.py`
-  - `plugins/quaid/core/lifecycle/soul_snippets.py`
+  - `modules/quaid/core/lifecycle/janitor.py`
+  - `modules/quaid/core/lifecycle/janitor_lifecycle.py`
+  - `modules/quaid/core/lifecycle/workspace_audit.py`
+  - `modules/quaid/core/lifecycle/soul_snippets.py`
 
 - Core docs:
-  - `plugins/quaid/core/docs/rag.py`
-  - `plugins/quaid/core/docs/registry.py`
-  - `plugins/quaid/core/docs/updater.py`
-  - `plugins/quaid/core/docs/project_updater.py`
+  - `modules/quaid/core/docs/rag.py`
+  - `modules/quaid/core/docs/registry.py`
+  - `modules/quaid/core/docs/updater.py`
+  - `modules/quaid/core/docs/project_updater.py`
 
 Plugin-root modules with these names are now compatibility shims only.
 

@@ -95,9 +95,9 @@ Write request
 
 | File | Purpose |
 |------|---------|
-| `plugins/quaid/scripts/check-runtime-pairs.mjs` | Enforces TS/JS runtime pair sync (`--strict` checks HEAD commit too) |
-| `plugins/quaid/scripts/run-all-tests.sh` | Orchestrated quick/full test launcher with syntax, integration, and Python isolated suites |
-| `plugins/quaid/scripts/run-quaid-e2e-matrix.sh` | Bootstrap/runtime auth-path matrix runner with failure classification + JSON summary |
+| `modules/quaid/scripts/check-runtime-pairs.mjs` | Enforces TS/JS runtime pair sync (`--strict` checks HEAD commit too) |
+| `modules/quaid/scripts/run-all-tests.sh` | Orchestrated quick/full test launcher with syntax, integration, and Python isolated suites |
+| `modules/quaid/scripts/run-quaid-e2e-matrix.sh` | Bootstrap/runtime auth-path matrix runner with failure classification + JSON summary |
 | `scripts/check-docs-consistency.mjs` | GitHub-facing docs drift gate (README/ARCHITECTURE/AI-REFERENCE invariants) |
 | `scripts/release-verify.mjs` | Release/version consistency gate (package/setup/README/release-note alignment) |
 | `scripts/release-owner-check.mjs` | Ownership/attribution gate (author/committer identity + blocked bot/co-author tags) |
@@ -535,7 +535,7 @@ quaid uninstall               # Clean removal (preserves DB, offers backup resto
 
 ### Python Module CLIs (Advanced)
 
-All commands run from the `plugins/quaid/` directory.
+All commands run from the `modules/quaid/` directory.
 
 ```bash
 # Memory operations
@@ -804,7 +804,7 @@ python3 janitor.py --task all --apply
 | Deduplication | `projects/quaid/memory-deduplication-system.md` |
 | Model routing | `projects/infrastructure/model-strategy.md` |
 | Claude Code hooks | `projects/infrastructure/claude-code-integration.md` |
-| Project onboarding | `plugins/quaid/prompts/project_onboarding.md` |
+| Project onboarding | `modules/quaid/prompts/project_onboarding.md` |
 
 > **Note:** These documentation paths reference internal workspace files and are not included in the public release repo. They are available in development environments where the full workspace is present.
 

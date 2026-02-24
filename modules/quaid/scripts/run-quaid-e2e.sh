@@ -37,7 +37,7 @@ Options:
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --notify-level <lvl>   Quaid notify level for e2e (quiet|normal|verbose|debug, default: quiet)
-  --env-file <path>      Optional .env file to source before running (default: plugins/quaid/.env.e2e)
+  --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
   -h, --help             Show this help
 USAGE
 }
@@ -64,7 +64,7 @@ skip_e2e() {
   echo "[e2e] SKIP: bootstrap e2e prerequisites are not available in this environment." >&2
   echo "[e2e] To enable e2e auth-path tests:" >&2
   echo "[e2e]   1) Set QUAID_BOOTSTRAP_ROOT (default: ~/quaid/bootstrap)." >&2
-  echo "[e2e]   2) Copy plugins/quaid/scripts/e2e.env.example to plugins/quaid/.env.e2e and set keys as needed." >&2
+  echo "[e2e]   2) Copy modules/quaid/scripts/e2e.env.example to modules/quaid/.env.e2e and set keys as needed." >&2
   echo "[e2e]   3) Required keys by path:" >&2
   echo "[e2e]      - openai-api: OPENAI_API_KEY" >&2
   echo "[e2e]      - anthropic-api: ANTHROPIC_API_KEY" >&2
@@ -316,7 +316,7 @@ rsync -a --delete \
   --exclude "logs" \
   --exclude "data" \
   --exclude "__pycache__" \
-  "${DEV_WS}/plugins/quaid/" "${E2E_WS}/plugins/quaid/"
+  "${DEV_WS}/modules/quaid/" "${E2E_WS}/plugins/quaid/"
 
 echo "[e2e] Running Quaid integration tests..."
 for required in \
