@@ -13,7 +13,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
@@ -28,6 +28,7 @@ class RoutineContext:
     allow_doc_apply: Optional[Callable[[str, str], bool]] = None
     graph: Any = None
     options: Dict[str, Any] = field(default_factory=dict)
+    parallel_map: Optional[Callable[..., List[Any]]] = None
 
 
 @dataclass
@@ -50,6 +51,9 @@ class LifecycleRegistry:
         self._write_resources: Dict[str, List[str]] = {}
         self._lock_registries: Dict[str, "_ResourceLockRegistry"] = {}
         self._lock_registries_guard = threading.Lock()
+        self._llm_executor: Optional[ThreadPoolExecutor] = None
+        self._llm_executor_workers: int = 0
+        self._llm_executor_guard = threading.Lock()
 
     def register(
         self,
@@ -79,21 +83,22 @@ class LifecycleRegistry:
         routine = self._routines.get(name)
         if routine is None:
             return RoutineResult(errors=[f"No lifecycle routine registered: {name}"])
+        bound_ctx = self._bind_core_runtime(ctx)
         lock_cfg = self._lock_config(ctx)
         if not lock_cfg["enabled"]:
-            return routine(ctx)
+            return routine(bound_ctx)
 
         resources = self._resolved_write_resources(name, ctx)
         if lock_cfg["require_registration"] and not resources:
             return RoutineResult(errors=[f"Lifecycle routine '{name}' missing write resource registration"])
 
         if not resources:
-            return routine(ctx)
+            return routine(bound_ctx)
 
         lock_registry = self._lock_registry_for_workspace(ctx.workspace)
         try:
             with lock_registry.acquire_many(resources, timeout_seconds=lock_cfg["timeout_seconds"]):
-                return routine(ctx)
+                return routine(bound_ctx)
         except TimeoutError as exc:
             return RoutineResult(errors=[f"Lifecycle routine '{name}' lock timeout: {exc}"])
 
@@ -128,6 +133,72 @@ class LifecycleRegistry:
                 reg = _ResourceLockRegistry(lock_root)
                 self._lock_registries[key] = reg
             return reg
+
+    def _llm_workers(self, ctx: RoutineContext) -> int:
+        try:
+            workers = int(getattr(ctx.cfg.janitor.parallel, "llm_workers", 4) or 4)
+            return max(1, workers)
+        except Exception:
+            return 4
+
+    def _ensure_llm_executor(self, workers: int) -> ThreadPoolExecutor:
+        worker_count = max(1, int(workers))
+        with self._llm_executor_guard:
+            if self._llm_executor is None:
+                self._llm_executor = ThreadPoolExecutor(max_workers=worker_count)
+                self._llm_executor_workers = worker_count
+            elif worker_count != self._llm_executor_workers:
+                old = self._llm_executor
+                self._llm_executor = ThreadPoolExecutor(max_workers=worker_count)
+                self._llm_executor_workers = worker_count
+                old.shutdown(wait=False)
+            return self._llm_executor
+
+    def _core_parallel_map(
+        self,
+        ctx: RoutineContext,
+        items: List[Any],
+        fn: Callable[[Any], Any],
+        *,
+        max_workers: Optional[int] = None,
+    ) -> List[Any]:
+        seq = list(items or [])
+        if not seq:
+            return []
+        requested = max_workers if max_workers is not None else self._llm_workers(ctx)
+        worker_count = max(1, min(int(requested), len(seq)))
+        if worker_count <= 1:
+            return [fn(item) for item in seq]
+
+        executor = self._ensure_llm_executor(self._llm_workers(ctx))
+        sem = threading.Semaphore(worker_count)
+        results: List[Any] = [None] * len(seq)
+
+        def _run(idx_item: tuple[int, Any]) -> tuple[int, Any]:
+            idx, item = idx_item
+            with sem:
+                return idx, fn(item)
+
+        futs = [executor.submit(_run, (idx, item)) for idx, item in enumerate(seq)]
+        for fut in as_completed(futs):
+            idx, value = fut.result()
+            results[idx] = value
+        return results
+
+    def _bind_core_runtime(self, ctx: RoutineContext) -> RoutineContext:
+        llm_workers = self._llm_workers(ctx)
+        options = dict(ctx.options or {})
+        options.setdefault("llm_workers", llm_workers)
+        return replace(
+            ctx,
+            options=options,
+            parallel_map=lambda items, fn, max_workers=None: self._core_parallel_map(
+                ctx,
+                items,
+                fn,
+                max_workers=max_workers,
+            ),
+        )
 
     def _lock_config(self, ctx: RoutineContext) -> Dict[str, Any]:
         if ctx.dry_run:
