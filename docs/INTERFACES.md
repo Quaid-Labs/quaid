@@ -51,6 +51,32 @@ This allows orchestrators/agents to adapt strategy based on supported events and
 
 New datastores should register DataWriters rather than adding direct write calls throughout adapters.
 
+## Identity Contract (Multi-User Foundation)
+
+Source:
+- `modules/quaid/core/runtime/identity_runtime.py`
+- `modules/quaid/datastore/memorydb/identity_defaults.py`
+- `modules/quaid/core/services/memory_service.py`
+
+Rules:
+1. Core allows exactly one active identity resolver registration and one active privacy policy registration.
+2. In `identity.mode=multi_user`, write paths fail fast if required identity envelope fields are missing.
+3. In `identity.mode=multi_user`, read paths fail fast unless a privacy policy is registered.
+4. Core bootstraps datastore-owned default hooks (`memorydb-default`) automatically so unhooked deployments fail loudly only for true contract violations, not missing wiring.
+
+Required write envelope fields in multi-user mode:
+- `source_channel`
+- `source_conversation_id`
+- `source_author_id`
+
+Required read context in multi-user mode:
+- `viewer_entity_id`
+
+Optional scoped read context:
+- `participant_entity_ids`
+- `subject_entity_id`
+- `source_channel` / `source_conversation_id` / `source_author_id`
+
 ## Event Contract
 
 - Source: `modules/quaid/core/runtime/events.py`
