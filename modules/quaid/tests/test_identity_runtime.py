@@ -138,3 +138,46 @@ def test_memory_service_search_applies_privacy_filter(monkeypatch):
         viewer_entity_id="user:a",
     )
     assert [row["id"] for row in out] == ["1"]
+
+
+def test_memory_service_search_passes_identity_scope_to_datastore(monkeypatch):
+    identity_runtime.clear_registrations()
+    monkeypatch.setattr(
+        "core.runtime.identity_runtime.get_config",
+        lambda: SimpleNamespace(
+            identity=SimpleNamespace(mode="multi_user"),
+            privacy=SimpleNamespace(enforce_strict_filters=True),
+        ),
+    )
+    monkeypatch.setattr(
+        "datastore.memorydb.identity_defaults.get_config",
+        lambda: SimpleNamespace(privacy=SimpleNamespace(enforce_strict_filters=True)),
+    )
+    captured = {}
+
+    def _fake_search(**kwargs):
+        captured.update(kwargs)
+        return [{"id": "1", "owner_id": "user:a", "visibility_scope": "global_shared"}]
+
+    monkeypatch.setattr("core.services.memory_service.search_memories", _fake_search)
+
+    import core.services.memory_service as mem_svc
+    mem_svc._IDENTITY_RUNTIME_BOOTSTRAPPED = False
+
+    svc = DatastoreMemoryService()
+    out = svc.search(
+        query="espresso",
+        owner_id="user:a",
+        viewer_entity_id="user:a",
+        source_channel="telegram",
+        source_conversation_id="chat-1",
+        source_author_id="<redacted>",
+        subject_entity_id="user:a",
+        participant_entity_ids=["user:a", "agent:bert"],
+    )
+    assert [row["id"] for row in out] == ["1"]
+    assert captured["source_channel"] == "telegram"
+    assert captured["source_conversation_id"] == "chat-1"
+    assert captured["source_author_id"] == "<redacted>"
+    assert captured["subject_entity_id"] == "user:a"
+    assert captured["participant_entity_ids"] == ["user:a", "agent:bert"]

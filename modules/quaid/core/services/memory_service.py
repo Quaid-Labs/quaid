@@ -117,7 +117,16 @@ class DatastoreMemoryService(MemoryServicePort):
         _ensure_identity_runtime_bootstrap()
         assert_multi_user_runtime_ready(require_read=True)
         viewer_entity_id = kwargs.get("viewer_entity_id")
-        results = search_memories(query=query, owner_id=owner_id, limit=limit)
+        results = search_memories(
+            query=query,
+            owner_id=owner_id,
+            limit=limit,
+            source_channel=kwargs.get("source_channel"),
+            source_conversation_id=kwargs.get("source_conversation_id"),
+            source_author_id=kwargs.get("source_author_id"),
+            subject_entity_id=kwargs.get("subject_entity_id"),
+            participant_entity_ids=kwargs.get("participant_entity_ids"),
+        )
         return filter_recall_results(
             viewer_entity_id=viewer_entity_id,
             results=results,

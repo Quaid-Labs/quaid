@@ -2355,24 +2355,84 @@ def search(
     query: str,
     limit: int = 10,
     owner_id: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    participant_entity_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Datastore search interface for API/core callers."""
     if not query or not query.strip():
         return []
+
+    def _participants(raw: Any) -> set[str]:
+        if isinstance(raw, list):
+            return {str(v).strip() for v in raw if str(v).strip()}
+        if isinstance(raw, str):
+            txt = raw.strip()
+            if not txt:
+                return set()
+            try:
+                parsed = json.loads(txt)
+                if isinstance(parsed, list):
+                    return {str(v).strip() for v in parsed if str(v).strip()}
+            except Exception:
+                pass
+            return {p.strip() for p in txt.split(",") if p.strip()}
+        return set()
+
     graph = get_graph()
     raw = graph.search_hybrid(query, limit=limit, owner_id=owner_id)
-    return [
-        {
-            "id": node.id,
-            "text": node.name,
-            "category": node.type,
-            "similarity": round(score, 4),
-            "confidence": node.confidence,
-            "owner_id": node.owner_id,
-            "created_at": node.created_at,
-        }
-        for node, score in raw
-    ]
+    out: List[Dict[str, Any]] = []
+    source_channel_norm = str(source_channel or "").strip().lower() or None
+    source_conversation_norm = str(source_conversation_id or "").strip() or None
+    source_author_norm = str(source_author_id or "").strip() or None
+    subject_entity_norm = str(subject_entity_id or "").strip() or None
+    requested_participants = _participants(participant_entity_ids)
+    for node, score in raw:
+        attrs = node.attributes if isinstance(node.attributes, dict) else {}
+        row_source_channel = str(attrs.get("source_channel") or "").strip().lower() or None
+        row_source_conversation = (
+            str(attrs.get("source_conversation_id") or attrs.get("conversation_id") or node.conversation_id or "").strip()
+            or None
+        )
+        row_source_author = str(attrs.get("source_author_id") or "").strip() or None
+        row_subject_entity = str(attrs.get("subject_entity_id") or "").strip() or None
+        row_participants = _participants(attrs.get("participant_entity_ids"))
+
+        if source_channel_norm and row_source_channel != source_channel_norm:
+            continue
+        if source_conversation_norm and row_source_conversation != source_conversation_norm:
+            continue
+        if source_author_norm and row_source_author != source_author_norm:
+            continue
+        if subject_entity_norm and row_subject_entity != subject_entity_norm:
+            continue
+        if requested_participants and requested_participants.isdisjoint(row_participants):
+            continue
+
+        out.append(
+            {
+                "id": node.id,
+                "text": node.name,
+                "category": node.type,
+                "similarity": round(score, 4),
+                "confidence": node.confidence,
+                "owner_id": node.owner_id,
+                "created_at": node.created_at,
+                "source_channel": row_source_channel,
+                "source_conversation_id": row_source_conversation,
+                "source_author_id": row_source_author,
+                "speaker_entity_id": str(attrs.get("speaker_entity_id") or node.speaker_entity_id or "").strip() or None,
+                "subject_entity_id": row_subject_entity,
+                "conversation_id": str(attrs.get("conversation_id") or node.conversation_id or "").strip() or None,
+                "visibility_scope": str(attrs.get("visibility_scope") or node.visibility_scope or "source_shared").strip(),
+                "sensitivity": str(attrs.get("sensitivity") or node.sensitivity or "normal").strip(),
+                "provenance_confidence": attrs.get("provenance_confidence", node.provenance_confidence),
+                "participant_entity_ids": sorted(row_participants) if row_participants else [],
+            }
+        )
+    return out
 
 
 def register_lifecycle_routines(registry, result_factory) -> None:
