@@ -260,6 +260,42 @@ class TestStoreBasic:
             node = graph.get_node(result["id"])
             assert node.speaker == "Hauser"
 
+    def test_store_source_type_agent_alias_normalizes_to_assistant(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            result = store(
+                "Assistant recommended a safe stretching routine",
+                owner_id="quaid",
+                source_type="agent",
+                skip_dedup=True,
+            )
+            node = graph.get_node(result["id"])
+            attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
+            assert attrs.get("source_type") == "assistant"
+            assert node.speaker == "Assistant"
+
+    def test_dedup_update_sets_speaker_when_missing(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            first = store(
+                "Assistant found the Edamam API for nutrition labels",
+                owner_id="quaid",
+                skip_dedup=True,
+            )
+            second = store(
+                "Assistant found the Edamam API for nutrition labels",
+                owner_id="quaid",
+                source_type="assistant",
+                skip_dedup=False,
+            )
+            assert second["status"] in ("duplicate", "updated")
+            node = graph.get_node(first["id"])
+            assert node.speaker == "Assistant"
+
     def test_store_preserves_confidence(self, tmp_path):
         from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
