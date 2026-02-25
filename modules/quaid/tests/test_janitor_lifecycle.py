@@ -28,7 +28,7 @@ def _make_cfg(projects_enabled: bool = True):
         ),
         rag=SimpleNamespace(docs_dir="docs"),
         database=SimpleNamespace(path="data/memory.db"),
-        janitor=SimpleNamespace(
+        core=SimpleNamespace(
             parallel=SimpleNamespace(
                 enabled=True,
                 lock_enforcement_enabled=True,
@@ -304,7 +304,7 @@ def test_lifecycle_registry_skips_lock_enforcement_when_disabled(tmp_path):
     from core.lifecycle.janitor_lifecycle import LifecycleRegistry
 
     cfg = _make_cfg(False)
-    cfg.janitor.parallel.lock_enforcement_enabled = False
+    cfg.core.parallel.lock_enforcement_enabled = False
     registry = LifecycleRegistry()
     registry.register("writer", lambda _ctx: SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={}))
 

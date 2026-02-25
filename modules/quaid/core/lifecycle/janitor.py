@@ -1014,6 +1014,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         parallel_lifecycle_results = {}
         if task == "all" and dry_run:
             try:
+                parallel_cfg = getattr(getattr(_cfg, "core", None), "parallel", None)
+                if parallel_cfg is None:
+                    raise RuntimeError("Missing required config: core.parallel")
+                prepass_workers = int(getattr(parallel_cfg, "lifecycle_prepass_workers", 3) or 3)
+                prepass_workers = max(1, prepass_workers)
                 parallel_lifecycle_results = _LIFECYCLE_REGISTRY.run_many(
                     [
                         ("workspace", RoutineContext(cfg=_cfg, dry_run=True, workspace=_workspace())),
@@ -1037,7 +1042,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                             force_distill=force_distill,
                         )),
                     ],
-                    max_workers=3,
+                    max_workers=prepass_workers,
                 )
                 print("[lifecycle] Parallel dry-run prepass completed for workspace/docs/snippets/journal")
             except Exception as e:

@@ -297,16 +297,16 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
-    def test_janitor_parallel_llm_workers_default_is_4(self, tmp_path):
+    def test_core_parallel_llm_workers_default_is_4(self, tmp_path):
         import config
         old_config = config._config
         config._config = None
         try:
             config_file = tmp_path / "memory.json"
-            config_file.write_text(json.dumps({"janitor": {"parallel": {"enabled": True}}}))
+            config_file.write_text(json.dumps({"core": {"parallel": {"enabled": True}}}))
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
-                assert cfg.janitor.parallel.llm_workers == 4
+                assert cfg.core.parallel.llm_workers == 4
         finally:
             config._config = old_config
 

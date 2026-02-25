@@ -17,14 +17,15 @@ _POOL_SIZE = 0
 
 
 def _configured_slots() -> int:
-    try:
-        from config import get_config
+    from config import get_config
 
-        cfg = get_config()
-        slots = int(getattr(cfg.janitor.parallel, "llm_workers", 4) or 4)
-        return max(1, slots)
-    except Exception:
-        return 4
+    cfg = get_config()
+    core = getattr(cfg, "core", None)
+    parallel = getattr(core, "parallel", None) if core else None
+    if parallel is None:
+        raise RuntimeError("Missing required config: core.parallel")
+    slots = int(getattr(parallel, "llm_workers", 4) or 4)
+    return max(1, slots)
 
 
 def _ensure_pool() -> threading.BoundedSemaphore:
@@ -51,4 +52,3 @@ def acquire_llm_slot(timeout_seconds: Optional[float] = None) -> Iterator[None]:
         yield
     finally:
         sem.release()
-
