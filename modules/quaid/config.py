@@ -407,8 +407,26 @@ class AdapterConfig:
 
 
 @dataclass
+class PluginSlotsConfig:
+    adapter: str = ""  # single active adapter plugin ID
+    ingest: List[str] = field(default_factory=list)  # enabled ingest plugin IDs
+    datastores: List[str] = field(default_factory=list)  # enabled datastore plugin IDs
+
+
+@dataclass
+class PluginsConfig:
+    enabled: bool = True
+    strict: bool = True  # fail boot on invalid manifests/registration conflicts
+    api_version: int = 1
+    paths: List[str] = field(default_factory=lambda: ["plugins"])
+    allowlist: List[str] = field(default_factory=list)  # empty => allow all discovered
+    slots: PluginSlotsConfig = field(default_factory=PluginSlotsConfig)
+
+
+@dataclass
 class MemoryConfig:
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
+    plugins: PluginsConfig = field(default_factory=PluginsConfig)
     core: CoreConfig = field(default_factory=CoreConfig)
     systems: SystemsConfig = field(default_factory=SystemsConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
@@ -885,6 +903,40 @@ def _load_config_inner() -> MemoryConfig:
     adapter = AdapterConfig(
         type=str(adapter_data.get('type', 'standalone')).strip().lower(),
     )
+    plugins_data = config_data.get('plugins', {})
+    raw_paths = plugins_data.get('paths', [])
+    plugin_paths: List[str] = []
+    if isinstance(raw_paths, list):
+        plugin_paths = [str(p).strip() for p in raw_paths if str(p).strip()]
+    if not plugin_paths:
+        plugin_paths = ["plugins"]
+    raw_allowlist = plugins_data.get(
+        'allowlist',
+        plugins_data.get('allow_list', plugins_data.get('allowList', []))
+    )
+    allowlist: List[str] = []
+    if isinstance(raw_allowlist, list):
+        allowlist = [str(p).strip() for p in raw_allowlist if str(p).strip()]
+    slots_data = plugins_data.get('slots', {})
+    raw_ingest = slots_data.get('ingest', [])
+    ingest_slots = [str(p).strip() for p in raw_ingest if str(p).strip()] if isinstance(raw_ingest, list) else []
+    raw_datastores = slots_data.get(
+        'datastores',
+        slots_data.get('data_stores', slots_data.get('dataStores', []))
+    )
+    datastore_slots = [str(p).strip() for p in raw_datastores if str(p).strip()] if isinstance(raw_datastores, list) else []
+    plugins = PluginsConfig(
+        enabled=bool(plugins_data.get('enabled', True)),
+        strict=bool(plugins_data.get('strict', True)),
+        api_version=max(1, int(plugins_data.get('api_version', plugins_data.get('apiVersion', 1)))),
+        paths=plugin_paths,
+        allowlist=allowlist,
+        slots=PluginSlotsConfig(
+            adapter=str(slots_data.get('adapter', '')).strip(),
+            ingest=ingest_slots,
+            datastores=datastore_slots,
+        ),
+    )
 
     systems_data = config_data.get('systems', {})
     systems = SystemsConfig(
@@ -896,6 +948,7 @@ def _load_config_inner() -> MemoryConfig:
 
     _config = MemoryConfig(
         adapter=adapter,
+        plugins=plugins,
         core=core_cfg,
         systems=systems,
         models=models,
