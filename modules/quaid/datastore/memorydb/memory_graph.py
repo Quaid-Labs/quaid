@@ -3654,6 +3654,17 @@ def store(
 
     if not owner_id:
         raise ValueError("Owner is required")
+    # Normalize source_type aliases at storage boundary.
+    if source_type is not None:
+        source_type = str(source_type).strip().lower()
+        if source_type == "agent":
+            source_type = "assistant"
+        if source_type not in {"user", "assistant", "both", "tool", "import"}:
+            source_type = None
+
+    # Default speaker attribution for assistant-originated facts when omitted.
+    if (not speaker) and source_type == "assistant":
+        speaker = "Assistant"
     if speaker_entity_id and not actor_id:
         actor_id = speaker_entity_id
     if conversation_id and not source_conversation_id:
@@ -3692,6 +3703,8 @@ def store(
         attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
         if source_type and not attrs.get("source_type"):
             attrs["source_type"] = source_type
+        if speaker and not existing.speaker:
+            existing.speaker = speaker
         if is_technical:
             attrs["is_technical"] = True
         if source_channel and not attrs.get("source_channel"):
@@ -4794,7 +4807,7 @@ if __name__ == "__main__":
         store_p.add_argument("--speaker", default=None, help="Speaker name")
         store_p.add_argument("--skip-dedup", action="store_true", help="Skip deduplication check")
         store_p.add_argument("--knowledge-type", default="fact", choices=["fact", "belief", "preference", "experience"], help="Knowledge type (default: fact)")
-        store_p.add_argument("--source-type", default=None, choices=["user", "assistant", "both", "tool", "import"], help="Source type (user, assistant, both, tool, import)")
+        store_p.add_argument("--source-type", default=None, choices=["user", "assistant", "agent", "both", "tool", "import"], help="Source type (user, assistant|agent, both, tool, import)")
         store_p.add_argument("--keywords", default=None, help="Space-separated derived search keywords")
         store_p.add_argument("--created-at", default=None, help="Override created_at timestamp (ISO format)")
         store_p.add_argument("--accessed-at", default=None, help="Override accessed_at timestamp (ISO format)")
