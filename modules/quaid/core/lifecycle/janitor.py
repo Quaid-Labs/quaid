@@ -1011,17 +1011,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 return True
             return _can_apply_scope("project_docs_writes", f"project docs {action}: {doc_path}")
 
-        parallel_cfg = getattr(getattr(_cfg, "janitor", None), "parallel", None)
-        lifecycle_prepass_enabled = bool(
-            getattr(parallel_cfg, "enabled", True)
-            and getattr(parallel_cfg, "lifecycle_prepass_enabled", True)
-        )
-        lifecycle_prepass_workers = max(
-            1,
-            int(getattr(parallel_cfg, "lifecycle_prepass_workers", 3) or 3),
-        )
         parallel_lifecycle_results = {}
-        if task == "all" and dry_run and lifecycle_prepass_enabled:
+        if task == "all" and dry_run:
             try:
                 parallel_lifecycle_results = _LIFECYCLE_REGISTRY.run_many(
                     [
@@ -1046,12 +1037,9 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                             force_distill=force_distill,
                         )),
                     ],
-                    max_workers=lifecycle_prepass_workers,
+                    max_workers=3,
                 )
-                print(
-                    f"[lifecycle] Parallel dry-run prepass completed "
-                    f"for workspace/docs/snippets/journal (workers={lifecycle_prepass_workers})"
-                )
+                print("[lifecycle] Parallel dry-run prepass completed for workspace/docs/snippets/journal")
             except Exception as e:
                 print(f"[lifecycle] Parallel prepass unavailable, falling back to sequential: {e}")
 

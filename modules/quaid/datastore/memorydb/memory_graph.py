@@ -122,12 +122,7 @@ class Node:
     confirmation_count: int = 0  # How many times this fact has been re-confirmed
     last_confirmed_at: Optional[str] = None  # When last confirmed by re-extraction
     owner_id: Optional[str] = None  # Multi-user: who owns this memory
-    actor_id: Optional[str] = None  # Canonical entity asserting/performing this memory event
-    subject_entity_id: Optional[str] = None  # Canonical entity this memory is about
     session_id: Optional[str] = None  # Session where this memory was created
-    source_channel: Optional[str] = None  # Channel/source type (telegram/discord/slack/dm/etc.)
-    source_conversation_id: Optional[str] = None  # Stable conversation/thread/group identifier
-    source_author_id: Optional[str] = None  # External speaker/author handle or ID
     fact_type: str = "unknown"  # mutable, immutable, contextual
     knowledge_type: str = "fact"  # fact, belief, preference, experience
     extraction_confidence: float = 0.5  # How confident the classifier was
@@ -210,11 +205,6 @@ class MemoryGraph:
                 ("content_hash", "TEXT"),
                 ("superseded_by", "TEXT"),
                 ("knowledge_type", "TEXT DEFAULT 'fact'"),
-                ("actor_id", "TEXT"),
-                ("subject_entity_id", "TEXT"),
-                ("source_channel", "TEXT"),
-                ("source_conversation_id", "TEXT"),
-                ("source_author_id", "TEXT"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {typedef}")
@@ -459,11 +449,10 @@ class MemoryGraph:
                 INSERT OR REPLACE INTO nodes
                 (id, type, name, attributes, embedding, verified, pinned, confidence,
                  source, source_id, privacy, valid_from, valid_until,
-                 created_at, updated_at, accessed_at, access_count, storage_strength,
-                 owner_id, actor_id, subject_entity_id, session_id, source_channel, source_conversation_id, source_author_id,
+                 created_at, updated_at, accessed_at, access_count, storage_strength, owner_id, session_id,
                  fact_type, knowledge_type, extraction_confidence, status, speaker, content_hash, superseded_by,
                  confirmation_count, last_confirmed_at, keywords)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 node.id, node.type, node.name,
                 json.dumps(node.attributes),
@@ -480,12 +469,7 @@ class MemoryGraph:
                 node.access_count,
                 node.storage_strength,
                 node.owner_id,
-                node.actor_id,
-                node.subject_entity_id,
                 node.session_id,
-                node.source_channel,
-                node.source_conversation_id,
-                node.source_author_id,
                 node.fact_type,
                 node.knowledge_type,
                 node.extraction_confidence,
@@ -533,8 +517,7 @@ class MemoryGraph:
                     valid_from = ?, valid_until = ?,
                     updated_at = ?, accessed_at = ?, access_count = ?,
                     storage_strength = ?,
-                    owner_id = ?, actor_id = ?, subject_entity_id = ?, session_id = ?,
-                    source_channel = ?, source_conversation_id = ?, source_author_id = ?,
+                    owner_id = ?, session_id = ?,
                     fact_type = ?, knowledge_type = ?, extraction_confidence = ?,
                     status = ?, speaker = ?,
                     content_hash = ?, superseded_by = ?,
@@ -556,12 +539,7 @@ class MemoryGraph:
                 node.access_count,
                 node.storage_strength,
                 node.owner_id,
-                node.actor_id,
-                node.subject_entity_id,
                 node.session_id,
-                node.source_channel,
-                node.source_conversation_id,
-                node.source_author_id,
                 node.fact_type,
                 node.knowledge_type,
                 node.extraction_confidence,
@@ -689,12 +667,7 @@ class MemoryGraph:
             access_count=row['access_count'],
             storage_strength=row['storage_strength'] if 'storage_strength' in row.keys() else 0.0,
             owner_id=row['owner_id'] if 'owner_id' in row.keys() else None,
-            actor_id=row['actor_id'] if 'actor_id' in row.keys() else None,
-            subject_entity_id=row['subject_entity_id'] if 'subject_entity_id' in row.keys() else None,
             session_id=row['session_id'] if 'session_id' in row.keys() else None,
-            source_channel=row['source_channel'] if 'source_channel' in row.keys() else None,
-            source_conversation_id=row['source_conversation_id'] if 'source_conversation_id' in row.keys() else None,
-            source_author_id=row['source_author_id'] if 'source_author_id' in row.keys() else None,
             fact_type=row['fact_type'] if 'fact_type' in row.keys() else 'unknown',
             knowledge_type=row['knowledge_type'] if 'knowledge_type' in row.keys() else 'fact',
             extraction_confidence=row['extraction_confidence'] if 'extraction_confidence' in row.keys() else 0.5,
@@ -793,9 +766,9 @@ class MemoryGraph:
             if _is_fail_hard_mode():
                 raise RuntimeError(
                     "Embedding provider returned no vector for semantic search. "
-                    "Fail-hard mode is ON (retrieval.fail_hard=true / retrieval.failHard=true), "
+                    "Fail-hard mode is ON (QUAID_FAIL_HARD=1 / retrieval.fail_hard=true), "
                     "so degraded FTS-only fallback is blocked. "
-                    "Set retrieval.fail_hard=false (or retrieval.failHard=false) to allow fallback, "
+                    "You can set QUAID_FAIL_HARD=0 (or retrieval.fail_hard=false) to allow fallback, "
                     "but this is not recommended because it masks infrastructure faults."
                 )
             return []
@@ -2345,6 +2318,10 @@ def _is_fail_hard_mode() -> bool:
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("MOCK_EMBEDDINGS"):
         return False
 
+    raw = str(os.environ.get("QUAID_FAIL_HARD", "")).strip().lower()
+    if raw:
+        return raw not in {"0", "false", "no", "off"}
+
     try:
         return bool(get_config().retrieval.fail_hard)
     except Exception:
@@ -2412,7 +2389,13 @@ def _compute_retrieval_difficulty(result: dict) -> float:
     return min(difficulty, 1.0)
 
 
-def _compute_composite_score(node: Node, search_score: float, config_retrieval=None, intent: str = "GENERAL") -> float:
+def _compute_composite_score(
+    node: Node,
+    search_score: float,
+    config_retrieval=None,
+    intent: str = "GENERAL",
+    prefer_fresh: bool = False,
+) -> float:
     """Compute composite score mixing search relevance, recency, and frequency.
 
     Weights: search_relevance=0.60, recency=0.20, frequency=0.15
@@ -2434,6 +2417,12 @@ def _compute_composite_score(node: Node, search_score: float, config_retrieval=N
         w_recency = getattr(config_retrieval, 'composite_recency_weight', 0.20)
         w_frequency = getattr(config_retrieval, 'composite_frequency_weight', 0.15)
         recency_days = getattr(config_retrieval, 'recency_decay_days', 90)
+
+    # Temporal-current queries should favor freshness over legacy popularity.
+    if prefer_fresh:
+        w_relevance = min(w_relevance, 0.50)
+        w_recency = max(w_recency, 0.35)
+        w_frequency = min(w_frequency, 0.10)
 
     # Base search relevance (already 0-1 from quality_score)
     relevance = min(search_score, 1.0)
@@ -2512,6 +2501,8 @@ def _compute_composite_score(node: Node, search_score: float, config_retrieval=N
         composite = relevance + confidence_bonus + confirmation_bonus + temporal_data_bonus + storage_bonus
 
     # Apply temporal validity penalty
+    if prefer_fresh and temporal_penalty > 0.0:
+        temporal_penalty = min(0.6, temporal_penalty * 1.5)
     composite = max(0.0, composite - temporal_penalty)
 
     return min(composite, 1.0)
@@ -2811,12 +2802,6 @@ def recall(
     debug: bool = False,
     technical_scope: str = "any",
     low_signal_retry: bool = True,
-    actor_id: Optional[str] = None,
-    subject_entity_id: Optional[str] = None,
-    source_channel: Optional[str] = None,
-    source_conversation_id: Optional[str] = None,
-    source_author_id: Optional[str] = None,
-    include_unscoped: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Recall memories matching a query.
@@ -2885,6 +2870,10 @@ def recall(
     else:
         intent = "GENERAL"
         type_boosts = {}
+    _temporal_fresh_cues = (
+        r"\b(latest|currently|current|now|today|most recent|recently|as of)\b"
+    )
+    prefer_fresh = bool(re.search(_temporal_fresh_cues, clean_query, re.IGNORECASE))
 
     # Fast Ollama health check — skip semantic search entirely if Ollama is down
     # Saves ~30s of embedding timeout waits when Ollama is unreachable
@@ -2907,9 +2896,9 @@ def recall(
         if _is_fail_hard_mode():
             raise RuntimeError(
                 "Embedding provider unavailable during recall. "
-                "Fail-hard mode is ON (retrieval.fail_hard=true / retrieval.failHard=true), "
+                "Fail-hard mode is ON (QUAID_FAIL_HARD=1 / retrieval.fail_hard=true), "
                 "so degraded FTS-only fallback is blocked. "
-                "Set retrieval.fail_hard=false (or retrieval.failHard=false) to allow fallback, "
+                "You can set QUAID_FAIL_HARD=0 (or retrieval.fail_hard=false) to allow fallback, "
                 "but this is not recommended because it masks infrastructure faults."
             )
         results = []  # Skip semantic search, go straight to FTS fallback
@@ -2941,7 +2930,13 @@ def recall(
     scored_results = []
     debug_info = {} if debug else None
     for node, quality_score in results:
-        composite = _compute_composite_score(node, quality_score, config_retrieval, intent=intent)
+        composite = _compute_composite_score(
+            node,
+            quality_score,
+            config_retrieval,
+            intent=intent,
+            prefer_fresh=prefer_fresh,
+        )
         # Apply intent-based type boost
         type_boost_applied = 1.0
         if type_boosts and node.type in type_boosts:
@@ -3023,7 +3018,13 @@ def recall(
                     extra = graph.search_hybrid(sq, limit=limit * 2, privacy=privacy, owner_id=owner_id, current_session_id=current_session_id, compaction_time=compaction_time, intent=intent)
                     for node, quality_score in extra:
                         if node.id not in existing_ids:
-                            composite = _compute_composite_score(node, quality_score, config_retrieval, intent=intent)
+                            composite = _compute_composite_score(
+                                node,
+                                quality_score,
+                                config_retrieval,
+                                intent=intent,
+                                prefer_fresh=prefer_fresh,
+                            )
                             if type_boosts and node.type in type_boosts:
                                 composite = min(composite * type_boosts[node.type], 1.0)
                             if composite >= min_similarity:
@@ -3078,11 +3079,6 @@ def recall(
             "valid_until": node.valid_until,
             "privacy": node.privacy,
             "owner_id": node.owner_id,
-            "actor_id": node.actor_id,
-            "subject_entity_id": node.subject_entity_id,
-            "source_channel": node.source_channel,
-            "source_conversation_id": node.source_conversation_id,
-            "source_author_id": node.source_author_id,
             "_multi_pass": node.id in _multi_pass_ids,
             "is_technical": _attrs.get("is_technical", False),
             "source_type": _attrs.get("source_type"),
@@ -3134,12 +3130,6 @@ def recall(
                                     "verified": co_node.verified,
                                     "pinned": co_node.pinned,
                                     "id": co_node.id,
-                                    "owner_id": co_node.owner_id,
-                                    "actor_id": co_node.actor_id,
-                                    "subject_entity_id": co_node.subject_entity_id,
-                                    "source_channel": co_node.source_channel,
-                                    "source_conversation_id": co_node.source_conversation_id,
-                                    "source_author_id": co_node.source_author_id,
                                     "via_relation": "co_session",
                                     "hop_depth": 0,
                                     "is_technical": _co_attrs.get("is_technical", False),
@@ -3214,12 +3204,6 @@ def recall(
                             "verified": rel_node.verified,
                             "pinned": rel_node.pinned,
                             "id": rel_node.id,
-                            "owner_id": rel_node.owner_id,
-                            "actor_id": rel_node.actor_id,
-                            "subject_entity_id": rel_node.subject_entity_id,
-                            "source_channel": rel_node.source_channel,
-                            "source_conversation_id": rel_node.source_conversation_id,
-                            "source_author_id": rel_node.source_author_id,
                             "via_relation": relation,
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
@@ -3255,12 +3239,6 @@ def recall(
                             "verified": rel_node.verified,
                             "pinned": rel_node.pinned,
                             "id": rel_node.id,
-                            "owner_id": rel_node.owner_id,
-                            "actor_id": rel_node.actor_id,
-                            "subject_entity_id": rel_node.subject_entity_id,
-                            "source_channel": rel_node.source_channel,
-                            "source_conversation_id": rel_node.source_conversation_id,
-                            "source_author_id": rel_node.source_author_id,
                             "via_relation": relation,
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
@@ -3268,38 +3246,6 @@ def recall(
                             "is_technical": _rel_attrs.get("is_technical", False),
                             "project": _rel_attrs.get("project"),
                         })
-
-    # Forward-compatible entity/source scoping filter (multi-user groundwork).
-    actor_scope = str(actor_id or "").strip() or None
-    subject_scope = str(subject_entity_id or "").strip() or None
-    source_channel_scope = str(source_channel or "").strip().lower() or None
-    source_conversation_scope = str(source_conversation_id or "").strip() or None
-    source_author_scope = str(source_author_id or "").strip() or None
-    if any([actor_scope, subject_scope, source_channel_scope, source_conversation_scope, source_author_scope]):
-        def _scope_match(value: Optional[str], expected: Optional[str], *, normalize_lower: bool = False) -> bool:
-            if not expected:
-                return True
-            actual = str(value or "").strip()
-            if not actual:
-                return bool(include_unscoped)
-            if normalize_lower:
-                return actual.lower() == expected.lower()
-            return actual == expected
-
-        filtered: List[Dict[str, Any]] = []
-        for r in output:
-            if not _scope_match(r.get("actor_id"), actor_scope):
-                continue
-            if not _scope_match(r.get("subject_entity_id"), subject_scope):
-                continue
-            if not _scope_match(r.get("source_channel"), source_channel_scope, normalize_lower=True):
-                continue
-            if not _scope_match(r.get("source_conversation_id"), source_conversation_scope):
-                continue
-            if not _scope_match(r.get("source_author_id"), source_author_scope):
-                continue
-            filtered.append(r)
-        output = filtered
 
     # Explicit scope filter for technical vs personal retrieval.
     if technical_scope == "technical":
@@ -3402,12 +3348,6 @@ def recall(
                         debug=False,
                         technical_scope=technical_scope,
                         low_signal_retry=False,
-                        actor_id=actor_id,
-                        subject_entity_id=subject_entity_id,
-                        source_channel=source_channel,
-                        source_conversation_id=source_conversation_id,
-                        source_author_id=source_author_id,
-                        include_unscoped=include_unscoped,
                     )
                     if len(retry_output) > len(final_output):
                         return retry_output
@@ -3460,12 +3400,7 @@ def store(
     source: Optional[str] = None,
     source_id: Optional[str] = None,
     owner_id: Optional[str] = None,
-    actor_id: Optional[str] = None,
-    subject_entity_id: Optional[str] = None,
     session_id: Optional[str] = None,
-    source_channel: Optional[str] = None,
-    source_conversation_id: Optional[str] = None,
-    source_author_id: Optional[str] = None,
     fact_type: str = "mutable",
     extraction_confidence: float = 0.5,
     dedup_threshold: float = 0.95,  # Catch near-identical duplicates (was 0.92, raised to avoid false positives on similar-but-different facts)
@@ -3812,15 +3747,10 @@ def store(
         source=source,
         source_id=source_id,
         confidence=adjusted_confidence,
-        actor_id=actor_id,
-        subject_entity_id=subject_entity_id,
         fact_type=fact_type,
         knowledge_type=knowledge_type,
         extraction_confidence=extraction_confidence,
-        speaker=speaker,
-        source_channel=source_channel,
-        source_conversation_id=source_conversation_id,
-        source_author_id=source_author_id,
+        speaker=speaker
     )
     node.owner_id = owner_id
     node.session_id = session_id
@@ -4057,11 +3987,6 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
             "pinned": node.pinned,
             "confidence": node.confidence,
             "owner_id": node.owner_id,
-            "actor_id": node.actor_id,
-            "subject_entity_id": node.subject_entity_id,
-            "source_channel": node.source_channel,
-            "source_conversation_id": node.source_conversation_id,
-            "source_author_id": node.source_author_id,
             "created_at": node.created_at,
             "updated_at": node.updated_at,
             "attributes": node.attributes
@@ -4564,11 +4489,6 @@ if __name__ == "__main__":
         store_p.add_argument("--privacy", default="shared", help="Privacy level (default: shared)")
         store_p.add_argument("--session-id", default=None, help="Session ID")
         store_p.add_argument("--speaker", default=None, help="Speaker name")
-        store_p.add_argument("--actor-id", default=None, help="Canonical actor/entity ID for this memory event")
-        store_p.add_argument("--subject-entity-id", default=None, help="Canonical subject entity ID this memory is about")
-        store_p.add_argument("--source-channel", default=None, help="Source channel type (telegram/discord/slack/dm/etc.)")
-        store_p.add_argument("--source-conversation-id", default=None, help="Stable conversation/thread/group identifier")
-        store_p.add_argument("--source-author-id", default=None, help="External speaker/author handle or ID")
         store_p.add_argument("--skip-dedup", action="store_true", help="Skip deduplication check")
         store_p.add_argument("--knowledge-type", default="fact", choices=["fact", "belief", "preference", "experience"], help="Knowledge type (default: fact)")
         store_p.add_argument("--source-type", default=None, choices=["user", "assistant", "both", "tool", "import"], help="Source type (user, assistant, both, tool, import)")
@@ -4802,12 +4722,7 @@ if __name__ == "__main__":
                     extraction_confidence=args.extraction_confidence,
                     source=args.source,
                     owner_id=owner,
-                    actor_id=args.actor_id,
-                    subject_entity_id=args.subject_entity_id,
                     session_id=args.session_id,
-                    source_channel=args.source_channel,
-                    source_conversation_id=args.source_conversation_id,
-                    source_author_id=args.source_author_id,
                     skip_dedup=args.skip_dedup,
                     speaker=args.speaker,
                     status=args.status,

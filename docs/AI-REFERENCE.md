@@ -51,11 +51,11 @@ Write request
 | `core/lifecycle/janitor_lifecycle.py` | Lifecycle routine registry and dispatch | `LifecycleRegistry`, `RoutineContext`, `RoutineResult`, `build_default_registry()` |
 | `adaptors/openclaw/maintenance.py` | OpenClaw-specific lifecycle registrations | `register_lifecycle_routines()` (workspace audit registration) |
 | `core/lifecycle/workspace_audit.py` | Workspace markdown audit implementation | `run_workspace_check()`, `check_bloat()` |
-| `datastore/docsdb/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
+| `core/lifecycle/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
 | `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search()`, `index_docs()`, `register_lifecycle_routines()` |
-| `datastore/docsdb/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
-| `datastore/docsdb/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
-| `datastore/docsdb/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
+| `core/docs/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
+| `core/docs/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
+| `core/docs/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
 | `core/runtime/events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
 | `core/runtime/notify.py` | User notifications via adapter/runtime context | `notify_user()`, retrieval/extraction/janitor/doc notifications |
 | `core/runtime/logger.py` | Structured JSONL logger with rotation | `Logger`, `rotate_logs()`, `memory_logger`, `janitor_logger` |
@@ -65,8 +65,6 @@ Write request
 | `core/llm/clients.py` | Compatibility alias to canonical LLM client module | module alias to `lib.llm_clients` |
 | `ingest/extract.py` | Extraction module — transcript to memories | `extract_from_transcript()`, `parse_session_jsonl()`, `build_transcript()` |
 | `ingest/docs_ingest.py` | Ingest pipeline for docs from transcript/source mapping | ingest orchestration helpers |
-| `ingest/session_logs_ingest.py` | Lifecycle session-log ingest bridge (adapter/core -> datastore) | `_run()`, `ingest/list/load/last/search` CLI |
-| `datastore/memorydb/session_logs.py` | Datastore-owned session transcript indexing/search | `index_session_log()`, `list_recent_sessions()`, `load_session()`, `load_last_session()`, `search_session_logs()` |
 | `datastore/memorydb/semantic_clustering.py` | Semantic clustering for contradiction candidate reduction | `classify_node_semantic_cluster()`, `get_memory_clusters()` |
 | `datastore/memorydb/schema.sql` | Database DDL (nodes, edges, FTS5, indexes, operational tables) | Full schema definition |
 | `datastore/memorydb/enable_wal.py` | WAL mode enablement helper | `enable_wal_mode()` |
@@ -90,7 +88,7 @@ Write request
 | File | Purpose | Notes |
 |------|---------|-------|
 | `adaptors/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
-| `adaptors/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`, `session_recall`, `session_logs_search`), extraction triggers, notifications |
+| `adaptors/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
 | `orchestrator/default-orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
 | `core/data-writers.ts` | Canonical write routing/dispatch | `createDataWriteEngine()`, `writeData()`, DataWriter registry/specs |
 | `adaptors/openclaw/index.js` / `adapter.js` / `orchestrator/default-orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
@@ -351,7 +349,7 @@ Merges are crash-safe, executed in single database transactions.
 | 1c | docs_cleanup | Clean bloated docs (churn-based) | ~$0.01-0.05 |
 | 1d | snippets | Soul snippets review (FOLD/REWRITE/DISCARD into core markdown) | ~$0.01-0.05 |
 | 1d | journal | Distill journal entries into core markdown | ~$0.05-0.10 |
-| 6 | edges | Not scheduled in janitor; edges are extracted during capture | N/A |
+| 6 | edges | Edge extraction (deprecated, skipped -- moved to capture time) | N/A |
 | 7 | rag | Reindex docs for RAG + project discovery | Free (local) |
 | 8 | tests | Run pytest suite | Free |
 | 9 | cleanup | Prune old logs, orphaned embeddings | Free |
@@ -398,7 +396,7 @@ The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The snake_c
 ### TypeScript / Gateway
 
 #### TS/JS Sync
-`adaptors/openclaw/index.ts` is source of truth, `adaptors/openclaw/index.js` must match manually. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
+`adaptors/openclaw/adapter.ts` is source of truth for runtime behavior; `adaptors/openclaw/adapter.js` must match manually. `adaptors/openclaw/index.ts` remains a minimal entry shim. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
 
 #### Gateway Stale Process
 `clawdbot gateway restart` does not reliably kill the old process. The reliable sequence is:
@@ -430,8 +428,8 @@ Has a 30-second cache. To force a re-check, clear `_ollama_healthy._cache`.
 #### create-edge --create-missing
 Without the `--create-missing` flag, the recovery wrapper silently fails on edges for entities not yet in the graph. Always include this flag when creating edges programmatically.
 
-#### Merge Safety Invariants
-All 3 merge paths (dedup/contradiction/review) use the shared `_merge_nodes_into()` helper. Required invariants are: confidence inheritance, `confirmation_count` sum, edge migration, `status="active"`, and owner inheritance from originals. These invariants are covered by 19 tests.
+#### Merge Destructive Pattern (FIXED)
+All 3 merge paths (dedup/contradiction/review) previously had 5 bugs: confidence reset to default, `confirmation_count` reset, wrong status, edges deleted instead of migrated, hardcoded owner. Now fixed with the shared `_merge_nodes_into()` helper. 19 tests cover: confidence inheritance, confirmation_count sum, edge migration, status="active", owner from originals.
 
 #### Dedup Merge owner_id
 `datastore/memorydb/maintenance_ops.py` currently defaults `owner_id` when merging without source nodes. Benchmark reprocessing may need a post-janitor SQL fixup to normalize owner IDs.
@@ -550,11 +548,6 @@ python3 ingest/extract.py transcript.txt --owner default
 python3 ingest/extract.py session.jsonl --dry-run --json
 echo "User: hi" | python3 ingest/extract.py - --owner default
 
-# Session log ingest/search
-python3 ingest/session_logs_ingest.py ingest --session-id <sid> --owner default --label Compaction --session-file ~/.openclaw/sessions/<sid>.jsonl
-python3 ingest/session_logs_ingest.py list --owner default --limit 10
-python3 ingest/session_logs_ingest.py search "query terms" --owner default --limit 5
-
 # Janitor pipeline
 python3 core/lifecycle/janitor.py --task all --dry-run           # Preview (no changes)
 python3 core/lifecycle/janitor.py --task review --apply           # Opus review of pending facts
@@ -566,9 +559,9 @@ python3 core/lifecycle/janitor.py --task duplicates --apply       # Dedup pass
 python3 core/lifecycle/janitor.py --task cleanup                  # Prune old logs
 
 # Documentation
-python3 datastore/docsdb/updater.py check                      # Check doc staleness (free)
-python3 datastore/docsdb/updater.py update-stale --apply       # Fix stale docs (Opus calls)
-python3 datastore/docsdb/rag.py search "query text"            # RAG search (free, local)
+python3 core/docs/updater.py check                      # Check doc staleness (free)
+python3 core/docs/updater.py update-stale --apply       # Fix stale docs (Opus calls)
+python3 datastore/docsdb/rag.py search "query text"     # RAG search (free, local)
 
 # Projects
 python3 docs_registry.py list --project quaid
@@ -607,16 +600,14 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `CLAWDBOT_WORKSPACE` | Workspace root hint (for OpenClaw paths) | Optional |
 | `MEMORY_DB_PATH` | Override database file path | `<quaid_home>/data/memory.db` |
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
-| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Runtime/provider dependent; fallback paths only when `retrieval.fail_hard=false` |
+| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from `.env` file or macOS Keychain |
 | `OPENAI_API_KEY` | OpenAI API key (for benchmark judging) | Must be set explicitly |
 | `OPENROUTER_API_KEY` | OpenRouter API key (alternative LLM routing) | Must be set explicitly |
 | `QUAID_DEV` | Enable dev mode (unit tests in janitor, verbose output) | Not set |
 | `QUAID_QUIET` | Suppress informational config messages | Not set |
 | `MOCK_EMBEDDINGS` | Use deterministic fake embeddings (for testing) | Not set |
 
-Credential resolution honors `retrieval.fail_hard`:
-- `true` (default): no fallback chains.
-- `false`: adapter fallback chains are allowed, with explicit warning logs.
+API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOME` -> macOS Keychain (OpenClaw adapter only).
 
 ---
 

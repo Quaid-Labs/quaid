@@ -20,46 +20,35 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Fails if answer includes stale/low-confidence hedge language.
 5. Notification matrix (`suite=notify|full`)
    - Verifies behavior across `quiet`, `normal`, `debug`.
-   - Waits for reset extraction completion before evaluating notification assertions (avoids queue-timing false negatives).
-   - Uses aggregate activity detection (`config-load + sent + no-channel + send-failed`) for normal/debug paths.
    - Detects fatal notify CLI wiring errors.
    - Optional strict mode: `QUAID_E2E_NOTIFY_REQUIRE_DELIVERY=true` requires active channel context and successful normal/debug sends.
 6. Ingestion stress (`suite=ingest|full|core`)
    - Injects mixed fact/journal/snippet/project content, runs compaction path, verifies extraction/project activity.
-7. Project CRUD (`suite=project|full|core|pre-benchmark|nightly`)
-   - Deterministic project lifecycle assertions through docs-registry CLI:
-     - create + list visibility
-     - rename propagation
-     - archive transition + directory move to `projects/archive/`
-     - delete removal from active listing
-8. Session tools (`suite=session|full|core|pre-benchmark|nightly|blocker`)
-   - Seeds a unique session marker, triggers compaction indexing, then validates:
-     - `session_logs_search` can recover the marker in a new query session.
-     - `session_recall action=list` returns indexed-session context.
-9. Janitor end-to-end (`suite=janitor|full|core`)
+7. Janitor end-to-end (`suite=janitor|full|core`)
    - Optional seed path (`suite=seed` or implied by `full/core`) populates pending maintenance workload.
+   - Seed path bootstraps memorydb schema before fixture insertion so clean/new workspaces do not fail with missing `nodes` table.
    - Runs janitor apply/dry-run and verifies `janitor_runs` + key maintenance side effects.
    - `suite=pre-benchmark` additionally enforces graduation invariant (`pending=0`, `approved=0`) with leftover-ID failure preview.
-10. Failure diagnostics (all suites)
+8. Failure diagnostics (all suites)
    - On error, runner prints pending signals, timeout logs, notify-worker tail, gateway status, and gateway logs.
-11. Machine-readable outcome summary (all suites)
+9. Machine-readable outcome summary (all suites)
    - Writes run summary to `/tmp/quaid-e2e-last-summary.json` (override with `QUAID_E2E_SUMMARY_PATH`).
    - Appends summary history to `/tmp/quaid-e2e-summary-history.jsonl` (override with `QUAID_E2E_SUMMARY_HISTORY_PATH`).
    - Includes overall status, duration, stage-by-stage pass/skip/fail state, per-stage durations, failure metadata, and runtime-budget status.
    - `modules/quaid/scripts/e2e-summary-check.py` validates status/duration and emits compact CI-friendly output.
    - `modules/quaid/scripts/e2e-budget-tune.py` recommends runtime budgets from history percentiles (`--stage` for per-stage tuning).
    - Nightly mode also emits `/tmp/quaid-e2e-budget-recommendation.json` (override `QUAID_E2E_BUDGET_RECOMMENDATION_PATH`) from accumulated history.
-12. Runtime budget presets
+10. Runtime budget presets
    - `--runtime-budget-profile auto|off|quick|deep` controls wall-clock budget gating.
    - `--runtime-budget-seconds` overrides budget in seconds.
    - Budget overrun fails run with explicit `runtime_budget_exceeded` failure reason in summary.
    - `QUAID_E2E_STAGE_BUDGETS_JSON='{"bootstrap":120,"notify_matrix":300}'` enables per-stage duration gates.
    - Nightly auto-tuning can populate stage budgets from history (`QUAID_E2E_AUTO_STAGE_BUDGETS=true`).
-13. Bootstrap collision recovery
+11. Bootstrap collision recovery
    - If worktree bootstrap fails with a workspace "already exists" collision after wipe, runner performs one forced cleanup + retry automatically.
-14. Workspace teardown reliability
+12. Workspace teardown reliability
    - Successful runs now retry workspace deletion (`~/quaid/e2e-test`) to handle transient file-creation races during shutdown.
-15. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
+13. Resilience and concurrency (`suite=resilience` or `suite=nightly`)
    - Validates recovery after forced gateway restart mid-session.
    - Validates live turns under janitor pressure.
    - Validates cross-session interleaving under janitor pressure; cursor checks enforce identity when cursor files are present.
@@ -77,7 +66,7 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Includes malformed-upstream-response probe (invalid JSON response parse failure + recovery turn).
    - Includes source-mapping drift fixture coverage via project-updater pressure path.
    - Includes carryover trend assertion across repeated janitor stress passes.
-16. Janitor parallel benchmark reporting (`suite=janitor-parallel-bench`)
+14. Janitor parallel benchmark reporting (`suite=janitor-parallel-bench`)
    - Emits `/tmp/quaid-e2e-janitor-parallel-bench.json` (override `QUAID_E2E_JANITOR_PARALLEL_REPORT_PATH`).
    - Captures seeded before/after carryover signals plus janitor task duration/change/error data from `janitor-stats.json`.
    - Enforces threshold gates for benchmark automation:
@@ -111,13 +100,9 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Nightly/full coverage with strict notification-delivery enforcement enabled.
 6. `--suite janitor-parallel-bench`
    - Janitor-focused benchmark lane (seed + pre-benchmark guards + benchmark-mode parallel LLM settings).
-7. `--suite project`
-   - Project CRUD-only lane.
-8. `--suite session`
-   - Session tools lane (`session_logs_search`, `session_recall`).
-9. `--quick-bootstrap`
+7. `--quick-bootstrap`
    - Skip OpenClaw source refresh/install for faster local loops.
-10. `--reuse-workspace`
+8. `--reuse-workspace`
    - Reuse existing `~/quaid/e2e-test` when possible; fallback to clean bootstrap on mismatch.
-11. `--runtime-budget-profile`, `--runtime-budget-seconds`
+9. `--runtime-budget-profile`, `--runtime-budget-seconds`
    - Enable explicit runtime regression gates for nightly and long suites.

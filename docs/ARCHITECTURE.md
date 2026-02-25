@@ -82,7 +82,6 @@ Quaid also exposes a queue-backed event bus for adapter-independent orchestratio
 
 - Event queue and handlers are implemented in `modules/quaid/core/runtime/events.py`.
 - Adapter lifecycle hooks emit events like `session.new`, `session.reset`, and `session.compaction`.
-- Lifecycle hooks also emit `session.ingest_log` so session transcript indexing runs through ingest/datastore boundaries.
 - CLI and MCP both support emitting/listing/processing events so orchestration can be tested and automated outside gateway hooks.
 - Event capabilities are discoverable via a registry (`event capabilities`, `memory_event_capabilities`) so orchestration can adapt strategy based on what this runtime supports.
 
@@ -121,7 +120,7 @@ Conversation messages
 
 Extraction can be triggered from any of Quaid's three interfaces:
 
-- **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/index.ts`): Compaction extraction uses gateway hook `before_compaction` (context being compacted). Reset/new extraction is routed via OpenClaw internal workspace hooks (`command:new`, `command:reset`) that queue `ResetSignal` for Quaid processing, due to upstream typed-hook boundary issues for `before_reset` (https://github.com/openclaw/openclaw/issues/23895). Programmatic compaction is available via gateway RPC `sessions.compact`.
+- **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/adapter.ts`): Compaction extraction uses gateway hook `before_compaction` (context being compacted). Reset/new extraction is routed via OpenClaw internal workspace hooks (`command:new`, `command:reset`) that queue `ResetSignal` for Quaid processing, due to upstream typed-hook boundary issues for `before_reset` (https://github.com/openclaw/openclaw/issues/23895). Programmatic compaction is available via gateway RPC `sessions.compact`.
 - **MCP server** (`modules/quaid/core/interface/mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
 - **CLI** (`modules/quaid/ingest/extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
 
@@ -441,7 +440,7 @@ The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 17 tasks in a defin
 
 ### Execution Order
 
-Task IDs are stable operational labels. Execution order is the contract.
+The task numbering is historical -- tasks were added over time and the numbers reflect that. The execution order is what matters, not the labels.
 
 **Phase 1: Preparation**
 
@@ -553,7 +552,7 @@ During the janitor, an API failure in any memory task (review, dedup, contradict
 Before every embedding operation, `_ollama_healthy()` performs a 200ms health check against the Ollama API, cached for 30 seconds. If Ollama is unreachable:
 
 - **During extraction:** Facts are stored without embeddings. The janitor's `embeddings` task (Phase 1) backfills missing embeddings on its next run.
-- **During retrieval:** If `retrieval.fail_hard=false`, vector search may degrade to FTS-only (keyword search) with warning logs. If `retrieval.fail_hard=true`, retrieval raises instead of degrading.
+- **During retrieval:** Vector search is skipped entirely. Retrieval falls back to FTS-only (keyword search), which still returns results but with lower recall quality. The fallback is transparent to the user.
 
 ### SQLite Lock Contention
 
@@ -563,9 +562,7 @@ If a write does fail after the timeout, `get_connection()` catches the exception
 
 ### General Strategy
 
-The system is configurable between strict and degraded behavior:
-- `retrieval.fail_hard=true` emphasizes correctness and explicit failure signals.
-- `retrieval.fail_hard=false` emphasizes continuity with noisy fallback logging.
+The system follows a "store what you can, skip what you can't" philosophy. A failed embedding doesn't prevent fact storage. A failed API call doesn't crash the gateway. A failed janitor task doesn't corrupt existing data. The worst case for any single failure is a temporary reduction in recall quality, which self-heals on the next successful run.
 
 ---
 
@@ -656,7 +653,7 @@ docs_registry.py find-project path/to/file.py   # Which project owns this file?
 docs_registry.py discover --project myproject    # Auto-discover docs in project dir
 ```
 
-**Doc Auto-Update** (`datastore/docsdb/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
+**Doc Auto-Update** (`core/docs/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
 1. **Low-reasoning pre-filter**: Classifies git diffs as "trivial" (whitespace, comments) or "significant" (logic changes). Trivial diffs skip the expensive update step.
 2. **High-reasoning update**: Reads the stale doc + relevant diffs, proposes targeted edits.
 
@@ -808,11 +805,10 @@ class ModelConfig:
 
 #### API Key Resolution
 
-Quaid uses pass-through API keys from the main system agent -- it does not manage keys directly.
-Credential fallback behavior is governed by `retrieval.fail_hard`:
-1. `fail_hard=true` (default): no fallback chains are used.
-2. `fail_hard=false`: adapter-specific fallback chains are allowed, but log explicit warnings.
-3. OpenClaw can resolve Anthropic credentials from gateway/runtime context and, when fallback is allowed, from `.env`/keychain helper paths.
+Quaid uses pass-through API keys from the main system agent -- it does not manage keys directly. Keys are resolved via the platform adapter in priority order:
+1. Environment variable (`ANTHROPIC_API_KEY`) -- typically set by the gateway or agent runtime
+2. `.env` file in `QUAID_HOME` (fallback for standalone CLI use)
+3. macOS Keychain (OpenClaw adapter only -- service lookup by agent name)
 
 #### Prompt Caching
 
@@ -867,10 +863,6 @@ core/interface/mcp_server.py (FastMCP)
 | `memory_stats` | Database statistics | Free |
 | `projects_search` | Search project documentation via RAG | Free |
 
-`memory_recall` also exposes forward-looking multi-user scope filters:
-`actor_id`, `subject_entity_id`, `source_channel`, `source_conversation_id`,
-`source_author_id`, and `include_unscoped`.
-
 ### Stdout Isolation
 
 MCP uses stdout for JSON-RPC communication. The server redirects Python's `sys.stdout` to `sys.stderr` at startup to prevent stray print statements from corrupting the protocol stream. This is critical because several modules (`memory_graph.py`, `lib/embeddings.py`) print status messages during normal operation.
@@ -883,6 +875,6 @@ The `QUAID_OWNER` environment variable sets the owner identity for all operation
 
 ## Appendix: File Reference
 
-The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). Session transcript indexing/search ownership also lives in datastore (`datastore/memorydb/session_logs.py`), with lifecycle ingest bridge in `ingest/session_logs_ingest.py` and orchestration via event bus (`session.ingest_log`). Lifecycle metadata (`source_channel`, `conversation_id`, `participant_ids`, `participant_aliases`) is propagated from adaptor hooks to ingest/datastore on compaction/reset/new flows. In OpenClaw integration, `adaptors/openclaw/index.ts` is the entry shim, `adaptors/openclaw/adapter.ts` owns runtime integration, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
+The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). In OpenClaw integration, `adaptors/openclaw/adapter.ts` owns runtime integration, `adaptors/openclaw/index.ts` remains a minimal entry shim, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).
