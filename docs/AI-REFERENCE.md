@@ -65,6 +65,8 @@ Write request
 | `core/llm/clients.py` | Compatibility alias to canonical LLM client module | module alias to `lib.llm_clients` |
 | `ingest/extract.py` | Extraction module — transcript to memories | `extract_from_transcript()`, `parse_session_jsonl()`, `build_transcript()` |
 | `ingest/docs_ingest.py` | Ingest pipeline for docs from transcript/source mapping | ingest orchestration helpers |
+| `ingest/session_logs_ingest.py` | Lifecycle session-log ingest bridge (adapter/core -> datastore) | `_run()`, `ingest/list/load/last/search` CLI |
+| `datastore/memorydb/session_logs.py` | Datastore-owned session transcript indexing/search | `index_session_log()`, `list_recent_sessions()`, `load_session()`, `load_last_session()`, `search_session_logs()` |
 | `datastore/memorydb/semantic_clustering.py` | Semantic clustering for contradiction candidate reduction | `classify_node_semantic_cluster()`, `get_memory_clusters()` |
 | `datastore/memorydb/schema.sql` | Database DDL (nodes, edges, FTS5, indexes, operational tables) | Full schema definition |
 | `datastore/memorydb/enable_wal.py` | WAL mode enablement helper | `enable_wal_mode()` |
@@ -88,7 +90,7 @@ Write request
 | File | Purpose | Notes |
 |------|---------|-------|
 | `adaptors/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
-| `adaptors/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
+| `adaptors/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`, `session_recall`, `session_logs_search`), extraction triggers, notifications |
 | `orchestrator/default-orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
 | `core/data-writers.ts` | Canonical write routing/dispatch | `createDataWriteEngine()`, `writeData()`, DataWriter registry/specs |
 | `adaptors/openclaw/index.js` / `adapter.js` / `orchestrator/default-orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
@@ -547,6 +549,11 @@ python3 datastore/memorydb/memory_graph.py get-edges <node_id>
 python3 ingest/extract.py transcript.txt --owner default
 python3 ingest/extract.py session.jsonl --dry-run --json
 echo "User: hi" | python3 ingest/extract.py - --owner default
+
+# Session log ingest/search
+python3 ingest/session_logs_ingest.py ingest --session-id <sid> --owner default --label Compaction --session-file ~/.openclaw/sessions/<sid>.jsonl
+python3 ingest/session_logs_ingest.py list --owner default --limit 10
+python3 ingest/session_logs_ingest.py search "query terms" --owner default --limit 5
 
 # Janitor pipeline
 python3 core/lifecycle/janitor.py --task all --dry-run           # Preview (no changes)
