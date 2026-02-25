@@ -134,6 +134,12 @@ function isPreInjectionPassEnabled() {
   if (typeof retrieval.pre_injection_pass === "boolean") return retrieval.pre_injection_pass;
   return true;
 }
+function isFailHardEnabled() {
+  const retrieval = getMemoryConfig().retrieval || {};
+  if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
+  if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
+  return true;
+}
 function getCaptureTimeoutMinutes() {
   const capture = getMemoryConfig().capture || {};
   const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
@@ -1714,9 +1720,10 @@ ${header}${journalContent}` : `${header}${journalContent}`;
         }
         const autoInjectK = computeDynamicK();
         const useTotalRecallForInject = isPreInjectionPassEnabled();
+        const failHard = isFailHardEnabled();
         const routerFailOpen = Boolean(
           getMemoryConfig().retrieval?.routerFailOpen ?? getMemoryConfig().retrieval?.router_fail_open ?? true
-        );
+        ) && !failHard;
         const injectLimit = autoInjectK;
         const injectIntent = "general";
         const injectTechnicalScope = "personal";
@@ -1984,9 +1991,10 @@ ${recallStoreGuidance}`,
               const docs = options.filters?.docs;
               const ranking = options.ranking;
               const datastoreOptions = options.datastoreOptions;
+              const failHard = isFailHardEnabled();
               const routerFailOpen = Boolean(
                 options.routing?.failOpen ?? getMemoryConfig().retrieval?.routerFailOpen ?? getMemoryConfig().retrieval?.router_fail_open ?? true
-              );
+              ) && !failHard;
               if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
                 return {
                   content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
