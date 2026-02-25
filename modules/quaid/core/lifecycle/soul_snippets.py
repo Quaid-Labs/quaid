@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.llm.clients import call_deep_reasoning, parse_json_response
+from core.llm.clients import call_llm, parse_json_response
 from config import get_config
 from lib.markdown import strip_protected_regions
 from lib.runtime_context import get_workspace_dir
@@ -40,6 +40,7 @@ def _backup_dir() -> Path:
     return _workspace_dir() / "backups" / "soul-snippets"
 
 logger = logging.getLogger(__name__)
+_SNIPPETS_REVIEW_MAX_PER_FILE = int(os.environ.get("QUAID_SNIPPETS_REVIEW_MAX_PER_FILE", "20") or 20)
 
 # Voice guidance for distillation prompts per target file
 _FILE_VOICE_GUIDANCE = {
@@ -129,6 +130,26 @@ def _get_journal_config():
         return get_config().docs.journal
     except Exception:
         return None
+
+
+def _get_snippet_review_model() -> str:
+    """Model override for snippet/journal review calls."""
+    try:
+        cfg = get_config()
+        model = str(getattr(cfg.janitor.opus_review, "model", "") or "").strip()
+        if model:
+            return model
+        return str(getattr(cfg.models, "deep_reasoning", "default") or "default")
+    except Exception:
+        return "default"
+
+
+def _review_model_tier(model_name: str) -> str:
+    """Map configured review model hint to provider tier."""
+    m = (model_name or "").lower()
+    if "haiku" in m:
+        return "fast"
+    return "deep"
 
 
 def _get_target_files() -> List[str]:
@@ -1159,10 +1180,13 @@ def run_journal_distillation(dry_run: bool = True,
         cfg = _get_journal_config()
         max_tokens = cfg.max_tokens if cfg else 8192
 
-        print(f"  Calling Opus for {filename} distillation...")
-        response_text, duration = call_deep_reasoning(
+        review_model = _get_snippet_review_model()
+        review_tier = _review_model_tier(review_model)
+        print(f"  Calling review model for {filename} distillation ({review_model})...")
+        response_text, duration = call_llm(
+            system_prompt,
             prompt,
-            system_prompt=system_prompt,
+            model_tier=review_tier,
             max_tokens=max_tokens,
         )
 
@@ -1257,6 +1281,14 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
         if not snippets:
             continue
 
+        if _SNIPPETS_REVIEW_MAX_PER_FILE > 0 and len(snippets) > _SNIPPETS_REVIEW_MAX_PER_FILE:
+            skipped = len(snippets) - _SNIPPETS_REVIEW_MAX_PER_FILE
+            snippets = snippets[:_SNIPPETS_REVIEW_MAX_PER_FILE]
+            print(
+                f"  {filename}: capping snippet review to "
+                f"{_SNIPPETS_REVIEW_MAX_PER_FILE} (skipping {skipped} older snippets this cycle)"
+            )
+
         parent_content = read_parent_file(filename)
         config = _get_core_markdown_config(filename)
 
@@ -1280,31 +1312,34 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
 
-    print("  Calling Opus for snippet review...")
-    response_text, duration = call_deep_reasoning(
+    review_model = _get_snippet_review_model()
+    review_tier = _review_model_tier(review_model)
+    print(f"  Calling review model for snippet review ({review_model})...")
+    response_text, duration = call_llm(
+        system_prompt,
         prompt,
-        system_prompt=system_prompt,
+        model_tier=review_tier,
         max_tokens=max_tokens,
     )
 
     if not response_text:
-        print("  Opus snippet review failed (no response)")
+        print("  Snippet review failed (no response)")
         return {"total_snippets": total_snippet_count, "folded": 0, "rewritten": 0,
-                "discarded": 0, "errors": ["No response from Opus"]}
+                "discarded": 0, "errors": ["No response from review model"]}
 
-    print(f"  Opus responded in {duration:.1f}s")
+    print(f"  Review model responded in {duration:.1f}s")
 
     result = parse_json_response(response_text)
     if not result:
-        print(f"  Could not parse Opus response: {response_text[:200]}")
+        print(f"  Could not parse review response: {response_text[:200]}")
         return {"total_snippets": total_snippet_count, "folded": 0, "rewritten": 0,
-                "discarded": 0, "errors": ["Parse failed"]}
+                "discarded": 0, "errors": ["Snippet review parse failed"]}
 
     decisions = result.get("decisions", [])
     if not decisions:
-        print("  Opus returned no decisions")
+        print("  Review model returned no decisions")
         return {"total_snippets": total_snippet_count, "folded": 0, "rewritten": 0,
-                "discarded": 0, "errors": []}
+                "discarded": 0, "errors": ["No decisions returned for pending snippets"]}
 
     # Backup before modification
     if not dry_run:
@@ -1336,6 +1371,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             result.metrics["snippets_folded"] = int(snippets_result.get("folded", 0))
             result.metrics["snippets_rewritten"] = int(snippets_result.get("rewritten", 0))
             result.metrics["snippets_discarded"] = int(snippets_result.get("discarded", 0))
+            for err in (snippets_result.get("errors") or []):
+                result.errors.append(f"Snippets review failed: {err}")
         except Exception as exc:
             result.errors.append(f"Snippets review failed: {exc}")
         return result
@@ -1350,6 +1387,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
             result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
             result.metrics["journal_entries_distilled"] = int(journal_result.get("total_entries", 0))
+            for err in (journal_result.get("errors") or []):
+                result.errors.append(f"Journal distillation failed: {err}")
         except Exception as exc:
             result.errors.append(f"Journal distillation failed: {exc}")
         return result
