@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from core.contracts.memory import MemoryServicePort
 from core.runtime.identity_runtime import (
+    assert_multi_user_runtime_ready,
     enforce_write_contract,
     enrich_identity_payload,
     filter_recall_results,
@@ -40,6 +41,7 @@ class DatastoreMemoryService(MemoryServicePort):
         is_technical: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        assert_multi_user_runtime_ready(require_write=True)
         identity_payload = {
             "source_channel": kwargs.get("source_channel"),
             "source_conversation_id": kwargs.get("source_conversation_id"),
@@ -79,6 +81,7 @@ class DatastoreMemoryService(MemoryServicePort):
         min_similarity: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
+        assert_multi_user_runtime_ready(require_read=True)
         viewer_entity_id = kwargs.get("viewer_entity_id")
         results = recall_memories(
             query=query,

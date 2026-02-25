@@ -50,3 +50,13 @@ def test_filter_recall_results_applies_registered_policy(monkeypatch):
     )
     assert [r["id"] for r in out] == ["1"]
 
+
+def test_multi_user_runtime_readiness_requires_hooks(monkeypatch):
+    monkeypatch.setattr(
+        "core.runtime.identity_runtime.get_config",
+        lambda: SimpleNamespace(identity=SimpleNamespace(mode="multi_user")),
+    )
+    with pytest.raises(RuntimeError):
+        identity_runtime.assert_multi_user_runtime_ready(require_write=True)
+    with pytest.raises(RuntimeError):
+        identity_runtime.assert_multi_user_runtime_ready(require_read=True)
