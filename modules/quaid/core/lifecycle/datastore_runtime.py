@@ -21,6 +21,8 @@ from datastore.memorydb.maintenance_ops import (
     write_update_check_cache,
     _is_benchmark_mode,
 )
+from datastore.docsdb.rag import DocsRAG
+from datastore.docsdb.soul_snippets import write_journal_entry, write_snippet_entry
 
 __all__ = [
     "JanitorMetrics",
@@ -38,4 +40,7 @@ __all__ = [
     "record_janitor_run",
     "write_update_check_cache",
     "_is_benchmark_mode",
+    "DocsRAG",
+    "write_journal_entry",
+    "write_snippet_entry",
 ]

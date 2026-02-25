@@ -53,9 +53,9 @@ class TestCheckStaleness:
     def test_no_mapping_returns_empty(self, tmp_path):
         """No source mapping → no stale docs."""
         cfg = _make_test_config(source_mapping={})
-        with patch("core.docs.updater.get_config", return_value=cfg), \
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from core.docs.updater import check_staleness
+            from datastore.docsdb.updater import check_staleness
             assert check_staleness() == {}
 
     def test_staleness_disabled_returns_empty(self, tmp_path):
@@ -64,9 +64,9 @@ class TestCheckStaleness:
             source_mapping={"src.py": {"docs": ["doc.md"]}},
             staleness_enabled=False,
         )
-        with patch("core.docs.updater.get_config", return_value=cfg), \
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from core.docs.updater import check_staleness
+            from datastore.docsdb.updater import check_staleness
             assert check_staleness() == {}
 
     def test_detects_stale_doc(self, tmp_path):
@@ -85,9 +85,9 @@ class TestCheckStaleness:
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
         )
-        with patch("core.docs.updater.get_config", return_value=cfg), \
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from core.docs.updater import check_staleness
+            from datastore.docsdb.updater import check_staleness
             stale = check_staleness()
             assert "docs/doc.md" in stale
             assert stale["docs/doc.md"].gap_hours > 0
@@ -108,9 +108,9 @@ class TestCheckStaleness:
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
         )
-        with patch("core.docs.updater.get_config", return_value=cfg), \
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from core.docs.updater import check_staleness
+            from datastore.docsdb.updater import check_staleness
             stale = check_staleness()
             assert stale == {}
 
@@ -122,9 +122,9 @@ class TestCheckStaleness:
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/nonexistent.md"]}},
         )
-        with patch("core.docs.updater.get_config", return_value=cfg), \
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from core.docs.updater import check_staleness
+            from datastore.docsdb.updater import check_staleness
             assert check_staleness() == {}
 
     def test_missing_source_ignored(self, tmp_path):
@@ -136,9 +136,9 @@ class TestCheckStaleness:
         cfg = _make_test_config(
             source_mapping={"nonexistent.py": {"docs": ["docs/doc.md"]}},
         )
-        with patch("core.docs.updater.get_config", return_value=cfg), \
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
              _adapter_patch(tmp_path):
-            from core.docs.updater import check_staleness
+            from datastore.docsdb.updater import check_staleness
             assert check_staleness() == {}
 
 
@@ -149,8 +149,8 @@ class TestMapSourcesToDocs:
         cfg = _make_test_config(
             source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/janitor-ref.md"]}},
         )
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import map_sources_to_docs
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import map_sources_to_docs
             result = map_sources_to_docs(["core.lifecycle.janitor.py"])
             assert "docs/janitor-ref.md" in result
             assert "core.lifecycle.janitor.py" in result["docs/janitor-ref.md"]
@@ -162,8 +162,8 @@ class TestMapSourcesToDocs:
                 "config.py": {"docs": ["docs/impl.md"]},
             },
         )
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import map_sources_to_docs
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import map_sources_to_docs
             result = map_sources_to_docs(["index.ts", "config.py"])
             assert "docs/impl.md" in result
             assert len(result["docs/impl.md"]) == 2
@@ -172,8 +172,8 @@ class TestMapSourcesToDocs:
         cfg = _make_test_config(
             source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/janitor-ref.md"]}},
         )
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import map_sources_to_docs
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import map_sources_to_docs
             result = map_sources_to_docs(["unknown_file.py"])
             assert result == {}
 
@@ -181,8 +181,8 @@ class TestMapSourcesToDocs:
         cfg = _make_test_config(
             source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/janitor-ref.md"]}},
         )
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import map_sources_to_docs
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import map_sources_to_docs
             assert map_sources_to_docs([]) == {}
 
 
@@ -191,7 +191,7 @@ class TestGetGitDiff:
 
     def test_returns_empty_for_nonexistent_file(self, tmp_path):
         with _adapter_patch(tmp_path):
-            from core.docs.updater import get_git_diff
+            from datastore.docsdb.updater import get_git_diff
             result = get_git_diff("nonexistent.py", 0.0)
             assert result == ""
 
@@ -201,8 +201,8 @@ class TestGetGitDiff:
         src_file.write_text("content")
 
         with _adapter_patch(tmp_path), \
-             patch("core.docs.updater.subprocess.run", side_effect=FileNotFoundError):
-            from core.docs.updater import get_git_diff
+             patch("datastore.docsdb.updater.subprocess.run", side_effect=FileNotFoundError):
+            from datastore.docsdb.updater import get_git_diff
             result = get_git_diff("src.py", 0.0)
             assert result == ""
 
@@ -213,15 +213,15 @@ class TestGetDocPurposes:
     def test_returns_purposes_from_config(self):
         purposes = {"docs/foo.md": "Foo documentation", "docs/bar.md": "Bar docs"}
         cfg = _make_test_config(doc_purposes=purposes)
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import get_doc_purposes
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import get_doc_purposes
             result = get_doc_purposes()
             assert result == purposes
 
     def test_empty_purposes(self):
         cfg = _make_test_config(doc_purposes={})
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import get_doc_purposes
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import get_doc_purposes
             assert get_doc_purposes() == {}
 
 
@@ -232,9 +232,9 @@ class TestDetectChangedSources:
         cfg = _make_test_config(
             source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/ref.md"]}},
         )
-        with patch("core.docs.updater.get_config", return_value=cfg), \
-             patch("core.docs.updater.call_fast_reasoning", return_value=(None, 1.0)):
-            from core.docs.updater import detect_changed_sources_from_transcript
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             patch("datastore.docsdb.updater.call_fast_reasoning", return_value=(None, 1.0)):
+            from datastore.docsdb.updater import detect_changed_sources_from_transcript
             result = detect_changed_sources_from_transcript("some transcript")
             assert result == []
 
@@ -246,9 +246,9 @@ class TestDetectChangedSources:
             },
         )
         response = '{"changed": ["core.lifecycle.janitor.py"]}'
-        with patch("core.docs.updater.get_config", return_value=cfg), \
-             patch("core.docs.updater.call_fast_reasoning", return_value=(response, 1.0)):
-            from core.docs.updater import detect_changed_sources_from_transcript
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             patch("datastore.docsdb.updater.call_fast_reasoning", return_value=(response, 1.0)):
+            from datastore.docsdb.updater import detect_changed_sources_from_transcript
             result = detect_changed_sources_from_transcript("modified janitor.py")
             assert result == ["core.lifecycle.janitor.py"]
 
@@ -257,16 +257,16 @@ class TestDetectChangedSources:
             source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/ref.md"]}},
         )
         response = '{"changed": ["core.lifecycle.janitor.py", "unknown.py"]}'
-        with patch("core.docs.updater.get_config", return_value=cfg), \
-             patch("core.docs.updater.call_fast_reasoning", return_value=(response, 1.0)):
-            from core.docs.updater import detect_changed_sources_from_transcript
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             patch("datastore.docsdb.updater.call_fast_reasoning", return_value=(response, 1.0)):
+            from datastore.docsdb.updater import detect_changed_sources_from_transcript
             result = detect_changed_sources_from_transcript("some transcript")
             assert result == ["core.lifecycle.janitor.py"]
 
     def test_no_mapping_returns_empty(self):
         cfg = _make_test_config(source_mapping={})
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import detect_changed_sources_from_transcript
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import detect_changed_sources_from_transcript
             assert detect_changed_sources_from_transcript("transcript") == []
 
 
@@ -280,8 +280,8 @@ class TestGetCoreMarkdownInfo:
         cfg.docs.core_markdown.files = {
             "TOOLS.md": {"purpose": "API docs and configs", "maxLines": 350},
         }
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import _get_core_markdown_info
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import _get_core_markdown_info
             result = _get_core_markdown_info("TOOLS.md")
             assert result == ("API docs and configs", 350)
 
@@ -292,8 +292,8 @@ class TestGetCoreMarkdownInfo:
         cfg.docs.core_markdown.files = {
             "TOOLS.md": {"purpose": "API docs", "maxLines": 350},
         }
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import _get_core_markdown_info
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import _get_core_markdown_info
             result = _get_core_markdown_info("projects/quaid/janitor-reference.md")
             assert result is None
 
@@ -304,8 +304,8 @@ class TestGetCoreMarkdownInfo:
         cfg.docs.core_markdown.files = {
             "AGENTS.md": {"purpose": "System operations", "maxLines": 350},
         }
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import _get_core_markdown_info
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import _get_core_markdown_info
             # Should not match — core markdown keys are bare filenames
             result = _get_core_markdown_info("some/path/AGENTS.md")
             assert result == ("System operations", 350)
@@ -315,8 +315,8 @@ class TestGetCoreMarkdownInfo:
         cfg = _make_test_config()
         cfg.docs.core_markdown = MagicMock()
         cfg.docs.core_markdown.files = {}
-        with patch("core.docs.updater.get_config", return_value=cfg):
-            from core.docs.updater import _get_core_markdown_info
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg):
+            from datastore.docsdb.updater import _get_core_markdown_info
             result = _get_core_markdown_info("TOOLS.md")
             assert result is None
 
@@ -326,7 +326,7 @@ class TestClassifyDocChange:
 
     def test_empty_diff_is_trivial(self):
         """Empty diff → trivial with high confidence."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         result = classify_doc_change("")
         assert result["classification"] == "trivial"
         assert result["confidence"] == 1.0
@@ -334,14 +334,14 @@ class TestClassifyDocChange:
 
     def test_none_diff_is_trivial(self):
         """None diff → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         result = classify_doc_change(None)
         assert result["classification"] == "trivial"
         assert result["confidence"] == 1.0
 
     def test_whitespace_only_is_trivial(self):
         """Whitespace-only changes → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.py\n"
             "+++ b/file.py\n"
@@ -356,7 +356,7 @@ class TestClassifyDocChange:
 
     def test_comment_only_is_trivial(self):
         """Comment-only changes → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.py\n"
             "+++ b/file.py\n"
@@ -369,7 +369,7 @@ class TestClassifyDocChange:
 
     def test_js_comment_is_trivial(self):
         """JavaScript comment changes → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.js\n"
             "+++ b/file.js\n"
@@ -382,7 +382,7 @@ class TestClassifyDocChange:
 
     def test_import_change_is_trivial(self):
         """Import path changes → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.py\n"
             "+++ b/file.py\n"
@@ -395,7 +395,7 @@ class TestClassifyDocChange:
 
     def test_version_bump_is_trivial(self):
         """Version bump → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/package.json\n"
             "+++ b/package.json\n"
@@ -408,7 +408,7 @@ class TestClassifyDocChange:
 
     def test_typo_fix_is_trivial(self):
         """Typo-like edit (high character similarity) → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.py\n"
             "+++ b/file.py\n"
@@ -421,7 +421,7 @@ class TestClassifyDocChange:
 
     def test_new_function_is_significant(self):
         """New function definition → significant."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.py\n"
             "+++ b/file.py\n"
@@ -442,7 +442,7 @@ class TestClassifyDocChange:
 
     def test_new_class_is_significant(self):
         """New class definition → significant."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.py\n"
             "+++ b/file.py\n"
@@ -456,7 +456,7 @@ class TestClassifyDocChange:
 
     def test_schema_change_is_significant(self):
         """Schema change → significant."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/datastore/memorydb/datastore/memorydb/schema.sql\n"
             "+++ b/datastore/memorydb/schema.sql\n"
@@ -470,7 +470,7 @@ class TestClassifyDocChange:
 
     def test_alter_table_is_significant(self):
         """ALTER TABLE → significant."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/datastore/memorydb/datastore/memorydb/schema.sql\n"
             "+++ b/datastore/memorydb/schema.sql\n"
@@ -482,7 +482,7 @@ class TestClassifyDocChange:
 
     def test_large_change_is_significant(self):
         """Large change (>50 lines) → significant."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         lines = ["+" + f"line {i}\n" for i in range(60)]
         diff = "--- a/file.py\n+++ b/file.py\n" + "".join(lines)
         result = classify_doc_change(diff)
@@ -492,7 +492,7 @@ class TestClassifyDocChange:
 
     def test_mixed_trivial_and_significant_is_significant(self):
         """Mixed trivial + significant signals → significant (safety default)."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.py\n"
             "+++ b/file.py\n"
@@ -510,7 +510,7 @@ class TestClassifyDocChange:
 
     def test_small_change_counts_as_trivial_signal(self):
         """Changes <=5 lines get 'small change' trivial signal."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.txt\n"
             "+++ b/file.txt\n"
@@ -523,7 +523,7 @@ class TestClassifyDocChange:
 
     def test_confidence_increases_with_signals(self):
         """More signals → higher confidence."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         # Single signal
         diff1 = (
             "--- a/file.py\n"
@@ -551,7 +551,7 @@ class TestClassifyDocChange:
 
     def test_require_change_is_trivial(self):
         """require() import change → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.js\n"
             "+++ b/file.js\n"
@@ -564,7 +564,7 @@ class TestClassifyDocChange:
 
     def test_export_change_is_significant(self):
         """Export API change → significant."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/file.js\n"
             "+++ b/file.js\n"
@@ -579,13 +579,13 @@ class TestClassifyDocChange:
 
     def test_whitespace_only_diff_is_trivial(self):
         """Pure whitespace diff text → trivial."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         result = classify_doc_change("   \n  \n  ")
         assert result["classification"] == "trivial"
 
     def test_result_shape(self):
         """Verify all expected keys are in the result."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         result = classify_doc_change("+some change\n-old line\n")
         assert "classification" in result
         assert "confidence" in result
@@ -598,7 +598,7 @@ class TestClassifyDocChange:
 
     def test_destructive_change_is_significant(self):
         """Destructive operations (DROP/DELETE/REMOVE) → significant."""
-        from core.docs.updater import classify_doc_change
+        from datastore.docsdb.updater import classify_doc_change
         diff = (
             "--- a/datastore/memorydb/datastore/memorydb/schema.sql\n"
             "+++ b/datastore/memorydb/schema.sql\n"

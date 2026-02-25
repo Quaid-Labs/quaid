@@ -119,6 +119,15 @@ class OpusReviewConfig:
 
 
 @dataclass
+class JanitorParallelConfig:
+    enabled: bool = True
+    llm_workers: int = 2
+    llm_workers_by_task: Dict[str, int] = field(default_factory=dict)
+    lifecycle_prepass_workers: int = 3
+    lifecycle_prepass_enabled: bool = True
+
+
+@dataclass
 class JanitorConfig:
     enabled: bool = True
     dry_run: bool = False
@@ -133,6 +142,7 @@ class JanitorConfig:
     task_timeout_minutes: int = 60
     run_tests: bool = False  # Only enable in dev (or set QUAID_DEV=1)
     opus_review: OpusReviewConfig = field(default_factory=OpusReviewConfig)
+    parallel: JanitorParallelConfig = field(default_factory=JanitorParallelConfig)
     dedup: DedupConfig = field(default_factory=DedupConfig)
     contradiction: ContradictionConfig = field(default_factory=ContradictionConfig)
 
@@ -563,6 +573,24 @@ def _load_config_inner() -> MemoryConfig:
         max_tokens=config_data.get('janitor', {}).get('opus_review', {}).get('max_tokens', 4000),
         model=config_data.get('janitor', {}).get('opus_review', {}).get('model', models.deep_reasoning)
     )
+
+    parallel_section = config_data.get('janitor', {}).get('parallel', {})
+    llm_workers_by_task = parallel_section.get('llm_workers_by_task', parallel_section.get('llmWorkersByTask', {}))
+    if not isinstance(llm_workers_by_task, dict):
+        llm_workers_by_task = {}
+    parallel = JanitorParallelConfig(
+        enabled=bool(parallel_section.get('enabled', True)),
+        llm_workers=int(parallel_section.get('llm_workers', parallel_section.get('llmWorkers', 2)) or 2),
+        llm_workers_by_task={str(k): int(v) for k, v in llm_workers_by_task.items() if str(v).strip().isdigit()},
+        lifecycle_prepass_workers=int(parallel_section.get(
+            'lifecycle_prepass_workers',
+            parallel_section.get('lifecyclePrepassWorkers', 3)
+        ) or 3),
+        lifecycle_prepass_enabled=bool(parallel_section.get(
+            'lifecycle_prepass_enabled',
+            parallel_section.get('lifecyclePrepassEnabled', True)
+        )),
+    )
     
     janitor = JanitorConfig(
         enabled=config_data.get('janitor', {}).get('enabled', True),
@@ -593,6 +621,7 @@ def _load_config_inner() -> MemoryConfig:
         run_tests=config_data.get('janitor', {}).get('run_tests',
                   config_data.get('janitor', {}).get('runTests', False)),
         opus_review=opus_review,
+        parallel=parallel,
         dedup=dedup,
         contradiction=contradiction
     )

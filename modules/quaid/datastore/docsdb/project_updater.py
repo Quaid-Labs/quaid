@@ -15,14 +15,15 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from config import get_config
-from core.docs.registry import DocsRegistry
-from core.docs.updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
+from datastore.docsdb.registry import DocsRegistry
+from datastore.docsdb.updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
 from lib.runtime_context import get_workspace_dir
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
 
@@ -449,7 +450,8 @@ def _notify_user(project_name: str, updates_applied: List[str], trigger: str) ->
         return
 
     try:
-        from core.runtime.events import queue_delayed_notification
+        payload_source = "project_updater"
+        events_py = Path(__file__).resolve().parents[2] / "core" / "runtime" / "events.py"
         for doc_path in updates_applied:
             message = (
                 "[Quaid] 📋 Project Documentation Update\n"
@@ -457,11 +459,28 @@ def _notify_user(project_name: str, updates_applied: List[str], trigger: str) ->
                 f"Updated: `{Path(doc_path).name}`\n"
                 f"Trigger: project-{trigger}"
             )
-            queue_delayed_notification(
-                message,
-                kind="project_doc_update",
-                priority="normal",
-                source="project_updater",
+            payload = {
+                "message": message,
+                "kind": "project_doc_update",
+                "priority": "normal",
+            }
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(events_py),
+                    "emit",
+                    "--name",
+                    "notification.delayed",
+                    "--payload",
+                    json.dumps(payload, ensure_ascii=False),
+                    "--source",
+                    payload_source,
+                    "--dispatch",
+                    "queued",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
             )
     except Exception as e:
         print(f"  Notification failed: {e}")

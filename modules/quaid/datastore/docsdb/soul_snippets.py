@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.llm.clients import call_llm, parse_json_response
+from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from lib.markdown import strip_protected_regions
 from lib.runtime_context import get_workspace_dir
@@ -1183,7 +1183,7 @@ def run_journal_distillation(dry_run: bool = True,
         review_model = _get_snippet_review_model()
         review_tier = _review_model_tier(review_model)
         print(f"  Calling review model for {filename} distillation ({review_model})...")
-        response_text, duration = call_llm(
+        response_text, duration = call_deep_reasoning(
             system_prompt,
             prompt,
             model_tier=review_tier,
@@ -1315,7 +1315,7 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
     review_model = _get_snippet_review_model()
     review_tier = _review_model_tier(review_model)
     print(f"  Calling review model for snippet review ({review_model})...")
-    response_text, duration = call_llm(
+    response_text, duration = call_deep_reasoning(
         system_prompt,
         prompt,
         model_tier=review_tier,

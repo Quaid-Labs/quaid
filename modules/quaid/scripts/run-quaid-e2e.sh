@@ -1763,7 +1763,7 @@ if isinstance(project_defs, dict) and project_defs:
     evt_path = os.path.join(staging_dir, f"{int(time.time() * 1000)}-e2e-resilience-project.json")
     evt_payload = {
         "project_hint": "quaid",
-        "files_touched": ["projects/quaid/README.md", "modules/quaid/core/docs/project_updater.py"],
+        "files_touched": ["projects/quaid/README.md", "modules/quaid/datastore/docsdb/project_updater.py"],
         "summary": "Resilience matrix queued project updater event.",
         "trigger": "compact",
         "session_id": f"quaid-e2e-resilience-project-{uuid.uuid4().hex[:8]}",
@@ -1778,7 +1778,7 @@ if isinstance(project_defs, dict) and project_defs:
     updater_env["QUAID_HOME"] = ws
     updater_env["CLAWDBOT_WORKSPACE"] = ws
     updater_probe = subprocess.Popen(
-        ["python3", "modules/quaid/core/docs/project_updater.py", "process-all"],
+        ["python3", "modules/quaid/datastore/docsdb/project_updater.py", "process-all"],
         cwd=".",
         env=updater_env,
         stdout=subprocess.PIPE,
@@ -2269,7 +2269,7 @@ start_line = line_count(events_path)
 
 run_agent(
     f"""{marker}
-I need you to remember project status and personal context. We are editing modules/quaid/core/lifecycle/janitor.py and modules/quaid/core/docs/project_updater.py.
+I need you to remember project status and personal context. We are editing modules/quaid/core/lifecycle/janitor.py and modules/quaid/datastore/docsdb/project_updater.py.
 Facts:
 1) My dog is named Madu.
 2) My sister is Shannon.
@@ -2355,7 +2355,7 @@ import uuid
 from pathlib import Path
 
 ws = Path(sys.argv[1])
-registry = ["python3", "-m", "core.docs.registry"]
+registry = ["python3", "-m", "datastore.docsdb.registry"]
 env = dict(os.environ)
 py = env.get("PYTHONPATH", "")
 root = str((ws / "modules" / "quaid").resolve())
