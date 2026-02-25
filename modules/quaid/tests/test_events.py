@@ -127,6 +127,10 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
             "owner_id": "quaid",
             "label": "Compaction",
             "session_file": str(tmp_path / "session.jsonl"),
+            "source_channel": "telegram",
+            "conversation_id": "group-1",
+            "participant_ids": ["user:owner", "agent:quaid"],
+            "participant_aliases": {"ownerAlias": "user:owner"},
             "message_count": 12,
             "topic_hint": "tracking session behavior",
         },
@@ -139,6 +143,8 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
     assert called["session_id"] == "sess-xyz"
     assert called["owner_id"] == "quaid"
     assert called["label"] == "Compaction"
+    assert called["source_channel"] == "telegram"
+    assert called["conversation_id"] == "group-1"
     assert called["message_count"] == 12
 
 
