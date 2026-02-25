@@ -274,7 +274,7 @@ def call_llm(system_prompt: str, user_message: str,
         {"role": "user", "content": user_message},
     ]
 
-    llm = get_llm_provider()
+    llm = get_llm_provider(model_tier=resolved_tier)
 
     start_time = time.time()
     retries = _MAX_RETRIES if max_retries is None else max_retries
@@ -289,9 +289,11 @@ def call_llm(system_prompt: str, user_message: str,
             _track_usage(result)
             if result.truncated:
                 print(f"[llm_clients] WARNING: Response truncated (max_tokens) for model={result.model}", file=sys.stderr)
-            if result.text is not None:
-                return result.text, result.duration
-            return None, result.duration
+            if result.text is None:
+                raise RuntimeError(
+                    f"No response from provider for tier={resolved_tier} model={result.model or model}"
+                )
+            return result.text, result.duration
         except Exception as e:
             last_error = e
             # Only retry on transient errors (rate limit, server errors, timeouts)

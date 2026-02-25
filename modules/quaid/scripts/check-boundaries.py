@@ -31,6 +31,7 @@ ALLOWLIST = {
     ("core/services/memory_service.py", "datastore"),
     ("core/docs/project_updater.py", "datastore"),
     ("core/docs/registry.py", "datastore"),
+    ("core/docs/updater.py", "datastore"),
     # Adapter selection composition point.
     ("lib/adapter.py", "adaptors"),
 }

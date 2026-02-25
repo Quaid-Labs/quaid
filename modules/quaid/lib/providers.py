@@ -339,18 +339,19 @@ class ClaudeCodeLLMProvider(LLMProvider):
             duration = time.time() - start_time
 
             if result.returncode != 0:
-                print(f"[providers] Claude Code failed (rc={result.returncode}): "
-                      f"{result.stderr[:200]}", file=sys.stderr)
-                return LLMResult(text=None, duration=duration,
-                                 model=model_alias)
+                err = (result.stderr or result.stdout or "").strip()
+                raise RuntimeError(
+                    f"Claude Code failed (rc={result.returncode}) for tier={model_tier}, "
+                    f"model={model_alias}: {err[:300]}"
+                )
 
             try:
                 data = json.loads(result.stdout)
             except (json.JSONDecodeError, ValueError):
-                print(f"[providers] Claude Code returned non-JSON stdout: "
-                      f"{result.stdout[:200]}", file=sys.stderr)
-                return LLMResult(text=None, duration=duration,
-                                 model=model_alias)
+                raise RuntimeError(
+                    f"Claude Code returned non-JSON output for tier={model_tier}, "
+                    f"model={model_alias}: {result.stdout[:300]}"
+                )
             text = data.get("result", "").strip()
 
             # Collect per-model usage

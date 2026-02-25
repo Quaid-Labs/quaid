@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -719,6 +720,22 @@ class TestProviderFactoryMethods:
             mock_cfg.return_value.models.llm_provider = "claude-code"
             llm = standalone.get_llm_provider()
         assert isinstance(llm, ClaudeCodeLLMProvider)
+
+    def test_standalone_respects_tier_provider_overrides(self, standalone, monkeypatch):
+        """StandaloneAdapter routes provider selection by model tier when configured."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="anthropic",
+                fast_reasoning_provider="claude-code",
+                deep_reasoning_provider="anthropic",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            fast_llm = standalone.get_llm_provider(model_tier="fast")
+            deep_llm = standalone.get_llm_provider(model_tier="deep")
+        assert isinstance(fast_llm, ClaudeCodeLLMProvider)
+        assert isinstance(deep_llm, AnthropicLLMProvider)
 
     def test_standalone_raises_without_any_provider(self, standalone, monkeypatch):
         """StandaloneAdapter raises when config requires anthropic but no key."""

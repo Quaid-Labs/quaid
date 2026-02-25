@@ -410,12 +410,21 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
 
     # Fallback: try heading-based replacement if marker not found
     if content == original:
-        content = re.sub(
-            r"(### In This Directory\n).*?(\n### External Files)",
-            rf"\g<1><!-- Auto-discovered — all files in this directory belong to this project -->\n{in_dir_text}\n\n\g<2>",
-            content,
-            flags=re.DOTALL,
-        )
+        if "### External Files" in content:
+            content = re.sub(
+                r"(### In This Directory\n).*?(\n### External Files)",
+                rf"\g<1><!-- Auto-discovered — all files in this directory belong to this project -->\n{in_dir_text}\n\n\g<2>",
+                content,
+                flags=re.DOTALL,
+            )
+        else:
+            # Legacy malformed layout: no External Files heading yet.
+            content = re.sub(
+                r"(### In This Directory\n).*?(?=\n## )",
+                rf"\g<1><!-- Auto-discovered — all files in this directory belong to this project -->\n{in_dir_text}\n",
+                content,
+                flags=re.DOTALL,
+            )
 
     # Replace External Files section
     original2 = content
@@ -428,7 +437,19 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
             flags=re.DOTALL,
         )
     else:
-        print(f"  Warning: Could not update External Files section (headings not found)")
+        # Recover malformed legacy PROJECT.md files that are missing
+        # the External Files heading by inserting a canonical section.
+        inserted = False
+        for marker in ("\n## Documents", "\n## Related", "\n## Update"):
+            idx = content.find(marker)
+            if idx >= 0:
+                insertion = f"\n### External Files\n{ext_text}\n"
+                content = content[:idx] + insertion + content[idx:]
+                inserted = True
+                break
+        if not inserted:
+            content = content.rstrip() + f"\n\n### External Files\n{ext_text}\n"
+        print("  Recovered missing External Files section in PROJECT.md")
 
     # Atomic write: write to temp file, then rename
     tmp_path = project_md_path.with_suffix(".tmp")
