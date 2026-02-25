@@ -3,6 +3,10 @@
 ## Status
 Accepted
 
+Update (2026-02-25): Core docs/snippets lifecycle ownership was moved into
+`datastore/docsdb/*` so datastore owns those maintenance internals. Janitor
+and core remain orchestration/composition only.
+
 ## Context
 The plugin accumulated boundary-owned modules at `modules/quaid/*.py`, which blurred ownership and encouraged cross-layer imports.
 
@@ -24,13 +28,14 @@ Canonical module ownership moved out of plugin root:
   - `modules/quaid/core/lifecycle/janitor.py`
   - `modules/quaid/core/lifecycle/janitor_lifecycle.py`
   - `modules/quaid/core/lifecycle/workspace_audit.py`
-  - `modules/quaid/core/lifecycle/soul_snippets.py`
+  - `modules/quaid/core/lifecycle/datastore_runtime.py` (composition bridge)
 
-- Core docs:
-  - `modules/quaid/core/docs/rag.py`
-  - `modules/quaid/core/docs/registry.py`
-  - `modules/quaid/core/docs/updater.py`
-  - `modules/quaid/core/docs/project_updater.py`
+- Datastore docs domain (first-class datastore ownership):
+  - `modules/quaid/datastore/docsdb/rag.py`
+  - `modules/quaid/datastore/docsdb/registry.py`
+  - `modules/quaid/datastore/docsdb/updater.py`
+  - `modules/quaid/datastore/docsdb/project_updater.py`
+  - `modules/quaid/datastore/docsdb/soul_snippets.py`
 
 Plugin-root compatibility shims were removed. Canonical ownership now lives only inside
 the boundary directories above.
