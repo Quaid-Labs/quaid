@@ -268,6 +268,19 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_janitor_parallel_llm_workers_default_is_4(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({"janitor": {"parallel": {"enabled": True}}}))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.janitor.parallel.llm_workers == 4
+        finally:
+            config._config = old_config
+
     def test_invalid_json_uses_defaults(self, tmp_path):
         """Invalid JSON in config file falls back to defaults."""
         import config

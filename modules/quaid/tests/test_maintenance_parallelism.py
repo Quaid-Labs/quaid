@@ -10,14 +10,14 @@ def test_llm_parallel_workers_defaults(monkeypatch):
     monkeypatch.delenv("QUAID_BENCHMARK_MODE", raising=False)
     monkeypatch.delenv("QUAID_JANITOR_LLM_PARALLELISM", raising=False)
     monkeypatch.delenv("QUAID_JANITOR_LLM_PARALLELISM_REVIEW_PENDING", raising=False)
-    assert _llm_parallel_workers("review_pending") == 2
+    assert _llm_parallel_workers("review_pending") == 4
 
 
 def test_llm_parallel_workers_benchmark_default(monkeypatch):
     monkeypatch.setenv("QUAID_BENCHMARK_MODE", "1")
     monkeypatch.delenv("QUAID_JANITOR_LLM_PARALLELISM", raising=False)
     monkeypatch.delenv("QUAID_JANITOR_LLM_PARALLELISM_REVIEW_PENDING", raising=False)
-    assert _llm_parallel_workers("review_pending") == 2
+    assert _llm_parallel_workers("review_pending") == 4
 
 
 def test_llm_parallel_workers_env_overrides(monkeypatch):
