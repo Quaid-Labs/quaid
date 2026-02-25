@@ -990,28 +990,32 @@ def find_duplicates_from_pairs(dup_candidates: List[Dict[str, Any]],
     total_batches = len(batches)
     print(f"  LLM analysis: {len(dup_candidates)} candidates in {total_batches} batches")
 
-    consecutive_failures = 0
-    for batch_num, batch in enumerate(batches, 1):
-        try:
-            batch_start_time = time.time()
-            results = batch_duplicate_check(batch, metrics)
-            batch_duration = time.time() - batch_start_time
-            merge_count = sum(1 for r in results if r)
-            for dup, suggestion in zip(batch, results):
-                if suggestion:
-                    dup["suggestion"] = suggestion
-                    duplicates.append(dup)
-            print(f"    Batch {batch_num}/{total_batches}: {merge_count} merge suggestions ({batch_duration:.1f}s)")
-            consecutive_failures = 0
-        except Exception as e:
-            consecutive_failures += 1
-            metrics.add_error(f"Duplicate batch {batch_num} exception: {e}")
-            print(f"    Batch {batch_num}/{total_batches}: FAILED ({e})")
+    def _invoke_batch(batch_num: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        batch_start_time = time.time()
+        return {
+            "batch_num": batch_num,
+            "batch": batch,
+            "results": batch_duplicate_check(batch, metrics),
+            "duration": time.time() - batch_start_time,
+        }
 
-        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-            print(f"  {consecutive_failures} consecutive failures, aborting duplicate batches")
-            metrics.add_error(f"Duplicates aborted: {consecutive_failures} consecutive batch failures")
-            break
+    llm_results = _run_llm_batches_parallel(batches, "duplicates", _invoke_batch)
+    for result in llm_results:
+        batch_num = int(result.get("batch_num", 0) or 0)
+        batch = result.get("batch") or []
+        if result.get("error"):
+            err = str(result.get("error"))
+            metrics.add_error(f"Duplicate batch {batch_num} exception: {err}")
+            print(f"    Batch {batch_num}/{total_batches}: FAILED ({err})")
+            continue
+        decisions = result.get("results") or []
+        batch_duration = float(result.get("duration", 0.0) or 0.0)
+        merge_count = sum(1 for r in decisions if r)
+        for dup, suggestion in zip(batch, decisions):
+            if suggestion:
+                dup["suggestion"] = suggestion
+                duplicates.append(dup)
+        print(f"    Batch {batch_num}/{total_batches}: {merge_count} merge suggestions ({batch_duration:.1f}s)")
 
     duplicates.sort(key=lambda x: x["similarity"], reverse=True)
     metrics.end_task("duplicates")
@@ -1100,38 +1104,41 @@ def find_contradictions_from_pairs(contradiction_candidates: List[Dict[str, Any]
     total_batches = len(batches)
     print(f"  LLM verification: {len(contradiction_candidates)} candidates in {total_batches} batches")
 
-    consecutive_failures = 0
-    for batch_num, batch in enumerate(batches, 1):
+    def _invoke_batch(batch_num: int, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        batch_start_time = time.time()
+        return {
+            "batch_num": batch_num,
+            "batch": batch,
+            "results": batch_contradiction_check(batch, metrics),
+            "duration": time.time() - batch_start_time,
+        }
+
+    llm_results = _run_llm_batches_parallel(batches, "contradictions", _invoke_batch)
+    for result in llm_results:
         elapsed = time.time() - task_start_time
         if elapsed > MAX_EXECUTION_TIME:
-            print(f"  Time limit reached ({elapsed:.1f}s), stopping")
+            print(f"  Time limit reached ({elapsed:.1f}s), stopping result processing")
             metrics.add_error(f"Contradiction check stopped: {elapsed:.1f}s > {MAX_EXECUTION_TIME}s")
             break
+        batch_num = int(result.get("batch_num", 0) or 0)
+        batch = result.get("batch") or []
+        if result.get("error"):
+            err = str(result.get("error"))
+            metrics.add_error(f"Contradiction batch {batch_num} exception: {err}")
+            print(f"    Batch {batch_num}/{total_batches}: FAILED ({err})")
+            continue
 
-        try:
-            batch_start_time = time.time()
-            results = batch_contradiction_check(batch, metrics)
-            batch_duration = time.time() - batch_start_time
-            batch_confirmed = 0
-            for pair, is_contradiction in zip(batch, results):
-                if is_contradiction:
-                    contradictions.append({**pair, "explanation": is_contradiction})
-                    confirmed_contradictions += 1
-                    batch_confirmed += 1
-                    # Persist to contradictions table (skip in dry-run)
-                    if not dry_run:
-                        store_contradiction(pair["id_a"], pair["id_b"], is_contradiction)
-            print(f"    Batch {batch_num}/{total_batches}: {batch_confirmed} contradictions ({batch_duration:.1f}s)")
-            consecutive_failures = 0
-        except Exception as e:
-            consecutive_failures += 1
-            metrics.add_error(f"Contradiction batch {batch_num} exception: {e}")
-            print(f"    Batch {batch_num}/{total_batches}: FAILED ({e})")
-
-        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-            print(f"  {consecutive_failures} consecutive failures, aborting contradiction batches")
-            metrics.add_error(f"Contradictions aborted: {consecutive_failures} consecutive batch failures")
-            break
+        decisions = result.get("results") or []
+        batch_duration = float(result.get("duration", 0.0) or 0.0)
+        batch_confirmed = 0
+        for pair, is_contradiction in zip(batch, decisions):
+            if is_contradiction:
+                contradictions.append({**pair, "explanation": is_contradiction})
+                confirmed_contradictions += 1
+                batch_confirmed += 1
+                if not dry_run:
+                    store_contradiction(pair["id_a"], pair["id_b"], is_contradiction)
+        print(f"    Batch {batch_num}/{total_batches}: {batch_confirmed} contradictions ({batch_duration:.1f}s)")
 
     print(f"\n  Confirmed: {confirmed_contradictions} contradictions")
     metrics.end_task("contradictions")

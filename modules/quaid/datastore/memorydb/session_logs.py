@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.runtime.worker_pool import run_callables
 from lib.database import get_connection as _lib_get_connection
 from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding as _lib_pack_embedding, unpack_embedding as _lib_unpack_embedding
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
@@ -68,6 +69,28 @@ def _infer_topic_hint(transcript: str) -> str:
             if body:
                 return body[:140]
     return ""
+
+
+def _parallel_workers(task_name: str, default: int = 4) -> int:
+    try:
+        from config import get_config
+
+        cfg = get_config()
+        parallel = getattr(getattr(cfg, "core", None), "parallel", None)
+        if parallel is None or not getattr(parallel, "enabled", True):
+            return 1
+        workers = int(getattr(parallel, "llm_workers", default) or default)
+        task_workers = getattr(parallel, "task_workers", {}) or {}
+        override = None
+        if isinstance(task_workers, dict):
+            for key in (task_name, task_name.upper(), task_name.lower()):
+                if key in task_workers:
+                    override = task_workers.get(key)
+                    break
+        raw = override if override is not None else workers
+        return max(1, min(int(raw), 16))
+    except Exception:
+        return max(1, int(default))
 
 
 def ensure_schema(conn) -> None:
@@ -152,6 +175,23 @@ def index_session_log(
 
     content_hash = hashlib.sha256(transcript_text.encode("utf-8")).hexdigest()
     chunks = _chunk_transcript(transcript_text)
+    embedding_blobs: List[Optional[bytes]] = []
+    if chunks:
+        calls = [(lambda chunk_text: (lambda: _lib_get_embedding(chunk_text)))(chunk) for chunk in chunks]
+        emb_results = run_callables(
+            calls,
+            max_workers=min(_parallel_workers("session_log_index"), len(chunks)),
+            pool_name="session-log-index",
+            return_exceptions=True,
+        )
+        for item in emb_results:
+            if isinstance(item, Exception) or not item:
+                embedding_blobs.append(None)
+            else:
+                try:
+                    embedding_blobs.append(_lib_pack_embedding(item))
+                except Exception:
+                    embedding_blobs.append(None)
 
     with _lib_get_connection() as conn:
         ensure_schema(conn)
@@ -231,10 +271,7 @@ def index_session_log(
         conn.execute("DELETE FROM session_log_chunks WHERE session_id = ?", (sid,))
         created = 0
         for i, chunk in enumerate(chunks):
-            embedding_blob = None
-            emb = _lib_get_embedding(chunk)
-            if emb:
-                embedding_blob = _lib_pack_embedding(emb)
+            embedding_blob = embedding_blobs[i] if i < len(embedding_blobs) else None
             conn.execute(
                 """
                 INSERT INTO session_log_chunks (id, session_id, chunk_index, content, embedding, created_at, updated_at)
@@ -375,8 +412,7 @@ def search_session_logs(
                 """
             ).fetchall()
 
-    results: List[Dict[str, Any]] = []
-    for row in rows:
+    def _score_row(row: Any) -> Optional[Dict[str, Any]]:
         content = str(row["content"] or "")
         sem = 0.0
         if q_emb and row["embedding"]:
@@ -388,22 +424,40 @@ def search_session_logs(
         lex = _lexical_score(q, content)
         score = max(sem, lex * 0.6)
         if score < float(min_similarity):
-            continue
-        results.append(
-            {
-                "session_id": row["session_id"],
-                "chunk_index": int(row["chunk_index"]),
-                "text": content,
-                "score": round(float(score), 4),
-                "semantic": round(float(sem), 4),
-                "lexical": round(float(lex), 4),
-                "owner_id": row["owner_id"],
-                "source_label": row["source_label"],
-                "message_count": int(row["message_count"] or 0),
-                "topic_hint": row["topic_hint"] or "",
-                "updated_at": row["updated_at"],
-            }
+            return None
+        return {
+            "session_id": row["session_id"],
+            "chunk_index": int(row["chunk_index"]),
+            "text": content,
+            "score": round(float(score), 4),
+            "semantic": round(float(sem), 4),
+            "lexical": round(float(lex), 4),
+            "owner_id": row["owner_id"],
+            "source_label": row["source_label"],
+            "message_count": int(row["message_count"] or 0),
+            "topic_hint": row["topic_hint"] or "",
+            "updated_at": row["updated_at"],
+        }
+
+    results: List[Dict[str, Any]] = []
+    worker_count = min(_parallel_workers("session_log_search"), len(rows))
+    if worker_count > 1 and len(rows) >= 32:
+        calls = [(lambda r: (lambda: _score_row(r)))(row) for row in rows]
+        scored = run_callables(
+            calls,
+            max_workers=worker_count,
+            pool_name="session-log-search",
+            return_exceptions=True,
         )
+        for item in scored:
+            if isinstance(item, Exception) or item is None:
+                continue
+            results.append(item)
+    else:
+        for row in rows:
+            scored = _score_row(row)
+            if scored is not None:
+                results.append(scored)
 
     results.sort(key=lambda x: (x["score"], x["updated_at"]), reverse=True)
     return results[:lim]
