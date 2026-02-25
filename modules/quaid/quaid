@@ -85,6 +85,10 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
     ;;
 
+  identity-map)
+    exec python3 "$SCRIPT_DIR/datastore/memorydb/identity_map.py" "$@"
+    ;;
+
   doctor)
     exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" health "$@"
     ;;

@@ -3,6 +3,7 @@
 ## Forward-Looking Adaptability (Post-Benchmark Priority)
 
 - [ ] Multi-user memory foundations (schema/interfaces now, behavior later):
+  - progress: `actor_id/subject_entity_id/source_*` columns added to `nodes`; session log context fields added; `identity_handles` table + datastore API added
   - add stable `entity_id`/`actor_id` ownership shape across memory, journal, snippets, session-log indexes
   - add channel/source identity mapping table (alias -> canonical entity)
   - add query-time subject scope API (`self`, `counterparty`, `group`, `global`)
@@ -31,4 +32,3 @@
   - `modules/quaid/datastore/memorydb/memory_graph.py` (best-effort blocks and soft-degrade paths)
   - `modules/quaid/core/session-timeout.ts` (event-message fallback behavior)
 - [ ] Add tests that fail if silent fallback paths are introduced in critical flows (recall/extract/janitor).
-

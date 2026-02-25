@@ -217,6 +217,26 @@ CREATE TABLE IF NOT EXISTS entity_aliases (
 CREATE INDEX IF NOT EXISTS idx_aliases_alias ON entity_aliases(alias);
 CREATE INDEX IF NOT EXISTS idx_aliases_canonical ON entity_aliases(canonical_name);
 
+-- Identity handles map (forward-looking multi-user/group-chat support)
+-- Maps source-specific handles/usernames to canonical entity IDs.
+CREATE TABLE IF NOT EXISTS identity_handles (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT,                     -- Tenant/user namespace
+    source_channel TEXT NOT NULL,      -- telegram/discord/slack/dm/etc.
+    conversation_id TEXT,              -- Optional group/thread scope
+    handle TEXT NOT NULL,              -- Raw handle seen in source context
+    canonical_entity_id TEXT NOT NULL, -- Canonical entity/person ID
+    confidence REAL DEFAULT 1.0,       -- Mapping confidence score
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(owner_id, source_channel, conversation_id, handle)
+);
+CREATE INDEX IF NOT EXISTS idx_identity_handles_lookup
+    ON identity_handles(owner_id, source_channel, conversation_id, handle);
+CREATE INDEX IF NOT EXISTS idx_identity_handles_entity
+    ON identity_handles(canonical_entity_id);
+
 -- Doc registry - managed by docs_registry.py ensure_table()
 -- Table definition lives in docs_registry.py to avoid schema drift.
 -- See docs_registry.py DocsRegistry.ensure_table() for the canonical DDL.
