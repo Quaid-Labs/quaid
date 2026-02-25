@@ -603,6 +603,42 @@ class TestNotifyEdgeCases:
             idx = cmd.index("--channel")
             assert cmd[idx + 1] == "discord"
 
+    def test_notify_override_fallback_retry_when_failhard_disabled(self, monkeypatch):
+        """When failHard=false, failed override channel retries last-used channel."""
+        adapter = OpenClawAdapter()
+        mock_info = ChannelInfo(
+            channel="telegram", target="123", account_id="default",
+            session_key="agent:main:main"
+        )
+        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: False)
+        fail = MagicMock()
+        fail.returncode = 1
+        fail.stderr = "failed"
+        ok = MagicMock()
+        ok.returncode = 0
+        with patch("adaptors.openclaw.adapter.subprocess.run", side_effect=[fail, ok]) as mock_run:
+            result = adapter.notify("test", channel_override="discord")
+            assert result is True
+            assert mock_run.call_count == 2
+
+    def test_notify_override_no_retry_when_failhard_enabled(self, monkeypatch):
+        """When failHard=true, failed override channel does not retry fallback channel."""
+        adapter = OpenClawAdapter()
+        mock_info = ChannelInfo(
+            channel="telegram", target="123", account_id="default",
+            session_key="agent:main:main"
+        )
+        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: True)
+        fail = MagicMock()
+        fail.returncode = 1
+        fail.stderr = "failed"
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=fail) as mock_run:
+            result = adapter.notify("test", channel_override="discord")
+            assert result is False
+            assert mock_run.call_count == 1
+
     def test_notify_non_default_account(self, monkeypatch):
         """Non-default account_id adds --account flag."""
         adapter = OpenClawAdapter()
