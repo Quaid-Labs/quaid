@@ -180,6 +180,7 @@ class RetrievalConfig:
     recency_decay_days: int = 90  # Days over which recency decays to 0
     pre_injection_pass: bool = True  # Auto-inject: use total_recall planning pass
     router_fail_open: bool = True  # If true, total_recall router failures use deterministic fallback recall instead of raising
+    fail_hard: bool = True  # If true, embedding outages raise instead of silent degraded fallback
     auto_inject: bool = False  # Auto-inject memories into context (Mem0-style)
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
 
@@ -658,6 +659,7 @@ def _load_config_inner() -> MemoryConfig:
         co_session_decay=retrieval_data.get('co_session_decay', 0.6),
         recency_decay_days=retrieval_data.get('recency_decay_days', 90),
         pre_injection_pass=retrieval_data.get('pre_injection_pass', retrieval_data.get('preInjectionPass', True)),
+        fail_hard=retrieval_data.get('fail_hard', retrieval_data.get('failHard', True)),
         auto_inject=retrieval_data.get('auto_inject', False),
         traversal=traversal,
     )

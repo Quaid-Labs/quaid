@@ -763,6 +763,14 @@ class MemoryGraph:
         """
         query_embedding = self.get_embedding(query)
         if not query_embedding:
+            if _is_fail_hard_mode():
+                raise RuntimeError(
+                    "Embedding provider returned no vector for semantic search. "
+                    "Fail-hard mode is ON (QUAID_FAIL_HARD=1 / retrieval.fail_hard=true), "
+                    "so degraded FTS-only fallback is blocked. "
+                    "You can set QUAID_FAIL_HARD=0 (or retrieval.fail_hard=false) to allow fallback, "
+                    "but this is not recommended because it masks infrastructure faults."
+                )
             return []
 
         results = []
@@ -2304,6 +2312,22 @@ def _ollama_healthy(timeout: float = 0.2) -> bool:
     return healthy
 
 
+def _is_fail_hard_mode() -> bool:
+    """Return whether embedding failures should raise instead of degrading."""
+    # Test and mock environments intentionally run without embeddings.
+    if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("MOCK_EMBEDDINGS"):
+        return False
+
+    raw = str(os.environ.get("QUAID_FAIL_HARD", "")).strip().lower()
+    if raw:
+        return raw not in {"0", "false", "no", "off"}
+
+    try:
+        return bool(get_config().retrieval.fail_hard)
+    except Exception:
+        return True
+
+
 def route_query(query: str, timeout_ms: int = 3000) -> str:
     """HyDE (Hypothetical Document Embedding) — generate a hypothetical answer
     to the query, then use that for semantic search. The embedding of an answer
@@ -2833,7 +2857,16 @@ def recall(
     else:
         search_query = clean_query  # No HyDE when embeddings unavailable
         import logging
-        logging.getLogger(__name__).warning("Ollama unreachable — recall falling back to FTS-only")
+        msg = "Ollama unreachable — recall falling back to FTS-only"
+        logging.getLogger(__name__).warning(msg)
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "Embedding provider unavailable during recall. "
+                "Fail-hard mode is ON (QUAID_FAIL_HARD=1 / retrieval.fail_hard=true), "
+                "so degraded FTS-only fallback is blocked. "
+                "You can set QUAID_FAIL_HARD=0 (or retrieval.fail_hard=false) to allow fallback, "
+                "but this is not recommended because it masks infrastructure faults."
+            )
         results = []  # Skip semantic search, go straight to FTS fallback
         _fts_fallback_used = True
 
