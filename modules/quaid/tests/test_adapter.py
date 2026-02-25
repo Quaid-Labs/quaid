@@ -735,8 +735,12 @@ class TestProviderFactoryMethods:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         with patch("config.get_config") as mock_cfg:
             mock_cfg.return_value.models.llm_provider = "claude-code"
+            mock_cfg.return_value.models.deep_reasoning = "claude-opus-4-5"
+            mock_cfg.return_value.models.fast_reasoning = "claude-haiku-4-5"
             llm = standalone.get_llm_provider()
         assert isinstance(llm, ClaudeCodeLLMProvider)
+        assert llm._deep_model == "claude-opus-4-5"
+        assert llm._fast_model == "claude-haiku-4-5"
 
     def test_standalone_respects_tier_provider_overrides(self, standalone, monkeypatch):
         """StandaloneAdapter routes provider selection by model tier when configured."""
