@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -40,7 +41,7 @@ def _backup_dir() -> Path:
     return _workspace_dir() / "backups" / "soul-snippets"
 
 logger = logging.getLogger(__name__)
-_SNIPPETS_REVIEW_MAX_PER_FILE = int(os.environ.get("QUAID_SNIPPETS_REVIEW_MAX_PER_FILE", "20") or 20)
+_SNIPPETS_REVIEW_MAX_PER_FILE = int(os.environ.get("QUAID_SNIPPETS_REVIEW_MAX_PER_FILE", "50") or 50)
 
 # Voice guidance for distillation prompts per target file
 _FILE_VOICE_GUIDANCE = {
@@ -130,6 +131,16 @@ def _get_journal_config():
         return get_config().docs.journal
     except Exception:
         return None
+
+
+def _get_llm_workers() -> int:
+    """Get janitor LLM parallel worker count."""
+    try:
+        cfg = get_config()
+        workers = int(getattr(cfg.janitor.parallel, "llm_workers", 4) or 4)
+        return max(1, workers)
+    except Exception:
+        return 4
 
 
 def _get_snippet_review_model() -> str:
@@ -1147,6 +1158,7 @@ def run_journal_distillation(dry_run: bool = True,
     total_edits = 0
     all_errors: List[str] = []
     files_distilled = 0
+    work_items: List[Dict[str, Any]] = []
 
     for filename in target_files:
         _, entries = read_journal_file(filename)
@@ -1177,33 +1189,68 @@ def run_journal_distillation(dry_run: bool = True,
             print(f"  {filename}: parent file not found, skipping")
             continue
 
-        # Build distillation prompt
-        prompt = build_distillation_prompt(filename, parent_content, entries)
-        system_prompt = "Respond with JSON only. No explanation, no markdown fencing."
+        work_items.append({
+            "filename": filename,
+            "entries": entries,
+            "parent_content": parent_content,
+        })
 
-        cfg = _get_journal_config()
-        max_tokens = cfg.max_tokens if cfg else 8192
+    if not work_items:
+        print(f"  Results: {files_distilled} files distilled, {total_additions} additions, "
+              f"{total_edits} edits from {total_entries} entries")
+        return {
+            "total_entries": total_entries,
+            "files_distilled": files_distilled,
+            "additions": total_additions,
+            "edits": total_edits,
+            "errors": all_errors,
+        }
 
-        review_model = _get_snippet_review_model()
-        print(f"  Calling review model for {filename} distillation ({review_model})...")
+    system_prompt = "Respond with JSON only. No explanation, no markdown fencing."
+    cfg = _get_journal_config()
+    max_tokens = cfg.max_tokens if cfg else 8192
+    review_model = _get_snippet_review_model()
+    worker_count = min(_get_llm_workers(), len(work_items))
+    print(
+        f"  Calling review model for distillation across {len(work_items)} files "
+        f"({review_model}, workers={worker_count})..."
+    )
+
+    def _distill_file(item: Dict[str, Any]) -> Dict[str, Any]:
+        filename = item["filename"]
+        prompt = build_distillation_prompt(filename, item["parent_content"], item["entries"])
         response_text, duration = call_deep_reasoning(
             prompt,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
         )
-
         if not response_text:
-            print(f"  Opus distillation failed for {filename} (no response)")
-            all_errors.append(f"No response for {filename}")
-            continue
-
-        print(f"  Opus responded in {duration:.1f}s")
-
+            return {"filename": filename, "error": f"No response for {filename}"}
         result = parse_json_response(response_text)
         if not result:
-            print(f"  Could not parse Opus response for {filename}: {response_text[:200]}")
-            all_errors.append(f"Parse failed for {filename}")
+            return {"filename": filename, "error": f"Parse failed for {filename}: {response_text[:200]}"}
+        return {"filename": filename, "duration": duration, "result": result}
+
+    distill_results: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {executor.submit(_distill_file, item): item["filename"] for item in work_items}
+        for fut in as_completed(future_map):
+            filename = future_map[fut]
+            try:
+                distill_results[filename] = fut.result()
+            except Exception as exc:
+                distill_results[filename] = {"filename": filename, "error": f"Distillation failed for {filename}: {exc}"}
+
+    for item in work_items:
+        filename = item["filename"]
+        entries = item["entries"]
+        out = distill_results.get(filename, {"filename": filename, "error": f"No result for {filename}"})
+        if out.get("error"):
+            print(f"  Opus distillation failed for {filename}: {out['error']}")
+            all_errors.append(str(out["error"]))
             continue
+        result = out["result"]
+        print(f"  Opus responded for {filename} in {float(out.get('duration', 0.0)):.1f}s")
 
         # Backup before modification
         if not dry_run:
@@ -1307,47 +1354,67 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
 
     print(f"  Found {total_snippet_count} snippets across {len(all_snippets)} files")
 
-    # Build prompt and call Opus
-    prompt = build_review_prompt(all_snippets)
     system_prompt = "Respond with JSON only. No explanation, no markdown fencing."
-
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
-
     review_model = _get_snippet_review_model()
-    print(f"  Calling review model for snippet review ({review_model})...")
-    response_text, duration = call_deep_reasoning(
-        prompt,
-        system_prompt=system_prompt,
-        max_tokens=max_tokens,
+    worker_count = min(_get_llm_workers(), len(all_snippets))
+    print(
+        f"  Calling review model for snippet review across {len(all_snippets)} files "
+        f"({review_model}, workers={worker_count})..."
     )
 
-    if not response_text:
-        print("  Snippet review failed (no response)")
-        return {"total_snippets": total_snippet_count, "folded": 0, "rewritten": 0,
-                "discarded": 0, "errors": ["No response from review model"]}
+    def _review_file(filename: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        prompt = build_review_prompt({filename: payload})
+        response_text, duration = call_deep_reasoning(
+            prompt,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+        )
+        if not response_text:
+            return {"filename": filename, "error": f"No response from review model for {filename}"}
+        parsed = parse_json_response(response_text)
+        if not parsed:
+            return {"filename": filename, "error": f"Snippet review parse failed for {filename}: {response_text[:200]}"}
+        decisions = parsed.get("decisions", [])
+        if not decisions:
+            return {"filename": filename, "error": f"No decisions returned for pending snippets in {filename}"}
+        return {"filename": filename, "duration": duration, "decisions": decisions}
 
-    print(f"  Review model responded in {duration:.1f}s")
-
-    result = parse_json_response(response_text)
-    if not result:
-        print(f"  Could not parse review response: {response_text[:200]}")
-        return {"total_snippets": total_snippet_count, "folded": 0, "rewritten": 0,
-                "discarded": 0, "errors": ["Snippet review parse failed"]}
-
-    decisions = result.get("decisions", [])
-    if not decisions:
-        print("  Review model returned no decisions")
-        return {"total_snippets": total_snippet_count, "folded": 0, "rewritten": 0,
-                "discarded": 0, "errors": ["No decisions returned for pending snippets"]}
+    review_results: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(_review_file, filename, payload): filename
+            for filename, payload in all_snippets.items()
+        }
+        for fut in as_completed(future_map):
+            filename = future_map[fut]
+            try:
+                review_results[filename] = fut.result()
+            except Exception as exc:
+                review_results[filename] = {"filename": filename, "error": f"Snippet review failed for {filename}: {exc}"}
 
     # Backup before modification
     if not dry_run:
         for filename in all_snippets:
             backup_file(filename)
 
-    # Apply decisions
-    stats = apply_decisions(decisions, all_snippets, dry_run=dry_run)
+    stats = {"folded": 0, "rewritten": 0, "discarded": 0, "errors": []}
+    for filename in all_snippets:
+        out = review_results.get(filename, {"filename": filename, "error": f"No review result for {filename}"})
+        if out.get("error"):
+            stats["errors"].append(str(out["error"]))
+            continue
+        print(f"  Review model responded for {filename} in {float(out.get('duration', 0.0)):.1f}s")
+        file_stats = apply_decisions(
+            out.get("decisions", []),
+            {filename: all_snippets[filename]},
+            dry_run=dry_run,
+        )
+        stats["folded"] += int(file_stats.get("folded", 0))
+        stats["rewritten"] += int(file_stats.get("rewritten", 0))
+        stats["discarded"] += int(file_stats.get("discarded", 0))
+        stats["errors"].extend(file_stats.get("errors", []))
 
     print(f"  Results: {stats['folded']} folded, {stats['rewritten']} rewritten, "
           f"{stats['discarded']} discarded from {total_snippet_count} snippets")
