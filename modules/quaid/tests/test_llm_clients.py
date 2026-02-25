@@ -22,6 +22,7 @@ from core.llm.clients import (
     call_fast_reasoning,
     call_deep_reasoning,
 )
+from lib.providers import LLMResult
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +230,18 @@ class TestCallLlmProvider:
         llm_clients.call_llm("system", "user", model="claude-opus-4-6")
         assert test_adapter.llm_calls[0]["model_tier"] == "deep"
 
+    def test_provider_resolution_receives_model_tier(self, test_adapter):
+        """Provider lookup should receive resolved model tier for tier-specific routing."""
+        import core.llm.clients as llm_clients
+
+        llm_clients._models_loaded = True
+        llm_clients._fast_reasoning_model = "claude-haiku-4-5"
+        llm_clients._deep_reasoning_model = "claude-opus-4-6"
+
+        with patch("core.llm.clients.get_llm_provider", wraps=llm_clients.get_llm_provider) as mock_get:
+            llm_clients.call_llm("system", "user", model="claude-haiku-4-5")
+            assert mock_get.call_args.kwargs.get("model_tier") == "fast"
+
     def test_retries_on_provider_error(self, test_adapter):
         """call_llm should retry on transient provider errors."""
         import core.llm.clients as llm_clients
@@ -268,6 +281,30 @@ class TestCallLlmProvider:
             raise ConnectionError("persistent failure")
 
         test_adapter._llm.llm_call = always_fail
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
+            result, _duration = llm_clients.call_llm("system", "user", max_retries=0)
+        assert result is None
+
+    def test_no_response_raises_when_failhard_enabled(self, test_adapter):
+        """Provider null responses must fail hard when failHard is enabled."""
+        import core.llm.clients as llm_clients
+
+        def no_response(*_args, **_kwargs):
+            return LLMResult(text=None, duration=0.01, model="null-model")
+
+        test_adapter._llm.llm_call = no_response
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="failHard is enabled"):
+                llm_clients.call_llm("system", "user", max_retries=0)
+
+    def test_no_response_degrades_when_failhard_disabled(self, test_adapter):
+        """Provider null responses should degrade only when failHard is disabled."""
+        import core.llm.clients as llm_clients
+
+        def no_response(*_args, **_kwargs):
+            return LLMResult(text=None, duration=0.01, model="null-model")
+
+        test_adapter._llm.llm_call = no_response
         with patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
             result, _duration = llm_clients.call_llm("system", "user", max_retries=0)
         assert result is None

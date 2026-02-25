@@ -3,6 +3,8 @@ import sqlite3
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 from core.lifecycle.janitor_lifecycle import RoutineContext, build_default_registry
 
 
@@ -268,3 +270,63 @@ def test_lifecycle_registry_allows_registered_write_locks(tmp_path):
     result = registry.run("writer", RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path))
     assert result.errors == []
     assert result.metrics["ok"] == 1
+
+
+def test_lifecycle_registry_allows_idempotent_reregister_same_owner(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+
+    def _writer(_ctx):
+        return SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={})
+
+    registry.register("writer", _writer, owner="memorydb", write_resources=["files:global"])
+    registry.register("writer", _writer, owner="memorydb")
+
+    result = registry.run(
+        "writer",
+        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path),
+    )
+    assert result.errors == []
+    assert result.metrics["ok"] == 1
+
+
+def test_lifecycle_registry_rejects_conflicting_reregister():
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    registry.register("writer", lambda _ctx: SimpleNamespace(metrics={}, logs=[], errors=[], data={}), owner="memorydb")
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register("writer", lambda _ctx: SimpleNamespace(metrics={}, logs=[], errors=[], data={}), owner="other")
+
+
+def test_lifecycle_registry_skips_lock_enforcement_when_disabled(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    cfg = _make_cfg(False)
+    cfg.janitor.parallel.lock_enforcement_enabled = False
+    registry = LifecycleRegistry()
+    registry.register("writer", lambda _ctx: SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={}))
+
+    result = registry.run("writer", RoutineContext(cfg=cfg, dry_run=False, workspace=tmp_path))
+    assert result.errors == []
+    assert result.metrics["ok"] == 1
+
+
+def test_lifecycle_registry_resolves_write_resources_to_absolute_paths(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    cfg = _make_cfg(False)
+    cfg.database.path = "state/memory.db"
+    registry = LifecycleRegistry()
+    registry.register(
+        "writer",
+        lambda _ctx: SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={}),
+        write_resources=["db:memory", "core_markdown", "files:global", "file:docs/AGENTS.md"],
+    )
+    ctx = RoutineContext(cfg=cfg, dry_run=False, workspace=tmp_path)
+    resolved = registry._resolved_write_resources("writer", ctx)  # Intentional private call for normalization coverage.
+
+    assert "files:global" in resolved
+    assert f"db:{(tmp_path / 'state' / 'memory.db').resolve()}" in resolved
+    assert f"file:{(tmp_path / 'docs' / 'AGENTS.md').resolve()}" in resolved
