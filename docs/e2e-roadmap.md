@@ -74,7 +74,7 @@ Coverage requirements:
    - Added concurrent pressure probe (janitor review dry-run while live turn executes).
    - Added cross-session concurrency matrix probe (two session IDs interleaved under janitor pressure; warns when cursor files are unavailable in non-live suites).
    - Added gateway restart during janitor run-write probe (cleanup apply run must still record a completed `janitor_runs` row).
-   - Added migration-fixture resilience probe (legacy `janitor_runs` schema auto-migrates before run write).
+   - Added migration-fixture resilience probe (`janitor_runs` schema migration is validated before run write).
    - Added registry/index drift fixture probe (`doc_registry.last_indexed_at` for seeded doc must refresh after janitor RAG).
    - Added registry/doc-chunk path-mismatch drift probe (both relative and absolute registry paths must refresh).
    - Added source-mapping drift fixture (`doc_registry.source_files` includes missing path) exercised under project-updater pressure path when projects are configured.
