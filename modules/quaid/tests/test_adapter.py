@@ -388,6 +388,7 @@ class TestAdapterSelection:
         assert isinstance(adapter, OpenClawAdapter)
 
     def test_missing_adapter_raises(self, monkeypatch, tmp_path):
+        reset_adapter()
         monkeypatch.delenv("QUAID_HOME", raising=False)
         monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
         monkeypatch.chdir(tmp_path)
@@ -604,42 +605,6 @@ class TestNotifyEdgeCases:
             idx = cmd.index("--channel")
             assert cmd[idx + 1] == "discord"
 
-    def test_notify_override_fallback_retry_when_failhard_disabled(self, monkeypatch):
-        """When failHard=false, failed override channel retries last-used channel."""
-        adapter = OpenClawAdapter()
-        mock_info = ChannelInfo(
-            channel="telegram", target="123", account_id="default",
-            session_key="agent:main:main"
-        )
-        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
-        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: False)
-        fail = MagicMock()
-        fail.returncode = 1
-        fail.stderr = "failed"
-        ok = MagicMock()
-        ok.returncode = 0
-        with patch("adaptors.openclaw.adapter.subprocess.run", side_effect=[fail, ok]) as mock_run:
-            result = adapter.notify("test", channel_override="discord")
-            assert result is True
-            assert mock_run.call_count == 2
-
-    def test_notify_override_no_retry_when_failhard_enabled(self, monkeypatch):
-        """When failHard=true, failed override channel does not retry fallback channel."""
-        adapter = OpenClawAdapter()
-        mock_info = ChannelInfo(
-            channel="telegram", target="123", account_id="default",
-            session_key="agent:main:main"
-        )
-        monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
-        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: True)
-        fail = MagicMock()
-        fail.returncode = 1
-        fail.stderr = "failed"
-        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=fail) as mock_run:
-            result = adapter.notify("test", channel_override="discord")
-            assert result is False
-            assert mock_run.call_count == 1
-
     def test_notify_non_default_account(self, monkeypatch):
         """Non-default account_id adds --account flag."""
         adapter = OpenClawAdapter()
@@ -770,15 +735,6 @@ class TestProviderFactoryMethods:
             mock_cfg.return_value.models.llm_provider = "anthropic"
             with pytest.raises(RuntimeError, match="LLM provider is 'anthropic'"):
                 standalone.get_llm_provider()
-
-    def test_standalone_default_provider_fallback_when_failhard_disabled(self, standalone, monkeypatch):
-        """When failHard=false, unset/default provider can fall back to a key-backed provider."""
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
-        with patch("config.get_config") as mock_cfg:
-            mock_cfg.return_value.models.llm_provider = "default"
-            mock_cfg.return_value.retrieval.fail_hard = False
-            llm = standalone.get_llm_provider()
-        assert isinstance(llm, AnthropicLLMProvider)
 
     def test_standalone_embeddings_returns_none(self, standalone):
         """StandaloneAdapter has no built-in embeddings provider."""
@@ -923,22 +879,6 @@ class TestResolveAnthropicCredential:
         adapter, _ = self._make_adapter(tmp_path, monkeypatch)
         cred = adapter._resolve_anthropic_credential()
         assert cred is None
-
-    def test_falls_through_to_env_var_when_failhard_disabled(self, tmp_path, monkeypatch):
-        """When failHard=false, ANTHROPIC_API_KEY env is an allowed noisy fallback."""
-        adapter, _ = self._make_adapter(tmp_path, monkeypatch)
-        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: False)
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-from-env")
-        cred = adapter._resolve_anthropic_credential()
-        assert cred == "sk-test-from-env"
-
-    def test_falls_through_to_dotenv_when_failhard_disabled(self, tmp_path, monkeypatch):
-        """When failHard=false, workspace .env is an allowed noisy fallback."""
-        adapter, _ = self._make_adapter(tmp_path, monkeypatch)
-        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: False)
-        (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=sk-test-from-dotenv\n")
-        cred = adapter._resolve_anthropic_credential()
-        assert cred == "sk-test-from-dotenv"
 
     def test_profiles_take_priority_when_env_present(self, tmp_path, monkeypatch):
         """Gateway-auth profile still wins when env var is present."""

@@ -74,7 +74,7 @@ Coverage requirements:
    - Added concurrent pressure probe (janitor review dry-run while live turn executes).
    - Added cross-session concurrency matrix probe (two session IDs interleaved under janitor pressure; warns when cursor files are unavailable in non-live suites).
    - Added gateway restart during janitor run-write probe (cleanup apply run must still record a completed `janitor_runs` row).
-   - Added migration-fixture resilience probe (`janitor_runs` schema migration is validated before run write).
+   - Added migration-fixture resilience probe (legacy `janitor_runs` schema auto-migrates before run write).
    - Added registry/index drift fixture probe (`doc_registry.last_indexed_at` for seeded doc must refresh after janitor RAG).
    - Added registry/doc-chunk path-mismatch drift probe (both relative and absolute registry paths must refresh).
    - Added source-mapping drift fixture (`doc_registry.source_files` includes missing path) exercised under project-updater pressure path when projects are configured.
@@ -99,8 +99,7 @@ Coverage requirements:
    - Emits recommendation JSON at `/tmp/quaid-e2e-budget-recommendation.json` (override with `QUAID_E2E_BUDGET_RECOMMENDATION_PATH`).
    - Non-fatal when history is insufficient (`QUAID_E2E_BUDGET_TUNE_MIN_SAMPLES`, `QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO` control tuning).
 10. Strict notification-delivery assertions.
-   - Notify matrix now tracks sent/failure/no-channel/config-load counters per level and computes aggregate activity.
-   - Notify matrix waits for reset extraction completion before asserting level behavior.
+   - Notify matrix now tracks sent/failure/no-channel counters per level.
    - Optional strict mode (`QUAID_E2E_NOTIFY_REQUIRE_DELIVERY=true`) fails when normal/debug have no active channel context or no successful sends.
 11. Stage-specific budget tuning primitives.
    - E2E summary now records `stage_durations_seconds` for each stage.
@@ -125,10 +124,6 @@ Coverage requirements:
      - `QUAID_E2E_JPB_MAX_DEDUP_UNREVIEWED_AFTER` (default `0`)
      - `QUAID_E2E_JPB_MAX_DECAY_PENDING_AFTER` (default `0`)
      - `QUAID_E2E_JPB_MAX_STAGING_EVENTS_AFTER` (default `0`)
-17. Nightly scheduler + Telegram status reporting.
-   - Added `modules/quaid/scripts/nightly-full-suite.sh` for unattended nightly execution.
-   - Added `modules/quaid/scripts/install-nightly-cron.sh` to install an idempotent `3:00 AM` cron entry.
-   - Nightly runner writes rotating logs under `~/quaid/logs/nightly-e2e/` and sends run status to Telegram.
 17. Janitor-parallel benchmark lane stabilization.
    - Added benchmark-mode catch-up review before graduate in janitor core to prevent same-cycle pending leakage.
    - Janitor-parallel E2E assertions now focus on deterministic benchmark invariants (pending/unreviewed depletion + threshold gates) instead of fragile status-delta assumptions.

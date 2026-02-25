@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from lib.llm_clients import call_deep_reasoning, parse_json_response
+from core.llm.clients import call_llm, parse_json_response
 from config import get_config
 from lib.markdown import strip_protected_regions
 from lib.runtime_context import get_workspace_dir
@@ -1059,11 +1059,7 @@ def apply_decisions(
             action = "DISCARD"
 
         if filename not in all_snippets:
-            logger.warning(
-                "Ignoring snippet decision for unknown file '%s' (known=%s)",
-                filename,
-                ",".join(sorted(all_snippets.keys())),
-            )
+            stats["errors"].append(f"Unknown file: {filename}")
             continue
 
         file_data = all_snippets[filename]
@@ -1119,6 +1115,103 @@ def apply_decisions(
             _clear_processed_snippets(filename, processed)
 
     return stats
+
+
+def _validate_and_normalize_decisions(
+    decisions: List[Dict[str, Any]],
+    all_snippets: Dict[str, Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Normalize snippet indices and report invalid decisions.
+
+    Some model outputs incorrectly use global snippet numbering across all files
+    instead of per-file numbering. We deterministically remap those when
+    possible, then return any still-invalid entries.
+    """
+    normalized: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    # Build global ranges using prompt order (same order as all_snippets was built).
+    ranges: Dict[str, Tuple[int, int]] = {}
+    cursor = 1
+    for filename, data in all_snippets.items():
+        count = len(data.get("snippets", []))
+        if count > 0:
+            ranges[filename] = (cursor, cursor + count - 1)
+            cursor += count
+
+    for i, decision in enumerate(decisions):
+        d = dict(decision or {})
+        filename = str(d.get("file", "")).strip()
+        try:
+            snippet_index = int(d.get("snippet_index", 0))
+        except Exception:
+            snippet_index = 0
+
+        if filename in all_snippets:
+            local_count = len(all_snippets[filename].get("snippets", []))
+            # Attempt deterministic remap for global numbering.
+            if (snippet_index < 1 or snippet_index > local_count) and filename in ranges:
+                start, end = ranges[filename]
+                if start <= snippet_index <= end:
+                    remapped = snippet_index - start + 1
+                    logger.info(
+                        "Normalized global snippet index for %s: %s -> %s",
+                        filename,
+                        snippet_index,
+                        remapped,
+                    )
+                    snippet_index = remapped
+                    d["snippet_index"] = remapped
+
+            if snippet_index < 1 or snippet_index > local_count:
+                errors.append(
+                    f"decision {i+1}: invalid snippet_index={snippet_index} for {filename} "
+                    f"(valid 1..{local_count})"
+                )
+        else:
+            errors.append(f"decision {i+1}: unknown file={filename}")
+
+        normalized.append(d)
+
+    return normalized, errors
+
+
+def _retry_invalid_decisions_once(
+    all_snippets: Dict[str, Dict[str, Any]],
+    max_tokens: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """Ask the model for a corrected full decision set once."""
+    retry_prompt = (
+        build_review_prompt(all_snippets)
+        + "\n\nCORRECTION REQUIREMENTS:\n"
+        + "- snippet_index is PER-FILE, not global.\n"
+        + "- For each file, numbering starts at 1.\n"
+        + "- Return exactly one decision per listed snippet.\n"
+        + "- Keep file names exactly as provided.\n"
+    )
+    system_prompt = "Respond with JSON only. No explanation, no markdown fencing."
+    review_model = _get_snippet_review_model()
+    review_tier = _review_model_tier(review_model)
+    print(f"  Retrying snippet review with index-correction prompt ({review_model})...")
+    response_text, duration = call_llm(
+        system_prompt,
+        retry_prompt,
+        model_tier=review_tier,
+        max_tokens=max_tokens,
+    )
+    if not response_text:
+        print("  Retry failed (no response)")
+        return None
+    print(f"  Retry model responded in {duration:.1f}s")
+    result = parse_json_response(response_text)
+    if not result:
+        print(f"  Retry parse failed: {response_text[:200]}")
+        return None
+    decisions = result.get("decisions", [])
+    if not isinstance(decisions, list) or not decisions:
+        print("  Retry returned no decisions")
+        return None
+    return decisions
 
 
 # =============================================================================
@@ -1185,10 +1278,12 @@ def run_journal_distillation(dry_run: bool = True,
         max_tokens = cfg.max_tokens if cfg else 8192
 
         review_model = _get_snippet_review_model()
+        review_tier = _review_model_tier(review_model)
         print(f"  Calling review model for {filename} distillation ({review_model})...")
-        response_text, duration = call_deep_reasoning(
+        response_text, duration = call_llm(
+            system_prompt,
             prompt,
-            system_prompt=system_prompt,
+            model_tier=review_tier,
             max_tokens=max_tokens,
         )
 
@@ -1315,10 +1410,12 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
     max_tokens = cfg.max_tokens if cfg else 8192
 
     review_model = _get_snippet_review_model()
+    review_tier = _review_model_tier(review_model)
     print(f"  Calling review model for snippet review ({review_model})...")
-    response_text, duration = call_deep_reasoning(
+    response_text, duration = call_llm(
+        system_prompt,
         prompt,
-        system_prompt=system_prompt,
+        model_tier=review_tier,
         max_tokens=max_tokens,
     )
 
@@ -1340,6 +1437,22 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
         print("  Review model returned no decisions")
         return {"total_snippets": total_snippet_count, "folded": 0, "rewritten": 0,
                 "discarded": 0, "errors": ["No decisions returned for pending snippets"]}
+
+    # Normalize and validate decision indices before apply.
+    decisions, index_errors = _validate_and_normalize_decisions(decisions, all_snippets)
+    if index_errors:
+        print(f"  Invalid snippet decisions detected ({len(index_errors)}); retrying once...")
+        retry_decisions = _retry_invalid_decisions_once(all_snippets, max_tokens=max_tokens)
+        if retry_decisions:
+            decisions, index_errors = _validate_and_normalize_decisions(retry_decisions, all_snippets)
+        if index_errors:
+            return {
+                "total_snippets": total_snippet_count,
+                "folded": 0,
+                "rewritten": 0,
+                "discarded": 0,
+                "errors": [f"Snippet decision validation failed after retry: {e}" for e in index_errors],
+            }
 
     # Backup before modification
     if not dry_run:

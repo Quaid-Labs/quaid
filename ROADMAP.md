@@ -10,15 +10,12 @@ It reflects broad areas of active focus, not delivery guarantees.
   - Support context muxing: fast context switching between participants and conversations.
   - Add intelligent mixed-recall policies for shared/group threads without cross-user leakage.
   - Harden datastore contracts so per-user and per-group stores remain modular and swappable.
-  - Publish and iterate the design spec in `docs/MULTI-USER-MEMORY-SPEC.md`.
-  - Add a dedicated `multi_user_agentlife` benchmark track for attribution, leakage, and policy correctness.
 
 - **Reliability and correctness**
   - Continue hardening extraction, recall, and janitor paths.
   - Reduce failure ambiguity with better diagnostics and test isolation.
   - Keep OpenClaw integration stable as the primary production path.
   - Parallelize janitor task execution after architectural boundary enforcement is complete.
-  - Add automated nightly full test-suite execution (unit + integration + E2E nightly) with machine-readable status reporting and alerting.
 
 - **Benchmark rigor**
   - Keep LoCoMo runs reproducible and current.

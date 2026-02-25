@@ -29,8 +29,6 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from lib.fail_policy import is_fail_hard_enabled
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Dataclasses
@@ -307,41 +305,27 @@ class ClaudeCodeLLMProvider(LLMProvider):
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)  # Allow nested invocation
 
-        # Ensure OAuth token is available.
-        # When failHard=true, do not degrade into .env fallback lookup.
-        fail_hard = is_fail_hard_enabled()
+        # Ensure OAuth token is available (load from .env if not in env)
         if "CLAUDE_CODE_OAUTH_TOKEN" not in env:
-            if fail_hard:
-                print(
-                    "[providers][FAIL-HARD] CLAUDE_CODE_OAUTH_TOKEN missing in process env; "
-                    "skipping .env credential fallback.",
-                    file=sys.stderr,
-                )
-            else:
+            adapter_env_path = ""
+            try:
+                # Lazy import to avoid module-level circular dependency.
+                from lib.adapter import get_adapter
+                adapter_env_path = str(get_adapter().quaid_home() / ".env")
+            except Exception:
                 adapter_env_path = ""
-                try:
-                    # Lazy import to avoid module-level circular dependency.
-                    from lib.adapter import get_adapter
-                    adapter_env_path = str(get_adapter().quaid_home() / ".env")
-                except Exception:
-                    adapter_env_path = ""
-                for env_path in [adapter_env_path]:
-                    if env_path and os.path.isfile(env_path):
-                        try:
-                            with open(env_path) as f:
-                                for line in f:
-                                    if line.strip().startswith("CLAUDE_CODE_OAUTH_TOKEN="):
-                                        env["CLAUDE_CODE_OAUTH_TOKEN"] = line.strip().split("=", 1)[1]
-                                        break
-                        except OSError:
-                            pass
-                        if "CLAUDE_CODE_OAUTH_TOKEN" in env:
-                            print(
-                                "[providers][FALLBACK] Loaded CLAUDE_CODE_OAUTH_TOKEN from "
-                                f"{env_path}. Set retrieval.fail_hard=true to disable fallback.",
-                                file=sys.stderr,
-                            )
-                            break
+            for env_path in [adapter_env_path]:
+                if env_path and os.path.isfile(env_path):
+                    try:
+                        with open(env_path) as f:
+                            for line in f:
+                                if line.strip().startswith("CLAUDE_CODE_OAUTH_TOKEN="):
+                                    env["CLAUDE_CODE_OAUTH_TOKEN"] = line.strip().split("=", 1)[1]
+                                    break
+                    except OSError:
+                        pass
+                    if "CLAUDE_CODE_OAUTH_TOKEN" in env:
+                        break
 
         start_time = time.time()
         try:
