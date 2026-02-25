@@ -252,7 +252,7 @@ class DocsRAG:
         # Sync indexed timestamp to registry
         if chunks_created > 0:
             try:
-                from core.docs.registry import DocsRegistry
+                from datastore.docsdb.registry import DocsRegistry
                 registry = DocsRegistry(self.db_path)
                 now = datetime.now().isoformat()
                 # Try both absolute and relative paths
@@ -367,7 +367,7 @@ class DocsRAG:
             project_paths = self._get_project_paths(project)
             # Also get registered external file paths from doc_registry
             try:
-                from core.docs.registry import DocsRegistry
+                from datastore.docsdb.registry import DocsRegistry
                 registry = DocsRegistry()
                 reg_docs = registry.list_docs(project=project)
                 registry_paths = [str(_workspace() / d["file_path"]) for d in reg_docs]
@@ -500,7 +500,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                     if updater_mod is not None and hasattr(updater_mod, "process_all_events"):
                         process_all_events = updater_mod.process_all_events
                     else:
-                        from core.docs.project_updater import process_all_events
+                        from datastore.docsdb.project_updater import process_all_events
 
                     result.logs.append("Processing queued project events...")
                     event_result = process_all_events()
@@ -519,7 +519,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                     if registry_mod is not None and hasattr(registry_mod, "DocsRegistry"):
                         DocsRegistry = registry_mod.DocsRegistry
                     else:
-                        from core.docs.registry import DocsRegistry
+                        from datastore.docsdb.registry import DocsRegistry
 
                     docs_registry = DocsRegistry()
                     total_discovered = 0

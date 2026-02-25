@@ -8,9 +8,9 @@ const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
 const RAG_SCRIPT = (() => {
-  const modernPath = path.join(WORKSPACE, "modules/quaid/core/docs/rag.py")
+  const modernPath = path.join(WORKSPACE, "modules/quaid/datastore/docsdb/rag.py")
   if (existsSync(modernPath)) return modernPath
-  return path.join(WORKSPACE, "plugins/quaid/core/docs/rag.py")
+  return path.join(WORKSPACE, "plugins/quaid/datastore/docsdb/rag.py")
 })()
 const PYTHON_MODULE_ROOT = path.resolve(path.dirname(RAG_SCRIPT), "../..")
 const TEST_DB = `/tmp/test-rag-${process.pid}.db`

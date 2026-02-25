@@ -75,7 +75,7 @@ def setup_env(tmp_path, monkeypatch):
 
 
 def _get_registry(tmp_path=None):
-    from core.docs.registry import DocsRegistry
+    from datastore.docsdb.registry import DocsRegistry
     return DocsRegistry(db_path=_tmp_db)
 
 
@@ -431,7 +431,7 @@ class TestDeleteProject:
                 shutil.rmtree(target)
             return None
 
-        with patch("core.docs.registry.subprocess.run") as mock_run:
+        with patch("datastore.docsdb.registry.subprocess.run") as mock_run:
             mock_run.side_effect = _trash_side_effect
             result = r.delete_project("test-project")
 
@@ -669,7 +669,7 @@ class TestProcessEventMalformedJson:
 
     def test_invalid_json(self, setup_env):
         tmp_path = setup_env
-        import core.docs.project_updater as project_updater
+        import datastore.docsdb.project_updater as project_updater
         monkeypatch_module = None
 
         event_file = tmp_path / "projects" / "staging" / "bad-event.json"
@@ -683,7 +683,7 @@ class TestProcessEventMalformedJson:
 
     def test_empty_file(self, setup_env):
         tmp_path = setup_env
-        import core.docs.project_updater as project_updater
+        import datastore.docsdb.project_updater as project_updater
 
         event_file = tmp_path / "projects" / "staging" / "empty-event.json"
         event_file.write_text("")
@@ -817,7 +817,7 @@ class TestConsistentProcessEventReturn:
 
     def test_error_return_has_all_keys(self, setup_env):
         tmp_path = setup_env
-        import core.docs.project_updater as project_updater
+        import datastore.docsdb.project_updater as project_updater
 
         result = project_updater.process_event("/nonexistent/event.json")
         assert "success" in result
@@ -829,7 +829,7 @@ class TestConsistentProcessEventReturn:
 
     def test_invalid_json_has_all_keys(self, setup_env):
         tmp_path = setup_env
-        import core.docs.project_updater as project_updater
+        import datastore.docsdb.project_updater as project_updater
 
         event_file = tmp_path / "projects" / "staging" / "bad.json"
         event_file.write_text("{not json")

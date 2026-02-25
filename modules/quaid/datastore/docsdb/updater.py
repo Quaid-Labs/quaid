@@ -38,9 +38,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import subprocess
 
 from config import get_config
-from core.llm.clients import call_deep_reasoning, call_fast_reasoning
+from lib.llm_clients import call_deep_reasoning, call_fast_reasoning
 from lib.runtime_context import get_workspace_dir
 
 def _workspace() -> Path:
@@ -51,6 +52,33 @@ def _changelog_path() -> Path:
 
 def _cleanup_state_path() -> Path:
     return _workspace() / "logs" / "docs-cleanup-state.json"
+
+
+def _queue_delayed_notification(message: str, kind: str, priority: str, source: str) -> None:
+    payload = {
+        "message": str(message),
+        "kind": str(kind),
+        "priority": str(priority),
+    }
+    events_py = Path(__file__).resolve().parents[2] / "core" / "runtime" / "events.py"
+    subprocess.run(
+        [
+            sys.executable,
+            str(events_py),
+            "emit",
+            "--name",
+            "notification.delayed",
+            "--payload",
+            json.dumps(payload, ensure_ascii=False),
+            "--source",
+            source,
+            "--dispatch",
+            "queued",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 # Cleanup thresholds
 CLEANUP_UPDATE_THRESHOLD = 10  # Trigger cleanup after this many updates
@@ -124,14 +152,13 @@ def log_doc_update(
         try:
             cfg = get_config()
             if cfg.docs.notify_on_update:
-                from core.runtime.events import queue_delayed_notification
                 message = (
                     "[Quaid] 📋 Auto-Documentation Update\n"
                     f"Updated: `{Path(doc_path).name}`\n"
                     f"Trigger: {trigger}\n"
                     f"Changes: {summary}"
                 )
-                queue_delayed_notification(
+                _queue_delayed_notification(
                     message,
                     kind="doc_update",
                     priority="normal",
@@ -521,7 +548,7 @@ def check_staleness() -> Dict[str, StalenessInfo]:
 
     # 1. Registry source mappings (takes precedence)
     try:
-        from core.docs.registry import DocsRegistry
+        from datastore.docsdb.registry import DocsRegistry
         registry = DocsRegistry()
         registry_mappings = registry.get_source_mappings()
         for doc_path, sources in registry_mappings.items():
@@ -715,7 +742,6 @@ def update_doc_from_diffs(
     # For borderline cases (low-confidence "significant"), use Haiku as a cheap gate
     if classification["confidence"] < 0.6:
         try:
-            from core.llm.clients import call_fast_reasoning
             gate_prompt = (
                 f"Does this code diff require updating the documentation at {doc_path}?\n"
                 f"Doc purpose: {purpose}\n\n"
@@ -823,7 +849,7 @@ def update_doc_from_diffs(
 
     # Sync modified timestamp to registry
     try:
-        from core.docs.registry import DocsRegistry
+        from datastore.docsdb.registry import DocsRegistry
         registry = DocsRegistry()
         registry.update_timestamps(doc_path, modified_at=datetime.now().isoformat())
     except Exception:
@@ -1006,7 +1032,7 @@ def update_doc_from_transcript(
             print(f"  Applied {applied} edit(s) to {doc_path}")
             # Sync modified timestamp to registry
             try:
-                from core.docs.registry import DocsRegistry
+                from datastore.docsdb.registry import DocsRegistry
                 registry = DocsRegistry()
                 registry.update_timestamps(doc_path, modified_at=datetime.now().isoformat())
             except Exception:
@@ -1231,7 +1257,7 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
 
     # Build mappings from registry + config
     try:
-        from core.docs.registry import DocsRegistry
+        from datastore.docsdb.registry import DocsRegistry
         registry = DocsRegistry()
         for doc_path, sources in registry.get_source_mappings().items():
             doc_to_sources[doc_path] = sources

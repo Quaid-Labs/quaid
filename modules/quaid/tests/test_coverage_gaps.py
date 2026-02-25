@@ -686,7 +686,7 @@ class TestDocsRegistryGc:
             "ollama": {"url": "http://localhost:11434", "embeddingModel": "nomic-embed-text"}
         }))
 
-        from core.docs.registry import DocsRegistry
+        from datastore.docsdb.registry import DocsRegistry
         from config import reload_config
         reload_config()
         return DocsRegistry(db_path=tmp_path / "gc_test.db")

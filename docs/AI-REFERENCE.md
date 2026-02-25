@@ -51,11 +51,11 @@ Write request
 | `core/lifecycle/janitor_lifecycle.py` | Lifecycle routine registry and dispatch | `LifecycleRegistry`, `RoutineContext`, `RoutineResult`, `build_default_registry()` |
 | `adaptors/openclaw/maintenance.py` | OpenClaw-specific lifecycle registrations | `register_lifecycle_routines()` (workspace audit registration) |
 | `core/lifecycle/workspace_audit.py` | Workspace markdown audit implementation | `run_workspace_check()`, `check_bloat()` |
-| `core/lifecycle/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
-| `core/docs/rag.py` | RAG indexing/search and lifecycle registration | `search()`, `index_docs()`, `register_lifecycle_routines()` |
-| `core/docs/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
-| `core/docs/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
-| `core/docs/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
+| `datastore/docsdb/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
+| `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search()`, `index_docs()`, `register_lifecycle_routines()` |
+| `datastore/docsdb/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
+| `datastore/docsdb/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
+| `datastore/docsdb/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
 | `core/runtime/events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
 | `core/runtime/notify.py` | User notifications via adapter/runtime context | `notify_user()`, retrieval/extraction/janitor/doc notifications |
 | `core/runtime/logger.py` | Structured JSONL logger with rotation | `Logger`, `rotate_logs()`, `memory_logger`, `janitor_logger` |
@@ -566,9 +566,9 @@ python3 core/lifecycle/janitor.py --task duplicates --apply       # Dedup pass
 python3 core/lifecycle/janitor.py --task cleanup                  # Prune old logs
 
 # Documentation
-python3 core/docs/updater.py check                      # Check doc staleness (free)
-python3 core/docs/updater.py update-stale --apply       # Fix stale docs (Opus calls)
-python3 core/docs/rag.py search "query text"            # RAG search (free, local)
+python3 datastore/docsdb/updater.py check                      # Check doc staleness (free)
+python3 datastore/docsdb/updater.py update-stale --apply       # Fix stale docs (Opus calls)
+python3 datastore/docsdb/rag.py search "query text"            # RAG search (free, local)
 
 # Projects
 python3 docs_registry.py list --project quaid
@@ -813,4 +813,4 @@ python3 core/lifecycle/janitor.py --task all --apply
 
 > **Note:** These documentation paths reference internal workspace files and are not included in the public release repo. They are available in development environments where the full workspace is present.
 
-**RAG search for docs:** `python3 core/docs/rag.py search "query"`
+**RAG search for docs:** `python3 datastore/docsdb/rag.py search "query"`
