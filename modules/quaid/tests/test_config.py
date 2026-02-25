@@ -212,6 +212,35 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_loads_identity_and_privacy_blocks(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "identity": {
+                    "mode": "multi_user",
+                    "autoLinkThreshold": 0.91,
+                    "requireReviewThreshold": 0.62
+                },
+                "privacy": {
+                    "defaultScopeDm": "private_subject",
+                    "defaultScopeGroup": "source_shared",
+                    "enforceStrictFilters": True
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.identity.mode == "multi_user"
+                assert cfg.identity.auto_link_threshold == 0.91
+                assert cfg.identity.require_review_threshold == 0.62
+                assert cfg.privacy.default_scope_dm == "private_subject"
+                assert cfg.privacy.default_scope_group == "source_shared"
+                assert cfg.privacy.enforce_strict_filters is True
+        finally:
+            config._config = old_config
+
     def test_loads_janitor_token_budget_from_config(self, tmp_path):
         import config
         old_config = config._config

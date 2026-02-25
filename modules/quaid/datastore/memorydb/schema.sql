@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS nodes (
     source_channel TEXT,                    -- Channel/source type (telegram/discord/slack/dm/etc.)
     source_conversation_id TEXT,            -- Stable conversation/thread/group identifier
     source_author_id TEXT,                  -- External speaker/author handle or ID
+    speaker_entity_id TEXT,                 -- Canonical entity that produced the source utterance
+    conversation_id TEXT,                   -- Canonical conversation/thread identifier (normalized)
+    visibility_scope TEXT DEFAULT 'source_shared', -- private_subject/source_shared/global_shared/system
+    sensitivity TEXT DEFAULT 'normal',      -- normal/restricted/secret
+    provenance_confidence REAL DEFAULT 0.5, -- confidence in ownership/attribution chain
 
     -- Classification
     fact_type TEXT DEFAULT 'unknown',       -- Subcategory (e.g. financial, health, family)
@@ -115,6 +120,11 @@ CREATE INDEX IF NOT EXISTS idx_nodes_actor ON nodes(actor_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_subject_entity ON nodes(subject_entity_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_session ON nodes(session_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_source_conversation ON nodes(source_conversation_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_conversation ON nodes(conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_nodes_speaker_entity ON nodes(speaker_entity_id, status);
+CREATE INDEX IF NOT EXISTS idx_nodes_visibility_scope ON nodes(visibility_scope, sensitivity, status);
+CREATE INDEX IF NOT EXISTS idx_nodes_subject_status_updated ON nodes(subject_entity_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_nodes_source_status_updated ON nodes(source_conversation_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
 CREATE INDEX IF NOT EXISTS idx_nodes_accessed ON nodes(accessed_at);
 CREATE INDEX IF NOT EXISTS idx_nodes_confidence ON nodes(confidence);
@@ -211,11 +221,56 @@ CREATE TABLE IF NOT EXISTS entity_aliases (
     canonical_name TEXT NOT NULL,  -- The canonical name (e.g., "Alice Smith")
     canonical_node_id TEXT,        -- Optional: link to the Person/entity node
     owner_id TEXT,                 -- Owner who defined this alias
+    entity_id TEXT,                -- Canonical identity entity ID (future multi-user routing)
+    platform TEXT,                 -- telegram/discord/openclaw/etc.
+    source_id TEXT,                -- Canonical source/group/thread scope
+    handle TEXT,                   -- Source-native handle
+    display_name TEXT,             -- Human-facing display name for this alias
+    confidence REAL DEFAULT 1.0,   -- Alias link confidence
+    updated_at TEXT DEFAULT (datetime('now')),
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE(alias, owner_id)
 );
 CREATE INDEX IF NOT EXISTS idx_aliases_alias ON entity_aliases(alias);
 CREATE INDEX IF NOT EXISTS idx_aliases_canonical ON entity_aliases(canonical_name);
+CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity ON entity_aliases(entity_id);
+CREATE INDEX IF NOT EXISTS idx_entity_aliases_lookup ON entity_aliases(platform, source_id, handle);
+
+-- Canonical identity entities (forward-compatible multi-user foundation).
+CREATE TABLE IF NOT EXISTS entities (
+    entity_id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL DEFAULT 'unknown'
+        CHECK(entity_type IN ('human', 'agent', 'org', 'system', 'unknown')),
+    canonical_name TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_entities_type_name ON entities(entity_type, canonical_name);
+
+-- Canonical source scopes (DM/group/thread/workspace).
+CREATE TABLE IF NOT EXISTS sources (
+    source_id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL DEFAULT 'dm'
+        CHECK(source_type IN ('dm', 'group', 'thread', 'workspace')),
+    platform TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    parent_source_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sources_platform_external ON sources(platform, external_id);
+
+-- Membership mapping for source scopes.
+CREATE TABLE IF NOT EXISTS source_participants (
+    source_id TEXT NOT NULL REFERENCES sources(source_id) ON DELETE CASCADE,
+    entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member'
+        CHECK(role IN ('member', 'owner', 'agent', 'observer')),
+    active_from TEXT DEFAULT (datetime('now')),
+    active_to TEXT,
+    PRIMARY KEY (source_id, entity_id, active_from)
+);
+CREATE INDEX IF NOT EXISTS idx_source_participants_entity ON source_participants(entity_id, active_to);
 
 -- Identity handles map (forward-looking multi-user/group-chat support)
 -- Maps source-specific handles/usernames to canonical entity IDs.
@@ -290,7 +345,7 @@ CREATE TABLE IF NOT EXISTS doc_update_log (
 
 -- Initialize metadata
 INSERT OR IGNORE INTO metadata (key, value) VALUES
-    ('schema_version', '4'),
+    ('schema_version', '5'),
     ('embedding_model', 'qwen3-embedding:8b'),
     ('embedding_dim', '4096'),
     ('last_seed', NULL);

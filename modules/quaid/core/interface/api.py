@@ -95,6 +95,8 @@ def recall(
     source_channel: Optional[str] = None,
     source_conversation_id: Optional[str] = None,
     source_author_id: Optional[str] = None,
+    viewer_entity_id: Optional[str] = None,
+    participant_entity_ids: Optional[List[str]] = None,
     include_unscoped: bool = True,
 ) -> List[Dict[str, Any]]:
     """Recall memories matching a natural language query.
@@ -145,6 +147,8 @@ def recall(
         source_channel=source_channel,
         source_conversation_id=source_conversation_id,
         source_author_id=source_author_id,
+        viewer_entity_id=viewer_entity_id,
+        participant_entity_ids=participant_entity_ids,
         include_unscoped=include_unscoped,
     )
 

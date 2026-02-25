@@ -238,6 +238,8 @@ function compactSummary(cfgPath, cfg) {
   const routerFailOpen = !!getPath(cfg, "retrieval.routerFailOpen", true);
   const failHard = retrievalFailHard(cfg);
   const autoCompactionOnTimeout = !!getPath(cfg, "capture.autoCompactionOnTimeout", true);
+  const identityMode = String(getPath(cfg, "identity.mode", "single_user"));
+  const strictPrivacy = !!getPath(cfg, "privacy.enforceStrictFilters", getPath(cfg, "privacy.enforce_strict_filters", true));
   const janitorParallel = janitorParallelEnabled(cfg);
   const janitorWorkers = janitorLlmWorkers(cfg);
   const janitorPrepassWorkers = janitorLifecyclePrepassWorkers(cfg);
@@ -256,6 +258,8 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Janitor Policies")}: core=${corePolicy} project=${projectPolicy} workspace=${workspacePolicy} destructive=${destructivePolicy}`,
     `${C.bold("Timeout")}: ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`,
     `${C.bold("Auto-compact Timeout")}: ${autoCompactionOnTimeout ? "on" : "off"} ${C.dim("(trigger compaction after timeout extraction)")}`,
+    `${C.bold("Identity Mode")}: ${identityMode}`,
+    `${C.bold("Strict Privacy")}: ${strictPrivacy ? "on" : "off"}`,
     `${C.bold("Pre-injection Pass")}: ${getPath(cfg, "retrieval.preInjectionPass", true) ? "on" : "off"} ${C.dim("(auto-inject total_recall planner)")}`,
     `${C.bold("Router Fail-Open")}: ${routerFailOpen ? "on" : "off"} ${C.dim("(on: noisy fallback to default recall plan if prepass fails)")}`,
     `${C.bold("Fail Hard")}: ${failHard ? "on" : "off"} ${C.dim("(on: no fallbacks; raise immediately)")}`,

@@ -9,6 +9,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from core.contracts.memory import MemoryServicePort
+from core.runtime.identity_runtime import (
+    enforce_write_contract,
+    enrich_identity_payload,
+    filter_recall_results,
+)
 from datastore.facade import (
     store_memory,
     recall_memories,
@@ -35,6 +40,23 @@ class DatastoreMemoryService(MemoryServicePort):
         is_technical: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        identity_payload = {
+            "source_channel": kwargs.get("source_channel"),
+            "source_conversation_id": kwargs.get("source_conversation_id"),
+            "source_author_id": kwargs.get("source_author_id"),
+            "speaker_entity_id": kwargs.get("speaker_entity_id"),
+            "subject_entity_id": kwargs.get("subject_entity_id"),
+            "participant_entity_ids": kwargs.get("participant_entity_ids"),
+        }
+        enforce_write_contract(identity_payload)
+        resolved = enrich_identity_payload(identity_payload)
+        for key, value in resolved.items():
+            if key not in kwargs or kwargs.get(key) in (None, ""):
+                kwargs[key] = value
+        # Compatibility bridge: datastore currently uses actor_id.
+        if kwargs.get("speaker_entity_id") and not kwargs.get("actor_id"):
+            kwargs["actor_id"] = kwargs["speaker_entity_id"]
+
         return store_memory(
             text=text,
             owner_id=owner_id,
@@ -57,12 +79,25 @@ class DatastoreMemoryService(MemoryServicePort):
         min_similarity: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
-        return recall_memories(
+        viewer_entity_id = kwargs.get("viewer_entity_id")
+        results = recall_memories(
             query=query,
             owner_id=owner_id,
             limit=limit,
             min_similarity=min_similarity,
             **kwargs,
+        )
+        return filter_recall_results(
+            viewer_entity_id=viewer_entity_id,
+            results=results,
+            context={
+                "owner_id": owner_id,
+                "source_channel": kwargs.get("source_channel"),
+                "source_conversation_id": kwargs.get("source_conversation_id"),
+                "source_author_id": kwargs.get("source_author_id"),
+                "subject_entity_id": kwargs.get("subject_entity_id"),
+                "participant_entity_ids": kwargs.get("participant_entity_ids"),
+            },
         )
 
     def search(self, query: str, owner_id: str, limit: int = 10) -> List[Dict[str, Any]]:
