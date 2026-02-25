@@ -11,8 +11,10 @@ Provider resolution order:
 
 import os
 import struct
+import sys
 from typing import List, Optional
 
+from lib.fail_policy import is_fail_hard_enabled
 from lib.providers import (
     EmbeddingsProvider,
     MockEmbeddingsProvider,
@@ -44,8 +46,16 @@ def get_embeddings_provider() -> EmbeddingsProvider:
         if adapter_embed is not None:
             _provider = adapter_embed
             return _provider
-    except Exception:
-        pass
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to resolve adapter embeddings provider while failHard is enabled."
+            ) from exc
+        print(
+            f"[embeddings][FALLBACK] Adapter embeddings provider unavailable: {exc}. "
+            "Falling back to standalone Ollama provider.",
+            file=sys.stderr,
+        )
 
     # 3. Default: standalone Ollama
     try:
@@ -55,7 +65,16 @@ def get_embeddings_provider() -> EmbeddingsProvider:
             model=get_embedding_model(),
             dim=get_embedding_dim(),
         )
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to build configured Ollama embeddings provider while failHard is enabled."
+            ) from exc
+        print(
+            f"[embeddings][FALLBACK] Configured Ollama embedding settings unavailable: {exc}. "
+            "Using default Ollama embedding provider settings.",
+            file=sys.stderr,
+        )
         _provider = OllamaEmbeddingsProvider()  # defaults
 
     return _provider
