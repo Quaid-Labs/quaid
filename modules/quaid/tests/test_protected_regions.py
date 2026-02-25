@@ -395,8 +395,8 @@ class TestSoulSnippetsProtectedRegions:
             "I am also curious.\n"
         )
 
-        with patch("datastore.docsdb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.docsdb.soul_snippets import apply_distillation
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import apply_distillation
             result = {
                 "edits": [
                     {
@@ -437,7 +437,7 @@ class TestSoulSnippetsProtectedRegions:
             "I care about truth.\n"
         )
 
-        from datastore.docsdb.soul_snippets import _insert_into_file
+        from datastore.notedb.soul_snippets import _insert_into_file
         result = _insert_into_file("SOUL.md", "New identity snippet.", "Identity")
 
         content = parent.read_text()
@@ -462,7 +462,7 @@ class TestSoulSnippetsProtectedRegions:
             "Something else.\n"
         )
 
-        from datastore.docsdb.soul_snippets import _insert_into_file
+        from datastore.notedb.soul_snippets import _insert_into_file
         result = _insert_into_file("SOUL.md", "I also value honesty.", "Values")
 
         assert result is True
@@ -476,8 +476,8 @@ class TestSoulSnippetsProtectedRegions:
 
     def test_distillation_prompt_strips_protected(self, snippets_workspace_dir, mock_config):
         """build_distillation_prompt should not include protected content."""
-        with patch("datastore.docsdb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.docsdb.soul_snippets import build_distillation_prompt
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import build_distillation_prompt
             parent_content = (
                 "# SOUL\n\n"
                 "Visible stuff.\n\n"
@@ -497,7 +497,7 @@ class TestSoulSnippetsProtectedRegions:
 
     def test_review_prompt_strips_protected(self, snippets_workspace_dir, mock_config):
         """build_review_prompt (legacy) should not include protected content in parent."""
-        from datastore.docsdb.soul_snippets import build_review_prompt
+        from datastore.notedb.soul_snippets import build_review_prompt
 
         all_snippets = {
             "SOUL.md": {
@@ -516,7 +516,7 @@ class TestSoulSnippetsProtectedRegions:
         assert "Visible." in prompt
         assert "Also visible." in prompt
 
-    @patch("datastore.docsdb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_full_distillation_respects_protected(self, mock_opus, snippets_workspace_dir, mock_config):
         """End-to-end distillation: Opus should not see protected content, and edits
         targeting protected content should be silently skipped."""
@@ -546,8 +546,8 @@ class TestSoulSnippetsProtectedRegions:
             "captured_dates": ["2026-02-10"],
         }), 1.5)
 
-        with patch("datastore.docsdb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.docsdb.soul_snippets import run_journal_distillation
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import run_journal_distillation
             result = run_journal_distillation(dry_run=False, force_distill=True)
 
         assert result["additions"] == 1
@@ -557,7 +557,7 @@ class TestSoulSnippetsProtectedRegions:
         # Addition was made in unprotected section
         assert "I embrace change." in content
 
-    @patch("datastore.docsdb.soul_snippets.call_deep_reasoning")
+    @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_snippet_review_with_protected_parent(self, mock_opus, snippets_workspace_dir, mock_config):
         """Snippet review should not expose protected content to Opus."""
         (snippets_workspace_dir / "SOUL.snippets.md").write_text(
@@ -580,8 +580,8 @@ class TestSoulSnippetsProtectedRegions:
             ]
         }), 1.0)
 
-        with patch("datastore.docsdb.soul_snippets.get_config", return_value=mock_config):
-            from datastore.docsdb.soul_snippets import run_soul_snippets_review
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import run_soul_snippets_review
             result = run_soul_snippets_review(dry_run=True)
 
         # Verify Opus was called and the prompt did not contain protected content

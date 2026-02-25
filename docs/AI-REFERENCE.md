@@ -51,7 +51,7 @@ Write request
 | `core/lifecycle/janitor_lifecycle.py` | Lifecycle routine registry and dispatch | `LifecycleRegistry`, `RoutineContext`, `RoutineResult`, `build_default_registry()` |
 | `adaptors/openclaw/maintenance.py` | OpenClaw-specific lifecycle registrations | `register_lifecycle_routines()` (workspace audit registration) |
 | `core/lifecycle/workspace_audit.py` | Workspace markdown audit implementation | `run_workspace_check()`, `check_bloat()` |
-| `core/lifecycle/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
+| `datastore/notedb/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
 | `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search()`, `index_docs()`, `register_lifecycle_routines()` |
 | `core/docs/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
 | `core/docs/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |

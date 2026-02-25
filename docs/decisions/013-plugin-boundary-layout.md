@@ -31,7 +31,7 @@ Canonical module ownership:
   - `modules/quaid/datastore/docsdb/registry.py`
   - `modules/quaid/datastore/docsdb/updater.py`
   - `modules/quaid/datastore/docsdb/project_updater.py`
-  - `modules/quaid/datastore/docsdb/soul_snippets.py`
+  - `modules/quaid/datastore/notedb/soul_snippets.py`
 
 Plugin-root compatibility shims are not used.
 

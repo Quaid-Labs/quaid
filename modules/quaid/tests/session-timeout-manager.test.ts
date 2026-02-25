@@ -8,6 +8,16 @@ function makeWorkspace(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
 }
 
+function writeFailHardConfig(workspace: string, failHard: boolean): void {
+  const configDir = path.join(workspace, "config")
+  fs.mkdirSync(configDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(configDir, "memory.json"),
+    JSON.stringify({ retrieval: { failHard } }),
+    "utf8",
+  )
+}
+
 describe('SessionTimeoutManager scheduling', () => {
   it('allows only one timeout worker leader per workspace', () => {
     const workspace = makeWorkspace('quaid-timeout-leader-')
@@ -144,5 +154,45 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0].sessionId).toBe('session-orphan')
+  })
+
+  it('blocks fallback event payload extraction when failHard=true', async () => {
+    const workspace = makeWorkspace('quaid-timeout-failhard-')
+    writeFailHardConfig(workspace, true)
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    await expect(
+      manager.extractSessionFromLog('session-failhard', 'Reset', [
+        { role: 'user', content: 'remember this', timestamp: Date.now() },
+      ]),
+    ).rejects.toThrow(/fallback payload blocked by failHard/i)
+  })
+
+  it('allows fallback event payload extraction when failHard=false', async () => {
+    const workspace = makeWorkspace('quaid-timeout-soft-')
+    writeFailHardConfig(workspace, false)
+    const calls: Array<{ messages: any[] }> = []
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async (messages) => {
+        calls.push({ messages })
+      },
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    const ok = await manager.extractSessionFromLog('session-soft', 'Reset', [
+      { role: 'user', content: 'remember this', timestamp: Date.now() },
+    ])
+    expect(ok).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].messages).toHaveLength(1)
   })
 })
