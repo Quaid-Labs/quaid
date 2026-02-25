@@ -161,6 +161,9 @@ def _get_journal_config():
 def _get_snippet_review_model() -> str:
     """Model override for snippet/journal review calls."""
     try:
+        env_model = str(os.environ.get("QUAID_JANITOR_REVIEW_MODEL", "") or "").strip()
+        if env_model:
+            return env_model
         cfg = get_config()
         model = str(getattr(cfg.janitor.opus_review, "model", "") or "").strip()
         if model:
@@ -1099,7 +1102,7 @@ def apply_decisions(
     dry_run: bool = True
 ) -> Dict[str, Any]:
     """Apply Opus decisions to parent files."""
-    stats = {"folded": 0, "rewritten": 0, "discarded": 0, "errors": []}
+    stats = {"folded": 0, "rewritten": 0, "discarded": 0, "skipped_at_limit": 0, "errors": []}
     processed_snippets: Dict[str, List[str]] = {}
     valid_actions = {"FOLD", "REWRITE", "DISCARD"}
 
@@ -1156,7 +1159,31 @@ def apply_decisions(
                         stats["folded"] += 1
                     processed_snippets.setdefault(filename, []).append(original_text)
                 else:
-                    stats["errors"].append(f"Skipped {filename}[{snippet_idx+1}]: file missing or at maxLines")
+                    file_path = _workspace_dir() / filename
+                    if not file_path.exists():
+                        stats["errors"].append(f"Skipped {filename}[{snippet_idx+1}]: file missing")
+                    else:
+                        try:
+                            current_lines = len(file_path.read_text(encoding='utf-8').split('\n'))
+                        except Exception:
+                            current_lines = -1
+                        if max_lines > 0 and current_lines >= max_lines:
+                            # At-limit is expected and should not fail janitor.
+                            # Clear the snippet to avoid infinite retries.
+                            stats["skipped_at_limit"] += 1
+                            stats["discarded"] += 1
+                            processed_snippets.setdefault(filename, []).append(original_text)
+                            logger.info(
+                                "SKIP_AT_LIMIT %s[%s]: %s/%s lines",
+                                filename,
+                                snippet_idx + 1,
+                                current_lines,
+                                max_lines,
+                            )
+                        else:
+                            stats["errors"].append(
+                                f"Skipped {filename}[{snippet_idx+1}]: insert returned false"
+                            )
             except Exception as e:
                 stats["errors"].append(f"Failed to insert into {filename}: {e}")
         else:
@@ -1272,6 +1299,7 @@ def run_journal_distillation(
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             timeout=llm_timeout,
+            model=review_model,
         )
         if not response_text:
             return {"filename": filename, "error": f"No response for {filename}"}
@@ -1433,6 +1461,7 @@ def run_soul_snippets_review(
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             timeout=llm_timeout,
+            model=review_model,
         )
         if not response_text:
             return {"filename": filename, "error": f"No response from review model for {filename}"}
@@ -1513,6 +1542,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             result.metrics["snippets_folded"] = int(snippets_result.get("folded", 0))
             result.metrics["snippets_rewritten"] = int(snippets_result.get("rewritten", 0))
             result.metrics["snippets_discarded"] = int(snippets_result.get("discarded", 0))
+            result.metrics["snippets_skipped_at_limit"] = int(snippets_result.get("skipped_at_limit", 0))
             for err in (snippets_result.get("errors") or []):
                 result.errors.append(f"Snippets review failed: {err}")
         except Exception as exc:
