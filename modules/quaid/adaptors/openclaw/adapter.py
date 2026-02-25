@@ -11,6 +11,7 @@ from typing import Optional
 
 from adaptors.openclaw.providers import GatewayLLMProvider
 from lib.adapter import ChannelInfo, QuaidAdapter, _read_env_file
+from lib.fail_policy import is_fail_hard_enabled
 
 
 class OpenClawAdapter(QuaidAdapter):
@@ -164,11 +165,23 @@ class OpenClawAdapter(QuaidAdapter):
         if key:
             return key
 
-        # 2. .env file in workspace root
+        if is_fail_hard_enabled():
+            return None
+
+        # 2. .env file in workspace root (noisy fallback only when failHard=false)
+        print(
+            f"[adapter][FALLBACK] {env_var_name} not found in env; "
+            "attempting workspace .env lookup because failHard is disabled.",
+            file=sys.stderr,
+        )
         env_file = self.quaid_home() / ".env"
         if env_file.exists():
             found = _read_env_file(env_file, env_var_name)
             if found:
+                print(
+                    f"[adapter][FALLBACK] Loaded {env_var_name} from {env_file}.",
+                    file=sys.stderr,
+                )
                 return found
 
         return None
