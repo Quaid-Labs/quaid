@@ -115,8 +115,15 @@ class OpenClawAdapter(QuaidAdapter):
                 return True
             # Fallback: if override channel fails, retry on the last active channel.
             if channel_override and channel_override != info.channel:
+                if is_fail_hard_enabled():
+                    print(
+                        "[notify] Override channel failed and failHard is enabled; "
+                        "not retrying fallback channel.",
+                        file=sys.stderr,
+                    )
+                    return False
                 print(
-                    f"[notify] Override channel failed; retrying with last channel={info.channel}",
+                    f"[notify][FALLBACK] Override channel failed; retrying with last channel={info.channel}",
                     file=sys.stderr,
                 )
                 return _send(info.channel)
