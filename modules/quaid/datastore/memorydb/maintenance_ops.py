@@ -10,7 +10,6 @@ import sqlite3
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
@@ -63,6 +62,7 @@ from lib.runtime_context import (
     get_install_url,
     get_llm_provider,
 )
+from core.runtime.worker_pool import run_callables
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
@@ -313,14 +313,21 @@ def _run_llm_batches_parallel(
             out.append(runner(idx, batch))
         return out
     out: List[Optional[Dict[str, Any]]] = [None] * len(batches)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(runner, idx, batch): idx for idx, batch in enumerate(batches, 1)}
-        for fut in as_completed(futures):
-            idx = futures[fut]
-            try:
-                out[idx - 1] = fut.result()
-            except Exception as exc:
-                out[idx - 1] = {"batch_num": idx, "error": str(exc), "response": None, "duration": 0.0}
+    calls = [
+        (lambda batch_num, batch_data: (lambda: runner(batch_num, batch_data)))(idx, batch)
+        for idx, batch in enumerate(batches, 1)
+    ]
+    results = run_callables(
+        calls,
+        max_workers=workers,
+        pool_name="janitor-llm-batches",
+        return_exceptions=True,
+    )
+    for idx, item in enumerate(results, 1):
+        if isinstance(item, Exception):
+            out[idx - 1] = {"batch_num": idx, "error": str(item), "response": None, "duration": 0.0}
+        else:
+            out[idx - 1] = item
     return [item if item is not None else {"batch_num": i + 1, "error": "missing-result"} for i, item in enumerate(out)]
 
 
