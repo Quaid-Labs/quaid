@@ -124,6 +124,10 @@ Coverage requirements:
      - `QUAID_E2E_JPB_MAX_DEDUP_UNREVIEWED_AFTER` (default `0`)
      - `QUAID_E2E_JPB_MAX_DECAY_PENDING_AFTER` (default `0`)
      - `QUAID_E2E_JPB_MAX_STAGING_EVENTS_AFTER` (default `0`)
+17. Nightly scheduler + Telegram status reporting.
+   - Added `modules/quaid/scripts/nightly-full-suite.sh` for unattended nightly execution.
+   - Added `modules/quaid/scripts/install-nightly-cron.sh` to install an idempotent `3:00 AM` cron entry.
+   - Nightly runner writes rotating logs under `~/quaid/logs/nightly-e2e/` and sends run status to Telegram.
 17. Janitor-parallel benchmark lane stabilization.
    - Added benchmark-mode catch-up review before graduate in janitor core to prevent same-cycle pending leakage.
    - Janitor-parallel E2E assertions now focus on deterministic benchmark invariants (pending/unreviewed depletion + threshold gates) instead of fragile status-delta assumptions.

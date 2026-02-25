@@ -16,6 +16,7 @@ It reflects broad areas of active focus, not delivery guarantees.
   - Reduce failure ambiguity with better diagnostics and test isolation.
   - Keep OpenClaw integration stable as the primary production path.
   - Parallelize janitor task execution after architectural boundary enforcement is complete.
+  - Add automated nightly full test-suite execution (unit + integration + E2E nightly) with machine-readable status reporting and alerting.
 
 - **Benchmark rigor**
   - Keep LoCoMo runs reproducible and current.
