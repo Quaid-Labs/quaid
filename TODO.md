@@ -26,7 +26,7 @@
   - failHard=true: no fallbacks
   - failHard=false: fallback allowed, but must emit loud warnings
 - [ ] Audit remaining fallback-heavy modules:
-  - `modules/quaid/lib/providers.py`
+  - `modules/quaid/lib/providers.py` (done: ClaudeCode `.env` OAuth token fallback now gated by `retrieval.fail_hard` + noisy warning path)
   - `modules/quaid/lib/embeddings.py`
   - `modules/quaid/datastore/docsdb/rag.py`
   - `modules/quaid/datastore/memorydb/memory_graph.py` (best-effort blocks and soft-degrade paths)

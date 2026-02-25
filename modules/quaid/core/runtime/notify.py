@@ -371,6 +371,8 @@ def notify_memory_extraction(
         extraction_level = get_config().notifications.effective_level("extraction")
     except Exception:
         extraction_level = "summary"
+    if extraction_level == "off":
+        return False
     show_trigger = extraction_level == "full"
     no_results = (facts_stored == 0 and facts_skipped == 0 and edges_created == 0 and not details and not has_snippets)
     if not always_notify and not details and facts_stored == 0 and edges_created == 0 and not has_snippets:

@@ -607,14 +607,16 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `CLAWDBOT_WORKSPACE` | Workspace root hint (for OpenClaw paths) | Optional |
 | `MEMORY_DB_PATH` | Override database file path | `<quaid_home>/data/memory.db` |
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
-| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from `.env` file or macOS Keychain |
+| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Runtime/provider dependent; fallback paths only when `retrieval.fail_hard=false` |
 | `OPENAI_API_KEY` | OpenAI API key (for benchmark judging) | Must be set explicitly |
 | `OPENROUTER_API_KEY` | OpenRouter API key (alternative LLM routing) | Must be set explicitly |
 | `QUAID_DEV` | Enable dev mode (unit tests in janitor, verbose output) | Not set |
 | `QUAID_QUIET` | Suppress informational config messages | Not set |
 | `MOCK_EMBEDDINGS` | Use deterministic fake embeddings (for testing) | Not set |
 
-API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOME` -> macOS Keychain (OpenClaw adapter only).
+Credential resolution honors `retrieval.fail_hard`:
+- `true` (default): no fallback chains.
+- `false`: adapter fallback chains are allowed, with explicit warning logs.
 
 ---
 

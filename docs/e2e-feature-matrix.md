@@ -20,6 +20,8 @@ For staged rollout and admission criteria, see `docs/e2e-roadmap.md`.
    - Fails if answer includes stale/low-confidence hedge language.
 5. Notification matrix (`suite=notify|full`)
    - Verifies behavior across `quiet`, `normal`, `debug`.
+   - Waits for reset extraction completion before evaluating notification assertions (avoids queue-timing false negatives).
+   - Uses aggregate activity detection (`config-load + sent + no-channel + send-failed`) for normal/debug paths.
    - Detects fatal notify CLI wiring errors.
    - Optional strict mode: `QUAID_E2E_NOTIFY_REQUIRE_DELIVERY=true` requires active channel context and successful normal/debug sends.
 6. Ingestion stress (`suite=ingest|full|core`)
