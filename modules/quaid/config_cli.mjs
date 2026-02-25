@@ -185,6 +185,31 @@ function defaultMappedModel(cfg, tier, provider) {
   return map?.[provider] || map?.[provider.replace(/-code$/, "")] || "(unmapped)";
 }
 
+function retrievalFailHard(cfg) {
+  if (typeof getPath(cfg, "retrieval.failHard") === "boolean") return !!getPath(cfg, "retrieval.failHard");
+  if (typeof getPath(cfg, "retrieval.fail_hard") === "boolean") return !!getPath(cfg, "retrieval.fail_hard");
+  return true;
+}
+
+function janitorParallelEnabled(cfg) {
+  if (typeof getPath(cfg, "janitor.parallel.enabled") === "boolean") return !!getPath(cfg, "janitor.parallel.enabled");
+  return true;
+}
+
+function janitorLlmWorkers(cfg) {
+  const raw = getPath(cfg, "janitor.parallel.llmWorkers", getPath(cfg, "janitor.parallel.llm_workers", 2));
+  return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 2;
+}
+
+function janitorLifecyclePrepassWorkers(cfg) {
+  const raw = getPath(
+    cfg,
+    "janitor.parallel.lifecyclePrepassWorkers",
+    getPath(cfg, "janitor.parallel.lifecycle_prepass_workers", 3),
+  );
+  return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 3;
+}
+
 function compactSummary(cfgPath, cfg) {
   const p = resolveEffectiveProvider(cfg);
   const deepProvider = resolveEffectiveTierProvider(cfg, "deep");
@@ -211,7 +236,11 @@ function compactSummary(cfgPath, cfg) {
   const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask"));
   const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
   const routerFailOpen = !!getPath(cfg, "retrieval.routerFailOpen", true);
+  const failHard = retrievalFailHard(cfg);
   const autoCompactionOnTimeout = !!getPath(cfg, "capture.autoCompactionOnTimeout", true);
+  const janitorParallel = janitorParallelEnabled(cfg);
+  const janitorWorkers = janitorLlmWorkers(cfg);
+  const janitorPrepassWorkers = janitorLifecyclePrepassWorkers(cfg);
 
   const lines = [
     `${C.bold("Config")}: ${cfgPath}`,
@@ -229,6 +258,8 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Auto-compact Timeout")}: ${autoCompactionOnTimeout ? "on" : "off"} ${C.dim("(trigger compaction after timeout extraction)")}`,
     `${C.bold("Pre-injection Pass")}: ${getPath(cfg, "retrieval.preInjectionPass", true) ? "on" : "off"} ${C.dim("(auto-inject total_recall planner)")}`,
     `${C.bold("Router Fail-Open")}: ${routerFailOpen ? "on" : "off"} ${C.dim("(on: noisy fallback to default recall plan if prepass fails)")}`,
+    `${C.bold("Fail Hard")}: ${failHard ? "on" : "off"} ${C.dim("(on: no fallbacks; raise immediately)")}`,
+    `${C.bold("Janitor Parallel")}: ${janitorParallel ? "on" : "off"} ${C.dim(`(llmWorkers:${janitorWorkers} prepassWorkers:${janitorPrepassWorkers})`)}`,
   ];
   note(lines.join("\n"), "Current");
 }
@@ -398,6 +429,10 @@ async function runEdit() {
         { value: "notify_retrieval", label: "Notifications: retrieval", hint: "off/summary/full" },
         { value: "pre_injection_pass", label: "Recall: pre-injection pass", hint: "auto-inject uses total_recall planner (recommended on)" },
         { value: "router_fail_open", label: "Recall: router fail-open", hint: "on = fallback to default recall plan if prepass fails (recommended)" },
+        { value: "fail_hard", label: "Recall: fail hard", hint: "on = disable all fallbacks and raise errors" },
+        { value: "janitor_parallel_enabled", label: "Janitor: parallel enabled", hint: "master janitor parallelism toggle" },
+        { value: "janitor_parallel_llm_workers", label: "Janitor: llm workers", hint: "parallel workers for LLM-backed maintenance batches" },
+        { value: "janitor_parallel_prepass_workers", label: "Janitor: prepass workers", hint: "parallel workers for lifecycle prepass stage" },
         { value: "janitor_policy_core", label: "Janitor: core markdown policy", hint: "root markdown writes (SOUL/USER/MEMORY/TOOLS)" },
         { value: "janitor_policy_project", label: "Janitor: project docs policy", hint: "project docs outside projects/quaid" },
         { value: "janitor_policy_workspace", label: "Janitor: workspace move/delete policy", hint: "workspace audit file moves/deletes" },
@@ -520,6 +555,52 @@ async function runEdit() {
         ],
       }));
       setPath(cfg, "retrieval.routerFailOpen", next === "on");
+    } else if (menu === "fail_hard") {
+      const current = retrievalFailHard(cfg);
+      const next = handleCancel(await select({
+        message: "retrieval.failHard",
+        initialValue: current ? "on" : "off",
+        options: [
+          { value: "on", label: "on", hint: "strict mode: no fallback behavior; raise immediately" },
+          { value: "off", label: "off", hint: "allow fallback behavior, but with noisy warnings" },
+        ],
+      }));
+      setPath(cfg, "retrieval.failHard", next === "on");
+    } else if (menu === "janitor_parallel_enabled") {
+      const current = janitorParallelEnabled(cfg);
+      const next = handleCancel(await select({
+        message: "janitor.parallel.enabled",
+        initialValue: current ? "on" : "off",
+        options: [
+          { value: "on", label: "on", hint: "enable janitor parallelism (recommended)" },
+          { value: "off", label: "off", hint: "run janitor maintenance stages serially" },
+        ],
+      }));
+      setPath(cfg, "janitor.parallel.enabled", next === "on");
+    } else if (menu === "janitor_parallel_llm_workers") {
+      const current = janitorLlmWorkers(cfg);
+      const next = handleCancel(await text({
+        message: "janitor.parallel.llmWorkers",
+        placeholder: String(current),
+        validate: (v) => {
+          const n = parseInt(String(v || "").trim(), 10);
+          if (!Number.isFinite(n) || n < 1) return "Enter an integer >= 1";
+          return undefined;
+        },
+      }));
+      setPath(cfg, "janitor.parallel.llmWorkers", parseInt(String(next).trim(), 10));
+    } else if (menu === "janitor_parallel_prepass_workers") {
+      const current = janitorLifecyclePrepassWorkers(cfg);
+      const next = handleCancel(await text({
+        message: "janitor.parallel.lifecyclePrepassWorkers",
+        placeholder: String(current),
+        validate: (v) => {
+          const n = parseInt(String(v || "").trim(), 10);
+          if (!Number.isFinite(n) || n < 1) return "Enter an integer >= 1";
+          return undefined;
+        },
+      }));
+      setPath(cfg, "janitor.parallel.lifecyclePrepassWorkers", parseInt(String(next).trim(), 10));
     } else if (menu === "janitor_policy_core") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.coreMarkdownWrites",
@@ -607,6 +688,8 @@ function showConfig() {
   console.log(`embeddings model: ${effectiveEmbModel}`);
   console.log(`notify level:     ${getPath(cfg, "notifications.level", "normal")} (janitor:${getPath(cfg, "notifications.janitor.verbosity", "inherit")} extraction:${getPath(cfg, "notifications.extraction.verbosity", "inherit")} retrieval:${getPath(cfg, "notifications.retrieval.verbosity", "inherit")})`);
   console.log(`janitor apply:    ${getPath(cfg, "janitor.applyMode", "auto")}`);
+  console.log(`fail hard:        ${retrievalFailHard(cfg) ? "on" : "off"} (retrieval.failHard)`);
+  console.log(`janitor parallel: ${janitorParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${janitorLlmWorkers(cfg)} prepassWorkers=${janitorLifecyclePrepassWorkers(cfg)})`);
   console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} workspace=${getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
   console.log(`idle timeout:     ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`);
   console.log(`timeout compact:  ${getPath(cfg, "capture.autoCompactionOnTimeout", true) ? "on" : "off"}`);

@@ -135,6 +135,7 @@
     "recencyDecayDays": 90,
     "preInjectionPass": true,
     "routerFailOpen": true,
+    "failHard": true,
     "traversal": {
       "useBeam": true,
       "beamWidth": 5,
@@ -142,7 +143,8 @@
       "hopDecay": 0.7,
       "_notes": "BEAM search for graph traversal. hopDecay: score multiplier per hop depth."
     },
-    "_notes_router": "routerFailOpen=true (recommended default): if total_recall prepass cannot produce valid structured JSON after retry, log loudly and continue with deterministic default recall plan. Set false for strict fail-through behavior."
+    "_notes_router": "routerFailOpen=true (recommended default): if total_recall prepass cannot produce valid structured JSON after retry, log loudly and continue with deterministic default recall plan. Set false for strict fail-through behavior. If failHard=true, fallback behavior should be disabled.",
+    "_notes_fail_hard": "failHard=true (recommended in dev/benchmark): disable fallbacks and fail fast on provider/path errors. Set false only when you explicitly want noisy degrade behavior."
   },
 
   "logging": {

@@ -6,6 +6,13 @@
 - Queue the new request and complete the current task first.
 - Only switch immediately when the operator uses explicit interruption language (for example: `wait`).
 
+## Fail-Hard Rule
+
+- Fail-hard control is config-driven through `retrieval.failHard` / `retrieval.fail_hard` in `config/memory.json`.
+- Do not implement fail-hard switching via env var toggles in product flows.
+- When fail-hard is `true`, never degrade/fallback silently.
+- When fail-hard is `false`, any fallback must emit loud warnings/diagnostics.
+
 ## Three Layers
 
 ### Layer 1: Core Markdown (Always Loaded)
