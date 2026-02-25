@@ -1,4 +1,7 @@
 import time
+from types import SimpleNamespace
+
+import datastore.memorydb.maintenance_ops as ops
 
 from datastore.memorydb.maintenance_ops import (
     _llm_parallel_workers,
@@ -7,29 +10,59 @@ from datastore.memorydb.maintenance_ops import (
 
 
 def test_llm_parallel_workers_defaults(monkeypatch):
-    monkeypatch.delenv("QUAID_BENCHMARK_MODE", raising=False)
-    monkeypatch.delenv("QUAID_JANITOR_LLM_PARALLELISM", raising=False)
-    monkeypatch.delenv("QUAID_JANITOR_LLM_PARALLELISM_REVIEW_PENDING", raising=False)
+    monkeypatch.setattr(
+        ops,
+        "_cfg",
+        SimpleNamespace(
+            janitor=SimpleNamespace(
+                parallel=SimpleNamespace(enabled=True, llm_workers=4, task_workers={})
+            )
+        ),
+    )
+    assert _llm_parallel_workers("review_pending") == 4
+
+
+def test_llm_parallel_workers_disabled(monkeypatch):
+    monkeypatch.setattr(
+        ops,
+        "_cfg",
+        SimpleNamespace(
+            janitor=SimpleNamespace(
+                parallel=SimpleNamespace(enabled=False, llm_workers=4, task_workers={})
+            )
+        ),
+    )
     assert _llm_parallel_workers("review_pending") == 1
 
 
-def test_llm_parallel_workers_benchmark_default(monkeypatch):
-    monkeypatch.setenv("QUAID_BENCHMARK_MODE", "1")
-    monkeypatch.delenv("QUAID_JANITOR_LLM_PARALLELISM", raising=False)
-    monkeypatch.delenv("QUAID_JANITOR_LLM_PARALLELISM_REVIEW_PENDING", raising=False)
-    assert _llm_parallel_workers("review_pending") == 2
-
-
-def test_llm_parallel_workers_env_overrides(monkeypatch):
-    monkeypatch.setenv("QUAID_BENCHMARK_MODE", "1")
-    monkeypatch.setenv("QUAID_JANITOR_LLM_PARALLELISM", "3")
-    monkeypatch.setenv("QUAID_JANITOR_LLM_PARALLELISM_REVIEW_PENDING", "5")
+def test_llm_parallel_workers_config_overrides(monkeypatch):
+    monkeypatch.setattr(
+        ops,
+        "_cfg",
+        SimpleNamespace(
+            janitor=SimpleNamespace(
+                parallel=SimpleNamespace(
+                    enabled=True,
+                    llm_workers=3,
+                    task_workers={"REVIEW_PENDING": 5},
+                )
+            )
+        ),
+    )
     assert _llm_parallel_workers("review_pending") == 5
     assert _llm_parallel_workers("dedup_review") == 3
 
 
 def test_run_llm_batches_parallel_preserves_order(monkeypatch):
-    monkeypatch.setenv("QUAID_JANITOR_LLM_PARALLELISM", "4")
+    monkeypatch.setattr(
+        ops,
+        "_cfg",
+        SimpleNamespace(
+            janitor=SimpleNamespace(
+                parallel=SimpleNamespace(enabled=True, llm_workers=4, task_workers={})
+            )
+        ),
+    )
     batches = ["a", "b", "c", "d"]
 
     def runner(batch_num, batch):

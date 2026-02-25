@@ -119,6 +119,13 @@ class OpusReviewConfig:
 
 
 @dataclass
+class JanitorParallelConfig:
+    enabled: bool = True
+    llm_workers: int = 4
+    task_workers: Dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
 class JanitorConfig:
     enabled: bool = True
     dry_run: bool = False
@@ -135,6 +142,7 @@ class JanitorConfig:
     opus_review: OpusReviewConfig = field(default_factory=OpusReviewConfig)
     dedup: DedupConfig = field(default_factory=DedupConfig)
     contradiction: ContradictionConfig = field(default_factory=ContradictionConfig)
+    parallel: JanitorParallelConfig = field(default_factory=JanitorParallelConfig)
 
 
 @dataclass
@@ -564,6 +572,21 @@ def _load_config_inner() -> MemoryConfig:
         max_tokens=config_data.get('janitor', {}).get('opus_review', {}).get('max_tokens', 4000),
         model=config_data.get('janitor', {}).get('opus_review', {}).get('model', models.deep_reasoning)
     )
+
+    janitor_parallel_data = config_data.get('janitor', {}).get('parallel', {})
+    raw_task_workers = janitor_parallel_data.get('task_workers', janitor_parallel_data.get('taskWorkers', {}))
+    task_workers: Dict[str, int] = {}
+    if isinstance(raw_task_workers, dict):
+        for key, value in raw_task_workers.items():
+            try:
+                task_workers[str(key)] = max(1, int(value))
+            except Exception:
+                continue
+    janitor_parallel = JanitorParallelConfig(
+        enabled=bool(janitor_parallel_data.get('enabled', True)),
+        llm_workers=max(1, int(janitor_parallel_data.get('llm_workers', janitor_parallel_data.get('llmWorkers', 4)))),
+        task_workers=task_workers,
+    )
     
     janitor = JanitorConfig(
         enabled=config_data.get('janitor', {}).get('enabled', True),
@@ -595,7 +618,8 @@ def _load_config_inner() -> MemoryConfig:
                   config_data.get('janitor', {}).get('runTests', False)),
         opus_review=opus_review,
         dedup=dedup,
-        contradiction=contradiction
+        contradiction=contradiction,
+        parallel=janitor_parallel,
     )
     
     retrieval_data = config_data.get('retrieval', {})
