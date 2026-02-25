@@ -133,6 +133,24 @@ class TestEmbeddingsProviderSelection:
         p2 = get_embeddings_provider()
         assert p1 is p2
 
+    def test_adapter_embed_error_falls_back_when_failhard_disabled(self, monkeypatch, tmp_path):
+        """When failHard=false, adapter embedding resolution errors degrade to Ollama."""
+        monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
+        reset_embeddings_provider()
+        with patch("lib.embeddings.is_fail_hard_enabled", return_value=False), \
+             patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")):
+            provider = get_embeddings_provider()
+        assert isinstance(provider, OllamaEmbeddingsProvider)
+
+    def test_adapter_embed_error_raises_when_failhard_enabled(self, monkeypatch):
+        """When failHard=true, adapter embedding resolution errors raise."""
+        monkeypatch.delenv("MOCK_EMBEDDINGS", raising=False)
+        reset_embeddings_provider()
+        with patch("lib.embeddings.is_fail_hard_enabled", return_value=True), \
+             patch("lib.adapter.get_adapter", side_effect=RuntimeError("adapter unavailable")):
+            with pytest.raises(RuntimeError, match="failHard is enabled"):
+                get_embeddings_provider()
+
 
 # ---------------------------------------------------------------------------
 # Integration: reset_adapter clears embeddings

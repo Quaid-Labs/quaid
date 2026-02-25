@@ -734,6 +734,15 @@ class TestProviderFactoryMethods:
             with pytest.raises(RuntimeError, match="LLM provider is 'anthropic'"):
                 standalone.get_llm_provider()
 
+    def test_standalone_default_provider_fallback_when_failhard_disabled(self, standalone, monkeypatch):
+        """When failHard=false, unset/default provider can fall back to a key-backed provider."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        with patch("config.get_config") as mock_cfg:
+            mock_cfg.return_value.models.llm_provider = "default"
+            mock_cfg.return_value.retrieval.fail_hard = False
+            llm = standalone.get_llm_provider()
+        assert isinstance(llm, AnthropicLLMProvider)
+
     def test_standalone_embeddings_returns_none(self, standalone):
         """StandaloneAdapter has no built-in embeddings provider."""
         assert standalone.get_embeddings_provider() is None
@@ -877,6 +886,22 @@ class TestResolveAnthropicCredential:
         adapter, _ = self._make_adapter(tmp_path, monkeypatch)
         cred = adapter._resolve_anthropic_credential()
         assert cred is None
+
+    def test_falls_through_to_env_var_when_failhard_disabled(self, tmp_path, monkeypatch):
+        """When failHard=false, ANTHROPIC_API_KEY env is an allowed noisy fallback."""
+        adapter, _ = self._make_adapter(tmp_path, monkeypatch)
+        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-from-env")
+        cred = adapter._resolve_anthropic_credential()
+        assert cred == "sk-test-from-env"
+
+    def test_falls_through_to_dotenv_when_failhard_disabled(self, tmp_path, monkeypatch):
+        """When failHard=false, workspace .env is an allowed noisy fallback."""
+        adapter, _ = self._make_adapter(tmp_path, monkeypatch)
+        monkeypatch.setattr("adaptors.openclaw.adapter.is_fail_hard_enabled", lambda: False)
+        (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=sk-test-from-dotenv\n")
+        cred = adapter._resolve_anthropic_credential()
+        assert cred == "sk-test-from-dotenv"
 
     def test_profiles_take_priority_when_env_present(self, tmp_path, monkeypatch):
         """Gateway-auth profile still wins when env var is present."""
