@@ -149,6 +149,8 @@ def memory_recall(
     source_channel: str = "",
     source_conversation_id: str = "",
     source_author_id: str = "",
+    viewer_entity_id: str = "",
+    participant_entity_ids_json: str = "",
     include_unscoped: bool = True,
 ) -> list:
     """Recall memories matching a natural language query.
@@ -191,12 +193,23 @@ def memory_recall(
         or bool(source_channel.strip() if source_channel else "")
         or bool(source_conversation_id.strip() if source_conversation_id else "")
         or bool(source_author_id.strip() if source_author_id else "")
+        or bool(viewer_entity_id.strip() if viewer_entity_id else "")
+        or bool(participant_entity_ids_json.strip() if participant_entity_ids_json else "")
         or not bool(include_unscoped)
     )
 
     # Fast path for common/default usage: stay on the stable API wrapper.
     if not has_advanced:
         return recall(query=query, owner_id=OWNER_ID, limit=limit, technical_scope=technical_scope)
+
+    participant_entity_ids = None
+    if participant_entity_ids_json and participant_entity_ids_json.strip():
+        try:
+            parsed = json.loads(participant_entity_ids_json)
+            if isinstance(parsed, list):
+                participant_entity_ids = [str(p).strip() for p in parsed if str(p).strip()]
+        except Exception:
+            participant_entity_ids = None
 
     # Advanced path: still route through API boundary.
     return recall(
@@ -218,6 +231,8 @@ def memory_recall(
         source_channel=(source_channel.strip().lower() if source_channel else None),
         source_conversation_id=(source_conversation_id.strip() if source_conversation_id else None),
         source_author_id=(source_author_id.strip() if source_author_id else None),
+        viewer_entity_id=(viewer_entity_id.strip() if viewer_entity_id else None),
+        participant_entity_ids=participant_entity_ids,
         include_unscoped=bool(include_unscoped),
     )
 
