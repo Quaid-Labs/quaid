@@ -389,6 +389,20 @@ class TestUpdateMetadata:
         entry = r.get("docs/test.md")
         assert entry["source_files"] == ["src/a.py"]
 
+    def test_update_metadata_normalizes_identity_scope_fields(self, setup_env):
+        r = _get_registry()
+        r.register("docs/test.md")
+        r.update_metadata(
+            "docs/test.md",
+            source_channel="  Telegram  ",
+            source_conversation_id="  chat-1  ",
+            source_author_id="  ownerAlias  ",
+        )
+        entry = r.get("docs/test.md")
+        assert entry["source_channel"] == "telegram"
+        assert entry["source_conversation_id"] == "chat-1"
+        assert entry["source_author_id"] == "ownerAlias"
+
 
 class TestUpdateTimestamps:
     def test_update_indexed_at(self, setup_env):

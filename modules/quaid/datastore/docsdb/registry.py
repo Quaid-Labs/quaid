@@ -504,6 +504,21 @@ class DocsRegistry:
             updates["source_files"] = json.dumps(updates["source_files"])
         if "participant_entity_ids" in updates:
             updates["participant_entity_ids"] = json.dumps(updates["participant_entity_ids"])
+        for field in (
+            "source_channel",
+            "source_conversation_id",
+            "source_author_id",
+            "speaker_entity_id",
+            "subject_entity_id",
+            "conversation_id",
+            "visibility_scope",
+            "sensitivity",
+        ):
+            if field in updates:
+                normalized = str(updates[field]).strip()
+                if field == "source_channel":
+                    normalized = normalized.lower()
+                updates[field] = normalized or None
         if "auto_update" in updates:
             updates["auto_update"] = 1 if updates["auto_update"] else 0
 
