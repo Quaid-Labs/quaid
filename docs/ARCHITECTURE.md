@@ -82,6 +82,7 @@ Quaid also exposes a queue-backed event bus for adapter-independent orchestratio
 
 - Event queue and handlers are implemented in `modules/quaid/core/runtime/events.py`.
 - Adapter lifecycle hooks emit events like `session.new`, `session.reset`, and `session.compaction`.
+- Lifecycle hooks also emit `session.ingest_log` so session transcript indexing runs through ingest/datastore boundaries.
 - CLI and MCP both support emitting/listing/processing events so orchestration can be tested and automated outside gateway hooks.
 - Event capabilities are discoverable via a registry (`event capabilities`, `memory_event_capabilities`) so orchestration can adapt strategy based on what this runtime supports.
 
@@ -875,6 +876,6 @@ The `QUAID_OWNER` environment variable sets the owner identity for all operation
 
 ## Appendix: File Reference
 
-The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). In OpenClaw integration, `adaptors/openclaw/index.ts` is the entry shim, `adaptors/openclaw/adapter.ts` owns runtime integration, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
+The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). Session transcript indexing/search ownership also lives in datastore (`datastore/memorydb/session_logs.py`), with lifecycle ingest bridge in `ingest/session_logs_ingest.py` and orchestration via event bus (`session.ingest_log`). In OpenClaw integration, `adaptors/openclaw/index.ts` is the entry shim, `adaptors/openclaw/adapter.ts` owns runtime integration, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

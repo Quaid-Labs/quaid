@@ -45,6 +45,7 @@ const WORKSPACE = _resolveWorkspace();
 const PYTHON_PLUGIN_ROOT = path.join(WORKSPACE, "plugins", "quaid");
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(WORKSPACE, "plugins/quaid/ingest/extract.py");
+const SESSION_LOGS_INGEST_SCRIPT = path.join(WORKSPACE, "plugins/quaid/ingest/session_logs_ingest.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
@@ -1084,6 +1085,12 @@ async function callDocsRegistry(command: string, args: string[] = []): Promise<s
   });
 }
 
+async function callSessionLogsIngest(command: string, args: string[] = []): Promise<string> {
+  return _spawnWithTimeout(SESSION_LOGS_INGEST_SCRIPT, command, args, "session_logs_ingest", {
+    QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+  });
+}
+
 // ============================================================================
 // Project Helpers
 // ============================================================================
@@ -1352,6 +1359,17 @@ function getMessageText(msg: any): string {
   return "";
 }
 
+function deriveTopicHint(messages: any[]): string {
+  for (const m of messages || []) {
+    if (m?.role !== "user") { continue; }
+    const cleaned = getMessageText(m).trim();
+    if (!cleaned) { continue; }
+    if (cleaned.startsWith("GatewayRestart:") || cleaned.startsWith("System:")) { continue; }
+    return cleaned.slice(0, 140);
+  }
+  return "";
+}
+
 function isResetBootstrapOnlyConversation(messages: any[]): boolean {
   const RESET_BOOTSTRAP_PROMPT = "A new session was started via /new or /reset.";
   const userTexts = messages
@@ -1420,6 +1438,45 @@ async function updateDocsFromTranscript(messages: any[], label: string, sessionI
     console.error(`[quaid] ${label} doc update failed:`, (err as Error).message);
   } finally {
     try { fs.unlinkSync(tmpPath); } catch {}
+  }
+}
+
+async function updateSessionLogsFromLifecycle(opts: {
+  sessionId: string;
+  label: string;
+  sessionFile?: string;
+  transcriptPath?: string;
+  messageCount?: number;
+  topicHint?: string;
+}): Promise<void> {
+  if (!isSystemEnabled("memory")) {
+    return;
+  }
+  const sid = String(opts.sessionId || "").trim();
+  if (!sid) {
+    return;
+  }
+
+  try {
+    const out = await emitEvent(
+      "session.ingest_log",
+      {
+        session_id: sid,
+        owner_id: resolveOwner(),
+        label: String(opts.label || "unknown"),
+        session_file: opts.sessionFile || null,
+        transcript_path: opts.transcriptPath || null,
+        message_count: Number(opts.messageCount || 0),
+        topic_hint: String(opts.topicHint || "").slice(0, 140),
+      },
+      "immediate",
+    );
+    const result = out?.processed?.details?.[0]?.result?.result || out?.processed?.details?.[0]?.result || {};
+    console.log(
+      `[quaid] session log ingest (${opts.label}) session=${sid} status=${String(result?.status || "unknown")} source=${String(result?.source_kind || "n/a")}`
+    );
+  } catch (err: unknown) {
+    console.warn(`[quaid] session log ingest failed session=${sid}: ${String((err as Error)?.message || err)}`);
   }
 }
 
@@ -2818,107 +2875,167 @@ notify_docs_search(data['query'], data['results'])
       })
     );
 
-    // Register session_recall tool — list/load recent conversation sessions
+    // Register session_recall tool — datastore-owned list/load/last session transcript recall
     api.registerTool(
       () => ({
         name: "session_recall",
-        description: `List or load recent conversation sessions. Use when the user wants to continue previous work, references a past conversation, or you need context about what was discussed recently.`,
+        description: `List or load indexed conversation sessions. Use "last" only when a user clearly references the immediately previous session and normal memory recall appears incomplete; it can pull a lot of text.`,
         parameters: Type.Object({
-          action: Type.String({ description: '"list" = recent sessions, "load" = specific session transcript' }),
+          action: Type.String({ description: '"list" = recent sessions, "load" = specific session transcript, "last" = most recent prior session transcript' }),
           session_id: Type.Optional(Type.String({ description: "Session ID to load (for action=load)" })),
-          limit: Type.Optional(Type.Number({ description: "How many recent sessions to list (default 5, for action=list)" })),
+          limit: Type.Optional(Type.Number({ description: "How many recent sessions to list (default 5, action=list)" })),
+          max_chars: Type.Optional(Type.Number({ description: "Max transcript chars to return for load/last (default 12000, capped at 40000)" })),
         }),
-        async execute(_toolCallId, params) {
+        async execute(_toolCallId, params, ctx) {
           try {
-            const { action = "list", session_id: sid, limit: listLimit = 5 } = params || {};
-
-            const extractionLogPath = path.join(WORKSPACE, "data", "extraction-log.json");
-            let extractionLog: Record<string, any> = {};
-            try { extractionLog = JSON.parse(fs.readFileSync(extractionLogPath, 'utf8')); } catch {}
+            const { action = "list", session_id: sid, limit: listLimit = 5, max_chars: maxCharsRaw = 12000 } = params || {};
+            const owner = resolveOwner();
+            const maxChars = Math.min(Math.max(Number(maxCharsRaw || 12000), 1000), 40000);
 
             if (action === "list") {
-              // Sort sessions by last_extracted_at descending
-              const sessions = Object.entries(extractionLog)
-                .filter(([, v]) => v && v.last_extracted_at)
-                .sort(([, a], [, b]) => (b.last_extracted_at || '').localeCompare(a.last_extracted_at || ''))
-                .slice(0, Math.min(listLimit, 20));
-
+              const output = await callSessionLogsIngest("list", ["--owner", owner, "--limit", String(Math.min(Math.max(Number(listLimit || 5), 1), 20))]);
+              const parsed = JSON.parse(output || "{}");
+              const sessions: any[] = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
               if (sessions.length === 0) {
                 return {
-                  content: [{ type: "text", text: "No recent sessions found in extraction log." }],
+                  content: [{ type: "text", text: "No indexed sessions found yet." }],
                   details: { count: 0 },
                 };
               }
-
-              let text = "Recent sessions:\n";
-              sessions.forEach(([id, info], i) => {
-                const date = info.last_extracted_at ? new Date(info.last_extracted_at).toLocaleString() : "unknown";
-                const msgCount = info.message_count || "?";
-                const trigger = info.label || "unknown";
-                const topic = info.topic_hint ? ` — "${info.topic_hint}"` : "";
-                text += `${i + 1}. [${date}] ${id} — ${msgCount} messages, extracted via ${trigger}${topic}\n`;
+              let text = "Recent indexed sessions:\n";
+              sessions.forEach((info: any, i: number) => {
+                const id = String(info?.session_id || "unknown");
+                const date = info?.updated_at ? new Date(info.updated_at).toLocaleString() : "unknown";
+                const msgCount = Number(info?.message_count || 0);
+                const trigger = String(info?.source_label || "unknown");
+                const topic = info?.topic_hint ? ` — "${String(info.topic_hint).slice(0, 120)}"` : "";
+                text += `${i + 1}. [${date}] ${id} — ${msgCount} messages, indexed via ${trigger}${topic}\n`;
               });
-
               return {
                 content: [{ type: "text", text }],
                 details: { count: sessions.length },
               };
             }
 
-            if (action === "load" && sid) {
-              // Validate session_id to prevent path traversal
-              if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sid)) {
+            if (action === "load") {
+              const targetSid = String(sid || "").trim();
+              if (!targetSid) {
                 return {
-                  content: [{ type: "text", text: "Invalid session ID format." }],
-                  details: { error: "invalid_session_id" },
+                  content: [{ type: "text", text: 'Provide session_id for action="load".' }],
+                  details: { error: "missing_session_id" },
                 };
               }
-              // Try to load session JSONL
-              const sessionsDir = path.join(os.homedir(), '.openclaw', 'sessions');
-              const sessionPath = path.join(sessionsDir, `${sid}.jsonl`);
+              const output = await callSessionLogsIngest("load", ["--owner", owner, "--session-id", targetSid]);
+              const parsed = JSON.parse(output || "{}");
+              const session = parsed?.session;
+              if (!session || typeof session !== "object") {
+                return {
+                  content: [{ type: "text", text: `Session ${targetSid} not found in indexed logs.` }],
+                  details: { error: "not_found", session_id: targetSid },
+                };
+              }
+              const transcript = String(session.transcript_text || "");
+              const truncated = transcript.length > maxChars;
+              const body = truncated ? `...[truncated]...\n\n${transcript.slice(-maxChars)}` : transcript;
+              return {
+                content: [{ type: "text", text: `Session ${targetSid} (${Number(session.message_count || 0)} messages):\n\n${body}` }],
+                details: { session_id: targetSid, message_count: Number(session.message_count || 0), truncated },
+              };
+            }
 
-              if (fs.existsSync(sessionPath)) {
-                try {
-                  const messages = readMessagesFromSessionFile(sessionPath);
-                  const transcript = buildTranscript(messages);
-                  // Return last 10k chars (most recent part of conversation)
-                  const truncated = transcript.length > 10000
-                    ? "...[truncated]...\n\n" + transcript.slice(-10000)
-                    : transcript;
-                  return {
-                    content: [{ type: "text", text: `Session ${sid} (${messages.length} messages):\n\n${truncated}` }],
-                    details: { session_id: sid, message_count: messages.length, truncated: transcript.length > 10000 },
-                  };
-                } catch {
-                  // File disappeared or unreadable — fall through to facts fallback
-                }
+            if (action === "last") {
+              const args = ["--owner", owner];
+              const currentSid = String(ctx?.sessionId || "").trim();
+              if (currentSid) {
+                args.push("--exclude-session-id", currentSid);
               }
-
-              // Fallback: return facts extracted from this session
-              try {
-                const factsOutput = await datastoreBridge.search([
-                  "*", "--session-id", sid, "--owner", resolveOwner(), "--limit", "20"
-                ]);
+              const output = await callSessionLogsIngest("last", args);
+              const parsed = JSON.parse(output || "{}");
+              const session = parsed?.session;
+              if (!session || typeof session !== "object") {
                 return {
-                  content: [{ type: "text", text: `Session file not available. Facts extracted from session ${sid}:\n${factsOutput || "No facts found."}` }],
-                  details: { session_id: sid, fallback: true },
-                };
-              } catch {
-                return {
-                  content: [{ type: "text", text: `Session ${sid} not found. Session file may have been cleaned up and no facts were found.` }],
-                  details: { session_id: sid, error: "not_found" },
+                  content: [{ type: "text", text: "No prior indexed session found." }],
+                  details: { error: "not_found" },
                 };
               }
+              const transcript = String(session.transcript_text || "");
+              const truncated = transcript.length > maxChars;
+              const body = truncated ? `...[truncated]...\n\n${transcript.slice(-maxChars)}` : transcript;
+              return {
+                content: [{ type: "text", text: `Last indexed session ${String(session.session_id)} (${Number(session.message_count || 0)} messages):\n\n${body}` }],
+                details: { session_id: String(session.session_id), message_count: Number(session.message_count || 0), truncated },
+              };
             }
 
             return {
-              content: [{ type: "text", text: 'Provide action: "list" or "load" (with session_id).' }],
+              content: [{ type: "text", text: 'Provide action: "list", "load" (with session_id), or "last".' }],
               details: { error: "invalid_action" },
             };
           } catch (err: unknown) {
             console.error("[quaid] session_recall error:", err);
             return {
               content: [{ type: "text", text: `Error: ${String(err)}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      })
+    );
+
+    // Full session-log semantic search. Expensive last-resort retrieval path.
+    api.registerTool(
+      () => ({
+        name: "session_logs_search",
+        description: "Expensive full-session log search across indexed transcripts. Use only when memory_recall and project/docs retrieval fail and you need last-resort recovery.",
+        parameters: Type.Object({
+          query: Type.String({ description: "What to look for in historical session logs" }),
+          limit: Type.Optional(Type.Number({ description: "Max matches to return (default 5, max 20)" })),
+          min_similarity: Type.Optional(Type.Number({ description: "Similarity threshold, default 0.15" })),
+        }),
+        async execute(_toolCallId, params) {
+          try {
+            const query = String(params?.query || "").trim();
+            if (!query) {
+              return {
+                content: [{ type: "text", text: "Provide query." }],
+                details: { error: "missing_query" },
+              };
+            }
+            const limit = Math.min(Math.max(Number(params?.limit || 5), 1), 20);
+            const minSimilarity = Number(params?.min_similarity ?? 0.15);
+            const output = await callSessionLogsIngest("search", [
+              query,
+              "--owner", resolveOwner(),
+              "--limit", String(limit),
+              "--min-similarity", String(Number.isFinite(minSimilarity) ? minSimilarity : 0.15),
+            ]);
+            const parsed = JSON.parse(output || "{}");
+            const results: any[] = Array.isArray(parsed?.results) ? parsed.results : [];
+            if (results.length === 0) {
+              return {
+                content: [{ type: "text", text: "No session log matches found." }],
+                details: { count: 0 },
+              };
+            }
+
+            let text = `Found ${results.length} session log match(es):\n`;
+            results.forEach((r: any, i: number) => {
+              const sid = String(r?.session_id || "unknown");
+              const score = Number(r?.score || 0);
+              const sourceLabel = String(r?.source_label || "unknown");
+              const snippet = String(r?.text || "").replace(/\s+/g, " ").trim();
+              const clipped = snippet.length > 260 ? `${snippet.slice(0, 257)}...` : snippet;
+              text += `${i + 1}. [${sid}] score=${(score * 100).toFixed(1)}% via ${sourceLabel} — ${clipped}\n`;
+            });
+
+            return {
+              content: [{ type: "text", text }],
+              details: { count: results.length, results },
+            };
+          } catch (err: unknown) {
+            console.error("[quaid] session_logs_search error:", err);
+            return {
+              content: [{ type: "text", text: `Error searching session logs: ${String(err)}` }],
               details: { error: String(err) },
             };
           }
@@ -3311,6 +3428,15 @@ notify_memory_extraction(
 
           // Auto-update docs from transcript (non-fatal)
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
+          if (uniqueSessionId) {
+            await updateSessionLogsFromLifecycle({
+              sessionId: uniqueSessionId,
+              label: "Compaction",
+              sessionFile: typeof event.sessionFile === "string" ? event.sessionFile : undefined,
+              messageCount: conversationMessages.length,
+              topicHint: deriveTopicHint(conversationMessages),
+            });
+          }
 
           try {
             await updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId);
@@ -3392,6 +3518,17 @@ notify_memory_extraction(
 
           // Auto-update docs from transcript (non-fatal)
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
+          if (uniqueSessionId) {
+            const normalizedReason = String(reason || "").toLowerCase();
+            const resetLabel = normalizedReason.includes("new") ? "New" : "Reset";
+            await updateSessionLogsFromLifecycle({
+              sessionId: uniqueSessionId,
+              label: resetLabel,
+              sessionFile: typeof event.sessionFile === "string" ? event.sessionFile : undefined,
+              messageCount: conversationMessages.length,
+              topicHint: deriveTopicHint(conversationMessages),
+            });
+          }
 
           try {
             await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);

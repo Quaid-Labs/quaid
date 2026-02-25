@@ -34,6 +34,7 @@ def test_event_emit_list_and_capabilities(tmp_path):
     caps = get_event_registry()
     assert any(c.get("name") == "session.reset" for c in caps)
     assert any(c.get("name") == "notification.delayed" for c in caps)
+    assert any(c.get("name") == "session.ingest_log" for c in caps)
     assert any(c.get("name") == "session.reset" and c.get("delivery_mode") == "active" for c in caps)
     assert any(c.get("name") == "notification.delayed" and c.get("delivery_mode") == "passive" for c in caps)
 
@@ -104,6 +105,41 @@ def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
     assert called["path"] == str(transcript)
     assert called["label"] == "Compaction"
     assert called["session_id"] == "sess-1"
+
+
+def test_event_process_session_ingest_log(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    import core.runtime.events as events
+    called = {}
+
+    def _fake_run(**kwargs):
+        called.update(kwargs)
+        return {"status": "indexed", "session_id": kwargs["session_id"], "chunks": 2}
+
+    fake_ingest = types.SimpleNamespace(_run=_fake_run)
+    monkeypatch.setitem(sys.modules, "session_logs_ingest", fake_ingest)
+
+    emit_event(
+        name="session.ingest_log",
+        payload={
+            "session_id": "sess-xyz",
+            "owner_id": "quaid",
+            "label": "Compaction",
+            "session_file": str(tmp_path / "session.jsonl"),
+            "message_count": 12,
+            "topic_hint": "tracking session behavior",
+        },
+        source="pytest",
+    )
+
+    out = process_events(limit=5, names=["session.ingest_log"])
+    assert out["processed"] >= 1
+    assert out["failed"] == 0
+    assert called["session_id"] == "sess-xyz"
+    assert called["owner_id"] == "quaid"
+    assert called["label"] == "Compaction"
+    assert called["message_count"] == 12
 
 
 def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, tmp_path):
