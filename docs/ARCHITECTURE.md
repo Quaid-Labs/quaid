@@ -441,7 +441,7 @@ The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 17 tasks in a defin
 
 ### Execution Order
 
-The task numbering is historical -- tasks were added over time and the numbers reflect that. The execution order is what matters, not the labels.
+Task IDs are stable operational labels. Execution order is the contract.
 
 **Phase 1: Preparation**
 

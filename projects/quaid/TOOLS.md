@@ -51,7 +51,7 @@ Use this as a hail-mary retrieval path over indexed session logs.
 
 Use cases:
 - all normal retrieval paths failed (`memory_recall`, `projects_search`, targeted docs reads)
-- you need to find a detail that likely only exists in historical raw session logs
+- you need to find a detail that likely only exists in indexed raw session logs
 
 Strict usage notes:
 - expensive and high-noise; run only when you are genuinely stuck/desperate.
