@@ -33,6 +33,7 @@ const WORKSPACE = _resolveWorkspace();
 const PYTHON_PLUGIN_ROOT = path.join(WORKSPACE, "plugins", "quaid");
 const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py");
 const EXTRACT_SCRIPT = path.join(WORKSPACE, "plugins/quaid/ingest/extract.py");
+const SESSION_LOGS_INGEST_SCRIPT = path.join(WORKSPACE, "plugins/quaid/ingest/session_logs_ingest.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
@@ -880,6 +881,21 @@ async function callExtractPipeline(opts) {
   if (opts.sessionId) {
     args.push("--session-id", opts.sessionId);
   }
+  if (opts.actorId) {
+    args.push("--actor-id", opts.actorId);
+  }
+  if (opts.subjectEntityId) {
+    args.push("--subject-entity-id", opts.subjectEntityId);
+  }
+  if (opts.sourceChannel) {
+    args.push("--source-channel", opts.sourceChannel);
+  }
+  if (opts.sourceConversationId) {
+    args.push("--source-conversation-id", opts.sourceConversationId);
+  }
+  if (opts.sourceAuthorId) {
+    args.push("--source-author-id", opts.sourceAuthorId);
+  }
   if (!opts.writeSnippets) {
     args.push("--no-snippets");
   }
@@ -967,6 +983,12 @@ async function callDocsRag(command, args = []) {
 }
 async function callDocsRegistry(command, args = []) {
   return _spawnWithTimeout(DOCS_REGISTRY, command, args, "docs_registry", {
+    QUAID_HOME: WORKSPACE,
+    CLAWDBOT_WORKSPACE: WORKSPACE
+  });
+}
+async function callSessionLogsIngest(command, args = []) {
+  return _spawnWithTimeout(SESSION_LOGS_INGEST_SCRIPT, command, args, "session_logs_ingest", {
     QUAID_HOME: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE
   });
@@ -1219,6 +1241,68 @@ function getMessageText(msg) {
   }
   return "";
 }
+function normalizeSourceChannel(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return void 0;
+  if (raw.includes("telegram")) return "telegram";
+  if (raw.includes("discord")) return "discord";
+  if (raw.includes("slack")) return "slack";
+  if (raw.includes("signal")) return "signal";
+  if (raw.includes("whatsapp")) return "whatsapp";
+  if (raw.includes("dm") || raw.includes("direct")) return "dm";
+  return raw;
+}
+function parseUserMessageEnvelope(text) {
+  const m = String(text || "").match(/^\[(Telegram|WhatsApp|Discord|Signal|Slack|DM)\s+([^\]]+)\]\s*/i);
+  if (!m) return {};
+  return {
+    channel: normalizeSourceChannel(m[1]),
+    author: String(m[2] || "").trim() || void 0
+  };
+}
+function deriveLifecycleSourceContext(event, ctx, messages, sessionId) {
+  const participantIds = /* @__PURE__ */ new Set();
+  const participantAliases = {};
+  let sourceChannel = normalizeSourceChannel(event?.sourceChannel ?? event?.channel ?? event?.source ?? ctx?.sourceChannel ?? ctx?.channel);
+  const conversationId = String(
+    event?.conversationId ?? event?.threadId ?? event?.chatId ?? ctx?.conversationId ?? ctx?.threadId ?? sessionId ?? ""
+  ).trim() || void 0;
+  let sourceAuthorId = String(event?.authorId ?? event?.speaker ?? ctx?.authorId ?? ctx?.speaker ?? "").trim() || void 0;
+  for (const m of messages || []) {
+    if (!m || m.role !== "user") continue;
+    const text = getMessageText(m);
+    const meta = parseUserMessageEnvelope(text);
+    if (!sourceChannel && meta.channel) sourceChannel = meta.channel;
+    const msgAuthor = String(m?.authorId || m?.speaker || meta.author || "").trim();
+    if (!sourceAuthorId && msgAuthor) sourceAuthorId = msgAuthor;
+    if (msgAuthor) participantIds.add(msgAuthor);
+  }
+  if (sourceAuthorId) participantIds.add(sourceAuthorId);
+  if (conversationId) participantIds.add(`conversation:${conversationId}`);
+  return {
+    sourceChannel,
+    conversationId,
+    sourceAuthorId,
+    participantIds: Array.from(participantIds),
+    participantAliases
+  };
+}
+function deriveTopicHint(messages) {
+  for (const m of messages || []) {
+    if (m?.role !== "user") {
+      continue;
+    }
+    const cleaned = getMessageText(m).trim();
+    if (!cleaned) {
+      continue;
+    }
+    if (cleaned.startsWith("GatewayRestart:") || cleaned.startsWith("System:")) {
+      continue;
+    }
+    return cleaned.slice(0, 140);
+  }
+  return "";
+}
 function isResetBootstrapOnlyConversation(messages) {
   const RESET_BOOTSTRAP_PROMPT = "A new session was started via /new or /reset.";
   const userTexts = messages.filter((m) => m?.role === "user").map((m) => getMessageText(m).trim()).filter(Boolean);
@@ -1277,6 +1361,40 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
       fs.unlinkSync(tmpPath);
     } catch {
     }
+  }
+}
+async function updateSessionLogsFromLifecycle(opts) {
+  if (!isSystemEnabled("memory")) {
+    return;
+  }
+  const sid = String(opts.sessionId || "").trim();
+  if (!sid) {
+    return;
+  }
+  try {
+    const out = await emitEvent(
+      "session.ingest_log",
+      {
+        session_id: sid,
+        owner_id: resolveOwner(),
+        label: String(opts.label || "unknown"),
+        session_file: opts.sessionFile || null,
+        transcript_path: opts.transcriptPath || null,
+        source_channel: opts.sourceChannel || null,
+        conversation_id: opts.conversationId || null,
+        participant_ids: Array.isArray(opts.participantIds) ? opts.participantIds : [],
+        participant_aliases: opts.participantAliases || {},
+        message_count: Number(opts.messageCount || 0),
+        topic_hint: String(opts.topicHint || "").slice(0, 140)
+      },
+      "immediate"
+    );
+    const result = out?.processed?.details?.[0]?.result?.result || out?.processed?.details?.[0]?.result || {};
+    console.log(
+      `[quaid] session log ingest (${opts.label}) session=${sid} status=${String(result?.status || "unknown")} source=${String(result?.source_kind || "n/a")}`
+    );
+  } catch (err2) {
+    console.warn(`[quaid] session log ingest failed session=${sid}: ${String(err2?.message || err2)}`);
   }
 }
 function isLowInformationEntityNode(result) {
@@ -2479,36 +2597,36 @@ notify_docs_search(data['query'], data['results'])
     api.registerTool(
       () => ({
         name: "session_recall",
-        description: `List or load recent conversation sessions. Use when the user wants to continue previous work, references a past conversation, or you need context about what was discussed recently.`,
+        description: `List or load indexed conversation sessions. Use "last" only when a user clearly references the immediately previous session and normal memory recall appears incomplete; it can pull a lot of text.`,
         parameters: Type.Object({
-          action: Type.String({ description: '"list" = recent sessions, "load" = specific session transcript' }),
+          action: Type.String({ description: '"list" = recent sessions, "load" = specific session transcript, "last" = most recent prior session transcript' }),
           session_id: Type.Optional(Type.String({ description: "Session ID to load (for action=load)" })),
-          limit: Type.Optional(Type.Number({ description: "How many recent sessions to list (default 5, for action=list)" }))
+          limit: Type.Optional(Type.Number({ description: "How many recent sessions to list (default 5, action=list)" })),
+          max_chars: Type.Optional(Type.Number({ description: "Max transcript chars to return for load/last (default 12000, capped at 40000)" }))
         }),
-        async execute(_toolCallId, params) {
+        async execute(_toolCallId, params, ctx) {
           try {
-            const { action = "list", session_id: sid, limit: listLimit = 5 } = params || {};
-            const extractionLogPath = path.join(WORKSPACE, "data", "extraction-log.json");
-            let extractionLog = {};
-            try {
-              extractionLog = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
-            } catch {
-            }
+            const { action = "list", session_id: sid, limit: listLimit = 5, max_chars: maxCharsRaw = 12e3 } = params || {};
+            const owner = resolveOwner();
+            const maxChars = Math.min(Math.max(Number(maxCharsRaw || 12e3), 1e3), 4e4);
             if (action === "list") {
-              const sessions = Object.entries(extractionLog).filter(([, v]) => v && v.last_extracted_at).sort(([, a], [, b]) => (b.last_extracted_at || "").localeCompare(a.last_extracted_at || "")).slice(0, Math.min(listLimit, 20));
+              const output = await callSessionLogsIngest("list", ["--owner", owner, "--limit", String(Math.min(Math.max(Number(listLimit || 5), 1), 20))]);
+              const parsed = JSON.parse(output || "{}");
+              const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
               if (sessions.length === 0) {
                 return {
-                  content: [{ type: "text", text: "No recent sessions found in extraction log." }],
+                  content: [{ type: "text", text: "No indexed sessions found yet." }],
                   details: { count: 0 }
                 };
               }
-              let text = "Recent sessions:\n";
-              sessions.forEach(([id, info], i) => {
-                const date = info.last_extracted_at ? new Date(info.last_extracted_at).toLocaleString() : "unknown";
-                const msgCount = info.message_count || "?";
-                const trigger = info.label || "unknown";
-                const topic = info.topic_hint ? ` \u2014 "${info.topic_hint}"` : "";
-                text += `${i + 1}. [${date}] ${id} \u2014 ${msgCount} messages, extracted via ${trigger}${topic}
+              let text = "Recent indexed sessions:\n";
+              sessions.forEach((info, i) => {
+                const id = String(info?.session_id || "unknown");
+                const date = info?.updated_at ? new Date(info.updated_at).toLocaleString() : "unknown";
+                const msgCount = Number(info?.message_count || 0);
+                const trigger = String(info?.source_label || "unknown");
+                const topic = info?.topic_hint ? ` \u2014 "${String(info.topic_hint).slice(0, 120)}"` : "";
+                text += `${i + 1}. [${date}] ${id} \u2014 ${msgCount} messages, indexed via ${trigger}${topic}
 `;
               });
               return {
@@ -2516,59 +2634,132 @@ notify_docs_search(data['query'], data['results'])
                 details: { count: sessions.length }
               };
             }
-            if (action === "load" && sid) {
-              if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sid)) {
+            if (action === "load") {
+              const targetSid = String(sid || "").trim();
+              if (!targetSid) {
                 return {
-                  content: [{ type: "text", text: "Invalid session ID format." }],
-                  details: { error: "invalid_session_id" }
+                  content: [{ type: "text", text: 'Provide session_id for action="load".' }],
+                  details: { error: "missing_session_id" }
                 };
               }
-              const sessionsDir = path.join(os.homedir(), ".openclaw", "sessions");
-              const sessionPath = path.join(sessionsDir, `${sid}.jsonl`);
-              if (fs.existsSync(sessionPath)) {
-                try {
-                  const messages = readMessagesFromSessionFile(sessionPath);
-                  const transcript = buildTranscript(messages);
-                  const truncated = transcript.length > 1e4 ? "...[truncated]...\n\n" + transcript.slice(-1e4) : transcript;
-                  return {
-                    content: [{ type: "text", text: `Session ${sid} (${messages.length} messages):
+              const output = await callSessionLogsIngest("load", ["--owner", owner, "--session-id", targetSid]);
+              const parsed = JSON.parse(output || "{}");
+              const session = parsed?.session;
+              if (!session || typeof session !== "object") {
+                return {
+                  content: [{ type: "text", text: `Session ${targetSid} not found in indexed logs.` }],
+                  details: { error: "not_found", session_id: targetSid }
+                };
+              }
+              const transcript = String(session.transcript_text || "");
+              const truncated = transcript.length > maxChars;
+              const body = truncated ? `...[truncated]...
 
-${truncated}` }],
-                    details: { session_id: sid, message_count: messages.length, truncated: transcript.length > 1e4 }
-                  };
-                } catch {
-                }
+${transcript.slice(-maxChars)}` : transcript;
+              return {
+                content: [{ type: "text", text: `Session ${targetSid} (${Number(session.message_count || 0)} messages):
+
+${body}` }],
+                details: { session_id: targetSid, message_count: Number(session.message_count || 0), truncated }
+              };
+            }
+            if (action === "last") {
+              const args = ["--owner", owner];
+              const currentSid = String(ctx?.sessionId || "").trim();
+              if (currentSid) {
+                args.push("--exclude-session-id", currentSid);
               }
-              try {
-                const factsOutput = await datastoreBridge.search([
-                  "*",
-                  "--session-id",
-                  sid,
-                  "--owner",
-                  resolveOwner(),
-                  "--limit",
-                  "20"
-                ]);
+              const output = await callSessionLogsIngest("last", args);
+              const parsed = JSON.parse(output || "{}");
+              const session = parsed?.session;
+              if (!session || typeof session !== "object") {
                 return {
-                  content: [{ type: "text", text: `Session file not available. Facts extracted from session ${sid}:
-${factsOutput || "No facts found."}` }],
-                  details: { session_id: sid, fallback: true }
-                };
-              } catch {
-                return {
-                  content: [{ type: "text", text: `Session ${sid} not found. Session file may have been cleaned up and no facts were found.` }],
-                  details: { session_id: sid, error: "not_found" }
+                  content: [{ type: "text", text: "No prior indexed session found." }],
+                  details: { error: "not_found" }
                 };
               }
+              const transcript = String(session.transcript_text || "");
+              const truncated = transcript.length > maxChars;
+              const body = truncated ? `...[truncated]...
+
+${transcript.slice(-maxChars)}` : transcript;
+              return {
+                content: [{ type: "text", text: `Last indexed session ${String(session.session_id)} (${Number(session.message_count || 0)} messages):
+
+${body}` }],
+                details: { session_id: String(session.session_id), message_count: Number(session.message_count || 0), truncated }
+              };
             }
             return {
-              content: [{ type: "text", text: 'Provide action: "list" or "load" (with session_id).' }],
+              content: [{ type: "text", text: 'Provide action: "list", "load" (with session_id), or "last".' }],
               details: { error: "invalid_action" }
             };
           } catch (err2) {
             console.error("[quaid] session_recall error:", err2);
             return {
               content: [{ type: "text", text: `Error: ${String(err2)}` }],
+              details: { error: String(err2) }
+            };
+          }
+        }
+      })
+    );
+    api.registerTool(
+      () => ({
+        name: "session_logs_search",
+        description: "Expensive full-session log search across indexed transcripts. Use only when memory_recall and project/docs retrieval fail and you need last-resort recovery.",
+        parameters: Type.Object({
+          query: Type.String({ description: "What to look for in historical session logs" }),
+          limit: Type.Optional(Type.Number({ description: "Max matches to return (default 5, max 20)" })),
+          min_similarity: Type.Optional(Type.Number({ description: "Similarity threshold, default 0.15" }))
+        }),
+        async execute(_toolCallId, params) {
+          try {
+            const query = String(params?.query || "").trim();
+            if (!query) {
+              return {
+                content: [{ type: "text", text: "Provide query." }],
+                details: { error: "missing_query" }
+              };
+            }
+            const limit = Math.min(Math.max(Number(params?.limit || 5), 1), 20);
+            const minSimilarity = Number(params?.min_similarity ?? 0.15);
+            const output = await callSessionLogsIngest("search", [
+              query,
+              "--owner",
+              resolveOwner(),
+              "--limit",
+              String(limit),
+              "--min-similarity",
+              String(Number.isFinite(minSimilarity) ? minSimilarity : 0.15)
+            ]);
+            const parsed = JSON.parse(output || "{}");
+            const results = Array.isArray(parsed?.results) ? parsed.results : [];
+            if (results.length === 0) {
+              return {
+                content: [{ type: "text", text: "No session log matches found." }],
+                details: { count: 0 }
+              };
+            }
+            let text = `Found ${results.length} session log match(es):
+`;
+            results.forEach((r, i) => {
+              const sid = String(r?.session_id || "unknown");
+              const score = Number(r?.score || 0);
+              const sourceLabel = String(r?.source_label || "unknown");
+              const snippet = String(r?.text || "").replace(/\s+/g, " ").trim();
+              const clipped = snippet.length > 260 ? `${snippet.slice(0, 257)}...` : snippet;
+              text += `${i + 1}. [${sid}] score=${(score * 100).toFixed(1)}% via ${sourceLabel} \u2014 ${clipped}
+`;
+            });
+            return {
+              content: [{ type: "text", text }],
+              details: { count: results.length, results }
+            };
+          } catch (err2) {
+            console.error("[quaid] session_logs_search error:", err2);
+            return {
+              content: [{ type: "text", text: `Error searching session logs: ${String(err2)}` }],
               details: { error: String(err2) }
             };
           }
@@ -2713,11 +2904,15 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
       const journalConfig = getMemoryConfig().docs?.journal || {};
       const journalEnabled = isSystemEnabled("journal") && journalConfig.enabled !== false;
       const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
+      const sourceContext = deriveLifecycleSourceContext(null, null, messages, sessionId);
       const extracted = await callExtractPipeline({
         transcript: transcriptForExtraction,
         owner: resolveOwner(),
         label: resolveExtractionTrigger(label),
         sessionId,
+        sourceChannel: sourceContext.sourceChannel,
+        sourceConversationId: sourceContext.conversationId || sessionId,
+        sourceAuthorId: sourceContext.sourceAuthorId,
         writeSnippets: snippetsEnabled,
         writeJournal: journalEnabled
       });
@@ -2917,6 +3112,20 @@ notify_memory_extraction(
             console.log("[quaid] Compaction: memory extraction skipped \u2014 memory system disabled");
           }
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
+          const sourceContext = deriveLifecycleSourceContext(event, ctx, conversationMessages, uniqueSessionId);
+          if (uniqueSessionId) {
+            await updateSessionLogsFromLifecycle({
+              sessionId: uniqueSessionId,
+              label: "Compaction",
+              sessionFile: typeof event.sessionFile === "string" ? event.sessionFile : void 0,
+              sourceChannel: sourceContext.sourceChannel,
+              conversationId: sourceContext.conversationId,
+              participantIds: sourceContext.participantIds,
+              participantAliases: sourceContext.participantAliases,
+              messageCount: conversationMessages.length,
+              topicHint: deriveTopicHint(conversationMessages)
+            });
+          }
           try {
             await updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId);
           } catch (err2) {
@@ -2983,6 +3192,22 @@ notify_memory_extraction(
             console.log("[quaid] Reset: memory extraction skipped \u2014 memory system disabled");
           }
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
+          if (uniqueSessionId) {
+            const normalizedReason = String(reason || "").toLowerCase();
+            const resetLabel = normalizedReason.includes("new") ? "New" : "Reset";
+            const sourceContext = deriveLifecycleSourceContext(event, ctx, conversationMessages, uniqueSessionId);
+            await updateSessionLogsFromLifecycle({
+              sessionId: uniqueSessionId,
+              label: resetLabel,
+              sessionFile: typeof event.sessionFile === "string" ? event.sessionFile : void 0,
+              sourceChannel: sourceContext.sourceChannel,
+              conversationId: sourceContext.conversationId,
+              participantIds: sourceContext.participantIds,
+              participantAliases: sourceContext.participantAliases,
+              messageCount: conversationMessages.length,
+              topicHint: deriveTopicHint(conversationMessages)
+            });
+          }
           try {
             await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);
           } catch (err2) {
