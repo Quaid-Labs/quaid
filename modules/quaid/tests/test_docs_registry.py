@@ -86,6 +86,26 @@ class TestEnsureTable:
         r.ensure_table()
         r.ensure_table()  # Second call should not error
 
+    def test_doc_registry_has_identity_columns(self, setup_env):
+        """Forward-compatible identity/source columns are present."""
+        r = _get_registry()
+        from lib.database import get_connection
+        with get_connection(r.db_path) as conn:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(doc_registry)").fetchall()}
+        required = {
+            "source_channel",
+            "source_conversation_id",
+            "source_author_id",
+            "speaker_entity_id",
+            "subject_entity_id",
+            "conversation_id",
+            "visibility_scope",
+            "sensitivity",
+            "participant_entity_ids",
+            "provenance_confidence",
+        }
+        assert required.issubset(cols)
+
 
 class TestRegisterAndGet:
     def test_register_basic(self, setup_env):
@@ -117,6 +137,35 @@ class TestRegisterAndGet:
         entry = r.get("docs/api.md")
         assert entry["auto_update"] is True
         assert entry["source_files"] == ["src/routes.js", "src/server.js"]
+
+    def test_register_with_identity_context(self, setup_env):
+        r = _get_registry()
+        r.register(
+            "docs/identity.md",
+            project="test-project",
+            source_channel="telegram",
+            source_conversation_id="group-42",
+            source_author_id="<redacted>",
+            speaker_entity_id="entity:fatman",
+            subject_entity_id="entity:albert",
+            conversation_id="conv:group-42",
+            visibility_scope="source_shared",
+            sensitivity="normal",
+            participant_entity_ids=["entity:fatman", "entity:albert"],
+            provenance_confidence=0.87,
+        )
+        entry = r.get("docs/identity.md")
+        assert entry is not None
+        assert entry["source_channel"] == "telegram"
+        assert entry["source_conversation_id"] == "group-42"
+        assert entry["source_author_id"] == "<redacted>"
+        assert entry["speaker_entity_id"] == "entity:fatman"
+        assert entry["subject_entity_id"] == "entity:albert"
+        assert entry["conversation_id"] == "conv:group-42"
+        assert entry["visibility_scope"] == "source_shared"
+        assert entry["sensitivity"] == "normal"
+        assert entry["participant_entity_ids"] == ["entity:fatman", "entity:albert"]
+        assert entry["provenance_confidence"] == pytest.approx(0.87)
 
 
 class TestListDocs:

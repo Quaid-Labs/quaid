@@ -20,6 +20,11 @@
   - add multi-user benchmark lane (agent swarms + group chat attribution)
   - add privacy regression assertions (no leakage across entities)
 
+- [ ] OpenClaw release detector/tester (replace fallback-heavy compatibility drift):
+  - detect OpenClaw hook/tool lifecycle API changes at install/bootstrap time
+  - run a focused compatibility test suite against detected version before gateway enable
+  - fail loudly with actionable diagnostics instead of introducing adapter-level soft fallbacks
+
 ## Fallback Sweep Backlog
 
 - [ ] Enforce fail-hard policy consistently:
