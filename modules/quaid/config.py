@@ -121,10 +121,13 @@ class OpusReviewConfig:
 @dataclass
 class JanitorParallelConfig:
     enabled: bool = True
-    llm_workers: int = 2
+    llm_workers: int = 4
     llm_workers_by_task: Dict[str, int] = field(default_factory=dict)
     lifecycle_prepass_workers: int = 3
     lifecycle_prepass_enabled: bool = True
+    lock_enforcement_enabled: bool = True
+    lock_wait_seconds: int = 120
+    lock_require_registration: bool = True
 
 
 @dataclass
@@ -581,7 +584,7 @@ def _load_config_inner() -> MemoryConfig:
         llm_workers_by_task = {}
     parallel = JanitorParallelConfig(
         enabled=bool(parallel_section.get('enabled', True)),
-        llm_workers=int(parallel_section.get('llm_workers', parallel_section.get('llmWorkers', 2)) or 2),
+        llm_workers=int(parallel_section.get('llm_workers', parallel_section.get('llmWorkers', 4)) or 4),
         llm_workers_by_task={str(k): int(v) for k, v in llm_workers_by_task.items() if str(v).strip().isdigit()},
         lifecycle_prepass_workers=int(parallel_section.get(
             'lifecycle_prepass_workers',
@@ -590,6 +593,18 @@ def _load_config_inner() -> MemoryConfig:
         lifecycle_prepass_enabled=bool(parallel_section.get(
             'lifecycle_prepass_enabled',
             parallel_section.get('lifecyclePrepassEnabled', True)
+        )),
+        lock_enforcement_enabled=bool(parallel_section.get(
+            'lock_enforcement_enabled',
+            parallel_section.get('lockEnforcementEnabled', True)
+        )),
+        lock_wait_seconds=int(parallel_section.get(
+            'lock_wait_seconds',
+            parallel_section.get('lockWaitSeconds', 120)
+        ) or 120),
+        lock_require_registration=bool(parallel_section.get(
+            'lock_require_registration',
+            parallel_section.get('lockRequireRegistration', True)
         )),
     )
     

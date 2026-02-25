@@ -25,6 +25,15 @@ def _make_cfg(projects_enabled: bool = True):
             },
         ),
         rag=SimpleNamespace(docs_dir="docs"),
+        database=SimpleNamespace(path="data/memory.db"),
+        janitor=SimpleNamespace(
+            parallel=SimpleNamespace(
+                enabled=True,
+                lock_enforcement_enabled=True,
+                lock_wait_seconds=5,
+                lock_require_registration=True,
+            )
+        ),
     )
 
 
@@ -233,3 +242,29 @@ def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):
     assert set(out.keys()) == {"a", "b"}
     assert out["a"].metrics["a"] == 1
     assert out["b"].metrics["b"] == 1
+
+
+def test_lifecycle_registry_requires_write_registration_when_enabled(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    registry.register("writer", lambda _ctx: SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={}))
+
+    result = registry.run("writer", RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path))
+    assert result.errors
+    assert "missing write resource registration" in result.errors[0]
+
+
+def test_lifecycle_registry_allows_registered_write_locks(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    registry.register(
+        "writer",
+        lambda _ctx: SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={}),
+        write_resources=["files:global", "db:memory"],
+    )
+
+    result = registry.run("writer", RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path))
+    assert result.errors == []
+    assert result.metrics["ok"] == 1

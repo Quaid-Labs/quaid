@@ -197,7 +197,7 @@ function janitorParallelEnabled(cfg) {
 }
 
 function janitorLlmWorkers(cfg) {
-  const raw = getPath(cfg, "janitor.parallel.llmWorkers", getPath(cfg, "janitor.parallel.llm_workers", 2));
+  const raw = getPath(cfg, "janitor.parallel.llmWorkers", getPath(cfg, "janitor.parallel.llm_workers", 4));
   return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 2;
 }
 

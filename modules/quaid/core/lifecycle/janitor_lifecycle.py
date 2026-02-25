@@ -8,9 +8,13 @@ logic and register their routines here.
 from __future__ import annotations
 
 import importlib
+import hashlib
 import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
@@ -43,8 +47,17 @@ class LifecycleRegistry:
     def __init__(self) -> None:
         self._routines: Dict[str, LifecycleRoutine] = {}
         self._owners: Dict[str, str] = {}
+        self._write_resources: Dict[str, List[str]] = {}
+        self._lock_registries: Dict[str, "_ResourceLockRegistry"] = {}
+        self._lock_registries_guard = threading.Lock()
 
-    def register(self, name: str, routine: LifecycleRoutine, owner: str = "unknown") -> None:
+    def register(
+        self,
+        name: str,
+        routine: LifecycleRoutine,
+        owner: str = "unknown",
+        write_resources: Optional[List[str]] = None,
+    ) -> None:
         existing = self._routines.get(name)
         if existing is not None:
             existing_owner = self._owners.get(name, "unknown")
@@ -57,6 +70,7 @@ class LifecycleRegistry:
             )
         self._routines[name] = routine
         self._owners[name] = owner
+        self._write_resources[name] = list(write_resources or [])
 
     def has(self, name: str) -> bool:
         return name in self._routines
@@ -65,7 +79,23 @@ class LifecycleRegistry:
         routine = self._routines.get(name)
         if routine is None:
             return RoutineResult(errors=[f"No lifecycle routine registered: {name}"])
-        return routine(ctx)
+        lock_cfg = self._lock_config(ctx)
+        if not lock_cfg["enabled"]:
+            return routine(ctx)
+
+        resources = self._resolved_write_resources(name, ctx)
+        if lock_cfg["require_registration"] and not resources:
+            return RoutineResult(errors=[f"Lifecycle routine '{name}' missing write resource registration"])
+
+        if not resources:
+            return routine(ctx)
+
+        lock_registry = self._lock_registry_for_workspace(ctx.workspace)
+        try:
+            with lock_registry.acquire_many(resources, timeout_seconds=lock_cfg["timeout_seconds"]):
+                return routine(ctx)
+        except TimeoutError as exc:
+            return RoutineResult(errors=[f"Lifecycle routine '{name}' lock timeout: {exc}"])
 
     def run_many(
         self,
@@ -88,6 +118,142 @@ class LifecycleRegistry:
                 except Exception as exc:  # pragma: no cover
                     results[name] = RoutineResult(errors=[f"Parallel lifecycle run failed for {name}: {exc}"])
         return results
+
+    def _lock_registry_for_workspace(self, workspace: Path) -> "_ResourceLockRegistry":
+        lock_root = (Path(workspace).resolve() / ".quaid" / "runtime" / "locks" / "janitor")
+        key = str(lock_root)
+        with self._lock_registries_guard:
+            reg = self._lock_registries.get(key)
+            if reg is None:
+                reg = _ResourceLockRegistry(lock_root)
+                self._lock_registries[key] = reg
+            return reg
+
+    def _lock_config(self, ctx: RoutineContext) -> Dict[str, Any]:
+        if ctx.dry_run:
+            return {"enabled": False, "timeout_seconds": 0, "require_registration": False}
+        obj = getattr(getattr(ctx.cfg, "janitor", None), "parallel", None)
+        enabled = bool(getattr(obj, "enabled", True) and getattr(obj, "lock_enforcement_enabled", True))
+        timeout_seconds = int(getattr(obj, "lock_wait_seconds", 120) or 120)
+        require_registration = bool(getattr(obj, "lock_require_registration", True))
+        return {
+            "enabled": enabled,
+            "timeout_seconds": max(1, timeout_seconds),
+            "require_registration": require_registration,
+        }
+
+    def _resolved_write_resources(self, name: str, ctx: RoutineContext) -> List[str]:
+        declared = self._write_resources.get(name) or _DEFAULT_WRITE_RESOURCES.get(name, [])
+        out: List[str] = []
+        for raw in declared:
+            token = str(raw or "").strip()
+            if not token:
+                continue
+            if token == "db:memory":
+                db_path = str(getattr(getattr(ctx.cfg, "database", None), "path", "data/memory.db") or "data/memory.db")
+                p = Path(db_path)
+                if not p.is_absolute():
+                    p = ctx.workspace / p
+                out.append(f"db:{p.resolve()}")
+            elif token in {"files:global", "files"}:
+                out.append("files:global")
+            elif token == "core_markdown":
+                out.append("files:global")
+            elif token.startswith("file:"):
+                fp = Path(token[5:])
+                if not fp.is_absolute():
+                    fp = ctx.workspace / fp
+                out.append(f"file:{fp.resolve()}")
+            else:
+                out.append(token)
+        # Deterministic order + dedupe.
+        return sorted(set(out))
+
+
+class _ResourceLockRegistry:
+    def __init__(self, root: Path) -> None:
+        self._root = Path(root)
+        self._root.mkdir(parents=True, exist_ok=True)
+        self._thread_locks: Dict[str, threading.RLock] = {}
+        self._thread_guard = threading.Lock()
+
+    def _thread_lock(self, resource: str) -> threading.RLock:
+        with self._thread_guard:
+            lock = self._thread_locks.get(resource)
+            if lock is None:
+                lock = threading.RLock()
+                self._thread_locks[resource] = lock
+            return lock
+
+    def _lockfile_for(self, resource: str) -> Path:
+        digest = hashlib.sha1(resource.encode("utf-8")).hexdigest()
+        return self._root / f"{digest}.lock"
+
+    @contextmanager
+    def acquire_many(self, resources: List[str], timeout_seconds: int = 120):
+        import fcntl
+
+        ordered = sorted(set(str(r).strip() for r in (resources or []) if str(r).strip()))
+        if not ordered:
+            yield
+            return
+
+        deadline = time.monotonic() + max(1, int(timeout_seconds or 120))
+        acquired_thread: List[threading.RLock] = []
+        acquired_fds: List[int] = []
+        try:
+            for resource in ordered:
+                thread_lock = self._thread_lock(resource)
+                remaining = max(0.0, deadline - time.monotonic())
+                if not thread_lock.acquire(timeout=remaining):
+                    raise TimeoutError(f"thread lock timeout for {resource}")
+                acquired_thread.append(thread_lock)
+
+                lockfile = self._lockfile_for(resource)
+                fd = os.open(str(lockfile), os.O_RDWR | os.O_CREAT, 0o600)
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            os.close(fd)
+                            raise TimeoutError(f"file lock timeout for {resource}")
+                        time.sleep(min(0.05, remaining))
+                acquired_fds.append(fd)
+
+            yield
+        finally:
+            for fd in reversed(acquired_fds):
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+            for lock in reversed(acquired_thread):
+                try:
+                    lock.release()
+                except Exception:
+                    pass
+
+
+_DEFAULT_WRITE_RESOURCES: Dict[str, List[str]] = {
+    # Any routine that can write markdown/docs gets the global files lock.
+    "workspace": ["files:global"],
+    "docs_staleness": ["files:global"],
+    "docs_cleanup": ["files:global"],
+    "snippets": ["files:global"],
+    "journal": ["files:global"],
+    # RAG updates docs index and sqlite artifacts.
+    "rag": ["files:global", "db:memory"],
+    # Memory maintenance is db-write heavy.
+    "memory_graph_maintenance": ["db:memory"],
+    "datastore_cleanup": ["db:memory"],
+}
 
 
 def _register_module_routines(

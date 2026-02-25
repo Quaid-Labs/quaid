@@ -74,7 +74,7 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"notify level:     {_get(data, 'notifications.level', 'normal')}")
     print(f"fail hard:        {_get(data, 'retrieval.failHard', _get(data, 'retrieval.fail_hard', True))}")
     print(f"janitor parallel: {_get(data, 'janitor.parallel.enabled', True)}")
-    print(f"llm workers:      {_get(data, 'janitor.parallel.llmWorkers', _get(data, 'janitor.parallel.llm_workers', 2))}")
+    print(f"llm workers:      {_get(data, 'janitor.parallel.llmWorkers', _get(data, 'janitor.parallel.llm_workers', 4))}")
     print(f"prepass workers:  {_get(data, 'janitor.parallel.lifecyclePrepassWorkers', _get(data, 'janitor.parallel.lifecycle_prepass_workers', 3))}")
     print(f"idle timeout:     {_get(data, 'capture.idle_timeout_minutes', 10)}m")
     print()
@@ -172,7 +172,7 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 raw = _prompt_str("janitor.parallel.enabled (true/false)", "true" if cur else "false").lower()
                 _set(staged, "janitor.parallel.enabled", raw in {"1", "true", "yes", "on"})
             elif choice == "9":
-                cur = int(_get(staged, "janitor.parallel.llmWorkers", _get(staged, "janitor.parallel.llm_workers", 2)))
+                cur = int(_get(staged, "janitor.parallel.llmWorkers", _get(staged, "janitor.parallel.llm_workers", 4)))
                 _set(staged, "janitor.parallel.llmWorkers", _prompt_int("janitor.parallel.llmWorkers", cur))
             elif choice == "10":
                 cur = int(_get(staged, "janitor.parallel.lifecyclePrepassWorkers", _get(staged, "janitor.parallel.lifecycle_prepass_workers", 3)))

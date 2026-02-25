@@ -70,7 +70,7 @@
     "applyMode": "auto",
     "parallel": {
       "enabled": true,
-      "llmWorkers": 2,
+      "llmWorkers": 4,
       "llmWorkersByTask": {
         "review_pending": 2,
         "dedup_review": 2,
@@ -78,7 +78,10 @@
         "contradiction_resolution": 2
       },
       "lifecyclePrepassEnabled": true,
-      "lifecyclePrepassWorkers": 3
+      "lifecyclePrepassWorkers": 3,
+      "lockEnforcementEnabled": true,
+      "lockWaitSeconds": 120,
+      "lockRequireRegistration": true
     },
     "approvalPolicies": {
       "coreMarkdownWrites": "ask",
@@ -105,7 +108,7 @@
       "minSimilarity": 0.6,
       "maxSimilarity": 0.85
     },
-    "_notes": "Nightly maintenance pipeline. parallel is the global janitor parallelism control (on by default): llmWorkers controls datastore LLM batch concurrency and can be overridden per task via llmWorkersByTask; lifecyclePrepass controls janitor dry-run prepass concurrency. approvalPolicies lets you set ask/auto per sensitive scope. Root markdown writes are usually ask; projects/quaid markdown is auto-managed by janitor. applyMode is a legacy master fallback (auto/ask/dry_run). opusReview: LLM reviews pending facts. dedup: similarity thresholds for duplicate detection. contradiction: detect conflicting facts."
+    "_notes": "Nightly maintenance pipeline. parallel is the global janitor parallelism control (on by default): llmWorkers controls datastore LLM batch concurrency and can be overridden per task via llmWorkersByTask; lifecyclePrepass controls janitor dry-run prepass concurrency. lockEnforcementEnabled requires registered write locks before maintenance routines can modify flat files/DB; lockRequireRegistration blocks routines that do not declare write resources; lockWaitSeconds controls lock timeout. approvalPolicies lets you set ask/auto per sensitive scope. Root markdown writes are usually ask; projects/quaid markdown is auto-managed by janitor. applyMode is a legacy master fallback (auto/ask/dry_run). opusReview: LLM reviews pending facts. dedup: similarity thresholds for duplicate detection. contradiction: detect conflicting facts."
   },
 
   "retrieval": {
