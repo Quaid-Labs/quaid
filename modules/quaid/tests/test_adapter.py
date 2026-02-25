@@ -133,12 +133,20 @@ class TestStandaloneAdapter:
     def test_get_api_key_from_env_file(self, standalone, tmp_path):
         env_file = tmp_path / ".env"
         env_file.write_text('MY_KEY=sk-from-file\n')
-        assert standalone.get_api_key("MY_KEY") == "sk-from-file"
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False):
+            assert standalone.get_api_key("MY_KEY") == "sk-from-file"
 
     def test_get_api_key_env_file_with_quotes(self, standalone, tmp_path):
         env_file = tmp_path / ".env"
         env_file.write_text('MY_KEY="sk-quoted"\n')
-        assert standalone.get_api_key("MY_KEY") == "sk-quoted"
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=False):
+            assert standalone.get_api_key("MY_KEY") == "sk-quoted"
+
+    def test_get_api_key_env_file_blocked_when_failhard_enabled(self, standalone, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text('MY_KEY=sk-from-file\n')
+        with patch("lib.adapter.is_fail_hard_enabled", return_value=True):
+            assert standalone.get_api_key("MY_KEY") is None
 
     def test_get_api_key_missing(self, standalone, monkeypatch):
         monkeypatch.delenv("MISSING_KEY", raising=False)
@@ -286,7 +294,16 @@ class TestOpenClawAdapter:
         monkeypatch.delenv("TEST_KEY", raising=False)
         (tmp_path / ".env").write_text("TEST_KEY=sk-from-ws-env\n")
         adapter = OpenClawAdapter()
-        assert adapter.get_api_key("TEST_KEY") == "sk-from-ws-env"
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=False):
+            assert adapter.get_api_key("TEST_KEY") == "sk-from-ws-env"
+
+    def test_get_api_key_from_env_file_blocked_when_failhard_enabled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("TEST_KEY", raising=False)
+        (tmp_path / ".env").write_text("TEST_KEY=sk-from-ws-env\n")
+        adapter = OpenClawAdapter()
+        with patch("adaptors.openclaw.adapter.is_fail_hard_enabled", return_value=True):
+            assert adapter.get_api_key("TEST_KEY") is None
 
     def test_get_last_channel_no_sessions_file(self, monkeypatch):
         monkeypatch.setattr(OpenClawAdapter, "_find_sessions_json",

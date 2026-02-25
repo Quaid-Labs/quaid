@@ -288,10 +288,24 @@ class StandaloneAdapter(QuaidAdapter):
         if key:
             return key
 
-        # 2. .env file in quaid home
+        if is_fail_hard_enabled():
+            return None
+
+        # 2. .env file in quaid home (noisy fallback only when failHard=false)
+        print(
+            f"[adapter][FALLBACK] {env_var_name} not found in env; "
+            "attempting ~/.quaid/.env lookup because failHard is disabled.",
+            file=sys.stderr,
+        )
         env_file = self.quaid_home() / ".env"
         if env_file.exists():
-            return _read_env_file(env_file, env_var_name)
+            found = _read_env_file(env_file, env_var_name)
+            if found:
+                print(
+                    f"[adapter][FALLBACK] Loaded {env_var_name} from {env_file}.",
+                    file=sys.stderr,
+                )
+                return found
 
         return None
 
