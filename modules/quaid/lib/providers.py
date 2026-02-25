@@ -309,6 +309,11 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
         # Ensure OAuth token is available (load from .env only when fail-hard is disabled)
         if "CLAUDE_CODE_OAUTH_TOKEN" not in env and not is_fail_hard_enabled():
+            print(
+                "[providers][FALLBACK] CLAUDE_CODE_OAUTH_TOKEN not present in env; "
+                "attempting ~/.quaid/.env fallback because failHard is disabled.",
+                file=sys.stderr,
+            )
             adapter_env_path = ""
             try:
                 # Lazy import to avoid module-level circular dependency.
@@ -323,9 +328,16 @@ class ClaudeCodeLLMProvider(LLMProvider):
                             for line in f:
                                 if line.strip().startswith("CLAUDE_CODE_OAUTH_TOKEN="):
                                     env["CLAUDE_CODE_OAUTH_TOKEN"] = line.strip().split("=", 1)[1]
+                                    print(
+                                        f"[providers][FALLBACK] Loaded CLAUDE_CODE_OAUTH_TOKEN from {env_path}.",
+                                        file=sys.stderr,
+                                    )
                                     break
                     except OSError:
-                        pass
+                        print(
+                            f"[providers][FALLBACK] Failed reading {env_path} for CLAUDE_CODE_OAUTH_TOKEN.",
+                            file=sys.stderr,
+                        )
                     if "CLAUDE_CODE_OAUTH_TOKEN" in env:
                         break
 
