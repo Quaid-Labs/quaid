@@ -885,6 +885,36 @@ class TestLegacyApplyDecisions:
         stats = apply_decisions(decisions, all_snippets, dry_run=True)
         assert stats["discarded"] == 1
 
+    def test_at_maxlines_is_non_fatal_and_clears_snippet(self, workspace_dir, mock_config):
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent_path = workspace_dir / "SOUL.md"
+        parent_path.write_text("# SOUL\n" + "line\n" * 80)  # at limit: 81 lines total
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Should be skipped at limit.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent_path.read_text(),
+                "snippets": ["Should be skipped at limit."],
+                "config": {"purpose": "Personality", "maxLines": 81},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD", "insert_after": "END", "reason": "test"}
+        ]
+
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert stats["errors"] == []
+        assert stats["skipped_at_limit"] == 1
+        assert stats["discarded"] == 1
+        if snippets_path.exists():
+            assert "Should be skipped at limit." not in snippets_path.read_text()
+
 
 # =============================================================================
 # _insert_into_file tests (shared by both legacy and new code)
