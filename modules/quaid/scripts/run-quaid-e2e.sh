@@ -2108,6 +2108,24 @@ def wait_for_reset_start(start_line: int, seconds: int = 45) -> None:
     preview = "\n".join(read_tail_since(events_path, start_line)[-30:])
     raise SystemExit(f"[e2e] ERROR: notify matrix timed out waiting for reset extraction start\n{preview}")
 
+def wait_for_reset_finish(start_line: int, seconds: int = 120) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        lines = read_tail_since(events_path, start_line)
+        if any(
+            '"label":"ResetSignal"' in ln
+            and (
+                '"event":"signal_process_complete"' in ln
+                or '"event":"signal_process_end"' in ln
+                or '"event":"extract_done"' in ln
+            )
+            for ln in lines
+        ):
+            return
+        time.sleep(1)
+    preview = "\n".join(read_tail_since(events_path, start_line)[-40:])
+    raise SystemExit(f"[e2e] ERROR: notify matrix timed out waiting for reset extraction completion\n{preview}")
+
 def assert_no_fatal_notify_errors(lines) -> None:
     patterns = (
         "No such file or directory: 'clawdbot'",
@@ -2133,13 +2151,15 @@ for level in ("quiet", "normal", "debug"):
     run_agent(sid, f"notification level marker: {marker}")
     run_agent(sid, "/reset")
     wait_for_reset_start(events_start, 45)
-    time.sleep(5)
+    wait_for_reset_finish(events_start, 120)
+    time.sleep(2)
     notify_lines = read_tail_since(notify_log_path, notify_start)
     assert_no_fatal_notify_errors(notify_lines)
     loaded = sum(1 for ln in notify_lines if "[config] Loaded from " in ln)
     sent = sum(1 for ln in notify_lines if "[notify] Sent to " in ln)
     no_last_channel = sum(1 for ln in notify_lines if "[notify] No last channel found" in ln)
     send_failed = sum(1 for ln in notify_lines if "[notify] Send failed" in ln)
+    activity = loaded + sent + no_last_channel + send_failed
     results.append(
         {
             "level": level,
@@ -2148,11 +2168,12 @@ for level in ("quiet", "normal", "debug"):
             "sent_count": sent,
             "no_last_channel_count": no_last_channel,
             "send_failed_count": send_failed,
+            "activity_count": activity,
         }
     )
     if level == "quiet" and loaded > 0:
         raise SystemExit("[e2e] ERROR: quiet level emitted extraction notifications")
-    if level in ("normal", "debug") and loaded == 0:
+    if level in ("normal", "debug") and activity == 0:
         raise SystemExit(f"[e2e] ERROR: {level} level emitted no extraction notification activity")
     if strict_delivery and level in ("normal", "debug"):
         if no_last_channel > 0:

@@ -28,6 +28,8 @@ This keeps high-signal maintenance and extraction visibility while avoiding per-
 - `verbose`: `janitor=full`, `extraction=summary`, `retrieval=summary`
 - `debug`: all features `full`
 
+When `notifications.extraction` is `off` (for example `quiet` preset), extraction-completion notifications are fully suppressed, including zero-result `/reset` or timeout completion summaries.
+
 ## Delayed Requests (Host-Managed)
 
 For host systems with asynchronous/heartbeat workflows (for example OpenClaw), delayed actionable requests are written to:

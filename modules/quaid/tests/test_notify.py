@@ -284,6 +284,14 @@ class TestNotifyMemoryExtraction:
             result = notify_memory_extraction(0, 1, 0, details=details)
             assert result is True
 
+    def test_extraction_off_suppresses_notification(self):
+        """quiet/off extraction level should suppress extraction notifications entirely."""
+        with _patch_notify_user() as mock_send, patch("config.get_config") as mock_cfg:
+            mock_cfg.return_value.notifications.effective_level.return_value = "off"
+            result = notify_memory_extraction(2, 0, 0, trigger="compaction", always_notify=True)
+            assert result is False
+            mock_send.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # notify_janitor_summary
