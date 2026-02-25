@@ -5,6 +5,20 @@
     "_notes": "Required. Set to 'standalone' for local CLI/MCP installs, or 'openclaw' when running under OpenClaw."
   },
 
+  "plugins": {
+    "enabled": true,
+    "strict": true,
+    "apiVersion": 1,
+    "paths": ["plugins"],
+    "allowList": [],
+    "slots": {
+      "adapter": "",
+      "ingest": [],
+      "dataStores": []
+    },
+    "_notes": "Phase-1 plugin runtime foundation. paths are scanned for plugin.json manifests. allowList empty means all discovered plugins are eligible. slots define active plugin IDs by zone. strict=true fails on invalid manifests/conflicts."
+  },
+
   "systems": {
     "memory": true,
     "journal": true,
