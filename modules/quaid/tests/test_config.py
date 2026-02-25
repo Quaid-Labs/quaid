@@ -284,6 +284,39 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_loads_plugins_config_block(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "plugins": {
+                    "enabled": True,
+                    "strict": True,
+                    "apiVersion": 1,
+                    "paths": ["plugins", "vendor/plugins"],
+                    "allowList": ["openclaw.adapter"],
+                    "slots": {
+                        "adapter": "openclaw.adapter",
+                        "ingest": ["core.extract"],
+                        "dataStores": ["memorydb.core"]
+                    }
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.plugins.enabled is True
+                assert cfg.plugins.strict is True
+                assert cfg.plugins.api_version == 1
+                assert cfg.plugins.paths == ["plugins", "vendor/plugins"]
+                assert cfg.plugins.allowlist == ["openclaw.adapter"]
+                assert cfg.plugins.slots.adapter == "openclaw.adapter"
+                assert cfg.plugins.slots.ingest == ["core.extract"]
+                assert cfg.plugins.slots.datastores == ["memorydb.core"]
+        finally:
+            config._config = old_config
+
     def test_loads_janitor_run_tests_from_config(self, tmp_path):
         import config
         old_config = config._config

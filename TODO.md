@@ -25,6 +25,13 @@
   - run a focused compatibility test suite against detected version before gateway enable
   - fail loudly with actionable diagnostics instead of introducing adapter-level soft fallbacks
 
+- [ ] Plugin runtime migration (foundation seeded in phase 1):
+  - convert first-party OpenClaw adapter to plugin registration contract
+  - convert ingest flows to plugin registration contract
+  - convert memorydb/docsdb/notedb to datastore plugin registration contract
+  - route janitor maintenance registration through plugin capabilities
+  - enforce conformance tests before enabling third-party plugins by default
+
 ## Fallback Sweep Backlog
 
 - [ ] Enforce fail-hard policy consistently:

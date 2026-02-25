@@ -15,6 +15,20 @@ This document defines Quaid's external interface model for host adapters and run
 - `MCP server` (`modules/quaid/core/interface/mcp_server.py`): host-agnostic RPC tools.
 - `CLI wrapper` (`modules/quaid/quaid`): operational entrypoint to Python modules.
 
+## Plugin Foundation (Phase 1)
+
+Source:
+- `modules/quaid/core/runtime/plugins.py`
+- `docs/PLUGIN-SYSTEM.md`
+
+Current state:
+- strict manifest schema + validation exists,
+- plugin discovery and registry exist,
+- config supports plugin paths/allowlist/slots,
+- active production control flow is not fully moved to plugin runtime yet.
+
+This keeps migration risk low while locking extension contracts before public expansion.
+
 ## Capability Discovery
 
 ### Knowledge Datastore Read Capabilities
