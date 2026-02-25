@@ -124,6 +124,16 @@ export function createKnowledgeEngine<TMemoryResult extends { text: string; simi
     return out;
   }
 
+  function isFailHardEnabled(): boolean {
+    try {
+      const cfg = deps.getMemoryConfig?.() || {};
+      const retrieval = cfg?.retrieval || {};
+      if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
+      if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
+    } catch {}
+    return true;
+  }
+
   async function routeWithRepair<T>(
     router: (systemPrompt: string, userPrompt: string) => Promise<string>,
     systemPrompt: string,
@@ -430,7 +440,8 @@ ${projectHints}
       });
       return sanitizeRecallResults(routed).slice(0, limit);
     } catch (err) {
-      if (opts.failOpen) {
+      const failHard = isFailHardEnabled();
+      if (opts.failOpen && !failHard) {
         const reason = (err as Error)?.message || String(err);
         const fallbackDatastores = normalizeKnowledgeDatastores(undefined, opts.expandGraph);
         console.error(
@@ -450,6 +461,13 @@ ${projectHints}
           via: "vector",
         } as TMemoryResult;
         return sanitizeRecallResults([warning, ...fallbackResults]).slice(0, limit);
+      }
+      if (opts.failOpen && failHard) {
+        const reason = (err as Error)?.message || String(err);
+        console.error(
+          `[quaid][recall-router][FAIL-HARD] Router prepass failed and fallback was blocked by failHard=true. ` +
+          `reason="${reason}"`
+        );
       }
       throw err;
     }

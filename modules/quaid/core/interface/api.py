@@ -157,6 +157,12 @@ def search(
     query: str,
     owner_id: str,
     limit: int = 10,
+    viewer_entity_id: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    participant_entity_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Search memories using hybrid retrieval (simpler than recall).
 
@@ -174,7 +180,17 @@ def search(
     Example:
         >>> results = search("Mars colony", owner_id="quaid")
     """
-    return _memory.search(query=query, owner_id=owner_id, limit=limit)
+    return _memory.search(
+        query=query,
+        owner_id=owner_id,
+        limit=limit,
+        viewer_entity_id=viewer_entity_id,
+        source_channel=source_channel,
+        source_conversation_id=source_conversation_id,
+        source_author_id=source_author_id,
+        subject_entity_id=subject_entity_id,
+        participant_entity_ids=participant_entity_ids,
+    )
 
 
 def create_edge(

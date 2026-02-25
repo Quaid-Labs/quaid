@@ -49,6 +49,7 @@ from lib.runtime_context import (
     get_sessions_dir,
     get_workspace_dir,
 )
+from lib.fail_policy import is_fail_hard_enabled
 
 OWNER_ID = os.environ.get("QUAID_OWNER", "default")
 
@@ -296,7 +297,16 @@ def memory_write(
 
 
 @mcp.tool()
-def memory_search(query: str, limit: int = 10) -> list:
+def memory_search(
+    query: str,
+    limit: int = 10,
+    viewer_entity_id: str = "",
+    source_channel: str = "",
+    source_conversation_id: str = "",
+    source_author_id: str = "",
+    subject_entity_id: str = "",
+    participant_entity_ids_json: str = "",
+) -> list:
     """Search memories using fast hybrid retrieval (simpler than recall).
 
     Skips HyDE expansion, intent classification, multi-pass retrieval, and reranking.
@@ -310,7 +320,27 @@ def memory_search(query: str, limit: int = 10) -> list:
         List of memory dicts with text, category, similarity, confidence.
     """
     limit = max(1, min(limit, 50))
-    return search(query=query, owner_id=OWNER_ID, limit=limit)
+    participant_entity_ids = None
+    if participant_entity_ids_json and participant_entity_ids_json.strip():
+        try:
+            parsed = json.loads(participant_entity_ids_json)
+            if not isinstance(parsed, list):
+                raise ValueError("participant_entity_ids_json must decode to a JSON array")
+            participant_entity_ids = [str(p).strip() for p in parsed if str(p).strip()]
+        except Exception as e:
+            raise ValueError(f"invalid participant_entity_ids_json: {e}")
+
+    return search(
+        query=query,
+        owner_id=OWNER_ID,
+        limit=limit,
+        viewer_entity_id=(viewer_entity_id.strip() if viewer_entity_id else None),
+        source_channel=(source_channel.strip().lower() if source_channel else None),
+        source_conversation_id=(source_conversation_id.strip() if source_conversation_id else None),
+        source_author_id=(source_author_id.strip() if source_author_id else None),
+        subject_entity_id=(subject_entity_id.strip() if subject_entity_id else None),
+        participant_entity_ids=participant_entity_ids,
+    )
 
 
 @mcp.tool()
@@ -454,6 +484,8 @@ def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -
             return {"error": "Invalid session_id format"}
         sessions_dir = get_sessions_dir()
         if not sessions_dir:
+            if is_fail_hard_enabled():
+                raise RuntimeError("Sessions directory not available.")
             return {"session_id": session_id, "fallback": True, "message": "Sessions directory not available."}
         sessions_dir = _Path(sessions_dir)
         session_path = sessions_dir / f"{session_id}.jsonl"
@@ -463,6 +495,8 @@ def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -
             truncated = transcript[-10000:] if len(transcript) > 10000 else transcript
             return {"session_id": session_id, "transcript": truncated, "truncated": len(transcript) > 10000}
 
+        if is_fail_hard_enabled():
+            raise RuntimeError("Session file not available.")
         return {"session_id": session_id, "fallback": True, "message": "Session file not available."}
 
     return {"error": "Provide action='list' or action='load' with session_id."}

@@ -312,11 +312,10 @@ class TestMemorySearch:
     def test_search_basic(self, server):
         mod, mock_api, *_ = server
         result = mod.memory_search("tea")
-        mock_api.search.assert_called_once_with(
-            query="tea",
-            owner_id="test-owner",
-            limit=10,
-        )
+        kwargs = mock_api.search.call_args.kwargs
+        assert kwargs["query"] == "tea"
+        assert kwargs["owner_id"] == "test-owner"
+        assert kwargs["limit"] == 10
         assert len(result) == 1
 
     def test_search_limit_capped_at_50(self, server):
@@ -328,6 +327,25 @@ class TestMemorySearch:
         mod, mock_api, *_ = server
         mod.memory_search("test", limit=-1)
         assert mock_api.search.call_args.kwargs["limit"] == 1
+
+    def test_search_passes_identity_context_fields(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_search(
+            "test",
+            viewer_entity_id="agent:bert",
+            source_channel="telegram",
+            source_conversation_id="chat-1",
+            source_author_id="ownerAlias",
+            subject_entity_id="user:owner",
+            participant_entity_ids_json='["user:owner","agent:bert"]',
+        )
+        kwargs = mock_api.search.call_args.kwargs
+        assert kwargs["viewer_entity_id"] == "agent:bert"
+        assert kwargs["source_channel"] == "telegram"
+        assert kwargs["source_conversation_id"] == "chat-1"
+        assert kwargs["source_author_id"] == "ownerAlias"
+        assert kwargs["subject_entity_id"] == "user:owner"
+        assert kwargs["participant_entity_ids"] == ["user:owner", "agent:bert"]
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +455,26 @@ class TestDocsSearch:
         mod, mock_api, _, _ = server
         mod.projects_search("test", project="")
         assert mock_api.projects_search_docs.call_args.kwargs["project"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests — session_recall
+# ---------------------------------------------------------------------------
+
+class TestSessionRecall:
+    def test_session_recall_returns_fallback_when_failhard_disabled(self, server):
+        mod, *_ = server
+        with patch("core.interface.mcp_server.get_sessions_dir", return_value=None), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=False):
+            out = mod.session_recall(action="load", session_id="sess-1")
+        assert out["fallback"] is True
+
+    def test_session_recall_raises_when_failhard_enabled(self, server):
+        mod, *_ = server
+        with patch("core.interface.mcp_server.get_sessions_dir", return_value=None), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Sessions directory not available"):
+                mod.session_recall(action="load", session_id="sess-1")
 
 
 # ---------------------------------------------------------------------------

@@ -105,3 +105,36 @@ def test_memory_service_bootstraps_default_identity_runtime(monkeypatch):
         viewer_entity_id="user:a",
     )
     assert len(recalled) == 1
+
+
+def test_memory_service_search_applies_privacy_filter(monkeypatch):
+    identity_runtime.clear_registrations()
+    monkeypatch.setattr(
+        "core.runtime.identity_runtime.get_config",
+        lambda: SimpleNamespace(
+            identity=SimpleNamespace(mode="multi_user"),
+            privacy=SimpleNamespace(enforce_strict_filters=True),
+        ),
+    )
+    monkeypatch.setattr(
+        "datastore.memorydb.identity_defaults.get_config",
+        lambda: SimpleNamespace(privacy=SimpleNamespace(enforce_strict_filters=True)),
+    )
+    monkeypatch.setattr(
+        "core.services.memory_service.search_memories",
+        lambda **kwargs: [
+            {"id": "1", "owner_id": "user:a", "visibility_scope": "global_shared"},
+            {"id": "2", "owner_id": "user:b", "visibility_scope": "private_subject", "subject_entity_id": "user:b"},
+        ],
+    )
+
+    import core.services.memory_service as mem_svc
+    mem_svc._IDENTITY_RUNTIME_BOOTSTRAPPED = False
+
+    svc = DatastoreMemoryService()
+    out = svc.search(
+        query="espresso",
+        owner_id="user:a",
+        viewer_entity_id="user:a",
+    )
+    assert [row["id"] for row in out] == ["1"]
