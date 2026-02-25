@@ -12,6 +12,17 @@ function safeLog(logger, message) {
   } catch {
   }
 }
+function isFailHardEnabled(workspace) {
+  try {
+    const configPath = path.join(workspace, "config", "memory.json");
+    const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const retrieval = raw?.retrieval || {};
+    if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
+    if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
+  } catch {
+  }
+  return true;
+}
 function messageText(msg) {
   if (!msg) return "";
   if (typeof msg.content === "string") return msg.content;
@@ -119,6 +130,7 @@ class SessionTimeoutManager {
   eventFilePath;
   workerTimer = null;
   chain = Promise.resolve();
+  failHard;
   constructor(opts) {
     this.timeoutMinutes = opts.timeoutMinutes;
     this.extract = opts.extract;
@@ -134,6 +146,7 @@ class SessionTimeoutManager {
     this.workerLockToken = `${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
     this.eventFilePath = path.join(this.logDir, "session-timeout-events.jsonl");
+    this.failHard = isFailHardEnabled(opts.workspace);
     try {
       fs.mkdirSync(this.logDir, { recursive: true });
       fs.mkdirSync(this.sessionLogDir, { recursive: true });
@@ -215,9 +228,15 @@ class SessionTimeoutManager {
     if (!sessionId) return false;
     const loggedMessages = this.readSessionMessages(sessionId);
     const fallback = filterEligibleMessages(fallbackMessages || []);
-    const source = loggedMessages.length > 0 ? "session_message_log" : fallback.length > 0 ? "fallback_event_messages" : "none";
-    const messages = loggedMessages.length > 0 ? loggedMessages : fallback;
+    const allowFallback = !this.failHard;
+    const source = loggedMessages.length > 0 ? "session_message_log" : allowFallback && fallback.length > 0 ? "fallback_event_messages" : "none";
+    const messages = loggedMessages.length > 0 ? loggedMessages : allowFallback ? fallback : [];
     if (!messages.length) {
+      if (this.failHard && fallback.length > 0) {
+        const msg = "session-timeout fallback payload blocked by failHard; no session_message_log available";
+        this.writeQuaidLog("extract_fail_hard_blocked_fallback", sessionId, { label, fallback_count: fallback.length });
+        throw new Error(msg);
+      }
       this.writeQuaidLog("extract_skip_empty", sessionId, { label, source });
       return false;
     }

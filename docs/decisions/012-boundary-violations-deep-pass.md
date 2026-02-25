@@ -148,7 +148,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - datastore/workspace modules now own registration + maintenance logic:
     - `modules/quaid/workspace_audit.py` registers `workspace`
     - `modules/quaid/docs_updater.py` registers `docs_staleness` and `docs_cleanup`
-    - `modules/quaid/soul_snippets.py` registers `snippets` and `journal`
+    - `modules/quaid/datastore/notedb/soul_snippets.py` registers `snippets` and `journal`
     - `modules/quaid/docs_rag.py` registers `rag`
     - `modules/quaid/memory_graph.py` registers `datastore_cleanup`
   - `modules/quaid/janitor.py` now dispatches those tasks through lifecycle registry instead of inline task bodies

@@ -16,7 +16,7 @@ describe("knowledge orchestrator", () => {
       workspace: "/tmp",
       path: {} as any,
       fs: {} as any,
-      getMemoryConfig: () => ({}),
+      getMemoryConfig: () => ({ retrieval: { failHard: false } }),
       isSystemEnabled: () => false,
       callDocsRag: vi.fn(async () => ""),
       callFastRouter: vi.fn(async () => ""),
@@ -41,7 +41,7 @@ describe("knowledge orchestrator", () => {
       workspace: "/tmp",
       path: {} as any,
       fs: {} as any,
-      getMemoryConfig: () => ({}),
+      getMemoryConfig: () => ({ retrieval: { failHard: false } }),
       isSystemEnabled: () => false,
       callDocsRag: vi.fn(async () => ""),
       callFastRouter: vi.fn(async () => {
@@ -66,7 +66,7 @@ describe("knowledge orchestrator", () => {
       workspace: "/tmp",
       path: {} as any,
       fs: {} as any,
-      getMemoryConfig: () => ({}),
+      getMemoryConfig: () => ({ retrieval: { failHard: false } }),
       isSystemEnabled: () => false,
       callDocsRag: vi.fn(async () => ""),
       callFastRouter: vi.fn(async () => {

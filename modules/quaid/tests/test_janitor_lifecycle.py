@@ -109,7 +109,7 @@ def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
 def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
     calls = {"journal": []}
 
-    monkeypatch.setattr("datastore.docsdb.soul_snippets.run_soul_snippets_review", lambda dry_run: {
+    monkeypatch.setattr("datastore.notedb.soul_snippets.run_soul_snippets_review", lambda dry_run: {
         "folded": 4,
         "rewritten": 2,
         "discarded": 1,
@@ -119,7 +119,7 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
         calls["journal"].append((dry_run, force_distill))
         return {"additions": 3, "edits": 1, "total_entries": 9}
 
-    monkeypatch.setattr("datastore.docsdb.soul_snippets.run_journal_distillation", _run_journal_distillation)
+    monkeypatch.setattr("datastore.notedb.soul_snippets.run_journal_distillation", _run_journal_distillation)
 
     registry = build_default_registry()
 

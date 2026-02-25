@@ -30,7 +30,13 @@ class MemoryServicePort(Protocol):
         **kwargs: Any,
     ) -> List[Dict[str, Any]]: ...
 
-    def search(self, query: str, owner_id: str, limit: int = 10) -> List[Dict[str, Any]]: ...
+    def search(
+        self,
+        query: str,
+        owner_id: str,
+        limit: int = 10,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]: ...
 
     def create_edge(
         self,
@@ -46,4 +52,3 @@ class MemoryServicePort(Protocol):
     def get_memory(self, node_id: str) -> Optional[Dict[str, Any]]: ...
 
     def stats(self) -> Dict[str, Any]: ...
-

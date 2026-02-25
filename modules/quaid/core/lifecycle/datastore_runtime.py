@@ -22,7 +22,7 @@ from datastore.memorydb.maintenance_ops import (
     _is_benchmark_mode,
 )
 from datastore.docsdb.rag import DocsRAG
-from datastore.docsdb.soul_snippets import write_journal_entry, write_snippet_entry
+from datastore.notedb.soul_snippets import write_journal_entry, write_snippet_entry
 
 __all__ = [
     "JanitorMetrics",
