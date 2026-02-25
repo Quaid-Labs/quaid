@@ -537,11 +537,13 @@ The half-life is extended by access frequency (`access_bonus_factor * access_cou
 
 ## 6. Error Handling & Resilience
 
-Quaid is designed to degrade gracefully rather than fail hard. The system encounters three main failure modes during operation.
+Quaid is fail-hard by default (`retrieval.fail_hard=true`). In this mode, provider failures raise immediately instead of silently degrading. If operators explicitly set `retrieval.fail_hard=false`, fallback paths are allowed but must emit explicit warnings.
+
+The system encounters three main failure modes during operation.
 
 ### Anthropic API Unavailable
 
-LLM calls in `llm_clients.py` use automatic retry with exponential backoff: 3 attempts with a 1-second base delay, doubling per retry. HTTP status codes 408, 429, 500, 502, 503, 504, and 529 trigger retries; other errors fail immediately. If all retries are exhausted, the function returns `(None, duration)` rather than raising -- callers check for `None` and skip LLM-dependent steps.
+LLM calls in `llm_clients.py` use automatic retry with exponential backoff: 3 attempts with a 1-second base delay, doubling per retry. HTTP status codes 408, 429, 500, 502, 503, 504, and 529 trigger retries; other errors fail immediately. If all retries are exhausted, the call raises when fail-hard is enabled; it only degrades to `(None, duration)` when `retrieval.fail_hard=false`.
 
 During extraction, an API failure means no facts are extracted for that session. The conversation transcript is not lost (it remains in the gateway's session file), but memories from that session will be missing until the next compaction or reset.
 
@@ -552,7 +554,7 @@ During the janitor, an API failure in any memory task (review, dedup, contradict
 Before every embedding operation, `_ollama_healthy()` performs a 200ms health check against the Ollama API, cached for 30 seconds. If Ollama is unreachable:
 
 - **During extraction:** Facts are stored without embeddings. The janitor's `embeddings` task (Phase 1) backfills missing embeddings on its next run.
-- **During retrieval:** Vector search is skipped entirely. Retrieval falls back to FTS-only (keyword search), which still returns results but with lower recall quality. The fallback is transparent to the user.
+- **During retrieval:** with fail-hard enabled, retrieval raises immediately and blocks degraded search. If fail-hard is disabled, vector search is skipped and retrieval falls back to FTS-only (keyword search) with warning logs.
 
 ### SQLite Lock Contention
 
@@ -562,7 +564,7 @@ If a write does fail after the timeout, `get_connection()` catches the exception
 
 ### General Strategy
 
-The system follows a "store what you can, skip what you can't" philosophy. A failed embedding doesn't prevent fact storage. A failed API call doesn't crash the gateway. A failed janitor task doesn't corrupt existing data. The worst case for any single failure is a temporary reduction in recall quality, which self-heals on the next successful run.
+The system preserves data integrity first. A failed embedding doesn't prevent fact storage. A failed janitor task doesn't corrupt existing data. Recall/LLM reliability behavior is policy-driven via `retrieval.fail_hard`, with no silent fallback paths in fail-hard mode.
 
 ---
 

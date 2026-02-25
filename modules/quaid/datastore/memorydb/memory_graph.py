@@ -766,9 +766,9 @@ class MemoryGraph:
             if _is_fail_hard_mode():
                 raise RuntimeError(
                     "Embedding provider returned no vector for semantic search. "
-                    "Fail-hard mode is ON (QUAID_FAIL_HARD=1 / retrieval.fail_hard=true), "
+                    "Fail-hard mode is ON (retrieval.fail_hard=true), "
                     "so degraded FTS-only fallback is blocked. "
-                    "You can set QUAID_FAIL_HARD=0 (or retrieval.fail_hard=false) to allow fallback, "
+                    "Set retrieval.fail_hard=false to allow fallback, "
                     "but this is not recommended because it masks infrastructure faults."
                 )
             return []
@@ -2318,12 +2318,9 @@ def _is_fail_hard_mode() -> bool:
     if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("MOCK_EMBEDDINGS"):
         return False
 
-    raw = str(os.environ.get("QUAID_FAIL_HARD", "")).strip().lower()
-    if raw:
-        return raw not in {"0", "false", "no", "off"}
-
     try:
-        return bool(get_config().retrieval.fail_hard)
+        from lib.fail_policy import is_fail_hard_enabled
+        return bool(is_fail_hard_enabled())
     except Exception:
         return True
 
@@ -2902,9 +2899,9 @@ def recall(
         if _is_fail_hard_mode():
             raise RuntimeError(
                 "Embedding provider unavailable during recall. "
-                "Fail-hard mode is ON (QUAID_FAIL_HARD=1 / retrieval.fail_hard=true), "
+                "Fail-hard mode is ON (retrieval.fail_hard=true), "
                 "so degraded FTS-only fallback is blocked. "
-                "You can set QUAID_FAIL_HARD=0 (or retrieval.fail_hard=false) to allow fallback, "
+                "Set retrieval.fail_hard=false to allow fallback, "
                 "but this is not recommended because it masks infrastructure faults."
             )
         results = []  # Skip semantic search, go straight to FTS fallback
