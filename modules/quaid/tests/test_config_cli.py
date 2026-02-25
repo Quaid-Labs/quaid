@@ -16,7 +16,7 @@ def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tm
     path = tmp_path / "config" / "memory.json"
     data = {
         "retrieval": {"failHard": True},
-        "janitor": {"parallel": {"enabled": False, "llmWorkers": 4, "lifecyclePrepassWorkers": 3}},
+        "core": {"parallel": {"enabled": False, "llmWorkers": 4, "lifecyclePrepassWorkers": 3}},
     }
     answers = iter(
         [
@@ -41,15 +41,15 @@ def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tm
     assert changed is True
     assert saved["path"] == path
     assert saved["data"]["retrieval"]["failHard"] is False
-    assert saved["data"]["janitor"]["parallel"]["enabled"] is True
-    assert saved["data"]["janitor"]["parallel"]["llmWorkers"] == 6
-    assert saved["data"]["janitor"]["parallel"]["lifecyclePrepassWorkers"] == 5
+    assert saved["data"]["core"]["parallel"]["enabled"] is True
+    assert saved["data"]["core"]["parallel"]["llmWorkers"] == 6
+    assert saved["data"]["core"]["parallel"]["lifecyclePrepassWorkers"] == 5
 
 
 def test_set_builds_nested_paths():
     data = {}
-    config_cli._set(data, "janitor.parallel.enabled", True)
+    config_cli._set(data, "core.parallel.enabled", True)
     config_cli._set(data, "retrieval.failHard", False)
 
-    assert data["janitor"]["parallel"]["enabled"] is True
+    assert data["core"]["parallel"]["enabled"] is True
     assert data["retrieval"]["failHard"] is False

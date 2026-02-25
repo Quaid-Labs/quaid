@@ -8,15 +8,14 @@ logic and register their routines here.
 from __future__ import annotations
 
 import importlib
-import hashlib
 import os
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
+
+from core.runtime.parallel_runtime import ResourceLockRegistry, get_parallel_config
 
 
 @dataclass
@@ -49,7 +48,7 @@ class LifecycleRegistry:
         self._routines: Dict[str, LifecycleRoutine] = {}
         self._owners: Dict[str, str] = {}
         self._write_resources: Dict[str, List[str]] = {}
-        self._lock_registries: Dict[str, "_ResourceLockRegistry"] = {}
+        self._lock_registries: Dict[str, ResourceLockRegistry] = {}
         self._lock_registries_guard = threading.Lock()
         self._llm_executor: Optional[ThreadPoolExecutor] = None
         self._llm_executor_workers: int = 0
@@ -124,22 +123,20 @@ class LifecycleRegistry:
                     results[name] = RoutineResult(errors=[f"Parallel lifecycle run failed for {name}: {exc}"])
         return results
 
-    def _lock_registry_for_workspace(self, workspace: Path) -> "_ResourceLockRegistry":
+    def _lock_registry_for_workspace(self, workspace: Path) -> ResourceLockRegistry:
         lock_root = (Path(workspace).resolve() / ".quaid" / "runtime" / "locks" / "janitor")
         key = str(lock_root)
         with self._lock_registries_guard:
             reg = self._lock_registries.get(key)
             if reg is None:
-                reg = _ResourceLockRegistry(lock_root)
+                reg = ResourceLockRegistry(lock_root)
                 self._lock_registries[key] = reg
             return reg
 
     def _llm_workers(self, ctx: RoutineContext) -> int:
-        try:
-            workers = int(getattr(ctx.cfg.janitor.parallel, "llm_workers", 4) or 4)
-            return max(1, workers)
-        except Exception:
-            return 4
+        parallel = get_parallel_config(ctx.cfg)
+        workers = int(getattr(parallel, "llm_workers", 4) or 4)
+        return max(1, workers)
 
     def _ensure_llm_executor(self, workers: int) -> ThreadPoolExecutor:
         worker_count = max(1, int(workers))
@@ -203,7 +200,7 @@ class LifecycleRegistry:
     def _lock_config(self, ctx: RoutineContext) -> Dict[str, Any]:
         if ctx.dry_run:
             return {"enabled": False, "timeout_seconds": 0, "require_registration": False}
-        obj = getattr(getattr(ctx.cfg, "janitor", None), "parallel", None)
+        obj = get_parallel_config(ctx.cfg)
         enabled = bool(getattr(obj, "enabled", True) and getattr(obj, "lock_enforcement_enabled", True))
         timeout_seconds = int(getattr(obj, "lock_wait_seconds", 120) or 120)
         require_registration = bool(getattr(obj, "lock_require_registration", True))
@@ -239,77 +236,6 @@ class LifecycleRegistry:
                 out.append(token)
         # Deterministic order + dedupe.
         return sorted(set(out))
-
-
-class _ResourceLockRegistry:
-    def __init__(self, root: Path) -> None:
-        self._root = Path(root)
-        self._root.mkdir(parents=True, exist_ok=True)
-        self._thread_locks: Dict[str, threading.RLock] = {}
-        self._thread_guard = threading.Lock()
-
-    def _thread_lock(self, resource: str) -> threading.RLock:
-        with self._thread_guard:
-            lock = self._thread_locks.get(resource)
-            if lock is None:
-                lock = threading.RLock()
-                self._thread_locks[resource] = lock
-            return lock
-
-    def _lockfile_for(self, resource: str) -> Path:
-        digest = hashlib.sha1(resource.encode("utf-8")).hexdigest()
-        return self._root / f"{digest}.lock"
-
-    @contextmanager
-    def acquire_many(self, resources: List[str], timeout_seconds: int = 120):
-        import fcntl
-
-        ordered = sorted(set(str(r).strip() for r in (resources or []) if str(r).strip()))
-        if not ordered:
-            yield
-            return
-
-        deadline = time.monotonic() + max(1, int(timeout_seconds or 120))
-        acquired_thread: List[threading.RLock] = []
-        acquired_fds: List[int] = []
-        try:
-            for resource in ordered:
-                thread_lock = self._thread_lock(resource)
-                remaining = max(0.0, deadline - time.monotonic())
-                if not thread_lock.acquire(timeout=remaining):
-                    raise TimeoutError(f"thread lock timeout for {resource}")
-                acquired_thread.append(thread_lock)
-
-                lockfile = self._lockfile_for(resource)
-                fd = os.open(str(lockfile), os.O_RDWR | os.O_CREAT, 0o600)
-                while True:
-                    try:
-                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            os.close(fd)
-                            raise TimeoutError(f"file lock timeout for {resource}")
-                        time.sleep(min(0.05, remaining))
-                acquired_fds.append(fd)
-
-            yield
-        finally:
-            for fd in reversed(acquired_fds):
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                except Exception:
-                    pass
-                try:
-                    os.close(fd)
-                except Exception:
-                    pass
-            for lock in reversed(acquired_thread):
-                try:
-                    lock.release()
-                except Exception:
-                    pass
 
 
 _DEFAULT_WRITE_RESOURCES: Dict[str, List[str]] = {

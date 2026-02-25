@@ -119,10 +119,19 @@ class OpusReviewConfig:
 
 
 @dataclass
-class JanitorParallelConfig:
+class CoreParallelConfig:
     enabled: bool = True
     llm_workers: int = 4
     task_workers: Dict[str, int] = field(default_factory=dict)
+    lifecycle_prepass_workers: int = 3
+    lock_enforcement_enabled: bool = True
+    lock_wait_seconds: int = 120
+    lock_require_registration: bool = True
+
+
+@dataclass
+class CoreConfig:
+    parallel: CoreParallelConfig = field(default_factory=CoreParallelConfig)
 
 
 @dataclass
@@ -142,7 +151,6 @@ class JanitorConfig:
     opus_review: OpusReviewConfig = field(default_factory=OpusReviewConfig)
     dedup: DedupConfig = field(default_factory=DedupConfig)
     contradiction: ContradictionConfig = field(default_factory=ContradictionConfig)
-    parallel: JanitorParallelConfig = field(default_factory=JanitorParallelConfig)
 
 
 @dataclass
@@ -401,6 +409,7 @@ class AdapterConfig:
 @dataclass
 class MemoryConfig:
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
+    core: CoreConfig = field(default_factory=CoreConfig)
     systems: SystemsConfig = field(default_factory=SystemsConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
@@ -589,8 +598,9 @@ def _load_config_inner() -> MemoryConfig:
         model=config_data.get('janitor', {}).get('opus_review', {}).get('model', models.deep_reasoning)
     )
 
-    janitor_parallel_data = config_data.get('janitor', {}).get('parallel', {})
-    raw_task_workers = janitor_parallel_data.get('task_workers', janitor_parallel_data.get('taskWorkers', {}))
+    core_parallel_data = config_data.get('core', {}).get('parallel', {})
+    parallel_data = core_parallel_data if isinstance(core_parallel_data, dict) else {}
+    raw_task_workers = parallel_data.get('task_workers', parallel_data.get('taskWorkers', {}))
     task_workers: Dict[str, int] = {}
     if isinstance(raw_task_workers, dict):
         for key, value in raw_task_workers.items():
@@ -598,11 +608,28 @@ def _load_config_inner() -> MemoryConfig:
                 task_workers[str(key)] = max(1, int(value))
             except Exception:
                 continue
-    janitor_parallel = JanitorParallelConfig(
-        enabled=bool(janitor_parallel_data.get('enabled', True)),
-        llm_workers=max(1, int(janitor_parallel_data.get('llm_workers', janitor_parallel_data.get('llmWorkers', 4)))),
+    core_parallel = CoreParallelConfig(
+        enabled=bool(parallel_data.get('enabled', True)),
+        llm_workers=max(1, int(parallel_data.get('llm_workers', parallel_data.get('llmWorkers', 4)))),
         task_workers=task_workers,
+        lifecycle_prepass_workers=max(1, int(parallel_data.get(
+            'lifecycle_prepass_workers',
+            parallel_data.get('lifecyclePrepassWorkers', 3),
+        ))),
+        lock_enforcement_enabled=bool(parallel_data.get(
+            'lock_enforcement_enabled',
+            parallel_data.get('lockEnforcementEnabled', True),
+        )),
+        lock_wait_seconds=max(1, int(parallel_data.get(
+            'lock_wait_seconds',
+            parallel_data.get('lockWaitSeconds', 120),
+        ))),
+        lock_require_registration=bool(parallel_data.get(
+            'lock_require_registration',
+            parallel_data.get('lockRequireRegistration', True),
+        )),
     )
+    core_cfg = CoreConfig(parallel=core_parallel)
     
     janitor = JanitorConfig(
         enabled=config_data.get('janitor', {}).get('enabled', True),
@@ -635,7 +662,6 @@ def _load_config_inner() -> MemoryConfig:
         opus_review=opus_review,
         dedup=dedup,
         contradiction=contradiction,
-        parallel=janitor_parallel,
     )
     
     retrieval_data = config_data.get('retrieval', {})
@@ -870,6 +896,7 @@ def _load_config_inner() -> MemoryConfig:
 
     _config = MemoryConfig(
         adapter=adapter,
+        core=core_cfg,
         systems=systems,
         models=models,
         capture=capture,
