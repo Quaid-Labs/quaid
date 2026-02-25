@@ -9,6 +9,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -335,6 +336,7 @@ class JanitorMetrics:
     """Track timing and performance metrics."""
     
     def __init__(self):
+        self._lock = threading.Lock()
         self.start_time = time.time()
         self.task_times = {}
         self.task_meta = {}
@@ -345,20 +347,22 @@ class JanitorMetrics:
         self.warnings = []
     
     def start_task(self, task_name: str):
-        self.task_times[task_name] = {"start": time.time(), "end": None}
-        self.task_meta[task_name] = {
-            "llm_calls": 0,
-            "llm_time_seconds": 0.0,
-            "errors": 0,
-            "warnings": 0,
-        }
-        self.current_task = task_name
+        with self._lock:
+            self.task_times[task_name] = {"start": time.time(), "end": None}
+            self.task_meta[task_name] = {
+                "llm_calls": 0,
+                "llm_time_seconds": 0.0,
+                "errors": 0,
+                "warnings": 0,
+            }
+            self.current_task = task_name
     
     def end_task(self, task_name: str):
-        if task_name in self.task_times:
-            self.task_times[task_name]["end"] = time.time()
-        if self.current_task == task_name:
-            self.current_task = None
+        with self._lock:
+            if task_name in self.task_times:
+                self.task_times[task_name]["end"] = time.time()
+            if self.current_task == task_name:
+                self.current_task = None
     
     def task_duration(self, task_name: str) -> float:
         if task_name in self.task_times and self.task_times[task_name]["end"]:
@@ -369,32 +373,50 @@ class JanitorMetrics:
         return time.time() - self.start_time
     
     def add_llm_call(self, duration: float):
-        self.llm_calls += 1
-        self.llm_time += duration
-        if self.current_task and self.current_task in self.task_meta:
-            self.task_meta[self.current_task]["llm_calls"] += 1
-            self.task_meta[self.current_task]["llm_time_seconds"] += float(duration or 0.0)
+        with self._lock:
+            self.llm_calls += 1
+            self.llm_time += duration
+            if self.current_task and self.current_task in self.task_meta:
+                self.task_meta[self.current_task]["llm_calls"] += 1
+                self.task_meta[self.current_task]["llm_time_seconds"] += float(duration or 0.0)
     
     def add_error(self, error: str):
-        self.errors.append({"time": datetime.now().isoformat(), "error": error})
-        if self.current_task and self.current_task in self.task_meta:
-            self.task_meta[self.current_task]["errors"] += 1
+        with self._lock:
+            self.errors.append({"time": datetime.now().isoformat(), "error": error})
+            if self.current_task and self.current_task in self.task_meta:
+                self.task_meta[self.current_task]["errors"] += 1
 
     def add_warning(self, warning: str):
-        self.warnings.append({"time": datetime.now().isoformat(), "warning": warning})
-        if self.current_task and self.current_task in self.task_meta:
-            self.task_meta[self.current_task]["warnings"] += 1
+        with self._lock:
+            self.warnings.append({"time": datetime.now().isoformat(), "warning": warning})
+            if self.current_task and self.current_task in self.task_meta:
+                self.task_meta[self.current_task]["warnings"] += 1
 
     @property
     def has_errors(self) -> bool:
-        return len(self.errors) > 0
+        with self._lock:
+            return len(self.errors) > 0
 
     def summary(self) -> Dict[str, Any]:
+        with self._lock:
+            task_times = dict(self.task_times)
+            task_meta = {k: dict(v) for k, v in self.task_meta.items()}
+            llm_calls = self.llm_calls
+            llm_time = self.llm_time
+            errors = list(self.errors)
+            warnings = list(self.warnings)
+
         task_durations = {
-            name: round(self.task_duration(name), 2) for name in self.task_times
+            name: round(
+                (
+                    (meta.get("end") or time.time()) - float(meta.get("start") or 0.0)
+                ) if meta.get("start") else 0.0,
+                2,
+            )
+            for name, meta in task_times.items()
         }
         task_metrics = {}
-        for name, meta in self.task_meta.items():
+        for name, meta in task_meta.items():
             task_metrics[name] = {
                 "duration_seconds": task_durations.get(name, 0.0),
                 "llm_calls": int(meta.get("llm_calls", 0) or 0),
@@ -406,12 +428,12 @@ class JanitorMetrics:
             "total_duration_seconds": round(self.total_duration(), 2),
             "task_durations": task_durations,
             "task_metrics": task_metrics,
-            "llm_calls": self.llm_calls,
-            "llm_time_seconds": round(self.llm_time, 2),
-            "errors": len(self.errors),
-            "error_details": self.errors[-5:] if self.errors else [],  # Last 5 errors
-            "warnings": len(self.warnings),
-            "warning_details": self.warnings[-10:] if self.warnings else [],
+            "llm_calls": llm_calls,
+            "llm_time_seconds": round(llm_time, 2),
+            "errors": len(errors),
+            "error_details": errors[-5:] if errors else [],  # Last 5 errors
+            "warnings": len(warnings),
+            "warning_details": warnings[-10:] if warnings else [],
         }
 
 
