@@ -23,10 +23,9 @@ import logging
 import os
 import re
 import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
@@ -131,16 +130,6 @@ def _get_journal_config():
         return get_config().docs.journal
     except Exception:
         return None
-
-
-def _get_llm_workers() -> int:
-    """Get janitor LLM parallel worker count."""
-    try:
-        cfg = get_config()
-        workers = int(getattr(cfg.janitor.parallel, "llm_workers", 4) or 4)
-        return max(1, workers)
-    except Exception:
-        return 4
 
 
 def _get_snippet_review_model() -> str:
@@ -1136,8 +1125,12 @@ def apply_decisions(
 # Main entry points
 # =============================================================================
 
-def run_journal_distillation(dry_run: bool = True,
-                              force_distill: bool = False) -> Dict[str, Any]:
+def run_journal_distillation(
+    dry_run: bool = True,
+    force_distill: bool = False,
+    parallel_map: Optional[Callable[..., List[Any]]] = None,
+    llm_workers: Optional[int] = None,
+) -> Dict[str, Any]:
     """Main entry point for janitor Task 1d: Journal Distillation.
 
     Reads journal entries, synthesizes themes via Opus, and updates core markdown.
@@ -1210,7 +1203,7 @@ def run_journal_distillation(dry_run: bool = True,
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
     review_model = _get_snippet_review_model()
-    worker_count = min(_get_llm_workers(), len(work_items))
+    worker_count = min(max(1, int(llm_workers or 1)), len(work_items))
     print(
         f"  Calling review model for distillation across {len(work_items)} files "
         f"({review_model}, workers={worker_count})..."
@@ -1232,14 +1225,22 @@ def run_journal_distillation(dry_run: bool = True,
         return {"filename": filename, "duration": duration, "result": result}
 
     distill_results: Dict[str, Dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_map = {executor.submit(_distill_file, item): item["filename"] for item in work_items}
-        for fut in as_completed(future_map):
-            filename = future_map[fut]
-            try:
-                distill_results[filename] = fut.result()
-            except Exception as exc:
-                distill_results[filename] = {"filename": filename, "error": f"Distillation failed for {filename}: {exc}"}
+    if parallel_map and worker_count > 1:
+        try:
+            mapped = parallel_map(work_items, _distill_file, max_workers=worker_count)
+            for res in mapped:
+                filename = str((res or {}).get("filename") or "").strip()
+                if filename:
+                    distill_results[filename] = res
+        except Exception as exc:
+            all_errors.append(f"Parallel distillation dispatch failed: {exc}")
+            for item in work_items:
+                res = _distill_file(item)
+                distill_results[item["filename"]] = res
+    else:
+        for item in work_items:
+            res = _distill_file(item)
+            distill_results[item["filename"]] = res
 
     for item in work_items:
         filename = item["filename"]
@@ -1302,7 +1303,11 @@ def run_journal_distillation(dry_run: bool = True,
     }
 
 
-def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
+def run_soul_snippets_review(
+    dry_run: bool = True,
+    parallel_map: Optional[Callable[..., List[Any]]] = None,
+    llm_workers: Optional[int] = None,
+) -> Dict[str, Any]:
     """Nightly snippet review: read *.snippets.md → Opus FOLD/REWRITE/DISCARD → update core files.
 
     This is the fast-path complement to journal distillation. Snippets are bullet-point
@@ -1358,7 +1363,7 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
     review_model = _get_snippet_review_model()
-    worker_count = min(_get_llm_workers(), len(all_snippets))
+    worker_count = min(max(1, int(llm_workers or 1)), len(all_snippets))
     print(
         f"  Calling review model for snippet review across {len(all_snippets)} files "
         f"({review_model}, workers={worker_count})..."
@@ -1382,17 +1387,25 @@ def run_soul_snippets_review(dry_run: bool = True) -> Dict[str, Any]:
         return {"filename": filename, "duration": duration, "decisions": decisions}
 
     review_results: Dict[str, Dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_map = {
-            executor.submit(_review_file, filename, payload): filename
-            for filename, payload in all_snippets.items()
-        }
-        for fut in as_completed(future_map):
-            filename = future_map[fut]
-            try:
-                review_results[filename] = fut.result()
-            except Exception as exc:
-                review_results[filename] = {"filename": filename, "error": f"Snippet review failed for {filename}: {exc}"}
+    review_items = list(all_snippets.items())
+    if parallel_map and worker_count > 1:
+        def _review_item(item: Tuple[str, Dict[str, Any]]) -> Dict[str, Any]:
+            filename, payload = item
+            return _review_file(filename, payload)
+
+        try:
+            mapped = parallel_map(review_items, _review_item, max_workers=worker_count)
+            for res in mapped:
+                filename = str((res or {}).get("filename") or "").strip()
+                if filename:
+                    review_results[filename] = res
+        except Exception as exc:
+            stats_err = f"Parallel snippet review dispatch failed: {exc}"
+            for filename in all_snippets:
+                review_results[filename] = {"filename": filename, "error": stats_err}
+    else:
+        for filename, payload in review_items:
+            review_results[filename] = _review_file(filename, payload)
 
     # Backup before modification
     if not dry_run:
@@ -1434,7 +1447,11 @@ def register_lifecycle_routines(registry, result_factory) -> None:
     def _run_snippets_review(ctx):
         result = result_factory()
         try:
-            snippets_result = run_soul_snippets_review(dry_run=ctx.dry_run)
+            snippets_result = run_soul_snippets_review(
+                dry_run=ctx.dry_run,
+                parallel_map=ctx.parallel_map,
+                llm_workers=int((ctx.options or {}).get("llm_workers", 1) or 1),
+            )
             result.metrics["snippets_folded"] = int(snippets_result.get("folded", 0))
             result.metrics["snippets_rewritten"] = int(snippets_result.get("rewritten", 0))
             result.metrics["snippets_discarded"] = int(snippets_result.get("discarded", 0))
@@ -1450,6 +1467,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             journal_result = run_journal_distillation(
                 dry_run=ctx.dry_run,
                 force_distill=ctx.force_distill,
+                parallel_map=ctx.parallel_map,
+                llm_workers=int((ctx.options or {}).get("llm_workers", 1) or 1),
             )
             result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
             result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
