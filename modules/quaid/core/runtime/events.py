@@ -99,6 +99,14 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
         "delivery_mode": "active",
     },
     {
+        "name": "session.ingest_log",
+        "description": "Index lifecycle session transcript into datastore-owned session log RAG.",
+        "fireable": True,
+        "processable": True,
+        "listenable": True,
+        "delivery_mode": "active",
+    },
+    {
         "name": "janitor.run_completed",
         "description": "Process janitor completion payload and queue user-facing notifications.",
         "fireable": True,
@@ -237,6 +245,41 @@ def _handle_docs_ingest_transcript(event: Event) -> Dict[str, Any]:
         return {"status": "failed", "error": str(e)}
 
 
+def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    session_id = str(payload.get("session_id") or "").strip()
+    owner_id = str(payload.get("owner_id") or "default").strip() or "default"
+    label = str(payload.get("label") or "unknown").strip() or "unknown"
+    session_file = payload.get("session_file")
+    transcript_path = payload.get("transcript_path")
+    message_count = int(payload.get("message_count") or 0)
+    topic_hint = str(payload.get("topic_hint") or "").strip()
+
+    if not session_id:
+        return {"status": "failed", "error": "payload.session_id is required"}
+
+    try:
+        session_ingest_mod = sys.modules.get("session_logs_ingest")
+        if session_ingest_mod is not None and hasattr(session_ingest_mod, "_run"):
+            _session_ingest_run = session_ingest_mod._run
+        else:
+            from ingest.session_logs_ingest import _run as _session_ingest_run
+        result = _session_ingest_run(
+            session_id=session_id,
+            owner_id=owner_id,
+            label=label,
+            session_file=str(session_file) if session_file else None,
+            transcript_path=str(transcript_path) if transcript_path else None,
+            message_count=message_count,
+            topic_hint=topic_hint,
+        )
+        if isinstance(result, dict) and str(result.get("status") or "").lower() in {"failed", "error"}:
+            return {"status": "failed", "result": result}
+        return {"status": "processed", "result": result}
+    except Exception as e:  # pragma: no cover
+        return {"status": "failed", "error": str(e)}
+
+
 def _handle_janitor_run_completed(event: Event) -> Dict[str, Any]:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
@@ -276,6 +319,7 @@ EVENT_HANDLERS: Dict[str, EventHandler] = {
     "notification.delayed": _handle_delayed_notification,
     "memory.force_compaction": _handle_force_compaction,
     "docs.ingest_transcript": _handle_docs_ingest_transcript,
+    "session.ingest_log": _handle_session_ingest_log,
     "janitor.run_completed": _handle_janitor_run_completed,
     "session.new": _handle_session_lifecycle,
     "session.reset": _handle_session_lifecycle,
