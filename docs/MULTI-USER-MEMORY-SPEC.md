@@ -244,11 +244,11 @@ Proposed config blocks:
 - `privacy.default_scope_group`
 - `privacy.enforce_strict_filters` (default true)
 
-Migration toggle:
+Runtime mode toggle:
 
-- Start with `single_user` default for backward compatibility.
+- Start with `single_user` default until multi-user policies are enabled.
 
-## 12) Migration Plan (No Code Yet)
+## 12) Implementation Plan
 
 Phase 0: Spec + invariants
 - finalize contracts and schema
