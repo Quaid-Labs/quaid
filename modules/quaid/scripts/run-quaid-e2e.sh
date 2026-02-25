@@ -30,7 +30,7 @@ RUN_RESILIENCE=false
 RUN_JANITOR_STRESS=false
 RUN_PREBENCH_GUARDS=false
 RUN_JANITOR_PARALLEL_BENCH=false
-JANITOR_TIMEOUT_SECONDS=240
+JANITOR_TIMEOUT_SECONDS=480
 JANITOR_MODE="apply"
 NOTIFY_LEVEL="debug"
 LIVE_TIMEOUT_WAIT_SECONDS=90
@@ -2905,9 +2905,35 @@ try:
     if env.get("PYTHONPATH"):
         py_parts.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = ":".join(py_parts)
+    configured_parallel = {
+        "enabled": None,
+        "llmWorkers": None,
+        "lifecyclePrepassWorkers": None,
+    }
     if janitor_parallel_bench:
+        cfg_path = os.path.join(ws, "config", "memory.json")
+        cfg = {}
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+        janitor_cfg = cfg.setdefault("janitor", {})
+        parallel_cfg = janitor_cfg.setdefault("parallel", {})
+        llm_workers = int(os.environ.get("QUAID_E2E_JPB_LLM_WORKERS", "4") or "4")
+        prepass_workers = int(os.environ.get("QUAID_E2E_JPB_PREPASS_WORKERS", "3") or "3")
+        parallel_cfg["enabled"] = True
+        parallel_cfg["llmWorkers"] = max(1, llm_workers)
+        parallel_cfg["lifecyclePrepassWorkers"] = max(1, prepass_workers)
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+        configured_parallel = {
+            "enabled": True,
+            "llmWorkers": max(1, llm_workers),
+            "lifecyclePrepassWorkers": max(1, prepass_workers),
+        }
         env["QUAID_BENCHMARK_MODE"] = "1"
-        env.setdefault("QUAID_JANITOR_LLM_PARALLELISM", "2")
     subprocess.run(
         cmd,
         cwd=ws,
@@ -3183,6 +3209,7 @@ if janitor_parallel_bench:
         "janitor_stats_changes": changes_applied,
         "janitor_stats_errors": error_details,
         "janitor_stats_warnings": warning_details,
+        "configured_parallel": configured_parallel,
         "thresholds": {
             "max_errors": _env_int("QUAID_E2E_JPB_MAX_ERRORS", 0),
             "max_warnings": _env_int("QUAID_E2E_JPB_MAX_WARNINGS", -1),

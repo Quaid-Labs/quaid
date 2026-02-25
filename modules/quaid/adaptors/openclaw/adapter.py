@@ -248,7 +248,7 @@ class OpenClawAdapter(QuaidAdapter):
             "PROJECT.md",
         ]
 
-    def get_llm_provider(self):
+    def get_llm_provider(self, model_tier: Optional[str] = None):
         port, token = self._get_gateway_auth()
         return GatewayLLMProvider(port=port, token=token)
 

@@ -207,7 +207,7 @@ class QuaidAdapter(abc.ABC):
     # ---- Providers ----
 
     @abc.abstractmethod
-    def get_llm_provider(self) -> "LLMProvider":
+    def get_llm_provider(self, model_tier: Optional[str] = None) -> "LLMProvider":
         """Produce the configured LLM provider for this platform.
 
         Reads user selection from config if multiple providers available.
@@ -302,14 +302,21 @@ class StandaloneAdapter(QuaidAdapter):
     def filter_system_messages(self, text: str) -> bool:
         return False
 
-    def get_llm_provider(self):
+    def get_llm_provider(self, model_tier: Optional[str] = None):
         from lib.providers import AnthropicLLMProvider, ClaudeCodeLLMProvider
 
-        # Resolve provider from config — models.llmProvider MUST be set.
-        # No ENV sniffing, no fallbacks. Explicit config only.
+        # Resolve provider from config with tier-aware overrides.
         from config import get_config
         cfg = get_config()
         provider_id = cfg.models.llm_provider
+        if model_tier == "fast":
+            fast_provider = getattr(cfg.models, "fast_reasoning_provider", "default")
+            if fast_provider and fast_provider != "default":
+                provider_id = fast_provider
+        elif model_tier == "deep":
+            deep_provider = getattr(cfg.models, "deep_reasoning_provider", "default")
+            if deep_provider and deep_provider != "default":
+                provider_id = deep_provider
 
         if not provider_id or provider_id == "default":
             if is_fail_hard_enabled():
@@ -423,7 +430,7 @@ class TestAdapter(StandaloneAdapter):
         from lib.providers import TestLLMProvider
         self._llm = TestLLMProvider(responses)
 
-    def get_llm_provider(self):
+    def get_llm_provider(self, model_tier: Optional[str] = None):
         return self._llm
 
     @property

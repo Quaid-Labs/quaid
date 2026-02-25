@@ -206,8 +206,8 @@ class TestClaudeCodeLLMProvider:
             idx = cmd.index("--model")
             assert cmd[idx + 1] == "opus"
 
-    def test_llm_call_returns_none_text_on_failure(self):
-        """Failed claude CLI returns LLMResult with text=None."""
+    def test_llm_call_raises_on_cli_failure(self):
+        """Failed claude CLI should raise instead of returning a soft-null response."""
         p = ClaudeCodeLLMProvider()
         mock_result = MagicMock()
         mock_result.returncode = 1
@@ -215,10 +215,10 @@ class TestClaudeCodeLLMProvider:
         mock_result.stderr = "error"
 
         with patch("lib.providers.subprocess.run", return_value=mock_result):
-            result = p.llm_call(
-                [{"role": "user", "content": "hi"}],
-            )
-            assert result.text is None
+            with pytest.raises(RuntimeError, match="Claude Code failed"):
+                p.llm_call(
+                    [{"role": "user", "content": "hi"}],
+                )
 
     def test_llm_call_raises_on_timeout(self):
         """Timeout should propagate."""

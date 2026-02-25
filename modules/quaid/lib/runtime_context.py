@@ -47,8 +47,8 @@ def get_bootstrap_markdown_globs() -> List[str]:
         return []
 
 
-def get_llm_provider() -> "LLMProvider":
-    return get_adapter().get_llm_provider()
+def get_llm_provider(model_tier: Optional[str] = None) -> "LLMProvider":
+    return get_adapter().get_llm_provider(model_tier=model_tier)
 
 
 def parse_session_jsonl(path: Path) -> str:
