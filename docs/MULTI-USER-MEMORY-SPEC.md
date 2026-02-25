@@ -255,16 +255,22 @@ Phase 0: Spec + invariants
 - define policy matrix tests
 
 Phase 1: Schema introduction
+- status: implemented
 - add identity/source tables + nullable columns
 - backfill existing records to default synthetic entity/source
 
 Phase 2: Write-path tagging
+- status: partially implemented
 - adaptor -> core -> ingest -> datastore carries identity context
-- all new writes include entity/source attribution
+- implemented now: session lifecycle log ingest metadata flow (`source_channel`, `conversation_id`, participants)
+- implemented now: extraction pipeline carries source attribution (`source_channel`, `source_conversation_id`, `source_author_id`, actor/subject IDs)
+- remaining: robust canonical identity resolution for actor/subject assignment (policy-driven, not heuristic-only)
 
 Phase 3: Read-path mux
+- status: partially implemented
 - retrieval APIs accept viewer/source/participants
-- apply privacy filters + rerank fusion
+- implemented now: scoped filters in recall API/MCP (`actor_id`, `subject_entity_id`, `source_*`, `include_unscoped`)
+- remaining: viewer-aware privacy policy gates and participant-aware ranking policy
 
 Phase 4: Janitor identity maintenance
 - register datastore-owned identity maintenance routine(s)
@@ -327,4 +333,3 @@ Mitigation: strict normalized ingest envelope with required/optional fields.
 2. Write an ADR for identity model and privacy decision matrix.
 3. Define minimal v1 scope for post-benchmark implementation cut.
 4. Design `multi_user_agentlife` benchmark harness in parallel with implementation prep.
-

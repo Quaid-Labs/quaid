@@ -990,6 +990,11 @@ async function callExtractPipeline(opts: {
   owner: string;
   label: string;
   sessionId?: string;
+  actorId?: string;
+  subjectEntityId?: string;
+  sourceChannel?: string;
+  sourceConversationId?: string;
+  sourceAuthorId?: string;
   writeSnippets: boolean;
   writeJournal: boolean;
 }): Promise<any> {
@@ -1003,6 +1008,21 @@ async function callExtractPipeline(opts: {
   ];
   if (opts.sessionId) {
     args.push("--session-id", opts.sessionId);
+  }
+  if (opts.actorId) {
+    args.push("--actor-id", opts.actorId);
+  }
+  if (opts.subjectEntityId) {
+    args.push("--subject-entity-id", opts.subjectEntityId);
+  }
+  if (opts.sourceChannel) {
+    args.push("--source-channel", opts.sourceChannel);
+  }
+  if (opts.sourceConversationId) {
+    args.push("--source-conversation-id", opts.sourceConversationId);
+  }
+  if (opts.sourceAuthorId) {
+    args.push("--source-author-id", opts.sourceAuthorId);
   }
   if (!opts.writeSnippets) {
     args.push("--no-snippets");
@@ -1366,6 +1386,66 @@ function getMessageText(msg: any): string {
   return "";
 }
 
+function normalizeSourceChannel(value: unknown): string | undefined {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw.includes("telegram")) return "telegram";
+  if (raw.includes("discord")) return "discord";
+  if (raw.includes("slack")) return "slack";
+  if (raw.includes("signal")) return "signal";
+  if (raw.includes("whatsapp")) return "whatsapp";
+  if (raw.includes("dm") || raw.includes("direct")) return "dm";
+  return raw;
+}
+
+function parseUserMessageEnvelope(text: string): { channel?: string; author?: string } {
+  const m = String(text || "").match(/^\[(Telegram|WhatsApp|Discord|Signal|Slack|DM)\s+([^\]]+)\]\s*/i);
+  if (!m) return {};
+  return {
+    channel: normalizeSourceChannel(m[1]),
+    author: String(m[2] || "").trim() || undefined,
+  };
+}
+
+function deriveLifecycleSourceContext(event: any, ctx: any, messages: any[], sessionId?: string): {
+  sourceChannel?: string;
+  conversationId?: string;
+  sourceAuthorId?: string;
+  participantIds: string[];
+  participantAliases: Record<string, string>;
+} {
+  const participantIds = new Set<string>();
+  const participantAliases: Record<string, string> = {};
+  let sourceChannel =
+    normalizeSourceChannel(event?.sourceChannel ?? event?.channel ?? event?.source ?? ctx?.sourceChannel ?? ctx?.channel);
+  const conversationId = String(
+    event?.conversationId ?? event?.threadId ?? event?.chatId ?? ctx?.conversationId ?? ctx?.threadId ?? sessionId ?? ""
+  ).trim() || undefined;
+  let sourceAuthorId =
+    String(event?.authorId ?? event?.speaker ?? ctx?.authorId ?? ctx?.speaker ?? "").trim() || undefined;
+
+  for (const m of (messages || [])) {
+    if (!m || m.role !== "user") continue;
+    const text = getMessageText(m);
+    const meta = parseUserMessageEnvelope(text);
+    if (!sourceChannel && meta.channel) sourceChannel = meta.channel;
+    const msgAuthor = String(m?.authorId || m?.speaker || meta.author || "").trim();
+    if (!sourceAuthorId && msgAuthor) sourceAuthorId = msgAuthor;
+    if (msgAuthor) participantIds.add(msgAuthor);
+  }
+
+  if (sourceAuthorId) participantIds.add(sourceAuthorId);
+  if (conversationId) participantIds.add(`conversation:${conversationId}`);
+
+  return {
+    sourceChannel,
+    conversationId,
+    sourceAuthorId,
+    participantIds: Array.from(participantIds),
+    participantAliases,
+  };
+}
+
 function deriveTopicHint(messages: any[]): string {
   for (const m of messages || []) {
     if (m?.role !== "user") { continue; }
@@ -1453,6 +1533,10 @@ async function updateSessionLogsFromLifecycle(opts: {
   label: string;
   sessionFile?: string;
   transcriptPath?: string;
+  sourceChannel?: string;
+  conversationId?: string;
+  participantIds?: string[];
+  participantAliases?: Record<string, string>;
   messageCount?: number;
   topicHint?: string;
 }): Promise<void> {
@@ -1473,6 +1557,10 @@ async function updateSessionLogsFromLifecycle(opts: {
         label: String(opts.label || "unknown"),
         session_file: opts.sessionFile || null,
         transcript_path: opts.transcriptPath || null,
+        source_channel: opts.sourceChannel || null,
+        conversation_id: opts.conversationId || null,
+        participant_ids: Array.isArray(opts.participantIds) ? opts.participantIds : [],
+        participant_aliases: opts.participantAliases || {},
         message_count: Number(opts.messageCount || 0),
         topic_hint: String(opts.topicHint || "").slice(0, 140),
       },
@@ -3205,11 +3293,15 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const journalConfig = getMemoryConfig().docs?.journal || {};
       const journalEnabled = isSystemEnabled("journal") && journalConfig.enabled !== false;
       const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
+      const sourceContext = deriveLifecycleSourceContext(null, null, messages, sessionId);
       const extracted = await callExtractPipeline({
         transcript: transcriptForExtraction,
         owner: resolveOwner(),
         label: resolveExtractionTrigger(label),
         sessionId,
+        sourceChannel: sourceContext.sourceChannel,
+        sourceConversationId: sourceContext.conversationId || sessionId,
+        sourceAuthorId: sourceContext.sourceAuthorId,
         writeSnippets: snippetsEnabled,
         writeJournal: journalEnabled,
       });
@@ -3437,11 +3529,16 @@ notify_memory_extraction(
 
           // Auto-update docs from transcript (non-fatal)
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
+          const sourceContext = deriveLifecycleSourceContext(event, ctx, conversationMessages, uniqueSessionId);
           if (uniqueSessionId) {
             await updateSessionLogsFromLifecycle({
               sessionId: uniqueSessionId,
               label: "Compaction",
               sessionFile: typeof event.sessionFile === "string" ? event.sessionFile : undefined,
+              sourceChannel: sourceContext.sourceChannel,
+              conversationId: sourceContext.conversationId,
+              participantIds: sourceContext.participantIds,
+              participantAliases: sourceContext.participantAliases,
               messageCount: conversationMessages.length,
               topicHint: deriveTopicHint(conversationMessages),
             });
@@ -3530,10 +3627,15 @@ notify_memory_extraction(
           if (uniqueSessionId) {
             const normalizedReason = String(reason || "").toLowerCase();
             const resetLabel = normalizedReason.includes("new") ? "New" : "Reset";
+            const sourceContext = deriveLifecycleSourceContext(event, ctx, conversationMessages, uniqueSessionId);
             await updateSessionLogsFromLifecycle({
               sessionId: uniqueSessionId,
               label: resetLabel,
               sessionFile: typeof event.sessionFile === "string" ? event.sessionFile : undefined,
+              sourceChannel: sourceContext.sourceChannel,
+              conversationId: sourceContext.conversationId,
+              participantIds: sourceContext.participantIds,
+              participantAliases: sourceContext.participantAliases,
               messageCount: conversationMessages.length,
               topicHint: deriveTopicHint(conversationMessages),
             });

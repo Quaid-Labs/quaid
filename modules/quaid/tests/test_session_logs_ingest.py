@@ -33,6 +33,10 @@ def test_ingest_from_transcript_path(monkeypatch, tmp_path):
         owner_id="quaid",
         label="Compaction",
         transcript_path=str(transcript),
+        source_channel="telegram",
+        conversation_id="chat-42",
+        participant_ids=["user:owner", "agent:quaid"],
+        participant_aliases={"ownerAlias": "user:owner"},
         message_count=2,
         topic_hint="hello",
     )
@@ -43,3 +47,7 @@ def test_ingest_from_transcript_path(monkeypatch, tmp_path):
     assert "sess-a" in captured["args"]
     assert "--owner" in captured["args"]
     assert "quaid" in captured["args"]
+    assert "--source-channel" in captured["args"]
+    assert "telegram" in captured["args"]
+    assert "--conversation-id" in captured["args"]
+    assert "chat-42" in captured["args"]

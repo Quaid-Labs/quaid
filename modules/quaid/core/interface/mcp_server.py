@@ -144,6 +144,12 @@ def memory_recall(
     use_reranker: bool = True,
     date_from: str = "",
     date_to: str = "",
+    actor_id: str = "",
+    subject_entity_id: str = "",
+    source_channel: str = "",
+    source_conversation_id: str = "",
+    source_author_id: str = "",
+    include_unscoped: bool = True,
 ) -> list:
     """Recall memories matching a natural language query.
 
@@ -180,6 +186,12 @@ def memory_recall(
         or not bool(use_reranker)
         or bool(date_from.strip() if date_from else "")
         or bool(date_to.strip() if date_to else "")
+        or bool(actor_id.strip() if actor_id else "")
+        or bool(subject_entity_id.strip() if subject_entity_id else "")
+        or bool(source_channel.strip() if source_channel else "")
+        or bool(source_conversation_id.strip() if source_conversation_id else "")
+        or bool(source_author_id.strip() if source_author_id else "")
+        or not bool(include_unscoped)
     )
 
     # Fast path for common/default usage: stay on the stable API wrapper.
@@ -201,6 +213,12 @@ def memory_recall(
         use_reranker=bool(use_reranker),
         date_from=(date_from.strip() if date_from else None),
         date_to=(date_to.strip() if date_to else None),
+        actor_id=(actor_id.strip() if actor_id else None),
+        subject_entity_id=(subject_entity_id.strip() if subject_entity_id else None),
+        source_channel=(source_channel.strip().lower() if source_channel else None),
+        source_conversation_id=(source_conversation_id.strip() if source_conversation_id else None),
+        source_author_id=(source_author_id.strip() if source_author_id else None),
+        include_unscoped=bool(include_unscoped),
     )
 
 

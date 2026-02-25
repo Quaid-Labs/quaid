@@ -183,6 +183,11 @@ def extract_from_transcript(
     owner_id: str,
     label: str = "cli",
     session_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
     write_snippets: bool = True,
     write_journal: bool = True,
     dry_run: bool = False,
@@ -346,6 +351,11 @@ def extract_from_transcript(
                 source_id=session_id,
                 owner_id=owner_id,
                 session_id=session_id,
+                actor_id=actor_id,
+                subject_entity_id=subject_entity_id,
+                source_channel=source_channel,
+                source_conversation_id=source_conversation_id,
+                source_author_id=source_author_id,
                 knowledge_type=knowledge_type,
                 keywords=keywords,
                 source_type=source_type,
@@ -492,6 +502,11 @@ def main():
     parser.add_argument("--owner", default=None, help="Owner ID (default: from config)")
     parser.add_argument("--label", default="cli", help="Source label for logging")
     parser.add_argument("--session-id", default=None, help="Optional session ID")
+    parser.add_argument("--actor-id", default=None, help="Optional canonical actor/entity ID")
+    parser.add_argument("--subject-entity-id", default=None, help="Optional canonical subject entity ID")
+    parser.add_argument("--source-channel", default=None, help="Optional source channel (telegram/discord/slack/etc.)")
+    parser.add_argument("--source-conversation-id", default=None, help="Optional source conversation/thread identifier")
+    parser.add_argument("--source-author-id", default=None, help="Optional source author/speaker identifier")
     parser.add_argument("--dry-run", action="store_true", help="Parse and plan but don't store")
     parser.add_argument("--no-snippets", action="store_true", help="Skip writing snippets")
     parser.add_argument("--no-journal", action="store_true", help="Skip writing journal entries")
@@ -550,6 +565,11 @@ def main():
         owner_id=owner_id,
         label=args.label,
         session_id=args.session_id,
+        actor_id=args.actor_id,
+        subject_entity_id=args.subject_entity_id,
+        source_channel=args.source_channel,
+        source_conversation_id=args.source_conversation_id,
+        source_author_id=args.source_author_id,
         write_snippets=not args.no_snippets,
         write_journal=not args.no_journal,
         dry_run=args.dry_run,
