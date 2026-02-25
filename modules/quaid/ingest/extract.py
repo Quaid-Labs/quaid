@@ -183,6 +183,11 @@ def extract_from_transcript(
     owner_id: str,
     label: str = "cli",
     session_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
     write_snippets: bool = True,
     write_journal: bool = True,
     dry_run: bool = False,
@@ -350,6 +355,11 @@ def extract_from_transcript(
                 keywords=keywords,
                 source_type=source_type,
                 is_technical=is_technical,
+                actor_id=actor_id,
+                subject_entity_id=subject_entity_id,
+                source_channel=source_channel,
+                source_conversation_id=source_conversation_id,
+                source_author_id=source_author_id,
             )
 
             if store_result.get("status") == "created":

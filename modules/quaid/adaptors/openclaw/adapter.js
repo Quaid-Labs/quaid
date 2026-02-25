@@ -1526,6 +1526,7 @@ const knowledgeEngine = createKnowledgeEngine({
         const m = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
         if (!m) continue;
         const sourcePath = m[1];
+        const file = sourcePath.split("/").pop() || sourcePath;
         const section = m[2].trim();
         const sim = Number.parseFloat(m[3]) || 0.6;
         const parts = sourcePath.split("/");
