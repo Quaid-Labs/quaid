@@ -1267,16 +1267,19 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # approved facts to active so they're never reprocessed by the pipeline.
         # CRITICAL: Only graduate if memory pipeline completed without errors.
         if task in ("all", "graduate") and not dry_run and _cfg.systems.memory:
-            # In benchmark mode, contradiction merge can create a new pending memory
-            # after the main review stage. Run one same-cycle catch-up review so
-            # graduation validity is evaluated on post-merge state.
-            if _is_benchmark_mode() and task == "all" and memory_pipeline_ok:
-                try:
-                    pending_counts = count_nodes_by_status(graph, ["pending"])
-                    pending_for_catchup = int(pending_counts.get("pending", 0) or 0)
-                except Exception:
-                    pending_for_catchup = 0
-                if pending_for_catchup > 0:
+            try:
+                pre_counts = count_nodes_by_status(graph, ["pending", "approved"])
+                pending_before = int(pre_counts.get("pending", 0) or 0)
+            except Exception as e:
+                pending_before = 0
+                metrics.add_error(f"Pre-graduate status count failed: {e}")
+
+            # In benchmark mode, contradiction merge can create pending memories.
+            # When janitor is driven as staged tasks (benchmark harness), `graduate`
+            # runs in a separate process and must still perform a same-cycle catch-up
+            # review before validating pending/approved invariants.
+            if _is_benchmark_mode() and task in ("all", "graduate") and memory_pipeline_ok:
+                if pending_before > 0:
                     print(
                         "[benchmark] Pending memories remain before graduate; "
                         "running catch-up review pass."
@@ -1308,12 +1311,6 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         memory_pipeline_ok = False
                         print("[benchmark] Catch-up review failed benchmark gate.")
                     metrics.end_task("review_catchup")
-
-            try:
-                pre_counts = count_nodes_by_status(graph, ["pending", "approved"])
-                pending_before = int(pre_counts.get("pending", 0) or 0)
-            except Exception:
-                pending_before = 0
 
             # Hard invariant: in benchmark mode, if pending exists before graduate,
             # review must have actually processed items in this janitor cycle.
