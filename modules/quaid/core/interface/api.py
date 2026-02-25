@@ -14,7 +14,7 @@ Usage:
 
 from typing import Optional, List, Dict, Any
 
-from core.docs.rag import DocsRAG
+from core.lifecycle.datastore_runtime import DocsRAG
 from core.services.memory_service import get_memory_service
 from lib.runtime_context import get_workspace_dir
 

@@ -267,24 +267,36 @@ def _parallel_key(task_name: str) -> str:
 
 
 def _llm_parallel_workers(task_name: str) -> int:
-    """Resolve LLM batch parallelism for a task from env + benchmark defaults.
+    """Resolve LLM batch parallelism for a task from config with optional env overrides.
 
     Precedence:
-    1. QUAID_JANITOR_LLM_PARALLELISM_<TASK>
-    2. QUAID_JANITOR_LLM_PARALLELISM
-    3. benchmark default: 2, non-benchmark default: 1
+    1. QUAID_JANITOR_LLM_PARALLELISM_<TASK> (optional override)
+    2. QUAID_JANITOR_LLM_PARALLELISM (optional override)
+    3. config janitor.parallel.llm_workers_by_task[task]
+    4. config janitor.parallel.llm_workers
     """
+    parallel_cfg = getattr(getattr(_cfg, "janitor", None), "parallel", None)
+    if parallel_cfg is not None and not bool(getattr(parallel_cfg, "enabled", True)):
+        return 1
+
+    cfg_default = int(getattr(parallel_cfg, "llm_workers", 2) or 2) if parallel_cfg else 2
+    cfg_scoped_map = getattr(parallel_cfg, "llm_workers_by_task", {}) if parallel_cfg else {}
+    cfg_scoped = cfg_scoped_map.get(task_name) if isinstance(cfg_scoped_map, dict) else None
+
     scoped_key = _parallel_key(task_name)
     scoped = os.environ.get(f"QUAID_JANITOR_LLM_PARALLELISM_{scoped_key}", "").strip()
     global_raw = os.environ.get("QUAID_JANITOR_LLM_PARALLELISM", "").strip()
     raw = scoped or global_raw
-    default_workers = 2 if _is_benchmark_mode() else 1
+    if cfg_scoped is not None:
+        default_workers = int(cfg_scoped)
+    else:
+        default_workers = cfg_default
     if not raw:
-        return default_workers
+        return max(1, min(default_workers, MAX_PARALLEL_WORKERS))
     try:
         value = int(raw)
     except Exception:
-        return default_workers
+        return max(1, min(default_workers, MAX_PARALLEL_WORKERS))
     return max(1, min(value, MAX_PARALLEL_WORKERS))
 
 

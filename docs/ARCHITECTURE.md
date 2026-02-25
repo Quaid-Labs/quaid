@@ -654,11 +654,11 @@ docs_registry.py find-project path/to/file.py   # Which project owns this file?
 docs_registry.py discover --project myproject    # Auto-discover docs in project dir
 ```
 
-**Doc Auto-Update** (`core/docs/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
+**Doc Auto-Update** (`datastore/docsdb/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
 1. **Low-reasoning pre-filter**: Classifies git diffs as "trivial" (whitespace, comments) or "significant" (logic changes). Trivial diffs skip the expensive update step.
 2. **High-reasoning update**: Reads the stale doc + relevant diffs, proposes targeted edits.
 
-**RAG Search** (`core/docs/rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
+**RAG Search** (`datastore/docsdb/rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
 
 **Project Updater** (`project_updater.py`): Processes file change events and refreshes project documentation. Integrates with Claude Code hooks (PostToolUse tracks edited files, PreCompact stages update events).
 
@@ -847,7 +847,7 @@ core/interface/mcp_server.py (FastMCP)
     +-- memory_forget   -> core/interface/api.py
     +-- memory_create_edge -> core/interface/api.py
     +-- memory_stats    -> core/interface/api.py
-    +-- projects_search -> core/docs/rag.py
+    +-- projects_search -> datastore/docsdb/rag.py
 ```
 
 ### Tools

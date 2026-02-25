@@ -140,9 +140,9 @@ def build_default_registry() -> LifecycleRegistry:
 
     module_specs: List[tuple[str, List[str]]] = [
         ("adaptors.openclaw.maintenance", ["workspace"]),
-        ("core.docs.updater", ["docs_staleness", "docs_cleanup"]),
-        ("core.lifecycle.soul_snippets", ["snippets", "journal"]),
-        ("core.docs.rag", ["rag"]),
+        ("datastore.docsdb.updater", ["docs_staleness", "docs_cleanup"]),
+        ("datastore.docsdb.soul_snippets", ["snippets", "journal"]),
+        ("datastore.docsdb.rag", ["rag"]),
         ("datastore.memorydb.maintenance", ["memory_graph_maintenance"]),
         ("datastore.memorydb.memory_graph", ["datastore_cleanup"]),
     ]

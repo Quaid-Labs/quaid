@@ -76,7 +76,7 @@ def _import_mcp_server():
          patch("core.interface.api.create_edge", mock_api.create_edge), \
          patch("core.interface.api.stats", mock_api.stats), \
          patch("core.interface.api.projects_search_docs", mock_api.projects_search_docs), \
-         patch("core.docs.rag.DocsRAG", mock_rag):
+         patch("datastore.docsdb.rag.DocsRAG", mock_rag):
         # Force reimport so mcp_server binds to mocked names
         if "core.interface.mcp_server" in sys.modules:
             del sys.modules["core.interface.mcp_server"]

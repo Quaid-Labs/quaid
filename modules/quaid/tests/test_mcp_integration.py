@@ -280,7 +280,7 @@ class TestMcpDocsSearch:
         graph, db_file = _make_graph(tmp_path)
         mod = _get_mcp_module()
         with _integration_patches(graph), \
-             patch("core.docs.rag.DB_PATH", db_file):
+             patch("datastore.docsdb.rag.DB_PATH", db_file):
             # No docs indexed, should return dict with empty chunks list
             results = mod.projects_search("anything")
             assert isinstance(results, dict)

@@ -16,7 +16,7 @@ from config import get_config
 
 
 def _docs_updater_module():
-    return importlib.import_module("core.docs.updater")
+    return importlib.import_module("datastore.docsdb.updater")
 
 
 def check_staleness():

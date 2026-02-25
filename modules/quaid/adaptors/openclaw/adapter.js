@@ -635,10 +635,10 @@ function maybeForceCompactionAfterTimeout(sessionId) {
     console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
   }
 }
-const DOCS_UPDATER = path.join(WORKSPACE, "plugins/quaid/core/docs/updater.py");
-const DOCS_RAG = path.join(WORKSPACE, "plugins/quaid/core/docs/rag.py");
-const DOCS_REGISTRY = path.join(WORKSPACE, "plugins/quaid/core/docs/registry.py");
-const PROJECT_UPDATER = path.join(WORKSPACE, "plugins/quaid/core/docs/project_updater.py");
+const DOCS_UPDATER = path.join(WORKSPACE, "plugins/quaid/datastore/docsdb/updater.py");
+const DOCS_RAG = path.join(WORKSPACE, "plugins/quaid/datastore/docsdb/rag.py");
+const DOCS_REGISTRY = path.join(WORKSPACE, "plugins/quaid/datastore/docsdb/registry.py");
+const PROJECT_UPDATER = path.join(WORKSPACE, "plugins/quaid/datastore/docsdb/project_updater.py");
 const EVENTS_SCRIPT = path.join(WORKSPACE, "plugins/quaid/core/runtime/events.py");
 function _getGatewayCredential(providers) {
   try {
