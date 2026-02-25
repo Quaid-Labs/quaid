@@ -1,9 +1,11 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import datastore.memorydb.maintenance_ops as ops
 
 from datastore.memorydb.maintenance_ops import (
+    JanitorMetrics,
     _llm_parallel_workers,
     _run_llm_batches_parallel,
 )
@@ -73,3 +75,22 @@ def test_run_llm_batches_parallel_preserves_order(monkeypatch):
     out = _run_llm_batches_parallel(batches, "review_pending", runner)
     assert [o["batch_num"] for o in out] == [1, 2, 3, 4]
     assert [o["value"] for o in out] == ["a", "b", "c", "d"]
+
+
+def test_janitor_metrics_thread_safe_counters():
+    metrics = JanitorMetrics()
+    metrics.start_task("parallel")
+
+    def _tick(_):
+        metrics.add_llm_call(0.01)
+        metrics.add_warning("w")
+        return True
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(_tick, range(200)))
+
+    metrics.end_task("parallel")
+    summary = metrics.summary()
+    assert summary["llm_calls"] == 200
+    assert summary["warnings"] == 200
+    assert summary["task_metrics"]["parallel"]["llm_calls"] == 200
