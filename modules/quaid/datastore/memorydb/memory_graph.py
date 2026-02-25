@@ -55,7 +55,7 @@ from lib.embeddings import (
     pack_embedding as _lib_pack_embedding,
     unpack_embedding as _lib_unpack_embedding,
 )
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from core.runtime.worker_pool import run_callables
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.tokens import (
     extract_key_tokens as _lib_extract_key_tokens,
@@ -1139,7 +1139,7 @@ class MemoryGraph:
         """Hybrid search combining semantic + FTS via Reciprocal Rank Fusion.
 
         Uses RRF (k=60) to combine ranked lists from semantic and FTS search.
-        Both searches run concurrently via ThreadPoolExecutor.
+        Both searches run concurrently via the core worker pool.
         Each result also carries a quality_score (cosine similarity from semantic
         search) used for threshold filtering in recall().
         """
@@ -1152,26 +1152,27 @@ class MemoryGraph:
             pass
         VECTOR_WEIGHT, FTS_WEIGHT = _get_fusion_weights(intent)
 
-        # Run semantic and FTS search concurrently
-        semantic_results = []
-        fts_results = []
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            sem_future = executor.submit(
-                self.search_semantic,
-                query, limit=limit*2, types=types, privacy=privacy, owner_id=owner_id,
-                current_session_id=current_session_id, compaction_time=compaction_time
-            )
-            fts_future = executor.submit(
-                self.search_fts, query, limit=limit*2, owner_id=owner_id
-            )
-            try:
-                semantic_results = sem_future.result(timeout=10)
-            except Exception:
-                semantic_results = []
-            try:
-                fts_results = fts_future.result(timeout=10)
-            except Exception:
-                fts_results = []
+        # Run semantic and FTS search concurrently.
+        results = run_callables(
+            [
+                lambda: self.search_semantic(
+                    query,
+                    limit=limit * 2,
+                    types=types,
+                    privacy=privacy,
+                    owner_id=owner_id,
+                    current_session_id=current_session_id,
+                    compaction_time=compaction_time,
+                ),
+                lambda: self.search_fts(query, limit=limit * 2, owner_id=owner_id),
+            ],
+            max_workers=2,
+            pool_name="search-hybrid",
+            timeout_seconds=10.0,
+            return_exceptions=True,
+        )
+        semantic_results = [] if isinstance(results[0], Exception) else results[0]
+        fts_results = [] if isinstance(results[1], Exception) else results[1]
 
         # Build RRF scores
         # Track both RRF rank score (for ordering) and quality score (for thresholding)

@@ -14,7 +14,7 @@ def test_llm_parallel_workers_defaults(monkeypatch):
         ops,
         "_cfg",
         SimpleNamespace(
-            janitor=SimpleNamespace(
+            core=SimpleNamespace(
                 parallel=SimpleNamespace(enabled=True, llm_workers=4, task_workers={})
             )
         ),
@@ -27,7 +27,7 @@ def test_llm_parallel_workers_disabled(monkeypatch):
         ops,
         "_cfg",
         SimpleNamespace(
-            janitor=SimpleNamespace(
+            core=SimpleNamespace(
                 parallel=SimpleNamespace(enabled=False, llm_workers=4, task_workers={})
             )
         ),
@@ -40,7 +40,7 @@ def test_llm_parallel_workers_config_overrides(monkeypatch):
         ops,
         "_cfg",
         SimpleNamespace(
-            janitor=SimpleNamespace(
+            core=SimpleNamespace(
                 parallel=SimpleNamespace(
                     enabled=True,
                     llm_workers=3,
@@ -58,7 +58,7 @@ def test_run_llm_batches_parallel_preserves_order(monkeypatch):
         ops,
         "_cfg",
         SimpleNamespace(
-            janitor=SimpleNamespace(
+            core=SimpleNamespace(
                 parallel=SimpleNamespace(enabled=True, llm_workers=4, task_workers={})
             )
         ),
