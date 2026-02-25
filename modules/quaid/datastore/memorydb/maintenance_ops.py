@@ -332,6 +332,8 @@ class JanitorMetrics:
     def __init__(self):
         self.start_time = time.time()
         self.task_times = {}
+        self.task_meta = {}
+        self.current_task = None
         self.llm_calls = 0
         self.llm_time = 0.0
         self.errors = []
@@ -339,10 +341,19 @@ class JanitorMetrics:
     
     def start_task(self, task_name: str):
         self.task_times[task_name] = {"start": time.time(), "end": None}
+        self.task_meta[task_name] = {
+            "llm_calls": 0,
+            "llm_time_seconds": 0.0,
+            "errors": 0,
+            "warnings": 0,
+        }
+        self.current_task = task_name
     
     def end_task(self, task_name: str):
         if task_name in self.task_times:
             self.task_times[task_name]["end"] = time.time()
+        if self.current_task == task_name:
+            self.current_task = None
     
     def task_duration(self, task_name: str) -> float:
         if task_name in self.task_times and self.task_times[task_name]["end"]:
@@ -355,22 +366,41 @@ class JanitorMetrics:
     def add_llm_call(self, duration: float):
         self.llm_calls += 1
         self.llm_time += duration
+        if self.current_task and self.current_task in self.task_meta:
+            self.task_meta[self.current_task]["llm_calls"] += 1
+            self.task_meta[self.current_task]["llm_time_seconds"] += float(duration or 0.0)
     
     def add_error(self, error: str):
         self.errors.append({"time": datetime.now().isoformat(), "error": error})
+        if self.current_task and self.current_task in self.task_meta:
+            self.task_meta[self.current_task]["errors"] += 1
 
     def add_warning(self, warning: str):
         self.warnings.append({"time": datetime.now().isoformat(), "warning": warning})
+        if self.current_task and self.current_task in self.task_meta:
+            self.task_meta[self.current_task]["warnings"] += 1
 
     @property
     def has_errors(self) -> bool:
         return len(self.errors) > 0
 
     def summary(self) -> Dict[str, Any]:
+        task_durations = {
+            name: round(self.task_duration(name), 2) for name in self.task_times
+        }
+        task_metrics = {}
+        for name, meta in self.task_meta.items():
+            task_metrics[name] = {
+                "duration_seconds": task_durations.get(name, 0.0),
+                "llm_calls": int(meta.get("llm_calls", 0) or 0),
+                "llm_time_seconds": round(float(meta.get("llm_time_seconds", 0.0) or 0.0), 2),
+                "errors": int(meta.get("errors", 0) or 0),
+                "warnings": int(meta.get("warnings", 0) or 0),
+            }
         return {
             "total_duration_seconds": round(self.total_duration(), 2),
-            "task_durations": {k: round(v, 2) for k, v in 
-                             {name: self.task_duration(name) for name in self.task_times}.items()},
+            "task_durations": task_durations,
+            "task_metrics": task_metrics,
             "llm_calls": self.llm_calls,
             "llm_time_seconds": round(self.llm_time, 2),
             "errors": len(self.errors),
