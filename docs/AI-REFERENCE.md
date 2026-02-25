@@ -351,7 +351,7 @@ Merges are crash-safe, executed in single database transactions.
 | 1c | docs_cleanup | Clean bloated docs (churn-based) | ~$0.01-0.05 |
 | 1d | snippets | Soul snippets review (FOLD/REWRITE/DISCARD into core markdown) | ~$0.01-0.05 |
 | 1d | journal | Distill journal entries into core markdown | ~$0.05-0.10 |
-| 6 | edges | Edge extraction (deprecated, skipped -- moved to capture time) | N/A |
+| 6 | edges | Not scheduled in janitor; edges are extracted during capture | N/A |
 | 7 | rag | Reindex docs for RAG + project discovery | Free (local) |
 | 8 | tests | Run pytest suite | Free |
 | 9 | cleanup | Prune old logs, orphaned embeddings | Free |
@@ -430,8 +430,8 @@ Has a 30-second cache. To force a re-check, clear `_ollama_healthy._cache`.
 #### create-edge --create-missing
 Without the `--create-missing` flag, the recovery wrapper silently fails on edges for entities not yet in the graph. Always include this flag when creating edges programmatically.
 
-#### Merge Destructive Pattern (FIXED)
-All 3 merge paths (dedup/contradiction/review) previously had 5 bugs: confidence reset to default, `confirmation_count` reset, wrong status, edges deleted instead of migrated, hardcoded owner. Now fixed with the shared `_merge_nodes_into()` helper. 19 tests cover: confidence inheritance, confirmation_count sum, edge migration, status="active", owner from originals.
+#### Merge Safety Invariants
+All 3 merge paths (dedup/contradiction/review) use the shared `_merge_nodes_into()` helper. Required invariants are: confidence inheritance, `confirmation_count` sum, edge migration, `status="active"`, and owner inheritance from originals. These invariants are covered by 19 tests.
 
 #### Dedup Merge owner_id
 `datastore/memorydb/maintenance_ops.py` currently defaults `owner_id` when merging without source nodes. Benchmark reprocessing may need a post-janitor SQL fixup to normalize owner IDs.

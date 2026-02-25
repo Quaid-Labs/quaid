@@ -3,22 +3,18 @@
 ## Status
 Accepted
 
-Update (2026-02-25): Core docs/snippets lifecycle ownership was moved into
-`datastore/docsdb/*` so datastore owns those maintenance internals. Janitor
-and core remain orchestration/composition only.
-
 ## Context
-The plugin accumulated boundary-owned modules at `modules/quaid/*.py`, which blurred ownership and encouraged cross-layer imports.
+The plugin architecture uses explicit directory ownership and strict import boundaries.
 
-The target architecture is explicit directory ownership:
+Directory ownership:
 - `ingest/` for transcript/document ingestion orchestration
-- `core/` for lifecycle/docs/core orchestration logic
+- `core/` for orchestration and composition logic
 - `adapters/` for host/runtime integration
 - `orchestrator/` for runtime orchestration
 - `datastore/` for datastore ownership and maintenance internals
 
 ## Decision
-Canonical module ownership moved out of plugin root:
+Canonical module ownership:
 
 - Ingest:
   - `modules/quaid/ingest/extract.py`
@@ -37,8 +33,7 @@ Canonical module ownership moved out of plugin root:
   - `modules/quaid/datastore/docsdb/project_updater.py`
   - `modules/quaid/datastore/docsdb/soul_snippets.py`
 
-Plugin-root compatibility shims were removed. Canonical ownership now lives only inside
-the boundary directories above.
+Plugin-root compatibility shims are not used.
 
 ## Import policy
 - Internal modules import canonical paths (`core.*`, `ingest.*`, `datastore.*`, `adaptors.*`, `orchestrator.*`).
@@ -46,5 +41,6 @@ the boundary directories above.
 - Boundary rules are enforced by `modules/quaid/scripts/check-boundaries.py`.
 
 ## Consequences
-- Boundaries are now represented in filesystem layout.
-- Boundary ownership now matches filesystem layout with no legacy root shims.
+- Boundaries are represented directly in filesystem layout.
+- Datastore domains own their internal maintenance logic.
+- Janitor remains orchestration-only via lifecycle routine registration.
