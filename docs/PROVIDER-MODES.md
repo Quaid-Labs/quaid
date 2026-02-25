@@ -24,6 +24,9 @@ Quaid can run through multiple provider paths. They do not have the same cost pr
 - `retrieval.fail_hard` controls fallback behavior system-wide:
   - `true` (default): fail fast, no fallback behavior.
   - `false`: fallback behavior is allowed, but must emit explicit warning logs.
+- API credential lookup follows the same rule:
+  - `true`: no `.env` credential fallback when env vars are missing.
+  - `false`: `.env` fallback is allowed and logged with `[FALLBACK]`.
 - Validate startup logs before long runs:
   - look for `[quaid][startup] ... provider=... model=...`
   - look for `[quaid][billing] paid provider active ...` warnings
