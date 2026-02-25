@@ -14,6 +14,8 @@ from core.runtime.identity_runtime import (
     enforce_write_contract,
     enrich_identity_payload,
     filter_recall_results,
+    register_identity_resolver,
+    register_privacy_policy,
 )
 from datastore.facade import (
     store_memory,
@@ -41,6 +43,7 @@ class DatastoreMemoryService(MemoryServicePort):
         is_technical: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        _ensure_identity_runtime_bootstrap()
         assert_multi_user_runtime_ready(require_write=True)
         identity_payload = {
             "source_channel": kwargs.get("source_channel"),
@@ -81,6 +84,7 @@ class DatastoreMemoryService(MemoryServicePort):
         min_similarity: Optional[float] = None,
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
+        _ensure_identity_runtime_bootstrap()
         assert_multi_user_runtime_ready(require_read=True)
         viewer_entity_id = kwargs.get("viewer_entity_id")
         results = recall_memories(
@@ -132,7 +136,23 @@ class DatastoreMemoryService(MemoryServicePort):
         return datastore_stats()
 
 _MEMORY_SERVICE: MemoryServicePort = DatastoreMemoryService()
+_IDENTITY_RUNTIME_BOOTSTRAPPED = False
+
+
+def _ensure_identity_runtime_bootstrap() -> None:
+    global _IDENTITY_RUNTIME_BOOTSTRAPPED
+    if _IDENTITY_RUNTIME_BOOTSTRAPPED:
+        return
+    # Core composition point: load datastore-owned defaults into runtime registry.
+    from datastore.memorydb.identity_defaults import (
+        default_identity_resolver,
+        default_privacy_policy,
+    )
+    register_identity_resolver("memorydb-default", default_identity_resolver)
+    register_privacy_policy("memorydb-default", default_privacy_policy)
+    _IDENTITY_RUNTIME_BOOTSTRAPPED = True
 
 
 def get_memory_service() -> MemoryServicePort:
+    _ensure_identity_runtime_bootstrap()
     return _MEMORY_SERVICE

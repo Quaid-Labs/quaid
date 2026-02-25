@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.services.memory_service import DatastoreMemoryService
 from core.runtime import identity_runtime
 
 
@@ -60,3 +61,47 @@ def test_multi_user_runtime_readiness_requires_hooks(monkeypatch):
         identity_runtime.assert_multi_user_runtime_ready(require_write=True)
     with pytest.raises(RuntimeError):
         identity_runtime.assert_multi_user_runtime_ready(require_read=True)
+
+
+def test_memory_service_bootstraps_default_identity_runtime(monkeypatch):
+    identity_runtime.clear_registrations()
+    monkeypatch.setattr(
+        "core.runtime.identity_runtime.get_config",
+        lambda: SimpleNamespace(
+            identity=SimpleNamespace(mode="multi_user"),
+            privacy=SimpleNamespace(enforce_strict_filters=True),
+        ),
+    )
+    monkeypatch.setattr(
+        "datastore.memorydb.identity_defaults.get_config",
+        lambda: SimpleNamespace(privacy=SimpleNamespace(enforce_strict_filters=True)),
+    )
+    monkeypatch.setattr(
+        "core.services.memory_service.store_memory",
+        lambda **kwargs: {"id": "m1", "status": "created", "kwargs": kwargs},
+    )
+    monkeypatch.setattr(
+        "core.services.memory_service.recall_memories",
+        lambda **kwargs: [{"id": "m1", "owner_id": "user:a", "visibility_scope": "global_shared"}],
+    )
+
+    import core.services.memory_service as mem_svc
+    mem_svc._IDENTITY_RUNTIME_BOOTSTRAPPED = False
+
+    svc = DatastoreMemoryService()
+    out = svc.store(
+        text="Alice likes espresso",
+        owner_id="user:a",
+        source_channel="telegram",
+        source_conversation_id="chat-1",
+        source_author_id="user:a",
+        speaker_entity_id="user:a",
+    )
+    assert out["status"] == "created"
+
+    recalled = svc.recall(
+        query="espresso",
+        owner_id="user:a",
+        viewer_entity_id="user:a",
+    )
+    assert len(recalled) == 1
