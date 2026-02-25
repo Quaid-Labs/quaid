@@ -191,21 +191,21 @@ function retrievalFailHard(cfg) {
   return true;
 }
 
-function janitorParallelEnabled(cfg) {
-  if (typeof getPath(cfg, "janitor.parallel.enabled") === "boolean") return !!getPath(cfg, "janitor.parallel.enabled");
+function coreParallelEnabled(cfg) {
+  if (typeof getPath(cfg, "core.parallel.enabled") === "boolean") return !!getPath(cfg, "core.parallel.enabled");
   return true;
 }
 
-function janitorLlmWorkers(cfg) {
-  const raw = getPath(cfg, "janitor.parallel.llmWorkers", getPath(cfg, "janitor.parallel.llm_workers", 4));
+function coreLlmWorkers(cfg) {
+  const raw = getPath(cfg, "core.parallel.llmWorkers", getPath(cfg, "core.parallel.llm_workers", 4));
   return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 2;
 }
 
-function janitorLifecyclePrepassWorkers(cfg) {
+function coreLifecyclePrepassWorkers(cfg) {
   const raw = getPath(
     cfg,
-    "janitor.parallel.lifecyclePrepassWorkers",
-    getPath(cfg, "janitor.parallel.lifecycle_prepass_workers", 3),
+    "core.parallel.lifecyclePrepassWorkers",
+    getPath(cfg, "core.parallel.lifecycle_prepass_workers", 3),
   );
   return Number.isFinite(Number(raw)) ? Math.max(1, parseInt(String(raw), 10)) : 3;
 }
@@ -240,9 +240,9 @@ function compactSummary(cfgPath, cfg) {
   const autoCompactionOnTimeout = !!getPath(cfg, "capture.autoCompactionOnTimeout", true);
   const identityMode = String(getPath(cfg, "identity.mode", "single_user"));
   const strictPrivacy = !!getPath(cfg, "privacy.enforceStrictFilters", getPath(cfg, "privacy.enforce_strict_filters", true));
-  const janitorParallel = janitorParallelEnabled(cfg);
-  const janitorWorkers = janitorLlmWorkers(cfg);
-  const janitorPrepassWorkers = janitorLifecyclePrepassWorkers(cfg);
+  const janitorParallel = coreParallelEnabled(cfg);
+  const janitorWorkers = coreLlmWorkers(cfg);
+  const janitorPrepassWorkers = coreLifecyclePrepassWorkers(cfg);
 
   const lines = [
     `${C.bold("Config")}: ${cfgPath}`,
@@ -263,7 +263,7 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Pre-injection Pass")}: ${getPath(cfg, "retrieval.preInjectionPass", true) ? "on" : "off"} ${C.dim("(auto-inject total_recall planner)")}`,
     `${C.bold("Router Fail-Open")}: ${routerFailOpen ? "on" : "off"} ${C.dim("(on: noisy fallback to default recall plan if prepass fails)")}`,
     `${C.bold("Fail Hard")}: ${failHard ? "on" : "off"} ${C.dim("(on: no fallbacks; raise immediately)")}`,
-    `${C.bold("Janitor Parallel")}: ${janitorParallel ? "on" : "off"} ${C.dim(`(llmWorkers:${janitorWorkers} prepassWorkers:${janitorPrepassWorkers})`)}`,
+    `${C.bold("Core Parallel")}: ${janitorParallel ? "on" : "off"} ${C.dim(`(llmWorkers:${janitorWorkers} prepassWorkers:${janitorPrepassWorkers})`)}`,
   ];
   note(lines.join("\n"), "Current");
 }
@@ -415,40 +415,96 @@ async function runEdit() {
     showBanner();
     compactSummary(cfgPath, cfg);
 
-    const menu = handleCancel(await select({
+    const root = handleCancel(await select({
       message: "Config menu",
       options: [
-        { value: "agent", label: "Agent system", hint: "Host integration layer (currently OpenClaw-first)" },
-        { value: "provider", label: "LLM provider", hint: "Routing class for deep/fast reasoning" },
-        { value: "deep_provider", label: "Deep reasoning provider", hint: "optional override for deep tier" },
-        { value: "deep", label: "Deep reasoning model", hint: "deep extraction/review" },
-        { value: "fast_provider", label: "Fast reasoning provider", hint: "optional override for fast tier" },
-        { value: "fast", label: "Fast reasoning model", hint: "cheap utility/rerank calls" },
-        { value: "emb_provider", label: "Embeddings provider", hint: "vector model host" },
-        { value: "emb_model", label: "Embeddings model", hint: "semantic retrieval vectors" },
-        { value: "notify", label: "Notification level", hint: "master level; feature verbosities may override" },
-        { value: "notify_recommended", label: "Notifications: apply recommended", hint: "janitor=summary extraction=summary retrieval=off" },
-        { value: "notify_janitor", label: "Notifications: janitor", hint: "off/summary/full" },
-        { value: "notify_extraction", label: "Notifications: extraction", hint: "off/summary/full" },
-        { value: "notify_retrieval", label: "Notifications: retrieval", hint: "off/summary/full" },
-        { value: "pre_injection_pass", label: "Recall: pre-injection pass", hint: "auto-inject uses total_recall planner (recommended on)" },
-        { value: "router_fail_open", label: "Recall: router fail-open", hint: "on = fallback to default recall plan if prepass fails (recommended)" },
-        { value: "fail_hard", label: "Recall: fail hard", hint: "on = disable all fallbacks and raise errors" },
-        { value: "janitor_parallel_enabled", label: "Janitor: parallel enabled", hint: "master janitor parallelism toggle" },
-        { value: "janitor_parallel_llm_workers", label: "Janitor: llm workers", hint: "parallel workers for LLM-backed maintenance batches" },
-        { value: "janitor_parallel_prepass_workers", label: "Janitor: prepass workers", hint: "parallel workers for lifecycle prepass stage" },
-        { value: "janitor_policy_core", label: "Janitor: core markdown policy", hint: "root markdown writes (SOUL/USER/MEMORY/TOOLS)" },
-        { value: "janitor_policy_project", label: "Janitor: project docs policy", hint: "project docs outside projects/quaid" },
-        { value: "janitor_policy_workspace", label: "Janitor: workspace move/delete policy", hint: "workspace audit file moves/deletes" },
-        { value: "janitor_policy_destructive", label: "Janitor: destructive memory policy", hint: "merges/supersedes/deletes in memory DB" },
-        { value: "janitor_apply", label: "Janitor apply mode", hint: "master policy: auto/ask/dry-run-only" },
-        { value: "timeout", label: "Inactivity timeout", hint: "minutes before timeout extraction" },
-        { value: "timeout_auto_compact", label: "Timeout auto-compaction", hint: "on/off compaction after timeout extraction (recommended on)" },
-        { value: "systems", label: "Systems on/off", hint: "feature gates" },
+        { value: "zone_models", label: "Models & Providers", hint: "agent/provider/model routing settings" },
+        { value: "zone_notifications", label: "Notifications", hint: "global and per-subsystem verbosity" },
+        { value: "zone_retrieval", label: "Retrieval", hint: "pre-injection + fail-open + failHard" },
+        { value: "zone_parallel", label: "Core Parallelism", hint: "global parallel workers and prepass settings" },
+        { value: "zone_janitor", label: "Janitor Policies", hint: "apply mode + policy scopes" },
+        { value: "zone_runtime", label: "Runtime & Systems", hint: "timeout + system gates" },
         { value: "save", label: "Save and exit" },
         { value: "discard", label: "Exit without saving" },
       ],
     }));
+    let menu = root;
+    if (root === "zone_models") {
+      menu = handleCancel(await select({
+        message: "Models & Providers",
+        options: [
+          { value: "agent", label: "Agent system", hint: "Host integration layer (currently OpenClaw-first)" },
+          { value: "provider", label: "LLM provider", hint: "Routing class for deep/fast reasoning" },
+          { value: "deep_provider", label: "Deep reasoning provider", hint: "optional override for deep tier" },
+          { value: "deep", label: "Deep reasoning model", hint: "deep extraction/review" },
+          { value: "fast_provider", label: "Fast reasoning provider", hint: "optional override for fast tier" },
+          { value: "fast", label: "Fast reasoning model", hint: "cheap utility/rerank calls" },
+          { value: "emb_provider", label: "Embeddings provider", hint: "vector model host" },
+          { value: "emb_model", label: "Embeddings model", hint: "semantic retrieval vectors" },
+          { value: "back", label: "Back" },
+        ],
+      }));
+      if (menu === "back") continue;
+    } else if (root === "zone_notifications") {
+      menu = handleCancel(await select({
+        message: "Notifications",
+        options: [
+          { value: "notify", label: "Notification level", hint: "master level; feature verbosities may override" },
+          { value: "notify_recommended", label: "Apply recommended profile", hint: "janitor=summary extraction=summary retrieval=off" },
+          { value: "notify_janitor", label: "Janitor verbosity", hint: "off/summary/full" },
+          { value: "notify_extraction", label: "Extraction verbosity", hint: "off/summary/full" },
+          { value: "notify_retrieval", label: "Retrieval verbosity", hint: "off/summary/full" },
+          { value: "back", label: "Back" },
+        ],
+      }));
+      if (menu === "back") continue;
+    } else if (root === "zone_retrieval") {
+      menu = handleCancel(await select({
+        message: "Retrieval",
+        options: [
+          { value: "pre_injection_pass", label: "Pre-injection pass", hint: "auto-inject uses total_recall planner (recommended on)" },
+          { value: "router_fail_open", label: "Router fail-open", hint: "on = fallback to default recall plan if prepass fails (recommended)" },
+          { value: "fail_hard", label: "Fail hard", hint: "on = disable all fallbacks and raise errors" },
+          { value: "back", label: "Back" },
+        ],
+      }));
+      if (menu === "back") continue;
+    } else if (root === "zone_parallel") {
+      menu = handleCancel(await select({
+        message: "Core Parallelism",
+        options: [
+          { value: "core_parallel_enabled", label: "Parallel enabled", hint: "master parallelism toggle" },
+          { value: "core_parallel_llm_workers", label: "LLM workers", hint: "parallel workers for LLM-backed maintenance batches" },
+          { value: "core_parallel_prepass_workers", label: "Prepass workers", hint: "parallel workers for lifecycle prepass stage" },
+          { value: "back", label: "Back" },
+        ],
+      }));
+      if (menu === "back") continue;
+    } else if (root === "zone_janitor") {
+      menu = handleCancel(await select({
+        message: "Janitor Policies",
+        options: [
+          { value: "janitor_apply", label: "Apply mode", hint: "master policy: auto/ask/dry-run-only" },
+          { value: "janitor_policy_core", label: "Core markdown policy", hint: "root markdown writes (SOUL/USER/MEMORY/TOOLS)" },
+          { value: "janitor_policy_project", label: "Project docs policy", hint: "project docs outside projects/quaid" },
+          { value: "janitor_policy_workspace", label: "Workspace move/delete policy", hint: "workspace audit file moves/deletes" },
+          { value: "janitor_policy_destructive", label: "Destructive memory policy", hint: "merges/supersedes/deletes in memory DB" },
+          { value: "back", label: "Back" },
+        ],
+      }));
+      if (menu === "back") continue;
+    } else if (root === "zone_runtime") {
+      menu = handleCancel(await select({
+        message: "Runtime & Systems",
+        options: [
+          { value: "timeout", label: "Inactivity timeout", hint: "minutes before timeout extraction" },
+          { value: "timeout_auto_compact", label: "Timeout auto-compaction", hint: "on/off compaction after timeout extraction (recommended on)" },
+          { value: "systems", label: "Systems on/off", hint: "feature gates" },
+          { value: "back", label: "Back" },
+        ],
+      }));
+      if (menu === "back") continue;
+    }
 
     if (menu === "agent") {
       const next = handleCancel(await select({
@@ -570,21 +626,21 @@ async function runEdit() {
         ],
       }));
       setPath(cfg, "retrieval.failHard", next === "on");
-    } else if (menu === "janitor_parallel_enabled") {
-      const current = janitorParallelEnabled(cfg);
+    } else if (menu === "core_parallel_enabled") {
+      const current = coreParallelEnabled(cfg);
       const next = handleCancel(await select({
-        message: "janitor.parallel.enabled",
+        message: "core.parallel.enabled",
         initialValue: current ? "on" : "off",
         options: [
-          { value: "on", label: "on", hint: "enable janitor parallelism (recommended)" },
-          { value: "off", label: "off", hint: "run janitor maintenance stages serially" },
+          { value: "on", label: "on", hint: "enable core parallelism (recommended)" },
+          { value: "off", label: "off", hint: "run maintenance stages serially" },
         ],
       }));
-      setPath(cfg, "janitor.parallel.enabled", next === "on");
-    } else if (menu === "janitor_parallel_llm_workers") {
-      const current = janitorLlmWorkers(cfg);
+      setPath(cfg, "core.parallel.enabled", next === "on");
+    } else if (menu === "core_parallel_llm_workers") {
+      const current = coreLlmWorkers(cfg);
       const next = handleCancel(await text({
-        message: "janitor.parallel.llmWorkers",
+        message: "core.parallel.llmWorkers",
         placeholder: String(current),
         validate: (v) => {
           const n = parseInt(String(v || "").trim(), 10);
@@ -592,11 +648,11 @@ async function runEdit() {
           return undefined;
         },
       }));
-      setPath(cfg, "janitor.parallel.llmWorkers", parseInt(String(next).trim(), 10));
-    } else if (menu === "janitor_parallel_prepass_workers") {
-      const current = janitorLifecyclePrepassWorkers(cfg);
+      setPath(cfg, "core.parallel.llmWorkers", parseInt(String(next).trim(), 10));
+    } else if (menu === "core_parallel_prepass_workers") {
+      const current = coreLifecyclePrepassWorkers(cfg);
       const next = handleCancel(await text({
-        message: "janitor.parallel.lifecyclePrepassWorkers",
+        message: "core.parallel.lifecyclePrepassWorkers",
         placeholder: String(current),
         validate: (v) => {
           const n = parseInt(String(v || "").trim(), 10);
@@ -604,7 +660,7 @@ async function runEdit() {
           return undefined;
         },
       }));
-      setPath(cfg, "janitor.parallel.lifecyclePrepassWorkers", parseInt(String(next).trim(), 10));
+      setPath(cfg, "core.parallel.lifecyclePrepassWorkers", parseInt(String(next).trim(), 10));
     } else if (menu === "janitor_policy_core") {
       const next = handleCancel(await select({
         message: "janitor.approvalPolicies.coreMarkdownWrites",
@@ -693,7 +749,7 @@ function showConfig() {
   console.log(`notify level:     ${getPath(cfg, "notifications.level", "normal")} (janitor:${getPath(cfg, "notifications.janitor.verbosity", "inherit")} extraction:${getPath(cfg, "notifications.extraction.verbosity", "inherit")} retrieval:${getPath(cfg, "notifications.retrieval.verbosity", "inherit")})`);
   console.log(`janitor apply:    ${getPath(cfg, "janitor.applyMode", "auto")}`);
   console.log(`fail hard:        ${retrievalFailHard(cfg) ? "on" : "off"} (retrieval.failHard)`);
-  console.log(`janitor parallel: ${janitorParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${janitorLlmWorkers(cfg)} prepassWorkers=${janitorLifecyclePrepassWorkers(cfg)})`);
+  console.log(`core parallel:    ${coreParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${coreLlmWorkers(cfg)} prepassWorkers=${coreLifecyclePrepassWorkers(cfg)})`);
   console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} workspace=${getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
   console.log(`idle timeout:     ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`);
   console.log(`timeout compact:  ${getPath(cfg, "capture.autoCompactionOnTimeout", true) ? "on" : "off"}`);

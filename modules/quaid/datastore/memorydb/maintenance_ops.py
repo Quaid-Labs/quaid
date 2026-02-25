@@ -268,9 +268,11 @@ def _parallel_key(task_name: str) -> str:
 
 def _llm_parallel_workers(task_name: str) -> int:
     """Resolve LLM batch parallelism for a task from config."""
-    janitor_cfg = getattr(_cfg, "janitor", None)
-    parallel_cfg = getattr(janitor_cfg, "parallel", None) if janitor_cfg else None
-    if not parallel_cfg or not getattr(parallel_cfg, "enabled", True):
+    core_cfg = getattr(_cfg, "core", None)
+    parallel_cfg = getattr(core_cfg, "parallel", None) if core_cfg else None
+    if parallel_cfg is None:
+        raise RuntimeError("Missing required config: core.parallel")
+    if not getattr(parallel_cfg, "enabled", True):
         return 1
 
     default_workers = int(getattr(parallel_cfg, "llm_workers", 4) or 4)
