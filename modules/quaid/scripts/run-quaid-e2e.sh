@@ -24,6 +24,8 @@ RUN_LIVE_EVENTS=true
 RUN_NOTIFY_MATRIX=true
 RUN_INTEGRATION_TESTS=true
 RUN_INGEST_STRESS=true
+RUN_PROJECT_CRUD=true
+RUN_SESSION_TOOLS=true
 RUN_JANITOR_SEED=true
 RUN_MEMORY_FLOW=true
 RUN_RESILIENCE=false
@@ -91,6 +93,12 @@ STAGE_notify_matrix_DURATION_SECONDS=0
 STAGE_ingest_stress="pending"
 STAGE_ingest_stress_START_EPOCH=0
 STAGE_ingest_stress_DURATION_SECONDS=0
+STAGE_project_crud="pending"
+STAGE_project_crud_START_EPOCH=0
+STAGE_project_crud_DURATION_SECONDS=0
+STAGE_session_tools="pending"
+STAGE_session_tools_START_EPOCH=0
+STAGE_session_tools_DURATION_SECONDS=0
 STAGE_janitor="pending"
 STAGE_janitor_START_EPOCH=0
 STAGE_janitor_DURATION_SECONDS=0
@@ -111,7 +119,7 @@ Options:
   --skip-llm-smoke       Skip gateway LLM smoke call
   --skip-live-events     Skip live command/timeout hook validation
   --skip-notify-matrix   Skip notification-level matrix validation (quiet/normal/debug)
-  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,nightly-strict-notify,janitor-parallel-bench,smoke,integration,live,memory,notify,ingest,janitor,seed,resilience,janitor-stress (default: full)
+  --suite <csv>          Test suites to run. Values: full,core,blocker,pre-benchmark,nightly,nightly-strict-notify,janitor-parallel-bench,smoke,integration,live,memory,notify,ingest,project,session,janitor,seed,resilience,janitor-stress (default: full)
   --janitor-timeout <s>  Janitor timeout seconds (default: 240)
   --janitor-dry-run      Run janitor in dry-run mode (default is apply)
   --live-timeout-wait <s> Max seconds to wait for timeout event in live check (default: 90)
@@ -210,6 +218,8 @@ if suite_has "blocker"; then
   RUN_LIVE_EVENTS=true
   RUN_NOTIFY_MATRIX=true
   RUN_INGEST_STRESS=false
+  RUN_PROJECT_CRUD=false
+  RUN_SESSION_TOOLS=true
   RUN_JANITOR=false
   RUN_JANITOR_SEED=false
   RUN_MEMORY_FLOW=true
@@ -219,6 +229,8 @@ elif suite_has "pre-benchmark"; then
   RUN_LIVE_EVENTS=true
   RUN_NOTIFY_MATRIX=true
   RUN_INGEST_STRESS=true
+  RUN_PROJECT_CRUD=true
+  RUN_SESSION_TOOLS=true
   RUN_JANITOR=true
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
@@ -229,6 +241,8 @@ elif suite_has "janitor-parallel-bench"; then
   RUN_LIVE_EVENTS=false
   RUN_NOTIFY_MATRIX=false
   RUN_INGEST_STRESS=false
+  RUN_PROJECT_CRUD=false
+  RUN_SESSION_TOOLS=false
   RUN_JANITOR=true
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=false
@@ -240,6 +254,8 @@ elif suite_has "core"; then
   RUN_LIVE_EVENTS=true
   RUN_NOTIFY_MATRIX=false
   RUN_INGEST_STRESS=true
+  RUN_PROJECT_CRUD=true
+  RUN_SESSION_TOOLS=true
   RUN_JANITOR=true
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
@@ -249,6 +265,8 @@ elif suite_has "full"; then
   RUN_LIVE_EVENTS=true
   RUN_NOTIFY_MATRIX=true
   RUN_INGEST_STRESS=true
+  RUN_PROJECT_CRUD=true
+  RUN_SESSION_TOOLS=true
   RUN_JANITOR=true
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
@@ -260,6 +278,8 @@ else
   RUN_LIVE_EVENTS=false
   RUN_NOTIFY_MATRIX=false
   RUN_INGEST_STRESS=false
+  RUN_PROJECT_CRUD=false
+  RUN_SESSION_TOOLS=false
   RUN_JANITOR=false
   RUN_JANITOR_SEED=false
   RUN_MEMORY_FLOW=false
@@ -272,6 +292,8 @@ else
   suite_has "notify" && RUN_NOTIFY_MATRIX=true
   suite_has "memory" && RUN_MEMORY_FLOW=true
   suite_has "ingest" && RUN_INGEST_STRESS=true
+  suite_has "project" && RUN_PROJECT_CRUD=true
+  suite_has "session" && RUN_SESSION_TOOLS=true
   suite_has "stress" && RUN_INGEST_STRESS=true
   suite_has "janitor" && RUN_JANITOR=true
   suite_has "seed" && RUN_JANITOR_SEED=true
@@ -514,6 +536,10 @@ write_e2e_summary() {
   SUMMARY_STAGE_notify_matrix_DURATION="$STAGE_notify_matrix_DURATION_SECONDS" \
   SUMMARY_STAGE_ingest_stress="$STAGE_ingest_stress" \
   SUMMARY_STAGE_ingest_stress_DURATION="$STAGE_ingest_stress_DURATION_SECONDS" \
+  SUMMARY_STAGE_project_crud="$STAGE_project_crud" \
+  SUMMARY_STAGE_project_crud_DURATION="$STAGE_project_crud_DURATION_SECONDS" \
+  SUMMARY_STAGE_session_tools="$STAGE_session_tools" \
+  SUMMARY_STAGE_session_tools_DURATION="$STAGE_session_tools_DURATION_SECONDS" \
   SUMMARY_STAGE_janitor="$STAGE_janitor" \
   SUMMARY_STAGE_janitor_DURATION="$STAGE_janitor_DURATION_SECONDS" \
   python3 - <<'PY'
@@ -565,6 +591,8 @@ out = {
         "memory_flow": os.environ["SUMMARY_STAGE_memory_flow"],
         "notify_matrix": os.environ["SUMMARY_STAGE_notify_matrix"],
         "ingest_stress": os.environ["SUMMARY_STAGE_ingest_stress"],
+        "project_crud": os.environ["SUMMARY_STAGE_project_crud"],
+        "session_tools": os.environ["SUMMARY_STAGE_session_tools"],
         "janitor": os.environ["SUMMARY_STAGE_janitor"],
     },
     "stage_durations_seconds": {
@@ -576,6 +604,8 @@ out = {
         "memory_flow": int(os.environ["SUMMARY_STAGE_memory_flow_DURATION"]),
         "notify_matrix": int(os.environ["SUMMARY_STAGE_notify_matrix_DURATION"]),
         "ingest_stress": int(os.environ["SUMMARY_STAGE_ingest_stress_DURATION"]),
+        "project_crud": int(os.environ["SUMMARY_STAGE_project_crud_DURATION"]),
+        "session_tools": int(os.environ["SUMMARY_STAGE_session_tools_DURATION"]),
         "janitor": int(os.environ["SUMMARY_STAGE_janitor_DURATION"]),
     },
 }
@@ -2311,6 +2341,248 @@ pass_stage "ingest_stress"
 else
   skip_stage "ingest_stress"
   echo "[e2e] Skipping ingestion stress checks (suite selection)."
+fi
+
+if [[ "$RUN_PROJECT_CRUD" == true ]]; then
+begin_stage "project_crud"
+echo "[e2e] Running project CRUD checks (create/list/rename/archive/delete)..."
+python3 - "$E2E_WS" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+ws = Path(sys.argv[1])
+registry = ["python3", "-m", "core.docs.registry"]
+env = dict(os.environ)
+py = env.get("PYTHONPATH", "")
+root = str((ws / "modules" / "quaid").resolve())
+env["PYTHONPATH"] = root if not py else f"{root}:{py}"
+
+def run(args, timeout=90):
+    proc = subprocess.run(
+        [*registry, *args],
+        cwd=str(ws),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[e2e] ERROR: docs_registry failed args={args}\n"
+            f"stdout:\n{proc.stdout[-800:]}\n"
+            f"stderr:\n{proc.stderr[-800:]}"
+        )
+    return proc.stdout.strip()
+
+def list_names():
+    out = run(["list-projects", "--names-only"])
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+seed = uuid.uuid4().hex[:8]
+p_create = f"e2e-crud-{seed}-c"
+p_rename_old = f"e2e-crud-{seed}-r1"
+p_rename_new = f"e2e-crud-{seed}-r2"
+p_archive = f"e2e-crud-{seed}-a"
+p_delete = f"e2e-crud-{seed}-d"
+
+# CREATE + LIST
+run(["create-project", p_create, "--label", "E2E Create", "--description", "e2e create/list validation"])
+names = set(list_names())
+if p_create not in names:
+    raise SystemExit(f"[e2e] ERROR: created project missing from list: {p_create}")
+
+# RENAME
+run(["create-project", p_rename_old, "--label", "E2E Rename", "--description", "e2e rename validation"])
+run(["rename-project", p_rename_old, p_rename_new])
+names = set(list_names())
+if p_rename_old in names or p_rename_new not in names:
+    raise SystemExit(
+        f"[e2e] ERROR: rename validation failed old={p_rename_old in names} new={p_rename_new in names}"
+    )
+
+# ARCHIVE
+run(["create-project", p_archive, "--label", "E2E Archive", "--description", "e2e archive validation"])
+run(["archive-project", p_archive, "--yes"])
+archive_dir = ws / "projects" / "archive" / p_archive
+if not archive_dir.exists():
+    raise SystemExit(f"[e2e] ERROR: archive validation failed; missing dir {archive_dir}")
+names = set(list_names())
+if p_archive in names:
+    raise SystemExit(f"[e2e] ERROR: archived project still listed as active: {p_archive}")
+
+# DELETE
+run(["create-project", p_delete, "--label", "E2E Delete", "--description", "e2e delete validation"])
+run(["delete-project", p_delete, "--yes"])
+names = set(list_names())
+if p_delete in names:
+    raise SystemExit(f"[e2e] ERROR: deleted project still listed as active: {p_delete}")
+
+print(
+    json.dumps(
+        {
+            "created_project": p_create,
+            "renamed_from": p_rename_old,
+            "renamed_to": p_rename_new,
+            "archived_project": p_archive,
+            "archived_dir_exists": archive_dir.exists(),
+            "deleted_project": p_delete,
+            "active_project_count_after": len(names),
+        },
+        indent=2,
+    )
+)
+print("[e2e] Project CRUD checks passed.")
+PY
+pass_stage "project_crud"
+else
+  skip_stage "project_crud"
+  echo "[e2e] Skipping project CRUD checks (suite selection)."
+fi
+
+if [[ "$RUN_SESSION_TOOLS" == true ]]; then
+begin_stage "session_tools"
+echo "[e2e] Running session tools checks (session_recall + session_logs_search)..."
+python3 - "$E2E_WS" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+ws = Path(sys.argv[1])
+session_seed = f"quaid-e2e-session-seed-{uuid.uuid4().hex[:10]}"
+session_query = f"quaid-e2e-session-query-{uuid.uuid4().hex[:10]}"
+marker = f"E2E_SESSION_SEARCH_{uuid.uuid4().hex[:12]}"
+events_path = ws / "logs" / "quaid" / "session-timeout-events.jsonl"
+sessions_dir = Path.home() / ".openclaw" / "sessions"
+
+def line_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        return sum(1 for _ in f)
+
+def read_tail_since(path: Path, start: int):
+    if not path.exists():
+        return []
+    out = []
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for idx, line in enumerate(f, start=1):
+            if idx > start:
+                out.append(line.strip())
+    return out
+
+def wait_for(pred, seconds: int, label: str, start_line: int):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        lines = read_tail_since(events_path, start_line)
+        if pred(lines):
+            return
+        time.sleep(1)
+    preview = "\n".join(read_tail_since(events_path, start_line)[-30:])
+    raise SystemExit(f"[e2e] ERROR: timed out waiting for {label}\n{preview}")
+
+def run_agent(session_id: str, message: str, timeout_sec: int = 220) -> str:
+    try:
+        proc = subprocess.run(
+            ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", str(timeout_sec), "--json"],
+            capture_output=True,
+            text=True,
+            timeout=max(timeout_sec + 60, 180),
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"[e2e] ERROR: openclaw agent timed out message={message[:80]!r}")
+    if proc.returncode != 0:
+        raise SystemExit(f"[e2e] ERROR: openclaw agent failed: {proc.stderr.strip()[:500]}")
+    out = proc.stdout.strip()
+    if not out:
+        return ""
+    try:
+        parsed = json.loads(out)
+    except Exception:
+        return out
+    if isinstance(parsed, dict):
+        if isinstance(parsed.get("response"), str):
+            return parsed["response"]
+        if isinstance(parsed.get("output"), str):
+            return parsed["output"]
+    return out
+
+# Seed a unique marker and force compaction-triggered ingest.
+run_agent(session_seed, f"Remember this exact marker for recovery tests: {marker}. Reply with ACK only.")
+start = line_count(events_path)
+run_agent(session_seed, "/compact", timeout_sec=260)
+wait_for(
+    lambda lines: any(
+        f'"session_id":"{session_seed}"' in ln
+        and '"label":"CompactionSignal"' in ln
+        and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+        for ln in lines
+    ),
+    45,
+    "session seed compaction signal",
+    start,
+)
+
+# Ask the model to use session_logs_search explicitly.
+answer = run_agent(
+    session_query,
+    (
+        f'Use the tool "session_logs_search" with query "{marker}". '
+        "Return exactly the marker if found; otherwise return NOT_FOUND."
+    ),
+    timeout_sec=260,
+)
+if marker not in answer:
+    raise SystemExit(
+        "[e2e] ERROR: session_logs_search validation failed; marker missing from response.\n"
+        f"[e2e] answer={answer[:700]}"
+    )
+
+# Validate session_recall list path returns indexed sessions text.
+list_answer = run_agent(
+    session_query,
+    "Use session_recall action=list limit=3 and return one session id you see.",
+    timeout_sec=260,
+)
+if "quaid-e2e-session-seed-" not in list_answer and "session" not in list_answer.lower():
+    raise SystemExit(
+        "[e2e] ERROR: session_recall list validation failed.\n"
+        f"[e2e] answer={list_answer[:700]}"
+    )
+
+# Soft assertion: verify tool call trace likely present in session transcript.
+query_session_path = sessions_dir / f"{session_query}.jsonl"
+tool_trace_found = False
+if query_session_path.exists():
+    raw = query_session_path.read_text(encoding="utf-8", errors="replace")
+    tool_trace_found = ("session_logs_search" in raw) or ("session_recall" in raw)
+
+print(
+    json.dumps(
+        {
+            "seed_session": session_seed,
+            "query_session": session_query,
+            "marker": marker,
+            "session_logs_search_response_preview": answer[:180],
+            "session_recall_response_preview": list_answer[:180],
+            "tool_trace_found": tool_trace_found,
+        },
+        indent=2,
+    )
+)
+print("[e2e] Session tools checks passed.")
+PY
+pass_stage "session_tools"
+else
+  skip_stage "session_tools"
+  echo "[e2e] Skipping session tools checks (suite selection)."
 fi
 
 if [[ "$RUN_JANITOR" == true ]]; then
