@@ -116,6 +116,11 @@ class DocsRegistry:
 
     def ensure_table(self):
         """Create doc_registry table if it doesn't exist."""
+        def _ensure_column(conn, table: str, column: str, definition: str) -> None:
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
         with get_connection(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS doc_registry (
@@ -135,6 +140,17 @@ class DocsRegistry:
                     registered_by TEXT DEFAULT 'system'
                 )
             """)
+            # Forward-compatible identity/source scope context (additive only).
+            _ensure_column(conn, "doc_registry", "source_channel", "TEXT")
+            _ensure_column(conn, "doc_registry", "source_conversation_id", "TEXT")
+            _ensure_column(conn, "doc_registry", "source_author_id", "TEXT")
+            _ensure_column(conn, "doc_registry", "speaker_entity_id", "TEXT")
+            _ensure_column(conn, "doc_registry", "subject_entity_id", "TEXT")
+            _ensure_column(conn, "doc_registry", "conversation_id", "TEXT")
+            _ensure_column(conn, "doc_registry", "visibility_scope", "TEXT DEFAULT 'source_shared'")
+            _ensure_column(conn, "doc_registry", "sensitivity", "TEXT DEFAULT 'normal'")
+            _ensure_column(conn, "doc_registry", "participant_entity_ids", "TEXT DEFAULT '[]'")
+            _ensure_column(conn, "doc_registry", "provenance_confidence", "REAL")
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_doc_registry_project
                 ON doc_registry(project)
@@ -146,6 +162,14 @@ class DocsRegistry:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_doc_registry_type
                 ON doc_registry(asset_type)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_doc_registry_source_scope
+                ON doc_registry(source_channel, source_conversation_id)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_doc_registry_subject_state
+                ON doc_registry(subject_entity_id, state)
             """)
 
             # Project definitions table — DB is source of truth (replaces JSON)
@@ -302,6 +326,16 @@ class DocsRegistry:
         tags: Optional[List[str]] = None,
         auto_update: bool = False,
         source_files: Optional[List[str]] = None,
+        source_channel: Optional[str] = None,
+        source_conversation_id: Optional[str] = None,
+        source_author_id: Optional[str] = None,
+        speaker_entity_id: Optional[str] = None,
+        subject_entity_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        visibility_scope: Optional[str] = None,
+        sensitivity: Optional[str] = None,
+        participant_entity_ids: Optional[List[str]] = None,
+        provenance_confidence: Optional[float] = None,
         registered_by: str = "system",
     ) -> int:
         """Register a document in the registry. Returns the row ID."""
@@ -311,8 +345,11 @@ class DocsRegistry:
             conn.execute("""
                 INSERT INTO doc_registry
                     (file_path, project, asset_type, title, description, tags,
-                     auto_update, source_files, registered_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     auto_update, source_files, source_channel, source_conversation_id,
+                     source_author_id, speaker_entity_id, subject_entity_id, conversation_id,
+                     visibility_scope, sensitivity, participant_entity_ids,
+                     provenance_confidence, registered_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(file_path) DO UPDATE SET
                     project = excluded.project,
                     asset_type = excluded.asset_type,
@@ -321,6 +358,16 @@ class DocsRegistry:
                     tags = excluded.tags,
                     auto_update = excluded.auto_update,
                     source_files = COALESCE(excluded.source_files, doc_registry.source_files),
+                    source_channel = COALESCE(excluded.source_channel, doc_registry.source_channel),
+                    source_conversation_id = COALESCE(excluded.source_conversation_id, doc_registry.source_conversation_id),
+                    source_author_id = COALESCE(excluded.source_author_id, doc_registry.source_author_id),
+                    speaker_entity_id = COALESCE(excluded.speaker_entity_id, doc_registry.speaker_entity_id),
+                    subject_entity_id = COALESCE(excluded.subject_entity_id, doc_registry.subject_entity_id),
+                    conversation_id = COALESCE(excluded.conversation_id, doc_registry.conversation_id),
+                    visibility_scope = COALESCE(excluded.visibility_scope, doc_registry.visibility_scope),
+                    sensitivity = COALESCE(excluded.sensitivity, doc_registry.sensitivity),
+                    participant_entity_ids = COALESCE(excluded.participant_entity_ids, doc_registry.participant_entity_ids),
+                    provenance_confidence = COALESCE(excluded.provenance_confidence, doc_registry.provenance_confidence),
                     state = 'active',
                     registered_by = excluded.registered_by
             """, (
@@ -332,6 +379,16 @@ class DocsRegistry:
                 json.dumps(tags or []),
                 1 if auto_update else 0,
                 json.dumps(source_files) if source_files else None,
+                str(source_channel or "").strip().lower() or None,
+                str(source_conversation_id or "").strip() or None,
+                str(source_author_id or "").strip() or None,
+                str(speaker_entity_id or "").strip() or None,
+                str(subject_entity_id or "").strip() or None,
+                str(conversation_id or "").strip() or None,
+                str(visibility_scope or "").strip() or None,
+                str(sensitivity or "").strip() or None,
+                json.dumps(participant_entity_ids or []) if participant_entity_ids is not None else None,
+                float(provenance_confidence) if provenance_confidence is not None else None,
                 registered_by,
             ))
             row = conn.execute(
@@ -432,7 +489,10 @@ class DocsRegistry:
     def update_metadata(self, file_path: str, **kwargs) -> bool:
         """Update metadata fields for a registry entry."""
         allowed = {"title", "description", "tags", "auto_update", "source_files",
-                    "project", "asset_type"}
+                    "project", "asset_type", "source_channel", "source_conversation_id",
+                    "source_author_id", "speaker_entity_id", "subject_entity_id",
+                    "conversation_id", "visibility_scope", "sensitivity",
+                    "participant_entity_ids", "provenance_confidence"}
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if not updates:
             return False
@@ -442,6 +502,8 @@ class DocsRegistry:
             updates["tags"] = json.dumps(updates["tags"])
         if "source_files" in updates:
             updates["source_files"] = json.dumps(updates["source_files"])
+        if "participant_entity_ids" in updates:
+            updates["participant_entity_ids"] = json.dumps(updates["participant_entity_ids"])
         if "auto_update" in updates:
             updates["auto_update"] = 1 if updates["auto_update"] else 0
 
@@ -1204,6 +1266,16 @@ class DocsRegistry:
             "state": row["state"],
             "auto_update": bool(row["auto_update"]),
             "source_files": json.loads(row["source_files"]) if row["source_files"] else [],
+            "source_channel": row["source_channel"] if "source_channel" in row.keys() else None,
+            "source_conversation_id": row["source_conversation_id"] if "source_conversation_id" in row.keys() else None,
+            "source_author_id": row["source_author_id"] if "source_author_id" in row.keys() else None,
+            "speaker_entity_id": row["speaker_entity_id"] if "speaker_entity_id" in row.keys() else None,
+            "subject_entity_id": row["subject_entity_id"] if "subject_entity_id" in row.keys() else None,
+            "conversation_id": row["conversation_id"] if "conversation_id" in row.keys() else None,
+            "visibility_scope": row["visibility_scope"] if "visibility_scope" in row.keys() else None,
+            "sensitivity": row["sensitivity"] if "sensitivity" in row.keys() else None,
+            "participant_entity_ids": json.loads(row["participant_entity_ids"]) if "participant_entity_ids" in row.keys() and row["participant_entity_ids"] else [],
+            "provenance_confidence": row["provenance_confidence"] if "provenance_confidence" in row.keys() else None,
             "last_indexed_at": row["last_indexed_at"],
             "last_modified_at": row["last_modified_at"],
             "registered_at": row["registered_at"],

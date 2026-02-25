@@ -77,6 +77,10 @@ Optional scoped read context:
 - `subject_entity_id`
 - `source_channel` / `source_conversation_id` / `source_author_id`
 
+Docs/project registry forward-compat surface:
+- `datastore/docsdb/registry.py` now supports additive identity/source context fields on `doc_registry` entries (`source_*`, `speaker_entity_id`, `subject_entity_id`, `conversation_id`, `visibility_scope`, `sensitivity`, `participant_entity_ids`, `provenance_confidence`).
+- These fields are schema-seeded now for future multi-user routing without destructive migrations.
+
 ## Event Contract
 
 - Source: `modules/quaid/core/runtime/events.py`
