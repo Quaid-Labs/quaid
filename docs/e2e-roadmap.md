@@ -99,7 +99,8 @@ Coverage requirements:
    - Emits recommendation JSON at `/tmp/quaid-e2e-budget-recommendation.json` (override with `QUAID_E2E_BUDGET_RECOMMENDATION_PATH`).
    - Non-fatal when history is insufficient (`QUAID_E2E_BUDGET_TUNE_MIN_SAMPLES`, `QUAID_E2E_BUDGET_TUNE_BUFFER_RATIO` control tuning).
 10. Strict notification-delivery assertions.
-   - Notify matrix now tracks sent/failure/no-channel counters per level.
+   - Notify matrix now tracks sent/failure/no-channel/config-load counters per level and computes aggregate activity.
+   - Notify matrix waits for reset extraction completion before asserting level behavior.
    - Optional strict mode (`QUAID_E2E_NOTIFY_REQUIRE_DELIVERY=true`) fails when normal/debug have no active channel context or no successful sends.
 11. Stage-specific budget tuning primitives.
    - E2E summary now records `stage_durations_seconds` for each stage.

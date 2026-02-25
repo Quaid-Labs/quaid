@@ -553,7 +553,7 @@ During the janitor, an API failure in any memory task (review, dedup, contradict
 Before every embedding operation, `_ollama_healthy()` performs a 200ms health check against the Ollama API, cached for 30 seconds. If Ollama is unreachable:
 
 - **During extraction:** Facts are stored without embeddings. The janitor's `embeddings` task (Phase 1) backfills missing embeddings on its next run.
-- **During retrieval:** Vector search is skipped entirely. Retrieval falls back to FTS-only (keyword search), which still returns results but with lower recall quality. The fallback is transparent to the user.
+- **During retrieval:** If `retrieval.fail_hard=false`, vector search may degrade to FTS-only (keyword search) with warning logs. If `retrieval.fail_hard=true`, retrieval raises instead of degrading.
 
 ### SQLite Lock Contention
 
@@ -563,7 +563,9 @@ If a write does fail after the timeout, `get_connection()` catches the exception
 
 ### General Strategy
 
-The system follows a "store what you can, skip what you can't" philosophy. A failed embedding doesn't prevent fact storage. A failed API call doesn't crash the gateway. A failed janitor task doesn't corrupt existing data. The worst case for any single failure is a temporary reduction in recall quality, which self-heals on the next successful run.
+The system is configurable between strict and degraded behavior:
+- `retrieval.fail_hard=true` emphasizes correctness and explicit failure signals.
+- `retrieval.fail_hard=false` emphasizes continuity with noisy fallback logging.
 
 ---
 
@@ -806,10 +808,11 @@ class ModelConfig:
 
 #### API Key Resolution
 
-Quaid uses pass-through API keys from the main system agent -- it does not manage keys directly. Keys are resolved via the platform adapter in priority order:
-1. Environment variable (`ANTHROPIC_API_KEY`) -- typically set by the gateway or agent runtime
-2. `.env` file in `QUAID_HOME` (fallback for standalone CLI use)
-3. macOS Keychain (OpenClaw adapter only -- service lookup by agent name)
+Quaid uses pass-through API keys from the main system agent -- it does not manage keys directly.
+Credential fallback behavior is governed by `retrieval.fail_hard`:
+1. `fail_hard=true` (default): no fallback chains are used.
+2. `fail_hard=false`: adapter-specific fallback chains are allowed, but log explicit warnings.
+3. OpenClaw can resolve Anthropic credentials from gateway/runtime context and, when fallback is allowed, from `.env`/keychain helper paths.
 
 #### Prompt Caching
 

@@ -229,6 +229,42 @@ class TestClaudeCodeLLMProvider:
             with pytest.raises(subprocess.TimeoutExpired):
                 p.llm_call([{"role": "user", "content": "hi"}])
 
+    def test_oauth_env_file_fallback_used_when_failhard_disabled(self, tmp_path, monkeypatch):
+        p = ClaudeCodeLLMProvider()
+        env_file = tmp_path / ".env"
+        env_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=token-from-file\n")
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.is_fail_hard_enabled", return_value=False), \
+             patch("lib.adapter.get_adapter", return_value=MagicMock(quaid_home=lambda: tmp_path)), \
+             patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
+            p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+            passed_env = mock_run.call_args.kwargs["env"]
+            assert passed_env.get("CLAUDE_CODE_OAUTH_TOKEN") == "token-from-file"
+
+    def test_oauth_env_file_fallback_blocked_when_failhard_enabled(self, tmp_path, monkeypatch):
+        p = ClaudeCodeLLMProvider()
+        env_file = tmp_path / ".env"
+        env_file.write_text("CLAUDE_CODE_OAUTH_TOKEN=token-from-file\n")
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.is_fail_hard_enabled", return_value=True), \
+             patch("lib.adapter.get_adapter", return_value=MagicMock(quaid_home=lambda: tmp_path)), \
+             patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
+            p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+            passed_env = mock_run.call_args.kwargs["env"]
+            assert "CLAUDE_CODE_OAUTH_TOKEN" not in passed_env
+
 
 # ---------------------------------------------------------------------------
 # TestLLMProvider
