@@ -436,7 +436,8 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
 
 def call_deep_reasoning(prompt: str, system_prompt: str = "Respond with JSON only. No explanation, no markdown fencing.",
                         max_tokens: int = 2000,
-                        timeout: float = DEEP_REASONING_TIMEOUT) -> Tuple[Optional[str], float]:
+                        timeout: float = DEEP_REASONING_TIMEOUT,
+                        model: Optional[str] = None) -> Tuple[Optional[str], float]:
     """Call the deep-reasoning model and return (response text, duration).
 
     Used for: memory review, workspace audit, contradiction resolution, edge extraction.
@@ -444,11 +445,12 @@ def call_deep_reasoning(prompt: str, system_prompt: str = "Respond with JSON onl
     Returns (None, duration) only for transient LLM failures after retries.
     """
     _load_model_config()
+    target_model = model or _deep_reasoning_model
     return call_llm(
         system_prompt=system_prompt,
         user_message=prompt,
-        model=_deep_reasoning_model,
-        model_tier="deep",
+        model=target_model,
+        model_tier=_resolve_tier(target_model),
         max_tokens=max_tokens,
         timeout=timeout,
     )
