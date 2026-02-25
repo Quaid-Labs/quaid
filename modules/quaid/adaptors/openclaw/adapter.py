@@ -11,6 +11,7 @@ from typing import Optional
 
 from adaptors.openclaw.providers import GatewayLLMProvider
 from lib.adapter import ChannelInfo, QuaidAdapter, _read_env_file
+from lib.fail_policy import is_fail_hard_enabled
 
 
 class OpenClawAdapter(QuaidAdapter):
@@ -281,7 +282,31 @@ class OpenClawAdapter(QuaidAdapter):
             except (json.JSONDecodeError, IOError, OSError):
                 pass
 
-        # No env/.env fallback here: avoid implicit paid API usage.
+        if is_fail_hard_enabled():
+            return None
+
+        # Reliability fallback path (failHard=false only): allow explicit env/.env
+        # key resolution, but always emit noisy diagnostics.
+        env_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if env_key:
+            print(
+                "[adapter][FALLBACK] Using ANTHROPIC_API_KEY from environment because "
+                "gateway auth profiles did not resolve a credential.",
+                file=sys.stderr,
+            )
+            return env_key
+
+        env_file = self.quaid_home() / ".env"
+        if env_file.exists():
+            fallback = _read_env_file(env_file, "ANTHROPIC_API_KEY")
+            if fallback:
+                print(
+                    "[adapter][FALLBACK] Using ANTHROPIC_API_KEY from workspace .env because "
+                    "gateway auth profiles did not resolve a credential.",
+                    file=sys.stderr,
+                )
+                return fallback
+
         return None
 
     def discover_llm_providers(self) -> list:

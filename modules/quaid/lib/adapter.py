@@ -21,10 +21,13 @@ import abc
 import json
 import os
 import re
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
+
+from lib.fail_policy import is_fail_hard_enabled
 
 if TYPE_CHECKING:
     from lib.providers import EmbeddingsProvider, LLMProvider
@@ -309,10 +312,31 @@ class StandaloneAdapter(QuaidAdapter):
         provider_id = cfg.models.llm_provider
 
         if not provider_id or provider_id == "default":
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    "models.llmProvider must be explicitly set in config/memory.json. "
+                    "Valid values: 'claude-code', 'anthropic', 'openai-compatible'. "
+                    "No default fallback while failHard is enabled."
+                )
+            # Reliability path when failHard=false: choose explicit fallback chain.
+            api_key = self.get_api_key("ANTHROPIC_API_KEY")
+            if api_key:
+                print(
+                    "[adapter][FALLBACK] models.llmProvider is unset/default; using "
+                    "anthropic provider from ANTHROPIC_API_KEY.",
+                    file=sys.stderr,
+                )
+                return AnthropicLLMProvider(api_key=api_key)
+            if shutil.which("claude"):
+                print(
+                    "[adapter][FALLBACK] models.llmProvider is unset/default; using "
+                    "claude-code provider because claude CLI is available.",
+                    file=sys.stderr,
+                )
+                return ClaudeCodeLLMProvider()
             raise RuntimeError(
-                "models.llmProvider must be explicitly set in config/memory.json. "
-                "Valid values: 'claude-code', 'anthropic', 'openai-compatible'. "
-                "No default fallback — set it explicitly."
+                "models.llmProvider is unset/default and fallback chain found no usable provider. "
+                "Set models.llmProvider explicitly in config/memory.json."
             )
 
         if provider_id == "openai-compatible":
