@@ -20,6 +20,7 @@ import sys
 import time
 from typing import Dict, Optional, Tuple
 
+from lib.fail_policy import is_fail_hard_enabled
 from lib.providers import LLMResult
 from lib.runtime_context import get_llm_provider
 
@@ -311,6 +312,15 @@ def call_llm(system_prompt: str, user_message: str,
 
     duration = time.time() - start_time
     print(f"[llm_clients] LLM error: {last_error}", file=sys.stderr)
+    if is_fail_hard_enabled():
+        raise RuntimeError(
+            "LLM call failed after retries while failHard is enabled "
+            f"(tier={resolved_tier}, model={model})."
+        ) from last_error
+    print(
+        "[llm_clients][FALLBACK] Returning None after LLM failure because failHard is disabled.",
+        file=sys.stderr,
+    )
     return None, duration
 
 
