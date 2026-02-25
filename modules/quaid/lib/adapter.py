@@ -322,6 +322,8 @@ class StandaloneAdapter(QuaidAdapter):
         # Resolve provider from config with tier-aware overrides.
         from config import get_config
         cfg = get_config()
+        deep_model = getattr(cfg.models, "deep_reasoning", "claude-opus-4-6")
+        fast_model = getattr(cfg.models, "fast_reasoning", "claude-haiku-4-5")
         provider_id = cfg.models.llm_provider
         if model_tier == "fast":
             fast_provider = getattr(cfg.models, "fast_reasoning_provider", "default")
@@ -354,7 +356,10 @@ class StandaloneAdapter(QuaidAdapter):
                     "claude-code provider because claude CLI is available.",
                     file=sys.stderr,
                 )
-                return ClaudeCodeLLMProvider()
+                return ClaudeCodeLLMProvider(
+                    deep_model=deep_model,
+                    fast_model=fast_model,
+                )
             raise RuntimeError(
                 "models.llmProvider is unset/default and fallback chain found no usable provider. "
                 "Set models.llmProvider explicitly in config/memory.json."
@@ -367,12 +372,15 @@ class StandaloneAdapter(QuaidAdapter):
             api_key = os.environ.get("OPENAI_API_KEY", "")
             return OpenAICompatibleLLMProvider(
                 base_url=base_url, api_key=api_key,
-                deep_model=cfg.models.deep_reasoning,
-                fast_model=cfg.models.fast_reasoning,
+                deep_model=deep_model,
+                fast_model=fast_model,
             )
 
         if provider_id == "claude-code":
-            return ClaudeCodeLLMProvider()
+            return ClaudeCodeLLMProvider(
+                deep_model=deep_model,
+                fast_model=fast_model,
+            )
 
         if provider_id == "anthropic":
             api_key = self.get_api_key("ANTHROPIC_API_KEY")
