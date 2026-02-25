@@ -247,3 +247,27 @@ class TestCallLlmProvider:
         result, duration = llm_clients.call_llm("system", "user", max_retries=3)
         assert result is not None
         assert call_count[0] == 3  # 2 failures + 1 success
+
+    def test_raises_on_persistent_error_when_failhard_enabled(self, test_adapter):
+        """Persistent provider failures should raise when failHard is enabled."""
+        import core.llm.clients as llm_clients
+
+        def always_fail(*_args, **_kwargs):
+            raise ConnectionError("persistent failure")
+
+        test_adapter._llm.llm_call = always_fail
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="failHard is enabled"):
+                llm_clients.call_llm("system", "user", max_retries=0)
+
+    def test_returns_none_on_persistent_error_when_failhard_disabled(self, test_adapter):
+        """Persistent provider failures should degrade to None when failHard is disabled."""
+        import core.llm.clients as llm_clients
+
+        def always_fail(*_args, **_kwargs):
+            raise ConnectionError("persistent failure")
+
+        test_adapter._llm.llm_call = always_fail
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
+            result, _duration = llm_clients.call_llm("system", "user", max_retries=0)
+        assert result is None

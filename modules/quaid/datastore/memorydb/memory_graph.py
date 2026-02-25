@@ -122,7 +122,12 @@ class Node:
     confirmation_count: int = 0  # How many times this fact has been re-confirmed
     last_confirmed_at: Optional[str] = None  # When last confirmed by re-extraction
     owner_id: Optional[str] = None  # Multi-user: who owns this memory
+    actor_id: Optional[str] = None  # Canonical entity asserting/performing this memory event
+    subject_entity_id: Optional[str] = None  # Canonical entity this memory is about
     session_id: Optional[str] = None  # Session where this memory was created
+    source_channel: Optional[str] = None  # Channel/source type (telegram/discord/slack/dm/etc.)
+    source_conversation_id: Optional[str] = None  # Stable conversation/thread/group identifier
+    source_author_id: Optional[str] = None  # External speaker/author handle or ID
     fact_type: str = "unknown"  # mutable, immutable, contextual
     knowledge_type: str = "fact"  # fact, belief, preference, experience
     extraction_confidence: float = 0.5  # How confident the classifier was
@@ -205,6 +210,11 @@ class MemoryGraph:
                 ("content_hash", "TEXT"),
                 ("superseded_by", "TEXT"),
                 ("knowledge_type", "TEXT DEFAULT 'fact'"),
+                ("actor_id", "TEXT"),
+                ("subject_entity_id", "TEXT"),
+                ("source_channel", "TEXT"),
+                ("source_conversation_id", "TEXT"),
+                ("source_author_id", "TEXT"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {typedef}")
@@ -449,10 +459,11 @@ class MemoryGraph:
                 INSERT OR REPLACE INTO nodes
                 (id, type, name, attributes, embedding, verified, pinned, confidence,
                  source, source_id, privacy, valid_from, valid_until,
-                 created_at, updated_at, accessed_at, access_count, storage_strength, owner_id, session_id,
+                 created_at, updated_at, accessed_at, access_count, storage_strength,
+                 owner_id, actor_id, subject_entity_id, session_id, source_channel, source_conversation_id, source_author_id,
                  fact_type, knowledge_type, extraction_confidence, status, speaker, content_hash, superseded_by,
                  confirmation_count, last_confirmed_at, keywords)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 node.id, node.type, node.name,
                 json.dumps(node.attributes),
@@ -469,7 +480,12 @@ class MemoryGraph:
                 node.access_count,
                 node.storage_strength,
                 node.owner_id,
+                node.actor_id,
+                node.subject_entity_id,
                 node.session_id,
+                node.source_channel,
+                node.source_conversation_id,
+                node.source_author_id,
                 node.fact_type,
                 node.knowledge_type,
                 node.extraction_confidence,
@@ -517,7 +533,8 @@ class MemoryGraph:
                     valid_from = ?, valid_until = ?,
                     updated_at = ?, accessed_at = ?, access_count = ?,
                     storage_strength = ?,
-                    owner_id = ?, session_id = ?,
+                    owner_id = ?, actor_id = ?, subject_entity_id = ?, session_id = ?,
+                    source_channel = ?, source_conversation_id = ?, source_author_id = ?,
                     fact_type = ?, knowledge_type = ?, extraction_confidence = ?,
                     status = ?, speaker = ?,
                     content_hash = ?, superseded_by = ?,
@@ -539,7 +556,12 @@ class MemoryGraph:
                 node.access_count,
                 node.storage_strength,
                 node.owner_id,
+                node.actor_id,
+                node.subject_entity_id,
                 node.session_id,
+                node.source_channel,
+                node.source_conversation_id,
+                node.source_author_id,
                 node.fact_type,
                 node.knowledge_type,
                 node.extraction_confidence,
@@ -667,7 +689,12 @@ class MemoryGraph:
             access_count=row['access_count'],
             storage_strength=row['storage_strength'] if 'storage_strength' in row.keys() else 0.0,
             owner_id=row['owner_id'] if 'owner_id' in row.keys() else None,
+            actor_id=row['actor_id'] if 'actor_id' in row.keys() else None,
+            subject_entity_id=row['subject_entity_id'] if 'subject_entity_id' in row.keys() else None,
             session_id=row['session_id'] if 'session_id' in row.keys() else None,
+            source_channel=row['source_channel'] if 'source_channel' in row.keys() else None,
+            source_conversation_id=row['source_conversation_id'] if 'source_conversation_id' in row.keys() else None,
+            source_author_id=row['source_author_id'] if 'source_author_id' in row.keys() else None,
             fact_type=row['fact_type'] if 'fact_type' in row.keys() else 'unknown',
             knowledge_type=row['knowledge_type'] if 'knowledge_type' in row.keys() else 'fact',
             extraction_confidence=row['extraction_confidence'] if 'extraction_confidence' in row.keys() else 0.5,
@@ -2598,6 +2625,21 @@ def classify_intent(query: str) -> Tuple[str, Dict[str, float]]:
     return best_intent, best_boosts
 
 
+def _expand_low_signal_query(query: str, intent: str) -> str:
+    """Expand under-specified recall queries when first pass yields low signal."""
+    q = (query or "").strip()
+    if not q:
+        return q
+    intent = (intent or "GENERAL").upper()
+    if intent == "WHEN":
+        return f"{q} timeline latest current date before after changed"
+    if intent == "PROJECT":
+        return f"{q} project implementation code schema api tests migration"
+    if intent in {"WHO", "RELATION"}:
+        return f"{q} who relationship said suggested source"
+    return f"{q} key facts names dates details"
+
+
 def _get_fusion_weights(intent: Optional[str] = None) -> Tuple[float, float]:
     """Return (vector_weight, fts_weight) based on query intent.
 
@@ -2768,6 +2810,7 @@ def recall(
     date_to: Optional[str] = None,
     debug: bool = False,
     technical_scope: str = "any",
+    low_signal_retry: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Recall memories matching a query.
@@ -3029,6 +3072,11 @@ def recall(
             "valid_until": node.valid_until,
             "privacy": node.privacy,
             "owner_id": node.owner_id,
+            "actor_id": node.actor_id,
+            "subject_entity_id": node.subject_entity_id,
+            "source_channel": node.source_channel,
+            "source_conversation_id": node.source_conversation_id,
+            "source_author_id": node.source_author_id,
             "_multi_pass": node.id in _multi_pass_ids,
             "is_technical": _attrs.get("is_technical", False),
             "source_type": _attrs.get("source_type"),
@@ -3268,6 +3316,42 @@ def recall(
         latency_ms=_recall_elapsed_ms,
     )
 
+    # Low-signal retry: if first pass produced no useful results, retry once with
+    # an intent-shaped expanded query. This logic lives in datastore recall so it
+    # applies consistently across interfaces, not in harnesses.
+    if low_signal_retry:
+        low_info_count = sum(1 for r in final_output if _is_low_information_entity_result(r))
+        low_signal = (len(final_output) == 0) or (
+            len(final_output) <= max(1, limit // 3) and low_info_count == len(final_output)
+        )
+        if low_signal:
+            retry_query = _expand_low_signal_query(clean_query, intent)
+            if retry_query and retry_query != clean_query:
+                try:
+                    retry_output = recall(
+                        retry_query,
+                        limit=limit,
+                        privacy=privacy,
+                        owner_id=owner_id,
+                        min_similarity=min_similarity,
+                        use_routing=use_routing,
+                        use_aliases=use_aliases,
+                        use_intent=use_intent,
+                        use_multi_pass=use_multi_pass,
+                        use_reranker=use_reranker,
+                        current_session_id=current_session_id,
+                        compaction_time=compaction_time,
+                        date_from=date_from,
+                        date_to=date_to,
+                        debug=False,
+                        technical_scope=technical_scope,
+                        low_signal_retry=False,
+                    )
+                    if len(retry_output) > len(final_output):
+                        return retry_output
+                except Exception:
+                    pass
+
     return final_output
 
 
@@ -3314,7 +3398,12 @@ def store(
     source: Optional[str] = None,
     source_id: Optional[str] = None,
     owner_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
     fact_type: str = "mutable",
     extraction_confidence: float = 0.5,
     dedup_threshold: float = 0.95,  # Catch near-identical duplicates (was 0.92, raised to avoid false positives on similar-but-different facts)
@@ -3661,10 +3750,15 @@ def store(
         source=source,
         source_id=source_id,
         confidence=adjusted_confidence,
+        actor_id=actor_id,
+        subject_entity_id=subject_entity_id,
         fact_type=fact_type,
         knowledge_type=knowledge_type,
         extraction_confidence=extraction_confidence,
-        speaker=speaker
+        speaker=speaker,
+        source_channel=source_channel,
+        source_conversation_id=source_conversation_id,
+        source_author_id=source_author_id,
     )
     node.owner_id = owner_id
     node.session_id = session_id
@@ -3901,6 +3995,11 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
             "pinned": node.pinned,
             "confidence": node.confidence,
             "owner_id": node.owner_id,
+            "actor_id": node.actor_id,
+            "subject_entity_id": node.subject_entity_id,
+            "source_channel": node.source_channel,
+            "source_conversation_id": node.source_conversation_id,
+            "source_author_id": node.source_author_id,
             "created_at": node.created_at,
             "updated_at": node.updated_at,
             "attributes": node.attributes
@@ -4403,6 +4502,11 @@ if __name__ == "__main__":
         store_p.add_argument("--privacy", default="shared", help="Privacy level (default: shared)")
         store_p.add_argument("--session-id", default=None, help="Session ID")
         store_p.add_argument("--speaker", default=None, help="Speaker name")
+        store_p.add_argument("--actor-id", default=None, help="Canonical actor/entity ID for this memory event")
+        store_p.add_argument("--subject-entity-id", default=None, help="Canonical subject entity ID this memory is about")
+        store_p.add_argument("--source-channel", default=None, help="Source channel type (telegram/discord/slack/dm/etc.)")
+        store_p.add_argument("--source-conversation-id", default=None, help="Stable conversation/thread/group identifier")
+        store_p.add_argument("--source-author-id", default=None, help="External speaker/author handle or ID")
         store_p.add_argument("--skip-dedup", action="store_true", help="Skip deduplication check")
         store_p.add_argument("--knowledge-type", default="fact", choices=["fact", "belief", "preference", "experience"], help="Knowledge type (default: fact)")
         store_p.add_argument("--source-type", default=None, choices=["user", "assistant", "both", "tool", "import"], help="Source type (user, assistant, both, tool, import)")
@@ -4636,7 +4740,12 @@ if __name__ == "__main__":
                     extraction_confidence=args.extraction_confidence,
                     source=args.source,
                     owner_id=owner,
+                    actor_id=args.actor_id,
+                    subject_entity_id=args.subject_entity_id,
                     session_id=args.session_id,
+                    source_channel=args.source_channel,
+                    source_conversation_id=args.source_conversation_id,
+                    source_author_id=args.source_author_id,
                     skip_dedup=args.skip_dedup,
                     speaker=args.speaker,
                     status=args.status,

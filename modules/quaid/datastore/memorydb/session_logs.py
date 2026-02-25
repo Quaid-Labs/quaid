@@ -78,6 +78,10 @@ def ensure_schema(conn) -> None:
             owner_id TEXT NOT NULL,
             source_label TEXT,
             source_path TEXT,
+            source_channel TEXT,
+            conversation_id TEXT,
+            participant_ids TEXT,
+            participant_aliases TEXT,
             message_count INTEGER DEFAULT 0,
             topic_hint TEXT,
             transcript_text TEXT NOT NULL,
@@ -87,8 +91,20 @@ def ensure_schema(conn) -> None:
         )
         """
     )
+    # Forward-compatible additive migrations for older DBs.
+    for col, ddl in [
+        ("source_channel", "TEXT"),
+        ("conversation_id", "TEXT"),
+        ("participant_ids", "TEXT"),
+        ("participant_aliases", "TEXT"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE session_logs ADD COLUMN {col} {ddl}")
+        except Exception:
+            pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_owner_updated ON session_logs(owner_id, updated_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_updated ON session_logs(updated_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_conversation ON session_logs(conversation_id, updated_at DESC)")
 
     conn.execute(
         """
@@ -115,6 +131,10 @@ def index_session_log(
     owner_id: str = "default",
     source_label: str = "unknown",
     source_path: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    participant_ids: Optional[List[str]] = None,
+    participant_aliases: Optional[Dict[str, str]] = None,
     message_count: Optional[int] = None,
     topic_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -143,10 +163,23 @@ def index_session_log(
             conn.execute(
                 """
                 UPDATE session_logs
-                SET owner_id = ?, source_label = ?, source_path = ?, message_count = ?, topic_hint = ?, updated_at = ?
+                SET owner_id = ?, source_label = ?, source_path = ?, source_channel = ?, conversation_id = ?,
+                    participant_ids = ?, participant_aliases = ?, message_count = ?, topic_hint = ?, updated_at = ?
                 WHERE session_id = ?
                 """,
-                (owner, str(source_label or "unknown"), source_path, msg_count, hint, now, sid),
+                (
+                    owner,
+                    str(source_label or "unknown"),
+                    source_path,
+                    str(source_channel or "").strip() or None,
+                    str(conversation_id or "").strip() or None,
+                    json.dumps(participant_ids or [], ensure_ascii=True),
+                    json.dumps(participant_aliases or {}, ensure_ascii=True),
+                    msg_count,
+                    hint,
+                    now,
+                    sid,
+                ),
             )
             return {
                 "status": "unchanged",
@@ -159,13 +192,18 @@ def index_session_log(
         conn.execute(
             """
             INSERT INTO session_logs (
-                session_id, owner_id, source_label, source_path, message_count,
+                session_id, owner_id, source_label, source_path, source_channel, conversation_id,
+                participant_ids, participant_aliases, message_count,
                 topic_hint, transcript_text, content_hash, indexed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 owner_id = excluded.owner_id,
                 source_label = excluded.source_label,
                 source_path = excluded.source_path,
+                source_channel = excluded.source_channel,
+                conversation_id = excluded.conversation_id,
+                participant_ids = excluded.participant_ids,
+                participant_aliases = excluded.participant_aliases,
                 message_count = excluded.message_count,
                 topic_hint = excluded.topic_hint,
                 transcript_text = excluded.transcript_text,
@@ -177,6 +215,10 @@ def index_session_log(
                 owner,
                 str(source_label or "unknown"),
                 source_path,
+                str(source_channel or "").strip() or None,
+                str(conversation_id or "").strip() or None,
+                json.dumps(participant_ids or [], ensure_ascii=True),
+                json.dumps(participant_aliases or {}, ensure_ascii=True),
                 msg_count,
                 hint,
                 transcript_text,
@@ -218,6 +260,7 @@ def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List
             rows = conn.execute(
                 """
                 SELECT session_id, owner_id, source_label, source_path, message_count, topic_hint, indexed_at, updated_at
+                       , source_channel, conversation_id, participant_ids, participant_aliases
                 FROM session_logs WHERE owner_id = ?
                 ORDER BY updated_at DESC LIMIT ?
                 """,
@@ -227,6 +270,7 @@ def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List
             rows = conn.execute(
                 """
                 SELECT session_id, owner_id, source_label, source_path, message_count, topic_hint, indexed_at, updated_at
+                       , source_channel, conversation_id, participant_ids, participant_aliases
                 FROM session_logs ORDER BY updated_at DESC LIMIT ?
                 """,
                 (lim,),
@@ -242,6 +286,7 @@ def load_session(session_id: str, owner_id: Optional[str] = None) -> Optional[Di
             row = conn.execute(
                 """
                 SELECT session_id, owner_id, source_label, source_path, message_count, topic_hint, indexed_at, updated_at, transcript_text
+                       , source_channel, conversation_id, participant_ids, participant_aliases
                 FROM session_logs WHERE session_id = ? AND owner_id = ?
                 """,
                 (sid, str(owner_id)),
@@ -250,6 +295,7 @@ def load_session(session_id: str, owner_id: Optional[str] = None) -> Optional[Di
             row = conn.execute(
                 """
                 SELECT session_id, owner_id, source_label, source_path, message_count, topic_hint, indexed_at, updated_at, transcript_text
+                       , source_channel, conversation_id, participant_ids, participant_aliases
                 FROM session_logs WHERE session_id = ?
                 """,
                 (sid,),
@@ -271,7 +317,8 @@ def load_last_session(owner_id: Optional[str] = None, exclude_session_id: Option
             params.append(exclude)
 
         sql = (
-            "SELECT session_id, owner_id, source_label, source_path, message_count, topic_hint, indexed_at, updated_at, transcript_text "
+            "SELECT session_id, owner_id, source_label, source_path, source_channel, conversation_id, participant_ids, participant_aliases, "
+            "message_count, topic_hint, indexed_at, updated_at, transcript_text "
             "FROM session_logs "
         )
         if where:
@@ -386,6 +433,10 @@ def _main() -> int:
     ingest_p.add_argument("--owner", default="default")
     ingest_p.add_argument("--label", default="unknown")
     ingest_p.add_argument("--source-path", default=None)
+    ingest_p.add_argument("--source-channel", default=None)
+    ingest_p.add_argument("--conversation-id", default=None)
+    ingest_p.add_argument("--participant-ids", default=None, help="Comma-separated participant IDs/handles")
+    ingest_p.add_argument("--participant-aliases", default=None, help="JSON object mapping alias -> canonical ID")
     ingest_p.add_argument("--message-count", type=int, default=0)
     ingest_p.add_argument("--topic-hint", default="")
     ingest_p.add_argument("--transcript-file", required=True)
@@ -418,6 +469,10 @@ def _main() -> int:
             owner_id=args.owner,
             source_label=args.label,
             source_path=args.source_path,
+            source_channel=args.source_channel,
+            conversation_id=args.conversation_id,
+            participant_ids=[p.strip() for p in str(args.participant_ids or "").split(",") if p.strip()],
+            participant_aliases=json.loads(args.participant_aliases) if args.participant_aliases else None,
             message_count=args.message_count,
             topic_hint=args.topic_hint,
         )

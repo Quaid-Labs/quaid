@@ -34,6 +34,10 @@ def test_session_log_index_list_load_search(monkeypatch, tmp_path):
         transcript=transcript,
         owner_id="quaid",
         source_label="Compaction",
+        source_channel="telegram",
+        conversation_id="chat-123",
+        participant_ids=["quaid", "user:owner"],
+        participant_aliases={"ownerAlias": "user:owner"},
         message_count=4,
     )
     assert out["status"] == "indexed"
@@ -42,10 +46,14 @@ def test_session_log_index_list_load_search(monkeypatch, tmp_path):
     recent = session_logs.list_recent_sessions(limit=5, owner_id="quaid")
     assert len(recent) == 1
     assert recent[0]["session_id"] == "sess-a1"
+    assert recent[0]["source_channel"] == "telegram"
+    assert recent[0]["conversation_id"] == "chat-123"
 
     loaded = session_logs.load_session("sess-a1", owner_id="quaid")
     assert loaded is not None
     assert "Wendy" in loaded["transcript_text"]
+    assert loaded["source_channel"] == "telegram"
+    assert loaded["conversation_id"] == "chat-123"
 
     hits = session_logs.search_session_logs("mother Wendy", owner_id="quaid", limit=5, min_similarity=0.05)
     assert len(hits) >= 1
