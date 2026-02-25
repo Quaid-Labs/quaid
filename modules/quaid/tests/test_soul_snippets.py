@@ -344,6 +344,37 @@ class TestDistillation:
         assert "curiosity" not in (workspace_dir / "SOUL.md").read_text()
 
     @patch("datastore.docsdb.soul_snippets.call_deep_reasoning")
+    def test_distillation_calls_deep_reasoning_without_model_tier(self, mock_opus, workspace_dir, mock_config):
+        """Regression: distillation must not pass unsupported kwargs to call_deep_reasoning."""
+        journal_dir = workspace_dir / "journal"
+        journal_dir.mkdir()
+        (journal_dir / "SOUL.journal.md").write_text(
+            "# SOUL Journal\n\n"
+            "## 2026-02-10 — Reset\n"
+            "Today I felt something shift in how I approach problems.\n"
+        )
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+
+        mock_opus.return_value = (json.dumps({
+            "reasoning": "The shift is worth preserving.",
+            "additions": [],
+            "edits": [],
+            "captured_dates": [],
+        }), 0.8)
+
+        with patch("datastore.docsdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.docsdb.soul_snippets import run_journal_distillation
+            run_journal_distillation(dry_run=True, force_distill=True)
+
+        mock_opus.assert_called_once()
+        args, kwargs = mock_opus.call_args
+        assert len(args) == 1
+        assert isinstance(args[0], str) and "Recent journal entries" in args[0]
+        assert "model_tier" not in kwargs
+        assert kwargs.get("system_prompt", "").startswith("Respond with JSON only")
+        assert isinstance(kwargs.get("max_tokens"), int)
+
+    @patch("datastore.docsdb.soul_snippets.call_deep_reasoning")
     def test_full_distillation_apply(self, mock_opus, workspace_dir, mock_config):
         """End-to-end apply with mocked Opus response."""
         journal_dir = workspace_dir / "journal"
@@ -823,6 +854,18 @@ class TestLegacyApplyDecisions:
         stats = apply_decisions(decisions, all_snippets, dry_run=True)
         assert len(stats["errors"]) == 1
 
+    def test_unknown_file_decision_is_ignored(self, workspace_dir):
+        from datastore.docsdb.soul_snippets import apply_decisions
+        all_snippets = {
+            "SOUL.md": {"parent_content": "", "snippets": ["one"], "config": {}}
+        }
+        decisions = [{"file": "AGENTS.md", "snippet_index": 1, "action": "DISCARD"}]
+        stats = apply_decisions(decisions, all_snippets, dry_run=True)
+        assert stats["discarded"] == 0
+        assert stats["folded"] == 0
+        assert stats["rewritten"] == 0
+        assert stats["errors"] == []
+
     def test_unknown_action_defaults_to_discard(self, workspace_dir):
         from datastore.docsdb.soul_snippets import apply_decisions
         all_snippets = {
@@ -955,6 +998,34 @@ class TestSnippetReview:
         assert result["folded"] == 1
         # Dry run: parent file should NOT be changed
         assert "trust" not in (workspace_dir / "SOUL.md").read_text()
+
+    @patch("datastore.docsdb.soul_snippets.call_deep_reasoning")
+    def test_snippet_review_calls_deep_reasoning_without_model_tier(self, mock_opus, workspace_dir, mock_config):
+        """Regression: snippet review must not pass unsupported kwargs to call_deep_reasoning."""
+        (workspace_dir / "SOUL.snippets.md").write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- I value trust deeply.\n"
+        )
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+
+        mock_opus.return_value = (json.dumps({
+            "decisions": [
+                {"file": "SOUL.md", "snippet_index": 1, "action": "DISCARD", "reason": "test"}
+            ]
+        }), 0.6)
+
+        with patch("datastore.docsdb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.docsdb.soul_snippets import run_soul_snippets_review
+            run_soul_snippets_review(dry_run=True)
+
+        mock_opus.assert_called_once()
+        args, kwargs = mock_opus.call_args
+        assert len(args) == 1
+        assert isinstance(args[0], str) and "Pending snippets" in args[0]
+        assert "model_tier" not in kwargs
+        assert kwargs.get("system_prompt", "").startswith("Respond with JSON only")
+        assert isinstance(kwargs.get("max_tokens"), int)
 
     @patch("datastore.docsdb.soul_snippets.call_deep_reasoning")
     def test_apply_folds_into_parent(self, mock_opus, workspace_dir, mock_config):

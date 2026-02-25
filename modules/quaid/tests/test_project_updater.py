@@ -98,14 +98,14 @@ A test project.
 
 
 def _get_registry():
-    from datastore.docsdb.registry import DocsRegistry
+    from core.docs.registry import DocsRegistry
     return DocsRegistry(db_path=_tmp_db)
 
 
 class TestProcessEvent:
     def test_basic_event(self, setup_env):
         """Process a basic event file with project hint."""
-        from datastore.docsdb.project_updater import process_event
+        from core.docs.project_updater import process_event
 
         tmp_path = setup_env
         event = {
@@ -125,13 +125,13 @@ class TestProcessEvent:
         assert not event_path.exists()
 
     def test_missing_event_file(self, setup_env):
-        from datastore.docsdb.project_updater import process_event
+        from core.docs.project_updater import process_event
         result = process_event("/nonexistent/event.json")
         assert result["success"] is False
 
     def test_unresolvable_project(self, setup_env):
         """Event with no resolvable project is skipped."""
-        from datastore.docsdb.project_updater import process_event
+        from core.docs.project_updater import process_event
 
         tmp_path = setup_env
         event = {
@@ -151,7 +151,7 @@ class TestProcessEvent:
 class TestProcessAllEvents:
     def test_multiple_events(self, setup_env):
         """Process multiple events chronologically."""
-        from datastore.docsdb.project_updater import process_all_events
+        from core.docs.project_updater import process_all_events
 
         tmp_path = setup_env
         staging = tmp_path / "projects" / "staging"
@@ -171,7 +171,7 @@ class TestProcessAllEvents:
         assert len(list(staging.glob("*.json"))) == 0
 
     def test_no_events(self, setup_env):
-        from datastore.docsdb.project_updater import process_all_events
+        from core.docs.project_updater import process_all_events
         result = process_all_events()
         assert result["processed"] == 0
 
@@ -179,7 +179,7 @@ class TestProcessAllEvents:
 class TestRefreshProjectMd:
     def test_updates_file_list(self, setup_env):
         """Refresh regenerates the file list in PROJECT.md."""
-        from datastore.docsdb.project_updater import refresh_project_md
+        from core.docs.project_updater import refresh_project_md
 
         tmp_path = setup_env
         registry = _get_registry()
@@ -200,9 +200,47 @@ class TestRefreshProjectMd:
         assert "notes.md" in content
 
     def test_unknown_project(self, setup_env):
-        from datastore.docsdb.project_updater import refresh_project_md
+        from core.docs.project_updater import refresh_project_md
         ok = refresh_project_md("nonexistent")
         assert ok is False
+
+    def test_refresh_recovers_missing_external_heading(self, setup_env):
+        """Refresh should still rebuild Files & Assets if headings are malformed."""
+        from core.docs.project_updater import refresh_project_md
+
+        tmp_path = setup_env
+        registry = _get_registry()
+        project_md_path = tmp_path / "projects" / "test-project" / "PROJECT.md"
+
+        # Simulate legacy/broken PROJECT.md lacking "### External Files".
+        project_md_path.write_text(
+            """# Project: Test Project
+
+## Overview
+A test project.
+
+## Files & Assets
+
+### In This Directory
+(auto-populated by janitor)
+
+## Documents
+| Document | Tracks | Auto-Update |
+|----------|--------|-------------|
+"""
+        )
+
+        # Ensure there is at least one discoverable doc under the project.
+        notes = tmp_path / "projects" / "test-project" / "notes.md"
+        notes.write_text("# Notes")
+        registry.register("projects/test-project/notes.md", project="test-project")
+
+        ok = refresh_project_md("test-project")
+        assert ok is True
+        content = project_md_path.read_text()
+        assert "### In This Directory" in content
+        assert "### External Files" in content
+        assert "- projects/test-project/notes.md" in content
 
 
 class TestExclusionPatterns:
@@ -229,7 +267,6 @@ class TestCascade:
     """Cascade was removed as dead code — tests verify removal."""
     def test_cascade_function_removed(self, setup_env):
         """_check_cascade was dead code and has been removed."""
-        import datastore.docsdb.project_updater as project_updater
+        import core.docs.project_updater as project_updater
         assert not hasattr(project_updater, '_check_cascade')
-
 
