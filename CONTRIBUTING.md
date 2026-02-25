@@ -70,6 +70,8 @@ See `docs/RELEASE.md` for ownership guard details and expected attribution setti
 
 - Keep adapter/orchestrator/core boundaries explicit.
 - Avoid silent fallback behavior that hides failures.
+- Treat `failHard` as config-owned (`retrieval.failHard` / `retrieval.fail_hard`), not env-owned.
+- `failHard=true`: do not fallback. `failHard=false`: fallback allowed only with loud diagnostics.
 - Use config-driven behavior where practical; avoid hardcoded operational constants.
 - Update docs when behavior changes.
 - Align major decisions with `VISION.md`.
