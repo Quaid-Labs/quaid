@@ -62,6 +62,22 @@ def identity_mode() -> str:
     return mode if mode in {"single_user", "multi_user"} else "single_user"
 
 
+def assert_multi_user_runtime_ready(*, require_write: bool = False, require_read: bool = False) -> None:
+    """Fail fast if multi-user mode is enabled without required hook wiring."""
+    if identity_mode() != "multi_user":
+        return
+    if require_write and _identity_resolver is None:
+        raise RuntimeError(
+            "multi_user mode is enabled but no identity resolver is registered. "
+            "Register exactly one resolver before write operations."
+        )
+    if require_read and _privacy_policy is None:
+        raise RuntimeError(
+            "multi_user mode is enabled but no privacy policy is registered. "
+            "Register exactly one privacy policy before recall operations."
+        )
+
+
 def enforce_write_contract(payload: Dict[str, Any]) -> None:
     """Fail fast on malformed identity envelopes in multi-user mode."""
     if identity_mode() != "multi_user":
@@ -106,4 +122,3 @@ def filter_recall_results(
         if bool(_privacy_policy.fn(viewer, row, context)):
             filtered.append(row)
     return filtered
-

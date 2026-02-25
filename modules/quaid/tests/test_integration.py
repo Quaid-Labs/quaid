@@ -123,6 +123,42 @@ class TestStoreRecallRoundTrip:
             assert scoped["id"] in found_ids
             assert unscoped["id"] not in found_ids
 
+    def test_recall_participant_scope_excludes_unscoped_when_disabled(self, tmp_path):
+        """Participant filtering must respect include_unscoped=False."""
+        from datastore.memorydb.memory_graph import store, recall
+
+        graph, _db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            scoped = store(
+                text="Albert and Solomon planned benchmark smoke tests",
+                category="fact",
+                owner_id="quaid",
+                participant_entity_ids=["user:albert", "user:owner"],
+                skip_dedup=True,
+            )
+            unscoped = store(
+                text="General release checklist was reviewed",
+                category="fact",
+                owner_id="quaid",
+                skip_dedup=True,
+            )
+            assert scoped and unscoped
+
+            results = recall(
+                query="benchmark smoke tests",
+                owner_id="quaid",
+                limit=10,
+                use_routing=False,
+                min_similarity=0.0,
+                participant_entity_ids=["user:albert"],
+                include_unscoped=False,
+            )
+            found_ids = {r["id"] for r in results}
+            assert scoped["id"] in found_ids
+            assert unscoped["id"] not in found_ids
+
     def test_store_with_edge_creates_both(self, tmp_path):
         """Storing a fact and then creating an edge should link them."""
         from datastore.memorydb.memory_graph import store, create_edge

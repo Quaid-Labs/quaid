@@ -284,6 +284,25 @@ class TestMemoryRecall:
         assert kwargs["subject_entity_id"] == "user:owner"
         assert kwargs["include_unscoped"] is False
 
+    def test_recall_participant_and_viewer_fields_route_through_advanced_path(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_recall(
+            "test",
+            viewer_entity_id="agent:bert",
+            participant_entity_ids_json='["user:owner","user:albert"]',
+        )
+        kwargs = mock_api.recall.call_args.kwargs
+        assert kwargs["viewer_entity_id"] == "agent:bert"
+        assert kwargs["participant_entity_ids"] == ["user:owner", "user:albert"]
+
+    def test_recall_invalid_participant_json_raises(self, server):
+        mod, _mock_api, *_ = server
+        with pytest.raises(ValueError):
+            mod.memory_recall(
+                "test",
+                participant_entity_ids_json='{"not":"array"}',
+            )
+
 
 # ---------------------------------------------------------------------------
 # Tests — memory_search
