@@ -18,12 +18,17 @@ CREATE TABLE IF NOT EXISTS nodes (
     
     -- Multi-user support
     owner_id TEXT,                          -- Who owns this memory (null = shared)
+    actor_id TEXT,                          -- Canonical entity that asserted/performed this memory event
+    subject_entity_id TEXT,                 -- Canonical entity this memory is primarily about
 
     -- Privacy tiers
     privacy TEXT DEFAULT 'shared' CHECK(privacy IN ('private', 'shared', 'public')),
 
     -- Session tracking
     session_id TEXT,                        -- Session where this memory was created (for dedup)
+    source_channel TEXT,                    -- Channel/source type (telegram/discord/slack/dm/etc.)
+    source_conversation_id TEXT,            -- Stable conversation/thread/group identifier
+    source_author_id TEXT,                  -- External speaker/author handle or ID
 
     -- Classification
     fact_type TEXT DEFAULT 'unknown',       -- Subcategory (e.g. financial, health, family)
@@ -106,7 +111,10 @@ CREATE INDEX IF NOT EXISTS idx_nodes_pinned ON nodes(pinned);
 CREATE INDEX IF NOT EXISTS idx_nodes_source ON nodes(source);
 CREATE INDEX IF NOT EXISTS idx_nodes_owner ON nodes(owner_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_owner_status ON nodes(owner_id, status);
+CREATE INDEX IF NOT EXISTS idx_nodes_actor ON nodes(actor_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_subject_entity ON nodes(subject_entity_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_session ON nodes(session_id);
+CREATE INDEX IF NOT EXISTS idx_nodes_source_conversation ON nodes(source_conversation_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
 CREATE INDEX IF NOT EXISTS idx_nodes_accessed ON nodes(accessed_at);
 CREATE INDEX IF NOT EXISTS idx_nodes_confidence ON nodes(confidence);
@@ -262,7 +270,7 @@ CREATE TABLE IF NOT EXISTS doc_update_log (
 
 -- Initialize metadata
 INSERT OR IGNORE INTO metadata (key, value) VALUES
-    ('schema_version', '3'),
+    ('schema_version', '4'),
     ('embedding_model', 'qwen3-embedding:8b'),
     ('embedding_dim', '4096'),
     ('last_seed', NULL);
