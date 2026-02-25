@@ -10,6 +10,7 @@ It reflects broad areas of active focus, not delivery guarantees.
   - Support context muxing: fast context switching between participants and conversations.
   - Add intelligent mixed-recall policies for shared/group threads without cross-user leakage.
   - Harden datastore contracts so per-user and per-group stores remain modular and swappable.
+  - Canonical design spec: `docs/MULTI-USER-MEMORY-SPEC.md`
 
 - **Reliability and correctness**
   - Continue hardening extraction, recall, and janitor paths.

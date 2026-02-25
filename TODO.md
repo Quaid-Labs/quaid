@@ -3,11 +3,11 @@
 ## Forward-Looking Adaptability (Post-Benchmark Priority)
 
 - [ ] Multi-user memory foundations (schema/interfaces now, behavior later):
-  - progress (implemented): `actor_id/subject_entity_id/source_*` columns on `nodes`; session log context fields; `identity_handles` table + datastore API
-  - progress (implemented): adapter -> event bus -> ingest -> datastore propagation for `source_channel`, `conversation_id`, participants metadata on session-log ingest
-  - progress (implemented): recall API/MCP scoped filters (`actor_id`, `subject_entity_id`, `source_channel`, `source_conversation_id`, `source_author_id`, `include_unscoped`)
-  - next: add stable identity ownership shape across journal/snippets writes (same canonical IDs as memory/session logs)
-  - next: define privacy policy boundaries for cross-entity recall and enforce at retrieval policy layer
+  - lock to `docs/MULTI-USER-MEMORY-SPEC.md` as canonical design
+  - seed additive schema/indexes for `entities`, `entity_aliases`, `sources`, `source_participants`
+  - unify identity fields across memory/session logs/journal/snippets/projects
+  - keep runtime default in `identity.mode=single_user` until benchmark gates pass
+  - implement resolver + privacy policy as registered providers (single active registration)
 - [ ] Group conversation context loading:
   - resolve participant set from source channel
   - load correct user/core markdown bundles per active participants
