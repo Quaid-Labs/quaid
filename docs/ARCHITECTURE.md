@@ -700,6 +700,8 @@ MemoryConfig (root)
   |     +-- journal: JournalConfig   # Snippets + journal settings
   +-- projects: ProjectsConfig
   +-- users: UsersConfig             # Owner identity mapping
+  +-- identity: IdentityConfig       # single_user/multi_user mode + resolver thresholds
+  +-- privacy: PrivacyConfig         # default scopes + strict filter policy
   +-- database: DatabaseConfig
   +-- ollama: OllamaConfig           # Embedding model, URL, dimensions
   +-- rag: RagConfig                 # Chunk sizes, search limits

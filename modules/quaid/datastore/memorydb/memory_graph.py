@@ -128,6 +128,11 @@ class Node:
     extraction_confidence: float = 0.5  # How confident the classifier was
     status: str = "pending"  # pending, approved, active
     speaker: Optional[str] = None  # Who stated this fact (e.g., "Alice", "Bob")
+    speaker_entity_id: Optional[str] = None  # Canonical entity who produced the source utterance
+    conversation_id: Optional[str] = None  # Canonical conversation/thread identifier
+    visibility_scope: str = "source_shared"  # private_subject/source_shared/global_shared/system
+    sensitivity: str = "normal"  # normal/restricted/secret
+    provenance_confidence: float = 0.5  # Confidence in attribution chain
     content_hash: Optional[str] = None  # SHA256 of name text (fast dedup pre-filter)
     superseded_by: Optional[str] = None  # ID of node that replaced this one (fact versioning)
     keywords: Optional[str] = None  # Space-separated derived search terms
@@ -220,6 +225,19 @@ class MemoryGraph:
                 except sqlite3.OperationalError:
                     pass  # Column already exists
 
+            # Forward-compatible multi-user attribution columns.
+            for col, typedef in [
+                ("speaker_entity_id", "TEXT"),
+                ("conversation_id", "TEXT"),
+                ("visibility_scope", "TEXT DEFAULT 'source_shared'"),
+                ("sensitivity", "TEXT DEFAULT 'normal'"),
+                ("provenance_confidence", "REAL DEFAULT 0.5"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE nodes ADD COLUMN {col} {typedef}")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
             # Migrate: add keywords column to nodes
             try:
                 conn.execute("ALTER TABLE nodes ADD COLUMN keywords TEXT")
@@ -283,6 +301,107 @@ class MemoryGraph:
                     conn.execute("ALTER TABLE dedup_log RENAME COLUMN haiku_reasoning TO llm_reasoning")
             except sqlite3.OperationalError:
                 pass  # Column already renamed or table doesn't exist yet
+
+            # Multi-user canonical identity/source tables for forward compatibility.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS entities (
+                    entity_id TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK(entity_type IN ('human', 'agent', 'org', 'system', 'unknown')),
+                    canonical_name TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sources (
+                    source_id TEXT PRIMARY KEY,
+                    source_type TEXT NOT NULL DEFAULT 'dm'
+                        CHECK(source_type IN ('dm', 'group', 'thread', 'workspace')),
+                    platform TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    parent_source_id TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS source_participants (
+                    source_id TEXT NOT NULL REFERENCES sources(source_id) ON DELETE CASCADE,
+                    entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+                    role TEXT NOT NULL DEFAULT 'member'
+                        CHECK(role IN ('member', 'owner', 'agent', 'observer')),
+                    active_from TEXT DEFAULT (datetime('now')),
+                    active_to TEXT,
+                    PRIMARY KEY (source_id, entity_id, active_from)
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_type_name ON entities(entity_type, canonical_name)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sources_platform_external ON sources(platform, external_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_source_participants_entity ON source_participants(entity_id, active_to)")
+
+            # Extend legacy entity_aliases table with canonical identity linkage columns.
+            for col, typedef in [
+                ("entity_id", "TEXT"),
+                ("platform", "TEXT"),
+                ("source_id", "TEXT"),
+                ("handle", "TEXT"),
+                ("display_name", "TEXT"),
+                ("confidence", "REAL DEFAULT 1.0"),
+                ("updated_at", "TEXT DEFAULT (datetime('now'))"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE entity_aliases ADD COLUMN {col} {typedef}")
+                except sqlite3.OperationalError:
+                    pass
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity ON entity_aliases(entity_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_aliases_lookup ON entity_aliases(platform, source_id, handle)")
+
+            # Default/backfill attribution values for legacy rows.
+            conn.execute(
+                """
+                UPDATE nodes
+                SET conversation_id = COALESCE(conversation_id, source_conversation_id)
+                WHERE conversation_id IS NULL OR conversation_id = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE nodes
+                SET speaker_entity_id = COALESCE(speaker_entity_id, actor_id)
+                WHERE speaker_entity_id IS NULL OR speaker_entity_id = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE nodes
+                SET visibility_scope = CASE
+                    WHEN owner_id IS NOT NULL AND TRIM(owner_id) != '' THEN 'private_subject'
+                    ELSE 'source_shared'
+                END
+                WHERE visibility_scope IS NULL OR visibility_scope = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE nodes
+                SET sensitivity = 'normal'
+                WHERE sensitivity IS NULL OR sensitivity = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE nodes
+                SET provenance_confidence = COALESCE(extraction_confidence, confidence, 0.5)
+                WHERE provenance_confidence IS NULL
+                """
+            )
 
             # FTS5 rebuild if out of sync (count mismatch or rowid drift)
             try:
@@ -450,9 +569,10 @@ class MemoryGraph:
                 (id, type, name, attributes, embedding, verified, pinned, confidence,
                  source, source_id, privacy, valid_from, valid_until,
                  created_at, updated_at, accessed_at, access_count, storage_strength, owner_id, session_id,
-                 fact_type, knowledge_type, extraction_confidence, status, speaker, content_hash, superseded_by,
-                 confirmation_count, last_confirmed_at, keywords)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 fact_type, knowledge_type, extraction_confidence, status, speaker, speaker_entity_id,
+                 conversation_id, visibility_scope, sensitivity, provenance_confidence,
+                 content_hash, superseded_by, confirmation_count, last_confirmed_at, keywords)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 node.id, node.type, node.name,
                 json.dumps(node.attributes),
@@ -475,6 +595,11 @@ class MemoryGraph:
                 node.extraction_confidence,
                 node.status,
                 node.speaker,
+                node.speaker_entity_id,
+                node.conversation_id,
+                node.visibility_scope,
+                node.sensitivity,
+                node.provenance_confidence,
                 node.content_hash,
                 node.superseded_by,
                 node.confirmation_count,
@@ -519,7 +644,9 @@ class MemoryGraph:
                     storage_strength = ?,
                     owner_id = ?, session_id = ?,
                     fact_type = ?, knowledge_type = ?, extraction_confidence = ?,
-                    status = ?, speaker = ?,
+                    status = ?, speaker = ?, speaker_entity_id = ?,
+                    conversation_id = ?, visibility_scope = ?, sensitivity = ?,
+                    provenance_confidence = ?,
                     content_hash = ?, superseded_by = ?,
                     confirmation_count = ?, last_confirmed_at = ?,
                     keywords = ?
@@ -545,6 +672,11 @@ class MemoryGraph:
                 node.extraction_confidence,
                 node.status,
                 node.speaker,
+                node.speaker_entity_id,
+                node.conversation_id,
+                node.visibility_scope,
+                node.sensitivity,
+                node.provenance_confidence,
                 node.content_hash,
                 node.superseded_by,
                 node.confirmation_count,
@@ -673,6 +805,11 @@ class MemoryGraph:
             extraction_confidence=row['extraction_confidence'] if 'extraction_confidence' in row.keys() else 0.5,
             status=row['status'] if 'status' in row.keys() else 'pending',
             speaker=row['speaker'] if 'speaker' in row.keys() else None,
+            speaker_entity_id=row['speaker_entity_id'] if 'speaker_entity_id' in row.keys() else None,
+            conversation_id=row['conversation_id'] if 'conversation_id' in row.keys() else None,
+            visibility_scope=row['visibility_scope'] if 'visibility_scope' in row.keys() else 'source_shared',
+            sensitivity=row['sensitivity'] if 'sensitivity' in row.keys() else 'normal',
+            provenance_confidence=row['provenance_confidence'] if 'provenance_confidence' in row.keys() else 0.5,
             content_hash=row['content_hash'] if 'content_hash' in row.keys() else None,
             superseded_by=row['superseded_by'] if 'superseded_by' in row.keys() else None,
             confirmation_count=row['confirmation_count'] if 'confirmation_count' in row.keys() else 0,
@@ -2801,6 +2938,8 @@ def recall(
     source_author_id: Optional[str] = None,
     actor_id: Optional[str] = None,
     subject_entity_id: Optional[str] = None,
+    viewer_entity_id: Optional[str] = None,
+    participant_entity_ids: Optional[List[str]] = None,
     include_unscoped: bool = True,
     debug: bool = False,
     technical_scope: str = "any",
@@ -3090,7 +3229,13 @@ def recall(
             "source_conversation_id": _attrs.get("source_conversation_id"),
             "source_author_id": _attrs.get("source_author_id"),
             "actor_id": _attrs.get("actor_id"),
+            "speaker_entity_id": _attrs.get("speaker_entity_id", node.speaker_entity_id),
             "subject_entity_id": _attrs.get("subject_entity_id"),
+            "conversation_id": _attrs.get("conversation_id", node.conversation_id),
+            "visibility_scope": _attrs.get("visibility_scope", node.visibility_scope),
+            "sensitivity": _attrs.get("sensitivity", node.sensitivity),
+            "provenance_confidence": _attrs.get("provenance_confidence", node.provenance_confidence),
+            "participant_entity_ids": _attrs.get("participant_entity_ids"),
         }
         if debug and debug_info and node.id in debug_info:
             result_dict["_debug"] = debug_info[node.id]
@@ -3314,6 +3459,20 @@ def recall(
                 filtered_output.append(row)
         output = filtered_output
 
+    if participant_entity_ids:
+        requested = {str(p).strip() for p in participant_entity_ids if str(p).strip()}
+        if requested:
+            participant_filtered = []
+            for row in output:
+                row_participants = row.get("participant_entity_ids")
+                if not isinstance(row_participants, list):
+                    participant_filtered.append(row if include_unscoped else row)
+                    continue
+                row_set = {str(p).strip() for p in row_participants if str(p).strip()}
+                if row_set & requested:
+                    participant_filtered.append(row)
+            output = participant_filtered
+
     output.sort(key=lambda x: x["similarity"], reverse=True)
     final_output = output[:limit]
 
@@ -3452,6 +3611,12 @@ def store(
     source_channel: Optional[str] = None,  # conversation channel/source (telegram/discord/etc.)
     source_conversation_id: Optional[str] = None,  # stable thread/group identifier
     source_author_id: Optional[str] = None,  # external speaker/author identifier
+    speaker_entity_id: Optional[str] = None,  # canonical speaker entity id
+    conversation_id: Optional[str] = None,  # canonical conversation/thread identifier
+    participant_entity_ids: Optional[List[str]] = None,  # canonical participants for this context
+    visibility_scope: Optional[str] = None,  # private_subject/source_shared/global_shared/system
+    sensitivity: Optional[str] = None,  # normal/restricted/secret
+    provenance_confidence: Optional[float] = None,  # attribution confidence
     actor_id: Optional[str] = None,  # canonical actor entity id
     subject_entity_id: Optional[str] = None,  # canonical subject entity id
     created_at: Optional[str] = None,  # Override created_at timestamp (ISO format)
@@ -3487,6 +3652,10 @@ def store(
 
     if not owner_id:
         raise ValueError("Owner is required")
+    if speaker_entity_id and not actor_id:
+        actor_id = speaker_entity_id
+    if conversation_id and not source_conversation_id:
+        source_conversation_id = conversation_id
     
     # Map category to type
     type_map = {
@@ -3508,6 +3677,12 @@ def store(
             or source_channel
             or source_conversation_id
             or source_author_id
+            or speaker_entity_id
+            or conversation_id
+            or participant_entity_ids
+            or visibility_scope
+            or sensitivity
+            or provenance_confidence is not None
             or actor_id
             or subject_entity_id
         ):
@@ -3523,10 +3698,32 @@ def store(
             attrs["source_conversation_id"] = source_conversation_id
         if source_author_id and not attrs.get("source_author_id"):
             attrs["source_author_id"] = source_author_id
+        if speaker_entity_id and not attrs.get("speaker_entity_id"):
+            attrs["speaker_entity_id"] = speaker_entity_id
+        if conversation_id and not attrs.get("conversation_id"):
+            attrs["conversation_id"] = conversation_id
+        if participant_entity_ids and not attrs.get("participant_entity_ids"):
+            attrs["participant_entity_ids"] = list(participant_entity_ids)
+        if visibility_scope and not attrs.get("visibility_scope"):
+            attrs["visibility_scope"] = visibility_scope
+        if sensitivity and not attrs.get("sensitivity"):
+            attrs["sensitivity"] = sensitivity
+        if provenance_confidence is not None and attrs.get("provenance_confidence") is None:
+            attrs["provenance_confidence"] = float(provenance_confidence)
         if actor_id and not attrs.get("actor_id"):
             attrs["actor_id"] = actor_id
         if subject_entity_id and not attrs.get("subject_entity_id"):
             attrs["subject_entity_id"] = subject_entity_id
+        if speaker_entity_id and not existing.speaker_entity_id:
+            existing.speaker_entity_id = speaker_entity_id
+        if conversation_id and not existing.conversation_id:
+            existing.conversation_id = conversation_id
+        if visibility_scope and not existing.visibility_scope:
+            existing.visibility_scope = visibility_scope
+        if sensitivity and not existing.sensitivity:
+            existing.sensitivity = sensitivity
+        if provenance_confidence is not None and existing.provenance_confidence is None:
+            existing.provenance_confidence = float(provenance_confidence)
         existing.attributes = attrs
 
     # Fast exact-dedup: content hash check (before embedding, saves API calls)
@@ -3820,6 +4017,14 @@ def store(
     if accessed_at:
         node.accessed_at = accessed_at
 
+    node.speaker_entity_id = speaker_entity_id or actor_id
+    node.conversation_id = conversation_id or source_conversation_id
+    node.visibility_scope = visibility_scope or ("private_subject" if owner_id else "source_shared")
+    node.sensitivity = sensitivity or "normal"
+    node.provenance_confidence = float(
+        provenance_confidence if provenance_confidence is not None else extraction_confidence
+    )
+
     # Store metadata flags in attributes blob
     if (
         source_type
@@ -3827,6 +4032,12 @@ def store(
         or source_channel
         or source_conversation_id
         or source_author_id
+        or speaker_entity_id
+        or conversation_id
+        or participant_entity_ids
+        or visibility_scope
+        or sensitivity
+        or provenance_confidence is not None
         or actor_id
         or subject_entity_id
     ):
@@ -3841,6 +4052,18 @@ def store(
             attrs["source_conversation_id"] = source_conversation_id
         if source_author_id:
             attrs["source_author_id"] = source_author_id
+        if speaker_entity_id:
+            attrs["speaker_entity_id"] = speaker_entity_id
+        if conversation_id:
+            attrs["conversation_id"] = conversation_id
+        if participant_entity_ids:
+            attrs["participant_entity_ids"] = list(participant_entity_ids)
+        if visibility_scope:
+            attrs["visibility_scope"] = visibility_scope
+        if sensitivity:
+            attrs["sensitivity"] = sensitivity
+        if provenance_confidence is not None:
+            attrs["provenance_confidence"] = float(provenance_confidence)
         if actor_id:
             attrs["actor_id"] = actor_id
         if subject_entity_id:

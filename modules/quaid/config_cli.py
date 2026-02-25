@@ -73,6 +73,8 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"embeddings model: {_get(data, 'models.embeddings', 'default')}")
     print(f"notify level:     {_get(data, 'notifications.level', 'normal')}")
     print(f"fail hard:        {_get(data, 'retrieval.failHard', _get(data, 'retrieval.fail_hard', True))}")
+    print(f"identity mode:    {_get(data, 'identity.mode', 'single_user')}")
+    print(f"strict privacy:   {_get(data, 'privacy.enforceStrictFilters', _get(data, 'privacy.enforce_strict_filters', True))}")
     print(f"janitor parallel: {_get(data, 'janitor.parallel.enabled', True)}")
     print(f"llm workers:      {_get(data, 'janitor.parallel.llmWorkers', _get(data, 'janitor.parallel.llm_workers', 4))}")
     print(f"prepass workers:  {_get(data, 'janitor.parallel.lifecyclePrepassWorkers', _get(data, 'janitor.parallel.lifecycle_prepass_workers', 3))}")

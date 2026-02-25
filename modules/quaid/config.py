@@ -297,6 +297,20 @@ class UsersConfig:
 
 
 @dataclass
+class IdentityConfig:
+    mode: str = "single_user"  # single_user | multi_user
+    auto_link_threshold: float = 0.95
+    require_review_threshold: float = 0.75
+
+
+@dataclass
+class PrivacyConfig:
+    default_scope_dm: str = "private_subject"
+    default_scope_group: str = "source_shared"
+    enforce_strict_filters: bool = True
+
+
+@dataclass
 class FeatureNotificationConfig:
     """Per-feature notification settings (verbosity + channel routing)."""
     verbosity: Optional[str] = None  # "off", "summary", "full" — None inherits from master level
@@ -397,6 +411,8 @@ class MemoryConfig:
     docs: DocsConfig = field(default_factory=DocsConfig)
     projects: ProjectsConfig = field(default_factory=ProjectsConfig)
     users: UsersConfig = field(default_factory=UsersConfig)
+    identity: IdentityConfig = field(default_factory=IdentityConfig)
+    privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     rag: RagConfig = field(default_factory=RagConfig)
@@ -774,6 +790,30 @@ def _load_config_inner() -> MemoryConfig:
         identities=identities
     )
 
+    # Parse identity config (forward-looking multi-user mode control)
+    identity_data = config_data.get('identity', {})
+    identity_mode = str(identity_data.get('mode', 'single_user')).strip().lower()
+    if identity_mode not in {'single_user', 'multi_user'}:
+        identity_mode = 'single_user'
+    identity = IdentityConfig(
+        mode=identity_mode,
+        auto_link_threshold=float(identity_data.get('auto_link_threshold',
+                                  identity_data.get('autoLinkThreshold', 0.95))),
+        require_review_threshold=float(identity_data.get('require_review_threshold',
+                                     identity_data.get('requireReviewThreshold', 0.75))),
+    )
+
+    # Parse privacy config (policy defaults)
+    privacy_data = config_data.get('privacy', {})
+    privacy = PrivacyConfig(
+        default_scope_dm=str(privacy_data.get('default_scope_dm',
+                             privacy_data.get('defaultScopeDm', 'private_subject'))),
+        default_scope_group=str(privacy_data.get('default_scope_group',
+                                privacy_data.get('defaultScopeGroup', 'source_shared'))),
+        enforce_strict_filters=bool(privacy_data.get('enforce_strict_filters',
+                                   privacy_data.get('enforceStrictFilters', True))),
+    )
+
     # Parse database config
     db_data = config_data.get('database', {})
     database = DatabaseConfig(
@@ -840,6 +880,8 @@ def _load_config_inner() -> MemoryConfig:
         docs=docs,
         projects=projects,
         users=users,
+        identity=identity,
+        privacy=privacy,
         database=database,
         ollama=ollama,
         rag=rag,
