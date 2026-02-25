@@ -1,335 +1,291 @@
-# Multi-User and Group Memory Spec (Design Only)
+# Multi-User and Group Memory Spec
 
-Status: Draft (no implementation)
+Status: Design locked for prelaunch schema/interface seeding (no behavior rollout in this phase)
 Owner: Quaid maintainers
-Scope: Architecture and contracts for multi-user, multi-conversation identity-aware memory
+Priority: P0 post-release capability, compatibility groundwork must be pre-seeded now
 
-## 1) Problem Statement
+## 1. Purpose
 
-Quaid is currently optimized for single-user/single-agent memory. Real deployments now involve:
+Quaid must evolve from single-user memory to identity-aware memory that works for:
 
-- Multi-user direct messages.
-- Group chats with changing participants.
-- Agent swarms where multiple agent identities talk to each other.
-- Identity aliases across channels (same entity, different handle).
+- direct messages with many users,
+- group threads with changing participants,
+- agent swarms where multiple agent identities communicate.
 
-Current risk if we do nothing: cross-entity memory leakage, low retrieval precision, ambiguous attribution, and weak privacy guarantees.
+This spec defines the boundary-correct architecture, schema, and contracts to seed now so future rollout does not require backward-compatibility shims or large migrations.
 
-## 2) Goals and Non-Goals
+## 2. Scope
 
-Goals:
+Included now (pre-seeding):
 
-- Distinguish entities reliably across channels and aliases.
-- Route extraction, storage, and retrieval through explicit conversation and participant context.
-- Preserve subsystem boundaries:
-  - adaptor reports source metadata
-  - core owns orchestration/routing
-  - ingest performs normalization
-  - datastore owns persistence/query/maintenance internals
-- Make privacy/visibility enforceable at query time.
-- Keep datastore modular/swappable.
-- Provide benchmarkable behavior for multi-user lifecycle quality.
+- datastore schema and indexes for identity/source-aware storage,
+- cross-layer interfaces (adapter -> core -> ingest -> datastore -> recall),
+- privacy policy contract shape and enforcement hooks,
+- janitor orchestration contract for identity maintenance routines,
+- benchmark/E2E requirements for eventual rollout.
 
-Non-goals (for this phase):
+Not included now:
 
-- Full shared-memory conflict resolution among autonomous agents.
-- Cross-instance federated identity sync.
-- Automatic identity linking with no human/operator override path.
+- full policy engine implementation,
+- automatic identity linking without review safeguards,
+- full shared-memory conflict resolution for autonomous multi-agent collaboration.
 
-## 3) Core Concepts
+## 3. Core Model
 
-- `source`: communication channel/session locus (DM, group room, thread, workspace).
-- `speaker`: actor that produced a message/fact in that source.
-- `subject`: entity the fact is about.
-- `viewer`: entity requesting recall (often the running agent persona).
-- `scope`: visibility domain for a memory record.
+Definitions:
 
-Design rule:
+- `source`: where a message happens (`dm`, `group`, `thread`, `workspace`).
+- `speaker`: who produced a message.
+- `subject`: who/what a fact is about.
+- `viewer`: identity requesting recall.
+- `scope`: visibility boundary for a memory record.
 
-- `source` models where data came from.
-- `speaker` models who said it.
-- `subject` models who/what it is about.
+Hard rule:
 
-These must be first-class fields and passed end-to-end.
+- `source`, `speaker`, `subject`, and `viewer` are first-class context fields carried through the full pipeline.
 
-## 4) Target Architecture (Boundary-Correct)
+## 4. Boundary Ownership
 
-Adaptor (host-specific):
+Adapter:
 
-- Emits normalized event context only:
-  - source identifier(s)
-  - speaker handle
-  - platform user id/agent id if available
-  - participant list for group messages
-  - conversation path/thread id
-- May optionally provide transcript path; no business logic for identity resolution.
+- Provides host metadata only:
+  - source/channel IDs,
+  - speaker handle/platform ID,
+  - participant list (if available),
+  - transcript/log location (if available).
+- Never performs identity resolution, privacy filtering, or memory business logic.
 
 Core:
 
-- Owns registration of identity resolvers and recall planners.
-- Resolves runtime request context (`viewer`, `source`, `participants`, `policy mode`).
-- Calls ingest and datastore APIs through stable contracts.
+- Registers exactly one active identity resolver and one active privacy policy provider.
+- Owns orchestration, registration, and request-context assembly.
+- Enforces single registration per extension point (same anti-double-registration rule used elsewhere).
 
 Ingest:
 
-- Normalizes event payloads into canonical identity descriptors.
-- Computes deterministic source/conversation keys.
-- Produces extraction envelopes tagged with identity context.
+- Normalizes adapter payloads into canonical identity envelopes.
+- Computes deterministic `source_id` / `conversation_id` keys.
+- Passes normalized identity context to datastore and recall planner.
 
-Datastore(s):
+Datastore:
 
-- Own all storage/query/maintenance logic for identity and scope.
-- Provide search APIs with context parameters.
-- Keep private/internal helper APIs internal.
+- Owns identity persistence, query filters, recall mux behavior, and identity maintenance logic.
+- Exposes stable APIs; internal heuristics stay datastore-private.
 
 Janitor:
 
-- Orchestrates registered maintenance tasks only.
-- No per-datastore identity business logic.
-- Enforces global invariants and reports failures.
+- Orchestrates only.
+- Runs registered datastore maintenance routines and reports outcomes.
+- Must not contain datastore identity logic.
 
-## 5) Data Model Additions (Proposed)
+## 5. Data Model (Seed Now)
 
-Add identity layer tables (datastore-owned):
+Add and keep in schema now, even if partially unused by current runtime.
+
+Identity tables:
 
 1. `entities`
-- `entity_id` (pk)
-- `entity_type` (`human`, `agent`, `org`, `unknown`)
+- `entity_id` (PK)
+- `entity_type` (`human`, `agent`, `org`, `system`, `unknown`)
 - `canonical_name`
 - `created_at`, `updated_at`
 
 2. `entity_aliases`
-- `alias_id` (pk)
-- `entity_id` (fk)
-- `platform` (telegram/openclaw/discord/...)
-- `source_id` (nullable, alias may be source-specific)
+- `alias_id` (PK)
+- `entity_id` (FK -> entities)
+- `platform`
+- `source_id` (nullable, alias can be source-specific)
 - `handle`
 - `display_name`
 - `confidence`
-- unique candidate key: (`platform`, `source_id`, `handle`)
+- `created_at`, `updated_at`
+- uniqueness target: (`platform`, `source_id`, `handle`)
 
 3. `sources`
-- `source_id` (pk)
+- `source_id` (PK)
 - `source_type` (`dm`, `group`, `thread`, `workspace`)
 - `platform`
 - `external_id`
 - `parent_source_id` (nullable)
-- `created_at`
+- `created_at`, `updated_at`
 
 4. `source_participants`
-- `source_id`
-- `entity_id`
+- `source_id` (FK -> sources)
+- `entity_id` (FK -> entities)
 - `role` (`member`, `owner`, `agent`, `observer`)
 - `active_from`, `active_to`
 
-Extend memory records with:
+Memory/session extensions:
 
 - `subject_entity_id`
 - `speaker_entity_id`
 - `source_id`
-- `conversation_id` (thread/session key)
+- `conversation_id`
 - `visibility_scope` (`private_subject`, `source_shared`, `global_shared`, `system`)
 - `sensitivity` (`normal`, `restricted`, `secret`)
 - `provenance_confidence`
 
-Index strategy (initial):
+Required indexes:
 
-- Composite btree:
-  - (`subject_entity_id`, `status`, `updated_at`)
-  - (`source_id`, `status`, `updated_at`)
-  - (`speaker_entity_id`, `status`)
-  - (`visibility_scope`, `sensitivity`, `status`)
-- FTS/vector metadata filters include `subject_entity_id`, `source_id`, `visibility_scope`.
+- (`subject_entity_id`, `status`, `updated_at`)
+- (`source_id`, `status`, `updated_at`)
+- (`speaker_entity_id`, `status`)
+- (`visibility_scope`, `sensitivity`, `status`)
+- (`conversation_id`, `created_at`)
 
-## 6) Identity Resolution Contract
+## 6. Interface Contracts (Seed Now)
 
-Core registers exactly one active identity resolver at a time (same anti-double-registration rule used elsewhere).
+### 6.1 Adapter -> Core envelope
 
-Resolver inputs:
+Each inbound event should carry:
 
-- platform metadata from adaptor
-- speaker handle/display id
-- participant roster
-- existing alias links
+- `platform`
+- `source_channel`
+- `source_conversation_id`
+- `source_author_id`
+- `source_author_handle` (optional)
+- `participants` (optional list)
+- `session_id` (if available)
 
-Resolver outputs:
+### 6.2 Core -> Ingest normalized identity context
 
-- `speaker_entity_id`
+- `viewer_entity_id` (if known)
+- `speaker_entity_id` (resolved or unresolved candidate)
 - `participant_entity_ids`
-- candidate merges/links (with confidence)
-- unresolved identities for review queue
+- `source_id`
+- `conversation_id`
+- `policy_mode`
 
-Policy:
+### 6.3 Ingest -> Datastore write envelope
 
-- High-confidence auto-link allowed.
-- Mid/low confidence creates pending alias links requiring approval.
-- Never silently merge two established entities with conflicting strong evidence.
+- fact payload + provenance
+- `speaker_entity_id`
+- `subject_entity_id`
+- `source_id`
+- `conversation_id`
+- visibility defaults for source type
 
-## 7) Retrieval Semantics (Mux Rules)
+### 6.4 Recall API contract
 
-Default recall for incoming user prompt in source `S` from speaker `U` to agent `A`:
+Recall/search interfaces must accept:
 
-1. Search self memory for `A` (agent operational/user-profile memory allowed by policy).
-2. Search subject memory for `U` (what agent knows about that user).
-3. Search shared source memory for `S` (group/channel context).
-4. Optional broader shared memory if allowed (`global_shared`).
-5. Fuse + rerank with strict visibility filters.
+- `viewer_entity_id`
+- `source_id` and/or `source_channel` + `conversation_id`
+- `participant_entity_ids`
+- `subject_entity_id` (optional target)
+- `include_unscoped` (policy-controlled)
 
-Group chat behavior:
+No retrieval surface may bypass this context once multi-user mode is enabled.
 
-- Query context includes full participant set.
-- Retrieval bias:
-  - high priority: requesting speaker + direct addressees mentioned in turn
-  - medium: source-shared facts
-  - low: unrelated participants unless explicitly referenced
+## 7. Retrieval Mux Semantics
 
-Explicit cross-user ask ("what did B say?"):
+Default retrieval plan for request from speaker `U` in source `S` to agent `A`:
 
-- Planner detects target entity B.
-- Performs scoped retrieval for B where visibility permits.
-- Returns privacy-filtered summary with provenance notes.
+1. agent self memory (`A`) within policy,
+2. memory about requesting speaker (`U`),
+3. source-shared memory for `S`,
+4. optional broader shared memory if policy allows.
 
-## 8) Privacy and Access Policy
+Fuse and rerank only after policy filtering.
 
-Policy check runs before final recall return.
+Explicit cross-user question:
 
-Decision tuple:
+- planner identifies target entity,
+- performs scoped retrieval for target entity with full policy checks,
+- returns provenance-aware results.
 
-- (`viewer_entity_id`, `subject_entity_id`, `source_id`, `visibility_scope`, `sensitivity`, `requested_operation`)
+## 8. Privacy Policy Contract
 
-Rules baseline:
+Policy decision input tuple:
 
-- `private_subject`: visible only to subject + authorized system actors.
-- `source_shared`: visible to active participants of source.
-- `global_shared`: visible to all allowed identities.
-- `restricted/secret`: requires explicit policy permit.
+- (`viewer_entity_id`, `subject_entity_id`, `source_id`, `visibility_scope`, `sensitivity`, `operation`)
+
+Baseline rules:
+
+- `private_subject`: subject + explicitly authorized system actors.
+- `source_shared`: active source participants.
+- `global_shared`: any allowed identity.
+- `restricted` / `secret`: explicit allow required.
 
 Hard requirement:
 
-- Policy filters apply both pre-rerank candidate gathering and post-rerank output.
+- policy filtering runs before candidate scoring and again before final output.
 
-## 9) Extraction Semantics in Multi-User Context
+## 9. Janitor Contract
 
-For each extracted fact:
+Datastore must register identity maintenance routines; janitor executes registration list only.
 
-- Set `speaker_entity_id` from turn speaker.
-- Infer/resolve `subject_entity_id` from content (self-reference, named mention, pronoun resolution).
-- Attach `source_id` and `conversation_id`.
-- Assign default `visibility_scope` from source type and policy.
+Example datastore-owned routines:
 
-Ambiguous ownership:
+- alias hygiene and confidence decay,
+- unresolved identity queue processing,
+- stale participant interval cleanup,
+- visibility/sensitivity integrity checks.
 
-- Store as pending with low provenance confidence.
-- Queue for janitor review task `identity_disambiguation` (datastore-owned maintenance routine).
+Janitor owns:
 
-## 10) Janitor Responsibilities (Post-Refactor Aligned)
+- scheduling,
+- orchestration,
+- logging/metrics/notifications,
+- retry and run-summary reporting.
 
-Janitor keeps orchestration only. Datastore provides identity-aware maintenance routines, e.g.:
+## 10. Configuration Shape
 
-- alias hygiene and stale alias pruning
-- unresolved identity disambiguation queue
-- cross-source duplicate merge recommendations
-- visibility/sensitivity integrity checks
+Add/keep config keys now:
 
-Core lifecycle registry provides task list; janitor executes and reports.
-
-## 11) Configuration Model
-
-Proposed config blocks:
-
-- `identity.mode`: `single_user` | `multi_user`
+- `identity.mode`: `single_user` | `multi_user` (default `single_user`)
 - `identity.auto_link_threshold`
 - `identity.require_review_threshold`
 - `privacy.default_scope_dm`
 - `privacy.default_scope_group`
-- `privacy.enforce_strict_filters` (default true)
+- `privacy.enforce_strict_filters` (default `true`)
 
-Runtime mode toggle:
+Policy/fallback rule still applies globally:
 
-- Start with `single_user` default until multi-user policies are enabled.
+- `retrieval.fail_hard=true` blocks degraded fallback behavior.
+- `retrieval.fail_hard=false` allows fallback with explicit warning logs.
 
-## 12) Implementation Plan
+## 11. Migration and Compatibility Strategy
 
-Phase 0: Spec + invariants
-- finalize contracts and schema
-- define policy matrix tests
+Prelaunch requirement:
 
-Phase 1: Schema introduction
-- status: implemented
-- add identity/source tables + nullable columns
-- backfill existing records to default synthetic entity/source
+- seed schema/interfaces now, keep runtime default behavior compatible with single-user mode.
 
-Phase 2: Write-path tagging
-- status: partially implemented
-- adaptor -> core -> ingest -> datastore carries identity context
-- implemented now: session lifecycle log ingest metadata flow (`source_channel`, `conversation_id`, participants)
-- implemented now: extraction pipeline carries source attribution (`source_channel`, `source_conversation_id`, `source_author_id`, actor/subject IDs)
-- remaining: robust canonical identity resolution for actor/subject assignment (policy-driven, not heuristic-only)
+Migration invariants:
 
-Phase 3: Read-path mux
-- status: partially implemented
-- retrieval APIs accept viewer/source/participants
-- implemented now: scoped filters in recall API/MCP (`actor_id`, `subject_entity_id`, `source_*`, `include_unscoped`)
-- remaining: viewer-aware privacy policy gates and participant-aware ranking policy
+- additive schema changes only,
+- deterministic synthetic defaults for legacy rows,
+- no destructive data rewrite,
+- no compatibility shims in core boundaries.
 
-Phase 4: Janitor identity maintenance
-- register datastore-owned identity maintenance routine(s)
-- enforce invariants and reporting
+## 12. Benchmark and E2E Plan
 
-Phase 5: hardening
-- E2E suites + multi-user benchmarks
-- remove deprecated single-user shortcuts
+Add benchmark lane: `multi_user_agentlife`.
 
-## 13) Benchmark and Test Plan
+Required benchmark scenarios:
 
-New benchmark class: `multi_user_agentlife`.
+- alias continuity across channels,
+- group attribution precision (A/B/C separation),
+- privacy containment under adversarial prompts,
+- rapid source/context switching.
 
-Scenarios:
+Required E2E suites:
 
-- DM alias continuity: same user with different handles across channels.
-- Group attribution: facts from A/B/C must be recalled per speaker correctly.
-- Privacy containment: forbidden cross-user recall attempts must fail safely.
-- Context switching: rapid source changes with correct memory mux.
-- Conflict resolution: contradictory statements by different users tracked separately.
+- multi-user source mux,
+- privacy gate enforcement,
+- participant-aware recall routing,
+- identity maintenance convergence through janitor.
 
-Metrics:
+## 13. Open Decisions to Resolve Before Implementation
 
-- attribution precision/recall
-- leakage rate (must trend to 0)
-- alias-link precision
-- recall relevance under mux constraints
-- janitor identity queue convergence time
+1. default subject assignment when ownership is ambiguous,
+2. v1 need for per-fact ACL overrides beyond scope+sensitivity,
+3. promotion policy from source-shared to global-shared,
+4. representation model for swarm-level collective memory.
 
-E2E additions (planned):
+## 14. Execution Checklist
 
-- multi-source synthetic conversation generator
-- deterministic alias mapping fixtures
-- privacy gate assertions
-
-## 14) Risks and Mitigations
-
-Risk: index/query latency increase with added filters.
-Mitigation: composite indexes + candidate caps + staged retrieval.
-
-Risk: incorrect alias merges.
-Mitigation: confidence thresholds + review queue + reversible links.
-
-Risk: privacy regressions.
-Mitigation: policy test matrix + deny-by-default for unknown scope.
-
-Risk: adapter metadata inconsistency across hosts.
-Mitigation: strict normalized ingest envelope with required/optional fields.
-
-## 15) Open Questions
-
-- Should subject default to speaker when ownership inference is unclear, or always require explicit confidence threshold?
-- Do we need per-fact ACL overrides in v1, or can scope+sensitivity handle launch needs?
-- Should source-shared memory ever be promoted to global automatically?
-- How should agent-to-agent swarm memory ownership be represented (individual vs collective entity)?
-
-## 16) Recommended Immediate Next Steps
-
-1. Review and lock this spec with benchmark + adaptor owners.
-2. Write an ADR for identity model and privacy decision matrix.
-3. Define minimal v1 scope for post-benchmark implementation cut.
-4. Design `multi_user_agentlife` benchmark harness in parallel with implementation prep.
+1. Keep schema and interfaces seeded in `single_user` mode.
+2. Add policy engine + resolver as pluggable datastore/core registrations.
+3. Enable `multi_user` mode behind explicit config.
+4. Ship benchmark + E2E gates before enabling by default.
