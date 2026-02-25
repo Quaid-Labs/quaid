@@ -29,6 +29,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from lib.fail_policy import is_fail_hard_enabled
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Dataclasses
@@ -305,8 +307,8 @@ class ClaudeCodeLLMProvider(LLMProvider):
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)  # Allow nested invocation
 
-        # Ensure OAuth token is available (load from .env if not in env)
-        if "CLAUDE_CODE_OAUTH_TOKEN" not in env:
+        # Ensure OAuth token is available (load from .env only when fail-hard is disabled)
+        if "CLAUDE_CODE_OAUTH_TOKEN" not in env and not is_fail_hard_enabled():
             adapter_env_path = ""
             try:
                 # Lazy import to avoid module-level circular dependency.

@@ -267,24 +267,32 @@ def _parallel_key(task_name: str) -> str:
 
 
 def _llm_parallel_workers(task_name: str) -> int:
-    """Resolve LLM batch parallelism for a task from env + benchmark defaults.
+    """Resolve LLM batch parallelism for a task from config."""
+    janitor_cfg = getattr(_cfg, "janitor", None)
+    parallel_cfg = getattr(janitor_cfg, "parallel", None) if janitor_cfg else None
+    if not parallel_cfg or not getattr(parallel_cfg, "enabled", True):
+        return 1
 
-    Precedence:
-    1. QUAID_JANITOR_LLM_PARALLELISM_<TASK>
-    2. QUAID_JANITOR_LLM_PARALLELISM
-    3. benchmark default: 2, non-benchmark default: 1
-    """
-    scoped_key = _parallel_key(task_name)
-    scoped = os.environ.get(f"QUAID_JANITOR_LLM_PARALLELISM_{scoped_key}", "").strip()
-    global_raw = os.environ.get("QUAID_JANITOR_LLM_PARALLELISM", "").strip()
-    raw = scoped or global_raw
-    default_workers = 2 if _is_benchmark_mode() else 1
-    if not raw:
-        return default_workers
+    default_workers = int(getattr(parallel_cfg, "llm_workers", 4) or 4)
+    task_workers = getattr(parallel_cfg, "task_workers", {}) or {}
+    override = None
+    if isinstance(task_workers, dict):
+        candidate_keys = [
+            str(task_name),
+            str(task_name).lower(),
+            _parallel_key(task_name),
+            _parallel_key(task_name).lower(),
+        ]
+        for key in candidate_keys:
+            if key in task_workers:
+                override = task_workers.get(key)
+                break
+
+    raw = override if override is not None else default_workers
     try:
         value = int(raw)
     except Exception:
-        return default_workers
+        value = default_workers
     return max(1, min(value, MAX_PARALLEL_WORKERS))
 
 

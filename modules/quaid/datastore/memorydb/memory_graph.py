@@ -2799,6 +2799,12 @@ def recall(
     compaction_time: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    include_unscoped: bool = True,
     debug: bool = False,
     technical_scope: str = "any",
     low_signal_retry: bool = True,
@@ -3083,6 +3089,11 @@ def recall(
             "is_technical": _attrs.get("is_technical", False),
             "source_type": _attrs.get("source_type"),
             "project": _attrs.get("project"),
+            "source_channel": _attrs.get("source_channel"),
+            "source_conversation_id": _attrs.get("source_conversation_id"),
+            "source_author_id": _attrs.get("source_author_id"),
+            "actor_id": _attrs.get("actor_id"),
+            "subject_entity_id": _attrs.get("subject_entity_id"),
         }
         if debug and debug_info and node.id in debug_info:
             result_dict["_debug"] = debug_info[node.id]
@@ -3277,6 +3288,35 @@ def recall(
         output = low_info
 
     # Sort by similarity and limit
+    scope_filters = {
+        "source_channel": source_channel,
+        "source_conversation_id": source_conversation_id,
+        "source_author_id": source_author_id,
+        "actor_id": actor_id,
+        "subject_entity_id": subject_entity_id,
+    }
+    active_scope_filters = {k: v for k, v in scope_filters.items() if v not in (None, "")}
+    if active_scope_filters:
+        filtered_output = []
+        for row in output:
+            is_unscoped = all(row.get(k) in (None, "") for k in active_scope_filters.keys())
+            if is_unscoped and include_unscoped:
+                filtered_output.append(row)
+                continue
+
+            matched = True
+            for key, expected in active_scope_filters.items():
+                actual = row.get(key)
+                if actual in (None, ""):
+                    matched = False
+                    break
+                if str(actual) != str(expected):
+                    matched = False
+                    break
+            if matched:
+                filtered_output.append(row)
+        output = filtered_output
+
     output.sort(key=lambda x: x["similarity"], reverse=True)
     final_output = output[:limit]
 
@@ -3412,6 +3452,11 @@ def store(
     keywords: Optional[str] = None,  # Space-separated derived search terms
     source_type: Optional[str] = None,  # user, assistant, tool, import
     is_technical: bool = False,  # technical/project-state memory flag
+    source_channel: Optional[str] = None,  # conversation channel/source (telegram/discord/etc.)
+    source_conversation_id: Optional[str] = None,  # stable thread/group identifier
+    source_author_id: Optional[str] = None,  # external speaker/author identifier
+    actor_id: Optional[str] = None,  # canonical actor entity id
+    subject_entity_id: Optional[str] = None,  # canonical subject entity id
     created_at: Optional[str] = None,  # Override created_at timestamp (ISO format)
     accessed_at: Optional[str] = None,  # Override accessed_at timestamp (ISO format)
 ) -> Dict[str, Any]:
@@ -3460,13 +3505,31 @@ def store(
 
     def _apply_metadata_flags(existing: Node) -> None:
         """Persist source/technical metadata on dedup-update paths."""
-        if not (source_type or is_technical):
+        if not (
+            source_type
+            or is_technical
+            or source_channel
+            or source_conversation_id
+            or source_author_id
+            or actor_id
+            or subject_entity_id
+        ):
             return
         attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
         if source_type and not attrs.get("source_type"):
             attrs["source_type"] = source_type
         if is_technical:
             attrs["is_technical"] = True
+        if source_channel and not attrs.get("source_channel"):
+            attrs["source_channel"] = source_channel
+        if source_conversation_id and not attrs.get("source_conversation_id"):
+            attrs["source_conversation_id"] = source_conversation_id
+        if source_author_id and not attrs.get("source_author_id"):
+            attrs["source_author_id"] = source_author_id
+        if actor_id and not attrs.get("actor_id"):
+            attrs["actor_id"] = actor_id
+        if subject_entity_id and not attrs.get("subject_entity_id"):
+            attrs["subject_entity_id"] = subject_entity_id
         existing.attributes = attrs
 
     # Fast exact-dedup: content hash check (before embedding, saves API calls)
@@ -3761,12 +3824,30 @@ def store(
         node.accessed_at = accessed_at
 
     # Store metadata flags in attributes blob
-    if source_type or is_technical:
+    if (
+        source_type
+        or is_technical
+        or source_channel
+        or source_conversation_id
+        or source_author_id
+        or actor_id
+        or subject_entity_id
+    ):
         attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
         if source_type:
             attrs["source_type"] = source_type
         if is_technical:
             attrs["is_technical"] = True
+        if source_channel:
+            attrs["source_channel"] = source_channel
+        if source_conversation_id:
+            attrs["source_conversation_id"] = source_conversation_id
+        if source_author_id:
+            attrs["source_author_id"] = source_author_id
+        if actor_id:
+            attrs["actor_id"] = actor_id
+        if subject_entity_id:
+            attrs["subject_entity_id"] = subject_entity_id
         node.attributes = attrs
 
     injection_match = None
