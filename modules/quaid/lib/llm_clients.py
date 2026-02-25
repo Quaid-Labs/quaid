@@ -21,6 +21,7 @@ import time
 from typing import Dict, Optional, Tuple
 
 from lib.fail_policy import is_fail_hard_enabled
+from lib.llm_pool import acquire_llm_slot
 from lib.providers import LLMResult
 from lib.runtime_context import get_llm_provider
 
@@ -285,7 +286,8 @@ def call_llm(system_prompt: str, user_message: str,
 
     for attempt in range(retries + 1):
         try:
-            result = llm.llm_call(messages, resolved_tier, max_tokens, timeout)
+            with acquire_llm_slot(timeout_seconds=timeout):
+                result = llm.llm_call(messages, resolved_tier, max_tokens, timeout)
             _track_usage(result)
             if result.truncated:
                 print(f"[llm_clients] WARNING: Response truncated (max_tokens) for model={result.model}", file=sys.stderr)
