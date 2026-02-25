@@ -160,6 +160,13 @@ function isPreInjectionPassEnabled(): boolean {
   return true;
 }
 
+function isFailHardEnabled(): boolean {
+  const retrieval = getMemoryConfig().retrieval || {};
+  if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
+  if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
+  return true;
+}
+
 function getCaptureTimeoutMinutes(): number {
   const capture = getMemoryConfig().capture || {};
   const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
@@ -2084,11 +2091,12 @@ const quaidPlugin = {
         // Dynamic K: 2 * log2(nodeCount) — scales with graph size
         const autoInjectK = computeDynamicK();
         const useTotalRecallForInject = isPreInjectionPassEnabled();
+        const failHard = isFailHardEnabled();
         const routerFailOpen = Boolean(
           getMemoryConfig().retrieval?.routerFailOpen ??
           getMemoryConfig().retrieval?.router_fail_open ??
           true
-        );
+        ) && !failHard;
         const injectLimit = autoInjectK;
         const injectIntent: "general" = "general";
         const injectTechnicalScope: "personal" | "technical" | "any" = "personal";
@@ -2381,12 +2389,13 @@ ${recallStoreGuidance}`,
             const docs = options.filters?.docs;
             const ranking = options.ranking;
             const datastoreOptions = options.datastoreOptions;
+            const failHard = isFailHardEnabled();
             const routerFailOpen = Boolean(
               options.routing?.failOpen ??
               getMemoryConfig().retrieval?.routerFailOpen ??
               getMemoryConfig().retrieval?.router_fail_open ??
               true
-            );
+            ) && !failHard;
             if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
               return {
                 content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
