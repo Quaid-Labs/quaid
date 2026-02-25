@@ -289,3 +289,12 @@ Required E2E suites:
 2. Add policy engine + resolver as pluggable datastore/core registrations.
 3. Enable `multi_user` mode behind explicit config.
 4. Ship benchmark + E2E gates before enabling by default.
+
+## 15. Current Safety Invariants
+
+Current code-level guarantees aligned with this spec:
+
+1. Resolver/policy registration is single-owner (duplicate registration raises).
+2. Multi-user write contract is fail-fast on missing required source identity fields.
+3. Multi-user read contract is fail-fast on missing `viewer_entity_id`.
+4. Core auto-bootstraps datastore-owned default resolver/policy hooks so missing registration does not become a silent runtime gap.

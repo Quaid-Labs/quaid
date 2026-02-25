@@ -875,6 +875,17 @@ MCP uses stdout for JSON-RPC communication. The server redirects Python's `sys.s
 
 The `QUAID_OWNER` environment variable sets the owner identity for all operations. This maps to the `owner_id` field in the database, enabling multi-user setups where each user's memories are namespaced.
 
+### Multi-User Runtime Guardrails
+
+When `identity.mode=multi_user`:
+
+1. Core enforces fail-fast write contracts for identity envelopes (`source_channel`, `source_conversation_id`, `source_author_id`).
+2. Core enforces fail-fast read contracts (`viewer_entity_id`) before scoped recall filtering.
+3. Identity resolver and privacy policy are single-registration hooks (duplicate registrations raise immediately).
+4. Core bootstraps datastore-owned default hooks (`memorydb-default`) at memory-service startup to avoid silent unhooked operation.
+
+This keeps multi-user surfaces observable under stress: missing wiring and malformed context raise explicit errors instead of degrading silently.
+
 ---
 
 ## Appendix: File Reference
