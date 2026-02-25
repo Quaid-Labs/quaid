@@ -72,6 +72,10 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"fast reasoning:    {_get(data, 'models.fastReasoning', 'default')}")
     print(f"embeddings model: {_get(data, 'models.embeddings', 'default')}")
     print(f"notify level:     {_get(data, 'notifications.level', 'normal')}")
+    print(f"fail hard:        {_get(data, 'retrieval.failHard', _get(data, 'retrieval.fail_hard', True))}")
+    print(f"janitor parallel: {_get(data, 'janitor.parallel.enabled', True)}")
+    print(f"llm workers:      {_get(data, 'janitor.parallel.llmWorkers', _get(data, 'janitor.parallel.llm_workers', 2))}")
+    print(f"prepass workers:  {_get(data, 'janitor.parallel.lifecyclePrepassWorkers', _get(data, 'janitor.parallel.lifecycle_prepass_workers', 3))}")
     print(f"idle timeout:     {_get(data, 'capture.idle_timeout_minutes', 10)}m")
     print()
     print("systems:")
@@ -130,9 +134,13 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
         print("4. Embeddings model")
         print("5. Notification level")
         print("6. Idle timeout (minutes)")
-        print("7. Systems on/off")
-        print("8. Show summary")
-        print("9. Save and exit")
+        print("7. Fail hard (retrieval.failHard)")
+        print("8. Janitor parallel enabled")
+        print("9. Janitor LLM workers")
+        print("10. Janitor prepass workers")
+        print("11. Systems on/off")
+        print("12. Show summary")
+        print("13. Save and exit")
         print("0. Exit without saving")
         choice = input("Select: ").strip()
 
@@ -156,10 +164,24 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = int(_get(staged, "capture.idle_timeout_minutes", 10))
                 _set(staged, "capture.idle_timeout_minutes", _prompt_int("capture.idle_timeout_minutes", cur))
             elif choice == "7":
-                _edit_systems(staged)
+                cur = bool(_get(staged, "retrieval.failHard", _get(staged, "retrieval.fail_hard", True)))
+                raw = _prompt_str("retrieval.failHard (true/false)", "true" if cur else "false").lower()
+                _set(staged, "retrieval.failHard", raw in {"1", "true", "yes", "on"})
             elif choice == "8":
-                _print_summary(path, staged)
+                cur = bool(_get(staged, "janitor.parallel.enabled", True))
+                raw = _prompt_str("janitor.parallel.enabled (true/false)", "true" if cur else "false").lower()
+                _set(staged, "janitor.parallel.enabled", raw in {"1", "true", "yes", "on"})
             elif choice == "9":
+                cur = int(_get(staged, "janitor.parallel.llmWorkers", _get(staged, "janitor.parallel.llm_workers", 2)))
+                _set(staged, "janitor.parallel.llmWorkers", _prompt_int("janitor.parallel.llmWorkers", cur))
+            elif choice == "10":
+                cur = int(_get(staged, "janitor.parallel.lifecyclePrepassWorkers", _get(staged, "janitor.parallel.lifecycle_prepass_workers", 3)))
+                _set(staged, "janitor.parallel.lifecyclePrepassWorkers", _prompt_int("janitor.parallel.lifecyclePrepassWorkers", cur))
+            elif choice == "11":
+                _edit_systems(staged)
+            elif choice == "12":
+                _print_summary(path, staged)
+            elif choice == "13":
                 _save_config(path, staged)
                 print(f"Saved: {path}")
                 return True
