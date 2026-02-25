@@ -2811,6 +2811,12 @@ def recall(
     debug: bool = False,
     technical_scope: str = "any",
     low_signal_retry: bool = True,
+    actor_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
+    include_unscoped: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Recall memories matching a query.
@@ -3128,6 +3134,12 @@ def recall(
                                     "verified": co_node.verified,
                                     "pinned": co_node.pinned,
                                     "id": co_node.id,
+                                    "owner_id": co_node.owner_id,
+                                    "actor_id": co_node.actor_id,
+                                    "subject_entity_id": co_node.subject_entity_id,
+                                    "source_channel": co_node.source_channel,
+                                    "source_conversation_id": co_node.source_conversation_id,
+                                    "source_author_id": co_node.source_author_id,
                                     "via_relation": "co_session",
                                     "hop_depth": 0,
                                     "is_technical": _co_attrs.get("is_technical", False),
@@ -3202,6 +3214,12 @@ def recall(
                             "verified": rel_node.verified,
                             "pinned": rel_node.pinned,
                             "id": rel_node.id,
+                            "owner_id": rel_node.owner_id,
+                            "actor_id": rel_node.actor_id,
+                            "subject_entity_id": rel_node.subject_entity_id,
+                            "source_channel": rel_node.source_channel,
+                            "source_conversation_id": rel_node.source_conversation_id,
+                            "source_author_id": rel_node.source_author_id,
                             "via_relation": relation,
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
@@ -3237,6 +3255,12 @@ def recall(
                             "verified": rel_node.verified,
                             "pinned": rel_node.pinned,
                             "id": rel_node.id,
+                            "owner_id": rel_node.owner_id,
+                            "actor_id": rel_node.actor_id,
+                            "subject_entity_id": rel_node.subject_entity_id,
+                            "source_channel": rel_node.source_channel,
+                            "source_conversation_id": rel_node.source_conversation_id,
+                            "source_author_id": rel_node.source_author_id,
                             "via_relation": relation,
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
@@ -3244,6 +3268,38 @@ def recall(
                             "is_technical": _rel_attrs.get("is_technical", False),
                             "project": _rel_attrs.get("project"),
                         })
+
+    # Forward-compatible entity/source scoping filter (multi-user groundwork).
+    actor_scope = str(actor_id or "").strip() or None
+    subject_scope = str(subject_entity_id or "").strip() or None
+    source_channel_scope = str(source_channel or "").strip().lower() or None
+    source_conversation_scope = str(source_conversation_id or "").strip() or None
+    source_author_scope = str(source_author_id or "").strip() or None
+    if any([actor_scope, subject_scope, source_channel_scope, source_conversation_scope, source_author_scope]):
+        def _scope_match(value: Optional[str], expected: Optional[str], *, normalize_lower: bool = False) -> bool:
+            if not expected:
+                return True
+            actual = str(value or "").strip()
+            if not actual:
+                return bool(include_unscoped)
+            if normalize_lower:
+                return actual.lower() == expected.lower()
+            return actual == expected
+
+        filtered: List[Dict[str, Any]] = []
+        for r in output:
+            if not _scope_match(r.get("actor_id"), actor_scope):
+                continue
+            if not _scope_match(r.get("subject_entity_id"), subject_scope):
+                continue
+            if not _scope_match(r.get("source_channel"), source_channel_scope, normalize_lower=True):
+                continue
+            if not _scope_match(r.get("source_conversation_id"), source_conversation_scope):
+                continue
+            if not _scope_match(r.get("source_author_id"), source_author_scope):
+                continue
+            filtered.append(r)
+        output = filtered
 
     # Explicit scope filter for technical vs personal retrieval.
     if technical_scope == "technical":
@@ -3346,6 +3402,12 @@ def recall(
                         debug=False,
                         technical_scope=technical_scope,
                         low_signal_retry=False,
+                        actor_id=actor_id,
+                        subject_entity_id=subject_entity_id,
+                        source_channel=source_channel,
+                        source_conversation_id=source_conversation_id,
+                        source_author_id=source_author_id,
+                        include_unscoped=include_unscoped,
                     )
                     if len(retry_output) > len(final_output):
                         return retry_output

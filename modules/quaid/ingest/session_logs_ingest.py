@@ -84,6 +84,10 @@ def _run(
     label: str,
     session_file: Optional[str] = None,
     transcript_path: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    participant_ids: Optional[list[str]] = None,
+    participant_aliases: Optional[Dict[str, str]] = None,
     message_count: int = 0,
     topic_hint: str = "",
 ) -> Dict[str, Any]:
@@ -112,6 +116,10 @@ def _run(
                 "--owner", str(owner_id or "default"),
                 "--label", str(label or "unknown"),
                 "--transcript-file", tmp_path,
+                *(["--source-channel", str(source_channel)] if source_channel else []),
+                *(["--conversation-id", str(conversation_id)] if conversation_id else []),
+                *(["--participant-ids", ",".join(str(p).strip() for p in (participant_ids or []) if str(p).strip())] if participant_ids else []),
+                *(["--participant-aliases", json.dumps(participant_aliases or {}, ensure_ascii=True)] if participant_aliases else []),
                 "--message-count", str(int(message_count or 0)),
                 "--topic-hint", str(topic_hint or ""),
                 *(["--source-path", str(src_path)] if src_path else []),
@@ -136,6 +144,10 @@ def main() -> int:
     ingest_p.add_argument("--label", default="unknown")
     ingest_p.add_argument("--session-file", default=None)
     ingest_p.add_argument("--transcript-path", default=None)
+    ingest_p.add_argument("--source-channel", default=None)
+    ingest_p.add_argument("--conversation-id", default=None)
+    ingest_p.add_argument("--participant-ids", default=None, help="Comma-separated participant IDs/handles")
+    ingest_p.add_argument("--participant-aliases", default=None, help="JSON object mapping alias -> canonical ID")
     ingest_p.add_argument("--message-count", type=int, default=0)
     ingest_p.add_argument("--topic-hint", default="")
 
@@ -166,6 +178,10 @@ def main() -> int:
             label=args.label,
             session_file=args.session_file,
             transcript_path=args.transcript_path,
+            source_channel=(str(args.source_channel or "").strip() or None),
+            conversation_id=(str(args.conversation_id or "").strip() or None),
+            participant_ids=[p.strip() for p in str(args.participant_ids or "").split(",") if p.strip()],
+            participant_aliases=json.loads(args.participant_aliases) if args.participant_aliases else None,
             message_count=args.message_count,
             topic_hint=args.topic_hint,
         )

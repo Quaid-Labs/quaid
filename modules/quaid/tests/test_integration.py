@@ -82,6 +82,47 @@ class TestStoreRecallRoundTrip:
             found_ids = [r["id"] for r in results]
             assert node_id in found_ids
 
+    def test_recall_source_scope_filters_results(self, tmp_path):
+        """Recall can scope to source metadata while optionally excluding unscoped rows."""
+        from datastore.memorydb.memory_graph import store, recall
+
+        graph, _db_file = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            scoped = store(
+                text="Solomon likes pourover coffee beans",
+                category="fact",
+                owner_id="quaid",
+                source_channel="telegram",
+                source_conversation_id="chat-1",
+                source_author_id="<redacted>",
+                actor_id="user:owner",
+                subject_entity_id="user:owner",
+                skip_dedup=True,
+            )
+            unscoped = store(
+                text="Solomon uses a hand grinder daily",
+                category="fact",
+                owner_id="quaid",
+                skip_dedup=True,
+            )
+            assert scoped and unscoped
+
+            results = recall(
+                query="coffee",
+                owner_id="quaid",
+                limit=10,
+                use_routing=False,
+                min_similarity=0.0,
+                source_channel="telegram",
+                source_conversation_id="chat-1",
+                include_unscoped=False,
+            )
+            found_ids = {r["id"] for r in results}
+            assert scoped["id"] in found_ids
+            assert unscoped["id"] not in found_ids
+
     def test_store_with_edge_creates_both(self, tmp_path):
         """Storing a fact and then creating an edge should link them."""
         from datastore.memorydb.memory_graph import store, create_edge

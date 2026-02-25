@@ -90,6 +90,12 @@ def recall(
     use_reranker: bool = True,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
+    include_unscoped: bool = True,
 ) -> List[Dict[str, Any]]:
     """Recall memories matching a natural language query.
 
@@ -134,6 +140,12 @@ def recall(
         use_reranker=use_reranker,
         date_from=date_from,
         date_to=date_to,
+        actor_id=actor_id,
+        subject_entity_id=subject_entity_id,
+        source_channel=source_channel,
+        source_conversation_id=source_conversation_id,
+        source_author_id=source_author_id,
+        include_unscoped=include_unscoped,
     )
 
 

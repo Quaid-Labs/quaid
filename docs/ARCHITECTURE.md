@@ -867,6 +867,10 @@ core/interface/mcp_server.py (FastMCP)
 | `memory_stats` | Database statistics | Free |
 | `projects_search` | Search project documentation via RAG | Free |
 
+`memory_recall` also exposes forward-looking multi-user scope filters:
+`actor_id`, `subject_entity_id`, `source_channel`, `source_conversation_id`,
+`source_author_id`, and `include_unscoped`.
+
 ### Stdout Isolation
 
 MCP uses stdout for JSON-RPC communication. The server redirects Python's `sys.stdout` to `sys.stderr` at startup to prevent stray print statements from corrupting the protocol stream. This is critical because several modules (`memory_graph.py`, `lib/embeddings.py`) print status messages during normal operation.
@@ -879,6 +883,6 @@ The `QUAID_OWNER` environment variable sets the owner identity for all operation
 
 ## Appendix: File Reference
 
-The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). Session transcript indexing/search ownership also lives in datastore (`datastore/memorydb/session_logs.py`), with lifecycle ingest bridge in `ingest/session_logs_ingest.py` and orchestration via event bus (`session.ingest_log`). In OpenClaw integration, `adaptors/openclaw/index.ts` is the entry shim, `adaptors/openclaw/adapter.ts` owns runtime integration, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
+The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). Session transcript indexing/search ownership also lives in datastore (`datastore/memorydb/session_logs.py`), with lifecycle ingest bridge in `ingest/session_logs_ingest.py` and orchestration via event bus (`session.ingest_log`). Lifecycle metadata (`source_channel`, `conversation_id`, `participant_ids`, `participant_aliases`) is propagated from adaptor hooks to ingest/datastore on compaction/reset/new flows. In OpenClaw integration, `adaptors/openclaw/index.ts` is the entry shim, `adaptors/openclaw/adapter.ts` owns runtime integration, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

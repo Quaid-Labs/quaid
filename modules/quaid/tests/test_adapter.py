@@ -387,9 +387,10 @@ class TestAdapterSelection:
         adapter = get_adapter()
         assert isinstance(adapter, OpenClawAdapter)
 
-    def test_missing_adapter_raises(self, monkeypatch):
+    def test_missing_adapter_raises(self, monkeypatch, tmp_path):
         monkeypatch.delenv("QUAID_HOME", raising=False)
         monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(RuntimeError, match="No config file found|must set adapter type"):
             get_adapter()
 

@@ -252,6 +252,12 @@ def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:
     label = str(payload.get("label") or "unknown").strip() or "unknown"
     session_file = payload.get("session_file")
     transcript_path = payload.get("transcript_path")
+    source_channel = str(payload.get("source_channel") or "").strip() or None
+    conversation_id = str(payload.get("conversation_id") or "").strip() or None
+    participant_ids_raw = payload.get("participant_ids")
+    participant_aliases_raw = payload.get("participant_aliases")
+    participant_ids = participant_ids_raw if isinstance(participant_ids_raw, list) else []
+    participant_aliases = participant_aliases_raw if isinstance(participant_aliases_raw, dict) else {}
     message_count = int(payload.get("message_count") or 0)
     topic_hint = str(payload.get("topic_hint") or "").strip()
 
@@ -270,6 +276,10 @@ def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:
             label=label,
             session_file=str(session_file) if session_file else None,
             transcript_path=str(transcript_path) if transcript_path else None,
+            source_channel=source_channel,
+            conversation_id=conversation_id,
+            participant_ids=[str(p).strip() for p in participant_ids if str(p).strip()],
+            participant_aliases={str(k): str(v) for k, v in participant_aliases.items() if str(k).strip()},
             message_count=message_count,
             topic_hint=topic_hint,
         )
