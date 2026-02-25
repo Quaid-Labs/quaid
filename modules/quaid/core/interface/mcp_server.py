@@ -17,6 +17,7 @@ Environment variables:
 
 import os
 import sys
+import json
 
 # MCP uses stdout for JSON-RPC — redirect stdout to stderr before any imports
 # to catch stray prints from memory_graph.py, lib/embeddings.py, etc.
@@ -206,10 +207,11 @@ def memory_recall(
     if participant_entity_ids_json and participant_entity_ids_json.strip():
         try:
             parsed = json.loads(participant_entity_ids_json)
-            if isinstance(parsed, list):
-                participant_entity_ids = [str(p).strip() for p in parsed if str(p).strip()]
-        except Exception:
-            participant_entity_ids = None
+            if not isinstance(parsed, list):
+                raise ValueError("participant_entity_ids_json must decode to a JSON array")
+            participant_entity_ids = [str(p).strip() for p in parsed if str(p).strip()]
+        except Exception as e:
+            raise ValueError(f"invalid participant_entity_ids_json: {e}")
 
     # Advanced path: still route through API boundary.
     return recall(

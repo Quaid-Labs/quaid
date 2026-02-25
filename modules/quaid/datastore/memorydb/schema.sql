@@ -235,6 +235,9 @@ CREATE INDEX IF NOT EXISTS idx_aliases_alias ON entity_aliases(alias);
 CREATE INDEX IF NOT EXISTS idx_aliases_canonical ON entity_aliases(canonical_name);
 CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity ON entity_aliases(entity_id);
 CREATE INDEX IF NOT EXISTS idx_entity_aliases_lookup ON entity_aliases(platform, source_id, handle);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_aliases_platform_scope_handle_unique
+    ON entity_aliases(platform, source_id, handle)
+    WHERE platform IS NOT NULL AND handle IS NOT NULL;
 
 -- Canonical identity entities (forward-compatible multi-user foundation).
 CREATE TABLE IF NOT EXISTS entities (

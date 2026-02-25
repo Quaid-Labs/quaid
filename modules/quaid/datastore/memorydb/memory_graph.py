@@ -3466,7 +3466,8 @@ def recall(
             for row in output:
                 row_participants = row.get("participant_entity_ids")
                 if not isinstance(row_participants, list):
-                    participant_filtered.append(row if include_unscoped else row)
+                    if include_unscoped:
+                        participant_filtered.append(row)
                     continue
                 row_set = {str(p).strip() for p in row_participants if str(p).strip()}
                 if row_set & requested:
