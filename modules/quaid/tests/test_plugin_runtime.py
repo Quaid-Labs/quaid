@@ -7,8 +7,6 @@ import pytest
 from core.runtime.plugins import (
     PluginRegistry,
     discover_plugin_manifests,
-    get_runtime_plugin_diagnostics,
-    get_runtime_plugin_registry,
     initialize_plugin_runtime,
     reset_plugin_runtime,
     validate_manifest_dict,
@@ -203,11 +201,6 @@ def test_initialize_plugin_runtime_non_strict_collects_slot_errors(tmp_path: Pat
     assert registry.get("adapter.a") is not None
     assert any("expected type 'datastore'" in msg for msg in errors)
     assert any("unknown plugin_id 'missing.ingest'" in msg for msg in errors)
-    diagnostics = get_runtime_plugin_diagnostics()
-    assert diagnostics["errors"] == errors
-    cached = get_runtime_plugin_registry()
-    assert cached is not None
-    assert cached.get("adapter.a") is not None
 
 
 def test_registry_register_is_thread_safe():

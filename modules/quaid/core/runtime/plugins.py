@@ -332,19 +332,6 @@ def initialize_plugin_runtime(
     return registry, list(errors), list(warnings)
 
 
-def get_runtime_plugin_registry() -> Optional[PluginRegistry]:
-    with _RUNTIME_LOCK:
-        return _RUNTIME_REGISTRY
-
-
-def get_runtime_plugin_diagnostics() -> Dict[str, List[str]]:
-    with _RUNTIME_LOCK:
-        return {
-            "errors": list(_RUNTIME_ERRORS),
-            "warnings": list(_RUNTIME_WARNINGS),
-        }
-
-
 def reset_plugin_runtime() -> None:
     with _RUNTIME_LOCK:
         global _RUNTIME_REGISTRY, _RUNTIME_ERRORS, _RUNTIME_WARNINGS
