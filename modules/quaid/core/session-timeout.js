@@ -121,6 +121,7 @@ class SessionTimeoutManager {
   pendingMessages = null;
   pendingSessionId;
   buffers = /* @__PURE__ */ new Map();
+  bufferTouchedAt = /* @__PURE__ */ new Map();
   bufferDir;
   logDir;
   sessionLogDir;
@@ -135,6 +136,7 @@ class SessionTimeoutManager {
   workerTimer = null;
   chain = Promise.resolve();
   failHard;
+  maxInMemoryBuffers = 200;
   constructor(opts) {
     this.timeoutMinutes = opts.timeoutMinutes;
     this.extract = opts.extract;
@@ -200,6 +202,8 @@ class SessionTimeoutManager {
     const merged = mergeUniqueMessages(existing, gatedIncoming);
     const added = merged.slice(existing.length);
     this.buffers.set(sessionId, merged);
+    this.bufferTouchedAt.set(sessionId, Date.now());
+    this.evictInMemoryBuffersIfNeeded(sessionId);
     this.writeBuffer(sessionId, merged);
     this.appendSessionMessages(sessionId, added);
     this.pendingMessages = merged;
@@ -257,6 +261,7 @@ class SessionTimeoutManager {
     const cursorMessages = loggedMessages.length > 0 ? loggedMessages : bufferedMessages;
     this.writeSessionCursor(sessionId, cursorMessages);
     this.buffers.delete(sessionId);
+    this.bufferTouchedAt.delete(sessionId);
     this.clearBuffer(sessionId);
     this.clearSessionMessageLog(sessionId);
     this.writeQuaidLog("session_cleared", sessionId);
@@ -268,6 +273,20 @@ class SessionTimeoutManager {
         this.timer = null;
         this.writeQuaidLog("timer_cleared", sessionId, { reason: "session_cleared" });
       }
+    }
+  }
+  evictInMemoryBuffersIfNeeded(currentSessionId) {
+    while (this.buffers.size > this.maxInMemoryBuffers) {
+      const oldestSession = Array.from(this.bufferTouchedAt.entries()).sort((a, b) => a[1] - b[1]).find(([sid]) => sid !== currentSessionId && sid !== this.pendingSessionId)?.[0];
+      if (!oldestSession) {
+        break;
+      }
+      this.buffers.delete(oldestSession);
+      this.bufferTouchedAt.delete(oldestSession);
+      this.writeQuaidLog("buffer_evicted", oldestSession, {
+        reason: "in_memory_buffer_limit",
+        limit: this.maxInMemoryBuffers
+      });
     }
   }
   async recoverStaleBuffers() {
