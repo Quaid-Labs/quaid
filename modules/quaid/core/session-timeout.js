@@ -515,6 +515,9 @@ class SessionTimeoutManager {
       await this.extract(messages, sessionId, "Timeout");
       this.writeQuaidLog("extract_done", sessionId, { message_count: messages.length });
       this.clearSession(sessionId);
+    }).catch((err) => {
+      safeLog(this.logger, `[quaid][timeout] extraction queue failed: ${String(err?.message || err)}`);
+      if (this.failHard) throw err;
     });
   }
   triggerWorkerTick() {
