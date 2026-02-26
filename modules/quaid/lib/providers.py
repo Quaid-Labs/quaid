@@ -47,6 +47,16 @@ def _sanitize_url_for_logs(url: str) -> str:
         return "<invalid-url>"
 
 
+def _summarize_error_text(text: str, max_len: int = 300) -> str:
+    """Return compact error summary preserving tail context."""
+    msg = str(text or "").strip()
+    if len(msg) <= max_len:
+        return msg
+    head = max_len // 3
+    tail = max_len - head - 5
+    return f"{msg[:head]} ... {msg[-tail:]}"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Dataclasses
 # ═══════════════════════════════════════════════════════════════════════
@@ -386,7 +396,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 err = (result.stderr or result.stdout or "").strip()
                 raise RuntimeError(
                     f"Claude Code failed (rc={result.returncode}) for tier={model_tier}, "
-                    f"model={model_alias}: {err[:300]}"
+                    f"model={model_alias}: {_summarize_error_text(err, 300)}"
                 )
 
             try:
