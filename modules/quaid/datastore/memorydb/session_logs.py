@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,8 @@ from lib.worker_pool import run_callables
 from lib.database import get_connection as _lib_get_connection
 from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding as _lib_pack_embedding, unpack_embedding as _lib_unpack_embedding
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
@@ -89,7 +92,8 @@ def _parallel_workers(task_name: str, default: int = 4) -> int:
                     break
         raw = override if override is not None else workers
         return max(1, min(int(raw), 16))
-    except Exception:
+    except Exception as exc:
+        logger.warning("session_logs parallel worker config parse failed for task=%s: %s", task_name, exc)
         return max(1, int(default))
 
 
@@ -123,8 +127,8 @@ def ensure_schema(conn) -> None:
     ]:
         try:
             conn.execute(f"ALTER TABLE session_logs ADD COLUMN {col} {ddl}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("session_logs migration skipped for column=%s: %s", col, exc)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_owner_updated ON session_logs(owner_id, updated_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_updated ON session_logs(updated_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_session_logs_conversation ON session_logs(conversation_id, updated_at DESC)")
