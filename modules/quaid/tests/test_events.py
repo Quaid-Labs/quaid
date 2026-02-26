@@ -178,3 +178,46 @@ def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, t
     kinds = [str(r.get("kind", "")) for r in requests]
     assert "janitor_summary" in kinds
     assert "janitor_daily_digest" in kinds
+
+
+def test_emit_event_caps_queue_length(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "MAX_EVENT_QUEUE", 3)
+    for i in range(5):
+        emit_event(name="session.reset", payload={"idx": i}, source="pytest")
+
+    queue_path = tmp_path / ".quaid" / "runtime" / "events" / "queue.json"
+    payload = json.loads(queue_path.read_text(encoding="utf-8"))
+    queued = payload.get("events") or []
+    assert len(queued) == 3
+    assert [int(item.get("payload", {}).get("idx")) for item in queued] == [2, 3, 4]
+
+
+def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "MAX_HISTORY_JSONL_BYTES", 120)
+    monkeypatch.setattr(events, "HISTORY_TRIM_TARGET_BYTES", 60)
+
+    history_path = tmp_path / ".quaid" / "runtime" / "events" / "history.jsonl"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    seed = "".join(
+        json.dumps({"ts": f"t{i}", "op": "seed", "event": {"id": i}}) + "\n"
+        for i in range(12)
+    )
+    history_path.write_text(seed, encoding="utf-8")
+
+    emit_event(name="session.reset", payload={"reason": "trim-check"}, source="pytest")
+
+    raw = history_path.read_text(encoding="utf-8")
+    lines = [line for line in raw.splitlines() if line.strip()]
+    assert lines
+    assert len(raw.encode("utf-8")) < len(seed.encode("utf-8"))
+    last = json.loads(lines[-1])
+    assert last.get("op") == "emit"
+    assert last.get("event", {}).get("payload", {}).get("reason") == "trim-check"
