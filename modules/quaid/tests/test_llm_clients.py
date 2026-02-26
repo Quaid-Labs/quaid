@@ -63,17 +63,17 @@ class TestParseJsonResponse:
     def test_invalid_json_returns_none(self):
         assert parse_json_response("{not valid json}") is None
 
-    def test_invalid_json_emits_parse_diagnostics(self, capsys):
+    def test_invalid_json_emits_parse_diagnostics(self, caplog):
+        caplog.set_level("WARNING")
         assert parse_json_response("{not valid json}") is None
-        captured = capsys.readouterr()
-        assert "parse_json_response failed" in captured.err
+        assert "parse_json_response failed" in caplog.text
 
-    def test_parse_diagnostics_do_not_leak_raw_content(self, capsys):
+    def test_parse_diagnostics_do_not_leak_raw_content(self, caplog):
+        caplog.set_level("WARNING")
         bad = '{"token":"my-super-secret-token",bad}'
         assert parse_json_response(bad) is None
-        captured = capsys.readouterr()
-        assert "parse_json_response failed" in captured.err
-        assert "my-super-secret-token" not in captured.err
+        assert "parse_json_response failed" in caplog.text
+        assert "my-super-secret-token" not in caplog.text
 
     def test_none_input_returns_none(self):
         assert parse_json_response(None) is None
@@ -100,19 +100,19 @@ class TestParseJsonResponse:
         # Should parse at least one of them
         assert "first" in result or "second" in result
 
-    def test_validate_llm_output_warns_on_unknown_keys(self, capsys):
+    def test_validate_llm_output_warns_on_unknown_keys(self, caplog):
+        caplog.set_level("WARNING")
         parsed = [{"foo": "bar"}]
         results = validate_llm_output(parsed, ReviewDecision)
-        captured = capsys.readouterr()
         assert results == []
-        assert "dropping unknown keys" in captured.err
+        assert "dropping unknown keys" in caplog.text
 
-    def test_validate_llm_output_does_not_log_raw_values(self, capsys):
+    def test_validate_llm_output_does_not_log_raw_values(self, caplog):
+        caplog.set_level("WARNING")
         parsed = [{"foo": "my-super-secret-token"}]
         results = validate_llm_output(parsed, ReviewDecision)
-        captured = capsys.readouterr()
         assert results == []
-        assert "my-super-secret-token" not in captured.err
+        assert "my-super-secret-token" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
