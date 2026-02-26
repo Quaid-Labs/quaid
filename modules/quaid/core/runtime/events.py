@@ -187,17 +187,18 @@ def _write_json(path: Path, payload: Any) -> None:
 
 def _append_jsonl(path: Path, payload: Any) -> None:
     _ensure_parent(path)
-    try:
-        if path.exists() and path.stat().st_size > MAX_HISTORY_JSONL_BYTES:
-            data = path.read_text(encoding="utf-8")
-            keep = data[-HISTORY_TRIM_TARGET_BYTES:]
-            if "\n" in keep:
-                keep = keep.split("\n", 1)[1]
-            path.write_text(keep, encoding="utf-8")
-    except Exception as exc:
-        logger.warning("Failed trimming history file %s: %s", path, exc)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    with _file_lock(_lock_path(path)):
+        try:
+            if path.exists() and path.stat().st_size > MAX_HISTORY_JSONL_BYTES:
+                data = path.read_text(encoding="utf-8")
+                keep = data[-HISTORY_TRIM_TARGET_BYTES:]
+                if "\n" in keep:
+                    keep = keep.split("\n", 1)[1]
+                path.write_text(keep, encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed trimming history file %s: %s", path, exc)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def _lock_path(path: Path) -> Path:
