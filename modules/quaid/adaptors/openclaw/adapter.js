@@ -71,6 +71,9 @@ function _envTimeoutMs(name, fallbackMs) {
 const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOUT_MS", 3e5);
 const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 3e5);
 const QUICK_PROJECT_SUMMARY_TIMEOUT_MS = _envTimeoutMs("QUAID_PROJECT_SUMMARY_TIMEOUT_MS", 6e4);
+const FAST_ROUTER_TIMEOUT_MS = _envTimeoutMs("QUAID_ROUTER_FAST_TIMEOUT_MS", 45e3);
+const DEEP_ROUTER_TIMEOUT_MS = _envTimeoutMs("QUAID_ROUTER_DEEP_TIMEOUT_MS", 6e4);
+const DATASTORE_STATS_TIMEOUT_MS = _envTimeoutMs("QUAID_DATASTORE_STATS_TIMEOUT_MS", 5e3);
 function buildPythonEnv(extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
@@ -92,7 +95,7 @@ function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
   try {
     const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
       encoding: "utf-8",
-      timeout: 5e3,
+      timeout: DATASTORE_STATS_TIMEOUT_MS,
       env: buildPythonEnv()
     });
     const parsed = JSON.parse(output);
@@ -1230,6 +1233,7 @@ os.unlink(${JSON.stringify(tmpFile)})
       }
     }
   }
+  return launched;
 }
 function _loadJanitorNudgeState() {
   try {
@@ -1702,11 +1706,11 @@ const knowledgeEngine = createKnowledgeEngine({
   isSystemEnabled,
   getProjectCatalog,
   callFastRouter: async (systemPrompt, userPrompt) => {
-    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, 45e3);
+    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, FAST_ROUTER_TIMEOUT_MS);
     return String(llm?.text || "");
   },
   callDeepRouter: async (systemPrompt, userPrompt) => {
-    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, 6e4);
+    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
     return String(llm?.text || "");
   },
   recallVector: async (query, limit, scope, dateFrom, dateTo) => {
@@ -2176,7 +2180,7 @@ ${formatted}` : formatted;
                 mode: "auto_inject"
               }
             }), { mode: 384 });
-            spawnNotifyScript(`
+            const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_recall
 with open(${JSON.stringify(dataFile)}, 'r') as f:
@@ -2184,6 +2188,12 @@ with open(${JSON.stringify(dataFile)}, 'r') as f:
 os.unlink(${JSON.stringify(dataFile)})
 notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown'])
 `);
+            if (!launchedNotify) {
+              try {
+                fs.unlinkSync(dataFile);
+              } catch {
+              }
+            }
             console.log("[quaid] Auto-inject recall notification dispatched");
           }
         } catch (notifyErr) {
@@ -2503,7 +2513,7 @@ ${recallStoreGuidance}`,
                   };
                   const dataFile2 = path.join(QUAID_TMP_DIR, `recall-data-${Date.now()}.json`);
                   fs.writeFileSync(dataFile2, JSON.stringify({ memories: memoryData, source_breakdown: sourceBreakdown }), { mode: 384 });
-                  spawnNotifyScript(`
+                  const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_recall
 with open(${JSON.stringify(dataFile2)}, 'r') as f:
@@ -2511,6 +2521,12 @@ with open(${JSON.stringify(dataFile2)}, 'r') as f:
 os.unlink(${JSON.stringify(dataFile2)})
 notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown'])
 `);
+                  if (!launchedNotify) {
+                    try {
+                      fs.unlinkSync(dataFile2);
+                    } catch {
+                    }
+                  }
                 }
               } catch (notifyErr) {
                 console.warn(`[quaid] Memory recall notification skipped: ${notifyErr.message}`);
@@ -2712,7 +2728,7 @@ ${results || "No results."}${stalenessWarning}` : results ? results + stalenessW
                 if (docResults.length > 0) {
                   const dataFile3 = path.join(QUAID_TMP_DIR, `docs-search-data-${Date.now()}.json`);
                   fs.writeFileSync(dataFile3, JSON.stringify({ query, results: docResults }), { mode: 384 });
-                  spawnNotifyScript(`
+                  const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_docs_search
 with open(${JSON.stringify(dataFile3)}, 'r') as f:
@@ -2720,6 +2736,12 @@ with open(${JSON.stringify(dataFile3)}, 'r') as f:
 os.unlink(${JSON.stringify(dataFile3)})
 notify_docs_search(data['query'], data['results'])
 `);
+                  if (!launchedNotify) {
+                    try {
+                      fs.unlinkSync(dataFile3);
+                    } catch {
+                    }
+                  }
                 }
               }
             } catch (notifyErr) {
@@ -3244,7 +3266,7 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
             snippet_details: hasMerged ? mergedDetails : null,
             always_notify: alwaysNotifyCompletion
           }), { mode: 384 });
-          spawnNotifyScript(`
+          const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_extraction
 with open(${JSON.stringify(detailsPath)}, 'r') as f:
@@ -3260,6 +3282,12 @@ notify_memory_extraction(
     always_notify=data.get('always_notify', False),
 )
 `);
+          if (!launchedNotify) {
+            try {
+              fs.unlinkSync(detailsPath);
+            } catch {
+            }
+          }
         } catch (notifyErr) {
           console.warn(`[quaid] Extraction notification skipped: ${notifyErr.message}`);
         }
