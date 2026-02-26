@@ -595,6 +595,19 @@ class TestNotifyFallbackVisibility:
             with pytest.raises(RuntimeError, match="fail-hard mode"):
                 _notify_full_text()
 
+    def test_notify_memory_extraction_config_error_falls_back_when_fail_hard_disabled(self):
+        with patch("config.get_config", side_effect=RuntimeError("bad config")), \
+             patch("core.runtime.notify.is_fail_hard_enabled", return_value=False), \
+             _patch_notify_user() as mock_send:
+            assert notify_memory_extraction(1, 0, 0, always_notify=True) is True
+            assert mock_send.called
+
+    def test_notify_memory_extraction_config_error_raises_when_fail_hard_enabled(self):
+        with patch("config.get_config", side_effect=RuntimeError("bad config")), \
+             patch("core.runtime.notify.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="fail-hard mode"):
+                notify_memory_extraction(1, 0, 0, always_notify=True)
+
     def test_check_janitor_health_returns_warning_on_runtime_error(self, caplog):
         caplog.set_level("WARNING")
         with patch(

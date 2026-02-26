@@ -431,7 +431,11 @@ def notify_memory_extraction(
     try:
         from config import get_config
         extraction_level = get_config().notifications.effective_level("extraction")
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to resolve extraction notification level while fail-hard mode is enabled"
+            ) from exc
         extraction_level = "summary"
     if extraction_level == "off":
         return False
