@@ -1,5 +1,7 @@
 import os
 import sys
+import urllib.request
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -93,3 +95,33 @@ def test_append_decision_log_trims_to_configured_tail(tmp_path, monkeypatch):
     assert len(lines) == 3
     payloads = [janitor.json.loads(line) for line in lines]
     assert [p["idx"] for p in payloads] == [2, 3, 4]
+
+
+def test_check_for_updates_ignores_non_object_github_payload(tmp_path, monkeypatch):
+    version_file = Path(janitor.__file__).parent / "VERSION"
+    original = version_file.read_text(encoding="utf-8") if version_file.exists() else None
+    version_file.write_text("0.1.0", encoding="utf-8")
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'["bad-payload"]'
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: _Resp())
+    monkeypatch.setattr(janitor, "get_graph", lambda: object())
+    monkeypatch.setattr(janitor, "get_update_check_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(janitor, "write_update_check_cache", lambda *_args, **_kwargs: None)
+
+    try:
+        out = janitor._check_for_updates()
+        assert out is None
+    finally:
+        if original is None:
+            version_file.unlink(missing_ok=True)
+        else:
+            version_file.write_text(original, encoding="utf-8")
