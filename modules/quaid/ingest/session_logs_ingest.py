@@ -47,7 +47,15 @@ def _call_session_logs_cli(command: str, args: list[str]) -> Dict[str, Any]:
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or f"session_logs {command} failed").strip())
+        stderr_text = (proc.stderr or "").strip()
+        stdout_text = (proc.stdout or "").strip()
+        detail_parts = []
+        if stderr_text:
+            detail_parts.append(f"stderr: {stderr_text}")
+        if stdout_text:
+            detail_parts.append(f"stdout: {stdout_text}")
+        detail = " | ".join(detail_parts) if detail_parts else f"session_logs {command} failed"
+        raise RuntimeError(f"session_logs {command} failed (exit={proc.returncode}): {detail}")
     try:
         return json.loads(proc.stdout or "{}")
     except Exception as exc:
