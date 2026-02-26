@@ -146,6 +146,50 @@ def _default_owner_id() -> str:
         return "default"
 
 
+def _upsert_vec_embedding(
+    conn: sqlite3.Connection,
+    node_id: str,
+    packed_embedding: Optional[bytes],
+    *,
+    context: str,
+) -> None:
+    """Resilient vec_nodes upsert with delete+insert fallback on constraint conflicts."""
+    if not packed_embedding:
+        return
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+            (node_id, packed_embedding),
+        )
+        return
+    except Exception as first_exc:
+        try:
+            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
+            conn.execute(
+                "INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                (node_id, packed_embedding),
+            )
+            logger.warning(
+                "vec_nodes upsert recovered via delete+insert for %s during %s: %s",
+                node_id,
+                context,
+                first_exc,
+            )
+            return
+        except Exception as retry_exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"vec_nodes update failed during {context} for node {node_id}"
+                ) from retry_exc
+            logger.warning(
+                "vec_nodes update skipped during %s for node %s: first=%s retry=%s",
+                context,
+                node_id,
+                first_exc,
+                retry_exc,
+            )
+
+
 def _merge_nodes_into(
     graph: MemoryGraph,
     merged_text: str,
@@ -1106,17 +1150,12 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
                         "UPDATE nodes SET embedding = ? WHERE id = ?",
                         (packed, node_id)
                     )
-                    try:
-                        conn.execute(
-                            "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
-                            (node_id, packed)
-                        )
-                    except Exception as exc:
-                        if is_fail_hard_enabled():
-                            raise RuntimeError(
-                                f"vec_nodes update failed during backfill for node {node_id}"
-                            ) from exc
-                        logger.warning("vec_nodes update skipped during backfill for node %s: %s", node_id, exc)
+                    _upsert_vec_embedding(
+                        conn,
+                        node_id,
+                        packed,
+                        context="backfill",
+                    )
                 embedded += 1
             else:
                 metrics.add_error(f"Failed to embed node {node_id}: {name[:50]}")
@@ -3250,18 +3289,12 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                     )
                     # Best effort vec index refresh. Keep the core fix path resilient
                     # when embedding dims drift across providers/config.
-                    if packed_emb:
-                        try:
-                            conn.execute(
-                                "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
-                                (memory_id, packed_emb)
-                            )
-                        except Exception as exc:
-                            if is_fail_hard_enabled():
-                                raise RuntimeError(
-                                    f"vec_nodes update failed during review FIX for node {memory_id}"
-                                ) from exc
-                            logger.warning("vec_nodes update skipped during review FIX for node %s: %s", memory_id, exc)
+                    _upsert_vec_embedding(
+                        conn,
+                        memory_id,
+                        packed_emb,
+                        context="review FIX",
+                    )
                     # Create new edges if provided.
                     for edge_data in new_edges:
                         if edge_data.get("subject") and edge_data.get("relation") and edge_data.get("object"):
@@ -3452,18 +3485,12 @@ def resolve_temporal_references(graph: MemoryGraph, dry_run: bool = True,
                     "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ? WHERE id = ?",
                     (new_text, packed_emb, new_hash, datetime.now().isoformat(), fact_id)
                 )
-                if packed_emb:
-                    try:
-                        conn.execute(
-                            "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
-                            (fact_id, packed_emb)
-                        )
-                    except Exception as exc:
-                        if is_fail_hard_enabled():
-                            raise RuntimeError(
-                                f"vec_nodes update failed during fact rewrite for node {fact_id}"
-                            ) from exc
-                        logger.warning("vec_nodes update skipped during fact rewrite for node %s: %s", fact_id, exc)
+                _upsert_vec_embedding(
+                    conn,
+                    fact_id,
+                    packed_emb,
+                    context="fact rewrite",
+                )
             print(f"    Fixed: {old_text[:50]}... → {new_text[:50]}...")
         fixed += 1
 
