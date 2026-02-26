@@ -2553,9 +2553,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               if (isFailHardEnabled()) {
                 throw err;
               }
+              const errObj = err instanceof Error ? err : new Error(String(err));
               return {
-                content: [{ type: "text", text: `Error recalling memories: ${String(err)}` }],
-                details: { error: String(err) }
+                content: [{ type: "text", text: `Error recalling memories: ${errObj.message}` }],
+                details: {
+                  error: errObj.message,
+                  error_name: errObj.name,
+                  error_cause: errObj.cause ? String(errObj.cause?.message || errObj.cause) : void 0
+                }
               };
             }
           }
