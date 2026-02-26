@@ -910,6 +910,9 @@ export class SessionTimeoutManager {
       return filterEligibleMessages(out);
     } catch (err: unknown) {
       safeLog(this.logger, `[quaid][timeout] failed reading session message log for ${sessionId}: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
       return [];
     }
   }
