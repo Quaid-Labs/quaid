@@ -2440,8 +2440,14 @@ const quaidPlugin = {
         const injectionLogPath = getInjectionLogPath(uniqueSessionId);
         let previouslyInjected: string[] = [];
         try {
-          const logData = JSON.parse(fs.readFileSync(injectionLogPath, 'utf8'));
-          previouslyInjected = logData.injected || logData.memoryTexts || [];
+          const parsed = JSON.parse(fs.readFileSync(injectionLogPath, "utf8"));
+          const logData = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : null;
+          const rawInjected = logData?.injected ?? logData?.memoryTexts;
+          previouslyInjected = Array.isArray(rawInjected)
+            ? rawInjected.map((item) => String(item || "").trim()).filter(Boolean)
+            : [];
         } catch (err: unknown) {
           console.warn(`[quaid] Injection log read failed for ${injectionLogPath}: ${String((err as Error)?.message || err)}`);
         }
@@ -3000,11 +3006,19 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             let stalenessWarning = "";
             try {
               const stalenessJson = await callDocsUpdater("check", ["--json"]);
-              const staleDocs = JSON.parse(stalenessJson || "{}");
+              const staleRaw = JSON.parse(stalenessJson || "{}");
+              const staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw)
+                ? (staleRaw as Record<string, any>)
+                : {};
               const staleKeys = Object.keys(staleDocs);
               if (staleKeys.length > 0) {
                 const warnings = staleKeys.map(
-                  (k) => `  ${k} (${staleDocs[k].gap_hours}h behind: ${staleDocs[k].stale_sources.join(", ")})`
+                  (k) => {
+                    const entry = staleDocs[k] && typeof staleDocs[k] === "object" ? staleDocs[k] : {};
+                    const gapHours = Number(entry?.gap_hours);
+                    const staleSources = Array.isArray(entry?.stale_sources) ? entry.stale_sources : [];
+                    return `  ${k} (${Number.isFinite(gapHours) ? gapHours : 0}h behind: ${staleSources.join(", ")})`;
+                  }
                 );
                 stalenessWarning = `\n\nSTALENESS WARNING: The following docs may be outdated:\n${warnings.join("\n")}\nConsider running: python3 docs_updater.py update-stale --apply`;
               }
