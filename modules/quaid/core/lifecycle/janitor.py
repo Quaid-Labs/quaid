@@ -1678,11 +1678,17 @@ if __name__ == "__main__":
     # Resolve token budget precedence: CLI > config > environment fallback.
     try:
         config_token_budget = int(getattr(_cfg.janitor, "token_budget", 0) or 0)
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Invalid janitor.token_budget config value") from exc
+        janitor_logger.warn("invalid_config_token_budget", error=str(exc))
         config_token_budget = 0
     try:
         env_token_budget = int(os.environ.get("JANITOR_TOKEN_BUDGET", "0") or 0)
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Invalid JANITOR_TOKEN_BUDGET environment value") from exc
+        janitor_logger.warn("invalid_env_token_budget", error=str(exc))
         env_token_budget = 0
     effective_token_budget = (
         int(args.token_budget) if args.token_budget is not None
