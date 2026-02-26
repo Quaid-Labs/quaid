@@ -269,3 +269,35 @@ def test_process_events_handler_error_marks_failed_when_not_fail_hard(monkeypatc
     out = process_events(limit=5, names=["docs.ingest_transcript"])
     assert out["processed"] == 0
     assert out["failed"] >= 1
+
+
+def test_emit_event_raises_on_malformed_queue_when_fail_hard(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    import core.runtime.events as events
+
+    queue_path = tmp_path / ".quaid" / "runtime" / "events" / "queue.json"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text("{bad json", encoding="utf-8")
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="fail-hard mode"):
+        emit_event(name="session.reset", payload={"reason": "malformed-queue"}, source="pytest")
+
+
+def test_emit_event_recovers_on_malformed_queue_when_not_fail_hard(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    import core.runtime.events as events
+
+    queue_path = tmp_path / ".quaid" / "runtime" / "events" / "queue.json"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text("{bad json", encoding="utf-8")
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    event = emit_event(name="session.reset", payload={"reason": "recover-queue"}, source="pytest")
+    assert event["name"] == "session.reset"
+
+    payload = json.loads(queue_path.read_text(encoding="utf-8"))
+    queued = payload.get("events") or []
+    assert len(queued) == 1
