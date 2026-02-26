@@ -4013,7 +4013,7 @@ def store(
                 if existing.embedding:
                     sim = graph.cosine_similarity(embedding, existing.embedding)
 
-                    if sim >= auto_reject_thresh and _texts_are_near_identical(text, existing.name):
+                    if sim >= auto_reject_thresh and texts_are_near_identical(text, existing.name):
                         # Zone 1: Auto-reject (high sim AND texts are near-identical strings)
                         log_dedup_decision(graph, text, existing.id, existing.name,
                                            sim, "auto_reject", owner_id=owner_id, source=source)
@@ -4106,7 +4106,7 @@ def store(
                                 # LLM unavailable — use similarity threshold
                                 # But only reject if texts are near-identical strings
                                 # (embeddings can't distinguish proper noun swaps)
-                                if sim >= dedup_threshold and _texts_are_near_identical(text, existing.name):
+                                if sim >= dedup_threshold and texts_are_near_identical(text, existing.name):
                                     log_dedup_decision(graph, text, existing.id, existing.name,
                                                        sim, "fallback_reject",
                                                        owner_id=owner_id, source=source)
@@ -4139,7 +4139,7 @@ def store(
                         else:
                             # LLM verification disabled — use similarity threshold
                             # But only reject if texts are near-identical strings
-                            if sim >= dedup_threshold and _texts_are_near_identical(text, existing.name):
+                            if sim >= dedup_threshold and texts_are_near_identical(text, existing.name):
                                 log_dedup_decision(graph, text, existing.id, existing.name,
                                                    sim, "fallback_reject",
                                                    owner_id=owner_id, source=source)
@@ -4728,11 +4728,6 @@ def log_dedup_decision(
             """, (log_id, new_text, existing_text,
                   similarity, decision, llm_reasoning, owner_id, source))
     return log_id
-
-
-def _texts_are_near_identical(a: str, b: str) -> bool:
-    """Check if two texts are near-identical strings. Delegates to lib.tokens."""
-    return texts_are_near_identical(a, b)
 
 
 def _llm_dedup_check(new_text: str, existing_text: str) -> Optional[Dict[str, Any]]:
