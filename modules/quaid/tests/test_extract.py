@@ -809,63 +809,6 @@ class TestCLI:
         assert "not found" in result.stderr.lower() or "error" in result.stderr.lower()
 
 
-# ---------------------------------------------------------------------------
-# Chunking tests (F3 — message-based context splitting)
-# ---------------------------------------------------------------------------
-
-class TestChunkMessages:
-    """Test _chunk_messages() — never splits a single message."""
-
-    def test_empty(self):
-        from ingest.extract import _chunk_messages
-        assert _chunk_messages([]) == []
-
-    def test_single_message_under_threshold(self):
-        from ingest.extract import _chunk_messages
-        msgs = [{"role": "user", "content": "hello world"}]
-        chunks = _chunk_messages(msgs, max_chars=1000)
-        assert len(chunks) == 1
-        assert chunks[0] == msgs
-
-    def test_multiple_messages_under_threshold(self):
-        from ingest.extract import _chunk_messages
-        msgs = [
-            {"role": "user", "content": "a" * 100},
-            {"role": "assistant", "content": "b" * 100},
-        ]
-        chunks = _chunk_messages(msgs, max_chars=1000)
-        assert len(chunks) == 1
-        assert len(chunks[0]) == 2
-
-    def test_splits_at_threshold(self):
-        from ingest.extract import _chunk_messages
-        msgs = [
-            {"role": "user", "content": "a" * 500},
-            {"role": "assistant", "content": "b" * 500},
-            {"role": "user", "content": "c" * 500},
-        ]
-        # Each message ~510 chars, threshold 600 → each in its own chunk (except first two may fit)
-        chunks = _chunk_messages(msgs, max_chars=600)
-        assert len(chunks) >= 2
-        # All messages present
-        total = sum(len(c) for c in chunks)
-        assert total == 3
-
-    def test_single_huge_message_not_split(self):
-        """A single message larger than threshold stays in one chunk."""
-        from ingest.extract import _chunk_messages
-        msgs = [{"role": "user", "content": "x" * 50000}]
-        chunks = _chunk_messages(msgs, max_chars=1000)
-        assert len(chunks) == 1
-        assert chunks[0] == msgs
-
-    def test_multipart_content(self):
-        from ingest.extract import _chunk_messages
-        msgs = [{"role": "user", "content": [{"text": "hello"}, {"text": "world"}]}]
-        chunks = _chunk_messages(msgs, max_chars=1000)
-        assert len(chunks) == 1
-
-
 class TestChunkTranscriptText:
     """Test _chunk_transcript_text() — splits at turn boundaries."""
 
