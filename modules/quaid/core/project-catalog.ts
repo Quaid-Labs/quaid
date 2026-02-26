@@ -5,6 +5,7 @@ type ProjectCatalogReaderDeps = {
   workspace: string;
   fs: typeof fsType;
   path: typeof pathType;
+  isFailHardEnabled?: () => boolean;
 };
 
 function warnCatalog(message: string): void {
@@ -55,13 +56,30 @@ function getProjectDescriptionFromProjectMd(
 }
 
 export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
+  function shouldFailHard(): boolean {
+    try {
+      return deps.isFailHardEnabled?.() === true;
+    } catch {
+      return false;
+    }
+  }
+
+  function handleCatalogError(context: string, err: unknown): void {
+    const detail = String((err as Error)?.message || err);
+    if (shouldFailHard()) {
+      const cause = err instanceof Error ? err : new Error(detail);
+      throw new Error(`[quaid] project catalog: ${context}: ${detail}`, { cause });
+    }
+    warnCatalog(`[quaid] project catalog: ${context}: ${detail}`);
+  }
+
   function getProjectNames(): string[] {
     try {
       const configPath = deps.path.join(deps.workspace, "config/memory.json");
       const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
       return Object.keys(configData?.projects?.definitions || {});
     } catch (err: unknown) {
-      warnCatalog(`[quaid] project catalog: failed to load project names: ${String((err as Error)?.message || err)}`);
+      handleCatalogError("failed to load project names", err);
       return [];
     }
   }
@@ -79,7 +97,7 @@ export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
         return { name, description };
       });
     } catch (err: unknown) {
-      warnCatalog(`[quaid] project catalog: failed to load full catalog: ${String((err as Error)?.message || err)}`);
+      handleCatalogError("failed to load full catalog", err);
       return getProjectNames().map((name) => ({ name, description: "No description" }));
     }
   }
