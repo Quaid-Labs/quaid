@@ -146,8 +146,6 @@ def _merge_nodes_into(
         node = graph.get_node(oid)
         if node:
             originals.append(node)
-    if not originals:
-        return None
 
     # Inherit the strongest signals from originals
     max_confidence = max((n.confidence for n in originals), default=0.9)
