@@ -250,7 +250,11 @@ def _prompt_hash(text: str) -> str:
 # Performance settings — fixed sizes are now safety limits only;
 # actual batch sizes are computed by TokenBatchBuilder based on context window.
 LR_BATCH_SIZE = 100  # Safety cap (pairs per fast-reasoning call)
-LR_BATCH_TIMEOUT = 120  # Timeout for batched calls (longer than single-pair default)
+try:
+    _env_batch_timeout = float(os.environ.get("QUAID_LR_BATCH_TIMEOUT", "120") or 120)
+except ValueError:
+    _env_batch_timeout = 120.0
+LR_BATCH_TIMEOUT = max(1.0, _env_batch_timeout)  # Timeout for batched calls
 MAX_CONSECUTIVE_FAILURES = 3  # Stop batching after N consecutive failures
 LLM_TIMEOUT = 30  # Timeout for individual LLM calls
 MAX_EXECUTION_TIME = _cfg.janitor.task_timeout_minutes * 60  # From config (seconds)
