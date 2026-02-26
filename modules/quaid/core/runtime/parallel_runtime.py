@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List
 
+MAX_THREAD_LOCK_CACHE = 1024
+
 
 def get_parallel_config(cfg: Any) -> Any:
     """Resolve core parallel config strictly from cfg.core.parallel."""
@@ -32,7 +34,28 @@ class ResourceLockRegistry:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
         self._thread_locks: Dict[str, threading.RLock] = {}
+        self._thread_lock_touched: Dict[str, float] = {}
         self._thread_guard = threading.Lock()
+
+    def _prune_thread_locks(self) -> None:
+        if len(self._thread_locks) < MAX_THREAD_LOCK_CACHE:
+            return
+        # Drop unlocked, oldest locks first; never block on an in-use lock.
+        by_age = sorted(self._thread_lock_touched.items(), key=lambda item: item[1])
+        for resource, _ in by_age:
+            if len(self._thread_locks) <= MAX_THREAD_LOCK_CACHE:
+                break
+            lock = self._thread_locks.get(resource)
+            if lock is None:
+                self._thread_lock_touched.pop(resource, None)
+                continue
+            if not lock.acquire(blocking=False):
+                continue
+            try:
+                self._thread_locks.pop(resource, None)
+                self._thread_lock_touched.pop(resource, None)
+            finally:
+                lock.release()
 
     def _thread_lock(self, resource: str) -> threading.RLock:
         with self._thread_guard:
@@ -40,6 +63,10 @@ class ResourceLockRegistry:
             if lock is None:
                 lock = threading.RLock()
                 self._thread_locks[resource] = lock
+                self._thread_lock_touched[resource] = time.monotonic()
+                self._prune_thread_locks()
+                return lock
+            self._thread_lock_touched[resource] = time.monotonic()
             return lock
 
     def _lockfile_for(self, resource: str) -> Path:
