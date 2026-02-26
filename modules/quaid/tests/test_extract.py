@@ -594,7 +594,8 @@ class TestExtractFromTranscript:
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     @patch("ingest.extract._memory.create_edge")
-    def test_edge_failure_non_fatal(self, mock_edge, mock_store, mock_llm):
+    @patch("ingest.extract.logger.warning")
+    def test_edge_failure_non_fatal(self, mock_warn, mock_edge, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
@@ -615,6 +616,9 @@ class TestExtractFromTranscript:
         # Fact still stored despite edge failure
         assert result["facts_stored"] == 1
         assert result["edges_created"] == 0
+        assert mock_warn.called
+        rendered = " ".join(str(arg) for arg in mock_warn.call_args.args)
+        assert "edge failed" in rendered
 
     @patch("ingest.extract._chunk_transcript_text")
     @patch("ingest.extract.call_deep_reasoning")
