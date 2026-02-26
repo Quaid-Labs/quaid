@@ -378,11 +378,11 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
             try:
                 data = json.loads(result.stdout)
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError) as e:
                 raise RuntimeError(
                     f"Claude Code returned non-JSON output for tier={model_tier}, "
                     f"model={model_alias}: {result.stdout[:300]}"
-                )
+                ) from e
             if not isinstance(data, dict):
                 raise RuntimeError(
                     f"Claude Code returned non-object JSON for tier={model_tier}, "
