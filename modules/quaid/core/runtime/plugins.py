@@ -51,42 +51,47 @@ class PluginRegistry:
         self.api_version = int(api_version)
         self._by_id: Dict[str, PluginRecord] = {}
         self._singletons: Dict[str, str] = {}  # slot -> plugin_id
+        self._lock = Lock()
 
     def register(self, manifest: PluginManifest) -> None:
-        if manifest.plugin_api_version != self.api_version:
-            raise ValueError(
-                f"Plugin '{manifest.plugin_id}' api version mismatch: "
-                f"manifest={manifest.plugin_api_version}, runtime={self.api_version}"
+        with self._lock:
+            if manifest.plugin_api_version != self.api_version:
+                raise ValueError(
+                    f"Plugin '{manifest.plugin_id}' api version mismatch: "
+                    f"manifest={manifest.plugin_api_version}, runtime={self.api_version}"
+                )
+            existing = self._by_id.get(manifest.plugin_id)
+            if existing:
+                if existing.manifest == manifest:
+                    return
+                raise ValueError(f"Plugin id conflict: '{manifest.plugin_id}' already registered")
+            self._by_id[manifest.plugin_id] = PluginRecord(
+                manifest=manifest,
+                owner_path=manifest.source_path or "",
             )
-        existing = self._by_id.get(manifest.plugin_id)
-        if existing:
-            if existing.manifest == manifest:
-                return
-            raise ValueError(f"Plugin id conflict: '{manifest.plugin_id}' already registered")
-        self._by_id[manifest.plugin_id] = PluginRecord(
-            manifest=manifest,
-            owner_path=manifest.source_path or "",
-        )
 
     def activate_singleton(self, slot: str, plugin_id: str) -> None:
         key = str(slot or "").strip()
         pid = str(plugin_id or "").strip()
         if not key or not pid:
             raise ValueError("slot and plugin_id are required for singleton activation")
-        if pid not in self._by_id:
-            raise KeyError(f"Cannot activate unknown plugin: {pid}")
-        existing = self._singletons.get(key)
-        if existing and existing != pid:
-            raise ValueError(
-                f"Singleton slot '{key}' already activated by '{existing}', cannot activate '{pid}'"
-            )
-        self._singletons[key] = pid
+        with self._lock:
+            if pid not in self._by_id:
+                raise KeyError(f"Cannot activate unknown plugin: {pid}")
+            existing = self._singletons.get(key)
+            if existing and existing != pid:
+                raise ValueError(
+                    f"Singleton slot '{key}' already activated by '{existing}', cannot activate '{pid}'"
+                )
+            self._singletons[key] = pid
 
     def get(self, plugin_id: str) -> Optional[PluginRecord]:
-        return self._by_id.get(str(plugin_id or "").strip())
+        with self._lock:
+            return self._by_id.get(str(plugin_id or "").strip())
 
     def list(self, plugin_type: Optional[str] = None) -> List[PluginRecord]:
-        records = list(self._by_id.values())
+        with self._lock:
+            records = list(self._by_id.values())
         if plugin_type:
             pt = str(plugin_type).strip().lower()
             records = [r for r in records if r.manifest.plugin_type == pt]
@@ -94,7 +99,8 @@ class PluginRegistry:
         return records
 
     def singletons(self) -> Dict[str, str]:
-        return dict(self._singletons)
+        with self._lock:
+            return dict(self._singletons)
 
 
 def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") -> PluginManifest:

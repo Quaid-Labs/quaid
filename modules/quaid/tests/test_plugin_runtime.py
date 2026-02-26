@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 
@@ -207,3 +208,24 @@ def test_initialize_plugin_runtime_non_strict_collects_slot_errors(tmp_path: Pat
     cached = get_runtime_plugin_registry()
     assert cached is not None
     assert cached.get("adapter.a") is not None
+
+
+def test_registry_register_is_thread_safe():
+    registry = PluginRegistry(api_version=1)
+
+    def _register(i: int) -> None:
+        registry.register(
+            validate_manifest_dict(
+                {
+                    "plugin_api_version": 1,
+                    "plugin_id": f"adapter.{i}",
+                    "plugin_type": "adapter",
+                    "module": f"adaptors.a{i}",
+                }
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        list(executor.map(_register, range(100)))
+
+    assert len(registry.list("adapter")) == 100

@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -223,3 +225,36 @@ def test_enrich_identity_payload_reports_resolver_return_type():
 
     with pytest.raises(RuntimeError, match="type=str"):
         identity_runtime.enrich_identity_payload({"source_channel": "telegram"})
+
+
+def test_memory_service_bootstrap_is_thread_safe(monkeypatch):
+    import core.services.memory_service as mem_svc
+
+    mem_svc._IDENTITY_RUNTIME_BOOTSTRAPPED = False
+    calls = {"resolver": 0, "policy": 0}
+    lock = threading.Lock()
+
+    def _count_resolver(_name, _fn):
+        with lock:
+            calls["resolver"] += 1
+
+    def _count_policy(_name, _fn):
+        with lock:
+            calls["policy"] += 1
+
+    monkeypatch.setattr(mem_svc, "register_identity_resolver", _count_resolver)
+    monkeypatch.setattr(mem_svc, "register_privacy_policy", _count_policy)
+    monkeypatch.setattr(
+        "datastore.memorydb.identity_defaults.default_identity_resolver",
+        lambda payload: payload,
+    )
+    monkeypatch.setattr(
+        "datastore.memorydb.identity_defaults.default_privacy_policy",
+        lambda _viewer, _row, _ctx: True,
+    )
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        list(executor.map(lambda _i: mem_svc._ensure_identity_runtime_bootstrap(), range(40)))
+
+    assert calls["resolver"] == 1
+    assert calls["policy"] == 1

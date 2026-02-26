@@ -6,6 +6,7 @@ It wraps datastore facade functions behind a core service contract.
 
 from __future__ import annotations
 
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 from core.contracts.memory import MemoryServicePort
@@ -167,20 +168,24 @@ class DatastoreMemoryService(MemoryServicePort):
 
 _MEMORY_SERVICE: MemoryServicePort = DatastoreMemoryService()
 _IDENTITY_RUNTIME_BOOTSTRAPPED = False
+_IDENTITY_BOOTSTRAP_LOCK = Lock()
 
 
 def _ensure_identity_runtime_bootstrap() -> None:
     global _IDENTITY_RUNTIME_BOOTSTRAPPED
     if _IDENTITY_RUNTIME_BOOTSTRAPPED:
         return
-    # Core composition point: load datastore-owned defaults into runtime registry.
-    from datastore.memorydb.identity_defaults import (
-        default_identity_resolver,
-        default_privacy_policy,
-    )
-    register_identity_resolver("memorydb-default", default_identity_resolver)
-    register_privacy_policy("memorydb-default", default_privacy_policy)
-    _IDENTITY_RUNTIME_BOOTSTRAPPED = True
+    with _IDENTITY_BOOTSTRAP_LOCK:
+        if _IDENTITY_RUNTIME_BOOTSTRAPPED:
+            return
+        # Core composition point: load datastore-owned defaults into runtime registry.
+        from datastore.memorydb.identity_defaults import (
+            default_identity_resolver,
+            default_privacy_policy,
+        )
+        register_identity_resolver("memorydb-default", default_identity_resolver)
+        register_privacy_policy("memorydb-default", default_privacy_policy)
+        _IDENTITY_RUNTIME_BOOTSTRAPPED = True
 
 
 def get_memory_service() -> MemoryServicePort:
