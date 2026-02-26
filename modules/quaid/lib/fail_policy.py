@@ -5,6 +5,10 @@ Centralizes how Quaid resolves fallback policy from config.
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def is_fail_hard_enabled() -> bool:
     """Return True when fallback behavior must be disabled.
@@ -21,6 +25,7 @@ def is_fail_hard_enabled() -> bool:
         # Dataclass field is fail_hard; config normalization handles aliases.
         if hasattr(retrieval, "fail_hard"):
             return bool(getattr(retrieval, "fail_hard"))
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load fail-hard policy from config; defaulting to enabled: %s", exc)
         return True
     return True
