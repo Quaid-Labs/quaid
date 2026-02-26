@@ -373,7 +373,7 @@ class DocsRAG:
                     "Doc RAG embedding failed while failHard is enabled; "
                     "no degraded docs fallback allowed."
                 )
-            print("Failed to get embedding for query", file=sys.stderr)
+            logger.warning("Failed to get embedding for query; returning no RAG results")
             return []
 
         # Build project filter — use SQL-level filtering to avoid full scan
