@@ -771,6 +771,9 @@ export class SessionTimeoutManager {
     } catch (err: unknown) {
       safeLog(this.logger, `[quaid][timeout] failed to persist buffer session=${sessionId}: ${String((err as Error)?.message || err)}`);
       this.writeQuaidLog("buffer_persist_error", sessionId, { error: String((err as Error)?.message || err) });
+      if (this.failHard) {
+        throw err;
+      }
     }
   }
 

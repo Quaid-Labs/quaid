@@ -839,7 +839,12 @@ function _getGatewayCredential(providers: string[]): string | undefined {
         }
       }
     }
-  } catch { /* auth-profiles not available */ }
+  } catch (err: unknown) {
+    if (isFailHardEnabled()) {
+      throw err;
+    }
+    /* auth-profiles not available */
+  }
   return undefined;
 }
 
@@ -1475,6 +1480,9 @@ async function getQuickProjectSummary(messages: any[]): Promise<{project_name: s
       }
   } catch (err: unknown) {
     console.error("[quaid] Quick project summary failed:", (err as Error).message);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
   }
 
   return { project_name: null, text: transcript.slice(0, 500) };
@@ -1533,6 +1541,9 @@ async function emitProjectEvent(messages: any[], trigger: string, sessionId?: st
     console.log(`[quaid] Emitted project event: ${trigger} -> ${summary.project_name || "unknown"}`);
   } catch (err: unknown) {
     console.error("[quaid] Failed to emit project event:", (err as Error).message);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
   }
 }
 
@@ -2147,6 +2158,9 @@ async function getStats(): Promise<DatastoreStats | null> {
     return parseDatastoreStats(output);
   } catch (err: unknown) {
     console.error("[quaid] stats error:", (err as Error).message);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return null;
   }
 }
@@ -2846,6 +2860,9 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             };
           } catch (err: unknown) {
             console.error("[quaid] memory_store error:", err);
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             return {
               content: [{ type: "text", text: `Error queuing memory note: ${String(err)}` }],
               details: { error: String(err) },
@@ -3006,6 +3023,9 @@ notify_docs_search(data['query'], data['results'])
             };
           } catch (err: unknown) {
             console.error("[quaid] projects_search error:", err);
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             return {
               content: [{ type: "text", text: `Error searching docs: ${String(err)}` }],
               details: { error: String(err) },
