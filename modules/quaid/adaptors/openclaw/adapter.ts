@@ -522,6 +522,9 @@ const datastoreBridge = createDatastoreBridge(
 // At compaction/reset, these are prepended to the transcript so Opus extracts
 // them with full context, edges, and quality review.
 const _memoryNotes = new Map<string, string[]>();
+const _memoryNotesTouchedAt = new Map<string, number>();
+const MAX_MEMORY_NOTE_SESSIONS = 200;
+const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const NOTES_DIR = QUAID_NOTES_DIR;
 
 function getNotesPath(sessionId: string): string {
@@ -533,11 +536,25 @@ function getInjectionLogPath(sessionId: string): string {
 }
 
 function addMemoryNote(sessionId: string, text: string, category: string): void {
+  // Bound in-memory session cache (disk persistence remains source of truth).
+  _memoryNotesTouchedAt.set(sessionId, Date.now());
+  if (_memoryNotes.size >= MAX_MEMORY_NOTE_SESSIONS && !_memoryNotes.has(sessionId)) {
+    const oldest = Array.from(_memoryNotesTouchedAt.entries()).sort((a, b) => a[1] - b[1])[0]?.[0];
+    if (oldest) {
+      _memoryNotes.delete(oldest);
+      _memoryNotesTouchedAt.delete(oldest);
+    }
+  }
+
   // In-memory
   if (!_memoryNotes.has(sessionId)) {
     _memoryNotes.set(sessionId, []);
   }
-  _memoryNotes.get(sessionId)!.push(`[${category}] ${text}`);
+  const noteList = _memoryNotes.get(sessionId)!;
+  noteList.push(`[${category}] ${text}`);
+  if (noteList.length > MAX_MEMORY_NOTES_PER_SESSION) {
+    noteList.splice(0, noteList.length - MAX_MEMORY_NOTES_PER_SESSION);
+  }
 
   // Persist to disk (survives gateway restart)
   try {
@@ -561,6 +578,7 @@ function getAndClearMemoryNotes(sessionId: string): string[] {
 
   // Clear both
   _memoryNotes.delete(sessionId);
+  _memoryNotesTouchedAt.delete(sessionId);
   try { fs.unlinkSync(notesPath); } catch {}
 
   return all;
