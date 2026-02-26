@@ -301,6 +301,7 @@ def call_llm(system_prompt: str, user_message: str,
     ]
 
     llm = get_llm_provider(model_tier=resolved_tier)
+    provider_name = llm.__class__.__name__
 
     start_time = time.time()
     deadline = None
@@ -326,7 +327,9 @@ def call_llm(system_prompt: str, user_message: str,
                 print(f"[llm_clients] WARNING: Response truncated (max_tokens) for model={result.model}", file=sys.stderr)
             if result.text is None:
                 raise RuntimeError(
-                    f"No response from provider for tier={resolved_tier} model={result.model or model}"
+                    "No response from provider "
+                    f"(provider={provider_name}, tier={resolved_tier}, model={result.model or model}, "
+                    f"timeout={timeout_for_attempt})"
                 )
             return result.text, result.duration
         except Exception as e:
@@ -357,9 +360,11 @@ def call_llm(system_prompt: str, user_message: str,
     duration = time.time() - start_time
     print(f"[llm_clients] LLM error: {last_error}", file=sys.stderr)
     if is_fail_hard_enabled():
+        err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
         raise RuntimeError(
             "LLM call failed after retries while failHard is enabled "
-            f"(tier={resolved_tier}, model={model})."
+            f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
+            f"error_type={err_type}, error={last_error})."
         ) from last_error
     print(
         "[llm_clients][FALLBACK] Returning None after LLM failure because failHard is disabled.",
