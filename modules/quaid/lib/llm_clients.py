@@ -15,6 +15,7 @@ manages API keys directly — the adapter/provider handles authentication.
 """
 
 import json
+import logging
 import os
 import sys
 import threading
@@ -25,6 +26,8 @@ from lib.fail_policy import is_fail_hard_enabled
 from lib.llm_pool import acquire_llm_slot
 from lib.providers import LLMResult
 from lib.runtime_context import get_llm_provider
+
+logger = logging.getLogger(__name__)
 
 # Timeouts (seconds)
 DEEP_REASONING_TIMEOUT = 600
@@ -74,22 +77,31 @@ _PRICING: Dict[str, Dict[str, float]] = {
     "claude-haiku-4-5":           {"input":  0.80, "output":  4.00},
 }
 _pricing_loaded: bool = False
+_pricing_error_logged: bool = False
 
 
 def _load_pricing():
     """Merge config pricing into the default table (once)."""
-    global _pricing_loaded
+    global _pricing_loaded, _pricing_error_logged
     if _pricing_loaded:
         return
-    _pricing_loaded = True
     try:
         from config import get_config
-        cfg = get_config()
+        get_config()
         # Config uses snake_case; pricing would be under models section
         # but MemoryConfig doesn't expose raw_config — use ModelConfig fields instead.
         # Custom pricing can be added to _PRICING dict directly or via env overrides.
-    except Exception:
-        pass  # Config not available — use built-in defaults
+        _pricing_loaded = True
+    except ImportError:
+        _pricing_loaded = True
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to load pricing configuration while failHard is enabled."
+            ) from exc
+        if not _pricing_error_logged:
+            logger.warning("Pricing config load failed; using built-in defaults: %s", exc)
+            _pricing_error_logged = True
 
 
 def reset_token_usage():

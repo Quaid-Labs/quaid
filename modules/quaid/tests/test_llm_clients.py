@@ -170,6 +170,40 @@ class TestTokenUsage:
         finally:
             llm_clients.reset_token_budget()
 
+    def test_load_pricing_warns_once_and_allows_retry_when_failhard_disabled(self):
+        import core.llm.clients as llm_clients
+        old_loaded = llm_clients._pricing_loaded
+        old_error_logged = llm_clients._pricing_error_logged
+        llm_clients._pricing_loaded = False
+        llm_clients._pricing_error_logged = False
+        try:
+            with patch("config.get_config", side_effect=RuntimeError("bad pricing config")), \
+                 patch("core.llm.clients.is_fail_hard_enabled", return_value=False), \
+                 patch("core.llm.clients.logger.warning") as log_warning:
+                llm_clients._load_pricing()
+                llm_clients._load_pricing()
+            assert llm_clients._pricing_loaded is False
+            assert llm_clients._pricing_error_logged is True
+            assert log_warning.call_count == 1
+        finally:
+            llm_clients._pricing_loaded = old_loaded
+            llm_clients._pricing_error_logged = old_error_logged
+
+    def test_load_pricing_raises_when_failhard_enabled(self):
+        import core.llm.clients as llm_clients
+        old_loaded = llm_clients._pricing_loaded
+        old_error_logged = llm_clients._pricing_error_logged
+        llm_clients._pricing_loaded = False
+        llm_clients._pricing_error_logged = False
+        try:
+            with patch("config.get_config", side_effect=RuntimeError("bad pricing config")), \
+                 patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+                with pytest.raises(RuntimeError, match="pricing configuration"):
+                    llm_clients._load_pricing()
+        finally:
+            llm_clients._pricing_loaded = old_loaded
+            llm_clients._pricing_error_logged = old_error_logged
+
 
 # ---------------------------------------------------------------------------
 # call_fast_reasoning / call_deep_reasoning — provider delegation
