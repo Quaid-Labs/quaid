@@ -1272,7 +1272,8 @@ ${transcript.slice(0, 4e3)}`,
           project_name: typeof parsed.project_name === "string" ? parsed.project_name : null,
           text: typeof parsed.text === "string" ? parsed.text : ""
         };
-      } catch {
+      } catch (err) {
+        console.warn(`[quaid] Quick project summary JSON parse failed: ${String(err?.message || err)}`);
       }
     }
   } catch (err) {
@@ -2501,7 +2502,8 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
                     projectMdContent = fs.readFileSync(mdPath, "utf-8");
                   }
                 }
-              } catch {
+              } catch (err) {
+                console.warn(`[quaid] projects_search PROJECT.md preload failed: ${String(err?.message || err)}`);
               }
             }
             let stalenessWarning = "";
@@ -2519,7 +2521,8 @@ STALENESS WARNING: The following docs may be outdated:
 ${warnings.join("\n")}
 Consider running: python3 docs_updater.py update-stale --apply`;
               }
-            } catch {
+            } catch (err) {
+              console.warn(`[quaid] projects_search staleness check failed: ${String(err?.message || err)}`);
             }
             const text = projectMdContent ? `--- PROJECT.md (${project}) ---
 ${projectMdContent}
@@ -2947,7 +2950,8 @@ ${factsOutput || "No facts found."}` }],
           } else if (entry.role) {
             messages.push(entry);
           }
-        } catch {
+        } catch (err) {
+          console.warn(`[quaid] session file line parse failed: ${String(err?.message || err)}`);
         }
       }
       return messages;
@@ -3033,7 +3037,8 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
             }
           }
         }
-      } catch {
+      } catch (err) {
+        console.warn(`[quaid] extraction snippet/journal parsing failed: ${String(err?.message || err)}`);
       }
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
@@ -3231,7 +3236,8 @@ notify_memory_extraction(
             let logData = {};
             try {
               logData = JSON.parse(fs.readFileSync(logPath, "utf8"));
-            } catch {
+            } catch (err) {
+              console.warn(`[quaid] compaction injection log read failed for ${logPath}: ${String(err?.message || err)}`);
             }
             logData.lastCompactionAt = (/* @__PURE__ */ new Date()).toISOString();
             logData.memoryTexts = [];
