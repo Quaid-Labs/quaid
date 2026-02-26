@@ -7,6 +7,7 @@ use it to apply resolver/policy hooks while keeping single-registration safety.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 from config import get_config
@@ -26,34 +27,38 @@ class _RegisteredHook:
 _identity_resolver: Optional[_RegisteredHook] = None
 _privacy_policy: Optional[_RegisteredHook] = None
 _ALLOWED_POLICY_ACTIONS = {"allow", "deny", "allow_redacted"}
+_hooks_lock = threading.RLock()
 
 
 def register_identity_resolver(owner: str, resolver: IdentityResolver) -> None:
     global _identity_resolver
     owner_name = str(owner or "").strip() or "unknown"
-    if _identity_resolver and _identity_resolver.owner != owner_name:
-        raise RuntimeError(
-            f"Identity resolver already registered by '{_identity_resolver.owner}', "
-            f"cannot register another from '{owner_name}'."
-        )
-    _identity_resolver = _RegisteredHook(owner=owner_name, fn=resolver)
+    with _hooks_lock:
+        if _identity_resolver and _identity_resolver.owner != owner_name:
+            raise RuntimeError(
+                f"Identity resolver already registered by '{_identity_resolver.owner}', "
+                f"cannot register another from '{owner_name}'."
+            )
+        _identity_resolver = _RegisteredHook(owner=owner_name, fn=resolver)
 
 
 def register_privacy_policy(owner: str, policy: PrivacyPolicy) -> None:
     global _privacy_policy
     owner_name = str(owner or "").strip() or "unknown"
-    if _privacy_policy and _privacy_policy.owner != owner_name:
-        raise RuntimeError(
-            f"Privacy policy already registered by '{_privacy_policy.owner}', "
-            f"cannot register another from '{owner_name}'."
-        )
-    _privacy_policy = _RegisteredHook(owner=owner_name, fn=policy)
+    with _hooks_lock:
+        if _privacy_policy and _privacy_policy.owner != owner_name:
+            raise RuntimeError(
+                f"Privacy policy already registered by '{_privacy_policy.owner}', "
+                f"cannot register another from '{owner_name}'."
+            )
+        _privacy_policy = _RegisteredHook(owner=owner_name, fn=policy)
 
 
 def clear_registrations() -> None:
     global _identity_resolver, _privacy_policy
-    _identity_resolver = None
-    _privacy_policy = None
+    with _hooks_lock:
+        _identity_resolver = None
+        _privacy_policy = None
 
 
 def _normalize_policy_decision(raw: Any) -> AccessDecision:
@@ -82,12 +87,15 @@ def assert_multi_user_runtime_ready(*, require_write: bool = False, require_read
     """Fail fast if multi-user mode is enabled without required hook wiring."""
     if identity_mode() != "multi_user":
         return
-    if require_write and _identity_resolver is None:
+    with _hooks_lock:
+        resolver = _identity_resolver
+        policy = _privacy_policy
+    if require_write and resolver is None:
         raise RuntimeError(
             "multi_user mode is enabled but no identity resolver is registered. "
             "Register exactly one resolver before write operations."
         )
-    if require_read and _privacy_policy is None:
+    if require_read and policy is None:
         raise RuntimeError(
             "multi_user mode is enabled but no privacy policy is registered. "
             "Register exactly one privacy policy before recall operations."
@@ -108,9 +116,11 @@ def enforce_write_contract(payload: Dict[str, Any]) -> None:
 
 
 def enrich_identity_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    if _identity_resolver is None:
+    with _hooks_lock:
+        resolver = _identity_resolver
+    if resolver is None:
         return payload
-    resolved = _identity_resolver.fn(dict(payload))
+    resolved = resolver.fn(dict(payload))
     if not isinstance(resolved, dict):
         raise RuntimeError(
             f"identity resolver returned non-dict payload type={type(resolved).__name__}"
@@ -130,14 +140,16 @@ def filter_recall_results(
     """
     if identity_mode() != "multi_user":
         return results
-    if _privacy_policy is None:
+    with _hooks_lock:
+        policy = _privacy_policy
+    if policy is None:
         return results
     viewer = str(viewer_entity_id or "").strip()
     if not viewer:
         raise ValueError("multi_user recall contract violation: viewer_entity_id is required")
     filtered: List[Dict[str, Any]] = []
     for row in results:
-        decision = _normalize_policy_decision(_privacy_policy.fn(viewer, row, context))
+        decision = _normalize_policy_decision(policy.fn(viewer, row, context))
         action = decision.get("action")
         if action in {"allow", "allow_redacted"}:
             filtered.append(row)
