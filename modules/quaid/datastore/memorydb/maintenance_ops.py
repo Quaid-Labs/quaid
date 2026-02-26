@@ -2586,6 +2586,7 @@ Respond with a JSON array only, no markdown fencing:
         error = result.get("error")
 
         try:
+            retry_cause = None
             if error is not None:
                 raise error
             if metrics:
@@ -2637,8 +2638,13 @@ Respond with a JSON array only, no markdown fencing:
                 )
                 if metrics:
                     metrics.add_llm_call(retry_duration)
+                retry_cause = None
+                if not retry_text:
+                    retry_cause = RuntimeError("retry returned empty response")
                 retry_raw = parse_json_response(retry_text or "")
                 retry_decisions = _normalize_review_decisions(retry_raw)
+                if retry_text and not retry_decisions:
+                    retry_cause = RuntimeError("retry returned invalid decision payload")
                 if retry_decisions:
                     decisions.extend(retry_decisions)
                     batch_covered = _collect_covered_ids(decisions)
@@ -2652,6 +2658,8 @@ Respond with a JSON array only, no markdown fencing:
                 )
                 if metrics:
                     metrics.add_error(msg)
+                if retry_cause is not None:
+                    raise RuntimeError(msg) from retry_cause
                 raise RuntimeError(msg)
 
             print(f"    Received {len(decisions)} decisions in {duration:.1f}s")
