@@ -13,6 +13,7 @@ import base64
 import argparse
 import contextlib
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from lib.runtime_context import get_workspace_dir
 
 Event = Dict[str, Any]
 EventHandler = Callable[[Event], Dict[str, Any]]
+logger = logging.getLogger(__name__)
 MAX_EVENT_QUEUE = 2000
 MAX_HISTORY_JSONL_BYTES = 5 * 1024 * 1024
 HISTORY_TRIM_TARGET_BYTES = 2 * 1024 * 1024
@@ -147,7 +149,8 @@ def _read_json(path: Path, default: Any) -> Any:
         if not path.exists():
             return default
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading JSON file %s: %s", path, exc)
         return default
 
 
@@ -161,8 +164,8 @@ def _write_json(path: Path, payload: Any) -> None:
     os.replace(tmp_path, path)
     try:
         os.chmod(path, 0o600)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to apply chmod 600 to %s: %s", path, exc)
 
 
 def _append_jsonl(path: Path, payload: Any) -> None:
@@ -174,8 +177,8 @@ def _append_jsonl(path: Path, payload: Any) -> None:
             if "\n" in keep:
                 keep = keep.split("\n", 1)[1]
             path.write_text(keep, encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed trimming history file %s: %s", path, exc)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
