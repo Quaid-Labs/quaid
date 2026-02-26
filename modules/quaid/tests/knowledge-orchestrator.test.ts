@@ -134,9 +134,13 @@ describe("knowledge orchestrator", () => {
       await engine.routeRecallPlan("x", false, "fast");
       throw new Error("expected routeRecallPlan to fail");
     } catch (err: unknown) {
-      const msg = String((err as Error)?.message || err);
+      const asError = err as Error;
+      const msg = String(asError?.message || err);
       expect(msg).toContain("First validation error: router returned no valid datastores");
       expect(msg).toContain("Retry validation error: router returned no valid datastores");
+      expect(String((asError?.cause as Error)?.message || asError?.cause || "")).toContain(
+        "router returned no valid datastores",
+      );
     }
   });
 
