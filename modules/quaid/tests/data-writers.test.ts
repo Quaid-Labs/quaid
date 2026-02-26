@@ -88,6 +88,8 @@ describe("data writers", () => {
     expect(out.status).toBe("failed");
     expect(out.error).toContain("temporary downstream error");
     expect(out.details?.error_type).toBe("RetryableWriteError");
+    expect(typeof out.details?.error_stack).toBe("string");
+    expect(String(out.details?.error_stack)).toContain("RetryableWriteError");
   });
 
   it("returns cloned writer registry specs", () => {
