@@ -55,7 +55,7 @@ from lib.embeddings import (
     pack_embedding as _lib_pack_embedding,
     unpack_embedding as _lib_unpack_embedding,
 )
-from core.runtime.worker_pool import run_callables
+from lib.worker_pool import run_callables
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.tokens import (
     extract_key_tokens as _lib_extract_key_tokens,
