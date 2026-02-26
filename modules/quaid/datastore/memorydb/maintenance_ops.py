@@ -575,7 +575,7 @@ def get_update_check_cache(graph: MemoryGraph, max_age_hours: int = 24) -> Optio
     """Return cached update-check payload when still fresh."""
     with graph._get_conn() as conn:
         row = conn.execute(
-            "SELECT value, updated_at FROM metadata WHERE key = 'update_check'"
+            "SELECT value, updated_at FROM janitor_metadata WHERE key = 'update_check'"
         ).fetchone()
     if not row:
         return None
@@ -595,7 +595,7 @@ def write_update_check_cache(graph: MemoryGraph, payload: Dict[str, Any]) -> Non
     """Persist update-check payload in datastore metadata."""
     with graph._get_conn() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+            "INSERT OR REPLACE INTO janitor_metadata (key, value, updated_at) VALUES (?, ?, datetime('now'))",
             ("update_check", json.dumps(payload)),
         )
 
