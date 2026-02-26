@@ -286,6 +286,23 @@ class TestExtractFromTranscript:
         mock_llm.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.get_config")
+    def test_capture_skip_patterns_can_filter_transcript(self, mock_get_config, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_get_config.return_value = SimpleNamespace(
+            capture=SimpleNamespace(enabled=True, chunk_size=30000, skip_patterns=[r"HEARTBEAT"])
+        )
+        result = extract_from_transcript(
+            transcript="HEARTBEAT ping\nHEARTBEAT_OK",
+            owner_id="test",
+        )
+
+        assert result["facts_stored"] == 0
+        assert result["facts_skipped"] == 0
+        mock_llm.assert_not_called()
+
+    @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     @patch("ingest.extract._memory.create_edge")
     def test_basic_extraction(self, mock_edge, mock_store, mock_llm, mock_opus_response, workspace_dir):
