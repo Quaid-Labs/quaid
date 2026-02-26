@@ -786,11 +786,21 @@ class MemoryGraph:
 
     def _row_to_node(self, row: sqlite3.Row) -> Node:
         """Convert database row to Node object."""
+        attrs_raw = row['attributes']
+        try:
+            attributes = json.loads(attrs_raw) if attrs_raw else {}
+        except (TypeError, ValueError):
+            import logging
+            logging.getLogger(__name__).warning(
+                "[memory_graph] malformed node attributes JSON for node_id=%s; using empty attributes",
+                row['id']
+            )
+            attributes = {}
         return Node(
             id=row['id'],
             type=row['type'],
             name=row['name'],
-            attributes=json.loads(row['attributes']) if row['attributes'] else {},
+            attributes=attributes,
             embedding=self._unpack_embedding(row['embedding']) if row['embedding'] else None,
             verified=bool(row['verified']),
             pinned=bool(row['pinned']) if 'pinned' in row.keys() else False,
@@ -872,12 +882,22 @@ class MemoryGraph:
 
     def _row_to_edge(self, row: sqlite3.Row) -> Edge:
         """Convert database row to Edge object."""
+        attrs_raw = row['attributes']
+        try:
+            attributes = json.loads(attrs_raw) if attrs_raw else {}
+        except (TypeError, ValueError):
+            import logging
+            logging.getLogger(__name__).warning(
+                "[memory_graph] malformed edge attributes JSON for edge_id=%s; using empty attributes",
+                row['id']
+            )
+            attributes = {}
         return Edge(
             id=row['id'],
             source_id=row['source_id'],
             target_id=row['target_id'],
             relation=row['relation'],
-            attributes=json.loads(row['attributes']) if row['attributes'] else {},
+            attributes=attributes,
             weight=row['weight'],
             valid_from=row['valid_from'],
             valid_until=row['valid_until'],
