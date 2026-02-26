@@ -701,15 +701,30 @@ class MemoryGraph:
                     conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                                  (node.id, packed))
                 except Exception as exc:
-                    logger.warning(
-                        "update_node updated node %s but failed vec_nodes upsert: %s",
-                        node.id,
-                        exc,
-                    )
-                    if _is_fail_hard_mode():
-                        raise RuntimeError(
-                            "Vector index upsert failed during update_node while fail-hard mode is enabled"
-                        ) from exc
+                    recovered = False
+                    # SQLite vec tables can occasionally raise UNIQUE violations on
+                    # REPLACE paths; recover by delete-then-insert in the same txn.
+                    if isinstance(exc, sqlite3.IntegrityError) and "UNIQUE constraint failed" in str(exc):
+                        try:
+                            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node.id,))
+                            conn.execute("INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)", (node.id, packed))
+                            recovered = True
+                        except Exception as retry_exc:
+                            logger.warning(
+                                "update_node vec_nodes retry failed for %s: %s",
+                                node.id,
+                                retry_exc,
+                            )
+                    if not recovered:
+                        logger.warning(
+                            "update_node updated node %s but failed vec_nodes upsert: %s",
+                            node.id,
+                            exc,
+                        )
+                        if _is_fail_hard_mode():
+                            raise RuntimeError(
+                                "Vector index upsert failed during update_node while fail-hard mode is enabled"
+                            ) from exc
             return result.rowcount > 0
 
     def get_node(self, node_id: str) -> Optional[Node]:
