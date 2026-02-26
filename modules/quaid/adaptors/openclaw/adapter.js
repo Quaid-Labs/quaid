@@ -1161,21 +1161,36 @@ sys.path.insert(0, ${JSON.stringify(path.join(WORKSPACE, "plugins/quaid"))})
   const cleanup = `
 os.unlink(${JSON.stringify(tmpFile)})
 `;
+  let launched = false;
+  let notifyLogFd = null;
   fs.writeFileSync(tmpFile, preamble + scriptBody + cleanup, { mode: 384 });
   try {
-    const notifyLogFd = fs.openSync(notifyLogFile, "a");
+    notifyLogFd = fs.openSync(notifyLogFile, "a");
     const proc = spawn("python3", [tmpFile], {
       detached: true,
       stdio: ["ignore", notifyLogFd, notifyLogFd],
       env: buildPythonEnv()
     });
-    fs.closeSync(notifyLogFd);
+    launched = true;
     proc.on("error", (err) => {
       appendNotifyLog(`[notify-worker-error] spawn failed: ${err.message}`);
     });
     proc.unref();
   } catch (err) {
     appendNotifyLog(`[notify-worker-error] launch failed: ${String(err?.message || err)}`);
+    if (!launched) {
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {
+      }
+    }
+  } finally {
+    if (notifyLogFd !== null) {
+      try {
+        fs.closeSync(notifyLogFd);
+      } catch {
+      }
+    }
   }
 }
 function _loadJanitorNudgeState() {
