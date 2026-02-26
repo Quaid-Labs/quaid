@@ -396,6 +396,19 @@ class TestOllamaEmbeddingsProvider:
             with pytest.raises(RuntimeError, match="failHard is enabled"):
                 p.embed("test text")
 
+    def test_embed_redacts_sensitive_url_in_error_logs(self):
+        p = OllamaEmbeddingsProvider(url="http://user:secret@localhost:11434?token=abc")
+        with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")), \
+             patch("lib.providers.is_fail_hard_enabled", return_value=False), \
+             patch("lib.providers.logger.error") as log_error:
+            result = p.embed("test text")
+
+        assert result is None
+        rendered = " ".join(str(a) for a in log_error.call_args.args)
+        assert "secret" not in rendered
+        assert "token=abc" not in rendered
+        assert "localhost:11434" in rendered
+
     def test_embed_returns_none_on_empty_response(self):
         p = OllamaEmbeddingsProvider()
         mock_resp = MagicMock()
