@@ -38,24 +38,52 @@ type SessionTimeoutManagerOptions = {
   logger?: TimeoutLogger;
 };
 
+type FailHardCacheEntry = {
+  value: boolean;
+  mtimeMs: number;
+  checkedAtMs: number;
+};
+
+const FAIL_HARD_CACHE_MS = 5000;
+const failHardCache = new Map<string, FailHardCacheEntry>();
+
 function safeLog(logger: TimeoutLogger | undefined, message: string): void {
   try { (logger || console.log)(message); } catch {}
 }
 
 function isFailHardEnabled(workspace: string): boolean {
+  const now = Date.now();
+  const cached = failHardCache.get(workspace);
+  if (cached && (now - cached.checkedAtMs) < FAIL_HARD_CACHE_MS) {
+    return cached.value;
+  }
+
+  const configPath = path.join(workspace, "config", "memory.json");
+  let mtimeMs = -1;
   try {
-    const configPath = path.join(workspace, "config", "memory.json");
+    mtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch {}
+
+  if (cached && cached.mtimeMs === mtimeMs) {
+    cached.checkedAtMs = now;
+    failHardCache.set(workspace, cached);
+    return cached.value;
+  }
+
+  let value = true;
+  try {
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
     const retrieval = raw?.retrieval || {};
-    if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
-    if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
+    if (typeof retrieval.fail_hard === "boolean") value = retrieval.fail_hard;
+    if (typeof retrieval.failHard === "boolean") value = retrieval.failHard;
   } catch (err: unknown) {
     const msg = String((err as Error)?.message || err || "");
     if (!msg.includes("ENOENT")) {
       console.warn(`[quaid][timeout] failed to read failHard config; defaulting to true: ${msg}`);
     }
   }
-  return true;
+  failHardCache.set(workspace, { value, mtimeMs, checkedAtMs: now });
+  return value;
 }
 
 function messageText(msg: any): string {

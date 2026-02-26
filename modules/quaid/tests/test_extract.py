@@ -428,6 +428,29 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
+    def test_skips_invalid_fact_payload_items(self, mock_store, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "facts": [
+                "not-a-dict",
+                {"text": 123, "category": "fact"},
+                {"category": "fact"},
+                {"text": "User likes orange juice", "category": "preference"},
+            ]
+        }), 1.0)
+        mock_store.return_value = {"id": "n1", "status": "created"}
+
+        result = extract_from_transcript(
+            transcript="User: test\n\nAssistant: ok",
+            owner_id="test",
+        )
+
+        assert result["facts_stored"] == 1
+        assert result["facts_skipped"] == 3
+
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store")
     def test_metadata_scope_fields_are_forwarded(self, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
 
