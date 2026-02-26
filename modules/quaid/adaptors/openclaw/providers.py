@@ -75,7 +75,9 @@ class GatewayLLMProvider(LLMProvider):
             print(f"[providers] Gateway LLM proxy error ({e.code}): {err_msg}",
                   file=sys.stderr)
             if e.code == 503:
-                raise RuntimeError(f"No credential configured for selected model provider: {err_msg}")
+                raise RuntimeError(
+                    f"No credential configured for selected model provider (HTTP {e.code}): {err_msg}"
+                ) from e
             raise
         except Exception as e:
             print(f"[providers] Gateway LLM proxy error: {e}", file=sys.stderr)
