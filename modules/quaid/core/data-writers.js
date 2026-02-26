@@ -47,12 +47,14 @@ function createDataWriteEngine(opts = {}) {
         throw err;
       }
       const errObj = err;
-      const errType = errObj?.name || typeof err || "UnknownError";
+      const errType = errObj?.name || typeof err;
+      const errStack = typeof errObj?.stack === "string" ? errObj.stack.slice(0, 4e3) : void 0;
       return {
         status: "failed",
         error: String(errObj?.message || err || "Unknown DataWriter error"),
         details: {
-          error_type: errType
+          error_type: errType,
+          error_stack: errStack
         }
       };
     }

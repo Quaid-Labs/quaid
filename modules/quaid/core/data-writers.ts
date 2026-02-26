@@ -101,11 +101,13 @@ export function createDataWriteEngine(opts: DataWriteEngineOptions = {}) {
       }
       const errObj = err as Error;
       const errType = errObj?.name || typeof err || "UnknownError";
+      const errStack = typeof errObj?.stack === "string" ? errObj.stack.slice(0, 4000) : undefined;
       return {
         status: "failed",
         error: String(errObj?.message || err || "Unknown DataWriter error"),
         details: {
           error_type: errType,
+          error_stack: errStack,
         },
       };
     }
