@@ -1422,7 +1422,14 @@ function _saveJanitorNudgeState(state: Record<string, any>): void {
 }
 
 function queueDelayedLlmRequest(message: string, kind: string = "janitor", priority: string = "normal"): boolean {
-  return queueDelayedRequest(DELAYED_LLM_REQUESTS_PATH, message, kind, priority, "quaid_adapter");
+  return queueDelayedRequest(
+    DELAYED_LLM_REQUESTS_PATH,
+    message,
+    kind,
+    priority,
+    "quaid_adapter",
+    isFailHardEnabled(),
+  );
 }
 
 function getJanitorHealthIssue(): string | null {

@@ -77,7 +77,8 @@ export function queueDelayedRequest(
   message: string,
   kind: string = "janitor",
   priority: string = "normal",
-  source: string = "quaid_adapter"
+  source: string = "quaid_adapter",
+  failHard: boolean = false
 ): boolean {
   try {
     return withRequestsLock(requestsPath, () => {
@@ -107,7 +108,12 @@ export function queueDelayedRequest(
       return true;
     });
   } catch (err: unknown) {
-    warnDelayed(`[quaid] delayed requests queue failed path=${requestsPath}: ${String((err as Error)?.message || err)}`);
+    const detail = `[quaid] delayed requests queue failed path=${requestsPath}: ${String((err as Error)?.message || err)}`;
+    if (failHard) {
+      const cause = err instanceof Error ? err : new Error(String(err));
+      throw new Error(detail, { cause });
+    }
+    warnDelayed(detail);
     return false;
   }
 }
