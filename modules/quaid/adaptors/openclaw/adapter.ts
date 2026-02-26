@@ -492,16 +492,27 @@ type UsersConfig = {
 };
 
 let _usersConfig: UsersConfig | null = null;
+let _usersConfigMtimeMs = -1;
 
 function getUsersConfig(): UsersConfig {
-  if (_usersConfig) { return _usersConfig; }
+  const configPath = path.join(WORKSPACE, "config/memory.json");
+  let mtimeMs = -1;
   try {
-    const configPath = path.join(WORKSPACE, "config/memory.json");
+    mtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch {
+    mtimeMs = -1;
+  }
+  if (_usersConfig && _usersConfigMtimeMs === mtimeMs) {
+    return _usersConfig;
+  }
+  try {
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
     _usersConfig = raw.users || { defaultOwner: "quaid", identities: {} };
+    _usersConfigMtimeMs = mtimeMs;
   } catch (err: unknown) {
     console.error("[quaid] failed to load users config from config/memory.json:", (err as Error)?.message || String(err));
     _usersConfig = { defaultOwner: "quaid", identities: {} };
+    _usersConfigMtimeMs = mtimeMs;
   }
   return _usersConfig!;
 }
