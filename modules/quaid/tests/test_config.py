@@ -212,6 +212,28 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_warns_on_unknown_keys(self, tmp_path, capsys):
+        import config
+        old_config = config._config
+        old_warned = set(config._warned_unknown_config_keys)
+        config._config = None
+        config._warned_unknown_config_keys.clear()
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "models": {"llmProvider": "default", "llmProvderTypo": "bad"},
+                "totallyUnknownSection": {"enabled": True},
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                _ = load_config()
+            err = capsys.readouterr().err
+            assert "Unknown config key ignored: models.llm_provder_typo" in err
+            assert "Unknown config key ignored: totally_unknown_section" in err
+        finally:
+            config._config = old_config
+            config._warned_unknown_config_keys.clear()
+            config._warned_unknown_config_keys.update(old_warned)
+
     def test_loads_identity_and_privacy_blocks(self, tmp_path):
         import config
         old_config = config._config
