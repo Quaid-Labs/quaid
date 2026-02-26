@@ -4568,25 +4568,32 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def hard_delete_node(node_id: str) -> bool:
+def hard_delete_node(node_id: str, conn: Optional[sqlite3.Connection] = None) -> bool:
     """Hard delete a node and all related references from the database.
 
     Cleans up edges, contradictions, and decay_review_queue entries.
     dedup_log references are kept (audit trail).
     """
     graph = get_graph()
-    with graph._get_conn() as conn:
-        conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (node_id, node_id))
-        conn.execute("DELETE FROM contradictions WHERE node_a_id = ? OR node_b_id = ?", (node_id, node_id))
-        conn.execute("DELETE FROM decay_review_queue WHERE node_id = ?", (node_id,))
+
+    def _delete_with_conn(active_conn: sqlite3.Connection) -> bool:
+        active_conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (node_id, node_id))
+        active_conn.execute("DELETE FROM contradictions WHERE node_a_id = ? OR node_b_id = ?", (node_id, node_id))
+        active_conn.execute("DELETE FROM decay_review_queue WHERE node_id = ?", (node_id,))
         # Clean up vec_nodes index (virtual table, no CASCADE)
         try:
-            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
+            active_conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
         except Exception:
             pass  # vec_nodes may not exist yet
         # dedup_log.existing_node_id uses ON DELETE SET NULL — audit trail preserved automatically
-        result = conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+        result = active_conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
         return result.rowcount > 0
+
+    if conn is not None:
+        return _delete_with_conn(conn)
+
+    with graph._get_conn() as managed_conn:
+        return _delete_with_conn(managed_conn)
 
 
 def soft_delete(node_id: str, reason: str = "manual") -> bool:
@@ -4844,17 +4851,26 @@ def get_pending_decay_reviews(limit: int = 50) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def resolve_decay_review(queue_id: str, decision: str, reason: str) -> bool:
+def resolve_decay_review(
+    queue_id: str, decision: str, reason: str, conn: Optional[sqlite3.Connection] = None
+) -> bool:
     """Mark a decay review item as reviewed. decision: 'delete', 'extend', 'pin'."""
     graph = get_graph()
-    with graph._get_conn() as conn:
-        result = conn.execute("""
+
+    def _resolve_with_conn(active_conn: sqlite3.Connection) -> bool:
+        result = active_conn.execute("""
             UPDATE decay_review_queue
             SET decision = ?, decision_reason = ?, status = 'reviewed',
                 reviewed_at = datetime('now')
             WHERE id = ?
         """, (decision, reason, queue_id))
         return result.rowcount > 0
+
+    if conn is not None:
+        return _resolve_with_conn(conn)
+
+    with graph._get_conn() as managed_conn:
+        return _resolve_with_conn(managed_conn)
 
 
 def decay_memories() -> Dict[str, Any]:
