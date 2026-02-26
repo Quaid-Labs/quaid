@@ -2862,6 +2862,9 @@ ${factsOutput || "No facts found."}` }],
           if (isFailHardEnabled()) {
             throw err;
           }
+          console.warn(
+            `[quaid][recall] waitForExtraction degraded: ${String(err?.message || err)}`
+          );
         } finally {
           if (raceTimer) clearTimeout(raceTimer);
         }

@@ -3244,6 +3244,9 @@ notify_docs_search(data['query'], data['results'])
           if (isFailHardEnabled()) {
             throw err;
           }
+          console.warn(
+            `[quaid][recall] waitForExtraction degraded: ${String((err as Error)?.message || err)}`
+          );
         } finally {
           if (raceTimer) clearTimeout(raceTimer);
         }
