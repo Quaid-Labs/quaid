@@ -106,6 +106,22 @@ class TestEnsureTable:
         }
         assert required.issubset(cols)
 
+    def test_seeded_project_definition_coerces_list_fields(self, setup_env):
+        """Seed from config normalizes malformed list-like project fields."""
+        cfg_path = setup_env / "config" / "memory.json"
+        cfg = json.loads(cfg_path.read_text())
+        cfg["projects"]["definitions"]["test-project"]["sourceRoots"] = {"bad": "type"}
+        cfg["projects"]["definitions"]["test-project"]["patterns"] = "not-a-list"
+        cfg["projects"]["definitions"]["test-project"]["exclude"] = {"bad": "type"}
+        cfg_path.write_text(json.dumps(cfg))
+
+        r = _get_registry()
+        pd = r.get_project_definition("test-project")
+        assert pd is not None
+        assert pd.source_roots == []
+        assert pd.patterns == ["*.md"]
+        assert pd.exclude == ["*.db", "*.log", "*.pyc", "__pycache__/"]
+
 
 class TestRegisterAndGet:
     def test_register_basic(self, setup_env):

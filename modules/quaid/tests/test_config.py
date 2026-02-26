@@ -463,6 +463,39 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_project_definition_json_fallback_validates_list_types(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "projects": {
+                    "definitions": {
+                        "json-proj": {
+                            "label": "JSON Project",
+                            "homeDir": "projects/json-proj/",
+                            "sourceRoots": {"bad": "type"},
+                            "autoIndex": True,
+                            "patterns": {"bad": "type"},
+                            "exclude": "not-a-list",
+                            "description": "from json",
+                        }
+                    }
+                }
+            }))
+
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("lib.config.get_db_path", return_value=tmp_path / "missing.db"):
+                cfg = load_config()
+
+            loaded = cfg.projects.definitions["json-proj"]
+            assert loaded.source_roots == []
+            assert loaded.patterns == ["*.md"]
+            assert loaded.exclude == ["*.db", "*.log", "*.pyc", "__pycache__/"]
+        finally:
+            config._config = old_config
+
     def test_core_parallel_llm_workers_default_is_4(self, tmp_path):
         import config
         old_config = config._config
