@@ -899,7 +899,8 @@ function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON
       if (code === 0) {
         resolve(stdout.trim());
       } else {
-        reject(new Error(`${label} error: ${stderr || stdout}`));
+        const detail = (stderr || stdout || "").trim().slice(0, 1e3);
+        reject(new Error(`${label} error (exit=${String(code)}): ${detail}`));
       }
     });
     proc.on("error", (err) => {
@@ -3176,15 +3177,36 @@ notify_memory_extraction(
           res.end(JSON.stringify({ error: "Invalid JSON body" }));
           return;
         }
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "JSON body must be an object" }));
+          return;
+        }
         const { system_prompt, user_message, model_tier, max_tokens = 4e3 } = body;
-        if (!system_prompt || !user_message) {
+        if (typeof system_prompt !== "string" || !system_prompt.trim() || typeof user_message !== "string" || !user_message.trim()) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "system_prompt and user_message required" }));
           return;
         }
+        if (model_tier !== void 0 && model_tier !== "fast" && model_tier !== "deep") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "model_tier must be 'fast' or 'deep'" }));
+          return;
+        }
+        if (typeof max_tokens !== "number" || !Number.isFinite(max_tokens)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "max_tokens must be a finite number" }));
+          return;
+        }
+        const requestedTokens = Math.trunc(max_tokens);
+        if (requestedTokens < 1 || requestedTokens > 1e5) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "max_tokens must be between 1 and 100000" }));
+          return;
+        }
         try {
           const tier = model_tier === "fast" ? "fast" : "deep";
-          const data = await callConfiguredLLM(system_prompt, user_message, tier, max_tokens, 6e5);
+          const data = await callConfiguredLLM(system_prompt, user_message, tier, requestedTokens, 6e5);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(data));
         } catch (err) {
