@@ -4,9 +4,13 @@ Semantic Clustering for Memory Maintenance
 Groups memories by domain to reduce O(n²) contradiction checking.
 """
 
+import logging
 from typing import Dict, List, Set
 from datastore.memorydb.memory_graph import Node, MemoryGraph, get_graph
 from lib.llm_clients import call_fast_reasoning
+from lib.fail_policy import is_fail_hard_enabled
+
+logger = logging.getLogger(__name__)
 
 # Define semantic clusters
 SEMANTIC_CLUSTERS = {
@@ -53,7 +57,11 @@ def call_ollama_clustering(prompt: str, max_tokens: int = 50) -> str:
         )
         return (result or "").strip()
     except Exception as e:
-        print(f"[clustering] LLM error: {e}")
+        logger.warning("semantic clustering LLM call failed: %s", e)
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "Semantic clustering LLM call failed while fail-hard mode is enabled"
+            ) from e
         return ""
 
 def classify_node_semantic_cluster(node: Node) -> str:
@@ -97,6 +105,7 @@ Return only the category name:"""
             return cluster_name
     
     # Default fallback
+    logger.warning("semantic clustering fallback used for node_id=%s", node.id)
     return "technology"  # Most general category
 
 def get_memory_clusters(graph: MemoryGraph) -> Dict[str, List[Node]]:
