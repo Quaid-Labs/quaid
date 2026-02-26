@@ -29,6 +29,7 @@ Usage:
 import argparse
 import difflib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -43,6 +44,7 @@ import subprocess
 from config import get_config
 from lib.llm_clients import call_deep_reasoning, call_fast_reasoning
 from lib.runtime_context import get_workspace_dir
+logger = logging.getLogger(__name__)
 
 def _workspace() -> Path:
     return get_workspace_dir()
@@ -165,7 +167,7 @@ def log_doc_update(
                     source="docs_updater",
                 )
         except Exception as e:
-            print(f"  [notify] Failed to notify user: {e}")
+            logger.warning("Failed to notify user about doc update for %s: %s", doc_path, e)
 
 
 def get_changelog(limit: int = 20) -> List[dict]:
