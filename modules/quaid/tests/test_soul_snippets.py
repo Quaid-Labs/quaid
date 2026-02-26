@@ -662,15 +662,17 @@ class TestArchiveAllEntries:
 
 
 class TestDistillationStateEdgeCases:
-    def test_corrupt_state_json(self, workspace_dir, mock_config):
+    def test_corrupt_state_json(self, workspace_dir, mock_config, caplog):
         """Corrupt state JSON returns empty dict."""
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             journal_dir = workspace_dir / "journal"
             journal_dir.mkdir()
             (journal_dir / ".distillation-state.json").write_text("NOT VALID JSON{{{")
             from datastore.notedb.soul_snippets import _get_distillation_state
+            caplog.set_level("WARNING")
             state = _get_distillation_state()
         assert state == {}
+        assert "Distillation state unreadable" in caplog.text
 
     def test_corrupt_date_triggers_distillation(self, workspace_dir, mock_config):
         """Invalid date string in state triggers distillation (safe fallback)."""
