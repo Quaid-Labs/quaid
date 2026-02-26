@@ -54,6 +54,7 @@ class LifecycleRegistry:
         self._registry_guard = threading.Lock()
         self._lock_registries: Dict[str, ResourceLockRegistry] = {}
         self._lock_registries_guard = threading.Lock()
+        self._max_lock_registries = max(1, int(os.environ.get("QUAID_MAX_LOCK_REGISTRIES", "64") or 64))
         self._llm_executor: Optional[ThreadPoolExecutor] = None
         self._llm_executor_workers: int = 0
         self._llm_executor_guard = threading.Lock()
@@ -134,10 +135,19 @@ class LifecycleRegistry:
         lock_root = (Path(workspace).resolve() / ".quaid" / "runtime" / "locks" / "janitor")
         key = str(lock_root)
         with self._lock_registries_guard:
-            reg = self._lock_registries.get(key)
+            reg = self._lock_registries.pop(key, None)
             if reg is None:
                 reg = ResourceLockRegistry(lock_root)
-                self._lock_registries[key] = reg
+            self._lock_registries[key] = reg
+            while len(self._lock_registries) > self._max_lock_registries:
+                oldest_key = next(iter(self._lock_registries))
+                if oldest_key == key and len(self._lock_registries) > 1:
+                    keys = iter(self._lock_registries)
+                    _ = next(keys, None)
+                    oldest_key = next(keys, oldest_key)
+                if oldest_key == key:
+                    break
+                self._lock_registries.pop(oldest_key, None)
             return reg
 
     def _llm_workers(self, ctx: RoutineContext) -> int:
