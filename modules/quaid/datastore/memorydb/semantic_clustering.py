@@ -38,6 +38,11 @@ SEMANTIC_CLUSTERS = {
         "description": "Events, activities, meetings, appointments, things that happened",
         "keywords": ["meeting", "appointment", "event", "activity", "happened", "occurred", "schedule", "calendar", "plan", "trip", "visit"],
         "types": ["Event"]
+    },
+    "uncategorized": {
+        "description": "Facts that do not map cleanly to semantic buckets",
+        "keywords": [],
+        "types": []
     }
 }
 
@@ -104,9 +109,9 @@ Return only the category name:"""
         if cluster_name in response.lower():
             return cluster_name
     
-    # Default fallback
+    # Default fallback: keep unknowns separate to avoid inflating any real bucket.
     logger.warning("semantic clustering fallback used for node_id=%s", node.id)
-    return "technology"  # Most general category
+    return "uncategorized"
 
 def get_memory_clusters(graph: MemoryGraph) -> Dict[str, List[Node]]:
     """Group all memory nodes by semantic cluster."""
@@ -148,7 +153,7 @@ def get_contradiction_pairs_by_cluster(graph: MemoryGraph, new_nodes: List[Node]
                 not existing_node.embedding):
                 continue
             
-            existing_cluster = node_clusters.get(existing_node.id, "technology")
+            existing_cluster = node_clusters.get(existing_node.id, "uncategorized")
             
             # Only check pairs within same cluster
             if new_cluster == existing_cluster:
