@@ -1,4 +1,6 @@
 import hashlib
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 from datastore.memorydb import session_logs
 from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
@@ -83,3 +85,50 @@ def test_session_log_last_session_excludes_current(monkeypatch, tmp_path):
     last = session_logs.load_last_session(owner_id="quaid", exclude_session_id="sess-new")
     assert last is not None
     assert last["session_id"] == "sess-old"
+
+
+def test_session_log_index_serializes_same_session(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+
+    def _slow_embedding(text: str):
+        time.sleep(0.12)
+        return _fake_embedding(text)
+
+    monkeypatch.setattr("datastore.memorydb.session_logs._lib_get_embedding", _slow_embedding)
+
+    t1 = "User: alpha fact\n\nAssistant: noted."
+    t2 = "User: beta fact\n\nAssistant: noted."
+
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(session_logs.index_session_log, session_id="sess-lock", transcript=t1, owner_id="quaid")
+        f2 = pool.submit(session_logs.index_session_log, session_id="sess-lock", transcript=t2, owner_id="quaid")
+        r1 = f1.result()
+        r2 = f2.result()
+    elapsed = time.perf_counter() - started
+
+    assert r1["status"] in {"indexed", "unchanged"}
+    assert r2["status"] in {"indexed", "unchanged"}
+    assert elapsed >= 0.22
+
+    loaded = session_logs.load_session("sess-lock", owner_id="quaid")
+    assert loaded is not None
+    transcript_text = loaded["transcript_text"]
+    content_hash = hashlib.sha256(transcript_text.encode("utf-8")).hexdigest()
+
+    with session_logs._lib_get_connection() as conn:
+        row = conn.execute(
+            "SELECT content_hash FROM session_logs WHERE session_id = ?",
+            ("sess-lock",),
+        ).fetchone()
+        assert row is not None
+        assert str(row["content_hash"]) == content_hash
+
+        chunks = conn.execute(
+            "SELECT content FROM session_log_chunks WHERE session_id = ? ORDER BY chunk_index ASC",
+            ("sess-lock",),
+        ).fetchall()
+    assert len(chunks) >= 1
+    for chunk in chunks:
+        assert str(chunk["content"]) in transcript_text

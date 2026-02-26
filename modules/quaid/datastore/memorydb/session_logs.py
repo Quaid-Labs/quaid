@@ -10,11 +10,14 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from lib.config import get_db_path as _lib_get_db_path
 from lib.worker_pool import run_callables
 from lib.database import get_connection as _lib_get_connection
 from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding as _lib_pack_embedding, unpack_embedding as _lib_unpack_embedding
@@ -35,6 +38,19 @@ def _normalize_session_id(session_id: str) -> str:
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", sid):
         raise ValueError("invalid session_id")
     return sid
+
+
+def _with_session_lock(session_id: str) -> tuple[int, str]:
+    lock_path = f"{_lib_get_db_path()}.session-{session_id}.lock"
+    last_err: Optional[Exception] = None
+    for _ in range(50):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+            return fd, lock_path
+        except FileExistsError as exc:
+            last_err = exc
+            time.sleep(0.01)
+    raise RuntimeError(f"failed to acquire session log lock for {session_id}: {last_err}")
 
 
 def _estimate_tokens(text: str) -> int:
@@ -167,63 +183,109 @@ def index_session_log(
     topic_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     sid = _normalize_session_id(session_id)
-    transcript_text = str(transcript or "").strip()
-    if not transcript_text:
-        return {"status": "skipped", "reason": "empty_transcript", "session_id": sid}
+    lock_fd, lock_path = _with_session_lock(sid)
+    try:
+        transcript_text = str(transcript or "").strip()
+        if not transcript_text:
+            return {"status": "skipped", "reason": "empty_transcript", "session_id": sid}
 
-    owner = str(owner_id or "default").strip() or "default"
-    now = _utcnow_iso()
-    hint = str(topic_hint or "").strip() or _infer_topic_hint(transcript_text)
-    msg_count = int(message_count or 0)
-    if msg_count <= 0:
-        msg_count = transcript_text.count("\n\n") + 1
+        owner = str(owner_id or "default").strip() or "default"
+        now = _utcnow_iso()
+        hint = str(topic_hint or "").strip() or _infer_topic_hint(transcript_text)
+        msg_count = int(message_count or 0)
+        if msg_count <= 0:
+            msg_count = transcript_text.count("\n\n") + 1
 
-    content_hash = hashlib.sha256(transcript_text.encode("utf-8")).hexdigest()
-    chunks = _chunk_transcript(transcript_text)
-    embedding_blobs: List[Optional[bytes]] = []
-    if chunks:
-        calls = [(lambda chunk_text: (lambda: _lib_get_embedding(chunk_text)))(chunk) for chunk in chunks]
-        emb_results = run_callables(
-            calls,
-            max_workers=min(_parallel_workers("session_log_index"), len(chunks)),
-            pool_name="session-log-index",
-            return_exceptions=True,
-        )
-        for item in emb_results:
-            if isinstance(item, Exception) or not item:
-                if isinstance(item, Exception):
-                    if is_fail_hard_enabled():
-                        raise RuntimeError(
-                            f"Session log embedding generation failed for session {sid}"
-                        ) from item
-                    logger.warning("Session log embedding generation failed for session %s: %s", sid, item)
-                embedding_blobs.append(None)
-            else:
-                try:
-                    embedding_blobs.append(_lib_pack_embedding(item))
-                except Exception as exc:
-                    if is_fail_hard_enabled():
-                        raise RuntimeError(
-                            f"Session log embedding pack failed for session {sid}"
-                        ) from exc
-                    logger.warning("Session log embedding pack failed for session %s: %s", sid, exc)
+        content_hash = hashlib.sha256(transcript_text.encode("utf-8")).hexdigest()
+        chunks = _chunk_transcript(transcript_text)
+        embedding_blobs: List[Optional[bytes]] = []
+        if chunks:
+            calls = [(lambda chunk_text: (lambda: _lib_get_embedding(chunk_text)))(chunk) for chunk in chunks]
+            emb_results = run_callables(
+                calls,
+                max_workers=min(_parallel_workers("session_log_index"), len(chunks)),
+                pool_name="session-log-index",
+                return_exceptions=True,
+            )
+            for item in emb_results:
+                if isinstance(item, Exception) or not item:
+                    if isinstance(item, Exception):
+                        if is_fail_hard_enabled():
+                            raise RuntimeError(
+                                f"Session log embedding generation failed for session {sid}"
+                            ) from item
+                        logger.warning("Session log embedding generation failed for session %s: %s", sid, item)
                     embedding_blobs.append(None)
+                else:
+                    try:
+                        embedding_blobs.append(_lib_pack_embedding(item))
+                    except Exception as exc:
+                        if is_fail_hard_enabled():
+                            raise RuntimeError(
+                                f"Session log embedding pack failed for session {sid}"
+                            ) from exc
+                        logger.warning("Session log embedding pack failed for session %s: %s", sid, exc)
+                        embedding_blobs.append(None)
 
-    with _lib_get_connection() as conn:
-        ensure_schema(conn)
-        prev = conn.execute(
-            "SELECT content_hash FROM session_logs WHERE session_id = ?",
-            (sid,),
-        ).fetchone()
-        if prev and str(prev["content_hash"]) == content_hash:
+        with _lib_get_connection() as conn:
+            ensure_schema(conn)
+            prev = conn.execute(
+                "SELECT content_hash FROM session_logs WHERE session_id = ?",
+                (sid,),
+            ).fetchone()
+            if prev and str(prev["content_hash"]) == content_hash:
+                conn.execute(
+                    """
+                    UPDATE session_logs
+                    SET owner_id = ?, source_label = ?, source_path = ?, source_channel = ?, conversation_id = ?,
+                        participant_ids = ?, participant_aliases = ?, message_count = ?, topic_hint = ?, updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (
+                        owner,
+                        str(source_label or "unknown"),
+                        source_path,
+                        str(source_channel or "").strip() or None,
+                        str(conversation_id or "").strip() or None,
+                        json.dumps(participant_ids or [], ensure_ascii=True),
+                        json.dumps(participant_aliases or {}, ensure_ascii=True),
+                        msg_count,
+                        hint,
+                        now,
+                        sid,
+                    ),
+                )
+                return {
+                    "status": "unchanged",
+                    "session_id": sid,
+                    "chunks": int(
+                        conn.execute("SELECT COUNT(*) AS n FROM session_log_chunks WHERE session_id = ?", (sid,)).fetchone()["n"]
+                    ),
+                }
+
             conn.execute(
                 """
-                UPDATE session_logs
-                SET owner_id = ?, source_label = ?, source_path = ?, source_channel = ?, conversation_id = ?,
-                    participant_ids = ?, participant_aliases = ?, message_count = ?, topic_hint = ?, updated_at = ?
-                WHERE session_id = ?
+                INSERT INTO session_logs (
+                    session_id, owner_id, source_label, source_path, source_channel, conversation_id,
+                    participant_ids, participant_aliases, message_count,
+                    topic_hint, transcript_text, content_hash, indexed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    owner_id = excluded.owner_id,
+                    source_label = excluded.source_label,
+                    source_path = excluded.source_path,
+                    source_channel = excluded.source_channel,
+                    conversation_id = excluded.conversation_id,
+                    participant_ids = excluded.participant_ids,
+                    participant_aliases = excluded.participant_aliases,
+                    message_count = excluded.message_count,
+                    topic_hint = excluded.topic_hint,
+                    transcript_text = excluded.transcript_text,
+                    content_hash = excluded.content_hash,
+                    updated_at = excluded.updated_at
                 """,
                 (
+                    sid,
                     owner,
                     str(source_label or "unknown"),
                     source_path,
@@ -233,76 +295,41 @@ def index_session_log(
                     json.dumps(participant_aliases or {}, ensure_ascii=True),
                     msg_count,
                     hint,
+                    transcript_text,
+                    content_hash,
                     now,
-                    sid,
+                    now,
                 ),
             )
-            return {
-                "status": "unchanged",
-                "session_id": sid,
-                "chunks": int(
-                    conn.execute("SELECT COUNT(*) AS n FROM session_log_chunks WHERE session_id = ?", (sid,)).fetchone()["n"]
-                ),
-            }
 
-        conn.execute(
-            """
-            INSERT INTO session_logs (
-                session_id, owner_id, source_label, source_path, source_channel, conversation_id,
-                participant_ids, participant_aliases, message_count,
-                topic_hint, transcript_text, content_hash, indexed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                owner_id = excluded.owner_id,
-                source_label = excluded.source_label,
-                source_path = excluded.source_path,
-                source_channel = excluded.source_channel,
-                conversation_id = excluded.conversation_id,
-                participant_ids = excluded.participant_ids,
-                participant_aliases = excluded.participant_aliases,
-                message_count = excluded.message_count,
-                topic_hint = excluded.topic_hint,
-                transcript_text = excluded.transcript_text,
-                content_hash = excluded.content_hash,
-                updated_at = excluded.updated_at
-            """,
-            (
-                sid,
-                owner,
-                str(source_label or "unknown"),
-                source_path,
-                str(source_channel or "").strip() or None,
-                str(conversation_id or "").strip() or None,
-                json.dumps(participant_ids or [], ensure_ascii=True),
-                json.dumps(participant_aliases or {}, ensure_ascii=True),
-                msg_count,
-                hint,
-                transcript_text,
-                content_hash,
-                now,
-                now,
-            ),
-        )
+            conn.execute("DELETE FROM session_log_chunks WHERE session_id = ?", (sid,))
+            created = 0
+            for i, chunk in enumerate(chunks):
+                embedding_blob = embedding_blobs[i] if i < len(embedding_blobs) else None
+                conn.execute(
+                    """
+                    INSERT INTO session_log_chunks (id, session_id, chunk_index, content, embedding, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (f"{sid}:{i}", sid, i, chunk, embedding_blob, now, now),
+                )
+                created += 1
 
-        conn.execute("DELETE FROM session_log_chunks WHERE session_id = ?", (sid,))
-        created = 0
-        for i, chunk in enumerate(chunks):
-            embedding_blob = embedding_blobs[i] if i < len(embedding_blobs) else None
-            conn.execute(
-                """
-                INSERT INTO session_log_chunks (id, session_id, chunk_index, content, embedding, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (f"{sid}:{i}", sid, i, chunk, embedding_blob, now, now),
-            )
-            created += 1
-
-    return {
-        "status": "indexed",
-        "session_id": sid,
-        "chunks": created,
-        "message_count": msg_count,
-    }
+        return {
+            "status": "indexed",
+            "session_id": sid,
+            "chunks": created,
+            "message_count": msg_count,
+        }
+    finally:
+        try:
+            os.close(lock_fd)
+        except Exception:
+            pass
+        try:
+            os.unlink(lock_path)
+        except Exception:
+            pass
 
 
 def list_recent_sessions(limit: int = 5, owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
