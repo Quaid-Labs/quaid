@@ -602,7 +602,13 @@ export class SessionTimeoutManager {
     if (this.ownsWorkerLock) return true;
     try {
       fs.mkdirSync(path.dirname(this.workerLockPath), { recursive: true });
-    } catch {}
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed to initialize worker lock directory: ${String((err as Error)?.message || err)}`);
+      if (this.failHard) {
+        throw err;
+      }
+      return false;
+    }
 
     const payload = {
       pid: process.pid,
@@ -637,7 +643,11 @@ export class SessionTimeoutManager {
       this.ownsWorkerLock = true;
       this.writeQuaidLog("worker_lock_stale_recovered", undefined, { stale_pid: existingPid || undefined });
       return true;
-    } catch {
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed stale-worker lock recovery: ${String((err as Error)?.message || err)}`);
+      if (this.failHard) {
+        throw err;
+      }
       return false;
     }
   }
@@ -703,7 +713,11 @@ export class SessionTimeoutManager {
       return fs.readdirSync(this.pendingSignalDir)
         .filter((f) => f.endsWith(".json"))
         .map((f) => path.join(this.pendingSignalDir, f));
-    } catch {
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed listing signal files: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
       return [];
     }
   }
@@ -714,7 +728,11 @@ export class SessionTimeoutManager {
       return fs.readdirSync(this.pendingSignalDir)
         .filter((f) => /\.json\.processing\.\d+$/.test(f))
         .map((f) => path.join(this.pendingSignalDir, f));
-    } catch {
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed listing signal claim files: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
       return [];
     }
   }
@@ -755,7 +773,12 @@ export class SessionTimeoutManager {
     try {
       const payload = JSON.parse(fs.readFileSync(this.bufferPath(sessionId), "utf8")) as TimeoutBufferPayload;
       if (Array.isArray(payload?.messages)) return payload.messages;
-    } catch {}
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed reading buffer session=${sessionId}: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
     return [];
   }
 

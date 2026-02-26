@@ -528,7 +528,12 @@ class SessionTimeoutManager {
     if (this.ownsWorkerLock) return true;
     try {
       fs.mkdirSync(path.dirname(this.workerLockPath), { recursive: true });
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed to initialize worker lock directory: ${String(err?.message || err)}`);
+      if (this.failHard) {
+        throw err;
+      }
+      return false;
     }
     const payload = {
       pid: process.pid,
@@ -561,7 +566,11 @@ class SessionTimeoutManager {
       this.ownsWorkerLock = true;
       this.writeQuaidLog("worker_lock_stale_recovered", void 0, { stale_pid: existingPid || void 0 });
       return true;
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed stale-worker lock recovery: ${String(err?.message || err)}`);
+      if (this.failHard) {
+        throw err;
+      }
       return false;
     }
   }
@@ -618,7 +627,11 @@ class SessionTimeoutManager {
     try {
       if (!fs.existsSync(this.pendingSignalDir)) return [];
       return fs.readdirSync(this.pendingSignalDir).filter((f) => f.endsWith(".json")).map((f) => path.join(this.pendingSignalDir, f));
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed listing signal files: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
       return [];
     }
   }
@@ -626,7 +639,11 @@ class SessionTimeoutManager {
     try {
       if (!fs.existsSync(this.pendingSignalDir)) return [];
       return fs.readdirSync(this.pendingSignalDir).filter((f) => /\.json\.processing\.\d+$/.test(f)).map((f) => path.join(this.pendingSignalDir, f));
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed listing signal claim files: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
       return [];
     }
   }
@@ -664,7 +681,11 @@ class SessionTimeoutManager {
     try {
       const payload = JSON.parse(fs.readFileSync(this.bufferPath(sessionId), "utf8"));
       if (Array.isArray(payload?.messages)) return payload.messages;
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed reading buffer session=${sessionId}: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
     }
     return [];
   }

@@ -305,4 +305,58 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(secondOk).toBe(true)
   })
+
+  it('throws on signal directory listing failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-list-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const notADir = path.join(workspace, 'data', 'signals-not-a-dir')
+    fs.mkdirSync(path.dirname(notADir), { recursive: true })
+    fs.writeFileSync(notADir, 'x', 'utf8')
+    ;(manager as any).pendingSignalDir = notADir
+    expect(() => (manager as any).listSignalFiles()).toThrow()
+  })
+
+  it('throws on malformed buffer payload when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-buffer-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const bufferPath = (manager as any).bufferPath('session-bad')
+    fs.mkdirSync(path.dirname(bufferPath), { recursive: true })
+    fs.writeFileSync(bufferPath, '{bad json', 'utf8')
+
+    expect(() => (manager as any).readBuffer('session-bad')).toThrow()
+  })
+
+  it('throws on stale lock parse failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-lock-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const lockPath = (manager as any).workerLockPath as string
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true })
+    fs.writeFileSync(lockPath, '{not json', 'utf8')
+
+    expect(() => (manager as any).tryAcquireWorkerLock()).toThrow()
+  })
 })
