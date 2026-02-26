@@ -159,6 +159,13 @@ function isPreInjectionPassEnabled(): boolean {
   return true;
 }
 
+function isFailHardEnabled(): boolean {
+  const retrieval = getMemoryConfig().retrieval || {};
+  if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
+  if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
+  return true;
+}
+
 function getCaptureTimeoutMinutes(): number {
   const capture = getMemoryConfig().capture || {};
   const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
@@ -347,7 +354,7 @@ function runStartupSelfCheck(): void {
     if (paidProviders.has(deep.provider)) {
       console.warn(`[quaid][billing] paid provider active for deep reasoning: ${deep.provider}/${deep.model}`);
     }
-  } catch (_err: unknown) {
+  } catch (err: unknown) {
     errors.push(`deep reasoning model resolution failed: ${String((err as Error)?.message || err)}`);
   }
 
@@ -710,7 +717,7 @@ function maybeForceCompactionAfterTimeout(sessionId?: string): void {
     } else {
       console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
     }
-  } catch (_err: unknown) {
+  } catch (err: unknown) {
     console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String((err as Error)?.message || err)}`);
   }
 }
@@ -869,48 +876,89 @@ async function callConfiguredLLM(
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  let gatewayRes: Response;
-  try {
-    gatewayRes = await fetch(gatewayUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: `${resolved.provider}/${resolved.model}`,
-        input: [
-          { type: "message", role: "system", content: systemPrompt },
-          { type: "message", role: "user", content: userMessage },
-        ],
-        max_output_tokens: maxTokens,
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err: unknown) {
-    const durationMs = Date.now() - started;
-    console.error(
-      `[quaid][llm] gateway_fetch_error tier=${modelTier} duration_ms=${durationMs} error=${(err as Error)?.name || "Error"}:${(err as Error)?.message || String(err)}`
+  const isTransientError = (status: number | null, err: unknown): boolean => {
+    if (typeof status === "number" && (status === 429 || status >= 500)) return true;
+    const msg = String((err as Error)?.message || err || "").toLowerCase();
+    const name = String((err as Error)?.name || "").toLowerCase();
+    return (
+      name.includes("timeout")
+      || msg.includes("timeout")
+      || msg.includes("timed out")
+      || msg.includes("econnreset")
+      || msg.includes("econnrefused")
+      || msg.includes("network")
+      || msg.includes("fetch failed")
     );
-    throw err;
-  }
+  };
+  const readBodyWithTimeout = async (resp: Response): Promise<string> => {
+    return await Promise.race([
+      resp.text(),
+      new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error(`gateway response body timeout after ${timeoutMs}ms`)), timeoutMs)
+      ),
+    ]);
+  };
 
-  const rawBody = await gatewayRes.text();
+  const maxAttempts = 2;
   let data: any = null;
-  try {
-    data = rawBody ? JSON.parse(rawBody) : {};
-  } catch (_err: unknown) {
-    const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
-    console.error(
-      `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
-    );
-    throw new Error(`Gateway response parse failed (${gatewayRes.status} ${gatewayRes.statusText})`);
+  let gatewayRes: Response | null = null;
+  let rawBody = "";
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      gatewayRes = await fetch(gatewayUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: `${resolved.provider}/${resolved.model}`,
+          input: [
+            { type: "message", role: "system", content: systemPrompt },
+            { type: "message", role: "user", content: userMessage },
+          ],
+          max_output_tokens: maxTokens,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      rawBody = await readBodyWithTimeout(gatewayRes);
+      try {
+        data = rawBody ? JSON.parse(rawBody) : {};
+      } catch (_err: unknown) {
+        const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
+        console.error(
+          `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
+        );
+        throw new Error(`Gateway response parse failed (${gatewayRes.status} ${gatewayRes.statusText})`);
+      }
+      if (!gatewayRes.ok) {
+        const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
+        console.error(
+          `[quaid][llm] gateway_http_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
+        );
+        const err = data?.error?.message || data?.message || `Gateway OpenResponses error ${gatewayRes.status}`;
+        if (attempt < maxAttempts && isTransientError(gatewayRes.status, err)) {
+          console.warn(`[quaid][llm] transient gateway error, retrying attempt=${attempt + 1}/${maxAttempts}`);
+          await new Promise((r) => setTimeout(r, 200 * attempt));
+          continue;
+        }
+        throw new Error(err);
+      }
+      break;
+    } catch (err: unknown) {
+      lastError = err;
+      const durationMs = Date.now() - started;
+      console.error(
+        `[quaid][llm] gateway_fetch_error tier=${modelTier} duration_ms=${durationMs} error=${(err as Error)?.name || "Error"}:${(err as Error)?.message || String(err)} attempt=${attempt}/${maxAttempts}`
+      );
+      if (attempt < maxAttempts && isTransientError(gatewayRes?.status ?? null, err)) {
+        await new Promise((r) => setTimeout(r, 200 * attempt));
+        continue;
+      }
+      throw err;
+    }
   }
-  if (!gatewayRes.ok) {
-    const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
-    console.error(
-      `[quaid][llm] gateway_http_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
-    );
-    const err = data?.error?.message || data?.message || `Gateway OpenResponses error ${gatewayRes.status}`;
-    throw new Error(err);
+  if (!gatewayRes || !gatewayRes.ok) {
+    throw (lastError instanceof Error ? lastError : new Error(String(lastError || "gateway call failed")));
   }
 
   const text = typeof data.output_text === "string"
@@ -1601,7 +1649,7 @@ async function recall(
 
     } catch (_parseErr: unknown) {
       // Fallback: parse line-by-line output format if JSON parsing fails
-      console.log("[quaid] JSON parse failed, trying line format");
+      console.warn("[quaid] JSON parse failed, trying line format");
       for (const line of output.split("\n")) {
         // [direct] format
         if (line.startsWith("[direct]")) {
@@ -1630,6 +1678,9 @@ async function recall(
 
     return results;
   } catch (err: unknown) {
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     console.error("[quaid] recall error:", (err as Error).message);
     return [];
   }
@@ -1795,7 +1846,11 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
         });
       }
       return results.slice(0, limit);
-    } catch {
+    } catch (err: unknown) {
+      if (isFailHardEnabled()) {
+        throw err;
+      }
+      console.warn("[quaid] project recall bridge error:", (err as Error)?.message || String(err));
       return [];
     }
   },
