@@ -331,7 +331,8 @@ class SessionTimeoutManager {
         if (!sid || msgs.length === 0) {
           try {
             fs.unlinkSync(lockedPath);
-          } catch {
+          } catch (unlinkErr) {
+            safeLog(this.logger, `[quaid][timeout] failed to delete invalid stale buffer claim ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
           }
           continue;
         }
@@ -350,7 +351,8 @@ class SessionTimeoutManager {
         this.clearSession(sid);
         try {
           fs.unlinkSync(lockedPath);
-        } catch {
+        } catch (unlinkErr) {
+          safeLog(this.logger, `[quaid][timeout] failed to delete processed stale buffer claim ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
         }
       } catch (err) {
         safeLog(this.logger, `[quaid][timeout] stale buffer recovery failed for ${filePath}: ${String(err?.message || err)}`);
@@ -373,7 +375,8 @@ class SessionTimeoutManager {
         try {
           const existing = JSON.parse(fs.readFileSync(signalPath, "utf8"));
           existingLabel = String(existing?.label || "Signal");
-        } catch {
+        } catch (err) {
+          safeLog(this.logger, `[quaid][timeout] failed to parse existing extraction signal ${signalPath}: ${String(err?.message || err)}`);
         }
         const incomingPriority = signalPriority(signal.label);
         const existingPriority = signalPriority(existingLabel);
@@ -410,10 +413,12 @@ class SessionTimeoutManager {
       let signal = null;
       try {
         signal = JSON.parse(fs.readFileSync(lockedPath, "utf8"));
-      } catch {
+      } catch (err) {
+        safeLog(this.logger, `[quaid][timeout] dropping malformed extraction signal ${lockedPath}: ${String(err?.message || err)}`);
         try {
           fs.unlinkSync(lockedPath);
-        } catch {
+        } catch (unlinkErr) {
+          safeLog(this.logger, `[quaid][timeout] failed to delete malformed extraction signal ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
         }
         continue;
       }
@@ -422,7 +427,8 @@ class SessionTimeoutManager {
       if (!sessionId) {
         try {
           fs.unlinkSync(lockedPath);
-        } catch {
+        } catch (unlinkErr) {
+          safeLog(this.logger, `[quaid][timeout] failed to delete signal without session id ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
         }
         continue;
       }
