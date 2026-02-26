@@ -939,6 +939,9 @@ export class SessionTimeoutManager {
       return payload;
     } catch (err: unknown) {
       safeLog(this.logger, `[quaid][timeout] failed reading session cursor for ${sessionId}: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
       return null;
     }
   }
