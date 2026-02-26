@@ -63,24 +63,28 @@ def _queue_delayed_notification(message: str, kind: str, priority: str, source: 
         "priority": str(priority),
     }
     events_py = Path(__file__).resolve().parents[2] / "core" / "runtime" / "events.py"
-    subprocess.run(
-        [
-            sys.executable,
-            str(events_py),
-            "emit",
-            "--name",
-            "notification.delayed",
-            "--payload",
-            json.dumps(payload, ensure_ascii=False),
-            "--source",
-            source,
-            "--dispatch",
-            "queued",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                str(events_py),
+                "emit",
+                "--name",
+                "notification.delayed",
+                "--payload",
+                json.dumps(payload, ensure_ascii=False),
+                "--source",
+                source,
+                "--dispatch",
+                "queued",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Timed out queuing delayed notification", extra={"source": source, "kind": kind})
 
 # Cleanup thresholds
 CLEANUP_UPDATE_THRESHOLD = 10  # Trigger cleanup after this many updates

@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -636,8 +636,9 @@ function maybeForceCompactionAfterTimeout(sessionId) {
     return;
   }
   try {
-    const out = execSync(
-      `openclaw gateway call sessions.compact --json --params '${JSON.stringify({ key })}'`,
+    const out = execFileSync(
+      "openclaw",
+      ["gateway", "call", "sessions.compact", "--json", "--params", JSON.stringify({ key })],
       { encoding: "utf-8", timeout: 2e4 }
     );
     const parsed = JSON.parse(String(out || "{}"));

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 _memory = SimpleNamespace(store=store_memory, create_edge=create_memory_edge)
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "extraction.txt"
+MAX_EXTRACT_WALL_SECONDS = 600.0
 
 
 def _load_extraction_prompt() -> str:
@@ -254,6 +256,7 @@ def extract_from_transcript(
     all_snippets: Dict[str, List[str]] = {}
     all_journal: Dict[str, str] = {}
     carry_facts: List[Dict[str, Any]] = []
+    extract_deadline = time.time() + MAX_EXTRACT_WALL_SECONDS
 
     for ci, chunk in enumerate(transcript_chunks):
         if not chunk.strip():
@@ -273,10 +276,19 @@ def extract_from_transcript(
         else:
             user_message = f"Extract memorable facts and journal entries from this conversation chunk:\n\n{chunk}"
 
+        remaining = extract_deadline - time.time()
+        if remaining <= 0:
+            logger.warning(
+                f"[extract] {label}: extraction deadline reached after {ci}/{len(transcript_chunks)} chunks; "
+                "stopping further chunk processing"
+            )
+            break
+
         response_text, duration = call_deep_reasoning(
             prompt=user_message,
             system_prompt=system_prompt,
             max_tokens=6144,
+            timeout=min(600.0, remaining),
         )
 
         if not response_text:

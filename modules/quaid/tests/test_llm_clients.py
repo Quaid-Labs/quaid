@@ -3,6 +3,7 @@
 import os
 import sys
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -321,3 +322,31 @@ class TestCallLlmProvider:
         with patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
             result, _duration = llm_clients.call_llm("system", "user", max_retries=0)
         assert result is None
+
+    def test_uses_remaining_deadline_for_slot_and_provider_timeout(self):
+        """Per-attempt timeout should use remaining deadline, not full timeout each retry."""
+        import core.llm.clients as llm_clients
+
+        captured_slot_timeouts = []
+        captured_call_timeouts = []
+
+        @contextmanager
+        def _slot(timeout_seconds=None):
+            captured_slot_timeouts.append(timeout_seconds)
+            yield
+
+        provider = MagicMock()
+
+        def _llm_call(_messages, _tier, _max_tokens, timeout):
+            captured_call_timeouts.append(timeout)
+            return LLMResult(text='{"ok":true}', duration=0.01, model="test")
+
+        provider.llm_call.side_effect = _llm_call
+
+        with patch("core.llm.clients.get_llm_provider", return_value=provider), \
+             patch("core.llm.clients.acquire_llm_slot", side_effect=_slot), \
+             patch("core.llm.clients.time.time", side_effect=[100.0, 100.2]):
+            llm_clients.call_llm("system", "user", timeout=1.0, max_retries=0)
+
+        assert captured_slot_timeouts[0] == pytest.approx(0.8, rel=1e-3)
+        assert captured_call_timeouts[0] == pytest.approx(0.8, rel=1e-3)
