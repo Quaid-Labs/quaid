@@ -275,23 +275,6 @@ def stats() -> Dict[str, Any]:
     return _memory.stats()
 
 
-def extract_transcript(
-    transcript: str,
-    owner_id: str,
-    label: str = "mcp",
-    dry_run: bool = False,
-) -> Dict[str, Any]:
-    """Run transcript extraction through the ingestor interface."""
-    from ingest.extract import extract_from_transcript
-
-    return extract_from_transcript(
-        transcript=transcript,
-        owner_id=owner_id,
-        label=label,
-        dry_run=dry_run,
-    )
-
-
 def projects_search_docs(
     query: str,
     limit: int = 5,
@@ -328,6 +311,5 @@ __all__ = [
     "forget",
     "get_memory",
     "stats",
-    "extract_transcript",
     "projects_search_docs",
 ]
