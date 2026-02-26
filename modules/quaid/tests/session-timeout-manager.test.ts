@@ -342,6 +342,24 @@ describe('SessionTimeoutManager scheduling', () => {
     expect(() => (manager as any).readBuffer('session-bad')).toThrow()
   })
 
+  it('throws on buffer directory listing failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-buffer-list-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const notADir = path.join(workspace, 'data', 'buffers-not-a-dir')
+    fs.mkdirSync(path.dirname(notADir), { recursive: true })
+    fs.writeFileSync(notADir, 'x', 'utf8')
+    ;(manager as any).bufferDir = notADir
+    expect(() => (manager as any).listBufferFiles()).toThrow()
+  })
+
   it('throws on stale lock parse failure when failHard=true', () => {
     const workspace = makeWorkspace('quaid-timeout-lock-failhard-')
     const manager = new SessionTimeoutManager({
