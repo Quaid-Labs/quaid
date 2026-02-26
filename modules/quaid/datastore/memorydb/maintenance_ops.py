@@ -2818,16 +2818,16 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                 if new_edges:
                     print(f"    Would create {len(new_edges)} new edges")
             else:
-                # Delete old edges created from this fact
-                edges_deleted = delete_edges_by_source_fact(memory_id)
-                if edges_deleted > 0:
-                    print(f"    DELETED {edges_deleted} old edges from fact")
-
-                # Update the fact text, embedding, and content_hash
-                from lib.embeddings import get_embedding as _get_emb_fix, pack_embedding as _pack_emb_fix
-                new_emb = _get_emb_fix(new_text)
-                new_hash = content_hash(new_text)
                 with graph._get_conn() as conn:
+                    # Delete old edges + update fact + recreate edges in one transaction.
+                    edges_deleted = conn.execute(
+                        "DELETE FROM edges WHERE source_fact_id = ?",
+                        (memory_id,),
+                    ).rowcount
+                    # Update the fact text, embedding, and content_hash.
+                    from lib.embeddings import get_embedding as _get_emb_fix, pack_embedding as _pack_emb_fix
+                    new_emb = _get_emb_fix(new_text)
+                    new_hash = content_hash(new_text)
                     packed_emb = _pack_emb_fix(new_emb) if new_emb else None
                     conn.execute(
                         "UPDATE nodes SET name = ?, embedding = ?, content_hash = ?, updated_at = ?, status = 'approved' WHERE id = ?",
@@ -2842,13 +2842,9 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                             )
                         except Exception:
                             pass  # vec_nodes may not exist
-                print(f"    FIXED: {memory_id} -> {new_text[:50]}...")
-
-                # Create new edges if provided
-                for edge_data in new_edges:
-                    if edge_data.get("subject") and edge_data.get("relation") and edge_data.get("object"):
-                        try:
-                            # Normalize edge relation before creating
+                    # Create new edges if provided.
+                    for edge_data in new_edges:
+                        if edge_data.get("subject") and edge_data.get("relation") and edge_data.get("object"):
                             norm = _normalize_edge(
                                 edge_data["subject"], "entity",
                                 edge_data["relation"],
@@ -2858,12 +2854,14 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                                 norm[0],
                                 norm[2],
                                 norm[3],
-                                source_fact_id=memory_id
+                                source_fact_id=memory_id,
+                                _conn=conn,
                             )
                             if result["status"] == "created":
                                 print(f"    Created edge: {edge_data['subject']} --{edge_data['relation']}--> {edge_data['object']}")
-                        except Exception as e:
-                            print(f"    Failed to create edge: {e}")
+                if edges_deleted > 0:
+                    print(f"    DELETED {edges_deleted} old edges from fact")
+                print(f"    FIXED: {memory_id} -> {new_text[:50]}...")
             fixed += 1
 
         elif action == "KEEP":
