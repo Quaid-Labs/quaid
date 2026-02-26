@@ -20,6 +20,15 @@
   - add core routing policy for conversation-derived writes (memory vs domain stores)
   - require explicit dual-write config + audit trail (no silent fan-out)
   - declare datastore domain/policy class metadata in plugin manifests
+- [ ] Enterprise/compliance forward-seed contracts:
+  - add residency metadata (`region`, `residency_class`) to datastore/record policy envelope
+  - define right-to-delete propagation contract (facts, edges, derived summaries/indexes)
+  - add consent/purpose binding fields (`purpose_tag`, `consent_scope`) to policy contract
+  - enforce tenant/principal-aware cache keying for retrieval/reranker/embedding/session caches
+  - add backup/restore scoping metadata + encrypted snapshot expectations
+  - define break-glass admin override contract (reason/approval/alert + audit)
+  - require sink-side redaction policy for notifications/telemetry/debug logs
+  - record policy version/ruleset hash on every access decision for replay
 - [ ] Adapter portability contract:
   - adapter only reports source/channel/message identity and log locations
   - ingest/datastore own parsing/indexing/search behavior
