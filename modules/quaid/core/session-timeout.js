@@ -847,6 +847,9 @@ class SessionTimeoutManager {
       return payload;
     } catch (err) {
       safeLog(this.logger, `[quaid][timeout] failed reading session cursor for ${sessionId}: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
       return null;
     }
   }
