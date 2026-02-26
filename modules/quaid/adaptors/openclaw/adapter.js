@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { execFileSync, execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -90,7 +90,7 @@ function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     return _cachedDatastoreStats;
   }
   try {
-    const output = execSync(`python3 "${PYTHON_SCRIPT}" stats`, {
+    const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
       encoding: "utf-8",
       timeout: 5e3,
       env: buildPythonEnv()
@@ -1982,7 +1982,7 @@ const quaidPlugin = {
     if (!fs.existsSync(DB_PATH)) {
       console.log("[quaid] Database not found, initializing datastore...");
       try {
-        execSync(`python3 "${PYTHON_SCRIPT}" init`, {
+        execFileSync("python3", [PYTHON_SCRIPT, "init"], {
           timeout: 2e4,
           env: buildPythonEnv()
         });
