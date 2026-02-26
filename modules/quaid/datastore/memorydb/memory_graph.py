@@ -477,8 +477,16 @@ class MemoryGraph:
                             "INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                             (row["id"], row["embedding"])
                         )
-                    except Exception:
-                        pass  # Skip bad embeddings
+                    except Exception as exc:
+                        logger.warning(
+                            "vec backfill skipped node %s due to vec_nodes insert failure: %s",
+                            row["id"],
+                            exc,
+                        )
+                        if _is_fail_hard_mode():
+                            raise RuntimeError(
+                                "Vector index backfill failed while fail-hard mode is enabled"
+                            ) from exc
                 print(f"[vec] Backfilled {len(missing)} embeddings into vec_nodes", file=sys.stderr)
 
     def _get_conn(self) -> sqlite3.Connection:
@@ -4435,8 +4443,16 @@ def create_edge(
                     "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                     (node.id, packed),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "create_edge inserted entity %s but failed vec_nodes upsert: %s",
+                    node.id,
+                    exc,
+                )
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Vector index upsert failed during create_edge while fail-hard mode is enabled"
+                    ) from exc
 
     conn_ctx = nullcontext(_conn) if _conn is not None else graph._get_conn()
     with conn_ctx as conn:
