@@ -101,3 +101,64 @@ def test_fix_vec_nodes_insert_error_respects_fail_hard():
          patch("lib.embeddings.pack_embedding", return_value=b"x"):
         with pytest.raises(RuntimeError, match="vec_nodes update failed"):
             maintenance_ops.apply_review_decisions_from_list(graph, decisions, dry_run=False)
+
+
+def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
+    metrics = maintenance_ops.JanitorMetrics()
+    pending = [{
+        "id": "c1",
+        "node_a_id": "na",
+        "node_b_id": "nb",
+        "text_a": "A",
+        "text_b": "B",
+        "conf_a": 0.9,
+        "conf_b": 0.8,
+        "created_a": "2026-01-01",
+        "created_b": "2026-01-02",
+        "source_a": "user",
+        "source_b": "user",
+        "speaker_a": "alice",
+        "speaker_b": "alice",
+        "access_a": 1,
+        "access_b": 1,
+        "explanation": "conflict",
+    }]
+
+    class _Conn:
+        def __init__(self):
+            self.sql = []
+
+        def execute(self, sql, params=()):
+            self.sql.append(str(sql))
+            if "SELECT COUNT(*) FROM contradictions" in sql:
+                return _DummyResult(rows=[(1,)])
+            return _DummyResult(rowcount=1)
+
+    class _Graph:
+        def __init__(self):
+            self.calls = []
+
+        @contextmanager
+        def _get_conn(self):
+            conn = _Conn()
+            self.calls.append(conn)
+            yield conn
+
+    graph = _Graph()
+    llm_batches = [{
+        "batch_num": 1,
+        "batch": pending,
+        "prompt_tag": "",
+        "response_duration": ('[{"pair": 1, "action": "KEEP_A", "reason": "latest"}]', 0.0),
+    }]
+
+    with patch.object(maintenance_ops, "get_pending_contradictions", return_value=pending), \
+         patch.object(maintenance_ops, "_run_llm_batches_parallel", return_value=llm_batches), \
+         patch.object(maintenance_ops, "resolve_contradiction", side_effect=AssertionError("legacy path called")):
+        out = maintenance_ops.resolve_contradictions_with_opus(graph, metrics, dry_run=False, max_items=1)
+
+    assert out["resolved"] == 1
+    assert len(graph.calls) >= 2  # count query + apply transaction
+    apply_sql = "\n".join(graph.calls[-1].sql)
+    assert "UPDATE nodes SET superseded_by" in apply_sql
+    assert "UPDATE contradictions" in apply_sql
