@@ -2531,7 +2531,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             "dedup_log": "DELETE FROM dedup_log WHERE review_status != 'unreviewed' AND created_at < datetime('now', '-90 days')",
             "health_snapshots": "DELETE FROM health_snapshots WHERE created_at < datetime('now', '-180 days')",
             "embedding_cache": "DELETE FROM embedding_cache WHERE created_at < datetime('now', '-30 days')",
-            "janitor_metadata": "DELETE FROM metadata WHERE key LIKE 'janitor_%' AND updated_at < datetime('now', '-180 days')",
+            "janitor_metadata": "DELETE FROM janitor_metadata WHERE updated_at < datetime('now', '-180 days')",
             "janitor_runs": "DELETE FROM janitor_runs WHERE completed_at < datetime('now', '-180 days')",
         }
         try:

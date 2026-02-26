@@ -198,13 +198,13 @@ def test_datastore_cleanup_lifecycle_runs_with_graph_override(tmp_path):
         CREATE TABLE dedup_log (review_status TEXT, created_at TEXT);
         CREATE TABLE health_snapshots (created_at TEXT);
         CREATE TABLE embedding_cache (created_at TEXT);
-        CREATE TABLE metadata (key TEXT, updated_at TEXT);
+        CREATE TABLE janitor_metadata (key TEXT, value TEXT, updated_at TEXT);
         CREATE TABLE janitor_runs (completed_at TEXT);
         INSERT INTO recall_log VALUES ('2000-01-01');
         INSERT INTO dedup_log VALUES ('done', '2000-01-01');
         INSERT INTO health_snapshots VALUES ('2000-01-01');
         INSERT INTO embedding_cache VALUES ('2000-01-01');
-        INSERT INTO metadata VALUES ('janitor_x', '2000-01-01');
+        INSERT INTO janitor_metadata VALUES ('update_check', '{}', '2000-01-01');
         INSERT INTO janitor_runs VALUES ('2000-01-01');
         """
     )
@@ -220,6 +220,7 @@ def test_datastore_cleanup_lifecycle_runs_with_graph_override(tmp_path):
     )
     assert result.errors == []
     assert result.data["cleanup"]["recall_log"] == 1
+    assert result.data["cleanup"]["janitor_metadata"] == 1
     assert result.data["cleanup"]["janitor_runs"] == 1
 
 
