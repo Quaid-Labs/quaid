@@ -716,7 +716,11 @@ class SessionTimeoutManager {
     try {
       if (!fs.existsSync(this.bufferDir)) return [];
       return fs.readdirSync(this.bufferDir).filter((f) => f.endsWith(".json")).map((f) => path.join(this.bufferDir, f));
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed listing buffer files: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
       return [];
     }
   }
@@ -724,7 +728,11 @@ class SessionTimeoutManager {
     try {
       if (!fs.existsSync(this.bufferDir)) return [];
       return fs.readdirSync(this.bufferDir).filter((f) => /\.json\.processing\.\d+$/.test(f)).map((f) => path.join(this.bufferDir, f));
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed listing buffer claim files: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
       return [];
     }
   }
