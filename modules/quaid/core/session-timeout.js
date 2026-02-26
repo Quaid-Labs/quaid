@@ -6,6 +6,8 @@ function signalPriority(label) {
   if (normalized === "compactionsignal" || normalized === "compaction") return 2;
   return 1;
 }
+const FAIL_HARD_CACHE_MS = 5e3;
+const failHardCache = /* @__PURE__ */ new Map();
 function safeLog(logger, message) {
   try {
     (logger || console.log)(message);
@@ -13,19 +15,36 @@ function safeLog(logger, message) {
   }
 }
 function isFailHardEnabled(workspace) {
+  const now = Date.now();
+  const cached = failHardCache.get(workspace);
+  if (cached && now - cached.checkedAtMs < FAIL_HARD_CACHE_MS) {
+    return cached.value;
+  }
+  const configPath = path.join(workspace, "config", "memory.json");
+  let mtimeMs = -1;
   try {
-    const configPath = path.join(workspace, "config", "memory.json");
+    mtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch {
+  }
+  if (cached && cached.mtimeMs === mtimeMs) {
+    cached.checkedAtMs = now;
+    failHardCache.set(workspace, cached);
+    return cached.value;
+  }
+  let value = true;
+  try {
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
     const retrieval = raw?.retrieval || {};
-    if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
-    if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
+    if (typeof retrieval.fail_hard === "boolean") value = retrieval.fail_hard;
+    if (typeof retrieval.failHard === "boolean") value = retrieval.failHard;
   } catch (err) {
     const msg = String(err?.message || err || "");
     if (!msg.includes("ENOENT")) {
       console.warn(`[quaid][timeout] failed to read failHard config; defaulting to true: ${msg}`);
     }
   }
-  return true;
+  failHardCache.set(workspace, { value, mtimeMs, checkedAtMs: now });
+  return value;
 }
 function messageText(msg) {
   if (!msg) return "";
