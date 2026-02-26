@@ -102,15 +102,20 @@ def assert_multi_user_runtime_ready(*, require_write: bool = False, require_read
     with _hooks_lock:
         resolver = _identity_resolver
         policy = _privacy_policy
+    resolver_owner = resolver.owner if resolver else "none"
+    policy_owner = policy.owner if policy else "none"
+    runtime_state = f"(resolver_owner={resolver_owner}, policy_owner={policy_owner})"
     if require_write and resolver is None:
         raise RuntimeError(
             "multi_user mode is enabled but no identity resolver is registered. "
-            "Register exactly one resolver before write operations."
+            "Register exactly one resolver before write operations. "
+            + runtime_state
         )
     if require_read and policy is None:
         raise RuntimeError(
             "multi_user mode is enabled but no privacy policy is registered. "
-            "Register exactly one privacy policy before recall operations."
+            "Register exactly one privacy policy before recall operations. "
+            + runtime_state
         )
 
 

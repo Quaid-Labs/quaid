@@ -93,9 +93,9 @@ def test_multi_user_runtime_readiness_requires_hooks(monkeypatch):
         "core.runtime.identity_runtime.get_config",
         lambda: SimpleNamespace(identity=SimpleNamespace(mode="multi_user")),
     )
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="resolver_owner=none"):
         identity_runtime.assert_multi_user_runtime_ready(require_write=True)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="policy_owner=none"):
         identity_runtime.assert_multi_user_runtime_ready(require_read=True)
 
 
