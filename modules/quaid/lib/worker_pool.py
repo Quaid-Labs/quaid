@@ -1,11 +1,11 @@
-"""Core-owned shared worker pools for bounded parallel execution."""
+"""Shared worker pools for bounded parallel execution."""
 
 from __future__ import annotations
 
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 
 _POOL_GUARD = threading.Lock()
@@ -85,11 +85,9 @@ def run_callables(
                     else:
                         raise
         except TimeoutError:
-            # Loop handles deadline + cancellation.
             continue
 
         if not progressed:
             break
 
     return out
-

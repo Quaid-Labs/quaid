@@ -63,7 +63,7 @@ from lib.runtime_context import (
     get_install_url,
     get_llm_provider,
 )
-from core.runtime.worker_pool import run_callables
+from lib.worker_pool import run_callables
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
