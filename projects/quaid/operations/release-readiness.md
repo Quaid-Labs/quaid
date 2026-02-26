@@ -19,6 +19,7 @@ Recommended framing:
 - Command API path fully replaces slash-text fallback paths.
 - Janitor modes split (`memory-maintenance` vs `workspace-editing`) to avoid incidental doc rewrites.
 - Provider matrix smoke (`openai` + `anthropic`) is part of release gating.
+- Remaining compatibility shims are removed from active import paths (notably `core/docs/*` shim entrypoints).
 
 ## Known Issues To Publish
 
@@ -26,6 +27,7 @@ Recommended framing:
 - Janitor scope currently includes workspace editing unless explicitly constrained.
 - Non-OpenClaw adapter coverage is still early compared to the OpenClaw path.
 - OpenClaw typed plugin hooks can miss `before_reset` across bundle boundaries (upstream: https://github.com/openclaw/openclaw/issues/23895). Quaid mitigates reset/new extraction via internal workspace command hooks (`command:new`, `command:reset`) while compaction remains on `before_compaction`.
+- Janitor apply-mode E2E can block on approval-policy `ask`; this is expected unless policy is pinned to non-interactive behavior for the run.
 
 ## Notification Posture (Alpha)
 
