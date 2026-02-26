@@ -3669,6 +3669,7 @@ def store(
     knowledge_type: str = "fact",  # fact, belief, preference, experience
     keywords: Optional[str] = None,  # Space-separated derived search terms
     source_type: Optional[str] = None,  # user, assistant, tool, import
+    target_datastore: Optional[str] = None,  # reserved routing seam (no-op in memorydb)
     is_technical: bool = False,  # technical/project-state memory flag
     source_channel: Optional[str] = None,  # conversation channel/source (telegram/discord/etc.)
     source_conversation_id: Optional[str] = None,  # stable thread/group identifier
@@ -3746,6 +3747,7 @@ def store(
         """Persist source/technical metadata on dedup-update paths."""
         if not (
             source_type
+            or target_datastore
             or is_technical
             or source_channel
             or source_conversation_id
@@ -3763,6 +3765,8 @@ def store(
         attrs = existing.attributes if isinstance(existing.attributes, dict) else (existing.attributes or {})
         if source_type and not attrs.get("source_type"):
             attrs["source_type"] = source_type
+        if target_datastore and not attrs.get("target_datastore"):
+            attrs["target_datastore"] = target_datastore
         if speaker and not existing.speaker:
             existing.speaker = speaker
         if is_technical:
@@ -4103,6 +4107,7 @@ def store(
     # Store metadata flags in attributes blob
     if (
         source_type
+        or target_datastore
         or is_technical
         or source_channel
         or source_conversation_id
@@ -4119,6 +4124,8 @@ def store(
         attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
         if source_type:
             attrs["source_type"] = source_type
+        if target_datastore:
+            attrs["target_datastore"] = target_datastore
         if is_technical:
             attrs["is_technical"] = True
         if source_channel:

@@ -420,6 +420,25 @@ class TestExtractFromTranscript:
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
+    def test_target_datastore_is_forwarded(self, mock_store, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "facts": [{"text": "User likes green tea", "category": "fact"}]
+        }), 1.0)
+        mock_store.return_value = {"id": "n1", "status": "created"}
+
+        extract_from_transcript(
+            transcript="User: test\n\nAssistant: ok",
+            owner_id="test",
+            target_datastore="memorydb",
+        )
+
+        kwargs = mock_store.call_args.kwargs
+        assert kwargs["target_datastore"] == "memorydb"
+
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store")
     def test_snippets_written(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
         from ingest.extract import extract_from_transcript
 
