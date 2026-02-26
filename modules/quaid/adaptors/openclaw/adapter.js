@@ -518,11 +518,13 @@ function addMemoryNote(sessionId, text, category) {
     let existing = [];
     try {
       existing = JSON.parse(fs.readFileSync(notesPath, "utf8"));
-    } catch {
+    } catch (err) {
+      console.warn(`[quaid] memory note read failed for ${notesPath}: ${String(err?.message || err)}`);
     }
     existing.push(`[${category}] ${text}`);
     fs.writeFileSync(notesPath, JSON.stringify(existing), { mode: 384 });
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] memory note write failed for session ${sessionId}: ${String(err?.message || err)}`);
   }
 }
 function getAndClearMemoryNotes(sessionId) {
@@ -531,14 +533,16 @@ function getAndClearMemoryNotes(sessionId) {
   const notesPath = getNotesPath(sessionId);
   try {
     onDisk = JSON.parse(fs.readFileSync(notesPath, "utf8"));
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] memory note load failed for ${notesPath}: ${String(err?.message || err)}`);
   }
   const all = Array.from(/* @__PURE__ */ new Set([...inMemory, ...onDisk]));
   _memoryNotes.delete(sessionId);
   _memoryNotesTouchedAt.delete(sessionId);
   try {
     fs.unlinkSync(notesPath);
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] memory note cleanup failed for ${notesPath}: ${String(err?.message || err)}`);
   }
   return all;
 }
