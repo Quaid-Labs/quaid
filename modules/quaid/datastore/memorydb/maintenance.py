@@ -126,9 +126,11 @@ def register_lifecycle_routines(registry, result_factory) -> None:
 
             result.errors.append(f"Unknown memory_graph_maintenance subtask: {subtask}")
         except RuntimeError as exc:
-            result.errors.append(str(exc))
+            result.errors.append(f"{exc.__class__.__name__}: {exc}")
         except Exception as exc:
-            result.errors.append(f"Memory graph maintenance failed: {exc}")
+            result.errors.append(
+                f"Memory graph maintenance failed ({exc.__class__.__name__}): {exc}"
+            )
         return result
 
     registry.register("memory_graph_maintenance", _run_memory_graph_maintenance)
