@@ -13,7 +13,8 @@ from config import get_config
 
 
 IdentityResolver = Callable[[Dict[str, Any]], Dict[str, Any]]
-PrivacyPolicy = Callable[[str, Dict[str, Any], Dict[str, Any]], bool]
+AccessDecision = Dict[str, Any]
+PrivacyPolicy = Callable[[str, Dict[str, Any], Dict[str, Any]], Any]
 
 
 @dataclass
@@ -24,6 +25,7 @@ class _RegisteredHook:
 
 _identity_resolver: Optional[_RegisteredHook] = None
 _privacy_policy: Optional[_RegisteredHook] = None
+_ALLOWED_POLICY_ACTIONS = {"allow", "deny", "allow_redacted"}
 
 
 def register_identity_resolver(owner: str, resolver: IdentityResolver) -> None:
@@ -52,6 +54,20 @@ def clear_registrations() -> None:
     global _identity_resolver, _privacy_policy
     _identity_resolver = None
     _privacy_policy = None
+
+
+def _normalize_policy_decision(raw: Any) -> AccessDecision:
+    """Normalize policy responses while preserving bool backward compatibility."""
+    if isinstance(raw, bool):
+        return {"action": "allow" if raw else "deny"}
+    if not isinstance(raw, dict):
+        return {"action": "deny", "reason": "invalid_policy_decision_type"}
+    action = str(raw.get("action", "")).strip().lower()
+    if action not in _ALLOWED_POLICY_ACTIONS:
+        return {"action": "deny", "reason": "invalid_policy_action"}
+    decision = dict(raw)
+    decision["action"] = action
+    return decision
 
 
 def identity_mode() -> str:
@@ -119,6 +135,8 @@ def filter_recall_results(
         raise ValueError("multi_user recall contract violation: viewer_entity_id is required")
     filtered: List[Dict[str, Any]] = []
     for row in results:
-        if bool(_privacy_policy.fn(viewer, row, context)):
+        decision = _normalize_policy_decision(_privacy_policy.fn(viewer, row, context))
+        action = decision.get("action")
+        if action in {"allow", "allow_redacted"}:
             filtered.append(row)
     return filtered

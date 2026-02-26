@@ -46,6 +46,11 @@ def test_registry_rejects_plugin_id_conflict():
             "plugin_id": "quaid.memorydb",
             "plugin_type": "datastore",
             "module": "datastore.memorydb",
+            "capabilities": {
+                "supports_multi_user": True,
+                "supports_policy_metadata": True,
+                "supports_redaction": True,
+            },
         }
     )
     second = validate_manifest_dict(
@@ -54,6 +59,11 @@ def test_registry_rejects_plugin_id_conflict():
             "plugin_id": "quaid.memorydb",
             "plugin_type": "datastore",
             "module": "datastore.memorydb.v2",
+            "capabilities": {
+                "supports_multi_user": True,
+                "supports_policy_metadata": True,
+                "supports_redaction": True,
+            },
         }
     )
     registry.register(first)
@@ -122,3 +132,15 @@ def test_discover_plugin_manifests_with_allowlist(tmp_path: Path):
     assert not errors
     assert [m.plugin_id for m in manifests] == ["adapter.b"]
 
+
+def test_validate_manifest_requires_datastore_capabilities():
+    with pytest.raises(ValueError, match="missing required capabilities"):
+        validate_manifest_dict(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "quaid.memorydb",
+                "plugin_type": "datastore",
+                "module": "datastore.memorydb",
+                "capabilities": {"supports_multi_user": True},
+            }
+        )

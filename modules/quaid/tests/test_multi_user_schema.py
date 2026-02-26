@@ -20,6 +20,11 @@ def test_memory_graph_initializes_multi_user_foundation_schema(tmp_path):
         assert "entities" in tables
         assert "sources" in tables
         assert "source_participants" in tables
+        assert "identity_credentials" in tables
+        assert "identity_sessions" in tables
+        assert "delegation_grants" in tables
+        assert "trust_assertions" in tables
+        assert "policy_audit_log" in tables
 
         node_cols = _table_columns(conn, "nodes")
         assert "speaker_entity_id" in node_cols
@@ -33,4 +38,3 @@ def test_memory_graph_initializes_multi_user_foundation_schema(tmp_path):
         assert "platform" in alias_cols
         assert "source_id" in alias_cols
         assert "handle" in alias_cols
-

@@ -18,6 +18,11 @@ from lib.runtime_context import get_workspace_dir
 _PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _PLUGIN_TYPES = {"adapter", "ingest", "datastore"}
 _PLUGIN_API_VERSION = 1
+_DATASTORE_REQUIRED_CAPABILITIES = (
+    "supports_multi_user",
+    "supports_policy_metadata",
+    "supports_redaction",
+)
 
 
 @dataclass(frozen=True)
@@ -121,6 +126,17 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
         raise ValueError("Manifest missing module")
     if not isinstance(capabilities, dict):
         raise ValueError("Manifest capabilities must be an object")
+    if plugin_type == "datastore":
+        missing = [k for k in _DATASTORE_REQUIRED_CAPABILITIES if k not in capabilities]
+        if missing:
+            raise ValueError(
+                "Datastore manifest missing required capabilities: " + ", ".join(missing)
+            )
+        invalid = [k for k in _DATASTORE_REQUIRED_CAPABILITIES if not isinstance(capabilities.get(k), bool)]
+        if invalid:
+            raise ValueError(
+                "Datastore manifest capability flags must be booleans: " + ", ".join(invalid)
+            )
     if not isinstance(dependencies, list):
         raise ValueError("Manifest dependencies must be an array")
 
@@ -201,4 +217,3 @@ def discover_plugin_manifests(
                     raise ValueError(msg) from exc
                 errors.append(msg)
     return manifests, errors
-
