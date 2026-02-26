@@ -2807,6 +2807,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             };
           } catch (err: unknown) {
             console.error("[quaid] memory_recall error:", err);
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             return {
               content: [{ type: "text", text: `Error recalling memories: ${String(err)}` }],
               details: { error: String(err) },
