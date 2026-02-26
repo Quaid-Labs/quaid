@@ -621,9 +621,17 @@ export class SessionTimeoutManager {
 
     try {
       const raw = fs.readFileSync(this.workerLockPath, "utf8");
-      const existing = JSON.parse(raw) as { pid?: number; started_at?: string };
+      const existing = JSON.parse(raw) as { pid?: number; token?: string; started_at?: string };
       const existingPid = Number(existing?.pid || 0);
       if (this.isPidAlive(existingPid)) return false;
+      const verifyRaw = fs.readFileSync(this.workerLockPath, "utf8");
+      const verify = JSON.parse(verifyRaw) as { pid?: number; token?: string };
+      if (
+        Number(verify?.pid || 0) !== existingPid
+        || String(verify?.token || "") !== String(existing?.token || "")
+      ) {
+        return false;
+      }
       try { fs.unlinkSync(this.workerLockPath); } catch {}
       fs.writeFileSync(this.workerLockPath, JSON.stringify(payload), { mode: 0o600, flag: "wx" });
       this.ownsWorkerLock = true;

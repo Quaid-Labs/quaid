@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -46,6 +46,42 @@ describe('SessionTimeoutManager scheduling', () => {
     const afterRelease = managerB.startWorker(30)
     expect(afterRelease).toBe(true)
     managerB.stopWorker()
+  })
+
+  it('does not remove worker lock when stale check sees lock content change', () => {
+    const workspace = makeWorkspace('quaid-timeout-lock-race-')
+    const managerA = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    const managerB = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    expect(managerA.startWorker(30)).toBe(true)
+    const lockPath = (managerA as any).workerLockPath as string
+    const originalRaw = fs.readFileSync(lockPath, 'utf8')
+
+    vi.spyOn(managerB as any, 'isPidAlive').mockImplementation(() => {
+      fs.writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: 99999999, token: 'different-token', started_at: new Date().toISOString() }),
+        'utf8',
+      )
+      return false
+    })
+
+    const acquired = (managerB as any).tryAcquireWorkerLock()
+    expect(acquired).toBe(false)
+    expect(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token).toBe('different-token')
+    managerA.stopWorker()
   })
 
   it('coalesces duplicate extraction signals per session and promotes reset over compaction', () => {
