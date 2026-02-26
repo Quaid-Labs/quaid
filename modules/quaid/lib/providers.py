@@ -202,9 +202,15 @@ class AnthropicLLMProvider(LLMProvider):
                                         headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode())
+                if not isinstance(data, dict):
+                    raise RuntimeError(
+                        f"Anthropic API returned non-object JSON for model={model}: {type(data).__name__}"
+                    )
                 duration = time.time() - start_time
 
                 usage = data.get("usage", {})
+                if not isinstance(usage, dict):
+                    usage = {}
                 in_tok = usage.get("input_tokens", 0)
                 out_tok = usage.get("output_tokens", 0)
                 cache_read = usage.get("cache_read_input_tokens", 0)
@@ -212,8 +218,15 @@ class AnthropicLLMProvider(LLMProvider):
                 truncated = data.get("stop_reason", "") == "max_tokens"
 
                 content_blocks = data.get("content", [])
-                text_parts = [b["text"] for b in content_blocks
-                              if b.get("type") == "text"]
+                if not isinstance(content_blocks, list):
+                    raise RuntimeError(
+                        f"Anthropic API returned invalid content payload for model={model}"
+                    )
+                text_parts = [
+                    b["text"]
+                    for b in content_blocks
+                    if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+                ]
                 text = "\n".join(text_parts).strip()
 
                 return LLMResult(
@@ -370,13 +383,34 @@ class ClaudeCodeLLMProvider(LLMProvider):
                     f"Claude Code returned non-JSON output for tier={model_tier}, "
                     f"model={model_alias}: {result.stdout[:300]}"
                 )
-            text = data.get("result", "").strip()
+            if not isinstance(data, dict):
+                raise RuntimeError(
+                    f"Claude Code returned non-object JSON for tier={model_tier}, "
+                    f"model={model_alias}"
+                )
+            raw_text = data.get("result")
+            if raw_text is None:
+                raise RuntimeError(
+                    f"Claude Code response missing result for tier={model_tier}, "
+                    f"model={model_alias}"
+                )
+            if not isinstance(raw_text, str):
+                raise RuntimeError(
+                    f"Claude Code returned non-string result for tier={model_tier}, "
+                    f"model={model_alias}"
+                )
+            text = raw_text.strip()
 
             # Collect per-model usage
             model_usage: Dict[str, Dict[str, int]] = {}
             total_in = 0
             total_out = 0
-            for _m, u in data.get("modelUsage", {}).items():
+            raw_model_usage = data.get("modelUsage", {})
+            if not isinstance(raw_model_usage, dict):
+                raw_model_usage = {}
+            for _m, u in raw_model_usage.items():
+                if not isinstance(u, dict):
+                    continue
                 in_tok = (u.get("inputTokens", 0)
                           + u.get("cacheReadInputTokens", 0)
                           + u.get("cacheCreationInputTokens", 0))
