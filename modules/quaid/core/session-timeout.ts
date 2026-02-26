@@ -648,7 +648,14 @@ export class SessionTimeoutManager {
       ) {
         return false;
       }
-      try { fs.unlinkSync(this.workerLockPath); } catch {}
+      try {
+        fs.unlinkSync(this.workerLockPath);
+      } catch (unlinkErr: unknown) {
+        safeLog(this.logger, `[quaid][timeout] failed removing stale worker lock ${this.workerLockPath}: ${String((unlinkErr as Error)?.message || unlinkErr)}`);
+        if (this.failHard && (unlinkErr as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          throw unlinkErr;
+        }
+      }
       fs.writeFileSync(this.workerLockPath, JSON.stringify(payload), { mode: 0o600, flag: "wx" });
       this.ownsWorkerLock = true;
       this.writeQuaidLog("worker_lock_stale_recovered", undefined, { stale_pid: existingPid || undefined });
@@ -772,7 +779,12 @@ export class SessionTimeoutManager {
           continue;
         }
         fs.renameSync(lockedPath, originalPath);
-      } catch {}
+      } catch (err: unknown) {
+        safeLog(this.logger, `[quaid][timeout] failed recovering orphaned signal claim ${lockedPath}: ${String((err as Error)?.message || err)}`);
+        if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          throw err;
+        }
+      }
     }
   }
 
@@ -823,7 +835,14 @@ export class SessionTimeoutManager {
   }
 
   private clearBuffer(sessionId: string): void {
-    try { fs.unlinkSync(this.bufferPath(sessionId)); } catch {}
+    try {
+      fs.unlinkSync(this.bufferPath(sessionId));
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed clearing buffer session=${sessionId}: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
   }
 
   private listBufferFiles(): string[] {
