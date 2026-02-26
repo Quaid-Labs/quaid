@@ -77,6 +77,33 @@ def test_run_llm_batches_parallel_preserves_order(monkeypatch):
     assert [o["value"] for o in out] == ["a", "b", "c", "d"]
 
 
+def test_run_llm_batches_parallel_preserves_exception_type(monkeypatch):
+    monkeypatch.setattr(
+        ops,
+        "_cfg",
+        SimpleNamespace(
+            core=SimpleNamespace(
+                parallel=SimpleNamespace(enabled=True, llm_workers=4, task_workers={})
+            )
+        ),
+    )
+    batches = ["ok", "boom"]
+
+    class RetryableBatchError(RuntimeError):
+        pass
+
+    def runner(batch_num, batch):
+        if batch == "boom":
+            raise RetryableBatchError("temporary failure")
+        return {"batch_num": batch_num, "value": batch}
+
+    out = _run_llm_batches_parallel(batches, "review_pending", runner)
+    assert out[0]["value"] == "ok"
+    assert out[1]["batch_num"] == 2
+    assert out[1]["error_type"] == "RetryableBatchError"
+    assert "temporary failure" in out[1]["error"]
+
+
 def test_janitor_metrics_thread_safe_counters():
     metrics = JanitorMetrics()
     metrics.start_task("parallel")

@@ -332,7 +332,13 @@ def _run_llm_batches_parallel(
     )
     for idx, item in enumerate(results, 1):
         if isinstance(item, Exception):
-            out[idx - 1] = {"batch_num": idx, "error": str(item), "response": None, "duration": 0.0}
+            out[idx - 1] = {
+                "batch_num": idx,
+                "error": str(item),
+                "error_type": item.__class__.__name__,
+                "response": None,
+                "duration": 0.0,
+            }
         else:
             out[idx - 1] = item
     return [item if item is not None else {"batch_num": i + 1, "error": "missing-result"} for i, item in enumerate(out)]
