@@ -14,5 +14,5 @@ def create_adapter(kind: str) -> "QuaidAdapter":
         from adaptors.openclaw.adapter import OpenClawAdapter
         return OpenClawAdapter()
     raise RuntimeError(
-        f"Unsupported adapter type: {kind!r}. Expected 'standalone' or 'openclaw'."
+        f"Unsupported adapter type: {kind!r}. Expected 'openclaw'."
     )

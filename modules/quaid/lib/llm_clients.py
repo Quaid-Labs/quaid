@@ -42,10 +42,10 @@ def _load_model_config():
     if _models_loaded:
         return
     try:
-        from config import get_config, resolve_model
+        from config import get_config
         cfg = get_config()
         _fast_reasoning_model = cfg.models.fast_reasoning
-        _deep_reasoning_model = resolve_model(cfg.models.deep_reasoning)
+        _deep_reasoning_model = cfg.models.deep_reasoning
         _models_loaded = True  # Only after success — allows retry on transient failures
     except ImportError:
         pass  # Config not available (test environment) — defaults set by provider
