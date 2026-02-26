@@ -28,20 +28,6 @@ from lib.runtime_context import get_workspace_dir, get_bootstrap_markdown_globs
 def _workspace_dir() -> Path:
     return get_workspace_dir()
 
-# Configure logging — deferred to avoid module-load side effects
-def _setup_logging():
-    log_dir = _workspace_dir() / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "workspace-audit.log"
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-
 logger = logging.getLogger(__name__)
 
 def _backup_dir() -> Path:
