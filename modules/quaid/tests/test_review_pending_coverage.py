@@ -111,3 +111,16 @@ def test_review_pending_memories_accepts_wrapped_decisions_payload(tmp_path):
         pending = conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'pending'").fetchone()[0]
     assert approved == 2
     assert pending == 0
+
+
+def test_review_pending_memories_aborts_on_connection_errors(tmp_path):
+    graph = _make_graph(tmp_path)
+    _add_pending_fact(graph, "My favorite editor is vim")
+    metrics = JanitorMetrics()
+
+    with patch("datastore.memorydb.maintenance_ops.call_llm", side_effect=ConnectionError("gateway unavailable")):
+        with pytest.raises(RuntimeError, match="gateway unavailable"):
+            review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
+    with graph._get_conn() as conn:
+        pending = conn.execute("SELECT COUNT(*) FROM nodes WHERE status = 'pending'").fetchone()[0]
+    assert pending == 1

@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { execFileSync, execSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -534,7 +535,7 @@ function extractSessionId(messages, ctx) {
   } else {
     firstTimestamp = Date.now().toString();
   }
-  const timestampHash = require("crypto").createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
+  const timestampHash = createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
   return timestampHash;
 }
 function getAllConversationMessages(messages) {
