@@ -114,7 +114,7 @@ function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<s
     return _cachedDatastoreStats;
   }
   try {
-    const output = execSync(`python3 "${PYTHON_SCRIPT}" stats`, {
+    const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
       encoding: "utf-8",
       timeout: 5000,
       env: buildPythonEnv(),
@@ -2305,7 +2305,7 @@ const quaidPlugin = {
     if (!fs.existsSync(DB_PATH)) {
       console.log("[quaid] Database not found, initializing datastore...");
       try {
-        execSync(`python3 "${PYTHON_SCRIPT}" init`, {
+        execFileSync("python3", [PYTHON_SCRIPT, "init"], {
           timeout: 20_000,
           env: buildPythonEnv(),
         });
