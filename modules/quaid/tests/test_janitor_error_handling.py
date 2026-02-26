@@ -59,3 +59,23 @@ def test_benchmark_gate_invalid_inputs_degrade_when_fail_hard_disabled(monkeypat
     )
     assert out is True
     assert metrics.has_errors
+
+
+def test_run_tests_uses_configurable_timeout(monkeypatch):
+    captured = {}
+
+    def _fake_run(*_args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return SimpleNamespace(
+            returncode=0,
+            stdout="Total: 1\nPassed: 1\nFailed: 0\n",
+            stderr="",
+        )
+
+    monkeypatch.setenv("QUAID_JANITOR_TEST_TIMEOUT_S", "42")
+    monkeypatch.setattr(janitor.subprocess, "run", _fake_run)
+
+    metrics = JanitorMetrics()
+    out = janitor.run_tests(metrics)
+    assert captured["timeout"] == 42
+    assert out["success"] is True
