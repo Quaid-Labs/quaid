@@ -6,14 +6,18 @@ datastore, and ingestor code does not import adapter internals directly.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 from lib.adapter import get_adapter
+from lib.fail_policy import is_fail_hard_enabled
 
 if TYPE_CHECKING:
     from lib.adapter import ChannelInfo, QuaidAdapter
     from lib.providers import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 
 def get_adapter_instance() -> "QuaidAdapter":
@@ -43,7 +47,10 @@ def get_install_url() -> str:
 def get_bootstrap_markdown_globs() -> List[str]:
     try:
         return get_adapter().get_bootstrap_markdown_globs()
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to load bootstrap markdown globs") from exc
+        logger.warning("Failed loading bootstrap markdown globs; using empty fallback: %s", exc)
         return []
 
 
