@@ -543,11 +543,6 @@ def validate_llm_output(parsed: object, schema_class: type, list_mode: bool = Tr
             results.append(obj)
         except (TypeError, ValueError) as e:
             print(f"[llm_clients] Validation warning: {e} for item {item}", file=sys.stderr)
-            if is_fail_hard_enabled():
-                raise RuntimeError(
-                    "LLM output validation failed while failHard is enabled "
-                    f"(schema={schema_class.__name__} item={item})"
-                ) from e
             continue
 
     return results
