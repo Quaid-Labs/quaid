@@ -182,9 +182,13 @@ def memory_recall(
     technical_scope = (technical_scope or "any").strip().lower()
     if technical_scope not in {"personal", "technical", "any"}:
         technical_scope = "any"
+    try:
+        parsed_min_similarity = float(min_similarity) if min_similarity is not None else 0.0
+    except (TypeError, ValueError):
+        raise ValueError(f"invalid min_similarity: {min_similarity!r}")
     has_advanced = (
         bool(debug)
-        or (min_similarity is not None and float(min_similarity) > 0)
+        or (min_similarity is not None and parsed_min_similarity > 0)
         or not bool(use_routing)
         or not bool(use_aliases)
         or not bool(use_intent)
@@ -222,7 +226,7 @@ def memory_recall(
         owner_id=OWNER_ID,
         limit=limit,
         technical_scope=technical_scope,
-        min_similarity=(min_similarity if min_similarity and min_similarity > 0 else None),
+        min_similarity=(parsed_min_similarity if parsed_min_similarity > 0 else None),
         debug=bool(debug),
         use_routing=bool(use_routing),
         use_aliases=bool(use_aliases),
@@ -269,11 +273,18 @@ def memory_write(
         text = str(payload.get("text") or "").strip()
         if not text:
             return {"error": "payload.text is required for vector/store_fact"}
+        raw_confidence = payload.get("confidence")
+        if raw_confidence is None:
+            raw_confidence = payload.get("extraction_confidence")
+        try:
+            confidence = float(raw_confidence if raw_confidence is not None else 0.5)
+        except (TypeError, ValueError):
+            return {"error": f"invalid confidence: {raw_confidence!r}"}
         return store(
             text=text,
             owner_id=OWNER_ID,
             category=str(payload.get("category") or "fact"),
-            confidence=float(payload.get("confidence") or payload.get("extraction_confidence") or 0.5),
+            confidence=confidence,
             knowledge_type=str(payload.get("knowledge_type") or "fact"),
             source=str(payload.get("source") or "mcp"),
             source_type=str(payload.get("source_type") or "import"),

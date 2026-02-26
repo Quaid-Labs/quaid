@@ -303,6 +303,11 @@ class TestMemoryRecall:
                 participant_entity_ids_json='{"not":"array"}',
             )
 
+    def test_recall_invalid_min_similarity_raises(self, server):
+        mod, _mock_api, *_ = server
+        with pytest.raises(ValueError, match="invalid min_similarity"):
+            mod.memory_recall("test", min_similarity="high")
+
 
 # ---------------------------------------------------------------------------
 # Tests — memory_search
@@ -346,6 +351,23 @@ class TestMemorySearch:
         assert kwargs["source_author_id"] == "<redacted>"
         assert kwargs["subject_entity_id"] == "user:owner"
         assert kwargs["participant_entity_ids"] == ["user:owner", "agent:bert"]
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_write
+# ---------------------------------------------------------------------------
+
+class TestMemoryWrite:
+    def test_memory_write_invalid_confidence_returns_error(self, server):
+        mod, _mock_api, *_ = server
+        payload = {
+            "text": "User likes coffee",
+            "confidence": "very high",
+        }
+        result = mod.memory_write("vector", "store_fact", json.dumps(payload))
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "invalid confidence" in result["error"]
 
 
 # ---------------------------------------------------------------------------
