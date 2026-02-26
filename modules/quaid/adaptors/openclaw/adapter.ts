@@ -3569,7 +3569,12 @@ notify_memory_extraction(
           console.log('[quaid] Recovery scan already ran recently, skipping');
           return;
         }
-      } catch {} // Flag doesn't exist — first run
+      } catch (err: unknown) {
+        const msg = String((err as Error)?.message || err || "");
+        if (!msg.includes("ENOENT")) {
+          console.warn(`[quaid] Recovery scan flag read failed: ${msg}`);
+        }
+      } // Flag missing is expected on first run.
 
       console.log('[quaid] Running recovery scan for unextracted sessions...');
 

@@ -3126,7 +3126,11 @@ notify_memory_extraction(
           console.log("[quaid] Recovery scan already ran recently, skipping");
           return;
         }
-      } catch {
+      } catch (err) {
+        const msg = String(err?.message || err || "");
+        if (!msg.includes("ENOENT")) {
+          console.warn(`[quaid] Recovery scan flag read failed: ${msg}`);
+        }
       }
       console.log("[quaid] Running recovery scan for unextracted sessions...");
       const sessionsDir = path.join(os.homedir(), ".openclaw", "sessions");
