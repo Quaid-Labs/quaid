@@ -19,6 +19,7 @@ Concrete providers shipped:
 import abc
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -30,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from lib.fail_policy import is_fail_hard_enabled
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -226,7 +228,7 @@ class AnthropicLLMProvider(LLMProvider):
                 )
         except Exception as e:
             duration = time.time() - start_time
-            print(f"[providers] Anthropic API error: {e}", file=sys.stderr)
+            logger.error("Anthropic API error: %s", e)
             raise
 
     def get_profiles(self):
@@ -394,12 +396,11 @@ class ClaudeCodeLLMProvider(LLMProvider):
             )
         except subprocess.TimeoutExpired:
             duration = time.time() - start_time
-            print(f"[providers] Claude Code timed out after {duration:.1f}s",
-                  file=sys.stderr)
+            logger.error("Claude Code timed out after %.1fs", duration)
             raise
         except Exception as e:
             duration = time.time() - start_time
-            print(f"[providers] Claude Code error: {e}", file=sys.stderr)
+            logger.error("Claude Code error: %s", e)
             raise
 
     def get_profiles(self):
@@ -540,11 +541,17 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                 if embeddings and embeddings[0]:
                     return embeddings[0]
         except Exception as e:
-            print(
-                f"[embeddings] provider=ollama model={self._model} url={self._url} "
-                f"text_len={len(str(text or ''))} error={e}",
-                file=sys.stderr,
+            logger.error(
+                "Ollama embeddings call failed provider=ollama model=%s url=%s text_len=%d error=%s",
+                self._model,
+                self._url,
+                len(str(text or "")),
+                e,
             )
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Ollama embeddings provider failed while failHard is enabled: model={self._model}"
+                ) from e
         return None
 
     def dimension(self):

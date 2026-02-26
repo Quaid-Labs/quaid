@@ -416,7 +416,8 @@ function getUsersConfig() {
     const configPath = path.join(WORKSPACE, "config/memory.json");
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
     _usersConfig = raw.users || { defaultOwner: "quaid", identities: {} };
-  } catch {
+  } catch (err) {
+    console.error("[quaid] failed to load users config from config/memory.json:", err?.message || String(err));
     _usersConfig = { defaultOwner: "quaid", identities: {} };
   }
   return _usersConfig;

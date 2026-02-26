@@ -335,9 +335,17 @@ class TestOllamaEmbeddingsProvider:
 
     def test_embed_returns_none_on_error(self):
         p = OllamaEmbeddingsProvider()
-        with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")):
+        with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")), \
+             patch("lib.providers.is_fail_hard_enabled", return_value=False):
             result = p.embed("test text")
             assert result is None
+
+    def test_embed_raises_on_error_when_failhard_enabled(self):
+        p = OllamaEmbeddingsProvider()
+        with patch("lib.providers.urllib.request.urlopen", side_effect=ConnectionError("refused")), \
+             patch("lib.providers.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="failHard is enabled"):
+                p.embed("test text")
 
     def test_embed_returns_none_on_empty_response(self):
         p = OllamaEmbeddingsProvider()

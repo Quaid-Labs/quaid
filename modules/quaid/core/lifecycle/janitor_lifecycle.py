@@ -8,6 +8,7 @@ logic and register their routines here.
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 import threading
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from core.runtime.parallel_runtime import ResourceLockRegistry, get_parallel_config
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -333,7 +335,7 @@ def build_default_registry() -> LifecycleRegistry:
                 continue
             module_specs.append((name, []))
     except Exception:
-        pass
+        logger.warning("Failed to parse lifecycle.modules config; using default lifecycle registry.", exc_info=True)
 
     # Preserve order, prevent duplicate module registrations in one build pass.
     seen_modules = set()

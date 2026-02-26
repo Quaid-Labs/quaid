@@ -209,10 +209,23 @@ class TestCallLlmProvider:
         llm_clients._usage_by_model = {"claude-opus-4-6": {"input": 1_000_000, "output": 1_000_000}}
         llm_clients._usage_input_tokens = 1_000_000
         llm_clients._usage_output_tokens = 1_000_000
-        result, duration = llm_clients.call_llm("system", "user")
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=False):
+            result, duration = llm_clients.call_llm("system", "user")
         assert result is None
         assert duration == 0.0
         # Clean up
+        reset_token_usage()
+
+    def test_cost_cap_raises_when_failhard_enabled(self, test_adapter, monkeypatch):
+        """Cost cap violations should raise when failHard is enabled."""
+        import core.llm.clients as llm_clients
+        monkeypatch.setenv("JANITOR_COST_CAP", "0.001")
+        llm_clients._usage_by_model = {"claude-opus-4-6": {"input": 1_000_000, "output": 1_000_000}}
+        llm_clients._usage_input_tokens = 1_000_000
+        llm_clients._usage_output_tokens = 1_000_000
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="cost cap exceeded"):
+                llm_clients.call_llm("system", "user")
         reset_token_usage()
 
     def test_model_tier_routing(self, test_adapter):
