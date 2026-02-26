@@ -275,6 +275,12 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
+        if not isinstance(data, dict):
+            janitor_logger.warn(
+                "update_check_invalid_payload_type",
+                payload_type=type(data).__name__,
+            )
+            return None
         latest_tag = data.get("tag_name", "").lstrip("v")
         html_url = data.get("html_url", f"https://github.com/{REPO}/releases")
     except urllib.error.URLError as e:
