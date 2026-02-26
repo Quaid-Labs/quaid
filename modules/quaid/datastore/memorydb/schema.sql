@@ -295,6 +295,72 @@ CREATE INDEX IF NOT EXISTS idx_identity_handles_lookup
 CREATE INDEX IF NOT EXISTS idx_identity_handles_entity
     ON identity_handles(canonical_entity_id);
 
+-- Forward-looking identity auth/delegation scaffolding.
+CREATE TABLE IF NOT EXISTS identity_credentials (
+    credential_id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    credential_type TEXT NOT NULL DEFAULT 'api_token'
+        CHECK(credential_type IN ('api_token', 'oauth', 'pubkey', 'password', 'external')),
+    key_id TEXT,
+    metadata TEXT DEFAULT '{}',
+    revoked INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_identity_credentials_entity
+    ON identity_credentials(entity_id, revoked);
+
+CREATE TABLE IF NOT EXISTS identity_sessions (
+    session_auth_id TEXT PRIMARY KEY,
+    source_id TEXT REFERENCES sources(source_id) ON DELETE SET NULL,
+    entity_id TEXT REFERENCES entities(entity_id) ON DELETE SET NULL,
+    authn_method TEXT NOT NULL DEFAULT 'unknown',
+    trust_level INTEGER NOT NULL DEFAULT 0,
+    issued_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_identity_sessions_source_entity
+    ON identity_sessions(source_id, entity_id, revoked_at);
+
+CREATE TABLE IF NOT EXISTS delegation_grants (
+    grant_id TEXT PRIMARY KEY,
+    grantor_entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    grantee_entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    scope TEXT NOT NULL DEFAULT 'none',
+    constraints TEXT DEFAULT '{}',
+    issued_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_delegation_grants_grantee
+    ON delegation_grants(grantee_entity_id, revoked_at);
+
+CREATE TABLE IF NOT EXISTS trust_assertions (
+    assertion_id TEXT PRIMARY KEY,
+    source_entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    subject_entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    assertion_type TEXT NOT NULL DEFAULT 'identity_link'
+        CHECK(assertion_type IN ('identity_link', 'trust_delegate', 'ownership')),
+    confidence REAL DEFAULT 0.5,
+    evidence TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_trust_assertions_subject
+    ON trust_assertions(subject_entity_id, assertion_type);
+
+CREATE TABLE IF NOT EXISTS policy_audit_log (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT DEFAULT (datetime('now')),
+    policy_name TEXT NOT NULL,
+    decision_action TEXT NOT NULL,
+    viewer_entity_id TEXT,
+    row_id TEXT,
+    context TEXT DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_policy_audit_log_when
+    ON policy_audit_log(occurred_at);
+
 -- Doc registry - managed by docs_registry.py ensure_table()
 -- Table definition lives in docs_registry.py to avoid schema drift.
 -- See docs_registry.py DocsRegistry.ensure_table() for the canonical DDL.
@@ -348,7 +414,7 @@ CREATE TABLE IF NOT EXISTS doc_update_log (
 
 -- Initialize metadata
 INSERT OR IGNORE INTO metadata (key, value) VALUES
-    ('schema_version', '5'),
+    ('schema_version', '6'),
     ('embedding_model', 'qwen3-embedding:8b'),
     ('embedding_dim', '4096'),
     ('last_seed', NULL);

@@ -52,6 +52,40 @@ def test_filter_recall_results_applies_registered_policy(monkeypatch):
     assert [r["id"] for r in out] == ["1"]
 
 
+def test_filter_recall_results_accepts_structured_policy_decisions(monkeypatch):
+    monkeypatch.setattr(
+        "core.runtime.identity_runtime.get_config",
+        lambda: SimpleNamespace(identity=SimpleNamespace(mode="multi_user")),
+    )
+    identity_runtime.register_privacy_policy(
+        "memorydb",
+        lambda _viewer, row, _ctx: {"action": "allow_redacted"} if row["id"] == "1" else {"action": "deny"},
+    )
+    out = identity_runtime.filter_recall_results(
+        viewer_entity_id="user:a",
+        results=[{"id": "1"}, {"id": "2"}],
+        context={},
+    )
+    assert [r["id"] for r in out] == ["1"]
+
+
+def test_filter_recall_results_denies_invalid_policy_decisions(monkeypatch):
+    monkeypatch.setattr(
+        "core.runtime.identity_runtime.get_config",
+        lambda: SimpleNamespace(identity=SimpleNamespace(mode="multi_user")),
+    )
+    identity_runtime.register_privacy_policy(
+        "memorydb",
+        lambda _viewer, _row, _ctx: "allow",
+    )
+    out = identity_runtime.filter_recall_results(
+        viewer_entity_id="user:a",
+        results=[{"id": "1"}],
+        context={},
+    )
+    assert out == []
+
+
 def test_multi_user_runtime_readiness_requires_hooks(monkeypatch):
     monkeypatch.setattr(
         "core.runtime.identity_runtime.get_config",
