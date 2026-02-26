@@ -134,7 +134,11 @@ function getMemoryConfig() {
   let mtimeMs = -1;
   try {
     mtimeMs = fs.statSync(configPath).mtimeMs;
-  } catch {
+  } catch (err) {
+    const msg = String(err?.message || err || "");
+    if (!msg.includes("ENOENT")) {
+      console.warn(`[quaid] memory config stat failed: ${msg}`);
+    }
   }
   if (_memoryConfig && mtimeMs >= 0 && _memoryConfigMtimeMs === mtimeMs) {
     return _memoryConfig;
@@ -259,7 +263,8 @@ function getGatewayDefaultProvider() {
         }
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] gateway default provider read failed from openclaw.json: ${String(err?.message || err)}`);
   }
   try {
     const profilesPath = path.join(os.homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
@@ -282,7 +287,8 @@ function getGatewayDefaultProvider() {
         }
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] gateway provider fallback read failed from auth-profiles.json: ${String(err?.message || err)}`);
   }
   return "";
 }
