@@ -72,6 +72,7 @@ from lib.runtime_context import (
     get_install_url,
     get_llm_provider,
 )
+from lib.fail_policy import is_fail_hard_enabled
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
@@ -104,7 +105,10 @@ def _default_owner_id() -> str:
     """Resolve default owner from config with safe fallback."""
     try:
         return _cfg.users.default_owner
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Unable to resolve janitor default owner from config") from exc
+        janitor_logger.warn("default_owner_fallback", error=str(exc))
         return "default"
 
 
@@ -429,7 +433,10 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 data = {"version": 1, "requests": []}
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to parse pending approval requests JSON") from exc
+        janitor_logger.warn("pending_approvals_parse_failed", error=str(exc))
         data = {"version": 1, "requests": []}
 
     reqs = data.get("requests", [])
@@ -475,11 +482,25 @@ def _benchmark_review_gate_triggered(applied_changes: Dict[str, Any], metrics: J
         return False
     try:
         coverage_pct = float(applied_changes.get("review_coverage_ratio_pct", 100) or 0)
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Invalid review_coverage_ratio_pct in benchmark gate input") from exc
+        janitor_logger.warn(
+            "benchmark_review_gate_invalid_coverage_pct",
+            raw_value=str(applied_changes.get("review_coverage_ratio_pct")),
+            error=str(exc),
+        )
         coverage_pct = 0.0
     try:
         carryover = int(applied_changes.get("review_carryover", 0) or 0)
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Invalid review_carryover in benchmark gate input") from exc
+        janitor_logger.warn(
+            "benchmark_review_gate_invalid_carryover",
+            raw_value=str(applied_changes.get("review_carryover")),
+            error=str(exc),
+        )
         carryover = 0
     if coverage_pct >= 100.0 and carryover <= 0:
         return False
