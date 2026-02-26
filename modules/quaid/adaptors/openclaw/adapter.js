@@ -459,6 +459,9 @@ const datastoreBridge = createDatastoreBridge(
   })
 );
 const _memoryNotes = /* @__PURE__ */ new Map();
+const _memoryNotesTouchedAt = /* @__PURE__ */ new Map();
+const MAX_MEMORY_NOTE_SESSIONS = 200;
+const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const NOTES_DIR = QUAID_NOTES_DIR;
 function getNotesPath(sessionId) {
   return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
@@ -467,10 +470,22 @@ function getInjectionLogPath(sessionId) {
   return path.join(QUAID_INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
 }
 function addMemoryNote(sessionId, text, category) {
+  _memoryNotesTouchedAt.set(sessionId, Date.now());
+  if (_memoryNotes.size >= MAX_MEMORY_NOTE_SESSIONS && !_memoryNotes.has(sessionId)) {
+    const oldest = Array.from(_memoryNotesTouchedAt.entries()).sort((a, b) => a[1] - b[1])[0]?.[0];
+    if (oldest) {
+      _memoryNotes.delete(oldest);
+      _memoryNotesTouchedAt.delete(oldest);
+    }
+  }
   if (!_memoryNotes.has(sessionId)) {
     _memoryNotes.set(sessionId, []);
   }
-  _memoryNotes.get(sessionId).push(`[${category}] ${text}`);
+  const noteList = _memoryNotes.get(sessionId);
+  noteList.push(`[${category}] ${text}`);
+  if (noteList.length > MAX_MEMORY_NOTES_PER_SESSION) {
+    noteList.splice(0, noteList.length - MAX_MEMORY_NOTES_PER_SESSION);
+  }
   try {
     const notesPath = getNotesPath(sessionId);
     let existing = [];
@@ -493,6 +508,7 @@ function getAndClearMemoryNotes(sessionId) {
   }
   const all = Array.from(/* @__PURE__ */ new Set([...inMemory, ...onDisk]));
   _memoryNotes.delete(sessionId);
+  _memoryNotesTouchedAt.delete(sessionId);
   try {
     fs.unlinkSync(notesPath);
   } catch {
