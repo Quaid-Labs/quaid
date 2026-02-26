@@ -61,6 +61,16 @@ let _cachedDatastoreStats = null;
 let _datastoreStatsTimestamp = 0;
 let _memoryConfigErrorLogged = false;
 let _memoryConfigMtimeMs = -1;
+function _envTimeoutMs(name, fallbackMs) {
+  const raw = Number(process.env[name] || "");
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return fallbackMs;
+  }
+  return Math.floor(raw);
+}
+const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOUT_MS", 3e5);
+const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 3e5);
+const QUICK_PROJECT_SUMMARY_TIMEOUT_MS = _envTimeoutMs("QUAID_PROJECT_SUMMARY_TIMEOUT_MS", 6e4);
 function buildPythonEnv(extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
@@ -1069,7 +1079,7 @@ async function callExtractPipeline(opts) {
       args.slice(1),
       "extract",
       {},
-      3e5
+      EXTRACT_PIPELINE_TIMEOUT_MS
     );
     const parsed = JSON.parse(output || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -1114,7 +1124,7 @@ async function emitEvent(name, payload, dispatch = "auto") {
   const out = await _spawnWithTimeout(EVENTS_SCRIPT, "emit", args.slice(1), "events", {
     QUAID_HOME: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE
-  }, 3e5);
+  }, EVENTS_EMIT_TIMEOUT_MS);
   let parsed = null;
   try {
     parsed = JSON.parse(out || "{}");
@@ -1316,7 +1326,8 @@ async function getQuickProjectSummary(messages) {
 
 ${transcript.slice(0, 4e3)}`,
       "fast",
-      300
+      300,
+      QUICK_PROJECT_SUMMARY_TIMEOUT_MS
     );
     const output = (llm.text || "").trim();
     const jsonMatch = output.match(/\{[\s\S]*\}/);
