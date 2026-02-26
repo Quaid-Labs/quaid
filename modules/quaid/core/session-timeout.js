@@ -10,7 +10,16 @@ const FAIL_HARD_CACHE_MS = 5e3;
 const failHardCache = /* @__PURE__ */ new Map();
 function safeLog(logger, message) {
   try {
-    (logger || console.log)(message);
+    if (logger) {
+      logger(message);
+      return;
+    }
+    const looksLikeFailure = /\b(fail|error|warn|timeout|exception)\b/i.test(String(message || ""));
+    if (looksLikeFailure) {
+      console.warn(message);
+    } else {
+      console.log(message);
+    }
   } catch {
   }
 }

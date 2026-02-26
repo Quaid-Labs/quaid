@@ -48,7 +48,18 @@ const FAIL_HARD_CACHE_MS = 5000;
 const failHardCache = new Map<string, FailHardCacheEntry>();
 
 function safeLog(logger: TimeoutLogger | undefined, message: string): void {
-  try { (logger || console.log)(message); } catch {}
+  try {
+    if (logger) {
+      logger(message);
+      return;
+    }
+    const looksLikeFailure = /\b(fail|error|warn|timeout|exception)\b/i.test(String(message || ""));
+    if (looksLikeFailure) {
+      console.warn(message);
+    } else {
+      console.log(message);
+    }
+  } catch {}
 }
 
 function isFailHardEnabled(workspace: string): boolean {
