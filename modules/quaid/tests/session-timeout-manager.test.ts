@@ -232,6 +232,34 @@ describe('SessionTimeoutManager scheduling', () => {
     expect(calls[0].messages).toHaveLength(1)
   })
 
+  it('enforces extraction timeout guard for queued extraction work', async () => {
+    vi.useFakeTimers()
+    try {
+      const workspace = makeWorkspace('quaid-timeout-extract-guard-')
+      writeFailHardConfig(workspace, false)
+      process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS = '10'
+      const manager = new SessionTimeoutManager({
+        workspace,
+        timeoutMinutes: 10,
+        extract: async () => await new Promise<void>(() => {}),
+        isBootstrapOnly: () => false,
+        logger: () => {},
+      })
+      ;(manager as any).failHard = true
+
+      manager.onAgentEnd([
+        { role: 'user', content: 'remember this', timestamp: Date.now() },
+      ], 'session-timeout-guard')
+      const pending = manager.extractSessionFromLog('session-timeout-guard', 'Reset')
+      const assertion = expect(pending).rejects.toThrow(/timed out/i)
+      await vi.advanceTimersByTimeAsync(20)
+      await assertion
+    } finally {
+      delete process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS
+      vi.useRealTimers()
+    }
+  })
+
   it('serializes concurrent extractSessionFromLog calls to avoid double extraction', async () => {
     const workspace = makeWorkspace('quaid-timeout-serialize-')
     writeFailHardConfig(workspace, false)
