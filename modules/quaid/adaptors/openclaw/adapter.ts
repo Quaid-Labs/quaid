@@ -1554,6 +1554,7 @@ async function recall(
     // Use search-graph-aware for enhanced graph traversal, or basic search
     if (!expandGraph) {
       // Basic search without graph expansion — accepts --current-session-id, --compaction-time
+      args.push("--json");
       if (currentSessionId) {
         args.push("--current-session-id", currentSessionId);
       }
@@ -1567,29 +1568,41 @@ async function recall(
         args.push("--date-to", dateTo);
       }
       const output = await datastoreBridge.search(args);
-      const results: MemoryResult[] = [];
-
-      for (const line of output.split("\n")) {
-        // Format: "[0.60] [fact](2026-03-01)[flags][C:0.8] text |ID:id|T:created_at|VF:valid_from|VU:valid_until|P:privacy|O:owner_id|ST:source_type"
-        const match = line.match(/\[(\d+\.\d+)\]\s+\[(\w+)\](?:\([^)]*\))?(?:\[[^\]]*\])*\[C:([\d.]+)\]\s*(.+?)(?:\s*\|ID:([^|]+))?(?:\|T:([^|]*))?(?:\|VF:([^|]*))?(?:\|VU:([^|]*))?(?:\|P:([^|]*))?(?:\|O:([^|]*))?(?:\|ST:(.*))?$/);
-        if (match) {
+      try {
+        const parsed = JSON.parse(output);
+        if (!Array.isArray(parsed)) {
+          throw new Error("search output JSON must be an array");
+        }
+        const results: MemoryResult[] = [];
+        for (const row of parsed) {
+          if (!row || typeof row !== "object") continue;
+          const text = typeof row.text === "string" ? row.text.trim() : "";
+          const category = typeof row.category === "string" ? row.category : "fact";
+          const similarity = typeof row.similarity === "number" ? row.similarity : Number(row.similarity ?? 0);
+          if (!text || !Number.isFinite(similarity)) continue;
+          const extractionConfidenceRaw = row.extraction_confidence ?? row.extractionConfidence;
+          const extractionConfidence = typeof extractionConfidenceRaw === "number"
+            ? extractionConfidenceRaw
+            : Number(extractionConfidenceRaw ?? 0.5);
           results.push({
-            text: match[4].trim(),
-            category: match[2],
-            similarity: parseFloat(match[1]),
-            extractionConfidence: parseFloat(match[3]),
-            id: match[5]?.trim(),
-            createdAt: match[6]?.trim() || undefined,
-            validFrom: match[7]?.trim() || undefined,
-            validUntil: match[8]?.trim() || undefined,
-            privacy: match[9]?.trim() || "shared",
-            ownerId: match[10]?.trim() || undefined,
-            sourceType: match[11]?.trim() || undefined,
+            text,
+            category,
+            similarity,
+            extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
+            id: typeof row.id === "string" ? row.id : undefined,
+            createdAt: typeof row.created_at === "string" ? row.created_at : undefined,
+            validFrom: typeof row.valid_from === "string" ? row.valid_from : undefined,
+            validUntil: typeof row.valid_until === "string" ? row.valid_until : undefined,
+            privacy: typeof row.privacy === "string" ? row.privacy : "shared",
+            ownerId: typeof row.owner_id === "string" ? row.owner_id : undefined,
+            sourceType: typeof row.source_type === "string" ? row.source_type : undefined,
             via: "vector",
           });
         }
+        return results.slice(0, limit);
+      } catch (err) {
+        throw new Error(`Failed to parse datastore search JSON output: ${(err as Error).message}`);
       }
-      return results.slice(0, limit);
     }
 
     // Use graph-aware search with JSON output — accepts --depth

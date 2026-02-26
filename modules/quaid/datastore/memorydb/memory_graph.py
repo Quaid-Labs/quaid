@@ -4891,6 +4891,7 @@ if __name__ == "__main__":
         search_p.add_argument("--session-id", default=None, help="Filter results to a specific session ID")
         search_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
         search_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
+        search_p.add_argument("--json", action="store_true", help="JSON output")
 
         # --- search-all ---
         search_all_p = subparsers.add_parser("search-all", help="Unified memory search (datastore only)")
@@ -5102,10 +5103,29 @@ if __name__ == "__main__":
             if args.archive:
                 from lib.archive import search_archive as _search_archive
                 archive_results = _search_archive(query, limit=args.limit)
-                for r in archive_results:
-                    print(f"[archive] [{r.get('type', '?')}] {r.get('name', '')} |ID:{r.get('id', '')}|archived:{r.get('archived_at', '')}|reason:{r.get('archive_reason', '')}")
-                if not archive_results:
-                    print("No archived memories found")
+                if args.json:
+                    out = []
+                    for r in archive_results:
+                        out.append({
+                            "text": r.get("name", ""),
+                            "category": r.get("type", "?"),
+                            "similarity": 1.0,
+                            "id": r.get("id", ""),
+                            "created_at": r.get("archived_at", ""),
+                            "valid_from": "",
+                            "valid_until": "",
+                            "privacy": r.get("privacy", "shared"),
+                            "owner_id": r.get("owner_id", ""),
+                            "source_type": r.get("source_type", "archive"),
+                            "via": "archive",
+                            "archive_reason": r.get("archive_reason", ""),
+                        })
+                    print(json.dumps(out))
+                else:
+                    for r in archive_results:
+                        print(f"[archive] [{r.get('type', '?')}] {r.get('name', '')} |ID:{r.get('id', '')}|archived:{r.get('archived_at', '')}|reason:{r.get('archive_reason', '')}")
+                    if not archive_results:
+                        print("No archived memories found")
             elif getattr(args, 'session_id', None):
                 # Session-filtered search: return facts from a specific session
                 mg = MemoryGraph()
@@ -5116,36 +5136,54 @@ if __name__ == "__main__":
                         "ORDER BY created_at DESC LIMIT ?",
                         (args.session_id, args.owner or _get_memory_config().users.default_owner, int(args.limit))
                     ).fetchall()
-                for r in rows:
-                    conf = r['extraction_confidence'] or 0.5
-                    created = r['created_at'] or ''
-                    date_str = f"({created.split('T')[0]})" if created else ""
-                    print(f"[1.00] [{r['type']}]{date_str}[C:{conf:.1f}] {r['content'] or r['name']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
-                if not rows:
-                    print("No facts found for this session")
+                if args.json:
+                    out = []
+                    for r in rows:
+                        out.append({
+                            "text": r["content"] or r["name"],
+                            "category": r["type"],
+                            "similarity": 1.0,
+                            "id": r["id"],
+                            "created_at": r["created_at"] or "",
+                            "valid_from": "",
+                            "valid_until": "",
+                            "privacy": r["privacy"] or "shared",
+                            "owner_id": r["owner_id"] or "",
+                            "source_type": "",
+                        })
+                    print(json.dumps(out))
+                else:
+                    for r in rows:
+                        conf = r['extraction_confidence'] or 0.5
+                        created = r['created_at'] or ''
+                        date_str = f"({created.split('T')[0]})" if created else ""
+                        print(f"[1.00] [{r['type']}]{date_str}[C:{conf:.1f}] {r['content'] or r['name']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
+                    if not rows:
+                        print("No facts found for this session")
             else:
                 results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, current_session_id=args.current_session_id, compaction_time=args.compaction_time, date_from=getattr(args, 'date_from', None), date_to=getattr(args, 'date_to', None), debug=getattr(args, 'debug', False), technical_scope=getattr(args, 'technical_scope', 'any'))
-                
-
-                # Output format: [similarity] [category](date)[flags][C:confidence] text |ID:id|T:created_at|P:privacy|O:owner_id
-                for r in results:
-                    flags = []
-                    if r.get('verified'): flags.append('V')
-                    if r.get('pinned'): flags.append('P')
-                    if r.get('valid_until'): flags.append('superseded')
-                    flag_str = f"[{''.join(flags)}]" if flags else ""
-                    conf = r.get('extraction_confidence', 0.5)
-                    created = r.get('created_at', '')
-                    date_str = f"({created.split('T')[0]})" if created else ""
-                    privacy = r.get('privacy', 'shared')
-                    owner = r.get('owner_id', '')
-                    valid_from = r.get('valid_from', '')
-                    valid_until = r.get('valid_until', '')
-                    source_type = r.get('source_type', '') or ''
-                    print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner}|ST:{source_type}")
-                    if r.get('_debug'):
-                        d = r['_debug']
-                        print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+                if args.json:
+                    print(json.dumps(results))
+                else:
+                    # Output format: [similarity] [category](date)[flags][C:confidence] text |ID:id|T:created_at|P:privacy|O:owner_id
+                    for r in results:
+                        flags = []
+                        if r.get('verified'): flags.append('V')
+                        if r.get('pinned'): flags.append('P')
+                        if r.get('valid_until'): flags.append('superseded')
+                        flag_str = f"[{''.join(flags)}]" if flags else ""
+                        conf = r.get('extraction_confidence', 0.5)
+                        created = r.get('created_at', '')
+                        date_str = f"({created.split('T')[0]})" if created else ""
+                        privacy = r.get('privacy', 'shared')
+                        owner = r.get('owner_id', '')
+                        valid_from = r.get('valid_from', '')
+                        valid_until = r.get('valid_until', '')
+                        source_type = r.get('source_type', '') or ''
+                        print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner}|ST:{source_type}")
+                        if r.get('_debug'):
+                            d = r['_debug']
+                            print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
 
         elif args.command == "store":
             try:
