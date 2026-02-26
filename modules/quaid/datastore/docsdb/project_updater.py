@@ -485,24 +485,28 @@ def _notify_user(project_name: str, updates_applied: List[str], trigger: str) ->
                 "kind": "project_doc_update",
                 "priority": "normal",
             }
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(events_py),
-                    "emit",
-                    "--name",
-                    "notification.delayed",
-                    "--payload",
-                    json.dumps(payload, ensure_ascii=False),
-                    "--source",
-                    payload_source,
-                    "--dispatch",
-                    "queued",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            try:
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(events_py),
+                        "emit",
+                        "--name",
+                        "notification.delayed",
+                        "--payload",
+                        json.dumps(payload, ensure_ascii=False),
+                        "--source",
+                        payload_source,
+                        "--dispatch",
+                        "queued",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=15,
+                )
+            except subprocess.TimeoutExpired:
+                print("  Notification timed out while queueing delayed event")
     except Exception as e:
         print(f"  Notification failed: {e}")
 

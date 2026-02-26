@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
@@ -2510,18 +2511,24 @@ Respond with a JSON array only, no markdown fencing:
         )
 
     def _invoke_review_batch(batch_num: int, payload: Dict[str, Any]) -> Dict[str, Any]:
-        response_text, duration = call_llm(
-            system_prompt=system_prompt,
-            user_message=payload["user_message"],
-            model=model,
-            max_tokens=payload["batch_max_tokens"],
-        )
+        try:
+            response_text, duration = call_llm(
+                system_prompt=system_prompt,
+                user_message=payload["user_message"],
+                model=model,
+                max_tokens=payload["batch_max_tokens"],
+            )
+            error: Optional[Exception] = None
+        except Exception as exc:
+            response_text, duration = None, 0.0
+            error = exc
         return {
             "batch_num": batch_num,
             "batch_rows": payload["batch_rows"],
             "batch_data": payload["batch_data"],
             "response_text": response_text,
             "duration": duration,
+            "error": error,
         }
 
     llm_results = _run_llm_batches_parallel(batch_requests, "review_pending", _invoke_review_batch)
@@ -2531,8 +2538,11 @@ Respond with a JSON array only, no markdown fencing:
         batch_data = result.get("batch_data") or []
         response_text = result.get("response_text")
         duration = float(result.get("duration", 0.0) or 0.0)
+        error = result.get("error")
 
         try:
+            if error is not None:
+                raise error
             if metrics:
                 metrics.add_llm_call(duration)
 
@@ -2610,12 +2620,21 @@ Respond with a JSON array only, no markdown fencing:
             totals["merged"] += batch_result["merged"]
 
         except RuntimeError as e:
-            # API key issues — abort all review batches
+            # Fatal review-path issue — abort all review batches
             print(f"    API key error: {e}")
             if metrics:
                 metrics.add_error(f"Review aborted: {e}")
             raise
         except Exception as e:
+            fatal_transport_error = isinstance(
+                e,
+                (ConnectionError, TimeoutError, urllib.error.URLError, urllib.error.HTTPError),
+            )
+            if fatal_transport_error:
+                print(f"    Review transport error (aborting): {e}")
+                if metrics:
+                    metrics.add_error(f"Review aborted: {e}")
+                raise RuntimeError(str(e)) from e
             print(f"    Batch {batch_num} failed: {e}")
             if metrics:
                 _record_llm_batch_issue(metrics, f"Review batch {batch_num}: {e}")

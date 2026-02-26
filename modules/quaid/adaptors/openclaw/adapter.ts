@@ -8,6 +8,7 @@
 import type { ClawdbotPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { execFileSync, execSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -607,7 +608,7 @@ function extractSessionId(messages: any[], ctx?: any): string {
   }
   
   // Create session identifier: timestamp hash only (channel agnostic)
-  const timestampHash = require('crypto').createHash('md5').update(firstTimestamp).digest('hex').substring(0, 12);
+  const timestampHash = createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
   return timestampHash;
 }
 
