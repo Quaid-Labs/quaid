@@ -847,7 +847,12 @@ export class SessionTimeoutManager {
           continue;
         }
         fs.renameSync(lockedPath, originalPath);
-      } catch {}
+      } catch (err: unknown) {
+        safeLog(this.logger, `[quaid][timeout] failed recovering orphaned buffer claim ${lockedPath}: ${String((err as Error)?.message || err)}`);
+        if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          throw err;
+        }
+      }
     }
   }
 
@@ -865,11 +870,23 @@ export class SessionTimeoutManager {
     try {
       if (!fs.existsSync(lockedPath)) return;
       if (fs.existsSync(originalPath)) {
-        try { fs.unlinkSync(lockedPath); } catch {}
+        try {
+          fs.unlinkSync(lockedPath);
+        } catch (unlinkErr: unknown) {
+          safeLog(this.logger, `[quaid][timeout] failed removing buffer claim ${lockedPath}: ${String((unlinkErr as Error)?.message || unlinkErr)}`);
+          if (this.failHard && (unlinkErr as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            throw unlinkErr;
+          }
+        }
         return;
       }
       fs.renameSync(lockedPath, originalPath);
-    } catch {}
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed releasing buffer claim ${lockedPath}: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
   }
 
   private sessionMessagePath(sessionId: string): string {
