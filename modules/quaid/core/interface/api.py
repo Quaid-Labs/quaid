@@ -12,6 +12,7 @@ Usage:
     results = search("dark mode", owner_id="quaid")
 """
 
+import logging
 from typing import Optional, List, Dict, Any
 
 from core.lifecycle.datastore_runtime import DocsRAG
@@ -19,6 +20,7 @@ from core.services.memory_service import get_memory_service
 from lib.runtime_context import get_workspace_dir
 
 _memory = get_memory_service()
+logger = logging.getLogger(__name__)
 
 
 def store(
@@ -298,8 +300,8 @@ def projects_search_docs(
                 md_path = get_workspace_dir() / defn.home_dir / "PROJECT.md"
                 if md_path.exists():
                     result["project_md"] = md_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("projects_search_docs failed to load PROJECT.md for project=%s: %s", project, exc)
     return result
 
 

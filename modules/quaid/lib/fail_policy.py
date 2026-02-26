@@ -18,12 +18,9 @@ def is_fail_hard_enabled() -> bool:
         retrieval = getattr(get_config(), "retrieval", None)
         if retrieval is None:
             return True
-        # Dataclass field is fail_hard; keep alias tolerance for robustness.
+        # Dataclass field is fail_hard; config normalization handles aliases.
         if hasattr(retrieval, "fail_hard"):
             return bool(getattr(retrieval, "fail_hard"))
-        if hasattr(retrieval, "failHard"):
-            return bool(getattr(retrieval, "failHard"))
     except Exception:
         return True
     return True
-

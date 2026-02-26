@@ -6,12 +6,14 @@ Falls back to sensible defaults if config is missing.
 """
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from lib.runtime_context import get_workspace_dir
+logger = logging.getLogger(__name__)
 
 
 def _default_deep_reasoning_model_classes() -> Dict[str, str]:
@@ -811,8 +813,8 @@ def _load_config_inner() -> MemoryConfig:
                         description=_row["description"] or "",
                         state=_row["state"],
                     )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to load project definitions from datastore; falling back to JSON config: %s", exc)
     if not project_definitions:
         # Fallback: load from JSON if DB not available (fresh install, tests)
         for proj_name, proj_data in raw_projects.get('definitions', {}).items():
