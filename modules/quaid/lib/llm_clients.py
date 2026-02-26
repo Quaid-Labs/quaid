@@ -57,7 +57,7 @@ def _load_model_config():
         except ImportError:
             pass  # Config not available (test environment) — defaults set by provider
         except Exception as e:
-            print(f"[llm_clients] FATAL: Config loaded but model resolution failed: {e}", file=sys.stderr)
+            logger.error("[llm_clients] FATAL: Config loaded but model resolution failed: %s", e)
             raise
 
 
@@ -298,7 +298,11 @@ def call_llm(system_prompt: str, user_message: str,
     _COST_CAP = float(os.environ.get("JANITOR_COST_CAP", "5.0"))
     current_cost = estimate_cost()
     if current_cost > _COST_CAP:
-        print(f"[llm_clients] COST CAP EXCEEDED: ${current_cost:.4f} > ${_COST_CAP:.2f}, aborting call", file=sys.stderr)
+        logger.warning(
+            "[llm_clients] COST CAP EXCEEDED: $%.4f > $%.2f, aborting call",
+            current_cost,
+            _COST_CAP,
+        )
         if is_fail_hard_enabled():
             raise RuntimeError(
                 f"LLM cost cap exceeded while failHard is enabled: ${current_cost:.4f} > ${_COST_CAP:.2f}"
@@ -308,7 +312,11 @@ def call_llm(system_prompt: str, user_message: str,
     # Token budget check
     if is_token_budget_exhausted():
         budget_used, budget_total = get_token_budget_usage()
-        print(f"[llm_clients] TOKEN BUDGET EXHAUSTED: {budget_used:,} >= {budget_total:,}, aborting call", file=sys.stderr)
+        logger.warning(
+            "[llm_clients] TOKEN BUDGET EXHAUSTED: %s >= %s, aborting call",
+            f"{budget_used:,}",
+            f"{budget_total:,}",
+        )
         if is_fail_hard_enabled():
             raise RuntimeError(
                 f"LLM token budget exhausted while failHard is enabled: {budget_used:,} >= {budget_total:,}"
@@ -344,7 +352,10 @@ def call_llm(system_prompt: str, user_message: str,
                 result = llm.llm_call(messages, resolved_tier, max_tokens, timeout_for_attempt)
             _track_usage(result)
             if result.truncated:
-                print(f"[llm_clients] WARNING: Response truncated (max_tokens) for model={result.model}", file=sys.stderr)
+                logger.warning(
+                    "[llm_clients] Response truncated (max_tokens) for model=%s",
+                    result.model,
+                )
             if result.text is None:
                 raise RuntimeError(
                     "No response from provider "
@@ -370,15 +381,19 @@ def call_llm(system_prompt: str, user_message: str,
                     if delay <= 0:
                         break
                 code = getattr(e, 'code', type(e).__name__)
-                print(f"[llm_clients] Retryable error ({code}), "
-                      f"attempt {attempt + 1}/{retries + 1}, retrying in {delay:.1f}s",
-                      file=sys.stderr)
+                logger.warning(
+                    "[llm_clients] Retryable error (%s), attempt %s/%s, retrying in %.1fs",
+                    code,
+                    attempt + 1,
+                    retries + 1,
+                    delay,
+                )
                 time.sleep(delay)
                 continue
             break
 
     duration = time.time() - start_time
-    print(f"[llm_clients] LLM error: {last_error}", file=sys.stderr)
+    logger.error("[llm_clients] LLM error: %s", last_error)
     if is_fail_hard_enabled():
         err_type = type(last_error).__name__ if last_error is not None else "UnknownError"
         raise RuntimeError(
@@ -386,9 +401,8 @@ def call_llm(system_prompt: str, user_message: str,
             f"(provider={provider_name}, tier={resolved_tier}, model={model}, "
             f"error_type={err_type}, error={last_error})."
         ) from last_error
-    print(
-        "[llm_clients][FALLBACK] Returning None after LLM failure because failHard is disabled.",
-        file=sys.stderr,
+    logger.warning(
+        "[llm_clients][FALLBACK] Returning None after LLM failure because failHard is disabled."
     )
     return None, duration
 
