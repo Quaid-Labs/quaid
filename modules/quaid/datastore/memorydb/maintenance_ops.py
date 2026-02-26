@@ -67,6 +67,7 @@ from lib.runtime_context import (
 )
 from lib.worker_pool import run_callables
 from lib.fail_policy import is_fail_hard_enabled
+from core.runtime.logger import janitor_logger
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +275,37 @@ def is_benchmark_mode() -> bool:
 def _is_benchmark_mode() -> bool:
     """Backward-compatible alias for older imports."""
     return is_benchmark_mode()
+
+
+def _diag_logging_enabled() -> bool:
+    """Enable verbose janitor diagnostics only in benchmark/debug lanes."""
+    debug_flag = str(os.environ.get("QUAID_JANITOR_DEBUG_DIAGNOSTICS", "")).strip().lower()
+    return _is_benchmark_mode() or debug_flag in {"1", "true", "yes", "on"}
+
+
+def _diag_truncate(value: Any, limit: int = 220) -> str:
+    txt = str(value or "")
+    if len(txt) <= limit:
+        return txt
+    return txt[:limit] + "..."
+
+
+def _diag_log_decision(event: str, **payload: Any) -> None:
+    """Best-effort structured logging for per-fact janitor decisions."""
+    if not _diag_logging_enabled():
+        return
+    safe_payload = {}
+    for k, v in payload.items():
+        if isinstance(v, str):
+            safe_payload[k] = _diag_truncate(v)
+        elif isinstance(v, list):
+            safe_payload[k] = [_diag_truncate(x, 120) for x in v[:20]]
+        else:
+            safe_payload[k] = v
+    try:
+        janitor_logger.info(event, **safe_payload)
+    except Exception:
+        pass
 
 
 def _record_llm_batch_issue(metrics: "JanitorMetrics", message: str) -> None:
@@ -2078,12 +2110,25 @@ JSON array only:"""
         metrics.add_llm_call(float(duration or 0.0))
         if not response:
             _record_llm_batch_issue(metrics, f"Dedup review batch {batch_num} failed")
+            _diag_log_decision(
+                "dedup_review_batch_failed",
+                batch_num=batch_num,
+                total_batches=total_batches,
+                reason="empty_response",
+            )
             print(f"    Batch {batch_num}/{total_batches}: FAILED (no response)")
             continue
 
         parsed = parse_json_response(response)
         if not isinstance(parsed, list):
             _record_llm_batch_issue(metrics, f"Dedup review batch {batch_num}: invalid JSON")
+            _diag_log_decision(
+                "dedup_review_batch_failed",
+                batch_num=batch_num,
+                total_batches=total_batches,
+                reason="invalid_json",
+                response_preview=(response or "")[:220],
+            )
             print(f"    Batch {batch_num}/{total_batches}: FAILED (invalid JSON)")
             continue
 
@@ -2097,6 +2142,16 @@ JSON array only:"""
             entry = batch[idx - 1]
             action = item.get("action", "").upper()
             reason = dedup_prompt_tag + item.get("reason", "")
+            _diag_log_decision(
+                "dedup_review_decision",
+                dry_run=bool(dry_run),
+                log_id=entry.get("id"),
+                action=action,
+                reason=reason,
+                similarity=float(entry.get("similarity", 0.0) or 0.0),
+                new_text=entry.get("new_text", ""),
+                existing_text=entry.get("existing_text", ""),
+            )
 
             if action == "CONFIRM":
                 if not dry_run:
@@ -2742,6 +2797,11 @@ Respond with a JSON array only, no markdown fencing:
 
             if not response_text:
                 print(f"    API returned empty response, skipping batch")
+                _diag_log_decision(
+                    "review_batch_failed",
+                    batch_num=batch_num,
+                    reason="empty_response",
+                )
                 if metrics:
                     _record_llm_batch_issue(metrics, f"Review batch {batch_num}: empty API response")
                 continue
@@ -2755,11 +2815,24 @@ Respond with a JSON array only, no markdown fencing:
                         "benchmark-mode fallback applying KEEP to all batch ids"
                     )
                     print(f"    WARNING: {fallback_msg}")
+                    _diag_log_decision(
+                        "review_batch_fallback_keep",
+                        batch_num=batch_num,
+                        reason="invalid_json",
+                        response_preview=(response_text or "")[:220],
+                        fallback_ids=[str(r["id"]) for r in batch_rows],
+                    )
                     if metrics:
                         metrics.add_warning(fallback_msg)
                     decisions = _synthesize_keep_decisions([str(r["id"]) for r in batch_rows])
                 else:
                     print(f"    Failed to parse response as JSON array, skipping batch")
+                    _diag_log_decision(
+                        "review_batch_failed",
+                        batch_num=batch_num,
+                        reason="invalid_json",
+                        response_preview=(response_text or "")[:220],
+                    )
                     if metrics:
                         _record_llm_batch_issue(metrics, f"Review batch {batch_num}: invalid JSON response")
                     continue
@@ -2775,6 +2848,12 @@ Respond with a JSON array only, no markdown fencing:
                     f"retrying missing IDs"
                 )
                 print(f"    WARNING: {msg}")
+                _diag_log_decision(
+                    "review_batch_coverage_retry",
+                    batch_num=batch_num,
+                    batch_size=len(batch_ids),
+                    missing_ids=missing,
+                )
                 if metrics:
                     metrics.add_warning(msg)
 
@@ -2816,6 +2895,12 @@ Respond with a JSON array only, no markdown fencing:
                         f"benchmark-mode fallback applying KEEP for missing_ids={missing}"
                     )
                     print(f"    WARNING: {msg}")
+                    _diag_log_decision(
+                        "review_batch_fallback_keep",
+                        batch_num=batch_num,
+                        reason="coverage_missing_after_retry",
+                        missing_ids=missing,
+                    )
                     if metrics:
                         metrics.add_warning(msg)
                     decisions.extend(_synthesize_keep_decisions(missing))
@@ -2901,11 +2986,19 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
 
     for decision in decisions:
         action = decision.get("action", "").upper()
+        reason = str(decision.get("reason", "") or "")
 
         # Handle MERGE
         if action == "MERGE" and "merge_ids" in decision and "merged_text" in decision:
             merge_ids = decision["merge_ids"]
             merged_text = decision["merged_text"]
+            _diag_log_decision(
+                "review_decision_merge",
+                dry_run=bool(dry_run),
+                merge_ids=merge_ids,
+                merged_text=merged_text,
+                reason=reason,
+            )
             if dry_run:
                 print(f"    Would MERGE {len(merge_ids)} memories -> {merged_text[:50]}...")
             else:
@@ -2925,9 +3018,35 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
 
         memory_id = decision.get("id")
         if not memory_id:
+            _diag_log_decision(
+                "review_decision_skipped",
+                dry_run=bool(dry_run),
+                action=action,
+                reason=reason,
+                payload=decision,
+                skip_reason="missing_id",
+            )
             continue
 
+        current_text = ""
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                "SELECT name, status FROM nodes WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+            current_status = row["status"] if row else "missing"
+            if row and row["name"]:
+                current_text = str(row["name"])
+
         if action == "DELETE":
+            _diag_log_decision(
+                "review_decision_delete",
+                dry_run=bool(dry_run),
+                memory_id=memory_id,
+                current_status=current_status,
+                current_text=current_text,
+                reason=reason,
+            )
             if dry_run:
                 print(f"    Would DELETE: {memory_id}")
             else:
@@ -2953,6 +3072,16 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
         elif action == "FIX" and "new_text" in decision:
             new_text = decision["new_text"]
             new_edges = decision.get("edges", [])
+            _diag_log_decision(
+                "review_decision_fix",
+                dry_run=bool(dry_run),
+                memory_id=memory_id,
+                current_status=current_status,
+                current_text=current_text,
+                new_text=new_text,
+                reason=reason,
+                new_edges_count=len(new_edges or []),
+            )
             if dry_run:
                 print(f"    Would FIX: {memory_id} -> {new_text[:50]}...")
                 if new_edges:
@@ -3009,6 +3138,14 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
             fixed += 1
 
         elif action == "KEEP":
+            _diag_log_decision(
+                "review_decision_keep",
+                dry_run=bool(dry_run),
+                memory_id=memory_id,
+                current_status=current_status,
+                current_text=current_text,
+                reason=reason,
+            )
             if not dry_run:
                 with graph._get_conn() as conn:
                     conn.execute(
@@ -3016,6 +3153,18 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                         (memory_id,)
                     )
             kept += 1
+        else:
+            _diag_log_decision(
+                "review_decision_skipped",
+                dry_run=bool(dry_run),
+                memory_id=memory_id,
+                current_status=current_status,
+                current_text=current_text,
+                action=action,
+                reason=reason,
+                payload=decision,
+                skip_reason="unknown_action",
+            )
 
     return {"kept": kept, "deleted": deleted, "fixed": fixed, "merged": merged}
 
