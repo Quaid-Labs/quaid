@@ -37,16 +37,16 @@ Quaid exposes its knowledge layer through three interfaces: an **MCP server** (w
           v                  v                agent turn)
     +----------+      +----------+               |
     |MCP Server|      | extract  |       +-------+-------+
-    | (stdio)  |      | .py CLI  |       | adapters/     |
+    | (stdio)  |      | .py CLI  |       | adaptors/     |
     |          |      |          |       | openclaw/     |
-    |          |      |          |       | adapters/openclaw/index.ts      |
+    |          |      |          |       | index.ts      |
     +----+-----+      +----+-----+       | (TS plugin)   |
          |                 |             +-------+-------+
          +--------+--------+--------------------+
                   |
            +------v------+           +----------+
            |  Python API  |           | Retrieval|
-           | (api.py)     |           | Pipeline |
+           | (core/interface/api.py)  | Pipeline |
            +--------------+           +----------+
                   |                        |
                   +------ SQLite DB -------+
@@ -80,7 +80,7 @@ Read-path routing (`total_recall`) is paired with a canonical write-path in core
 
 Quaid also exposes a queue-backed event bus for adapter-independent orchestration:
 
-- Event queue and handlers are implemented in `plugins/quaid/events.py`.
+- Event queue and handlers are implemented in `modules/quaid/core/runtime/events.py`.
 - Adapter lifecycle hooks emit events like `session.new`, `session.reset`, and `session.compaction`.
 - CLI and MCP both support emitting/listing/processing events so orchestration can be tested and automated outside gateway hooks.
 - Event capabilities are discoverable via a registry (`event capabilities`, `memory_event_capabilities`) so orchestration can adapt strategy based on what this runtime supports.
@@ -104,6 +104,7 @@ Conversation messages
         +---> duplicates merged, contradictions resolved
         +---> snippets folded into SOUL.md / USER.md
         +---> journal distilled into core markdown
+        +---> datastore-owned maintenance routines executed via core lifecycle registry
         |
   [Retrieval]  Per-turn: query -> route datastores -> search -> rerank -> inject
         |
@@ -119,9 +120,9 @@ Conversation messages
 
 Extraction can be triggered from any of Quaid's three interfaces:
 
-- **OpenClaw plugin** (`adapters/openclaw/index.ts`): Two gateway hooks -- `before_compaction` (context being compacted) and `before_reset` (session ending). Both call `extractMemoriesFromMessages()`. Programmatic compaction is available via gateway RPC `sessions.compact`.
-- **MCP server** (`mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
-- **CLI** (`extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
+- **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/adapter.ts`): Compaction extraction uses gateway hook `before_compaction` (context being compacted). Reset/new extraction is routed via OpenClaw internal workspace hooks (`command:new`, `command:reset`) that queue `ResetSignal` for Quaid processing, due to upstream typed-hook boundary issues for `before_reset` (https://github.com/openclaw/openclaw/issues/23895). Programmatic compaction is available via gateway RPC `sessions.compact`.
+- **MCP server** (`modules/quaid/core/interface/mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
+- **CLI** (`modules/quaid/ingest/extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
 
 All three paths converge on the same extraction logic and produce identical results.
 
@@ -135,11 +136,12 @@ All three paths converge on the same extraction logic and produce identical resu
    - **Soul snippets**: Bullet-point observations for core markdown files
    - **Journal entries**: Reflective diary paragraphs
 
-3. **Fact storage** -- Each fact is stored via `memory_graph.store()`:
+3. **Fact storage** -- Each fact is stored via the core memory service (`core/services/memory_service.py`), whose default implementation delegates to memorydb:
    - Content hash computed (SHA256) for exact-dedup before embedding
    - Embedding generated via Ollama (local, no API cost)
    - Semantic dedup check against existing facts (cosine similarity > 0.95)
    - If duplicate found: confirmation count incremented, confidence boosted
+   - Datastore-owned dedup paths preserve metadata flags like `source_type` and `is_technical`
    - If new: stored with `status="pending"`, awaiting janitor review
 
 4. **Edge creation** -- Edges are normalized via `_normalize_edge()` and stored with `source_fact_id` linking back to the originating fact. Entity nodes are created on-the-fly if they don't exist.
@@ -434,7 +436,7 @@ In practice, extraction (write) and retrieval (read) can run simultaneously. The
 
 ## 5. Janitor Pipeline (Nightly Maintenance)
 
-The janitor (`janitor.py`) runs 17 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
+The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 17 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
 
 ### Execution Order
 
@@ -462,7 +464,7 @@ The task numbering is historical -- tasks were added over time and the numbers r
 
 | Task | Purpose | LLM? |
 |------|---------|------|
-| workspace | Core markdown bloat monitoring + deep-reasoning LLM review | High |
+| workspace | OpenClaw adaptor-registered core markdown bloat monitoring + deep-reasoning LLM review | High |
 | docs_staleness | Auto-update stale docs from git diffs (fast-reasoning pre-filter + deep-reasoning update) | Both |
 | docs_cleanup | Clean bloated docs based on churn metrics | Low |
 | snippets | Review soul snippets: FOLD (merge into file), REWRITE, or DISCARD | High |
@@ -535,11 +537,17 @@ The half-life is extended by access frequency (`access_bonus_factor * access_cou
 
 ## 6. Error Handling & Resilience
 
-Quaid is designed to degrade gracefully rather than fail hard. The system encounters three main failure modes during operation.
+Quaid is fail-hard by default (`retrieval.fail_hard=true`). In this mode, provider failures raise immediately instead of silently degrading. If operators explicitly set `retrieval.fail_hard=false`, fallback paths are allowed but must emit explicit warnings.
+
+Runtime hardening notes:
+- `retrieval.fail_hard` is the canonical config key; `retrieval.failHard` is treated as compatibility alias.
+- Core LLM pool size and janitor lifecycle worker pool size are process-stable for safety. Changing worker counts in config takes effect on process restart (live semaphore/executor resize is intentionally blocked to avoid stranded waiters/tasks).
+
+The system encounters three main failure modes during operation.
 
 ### Anthropic API Unavailable
 
-LLM calls in `llm_clients.py` use automatic retry with exponential backoff: 3 attempts with a 1-second base delay, doubling per retry. HTTP status codes 408, 429, 500, 502, 503, 504, and 529 trigger retries; other errors fail immediately. If all retries are exhausted, the function returns `(None, duration)` rather than raising -- callers check for `None` and skip LLM-dependent steps.
+LLM calls in `llm_clients.py` use automatic retry with exponential backoff: 3 attempts with a 1-second base delay, doubling per retry. HTTP status codes 408, 429, 500, 502, 503, 504, and 529 trigger retries; other errors fail immediately. If all retries are exhausted, the call raises when fail-hard is enabled; it only degrades to `(None, duration)` when `retrieval.fail_hard=false`.
 
 During extraction, an API failure means no facts are extracted for that session. The conversation transcript is not lost (it remains in the gateway's session file), but memories from that session will be missing until the next compaction or reset.
 
@@ -550,7 +558,7 @@ During the janitor, an API failure in any memory task (review, dedup, contradict
 Before every embedding operation, `_ollama_healthy()` performs a 200ms health check against the Ollama API, cached for 30 seconds. If Ollama is unreachable:
 
 - **During extraction:** Facts are stored without embeddings. The janitor's `embeddings` task (Phase 1) backfills missing embeddings on its next run.
-- **During retrieval:** Vector search is skipped entirely. Retrieval falls back to FTS-only (keyword search), which still returns results but with lower recall quality. The fallback is transparent to the user.
+- **During retrieval:** with fail-hard enabled, retrieval raises immediately and blocks degraded search. If fail-hard is disabled, vector search is skipped and retrieval falls back to FTS-only (keyword search) with warning logs.
 
 ### SQLite Lock Contention
 
@@ -560,7 +568,7 @@ If a write does fail after the timeout, `get_connection()` catches the exception
 
 ### General Strategy
 
-The system follows a "store what you can, skip what you can't" philosophy. A failed embedding doesn't prevent fact storage. A failed API call doesn't crash the gateway. A failed janitor task doesn't corrupt existing data. The worst case for any single failure is a temporary reduction in recall quality, which self-heals on the next successful run.
+The system preserves data integrity first. A failed embedding doesn't prevent fact storage. A failed janitor task doesn't corrupt existing data. Recall/LLM reliability behavior is policy-driven via `retrieval.fail_hard`, with no silent fallback paths in fail-hard mode.
 
 ---
 
@@ -651,11 +659,11 @@ docs_registry.py find-project path/to/file.py   # Which project owns this file?
 docs_registry.py discover --project myproject    # Auto-discover docs in project dir
 ```
 
-**Doc Auto-Update** (`docs_updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
+**Doc Auto-Update** (`core/docs/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
 1. **Low-reasoning pre-filter**: Classifies git diffs as "trivial" (whitespace, comments) or "significant" (logic changes). Trivial diffs skip the expensive update step.
 2. **High-reasoning update**: Reads the stale doc + relevant diffs, proposes targeted edits.
 
-**RAG Search** (`docs_rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
+**RAG Search** (`datastore/docsdb/rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
 
 **Project Updater** (`project_updater.py`): Processes file change events and refreshes project documentation. Integrates with Claude Code hooks (PostToolUse tracks edited files, PreCompact stages update events).
 
@@ -696,6 +704,8 @@ MemoryConfig (root)
   |     +-- journal: JournalConfig   # Snippets + journal settings
   +-- projects: ProjectsConfig
   +-- users: UsersConfig             # Owner identity mapping
+  +-- identity: IdentityConfig       # single_user/multi_user mode + resolver thresholds
+  +-- privacy: PrivacyConfig         # default scopes + strict filter policy
   +-- database: DatabaseConfig
   +-- ollama: OllamaConfig           # Embedding model, URL, dimensions
   +-- rag: RagConfig                 # Chunk sizes, search limits
@@ -785,7 +795,7 @@ On OpenClaw plugin boot, Quaid now runs a strict startup preflight before regist
 
 - Resolves both `deep` and `fast` reasoning model/provider pairs from config + gateway defaults
 - Validates key runtime config values (for example `retrieval.maxResults > 0`)
-- Verifies required runtime files exist (`janitor.py`, `memory_graph.py`)
+- Verifies required runtime files exist (`core/lifecycle/janitor.py`, `datastore/memorydb/memory_graph.py`)
 
 If preflight fails, plugin initialization aborts with explicit error details instead of degrading silently during later calls.
 
@@ -818,13 +828,13 @@ Every LLM call accumulates into per-run counters (`_usage_input_tokens`, `_usage
 
 ### Notifications
 
-Quaid includes a notification system (`notify.py`) that sends status updates for extraction, retrieval, janitor runs, and documentation changes. Notifications support four verbosity levels (quiet, normal, verbose, debug) with per-feature overrides, and are routed to the user's last active communication channel. To change the notification level, ask your agent or edit `config/memory.json`. For full details on verbosity presets, channel routing, and per-feature configuration, see [AI-REFERENCE.md](AI-REFERENCE.md).
+Quaid includes a notification system (`modules/quaid/core/runtime/notify.py`) that sends status updates for extraction, retrieval, janitor runs, and documentation changes. Notifications support four verbosity levels (quiet, normal, verbose, debug) with per-feature overrides, and are routed to the user's last active communication channel. To change the notification level, ask your agent or edit `config/memory.json`. For full details on verbosity presets, channel routing, and per-feature configuration, see [AI-REFERENCE.md](AI-REFERENCE.md).
 
 ---
 
 ## 10. MCP Server
 
-The MCP server (`mcp_server.py`) exposes Quaid's knowledge layer as tools over the [Model Context Protocol](https://modelcontextprotocol.io) stdio transport. This is the primary integration path for clients that support MCP (Claude Desktop, Claude Code, Cursor, Windsurf, etc.).
+The MCP server (`modules/quaid/core/interface/mcp_server.py`) exposes Quaid's knowledge layer as tools over the [Model Context Protocol](https://modelcontextprotocol.io) stdio transport. This is the primary integration path for clients that support MCP (Claude Desktop, Claude Code, Cursor, Windsurf, etc.).
 
 ### Architecture
 
@@ -834,17 +844,17 @@ MCP Client (Claude Desktop, Cursor, etc.)
     | JSON-RPC over stdio
     |
     v
-mcp_server.py (FastMCP)
+core/interface/mcp_server.py (FastMCP)
     |
-    +-- memory_extract  -> extract.py -> llm_clients + memory_graph
-    +-- memory_store    -> api.store()
-    +-- memory_recall   -> api.recall()
-    +-- memory_search   -> api.search()
-    +-- memory_get      -> api.get_memory()
-    +-- memory_forget   -> api.forget()
-    +-- memory_create_edge -> api.create_edge()
-    +-- memory_stats    -> api.get_graph().stats()
-    +-- projects_search -> docs_rag.search()
+    +-- memory_extract  -> ingest/extract.py -> lib/llm_clients.py + core/services/memory_service.py
+    +-- memory_store    -> core/interface/api.py
+    +-- memory_recall   -> core/interface/api.py
+    +-- memory_search   -> core/interface/api.py
+    +-- memory_get      -> core/interface/api.py
+    +-- memory_forget   -> core/interface/api.py
+    +-- memory_create_edge -> core/interface/api.py
+    +-- memory_stats    -> core/interface/api.py
+    +-- projects_search -> datastore/docsdb/rag.py
 ```
 
 ### Tools
@@ -869,10 +879,21 @@ MCP uses stdout for JSON-RPC communication. The server redirects Python's `sys.s
 
 The `QUAID_OWNER` environment variable sets the owner identity for all operations. This maps to the `owner_id` field in the database, enabling multi-user setups where each user's memories are namespaced.
 
+### Multi-User Runtime Guardrails
+
+When `identity.mode=multi_user`:
+
+1. Core enforces fail-fast write contracts for identity envelopes (`source_channel`, `source_conversation_id`, `source_author_id`).
+2. Core enforces fail-fast read contracts (`viewer_entity_id`) before scoped recall filtering.
+3. Identity resolver and privacy policy are single-registration hooks (duplicate registrations raise immediately).
+4. Core bootstraps datastore-owned default hooks (`memorydb-default`) at memory-service startup to avoid silent unhooked operation.
+
+This keeps multi-user surfaces observable under stress: missing wiring and malformed context raise explicit errors instead of degrading silently.
+
 ---
 
 ## Appendix: File Reference
 
-The plugin lives in `plugins/quaid/` with Python modules for graph operations (`memory_graph.py`), extraction (`extract.py`), MCP server (`mcp_server.py`), nightly maintenance (`janitor.py`), dual learning (`soul_snippets.py`), and configuration (`config.py`). In OpenClaw integration, `adapters/openclaw/index.ts` is a lightweight entry shim, while `adapters/openclaw/adapter.ts` + `adapters/openclaw/knowledge/orchestrator.ts` hold the runtime tool/hook logic and recall orchestration. Shared utilities live in `lib/`. Prompt templates live in `prompts/`.
+The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). In OpenClaw integration, `adaptors/openclaw/adapter.ts` owns runtime integration, `adaptors/openclaw/index.ts` remains a minimal entry shim, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

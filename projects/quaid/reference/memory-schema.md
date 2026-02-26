@@ -2,7 +2,7 @@
 <!-- PURPOSE: Database schema: nodes, edges, FTS5, indexes, doc_registry -->
 <!-- SOURCES: schema.sql -->
 
-> Auto-generated from `plugins/quaid/schema.sql` — 2026-02-07
+> Auto-generated from `modules/quaid/schema.sql` — 2026-02-07
 > Schema version: 3 | Embedding model: qwen3-embedding:8b (4096-dim)
 
 ## Nodes — All Memory Entities

@@ -43,7 +43,7 @@ bash scripts/release-check.sh
 2. Run CI-validating checks if release-impacting changes are large:
 
 ```bash
-cd plugins/quaid
+cd modules/quaid
 npm run test:all
 ```
 
@@ -76,3 +76,4 @@ If a bad release lands:
 - Keep auth/provider credentials out of git-tracked files
 - Prefer GitHub noreply email for public attribution
 - Keep release notes accurate and explicit about known limitations
+- For benchmark handoff/cut procedure, use `docs/BENCHMARK-OPERATIONS.md` (checkpoint ownership is in `~/quaid/benchmark`).

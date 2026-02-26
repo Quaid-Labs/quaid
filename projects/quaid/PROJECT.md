@@ -42,7 +42,7 @@ This file is the canonical entry point for all docs in `projects/quaid`.
 | `projects/quaid/operations/repo-cleanup.md` | Repo hygiene log: removed OpenClaw carryover artifacts and pending scrub tasks. |
 
 ## Source Code
-- `plugins/quaid/`
+- `modules/quaid/`
 
 ## Update Rule
 When adding or moving any project doc under `projects/quaid`, update this index in the same change.

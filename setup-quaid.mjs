@@ -471,7 +471,7 @@ async function step1_preflight() {
   // --- Plugin source ---
   s.start("Locating plugin source...");
   const pluginSrc = [
-    path.join(__dirname, "plugins", "quaid"),
+    path.join(__dirname, "modules", "quaid"),
     PLUGIN_DIR,
   ].find(p => {
     try {
@@ -480,7 +480,7 @@ async function step1_preflight() {
   });
   if (!pluginSrc) {
     s.stop(C.red("Plugin source not found"), 2);
-    bail(`Expected at ${path.join(__dirname, "plugins", "quaid")} or ${PLUGIN_DIR}`);
+    bail(`Expected at ${path.join(__dirname, "modules", "quaid")} or ${PLUGIN_DIR}`);
   }
   s.stop(C.green("Plugin source found"));
 
@@ -1254,6 +1254,19 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
   }
 
+  // Install internal reset/new command hook (OpenClaw workaround for before_reset).
+  const quaidHookSrc = path.join(PLUGIN_DIR, "adaptors/openclaw/hooks/quaid-reset-signal");
+  const quaidHookDst = path.join(WORKSPACE, "hooks", "quaid-reset-signal");
+  if (fs.existsSync(path.join(quaidHookSrc, "HOOK.md")) && fs.existsSync(path.join(quaidHookSrc, "handler.js"))) {
+    fs.mkdirSync(path.join(WORKSPACE, "hooks"), { recursive: true });
+    fs.rmSync(quaidHookDst, { recursive: true, force: true });
+    fs.cpSync(quaidHookSrc, quaidHookDst, { recursive: true });
+    log.info("Installed internal hook: quaid-reset-signal");
+    spawnSync("openclaw", ["hooks", "enable", "quaid-reset-signal"], { stdio: "pipe" });
+  } else {
+    log.warn("quaid-reset-signal hook missing from plugin source");
+  }
+
   // Install Python dependency: sqlite-vec (vector search extension)
   s.start("Installing sqlite-vec...");
   try {
@@ -1266,7 +1279,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Initialize database
   s.start("Initializing database...");
   const dbPath = path.join(DATA_DIR, "memory.db");
-  const schemaPath = path.join(PLUGIN_DIR, "schema.sql");
+  const schemaPath = path.join(PLUGIN_DIR, "datastore/memorydb/schema.sql");
   if (fs.existsSync(schemaPath)) {
     const initScript = `
 import sqlite3
@@ -1405,8 +1418,8 @@ import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from memory_graph import store
-from llm_clients import call_deep_reasoning, parse_json_response
+from datastore.memorydb.memory_graph import store
+from core.llm.clients import call_deep_reasoning, parse_json_response
 files = ${JSON.stringify(mdFiles)}
 total = 0
 for fname in files:

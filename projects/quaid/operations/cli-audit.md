@@ -31,11 +31,11 @@ Purpose: evaluate current `quaid` CLI commands for practical runtime value in al
 - Added `quaid config edit` menu-driven editor.
 - Added `quaid config path`.
 - Added `quaid config set <dotted.key> <value>`.
-- Added shared helper `plugins/quaid/config_cli.py`.
+- Added shared helper `modules/quaid/config_cli.py`.
 
 2. CLI consistency:
 - Wired config subcommands in both:
-  - `plugins/quaid/quaid`
+  - `modules/quaid/quaid`
   - `scripts/release-templates/quaid`
 - Added `doctor` alias in the dev wrapper (`health` parity).
 

@@ -35,6 +35,28 @@ Notes:
 - `projects_search` is docs-focused and project-aware.
 - `memory_recall` can include `project` store, but `projects_search` is still the better doc workflow for broad doc lookup.
 
+### `session_recall`
+Use this for indexed lifecycle session transcripts (`list`, `load`, `last`).
+
+Use cases:
+- user references a previous session explicitly and you need exact transcript context
+- operator asks for what happened in a specific session ID
+
+Strict usage notes:
+- `action=last` is dangerous and high-volume; use it only if the user clearly refers to the immediately prior session and normal memory retrieval likely missed context.
+- prefer `memory_recall` first for normal fact recall.
+
+### `session_logs_search`
+Use this as a hail-mary retrieval path over indexed session logs.
+
+Use cases:
+- all normal retrieval paths failed (`memory_recall`, `projects_search`, targeted docs reads)
+- you need to find a detail that likely only exists in indexed raw session logs
+
+Strict usage notes:
+- expensive and high-noise; run only when you are genuinely stuck/desperate.
+- keep `limit` low and start with very specific query terms (names, file paths, unique phrases).
+
 ### `memory_store`
 Use this only for explicit/manual memory insertion when needed.
 Default behavior should favor automatic extraction.
@@ -64,6 +86,11 @@ Default behavior should favor automatic extraction.
 1. Recall from `vector_technical` + `project`.
 2. If still ambiguous, run `projects_search` scoped to the project.
 
+### Previous-session reference looks missing
+1. Run `memory_recall` first with specific entities.
+2. If still missing and user clearly means last session, run `session_recall action=last`.
+3. If still missing, run `session_logs_search` as last resort.
+
 ### Conflicting or stale facts
 1. Recall with recency-sensitive ranking.
 2. Prefer newest consistent facts.
@@ -72,7 +99,7 @@ Default behavior should favor automatic extraction.
 ## Operational Commands (Operator Reference)
 
 ```bash
-cd plugins/quaid
+cd modules/quaid
 
 # Recall and inspection
 python3 memory_graph.py search "query" --owner quaid --limit 50 --min-similarity 0.6

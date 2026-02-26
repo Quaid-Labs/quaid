@@ -1,9 +1,9 @@
 # Memory-Local Plugin Implementation — Total Recall (quaid)
 <!-- PURPOSE: Implementation details: schema, modules, config, shared lib, CLI, hooks, test suite, projects system -->
-<!-- SOURCES: memory_graph.py, adapters/openclaw/index.ts, docs_rag.py, config.py, docs_registry.py, project_updater.py, config/memory.json -->
+<!-- SOURCES: memory_graph.py, adaptors/openclaw/index.ts, docs_rag.py, config.py, docs_registry.py, project_updater.py, config/memory.json -->
 
 **Status:** Production Ready (updated 2026-02-08)
-**Location:** `plugins/quaid/`
+**Location:** `modules/quaid/`
 **Codename:** Total Recall (quaid)
 
 ---
@@ -140,7 +140,7 @@ Each result dict from `recall()` includes:
 
 **LLM/Embeddings provider architecture:**
 - Core Quaid code is provider-agnostic. Only the adapter/provider layer and config are provider-aware.
-- LLM calls route through the OpenClaw gateway adapter (`/plugins/quaid/llm`) and are resolved by model tier (`high`/`low`), not by hardcoded provider branches in core logic.
+- LLM calls route through the OpenClaw gateway adapter (`/modules/quaid/llm`) and are resolved by model tier (`high`/`low`), not by hardcoded provider branches in core logic.
 - Provider/model selection is fully config-driven via `models.llmProvider`, tier settings, and `models.providerModelClasses` in `config/memory.json`.
 
 **Data sanitization:**
@@ -212,7 +212,7 @@ python seed.py -q        # Quiet mode
 
 ---
 
-### 4. Plugin Entry Point (`adapters/openclaw/index.ts`)
+### 4. Plugin Entry Point (`adaptors/openclaw/index.ts`)
 
 OpenClaw plugin (Total Recall / quaid) that:
 
@@ -528,7 +528,7 @@ The `dynamicK` section controls the automatic retrieval limit scaling. When `ena
 
 `default` model resolution is adapter/gateway-driven:
 
-- Tier requests (`high`/`low`) are resolved in `adapters/openclaw/index.ts`.
+- Tier requests (`high`/`low`) are resolved in `adaptors/openclaw/index.ts`.
 - Provider resolution uses `models.llmProvider` + active gateway provider state.
 - Tier model resolution uses `models.deepReasoning` / `models.fastReasoning`; if either is `default`, Quaid looks up `models.providerModelClasses`.
 - Missing provider mappings fail loudly (no implicit hardcoded provider fallback).

@@ -240,5 +240,5 @@ Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 - Database path: `config.database.path` (default: `data/memory.db`, SQLite + WAL)
 - Archive DB: `config.database.archivePath` (default: `data/memory_archive.db`)
 - Embeddings: `config.ollama.url` (default: `http://localhost:11434`) with `config.ollama.embeddingModel` (default: `qwen3-embedding:8b`, 4096-dim)
-- Shared library in `plugins/quaid/lib/` — config, database, embeddings, similarity, tokens, archive
+- Shared library in `modules/quaid/lib/` — config, database, embeddings, similarity, tokens, archive
 - Env var overrides for testing: `MEMORY_DB_PATH`, `MEMORY_ARCHIVE_DB_PATH`, `OLLAMA_URL`, `CLAWDBOT_WORKSPACE`

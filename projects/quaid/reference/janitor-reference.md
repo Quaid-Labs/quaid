@@ -1,13 +1,13 @@
 # Janitor (Sandman) Reference
 <!-- PURPOSE: Complete reference for nightly janitor pipeline: task list, schedule, thresholds, fail-fast, edge normalization, cost tracking -->
-<!-- SOURCES: janitor.py, workspace_audit.py, adapters/openclaw/index.ts, lib/adapter.py, lib/providers.py -->
+<!-- SOURCES: janitor.py, workspace_audit.py, adaptors/openclaw/index.ts, lib/adapter.py, lib/providers.py -->
 
 Nightly memory maintenance pipeline. Cleans, decays, deduplicates, detects contradictions, and maintains memory quality.
 
 ## Schedule
 - **Cron name:** `sandman`
 - **Time:** 4:30 AM Asia/Makassar (WITA)
-- **Script:** `plugins/quaid/janitor.py`
+- **Script:** `modules/quaid/janitor.py`
 - **Logs:** `logs/janitor.log` (structured JSON)
 - **Stats:** `data/janitor-stats.json` (run metrics + API cost)
 - **Session:** `isolated` (dedicated session per run, not main Alfie session)
@@ -57,7 +57,7 @@ The janitor requires LLM access for review/dedup/contradiction tasks. Provider/m
 | 1 | **workspace** | Opus | Infra | Single-pass audit of changed workspace files |
 | 1b | **docs_staleness** | Opus | Infra | Update stale docs from git diffs |
 | 1c | **docs_cleanup** | Opus | Infra | Clean bloated docs (churn-based trigger) |
-| 1d-snippets | **soul_snippets** | Opus | Infra | Review & fold pending snippets into core markdown |
+| 1d-snippets | **snippets** | Opus | Infra | Review & fold pending snippets into core markdown |
 | 1d-journal | **journal** | Opus | Infra | Distill journal entries into core markdown themes, archive old entries |
 | 2 | **review** | Opus | Memory | Batch-review pending memories (KEEP/DELETE/FIX/MERGE/MOVE_TO_PROJECT) |
 | 2a | **temporal** | None | Memory | Resolve relative dates (tomorrow, yesterday) to absolute |
@@ -67,12 +67,9 @@ The janitor requires LLM access for review/dedup/contradiction tasks. Provider/m
 | 4b | **contradictions (resolve)** | Opus | Memory | Resolve pending contradictions (keep_a/keep_b/merge/keep_both) |
 | 5 | **decay** | None | Memory | Confidence decay on old unused memories |
 | 5b | **decay_review** | Opus | Memory | Review decayed facts (DELETE/EXTEND/PIN) |
-| 6 | **edges** | None | Memory | ~~Edge extraction~~ DEPRECATED — edges now created at capture time; skipped in `--task all` |
 | 7 | **rag** | None | Infra | RAG reindex + project discovery + event processing |
 | 8 | **tests** | None | Infra | Run vitest suite (npm test; only when `--task tests`, `QUAID_DEV=1`, or `janitor.run_tests=true`) |
 | 9 | **cleanup** | None | Infra | Prune old recall_log (90d), dedup_log (90d), health_snapshots (180d), orphaned embeddings |
-
-> **Note:** Task 6 (edge extraction) is deprecated as of Feb 2026. Edges are now created at capture time (see "Edge Extraction" below). The task is kept for backward compatibility with `--task edges` but is explicitly skipped in `--task all` runs.
 
 > **Category** determines fail-fast behavior — see "Fail-Fast Pipeline Guard" below.
 
@@ -198,13 +195,6 @@ Uses the Ebbinghaus forgetting curve with access-scaled half-life:
 - **Auto-captured:** Normal decay rate
 - Frequently accessed memories decay slower (access_count scales half-life)
 - When confidence drops below threshold: queued for Task 5b review (not silently deleted)
-
-### Task 6: Edge Extraction — DEPRECATED
-Edge extraction has been moved to capture time (Feb 2026). This task is:
-- **Skipped** in `--task all` runs (explicitly bypassed)
-- **Available** via `--task edges` for backward compatibility or manual backfill
-- When run manually, uses Opus to extract edges from facts that have no outgoing edges
-- See "Edge Extraction (Capture-Time)" section below for the current approach
 
 ### Task 7: RAG Reindex + Project Discovery
 

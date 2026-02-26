@@ -28,6 +28,8 @@ This keeps high-signal maintenance and extraction visibility while avoiding per-
 - `verbose`: `janitor=full`, `extraction=summary`, `retrieval=summary`
 - `debug`: all features `full`
 
+When `notifications.extraction` is `off` (for example `quiet` preset), extraction-completion notifications are fully suppressed, including zero-result `/reset` or timeout completion summaries.
+
 ## Delayed Requests (Host-Managed)
 
 For host systems with asynchronous/heartbeat workflows (for example OpenClaw), delayed actionable requests are written to:
@@ -41,6 +43,8 @@ In OpenClaw, the adapter can queue delayed requests and HEARTBEAT instructions c
 ## Janitor Health Escalation
 
 If janitor appears unhealthy (never run, or stale), Quaid queues a delayed high-priority request through the adapter-owned delayed-request path instead of spamming immediate extraction notifications.
+
+Pending maintenance approval requests use immediate adapter notifications (cooldown-gated) so operators see approval backlog without waiting for delayed-request processing.
 
 ## Configuration
 

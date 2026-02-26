@@ -504,15 +504,13 @@ conn.close()
     fi
 
     # Check if plugin source exists (release tarball or existing install)
-    if [[ -d "${SCRIPT_DIR}/plugins/quaid" ]]; then
+    if [[ -d "${SCRIPT_DIR}/modules/quaid" ]]; then
         info "Plugin source found in release package"
-    elif [[ -d "${SCRIPT_DIR}/quaid" ]]; then
-        info "Plugin source found in release package (flat layout)"
     elif [[ -d "${PLUGIN_DIR}" ]] && [[ -n "$(ls -A "${PLUGIN_DIR}" 2>/dev/null)" ]]; then
         info "Plugin source found at existing install"
     else
         error "Plugin source not found."
-        error "Expected at ${SCRIPT_DIR}/plugins/quaid/ or ${PLUGIN_DIR}/"
+        error "Expected at ${SCRIPT_DIR}/modules/quaid/ or ${PLUGIN_DIR}/"
         exit 1
     fi
 
@@ -1089,12 +1087,10 @@ step6_install() {
     if [[ ! -d "${PLUGIN_DIR}" ]] || [[ -z "$(ls -A "${PLUGIN_DIR}" 2>/dev/null)" ]]; then
         info "Installing plugin source..."
         mkdir -p "${PLUGIN_DIR}"
-        if [[ -d "${SCRIPT_DIR}/plugins/quaid" ]]; then
-            cp -R "${SCRIPT_DIR}/plugins/quaid/"* "${PLUGIN_DIR}/"
-        elif [[ -d "${SCRIPT_DIR}/quaid" ]]; then
-            cp -R "${SCRIPT_DIR}/quaid/"* "${PLUGIN_DIR}/"
+        if [[ -d "${SCRIPT_DIR}/modules/quaid" ]]; then
+            cp -R "${SCRIPT_DIR}/modules/quaid/"* "${PLUGIN_DIR}/"
         else
-            error "Plugin source not found. Expected at ${SCRIPT_DIR}/plugins/quaid/ or ${SCRIPT_DIR}/quaid/"
+            error "Plugin source not found. Expected at ${SCRIPT_DIR}/modules/quaid/"
             exit 1
         fi
     else
@@ -1112,6 +1108,23 @@ step6_install() {
         fi
     fi
 
+    # Install internal reset/new command hook (OpenClaw workaround for before_reset).
+    local quaid_hook_src="${PLUGIN_DIR}/adaptors/openclaw/hooks/quaid-reset-signal"
+    local quaid_hook_dst="${WORKSPACE_ROOT}/hooks/quaid-reset-signal"
+    if [[ -f "${quaid_hook_src}/HOOK.md" ]] && [[ -f "${quaid_hook_src}/handler.js" ]]; then
+        mkdir -p "${WORKSPACE_ROOT}/hooks"
+        rm -rf "${quaid_hook_dst}"
+        cp -R "${quaid_hook_src}" "${quaid_hook_dst}"
+        info "Installed internal hook: quaid-reset-signal"
+        if command -v openclaw &>/dev/null; then
+            openclaw hooks enable quaid-reset-signal >/dev/null 2>&1 || true
+        elif command -v clawdbot &>/dev/null; then
+            clawdbot hooks enable quaid-reset-signal >/dev/null 2>&1 || true
+        fi
+    else
+        warn "quaid-reset-signal hook missing from plugin source"
+    fi
+
     # Initialize database
     info "Initializing database..."
     if [[ -f "${DATA_DIR}/memory.db" ]]; then
@@ -1120,7 +1133,7 @@ step6_install() {
             python3 -c "
 import sqlite3
 conn = sqlite3.connect('${DATA_DIR}/memory.db')
-with open('${PLUGIN_DIR}/schema.sql') as f:
+with open('${PLUGIN_DIR}/datastore/memorydb/schema.sql') as f:
     conn.executescript(f.read())
 conn.close()
 print('[+] Database updated')
@@ -1130,7 +1143,7 @@ print('[+] Database updated')
         python3 -c "
 import sqlite3
 conn = sqlite3.connect('${DATA_DIR}/memory.db')
-with open('${PLUGIN_DIR}/schema.sql') as f:
+with open('${PLUGIN_DIR}/datastore/memorydb/schema.sql') as f:
     conn.executescript(f.read())
 conn.close()
 print('[+] Database initialized')
@@ -1510,8 +1523,8 @@ import os, sys
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 
-from memory_graph import store
-from llm_clients import call_deep_reasoning, parse_json_response
+from datastore.memorydb.memory_graph import store
+from core.llm.clients import call_deep_reasoning, parse_json_response
 
 files = [f for f in ['SOUL.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'AGENTS.md']
          if os.path.exists(os.path.join('${WORKSPACE_ROOT}', f))]

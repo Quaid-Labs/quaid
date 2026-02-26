@@ -115,7 +115,7 @@ ls -la projects/staging/failed/ 2>/dev/null  # Should be empty/nonexistent
 **Setup (CLI):**
 ```bash
 # Touch a source file to make it newer than its tracked doc
-touch plugins/quaid/janitor.py
+touch modules/quaid/janitor.py
 ```
 
 **Then say to Alfie:**
@@ -126,7 +126,7 @@ touch plugins/quaid/janitor.py
 **Reset (CLI):**
 ```bash
 # Restore original mtime
-git checkout plugins/quaid/janitor.py
+git checkout modules/quaid/janitor.py
 ```
 
 ---
@@ -136,7 +136,7 @@ git checkout plugins/quaid/janitor.py
 **What it tests:** Path resolution across projects
 
 **Say to Alfie:**
-> "Which project does plugins/quaid/janitor.py belong to?"
+> "Which project does modules/quaid/janitor.py belong to?"
 
 **Expected:** Alfie should be able to figure out it's the quaid project (via sourceRoots). This tests whether Alfie can use the project tools to answer project-ownership questions.
 
@@ -158,7 +158,7 @@ echo "# Research Notes" > projects/spark-agents/research-notes.md
 
 **Run janitor task:**
 ```bash
-cd plugins/quaid && python3 janitor.py --task rag --dry-run
+cd modules/quaid && python3 janitor.py --task rag --dry-run
 ```
 
 **Expected:** Output should mention discovering `projects/spark-agents/research-notes.md`.
@@ -198,7 +198,7 @@ python3 docs_registry.py unregister projects/weekend-plans/PROJECT.md
 Run these to verify the system state is correct:
 
 ```bash
-cd ~/clawd/plugins/quaid
+cd ~/clawd/modules/quaid
 
 # All projects visible
 python3 docs_registry.py list --project quaid
@@ -207,7 +207,7 @@ python3 docs_registry.py list --project infrastructure
 python3 docs_registry.py list --project integrations
 
 # Path resolution
-python3 docs_registry.py find-project plugins/quaid/janitor.py     # → quaid
+python3 docs_registry.py find-project modules/quaid/janitor.py     # → quaid
 python3 docs_registry.py find-project projects/spark-agents/spark-planning.md      # → spark-agents
 python3 docs_registry.py find-project projects/infrastructure/ollama-setup.md     # → infrastructure
 python3 docs_registry.py find-project projects/integrations/voice-calls.md        # → integrations

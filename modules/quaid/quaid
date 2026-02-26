@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# quaid - Total Recall memory system CLI
+#
+# Usage:
+#   quaid search "query" --owner quaid
+#   quaid store "fact" --owner quaid
+#   quaid stats
+#   quaid get-edges <node_id>
+#   quaid janitor --task all --dry-run
+#   quaid mcp-server
+#   quaid docs search "query"
+#   quaid docs check
+#   quaid registry list --project quaid
+#   quaid doctor
+#   quaid config [show|edit|path|set <key> <value>]
+#   quaid help
+#
+# This is a convenience wrapper around the Python modules.
+
+set -euo pipefail
+
+# Resolve symlinks to find the real plugin directory
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+CMD="${1:-help}"
+shift 2>/dev/null || true
+
+# Ensure adapter config discovery has a canonical root.
+# Quaid core resolves config from QUAID_HOME/config/memory.json.
+if [[ -z "${QUAID_HOME:-}" && -n "${CLAWDBOT_WORKSPACE:-}" ]]; then
+  export QUAID_HOME="$CLAWDBOT_WORKSPACE"
+fi
+if [[ -z "${CLAWDBOT_WORKSPACE:-}" && -n "${QUAID_HOME:-}" ]]; then
+  export CLAWDBOT_WORKSPACE="$QUAID_HOME"
+fi
+if [[ -z "${QUAID_HOME:-}" ]]; then
+  ROOT_CANDIDATE="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  if [[ -f "$ROOT_CANDIDATE/config/memory.json" ]]; then
+    export QUAID_HOME="$ROOT_CANDIDATE"
+    export CLAWDBOT_WORKSPACE="$ROOT_CANDIDATE"
+  fi
+fi
+
+case "$CMD" in
+  # Janitor commands
+  janitor)
+    exec python3 "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
+    ;;
+
+  # MCP server
+  mcp-server|mcp)
+    exec python3 "$SCRIPT_DIR/core/interface/mcp_server.py" "$@"
+    ;;
+
+  # Docs subsystem
+  docs)
+    SUBCMD="${1:-help}"
+    shift 2>/dev/null || true
+    case "$SUBCMD" in
+      search)  exec python3 "$SCRIPT_DIR/datastore/docsdb/rag.py" search "$@" ;;
+      check)   exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
+      update)  exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" update-stale "$@" ;;
+      changelog) exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" changelog "$@" ;;
+      *)       echo "Usage: quaid docs {search|check|update|changelog} [args...]"; exit 1 ;;
+    esac
+    ;;
+
+  # Registry/projects subsystem
+  registry|project|projects)
+    exec python3 "$SCRIPT_DIR/datastore/docsdb/registry.py" "$@"
+    ;;
+
+  # Project updater
+  updater)
+    exec python3 "$SCRIPT_DIR/datastore/docsdb/project_updater.py" "$@"
+    ;;
+
+# Everything else goes to memory_graph.py
+search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|search-all|search-fts|backfill-hashes|health|event)
+    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
+    ;;
+
+  identity-map)
+    exec python3 "$SCRIPT_DIR/datastore/memorydb/identity_map.py" "$@"
+    ;;
+
+  doctor)
+    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" health "$@"
+    ;;
+
+  config)
+    SUBCMD="${1:-show}"
+    shift 2>/dev/null || true
+    CONFIG_NODE="$SCRIPT_DIR/config_cli.mjs"
+    CONFIG_PY="$SCRIPT_DIR/config_cli.py"
+    case "$SUBCMD" in
+      show|edit|path)
+        if [[ -f "$CONFIG_NODE" ]]; then
+          exec node "$CONFIG_NODE" "$SUBCMD" "$@"
+        fi
+        exec python3 "$CONFIG_PY" "$SUBCMD" "$@"
+        ;;
+      set)
+        if [[ -f "$CONFIG_NODE" ]]; then
+          exec node "$CONFIG_NODE" set "$@"
+        fi
+        exec python3 "$CONFIG_PY" set "$@"
+        ;;
+      *)
+        echo "Usage: quaid config [show|edit|path|set <dotted.key> <value>]"
+        exit 1
+        ;;
+    esac
+    ;;
+
+  help|--help|-h)
+    echo "quaid - Total Recall memory system"
+    echo ""
+    echo "Memory commands:"
+    echo "  search <query>       Search memories (semantic + FTS)"
+    echo "  store <text>         Store a new memory"
+    echo "  recall <query>       Full recall pipeline (search + rerank + graph)"
+    echo "  stats                Database statistics"
+    echo "  health               Knowledge base health metrics"
+    echo "  doctor               Alias for health"
+    echo "  get-node <id>        Get a specific node"
+    echo "  get-edges <id>       Get edges for a node"
+    echo "  search-all <query>   Search memories + docs"
+    echo "  event [subcmd]       Event bus (emit/list/process/capabilities)"
+    echo ""
+    echo "Maintenance:"
+    echo "  janitor [args]       Run janitor pipeline"
+    echo "  mcp-server           Start MCP server (stdio)"
+    echo ""
+    echo "Docs:"
+    echo "  docs search <query>  Search RAG docs"
+    echo "  docs check           Check doc staleness"
+    echo "  docs update --apply  Update stale docs"
+    echo "  docs changelog       View update history"
+    echo ""
+    echo "Projects:"
+    echo "  registry [cmd]       Project/doc registry CLI"
+    echo "  updater [cmd]        Project event processor"
+    echo ""
+    echo "Config:"
+    echo "  config               Show configuration summary"
+    echo "  config edit          Interactive menu editor"
+    echo "  config path          Show active config path"
+    echo "  config set k v       Set value by dotted key path"
+    echo ""
+    echo "Run from: $SCRIPT_DIR"
+    ;;
+
+  *)
+    exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
+    ;;
+esac

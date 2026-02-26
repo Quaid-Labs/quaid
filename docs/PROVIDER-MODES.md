@@ -21,9 +21,22 @@ Quaid can run through multiple provider paths. They do not have the same cost pr
 
 - Avoid silent fallbacks from subscription paths into API-key paths.
 - Prefer explicit provider configuration over implicit defaults.
+- `retrieval.fail_hard` controls fallback behavior system-wide:
+  - `true` (default): fail fast, no fallback behavior.
+  - `false`: fallback behavior is allowed, but must emit explicit warning logs.
+- API credential lookup follows the same rule:
+  - `true`: no `.env` credential fallback when env vars are missing.
+  - `false`: `.env` fallback is allowed and logged with `[FALLBACK]`.
+  - For `claude-code`, fail-hard now requires `CLAUDE_CODE_OAUTH_TOKEN` to already exist in environment at call time.
 - Validate startup logs before long runs:
   - look for `[quaid][startup] ... provider=... model=...`
   - look for `[quaid][billing] paid provider active ...` warnings
+
+## Docs Retrieval
+
+- Docs RAG embedding generation follows fail-hard policy too:
+  - `retrieval.fail_hard=true`: embedding failures raise (no empty-result degrade).
+  - `retrieval.fail_hard=false`: failures degrade with warning logs.
 
 ## Recommended Config Pattern
 
@@ -40,4 +53,4 @@ If provider resolution fails:
 1. Check OpenClaw auth profiles and `lastGood` profile mapping.
 1. Re-run release/runtime checks:
    - `bash scripts/release-check.sh`
-   - `node plugins/quaid/scripts/check-runtime-pairs.mjs --strict`
+   - `node modules/quaid/scripts/check-runtime-pairs.mjs --strict`
