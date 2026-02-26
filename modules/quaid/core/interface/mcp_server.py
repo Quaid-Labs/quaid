@@ -488,7 +488,11 @@ def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -
 
     extraction_log: dict = {}
     try:
-        extraction_log = _json.loads(log_path.read_text(encoding="utf-8"))
+        parsed = _json.loads(log_path.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict):
+            extraction_log = parsed
+        else:
+            raise ValueError(f"extraction log root must be an object, got {type(parsed).__name__}")
     except FileNotFoundError:
         extraction_log = {}
     except Exception as exc:

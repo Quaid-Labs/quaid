@@ -526,6 +526,16 @@ class TestSessionRecall:
             with pytest.raises(RuntimeError, match="Failed to parse extraction log"):
                 mod.session_recall(action="list", limit=5)
 
+    def test_session_recall_non_object_extraction_log_raises_when_failhard_enabled(self, server, tmp_path):
+        mod, *_ = server
+        bad_log = tmp_path / "data"
+        bad_log.mkdir(parents=True, exist_ok=True)
+        (bad_log / "extraction-log.json").write_text('["not-an-object"]', encoding="utf-8")
+        with patch("core.interface.mcp_server.get_workspace_dir", return_value=tmp_path), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to parse extraction log"):
+                mod.session_recall(action="list", limit=5)
+
 
 class TestProvider:
     def test_memory_provider_raises_when_failhard_enabled(self, server):
