@@ -17,6 +17,7 @@ manages API keys directly — the adapter/provider handles authentication.
 import json
 import os
 import sys
+import threading
 import time
 from typing import Dict, Optional, Tuple
 
@@ -60,6 +61,7 @@ _usage_calls: int = 0
 _usage_cache_read_tokens: int = 0
 _usage_cache_creation_tokens: int = 0
 _usage_by_model: Dict[str, Dict[str, int]] = {}  # {model: {input: N, output: N}}
+_usage_lock = threading.RLock()
 
 # Default pricing per million tokens (as of Feb 2026)
 # Used for cost estimation in janitor runs. Config overrides via models.pricing.
@@ -94,23 +96,25 @@ def reset_token_usage():
     """Reset the per-run token usage counters."""
     global _usage_input_tokens, _usage_output_tokens, _usage_calls
     global _usage_cache_read_tokens, _usage_cache_creation_tokens, _usage_by_model
-    _usage_input_tokens = 0
-    _usage_output_tokens = 0
-    _usage_calls = 0
-    _usage_cache_read_tokens = 0
-    _usage_cache_creation_tokens = 0
-    _usage_by_model = {}
+    with _usage_lock:
+        _usage_input_tokens = 0
+        _usage_output_tokens = 0
+        _usage_calls = 0
+        _usage_cache_read_tokens = 0
+        _usage_cache_creation_tokens = 0
+        _usage_by_model = {}
 
 
 def get_token_usage() -> dict:
     """Return accumulated token usage and estimated cost for this run."""
-    return {
-        "input_tokens": _usage_input_tokens,
-        "output_tokens": _usage_output_tokens,
-        "api_calls": _usage_calls,
-        "cache_read_tokens": _usage_cache_read_tokens,
-        "cache_creation_tokens": _usage_cache_creation_tokens,
-    }
+    with _usage_lock:
+        return {
+            "input_tokens": _usage_input_tokens,
+            "output_tokens": _usage_output_tokens,
+            "api_calls": _usage_calls,
+            "cache_read_tokens": _usage_cache_read_tokens,
+            "cache_creation_tokens": _usage_cache_creation_tokens,
+        }
 
 
 def estimate_cost() -> float:
@@ -126,22 +130,23 @@ def estimate_cost() -> float:
     # Find the cheapest rate as fallback for unknown models
     _cheapest = min(_PRICING.values(), key=lambda r: r["input"])
 
-    cost = 0.0
-    tracked_input = 0
-    tracked_output = 0
-    for model_name, counts in _usage_by_model.items():
-        rate = _PRICING.get(model_name, _cheapest)
-        cost += counts.get("input", 0) / 1_000_000 * rate["input"]
-        cost += counts.get("output", 0) / 1_000_000 * rate["output"]
-        tracked_input += counts.get("input", 0)
-        tracked_output += counts.get("output", 0)
-    # Fall back to cheapest rate for any untracked remainder
-    untracked_in = max(0, _usage_input_tokens - tracked_input)
-    untracked_out = max(0, _usage_output_tokens - tracked_output)
-    if untracked_in or untracked_out:
-        cost += untracked_in / 1_000_000 * _cheapest["input"]
-        cost += untracked_out / 1_000_000 * _cheapest["output"]
-    return round(cost, 4)
+    with _usage_lock:
+        cost = 0.0
+        tracked_input = 0
+        tracked_output = 0
+        for model_name, counts in _usage_by_model.items():
+            rate = _PRICING.get(model_name, _cheapest)
+            cost += counts.get("input", 0) / 1_000_000 * rate["input"]
+            cost += counts.get("output", 0) / 1_000_000 * rate["output"]
+            tracked_input += counts.get("input", 0)
+            tracked_output += counts.get("output", 0)
+        # Fall back to cheapest rate for any untracked remainder
+        untracked_in = max(0, _usage_input_tokens - tracked_input)
+        untracked_out = max(0, _usage_output_tokens - tracked_output)
+        if untracked_in or untracked_out:
+            cost += untracked_in / 1_000_000 * _cheapest["input"]
+            cost += untracked_out / 1_000_000 * _cheapest["output"]
+        return round(cost, 4)
 
 
 # Per-operation token budget — set by callers to limit total tokens for a
@@ -156,27 +161,31 @@ _token_budget_used: int = 0
 def set_token_budget(max_tokens: int) -> None:
     """Set a token budget for subsequent LLM calls. 0 = unlimited."""
     global _token_budget, _token_budget_used
-    _token_budget = max(0, max_tokens)
-    _token_budget_used = 0
+    with _usage_lock:
+        _token_budget = max(0, max_tokens)
+        _token_budget_used = 0
 
 
 def reset_token_budget() -> None:
     """Clear the token budget (unlimited)."""
     global _token_budget, _token_budget_used
-    _token_budget = 0
-    _token_budget_used = 0
+    with _usage_lock:
+        _token_budget = 0
+        _token_budget_used = 0
 
 
 def get_token_budget_remaining() -> int:
     """Return remaining tokens in budget. -1 = unlimited."""
-    if _token_budget <= 0:
-        return -1
-    return max(0, _token_budget - _token_budget_used)
+    with _usage_lock:
+        if _token_budget <= 0:
+            return -1
+        return max(0, _token_budget - _token_budget_used)
 
 
 def is_token_budget_exhausted() -> bool:
     """Check if token budget is set and exhausted."""
-    return _token_budget > 0 and _token_budget_used >= _token_budget
+    with _usage_lock:
+        return _token_budget > 0 and _token_budget_used >= _token_budget
 
 
 # Retry config
@@ -190,28 +199,29 @@ def _track_usage(result: LLMResult) -> None:
     global _usage_cache_read_tokens, _usage_cache_creation_tokens, _usage_by_model
     global _token_budget_used
 
-    _usage_input_tokens += result.input_tokens
-    _usage_output_tokens += result.output_tokens
-    _usage_cache_read_tokens += result.cache_read_tokens
-    _usage_cache_creation_tokens += result.cache_creation_tokens
-    _usage_calls += 1
+    with _usage_lock:
+        _usage_input_tokens += result.input_tokens
+        _usage_output_tokens += result.output_tokens
+        _usage_cache_read_tokens += result.cache_read_tokens
+        _usage_cache_creation_tokens += result.cache_creation_tokens
+        _usage_calls += 1
 
-    # Track against per-operation token budget
-    _token_budget_used += result.input_tokens + result.output_tokens
+        # Track against per-operation token budget
+        _token_budget_used += result.input_tokens + result.output_tokens
 
-    # Per-model tracking (for accurate cost estimation)
-    if result.model_usage:
-        for m, counts in result.model_usage.items():
-            if m not in _usage_by_model:
-                _usage_by_model[m] = {"input": 0, "output": 0}
-            _usage_by_model[m]["input"] += counts.get("input", 0)
-            _usage_by_model[m]["output"] += counts.get("output", 0)
-    elif result.model:
-        model_key = result.model
-        if model_key not in _usage_by_model:
-            _usage_by_model[model_key] = {"input": 0, "output": 0}
-        _usage_by_model[model_key]["input"] += result.input_tokens
-        _usage_by_model[model_key]["output"] += result.output_tokens
+        # Per-model tracking (for accurate cost estimation)
+        if result.model_usage:
+            for m, counts in result.model_usage.items():
+                if m not in _usage_by_model:
+                    _usage_by_model[m] = {"input": 0, "output": 0}
+                _usage_by_model[m]["input"] += counts.get("input", 0)
+                _usage_by_model[m]["output"] += counts.get("output", 0)
+        elif result.model:
+            model_key = result.model
+            if model_key not in _usage_by_model:
+                _usage_by_model[model_key] = {"input": 0, "output": 0}
+            _usage_by_model[model_key]["input"] += result.input_tokens
+            _usage_by_model[model_key]["output"] += result.output_tokens
 
 
 def _resolve_tier(model: Optional[str]) -> str:

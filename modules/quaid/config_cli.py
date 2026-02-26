@@ -70,7 +70,7 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"provider:         {_get(data, 'models.llmProvider', 'default')}")
     print(f"deep reasoning:   {_get(data, 'models.deepReasoning', 'default')}")
     print(f"fast reasoning:    {_get(data, 'models.fastReasoning', 'default')}")
-    print(f"embeddings model: {_get(data, 'models.embeddings', 'default')}")
+    print(f"embeddings model: {_get(data, 'ollama.embeddingModel', _get(data, 'ollama.embedding_model', 'qwen3-embedding:8b'))}")
     print(f"notify level:     {_get(data, 'notifications.level', 'normal')}")
     print(f"fail hard:        {_get(data, 'retrieval.failHard', _get(data, 'retrieval.fail_hard', True))}")
     print(f"identity mode:    {_get(data, 'identity.mode', 'single_user')}")
@@ -78,7 +78,7 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"core parallel:    {_get(data, 'core.parallel.enabled', True)}")
     print(f"llm workers:      {_get(data, 'core.parallel.llmWorkers', _get(data, 'core.parallel.llm_workers', 4))}")
     print(f"prepass workers:  {_get(data, 'core.parallel.lifecyclePrepassWorkers', _get(data, 'core.parallel.lifecycle_prepass_workers', 3))}")
-    print(f"idle timeout:     {_get(data, 'capture.idle_timeout_minutes', 10)}m")
+    print(f"idle timeout:     {_get(data, 'capture.inactivity_timeout_minutes', _get(data, 'capture.inactivityTimeoutMinutes', 120))}m")
     print()
     print("systems:")
     for key in ("memory", "journal", "projects", "workspace"):
@@ -157,14 +157,14 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = str(_get(staged, "models.fastReasoning", "default"))
                 _set(staged, "models.fastReasoning", _prompt_str("models.fastReasoning", cur))
             elif choice == "4":
-                cur = str(_get(staged, "models.embeddings", "default"))
-                _set(staged, "models.embeddings", _prompt_str("models.embeddings", cur))
+                cur = str(_get(staged, "ollama.embeddingModel", _get(staged, "ollama.embedding_model", "qwen3-embedding:8b")))
+                _set(staged, "ollama.embeddingModel", _prompt_str("ollama.embeddingModel", cur))
             elif choice == "5":
                 cur = str(_get(staged, "notifications.level", "normal"))
                 _set(staged, "notifications.level", _prompt_str("notifications.level", cur))
             elif choice == "6":
-                cur = int(_get(staged, "capture.idle_timeout_minutes", 10))
-                _set(staged, "capture.idle_timeout_minutes", _prompt_int("capture.idle_timeout_minutes", cur))
+                cur = int(_get(staged, "capture.inactivity_timeout_minutes", _get(staged, "capture.inactivityTimeoutMinutes", 120)))
+                _set(staged, "capture.inactivity_timeout_minutes", _prompt_int("capture.inactivity_timeout_minutes", cur))
             elif choice == "7":
                 cur = bool(_get(staged, "retrieval.failHard", _get(staged, "retrieval.fail_hard", True)))
                 raw = _prompt_str("retrieval.failHard (true/false)", "true" if cur else "false").lower()

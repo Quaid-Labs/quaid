@@ -72,6 +72,7 @@ let _nodeCountTimestamp = 0;
 const NODE_COUNT_CACHE_MS = 5 * 60 * 1000; // 5 minutes
 let _cachedDatastoreStats: Record<string, any> | null = null;
 let _datastoreStatsTimestamp = 0;
+let _memoryConfigErrorLogged = false;
 
 function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   const sep = process.platform === "win32" ? ";" : ":";
@@ -105,7 +106,12 @@ function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<s
     _cachedDatastoreStats = parsed;
     _datastoreStatsTimestamp = now;
     return parsed;
-  } catch {
+  } catch (err: unknown) {
+    const msg = `[quaid] datastore stats read failed: ${(err as Error)?.message || String(err)}`;
+    if (isFailHardEnabled()) {
+      throw new Error(msg);
+    }
+    console.warn(msg);
     return null;
   }
 }
@@ -138,7 +144,14 @@ function getMemoryConfig(): any {
   if (_memoryConfig) { return _memoryConfig; }
   try {
     _memoryConfig = JSON.parse(fs.readFileSync(path.join(WORKSPACE, "config/memory.json"), "utf8"));
-  } catch {
+  } catch (err: unknown) {
+    if (!_memoryConfigErrorLogged) {
+      _memoryConfigErrorLogged = true;
+      console.error("[quaid] failed to load config/memory.json:", (err as Error)?.message || String(err));
+    }
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     _memoryConfig = {};
   }
   return _memoryConfig;
@@ -371,9 +384,9 @@ function runStartupSelfCheck(): void {
 
   try {
     const cfg = getMemoryConfig();
-    const maxResults = Number(cfg?.retrieval?.maxResults ?? 0);
+    const maxResults = Number(cfg?.retrieval?.maxLimit ?? cfg?.retrieval?.max_limit ?? 0);
     if (!Number.isFinite(maxResults) || maxResults <= 0) {
-      errors.push(`invalid retrieval.maxResults=${String(cfg?.retrieval?.maxResults)}`);
+      errors.push(`invalid retrieval.maxLimit=${String(cfg?.retrieval?.maxLimit ?? cfg?.retrieval?.max_limit)}`);
     }
   } catch (err: unknown) {
     errors.push(`config load failed: ${String((err as Error)?.message || err)}`);
@@ -1248,6 +1261,10 @@ notify_user("Hey, I see you just installed Quaid. Want me to help migrate import
       const requests = Array.isArray(raw?.requests) ? raw.requests : [];
       const pendingCount = requests.filter((r: any) => r?.status === "pending").length;
       if (pendingCount > 0) {
+        spawnNotifyScript(`
+from core.runtime.notify import notify_user
+notify_user("Quaid has ${pendingCount} pending approval request(s). Review pending maintenance approvals.")
+`);
         state.lastApprovalNudgeAt = now;
       }
     }
@@ -2006,6 +2023,9 @@ const quaidPlugin = {
         console.log("[quaid] Datastore initialization complete");
       } catch (err: unknown) {
         console.error("[quaid] Datastore initialization failed:", (err as Error).message);
+        if (isFailHardEnabled()) {
+          throw err;
+        }
       }
     }
 
@@ -3296,7 +3316,11 @@ notify_memory_extraction(
         };
         fs.writeFileSync(extractionLogPath, JSON.stringify(extractionLog, null, 2), { mode: 0o600 });
       } catch (logErr: unknown) {
-        console.log(`[quaid] extraction log update failed: ${(logErr as Error).message}`);
+        const msg = `[quaid] extraction log update failed: ${(logErr as Error).message}`;
+        if (isFailHardEnabled()) {
+          throw new Error(msg);
+        }
+        console.warn(msg);
       }
     };
     // Recovery scan: detect sessions interrupted by gateway restart before extraction fired
