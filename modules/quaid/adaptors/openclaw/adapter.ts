@@ -2032,10 +2032,39 @@ interface RecallOptions {
 // defined below inside register() as well, so it has access to it.
 // (Moved into register() closure when used)
 
-async function getStats(): Promise<object | null> {
+type DatastoreStats = {
+  total_nodes: number;
+  edges: number;
+};
+
+function parseDatastoreStats(raw: string): DatastoreStats | null {
+  let parsed: unknown = null;
+  try {
+    parsed = JSON.parse(raw || "{}");
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const totalNodes = Number((parsed as Record<string, unknown>).total_nodes);
+  const edges = Number((parsed as Record<string, unknown>).edges);
+  if (!Number.isFinite(totalNodes) || totalNodes < 0) {
+    return null;
+  }
+  if (!Number.isFinite(edges) || edges < 0) {
+    return null;
+  }
+  return {
+    total_nodes: totalNodes,
+    edges,
+  };
+}
+
+async function getStats(): Promise<DatastoreStats | null> {
   try {
     const output = await datastoreBridge.stats();
-    return JSON.parse(output);
+    return parseDatastoreStats(output);
   } catch (err: unknown) {
     console.error("[quaid] stats error:", (err as Error).message);
     return null;
@@ -2125,7 +2154,7 @@ const quaidPlugin = {
       .then((stats) => {
         if (stats) {
           console.log(
-            `[quaid] Database ready: ${(stats as any).total_nodes} nodes, ${(stats as any).edges} edges`
+            `[quaid] Database ready: ${stats.total_nodes} nodes, ${stats.edges} edges`
           );
         }
       })
