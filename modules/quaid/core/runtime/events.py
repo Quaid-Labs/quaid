@@ -160,6 +160,10 @@ def _read_json(path: Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning("Failed reading JSON file %s: %s", path, exc)
+        if _is_fail_hard_enabled():
+            raise RuntimeError(
+                f"Failed reading JSON file while fail-hard mode is enabled: {path}"
+            ) from exc
         return default
 
 
