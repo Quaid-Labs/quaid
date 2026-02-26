@@ -75,13 +75,18 @@ def run_callables(
             if remaining <= 0:
                 for fut in pending:
                     fut.cancel()
-                timeout_exc = TimeoutError(f"Parallel call timed out after {timeout_seconds}s")
                 if return_exceptions:
                     for fut in pending:
                         idx = fut_to_idx[fut]
-                        out[idx] = timeout_exc
+                        out[idx] = TimeoutError(
+                            f"Parallel call timed out after {timeout_seconds}s (callable_index={idx})"
+                        )
                     break
-                raise timeout_exc
+                pending_indices = sorted(fut_to_idx[f] for f in pending)
+                raise TimeoutError(
+                    f"Parallel call timed out after {timeout_seconds}s "
+                    f"(pending_callable_indices={pending_indices})"
+                )
             iterator = as_completed(pending, timeout=remaining)
 
         progressed = False
