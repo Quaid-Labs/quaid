@@ -527,11 +527,18 @@ function addMemoryNote(sessionId, text, category) {
     try {
       existing = JSON.parse(fs.readFileSync(notesPath, "utf8"));
     } catch (err) {
-      console.warn(`[quaid] memory note read failed for ${notesPath}: ${String(err?.message || err)}`);
+      const msg = String(err?.message || err);
+      if (!msg.includes("ENOENT") && isFailHardEnabled()) {
+        throw err;
+      }
+      console.warn(`[quaid] memory note read failed for ${notesPath}: ${msg}`);
     }
     existing.push(`[${category}] ${text}`);
     fs.writeFileSync(notesPath, JSON.stringify(existing), { mode: 384 });
   } catch (err) {
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     console.warn(`[quaid] memory note write failed for session ${sessionId}: ${String(err?.message || err)}`);
   }
 }
