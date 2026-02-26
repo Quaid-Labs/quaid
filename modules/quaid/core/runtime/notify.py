@@ -185,58 +185,6 @@ def notify_user(
     return _ctx_send_notification(message, channel_override=channel_override, dry_run=dry_run)
 
 
-def notify_doc_update(
-    doc_path: str,
-    trigger: str,
-    summary: Optional[str] = None,
-    dry_run: bool = False
-) -> bool:
-    """
-    Notify user about a doc auto-update.
-
-    Args:
-        doc_path: Path to the updated doc
-        trigger: What triggered the update (compact, janitor, manual)
-        summary: Optional summary of changes
-        dry_run: If True, don't actually send
-
-    Returns:
-        True if notification sent
-    """
-    # Extract just the filename for brevity
-    doc_name = Path(doc_path).name
-
-    # Map trigger to human-readable description
-    trigger_desc = {
-        "compact": "conversation compaction",
-        "reset": "session reset",
-        "janitor": "nightly maintenance",
-        "manual": "manual request",
-        "on-demand": "staleness detection",
-    }.get(trigger, trigger)
-
-    # Build message with header
-    msg_parts = [
-        f"{QUAID_HEADER} 📋 **Auto-Documentation System Report**",
-        "",
-        f"Updated: `{doc_name}`",
-        f"Trigger: {trigger_desc}",
-    ]
-
-    if summary:
-        # Truncate summary if too long (unless fullText enabled)
-        if not _notify_full_text() and len(summary) > 200:
-            summary = summary[:197] + "..."
-        msg_parts.append(f"Changes: {summary}")
-
-    msg_parts.append("")
-    msg_parts.append("_This doc was auto-updated to stay in sync with code changes._")
-
-    message = "\n".join(msg_parts)
-
-    return notify_user(message, dry_run=dry_run)
-
-
 def notify_memory_recall(
     memories: list,
     min_similarity: int = 70,
