@@ -15,8 +15,10 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -520,6 +522,47 @@ def _cleanup_event(event_file: Path) -> None:
         print(f"  Failed to cleanup event file: {e}")
 
 
+def _move_event_to_failed(event_file: Path) -> None:
+    """Move an event file into failed/ for manual triage."""
+    try:
+        if not event_file.exists():
+            return
+        failed_dir = event_file.parent / "failed"
+        failed_dir.mkdir(exist_ok=True)
+        event_file.rename(failed_dir / event_file.name)
+    except Exception:
+        _cleanup_event(event_file)
+
+
+def _watchdog_seconds(default_seconds: int = 900) -> int:
+    raw = os.getenv("QUAID_PROJECT_UPDATER_WATCHDOG_SECONDS", str(default_seconds))
+    try:
+        seconds = int(raw)
+    except Exception:
+        seconds = default_seconds
+    return max(0, seconds)
+
+
+def _run_with_watchdog(fn, timeout_seconds: int, label: str):
+    """Run fn with a hard POSIX alarm timeout when available."""
+    if timeout_seconds <= 0 or os.name != "posix" or not hasattr(signal, "SIGALRM"):
+        return fn()
+
+    def _on_alarm(_signum, _frame):
+        raise TimeoutError(f"{label} exceeded watchdog timeout ({timeout_seconds}s)")
+
+    prev_handler = signal.getsignal(signal.SIGALRM)
+    prev_timer = signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds), 0.0)
+    signal.signal(signal.SIGALRM, _on_alarm)
+    try:
+        return fn()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0, 0.0)
+        signal.signal(signal.SIGALRM, prev_handler)
+        if prev_timer and (prev_timer[0] > 0 or prev_timer[1] > 0):
+            signal.setitimer(signal.ITIMER_REAL, prev_timer[0], prev_timer[1])
+
+
 # ============================================================================
 # CLI
 # ============================================================================
@@ -570,7 +613,26 @@ def main():
                 print(f"  {f.name}: (unreadable)")
 
     elif args.command == "process-event":
-        result = process_event(args.event_file)
+        event_file = Path(args.event_file)
+        timeout_seconds = _watchdog_seconds()
+        started = time.time()
+        try:
+            result = _run_with_watchdog(
+                lambda: process_event(args.event_file),
+                timeout_seconds,
+                "project-updater process-event",
+            )
+        except TimeoutError as exc:
+            _move_event_to_failed(event_file)
+            print(f"Watchdog timeout: {exc}", file=sys.stderr)
+            result = {
+                "success": False,
+                "project": None,
+                "updates": 0,
+                "trigger": "unknown",
+                "error": "watchdog_timeout",
+                "elapsed_seconds": round(time.time() - started, 3),
+            }
         print(json.dumps(result, indent=2))
 
     elif args.command == "process-all":
