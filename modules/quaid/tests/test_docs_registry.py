@@ -226,6 +226,19 @@ class TestRead:
         assert entry["file_path"] == "docs/test.md"
 
 
+class TestTitleExtraction:
+    def test_extract_title_logs_failure(self, setup_env, caplog):
+        from datastore.docsdb.registry import DocsRegistry
+
+        r = DocsRegistry(db_path=_tmp_db)
+        caplog.set_level("WARNING")
+        with patch("builtins.open", side_effect=OSError("no read")):
+            title = r._extract_title(Path("/tmp/missing.md"))
+
+        assert title is None
+        assert "Failed to extract markdown title" in caplog.text
+
+
 class TestUnregister:
     def test_soft_delete(self, setup_env):
         r = _get_registry()
