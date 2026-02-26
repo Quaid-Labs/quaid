@@ -7,6 +7,10 @@ type ProjectCatalogReaderDeps = {
   path: typeof pathType;
 };
 
+function warnCatalog(message: string): void {
+  try { console.warn(message); } catch {}
+}
+
 function firstUsefulLine(content: string): string {
   return String(content || "")
     .split("\n")
@@ -26,7 +30,8 @@ function getProjectDescriptionFromToolsMd(
     const m = content.match(/^\s*(?:Project\s+Description|Description)\s*:\s*(.+)$/im);
     if (m && m[1]) return m[1].trim().slice(0, 180);
     return firstUsefulLine(content).slice(0, 180);
-  } catch {
+  } catch (err: unknown) {
+    warnCatalog(`[quaid] project catalog: TOOLS.md description read failed: ${String((err as Error)?.message || err)}`);
     return "";
   }
 }
@@ -43,7 +48,8 @@ function getProjectDescriptionFromProjectMd(
     const m = content.match(/^\s*Description\s*:\s*(.+)$/im);
     if (m && m[1]) return m[1].trim().slice(0, 180);
     return firstUsefulLine(content).slice(0, 180);
-  } catch {
+  } catch (err: unknown) {
+    warnCatalog(`[quaid] project catalog: PROJECT.md description read failed: ${String((err as Error)?.message || err)}`);
     return "";
   }
 }
@@ -54,7 +60,8 @@ export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
       const configPath = deps.path.join(deps.workspace, "config/memory.json");
       const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
       return Object.keys(configData?.projects?.definitions || {});
-    } catch {
+    } catch (err: unknown) {
+      warnCatalog(`[quaid] project catalog: failed to load project names: ${String((err as Error)?.message || err)}`);
       return [];
     }
   }
@@ -71,7 +78,8 @@ export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
           || "No description";
         return { name, description };
       });
-    } catch {
+    } catch (err: unknown) {
+      warnCatalog(`[quaid] project catalog: failed to load full catalog: ${String((err as Error)?.message || err)}`);
       return getProjectNames().map((name) => ({ name, description: "No description" }));
     }
   }

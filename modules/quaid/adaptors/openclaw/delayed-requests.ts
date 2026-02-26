@@ -17,11 +17,16 @@ type RequestsPayload = {
   requests: RequestItem[];
 };
 
+function warnDelayed(message: string): void {
+  try { console.warn(message); } catch {}
+}
+
 function readJson(path: string): any {
   try {
     if (!fs.existsSync(path)) return null;
     return JSON.parse(fs.readFileSync(path, "utf8"));
-  } catch {
+  } catch (err: unknown) {
+    warnDelayed(`[quaid] delayed requests read failed path=${path}: ${String((err as Error)?.message || err)}`);
     return null;
   }
 }
@@ -66,7 +71,8 @@ export function queueDelayedRequest(
     payload.requests = requests;
     writeJson(requestsPath, payload);
     return true;
-  } catch {
+  } catch (err: unknown) {
+    warnDelayed(`[quaid] delayed requests queue failed path=${requestsPath}: ${String((err as Error)?.message || err)}`);
     return false;
   }
 }
