@@ -486,7 +486,15 @@ def extract_from_transcript(
                                     f"{subj} --{rel}--> {obj}"
                                 )
                         except Exception as e:
-                            logger.warning(f"[extract] {label}: edge failed: {e}")
+                            logger.warning(
+                                "[extract] %s: edge failed for %s --%s--> %s: %s",
+                                label,
+                                subj,
+                                rel,
+                                obj,
+                                e,
+                                exc_info=True,
+                            )
         else:
             # Dry run — just mark as would-store
             fact_entry["status"] = "would_store"
