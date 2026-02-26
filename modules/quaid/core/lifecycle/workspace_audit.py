@@ -23,6 +23,7 @@ from typing import Dict, List, Any, Optional
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from lib.runtime_context import get_workspace_dir, get_bootstrap_markdown_globs
+from lib.fail_policy import is_fail_hard_enabled
 
 # Configuration
 def _workspace_dir() -> Path:
@@ -84,7 +85,8 @@ def _queue_project_review(
             pending = json.loads(raw) if raw else []
             if not isinstance(pending, list):
                 pending = []
-        except (json.JSONDecodeError, IOError):
+        except (json.JSONDecodeError, IOError) as exc:
+            logger.warning("Failed to read pending project review queue %s: %s", queue_path, exc)
             pending = []
         pending.append(entry)
         f.seek(0)
@@ -110,7 +112,8 @@ def get_pending_project_reviews() -> List[Dict[str, Any]]:
     try:
         with open(_pending_project_review(), "r") as f:
             pending = json.load(f)
-    except (json.JSONDecodeError, IOError):
+    except (json.JSONDecodeError, IOError) as exc:
+        logger.warning("Failed to read pending project reviews %s: %s", _pending_project_review(), exc)
         return []
 
     return pending
@@ -127,6 +130,16 @@ def clear_pending_project_reviews() -> None:
 
 # Protected region helpers — canonical implementation in lib/markdown.py
 from lib.markdown import strip_protected_regions, section_overlaps_protected
+
+
+def _default_owner_id() -> str:
+    try:
+        return get_config().users.default_owner
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Unable to resolve workspace audit default owner from config") from exc
+        logger.warning("Workspace audit default owner fallback to 'default': %s", exc)
+        return "default"
 
 
 # Default maxLines for bootstrap files (project-level TOOLS.md, AGENTS.md, etc.)
@@ -606,16 +619,11 @@ def apply_review_decisions(dry_run: bool = True,
                         if dry_run:
                             print(f"  Would store '{section}' from {filename} as {memory_type} memory")
                         else:
-                            cfg = get_config()
-                            try:
-                                default_owner = cfg.users.default_owner
-                            except Exception:
-                                default_owner = "default"
                             get_memory_service().store(
                                 text=section_content[:2000],
                                 category="fact",
                                 source=f"workspace_audit:{filename}",
-                                owner_id=default_owner,
+                                owner_id=_default_owner_id(),
                                 verified=(memory_type == "verified"),
                                 pinned=(memory_type == "pinned"),
                             )
