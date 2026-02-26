@@ -301,7 +301,6 @@ class ClaudeCodeLLMProvider(LLMProvider):
             "--output-format", "json",
             "--no-session-persistence",
             "--max-turns", "1",
-            "--tools", "",
             "--system-prompt", system_prompt,
             user_message,
         ]
