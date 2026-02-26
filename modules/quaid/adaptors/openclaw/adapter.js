@@ -784,13 +784,21 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
     const name = String(err?.name || "").toLowerCase();
     return name.includes("timeout") || msg.includes("timeout") || msg.includes("timed out") || msg.includes("econnreset") || msg.includes("econnrefused") || msg.includes("network") || msg.includes("fetch failed");
   };
-  const readBodyWithTimeout = async (resp) => {
-    return await Promise.race([
-      resp.text(),
-      new Promise(
-        (_, reject) => setTimeout(() => reject(new Error(`gateway response body timeout after ${timeoutMs}ms`)), timeoutMs)
-      )
-    ]);
+  const readBodyWithTimeout = async (resp, bodyTimeoutMs) => {
+    let timer = null;
+    try {
+      return await Promise.race([
+        resp.text(),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`gateway response body timeout after ${bodyTimeoutMs}ms`)),
+            bodyTimeoutMs
+          );
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   };
   const maxAttempts = 2;
   let data = null;
@@ -798,6 +806,7 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
   let rawBody = "";
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptStart = Date.now();
     try {
       gatewayRes = await fetch(gatewayUrl, {
         method: "POST",
@@ -813,7 +822,9 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
         }),
         signal: AbortSignal.timeout(timeoutMs)
       });
-      rawBody = await readBodyWithTimeout(gatewayRes);
+      const elapsedMs = Date.now() - attemptStart;
+      const bodyTimeoutMs = Math.max(1, timeoutMs - elapsedMs);
+      rawBody = await readBodyWithTimeout(gatewayRes, bodyTimeoutMs);
       try {
         data = rawBody ? JSON.parse(rawBody) : {};
       } catch (err) {
