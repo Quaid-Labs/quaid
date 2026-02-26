@@ -149,6 +149,21 @@ def test_janitor_metrics_thread_safe_counters():
     assert summary["task_metrics"]["parallel"]["llm_calls"] == 200
 
 
+def test_janitor_metrics_caps_error_and_warning_buffers(monkeypatch):
+    monkeypatch.setenv("JANITOR_METRICS_MAX_EVENTS", "3")
+    metrics = JanitorMetrics()
+
+    for idx in range(5):
+        metrics.add_error(f"e{idx}")
+        metrics.add_warning(f"w{idx}")
+
+    summary = metrics.summary()
+    assert summary["errors"] == 3
+    assert summary["warnings"] == 3
+    assert summary["error_details"][0]["error"] == "e2"
+    assert summary["warning_details"][0]["warning"] == "w2"
+
+
 def test_find_contradictions_applies_remaining_budget_to_parallel_timeout(monkeypatch):
     captured = {}
 
