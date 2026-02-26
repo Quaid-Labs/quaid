@@ -39,3 +39,21 @@ def test_maintenance_errors_include_exception_type():
 
     assert result.errors
     assert "ValueError" in result.errors[0]
+
+
+def test_maintenance_runtime_errors_use_consistent_prefix():
+    registry = _Registry()
+    register_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["memory_graph_maintenance"]
+
+    ctx = SimpleNamespace(
+        graph=object(),
+        options={"subtask": "review"},
+        dry_run=True,
+    )
+
+    with patch("datastore.memorydb.maintenance.ops.review_pending_memories", side_effect=RuntimeError("boom")):
+        result = handler(ctx)
+
+    assert result.errors
+    assert result.errors[0].startswith("Memory graph maintenance failed (RuntimeError):")
