@@ -328,7 +328,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
                         with open(env_path) as f:
                             for line in f:
                                 if line.strip().startswith("CLAUDE_CODE_OAUTH_TOKEN="):
-                                    env["CLAUDE_CODE_OAUTH_TOKEN"] = line.strip().split("=", 1)[1]
+                                    env["CLAUDE_CODE_OAUTH_TOKEN"] = line.strip().split("=", 1)[1].strip()
                                     print(
                                         f"[providers][FALLBACK] Loaded CLAUDE_CODE_OAUTH_TOKEN from {env_path}.",
                                         file=sys.stderr,
