@@ -1435,8 +1435,25 @@ JSON array only:"""
                 if dry_run:
                     print(f"    Would KEEP_A: supersede B ({c['text_b'][:40]}...) — {reason[:50]}")
                 else:
-                    graph.supersede_node(c["node_b_id"], c["node_a_id"])
-                    resolve_contradiction(c["id"], "keep_a", reason)
+                    now_iso = datetime.now().isoformat()
+                    with graph._get_conn() as conn:
+                        conn.execute(
+                            """
+                            UPDATE nodes SET superseded_by = ?, confidence = 0.1,
+                                valid_until = ?, updated_at = ?
+                            WHERE id = ? AND superseded_by IS NULL
+                            """,
+                            (c["node_a_id"], now_iso, now_iso, c["node_b_id"]),
+                        )
+                        conn.execute(
+                            """
+                            UPDATE contradictions
+                            SET status = 'resolved', resolution = ?, resolution_reason = ?,
+                                resolved_at = datetime('now')
+                            WHERE id = ?
+                            """,
+                            ("keep_a", reason, c["id"]),
+                        )
                 results["resolved"] += 1
                 batch_resolved += 1
                 results["decisions"].append(decision_row)
@@ -1445,8 +1462,25 @@ JSON array only:"""
                 if dry_run:
                     print(f"    Would KEEP_B: supersede A ({c['text_a'][:40]}...) — {reason[:50]}")
                 else:
-                    graph.supersede_node(c["node_a_id"], c["node_b_id"])
-                    resolve_contradiction(c["id"], "keep_b", reason)
+                    now_iso = datetime.now().isoformat()
+                    with graph._get_conn() as conn:
+                        conn.execute(
+                            """
+                            UPDATE nodes SET superseded_by = ?, confidence = 0.1,
+                                valid_until = ?, updated_at = ?
+                            WHERE id = ? AND superseded_by IS NULL
+                            """,
+                            (c["node_b_id"], now_iso, now_iso, c["node_a_id"]),
+                        )
+                        conn.execute(
+                            """
+                            UPDATE contradictions
+                            SET status = 'resolved', resolution = ?, resolution_reason = ?,
+                                resolved_at = datetime('now')
+                            WHERE id = ?
+                            """,
+                            ("keep_b", reason, c["id"]),
+                        )
                 results["resolved"] += 1
                 batch_resolved += 1
                 results["decisions"].append(decision_row)
