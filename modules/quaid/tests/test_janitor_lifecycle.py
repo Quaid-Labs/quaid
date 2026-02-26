@@ -300,6 +300,28 @@ def test_lifecycle_registry_rejects_conflicting_reregister():
         registry.register("writer", lambda _ctx: SimpleNamespace(metrics={}, logs=[], errors=[], data={}), owner="other")
 
 
+def test_lifecycle_registry_register_and_has_use_registry_guard():
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    class _CountingLock:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __enter__(self):
+            self.calls += 1
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    registry = LifecycleRegistry()
+    counter = _CountingLock()
+    registry._registry_guard = counter  # Intentional white-box check for thread-safety guard coverage.
+    registry.register("writer", lambda _ctx: SimpleNamespace(metrics={}, logs=[], errors=[], data={}), owner="memorydb")
+    assert registry.has("writer") is True
+    assert counter.calls >= 2
+
+
 def test_lifecycle_registry_skips_lock_enforcement_when_disabled(tmp_path):
     from core.lifecycle.janitor_lifecycle import LifecycleRegistry
 
