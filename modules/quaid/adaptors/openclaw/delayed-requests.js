@@ -63,6 +63,9 @@ function queueDelayedRequest(requestsPath, message, kind = "janitor", priority =
       const normalizedMessage = String(message || "").trim();
       if (!normalizedMessage) return false;
       const loaded = readJson(requestsPath);
+      if (loaded === null && failHard && fs.existsSync(requestsPath)) {
+        throw new Error(`delayed requests file is unreadable or malformed: ${requestsPath}`);
+      }
       const payload = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? loaded : { version: 1, requests: [] };
       const requests = Array.isArray(payload.requests) ? payload.requests : [];
       const id = makeRequestId(kind, normalizedMessage);
