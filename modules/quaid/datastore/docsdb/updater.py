@@ -653,8 +653,8 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
         )
         if log_output.returncode == 0 and log_output.stdout.strip():
             parts.append(f"### Commits for {source_path}:\n{log_output.stdout.strip()}")
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        logger.debug("Git log unavailable for %s since %s: %s", source_path, since_iso, exc)
 
     # Git diff (staged + unstaged changes)
     try:
@@ -668,8 +668,8 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
             if len(diff_text) > 8000:
                 diff_text = diff_text[:8000] + "\n... (truncated)"
             parts.append(f"### Diff for {source_path}:\n{diff_text}")
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        logger.debug("Git diff unavailable for %s: %s", source_path, exc)
 
     return "\n\n".join(parts)
 

@@ -202,10 +202,14 @@ class TestGetGitDiff:
         src_file.write_text("content")
 
         with _adapter_patch(tmp_path), \
-             patch("datastore.docsdb.updater.subprocess.run", side_effect=FileNotFoundError):
+             patch("datastore.docsdb.updater.subprocess.run", side_effect=FileNotFoundError), \
+             patch("datastore.docsdb.updater.logger.debug") as log_debug:
             from datastore.docsdb.updater import get_git_diff
             result = get_git_diff("src.py", 0.0)
             assert result == ""
+            debug_messages = [str(call.args[0]) for call in log_debug.call_args_list if call.args]
+            assert any("Git log unavailable" in msg for msg in debug_messages)
+            assert any("Git diff unavailable" in msg for msg in debug_messages)
 
 
 class TestGetDocPurposes:
