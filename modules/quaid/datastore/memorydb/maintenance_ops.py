@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -65,6 +66,9 @@ from lib.runtime_context import (
     get_llm_provider,
 )
 from lib.worker_pool import run_callables
+from lib.fail_policy import is_fail_hard_enabled
+
+logger = logging.getLogger(__name__)
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
@@ -131,7 +135,10 @@ def _default_owner_id() -> str:
     """Get the default owner ID from config."""
     try:
         return _cfg.users.default_owner
-    except Exception:
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Unable to resolve maintenance default owner from config") from exc
+        logger.warning("maintenance default owner fallback to 'default': %s", exc)
         return "default"
 
 
@@ -795,7 +802,10 @@ def get_last_successful_janitor_completed_at(graph: MemoryGraph) -> Optional[str
             ).fetchone()
         if row and row["completed_at"]:
             return str(row["completed_at"])
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to read last successful janitor completion time: %s", exc)
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to read janitor completion status from datastore") from exc
         return None
     return None
 
@@ -847,7 +857,12 @@ def recall_candidates(graph: MemoryGraph, text: str, exclude_id: str,
                   AND (n.status IS NULL OR n.status IN ('approved', 'pending', 'active'))
                 LIMIT ?
             """, (fts_query, exclude_id, limit)).fetchall()
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    "recall_candidates FTS query failed while fail-hard mode is enabled"
+                ) from exc
+            logger.warning("recall_candidates FTS query failed, falling back to LIKE: %s", exc)
             # Fallback to LIKE if FTS5 index not yet rebuilt
             conditions = " OR ".join(["LOWER(name) LIKE ?"] * len(tokens))
             params: list = [f"%{t}%" for t in tokens]
@@ -905,8 +920,12 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
                             "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                             (node_id, packed)
                         )
-                    except Exception:
-                        pass  # vec_nodes may not exist
+                    except Exception as exc:
+                        if is_fail_hard_enabled():
+                            raise RuntimeError(
+                                f"vec_nodes update failed during backfill for node {node_id}"
+                            ) from exc
+                        logger.warning("vec_nodes update skipped during backfill for node %s: %s", node_id, exc)
                 embedded += 1
             else:
                 metrics.add_error(f"Failed to embed node {node_id}: {name[:50]}")
@@ -2840,8 +2859,12 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                                 "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                                 (memory_id, packed_emb)
                             )
-                        except Exception:
-                            pass  # vec_nodes may not exist
+                        except Exception as exc:
+                            if is_fail_hard_enabled():
+                                raise RuntimeError(
+                                    f"vec_nodes update failed during review FIX for node {memory_id}"
+                                ) from exc
+                            logger.warning("vec_nodes update skipped during review FIX for node %s: %s", memory_id, exc)
                     # Create new edges if provided.
                     for edge_data in new_edges:
                         if edge_data.get("subject") and edge_data.get("relation") and edge_data.get("object"):
@@ -3016,8 +3039,12 @@ def resolve_temporal_references(graph: MemoryGraph, dry_run: bool = True,
                             "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                             (fact_id, packed_emb)
                         )
-                    except Exception:
-                        pass  # vec_nodes may not exist
+                    except Exception as exc:
+                        if is_fail_hard_enabled():
+                            raise RuntimeError(
+                                f"vec_nodes update failed during fact rewrite for node {fact_id}"
+                            ) from exc
+                        logger.warning("vec_nodes update skipped during fact rewrite for node %s: %s", fact_id, exc)
             print(f"    Fixed: {old_text[:50]}... → {new_text[:50]}...")
         fixed += 1
 
