@@ -849,6 +849,9 @@ function maybeForceCompactionAfterTimeout(sessionId?: string): void {
       console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
     }
   } catch (err: unknown) {
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String((err as Error)?.message || err)}`);
   }
 }
@@ -2306,9 +2309,15 @@ const quaidPlugin = {
         return;
       }
       try { maybeSendJanitorNudges(); } catch (err: unknown) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.warn(`[quaid] Janitor nudge dispatch failed: ${String((err as Error)?.message || err)}`);
       }
       try { maybeQueueJanitorHealthAlert(); } catch (err: unknown) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.warn(`[quaid] Janitor health alert dispatch failed: ${String((err as Error)?.message || err)}`);
       }
       // Cancel inactivity timer — agent is active again
@@ -2948,6 +2957,9 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             };
           } catch (err: unknown) {
             console.error("[quaid] memory_forget error:", err);
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             return {
               content: [{ type: "text", text: `Error deleting memory: ${String(err)}` }],
               details: { error: String(err) },

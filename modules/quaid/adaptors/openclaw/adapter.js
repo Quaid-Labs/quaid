@@ -750,6 +750,9 @@ function maybeForceCompactionAfterTimeout(sessionId) {
       console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
     }
   } catch (err) {
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
   }
 }
@@ -1959,11 +1962,17 @@ const quaidPlugin = {
       try {
         maybeSendJanitorNudges();
       } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.warn(`[quaid] Janitor nudge dispatch failed: ${String(err?.message || err)}`);
       }
       try {
         maybeQueueJanitorHealthAlert();
       } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.warn(`[quaid] Janitor health alert dispatch failed: ${String(err?.message || err)}`);
       }
       timeoutManager.onAgentStart();
@@ -2532,6 +2541,9 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
               };
             } catch (err) {
               console.error("[quaid] memory_forget error:", err);
+              if (isFailHardEnabled()) {
+                throw err;
+              }
               return {
                 content: [{ type: "text", text: `Error deleting memory: ${String(err)}` }],
                 details: { error: String(err) }
