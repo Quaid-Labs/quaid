@@ -371,6 +371,28 @@ def _decision_log_path() -> Path:
     return p
 
 
+def _decision_log_max_lines(default_lines: int = 2000) -> int:
+    raw = os.environ.get("QUAID_DECISION_LOG_MAX_LINES", "")
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        parsed = 0
+    return parsed if parsed > 0 else int(default_lines)
+
+
+def _trim_decision_log_tail(path: Path, max_lines: int) -> None:
+    if max_lines <= 0:
+        return
+    try:
+        content = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return
+    if len(content) <= max_lines:
+        return
+    trimmed = "\n".join(content[-max_lines:]) + "\n"
+    _atomic_write_text(path, trimmed)
+
+
 def _append_decision_log(kind: str, payload: Dict[str, Any]) -> None:
     """Append janitor decision events for audit/debug."""
     try:
@@ -379,10 +401,13 @@ def _append_decision_log(kind: str, payload: Dict[str, Any]) -> None:
             "kind": kind,
             **payload,
         }
-        with _decision_log_path().open("a", encoding="utf-8") as f:
+        log_path = _decision_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=True) + "\n")
+        _trim_decision_log_tail(log_path, _decision_log_max_lines())
     except Exception as exc:
-        janitor_logger.warning(f"decision log append failed: {exc}")
+        janitor_logger.warn("decision_log_append_failed", error=str(exc))
 
 
 def _pending_approvals_json_path() -> Path:
