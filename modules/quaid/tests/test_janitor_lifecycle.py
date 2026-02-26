@@ -18,7 +18,7 @@ class _FakeRag:
         return {"total_files": 2, "indexed_files": 1, "skipped_files": 1, "total_chunks": 3}
 
 
-def _make_cfg(projects_enabled: bool = True):
+def _make_cfg(projects_enabled: bool = True, lifecycle_timeout_seconds: float = 300.0):
     return SimpleNamespace(
         projects=SimpleNamespace(
             enabled=projects_enabled,
@@ -35,6 +35,7 @@ def _make_cfg(projects_enabled: bool = True):
                 lock_enforcement_enabled=True,
                 lock_wait_seconds=5,
                 lock_require_registration=True,
+                lifecycle_prepass_timeout_seconds=lifecycle_timeout_seconds,
             )
         ),
     )
@@ -272,6 +273,29 @@ def test_lifecycle_registry_run_many_times_out_pending_tasks(tmp_path):
     assert out["fast"].metrics.get("fast") == 1
     assert out["slow"].errors
     assert "timed out" in out["slow"].errors[0]
+
+
+def test_lifecycle_registry_parallel_map_times_out(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+
+    def _slow_map(ctx):
+        assert ctx.parallel_map is not None
+        ctx.parallel_map([1, 2], lambda _item: time.sleep(0.2), max_workers=2)
+        return SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={})
+
+    registry.register("slow_map", _slow_map)
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        registry.run(
+            "slow_map",
+            RoutineContext(
+                cfg=_make_cfg(False, lifecycle_timeout_seconds=0.05),
+                dry_run=True,
+                workspace=tmp_path,
+            ),
+        )
 
 
 def test_lifecycle_registry_requires_write_registration_when_enabled(tmp_path):

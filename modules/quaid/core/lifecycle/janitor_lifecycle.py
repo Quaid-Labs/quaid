@@ -216,6 +216,8 @@ class LifecycleRegistry:
         executor = self._ensure_llm_executor(self._llm_workers(ctx))
         sem = threading.Semaphore(worker_count)
         results: List[Any] = [None] * len(seq)
+        timeout_seconds = self._parallel_map_timeout_seconds(ctx)
+        deadline = time.monotonic() + timeout_seconds
 
         def _run(idx_item: tuple[int, Any]) -> tuple[int, Any]:
             idx, item = idx_item
@@ -223,8 +225,27 @@ class LifecycleRegistry:
                 return idx, fn(item)
 
         futs = [executor.submit(_run, (idx, item)) for idx, item in enumerate(seq)]
-        for fut in as_completed(futs):
-            idx, value = fut.result()
+        pending = set(futs)
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                for fut in list(pending):
+                    fut.cancel()
+                raise TimeoutError(
+                    f"Parallel map timed out after {timeout_seconds:.2f}s "
+                    f"(items={len(seq)}, workers={worker_count})"
+                )
+            try:
+                done = next(as_completed(pending, timeout=remaining))
+            except TimeoutError:
+                for fut in list(pending):
+                    fut.cancel()
+                raise TimeoutError(
+                    f"Parallel map timed out after {timeout_seconds:.2f}s "
+                    f"(items={len(seq)}, workers={worker_count})"
+                )
+            pending.discard(done)
+            idx, value = done.result()
             results[idx] = value
         return results
 
@@ -264,6 +285,30 @@ class LifecycleRegistry:
             "timeout_seconds": max(1, timeout_seconds),
             "require_registration": require_registration,
         }
+
+    def _parallel_map_timeout_seconds(self, ctx: RoutineContext, default_seconds: float = 300.0) -> float:
+        raw_env = os.environ.get("QUAID_CORE_PARALLEL_MAP_TIMEOUT_SECONDS", "")
+        if str(raw_env).strip():
+            try:
+                parsed_env = float(raw_env)
+                if parsed_env > 0:
+                    return parsed_env
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid QUAID_CORE_PARALLEL_MAP_TIMEOUT_SECONDS=%r; using config/default",
+                    raw_env,
+                )
+        try:
+            parallel_cfg = get_parallel_config(ctx.cfg)
+            parsed_cfg = float(
+                getattr(parallel_cfg, "lifecycle_prepass_timeout_seconds", default_seconds)
+                or default_seconds
+            )
+            if parsed_cfg > 0:
+                return parsed_cfg
+        except Exception:
+            pass
+        return float(default_seconds)
 
     def _resolved_write_resources(self, name: str, ctx: RoutineContext) -> List[str]:
         with self._registry_guard:
