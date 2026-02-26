@@ -624,8 +624,16 @@ class MemoryGraph:
                     self._ensure_vec_table(conn, node.embedding)
                     conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                                  (node.id, packed))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "add_node inserted node %s but failed vec_nodes upsert: %s",
+                        node.id,
+                        exc,
+                    )
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "Vector index upsert failed during add_node while fail-hard mode is enabled"
+                        ) from exc
         return node.id
 
     def update_node(self, node: Node, embed: bool = False) -> bool:
@@ -702,8 +710,16 @@ class MemoryGraph:
                     self._ensure_vec_table(conn, node.embedding)
                     conn.execute("INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
                                  (node.id, packed))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "update_node updated node %s but failed vec_nodes upsert: %s",
+                        node.id,
+                        exc,
+                    )
+                    if _is_fail_hard_mode():
+                        raise RuntimeError(
+                            "Vector index upsert failed during update_node while fail-hard mode is enabled"
+                        ) from exc
             return result.rowcount > 0
 
     def get_node(self, node_id: str) -> Optional[Node]:
