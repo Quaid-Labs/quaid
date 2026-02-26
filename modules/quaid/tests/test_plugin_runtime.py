@@ -6,6 +6,10 @@ import pytest
 from core.runtime.plugins import (
     PluginRegistry,
     discover_plugin_manifests,
+    get_runtime_plugin_diagnostics,
+    get_runtime_plugin_registry,
+    initialize_plugin_runtime,
+    reset_plugin_runtime,
     validate_manifest_dict,
 )
 
@@ -144,3 +148,62 @@ def test_validate_manifest_requires_datastore_capabilities():
                 "capabilities": {"supports_multi_user": True},
             }
         )
+
+
+def test_initialize_plugin_runtime_strict_rejects_slot_type_mismatch(tmp_path: Path):
+    plugins_dir = tmp_path / "plugins"
+    adapter_dir = plugins_dir / "adapter-a"
+    adapter_dir.mkdir(parents=True)
+    (adapter_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "adapter.a",
+                "plugin_type": "adapter",
+                "module": "adaptors.a",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="expected type 'datastore'"):
+        initialize_plugin_runtime(
+            api_version=1,
+            paths=[str(plugins_dir)],
+            strict=True,
+            slots={"datastores": ["adapter.a"]},
+            workspace_root=str(tmp_path),
+        )
+
+
+def test_initialize_plugin_runtime_non_strict_collects_slot_errors(tmp_path: Path):
+    reset_plugin_runtime()
+    plugins_dir = tmp_path / "plugins"
+    adapter_dir = plugins_dir / "adapter-a"
+    adapter_dir.mkdir(parents=True)
+    (adapter_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "adapter.a",
+                "plugin_type": "adapter",
+                "module": "adaptors.a",
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry, errors, warnings = initialize_plugin_runtime(
+        api_version=1,
+        paths=[str(plugins_dir)],
+        strict=False,
+        slots={"datastores": ["adapter.a"], "ingest": ["missing.ingest"]},
+        workspace_root=str(tmp_path),
+    )
+    assert not warnings
+    assert registry.get("adapter.a") is not None
+    assert any("expected type 'datastore'" in msg for msg in errors)
+    assert any("unknown plugin_id 'missing.ingest'" in msg for msg in errors)
+    diagnostics = get_runtime_plugin_diagnostics()
+    assert diagnostics["errors"] == errors
+    cached = get_runtime_plugin_registry()
+    assert cached is not None
+    assert cached.get("adapter.a") is not None

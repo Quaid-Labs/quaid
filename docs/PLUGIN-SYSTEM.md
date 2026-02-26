@@ -1,6 +1,6 @@
 # Plugin System (Phase 1 Foundation)
 
-Status: Seeded foundations, runtime takeover not enabled yet.
+Status: Config-driven preflight is active; runtime takeover is not enabled yet.
 
 Execution checklist: `projects/quaid/operations/plugin-framework-checklist.md`
 
@@ -40,7 +40,7 @@ Phase 1 introduces:
     - plugin ID conflict prevention
     - singleton slot conflict prevention (for single-owner slots)
 
-This module is intentionally dormant by default; it seeds architecture, validation, and tests without changing current production control flow.
+Runtime preflight is invoked from config boot when `plugins.enabled=true`. It validates discovery, registration, and configured slots without taking over adapter/ingest/datastore activation yet.
 
 ## Config (seeded)
 

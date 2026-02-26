@@ -289,6 +289,32 @@ class TestConfigLoading:
         old_config = config._config
         config._config = None
         try:
+            (tmp_path / "plugins" / "openclaw").mkdir(parents=True)
+            (tmp_path / "plugins" / "openclaw" / "plugin.json").write_text(json.dumps({
+                "plugin_api_version": 1,
+                "plugin_id": "openclaw.adapter",
+                "plugin_type": "adapter",
+                "module": "adaptors.openclaw.adapter",
+            }))
+            (tmp_path / "vendor" / "plugins" / "core-extract").mkdir(parents=True)
+            (tmp_path / "vendor" / "plugins" / "core-extract" / "plugin.json").write_text(json.dumps({
+                "plugin_api_version": 1,
+                "plugin_id": "core.extract",
+                "plugin_type": "ingest",
+                "module": "ingest.core",
+            }))
+            (tmp_path / "vendor" / "plugins" / "memorydb").mkdir(parents=True)
+            (tmp_path / "vendor" / "plugins" / "memorydb" / "plugin.json").write_text(json.dumps({
+                "plugin_api_version": 1,
+                "plugin_id": "memorydb.core",
+                "plugin_type": "datastore",
+                "module": "datastore.memorydb",
+                "capabilities": {
+                    "supports_multi_user": True,
+                    "supports_policy_metadata": True,
+                    "supports_redaction": True,
+                },
+            }))
             config_file = tmp_path / "memory.json"
             config_file.write_text(json.dumps({
                 "plugins": {
@@ -296,7 +322,7 @@ class TestConfigLoading:
                     "strict": True,
                     "apiVersion": 1,
                     "paths": ["plugins", "vendor/plugins"],
-                    "allowList": ["openclaw.adapter"],
+                    "allowList": ["openclaw.adapter", "core.extract", "memorydb.core"],
                     "slots": {
                         "adapter": "openclaw.adapter",
                         "ingest": ["core.extract"],
@@ -304,13 +330,14 @@ class TestConfigLoading:
                     }
                 }
             }))
-            with patch.object(config, "_config_paths", lambda: [config_file]):
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                    patch.object(config, "_workspace_root", lambda: tmp_path):
                 cfg = load_config()
                 assert cfg.plugins.enabled is True
                 assert cfg.plugins.strict is True
                 assert cfg.plugins.api_version == 1
                 assert cfg.plugins.paths == ["plugins", "vendor/plugins"]
-                assert cfg.plugins.allowlist == ["openclaw.adapter"]
+                assert cfg.plugins.allowlist == ["openclaw.adapter", "core.extract", "memorydb.core"]
                 assert cfg.plugins.slots.adapter == "openclaw.adapter"
                 assert cfg.plugins.slots.ingest == ["core.extract"]
                 assert cfg.plugins.slots.datastores == ["memorydb.core"]
