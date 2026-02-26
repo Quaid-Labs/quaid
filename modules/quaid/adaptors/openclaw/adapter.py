@@ -339,5 +339,24 @@ class OpenClawAdapter(QuaidAdapter):
 
     @staticmethod
     def _keychain_lookup(service: str, account: str) -> Optional[str]:
-        """Keychain lookup stub - .env is preferred over Keychain."""
-        return None
+        """Best-effort macOS keychain lookup."""
+        if sys.platform != "darwin":
+            return None
+        svc = str(service or "").strip()
+        acct = str(account or "").strip()
+        if not svc or not acct:
+            return None
+        try:
+            proc = subprocess.run(
+                ["security", "find-generic-password", "-s", svc, "-a", acct, "-w"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if proc.returncode != 0:
+                return None
+            token = (proc.stdout or "").strip()
+            return token or None
+        except Exception:
+            return None
