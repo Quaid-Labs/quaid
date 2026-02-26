@@ -134,6 +134,12 @@ function isPreInjectionPassEnabled() {
   if (typeof retrieval.pre_injection_pass === "boolean") return retrieval.pre_injection_pass;
   return true;
 }
+function isFailHardEnabled() {
+  const retrieval = getMemoryConfig().retrieval || {};
+  if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
+  if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
+  return true;
+}
 function getCaptureTimeoutMinutes() {
   const capture = getMemoryConfig().capture || {};
   const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
@@ -311,7 +317,7 @@ function runStartupSelfCheck() {
     if (paidProviders.has(deep.provider)) {
       console.warn(`[quaid][billing] paid provider active for deep reasoning: ${deep.provider}/${deep.model}`);
     }
-  } catch (_err) {
+  } catch (err) {
     errors.push(`deep reasoning model resolution failed: ${String(err?.message || err)}`);
   }
   try {
@@ -631,7 +637,7 @@ function maybeForceCompactionAfterTimeout(sessionId) {
     } else {
       console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
     }
-  } catch (_err) {
+  } catch (err) {
     console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
   }
 }
@@ -761,47 +767,78 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  let gatewayRes;
-  try {
-    gatewayRes = await fetch(gatewayUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: `${resolved.provider}/${resolved.model}`,
-        input: [
-          { type: "message", role: "system", content: systemPrompt },
-          { type: "message", role: "user", content: userMessage }
-        ],
-        max_output_tokens: maxTokens,
-        stream: false
-      }),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
-  } catch (err2) {
-    const durationMs2 = Date.now() - started;
-    console.error(
-      `[quaid][llm] gateway_fetch_error tier=${modelTier} duration_ms=${durationMs2} error=${err2?.name || "Error"}:${err2?.message || String(err2)}`
-    );
-    throw err2;
-  }
-  const rawBody = await gatewayRes.text();
+  const isTransientError = (status, err2) => {
+    if (typeof status === "number" && (status === 429 || status >= 500)) return true;
+    const msg = String(err2?.message || err2 || "").toLowerCase();
+    const name = String(err2?.name || "").toLowerCase();
+    return name.includes("timeout") || msg.includes("timeout") || msg.includes("timed out") || msg.includes("econnreset") || msg.includes("econnrefused") || msg.includes("network") || msg.includes("fetch failed");
+  };
+  const readBodyWithTimeout = async (resp) => {
+    return await Promise.race([
+      resp.text(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`gateway response body timeout after ${timeoutMs}ms`)), timeoutMs))
+    ]);
+  };
+  const maxAttempts = 2;
   let data = null;
-  try {
-    data = rawBody ? JSON.parse(rawBody) : {};
-  } catch (_err) {
-    const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
-    console.error(
-      `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
-    );
-    throw new Error(`Gateway response parse failed (${gatewayRes.status} ${gatewayRes.statusText})`);
+  let gatewayRes = null;
+  let rawBody = "";
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      gatewayRes = await fetch(gatewayUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: `${resolved.provider}/${resolved.model}`,
+          input: [
+            { type: "message", role: "system", content: systemPrompt },
+            { type: "message", role: "user", content: userMessage }
+          ],
+          max_output_tokens: maxTokens,
+          stream: false
+        }),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      rawBody = await readBodyWithTimeout(gatewayRes);
+      try {
+        data = rawBody ? JSON.parse(rawBody) : {};
+      } catch (_err) {
+        const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
+        console.error(
+          `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
+        );
+        throw new Error(`Gateway response parse failed (${gatewayRes.status} ${gatewayRes.statusText})`);
+      }
+      if (!gatewayRes.ok) {
+        const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
+        console.error(
+          `[quaid][llm] gateway_http_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
+        );
+        const err2 = data?.error?.message || data?.message || `Gateway OpenResponses error ${gatewayRes.status}`;
+        if (attempt < maxAttempts && isTransientError(gatewayRes.status, err2)) {
+          console.warn(`[quaid][llm] transient gateway error, retrying attempt=${attempt + 1}/${maxAttempts}`);
+          await new Promise((r) => setTimeout(r, 200 * attempt));
+          continue;
+        }
+        throw new Error(err2);
+      }
+      break;
+    } catch (err2) {
+      lastError = err2;
+      const durationMs2 = Date.now() - started;
+      console.error(
+        `[quaid][llm] gateway_fetch_error tier=${modelTier} duration_ms=${durationMs2} error=${err2?.name || "Error"}:${err2?.message || String(err2)} attempt=${attempt}/${maxAttempts}`
+      );
+      if (attempt < maxAttempts && isTransientError(gatewayRes?.status ?? null, err2)) {
+        await new Promise((r) => setTimeout(r, 200 * attempt));
+        continue;
+      }
+      throw err2;
+    }
   }
-  if (!gatewayRes.ok) {
-    const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
-    console.error(
-      `[quaid][llm] gateway_http_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
-    );
-    const err2 = data?.error?.message || data?.message || `Gateway OpenResponses error ${gatewayRes.status}`;
-    throw new Error(err2);
+  if (!gatewayRes || !gatewayRes.ok) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError || "gateway call failed"));
   }
   const text = typeof data.output_text === "string" ? data.output_text : Array.isArray(data.output) ? data.output.flatMap((o) => Array.isArray(o?.content) ? o.content : []).filter((c) => (c?.type === "output_text" || c?.type === "text") && typeof c?.text === "string").map((c) => c.text).join("\n") : "";
   const durationMs = Date.now() - started;
@@ -1368,7 +1405,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
         });
       }
     } catch (_parseErr) {
-      console.log("[quaid] JSON parse failed, trying line format");
+      console.warn("[quaid] JSON parse failed, trying line format");
       for (const line of output.split("\n")) {
         if (line.startsWith("[direct]")) {
           const match = line.match(/\[direct\]\s+\[(\d+\.\d+)\]\s+\[(\w+)\]\s+(.+)/);
@@ -1393,6 +1430,9 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
     }
     return results;
   } catch (err2) {
+    if (isFailHardEnabled()) {
+      throw err2;
+    }
     console.error("[quaid] recall error:", err2.message);
     return [];
   }
@@ -1578,7 +1618,11 @@ const knowledgeEngine = createKnowledgeEngine({
         });
       }
       return results.slice(0, limit);
-    } catch {
+    } catch (err2) {
+      if (isFailHardEnabled()) {
+        throw err2;
+      }
+      console.warn("[quaid] project recall bridge error:", err2?.message || String(err2));
       return [];
     }
   }

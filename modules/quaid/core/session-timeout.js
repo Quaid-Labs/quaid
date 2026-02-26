@@ -17,8 +17,8 @@ function isFailHardEnabled(workspace) {
     const configPath = path.join(workspace, "config", "memory.json");
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
     const retrieval = raw?.retrieval || {};
-    if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
     if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
+    if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
   } catch {
   }
   return true;
@@ -385,9 +385,21 @@ class SessionTimeoutManager {
         this.writeQuaidLog("signal_process_done", sessionId, { label });
       } catch (err) {
         this.writeQuaidLog("signal_process_error", sessionId, { label, error: String(err?.message || err) });
+        if (this.failHard) {
+          try {
+            const originalPath = filePath;
+            if (!fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
+              fs.renameSync(lockedPath, originalPath);
+            }
+          } catch {
+          }
+          throw err;
+        }
       } finally {
         try {
-          fs.unlinkSync(lockedPath);
+          if (fs.existsSync(lockedPath)) {
+            fs.unlinkSync(lockedPath);
+          }
         } catch {
         }
       }

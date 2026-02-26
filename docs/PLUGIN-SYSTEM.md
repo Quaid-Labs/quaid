@@ -2,6 +2,8 @@
 
 Status: Seeded foundations, runtime takeover not enabled yet.
 
+Execution checklist: `projects/quaid/operations/plugin-framework-checklist.md`
+
 ## Purpose
 
 Quaid must remain small in core and extensible at the boundaries.  
@@ -73,4 +75,3 @@ This module is intentionally dormant by default; it seeds architecture, validati
 2. Move janitor lifecycle registration to plugin capability wiring.
 3. Add conformance suite for adapter/ingest/datastore plugin contracts.
 4. Open external plugin support only after first-party parity is complete.
-

@@ -6,9 +6,6 @@ runtime behavior/policies (for example, core-markdown workspace auditing).
 
 from __future__ import annotations
 
-from core.lifecycle import workspace_audit
-
-
 def register_lifecycle_routines(registry, result_factory) -> None:
     """Register OpenClaw-specific lifecycle routines."""
 
@@ -24,6 +21,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             return result
 
         try:
+            from core.lifecycle import workspace_audit
             audit_result = workspace_audit.run_workspace_check(dry_run=ctx.dry_run)
             phase = audit_result.get("phase", "unknown")
             result.data["workspace_phase"] = phase
@@ -66,4 +64,3 @@ def register_lifecycle_routines(registry, result_factory) -> None:
         return result
 
     registry.register("workspace", _run_workspace_audit)
-
