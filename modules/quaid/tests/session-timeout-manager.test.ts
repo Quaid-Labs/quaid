@@ -196,6 +196,36 @@ describe('SessionTimeoutManager scheduling', () => {
     expect(calls[0].messages).toHaveLength(1)
   })
 
+  it('serializes concurrent extractSessionFromLog calls to avoid double extraction', async () => {
+    const workspace = makeWorkspace('quaid-timeout-serialize-')
+    writeFailHardConfig(workspace, false)
+    const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async (messages, sessionId, label) => {
+        calls.push({ messages, sessionId, label })
+        await new Promise((resolve) => setTimeout(resolve, 15))
+      },
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = false
+
+    manager.onAgentEnd([
+      { role: 'user', content: 'remember this once', timestamp: Date.now() },
+    ], 'session-serialize')
+
+    const [first, second] = await Promise.all([
+      manager.extractSessionFromLog('session-serialize', 'Reset'),
+      manager.extractSessionFromLog('session-serialize', 'Reset'),
+    ])
+
+    expect(first).toBe(true)
+    expect(second).toBe(false)
+    expect(calls).toHaveLength(1)
+  })
+
   it('bounds in-memory buffers to avoid unbounded session growth', () => {
     const workspace = makeWorkspace('quaid-timeout-buffer-cap-')
     const manager = new SessionTimeoutManager({
