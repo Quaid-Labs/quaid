@@ -753,18 +753,21 @@ class SessionTimeoutManager {
           if (parsed && typeof parsed === "object") {
             out.push(parsed);
           }
-        } catch {
+        } catch (err) {
+          safeLog(this.logger, `[quaid][timeout] skipped malformed session-message line for ${sessionId}: ${String(err?.message || err)}`);
         }
       }
       return filterEligibleMessages(out);
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed reading session message log for ${sessionId}: ${String(err?.message || err)}`);
       return [];
     }
   }
   clearSessionMessageLog(sessionId) {
     try {
       fs.unlinkSync(this.sessionMessagePath(sessionId));
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed clearing session message log for ${sessionId}: ${String(err?.message || err)}`);
     }
   }
   cursorPath(sessionId) {
@@ -778,7 +781,8 @@ class SessionTimeoutManager {
       const payload = JSON.parse(fs.readFileSync(fp, "utf8"));
       if (!payload || typeof payload !== "object") return null;
       return payload;
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed reading session cursor for ${sessionId}: ${String(err?.message || err)}`);
       return null;
     }
   }

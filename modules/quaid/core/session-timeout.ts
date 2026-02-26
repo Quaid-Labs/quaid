@@ -831,16 +831,23 @@ export class SessionTimeoutManager {
         try {
           const parsed = JSON.parse(line);
           if (parsed && typeof parsed === "object") { out.push(parsed); }
-        } catch {}
+        } catch (err: unknown) {
+          safeLog(this.logger, `[quaid][timeout] skipped malformed session-message line for ${sessionId}: ${String((err as Error)?.message || err)}`);
+        }
       }
       return filterEligibleMessages(out);
-    } catch {
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed reading session message log for ${sessionId}: ${String((err as Error)?.message || err)}`);
       return [];
     }
   }
 
   private clearSessionMessageLog(sessionId: string): void {
-    try { fs.unlinkSync(this.sessionMessagePath(sessionId)); } catch {}
+    try {
+      fs.unlinkSync(this.sessionMessagePath(sessionId));
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed clearing session message log for ${sessionId}: ${String((err as Error)?.message || err)}`);
+    }
   }
 
   private cursorPath(sessionId: string): string {
@@ -855,7 +862,8 @@ export class SessionTimeoutManager {
       const payload = JSON.parse(fs.readFileSync(fp, "utf8")) as SessionCursorPayload;
       if (!payload || typeof payload !== "object") return null;
       return payload;
-    } catch {
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed reading session cursor for ${sessionId}: ${String((err as Error)?.message || err)}`);
       return null;
     }
   }
