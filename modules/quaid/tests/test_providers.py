@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import io
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -255,6 +256,19 @@ class TestClaudeCodeLLMProvider:
             with pytest.raises(RuntimeError, match="non-object JSON"):
                 p.llm_call([{"role": "user", "content": "hi"}])
 
+    def test_llm_call_non_json_preserves_decode_cause(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "not-json"
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="non-JSON output") as excinfo:
+                p.llm_call([{"role": "user", "content": "hi"}])
+        assert excinfo.value.__cause__ is not None
+
     def test_llm_call_raises_when_result_missing(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
         p = ClaudeCodeLLMProvider()
@@ -501,6 +515,23 @@ class TestGatewayLLMProvider:
         p = GatewayLLMProvider(port=59999)  # unlikely to be running
         with pytest.raises(Exception):
             p.llm_call([{"role": "user", "content": "test"}], timeout=1)
+
+    def test_llm_call_503_preserves_http_error_cause(self):
+        import urllib.request
+        import urllib.error
+
+        p = GatewayLLMProvider(port=18789)
+        http_err = urllib.error.HTTPError(
+            url="http://127.0.0.1:18789/plugins/quaid/llm",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":"missing credentials"}'),
+        )
+        with patch.object(urllib.request, "urlopen", side_effect=http_err):
+            with pytest.raises(RuntimeError, match="HTTP 503") as excinfo:
+                p.llm_call([{"role": "user", "content": "test"}], timeout=1)
+        assert excinfo.value.__cause__ is http_err
 
 
 class TestABCEnforcement:
