@@ -504,4 +504,22 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(() => (manager as any).writeSessionCursor('session-bad-cursor-write', [{ role: 'user', content: 'hello' }])).toThrow()
   })
+
+  it('throws on timeout log write failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-log-write-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const logPath = (manager as any).logFilePath as string
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    fs.mkdirSync(logPath, { recursive: true })
+
+    expect(() => (manager as any).writeQuaidLog('unit_test')).toThrow()
+  })
 })
