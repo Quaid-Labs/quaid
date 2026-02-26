@@ -15,6 +15,7 @@ manages API keys directly — the adapter/provider handles authentication.
 """
 
 import json
+import hashlib
 import logging
 import os
 import sys
@@ -500,10 +501,11 @@ def parse_json_response(text: str) -> Optional[object]:
                 continue
 
     if parse_errors:
-        excerpt = cleaned.replace("\n", "\\n")[:180]
+        content_len = len(cleaned)
+        content_hash = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
         print(
             "[llm_clients] parse_json_response failed: "
-            f"{'; '.join(parse_errors[:3])}; excerpt={excerpt!r}",
+            f"{'; '.join(parse_errors[:3])}; content_len={content_len}; content_sha256_prefix={content_hash}",
             file=sys.stderr,
         )
 
