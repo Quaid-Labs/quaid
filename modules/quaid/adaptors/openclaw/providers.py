@@ -73,7 +73,10 @@ class GatewayLLMProvider(LLMProvider):
             except urllib.error.HTTPError as e:
                 try:
                     err_body = json.loads(e.read().decode("utf-8"))
-                    err_msg = err_body.get("error", str(e))
+                    if isinstance(err_body, dict):
+                        err_msg = err_body.get("error", str(e))
+                    else:
+                        err_msg = str(e)
                 except Exception:
                     err_msg = str(e)
                 logger.warning("Gateway LLM proxy HTTP error (%s): %s", e.code, err_msg)
