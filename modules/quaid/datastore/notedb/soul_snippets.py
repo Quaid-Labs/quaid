@@ -504,8 +504,12 @@ def _get_distillation_state() -> Dict[str, Any]:
     if state_path.exists():
         try:
             return json.loads(state_path.read_text(encoding='utf-8'))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Distillation state unreadable at %s; treating as fresh state: %s",
+                state_path,
+                exc,
+            )
     return {}
 
 
