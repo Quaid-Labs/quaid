@@ -34,6 +34,7 @@ if str(_MODULE_ROOT) not in sys.path:
     sys.path.insert(0, str(_MODULE_ROOT))
 
 from lib.adapter import ChannelInfo
+from lib.fail_policy import is_fail_hard_enabled
 from lib.runtime_context import (
     get_install_url,
     get_last_channel as _ctx_get_last_channel,
@@ -92,6 +93,10 @@ def _notify_full_text() -> bool:
         from config import get_config
         return get_config().notifications.full_text
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                "Failed to read notifications.full_text while fail-hard mode is enabled"
+            ) from exc
         logger.warning("Failed to read notifications.full_text config: %s", exc)
         return False
 
