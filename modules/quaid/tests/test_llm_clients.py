@@ -19,6 +19,7 @@ from core.llm.clients import (
     parse_json_response,
     reset_token_usage,
     get_token_usage,
+    get_token_budget_usage,
     estimate_cost,
     call_fast_reasoning,
     call_deep_reasoning,
@@ -136,6 +137,17 @@ class TestTokenUsage:
         # Should be > 0 and reasonable
         assert cost > 0
         assert isinstance(cost, float)
+
+    def test_token_budget_snapshot_returns_consistent_pair(self):
+        import core.llm.clients as llm_clients
+        llm_clients.set_token_budget(1234)
+        try:
+            llm_clients._token_budget_used = 456
+            used, total = get_token_budget_usage()
+            assert used == 456
+            assert total == 1234
+        finally:
+            llm_clients.reset_token_budget()
 
 
 # ---------------------------------------------------------------------------
