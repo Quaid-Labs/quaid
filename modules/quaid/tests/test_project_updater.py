@@ -98,7 +98,7 @@ A test project.
 
 
 def _get_registry():
-    from core.docs.registry import DocsRegistry
+    from datastore.docsdb.registry import DocsRegistry
     return DocsRegistry(db_path=_tmp_db)
 
 
