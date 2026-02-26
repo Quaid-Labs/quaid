@@ -4995,7 +4995,16 @@ def summarize_all_entities(owner_id: str = None, use_llm: bool = True, entity_ty
 
     for row in rows:
         # Skip if already has a recent summary and not using LLM (quick mode)
-        attrs = json.loads(row['attributes']) if row['attributes'] else {}
+        attrs_raw = row['attributes']
+        try:
+            attrs = json.loads(attrs_raw) if attrs_raw else {}
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "[memory_graph] malformed node attributes JSON for summary node_id=%s; using empty attributes: %s",
+                row['id'],
+                exc,
+            )
+            attrs = {}
         if attrs.get("summary") and not use_llm:
             stats["skipped"] += 1
             continue
