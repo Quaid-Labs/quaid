@@ -27,9 +27,6 @@ DB_PATH = get_db_path()
 def _workspace() -> Path:
     return get_workspace_dir()
 
-WORKSPACE = None  # Lazy — use _workspace() instead
-
-
 def _rag_config():
     """Get RAG config section (lazy import to avoid circular deps)."""
     try:
