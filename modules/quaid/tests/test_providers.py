@@ -234,6 +234,22 @@ class TestClaudeCodeLLMProvider:
                     [{"role": "user", "content": "hi"}],
                 )
 
+    def test_llm_call_failure_includes_tail_of_long_stderr(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = ("prefix-" * 80) + "CRITICAL_END_MARKER"
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError) as exc:
+                p.llm_call([{"role": "user", "content": "hi"}])
+
+        msg = str(exc.value)
+        assert "CRITICAL_END_MARKER" in msg
+        assert " ... " in msg
+
     def test_llm_call_raises_on_timeout(self, monkeypatch):
         """Timeout should propagate."""
         monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
