@@ -1062,52 +1062,26 @@ async function callExtractPipeline(opts) {
     args.push("--no-journal");
   }
   try {
-    const output = await new Promise((resolve, reject) => {
-      const proc = spawn("python3", [EXTRACT_SCRIPT, ...args], {
-        cwd: WORKSPACE,
-        env: buildPythonEnv()
-      });
-      let stdout = "";
-      let stderr = "";
-      let settled = false;
-      const timeoutMs = 3e5;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        proc.kill("SIGTERM");
-        reject(new Error(`extract timeout after ${timeoutMs}ms`));
-      }, timeoutMs);
-      proc.stdout.on("data", (data) => {
-        stdout += data;
-      });
-      proc.stderr.on("data", (data) => {
-        stderr += data;
-      });
-      proc.on("close", (code) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (code === 0) {
-          resolve(stdout.trim());
-        } else {
-          reject(new Error(`extract error: ${stderr || stdout}`));
-        }
-      });
-      proc.on("error", (err) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(err);
-      });
-    });
+    const output = await _spawnWithTimeout(
+      EXTRACT_SCRIPT,
+      tmpPath,
+      args.slice(1),
+      "extract",
+      {},
+      3e5
+    );
     const parsed = JSON.parse(output || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("extract pipeline returned non-object JSON payload");
     }
     return parsed;
   } catch (err) {
-    const msg = String(err?.message || err);
-    throw new Error(`[quaid] extract pipeline parse/exec failed: ${msg.slice(0, 500)}`);
+    const cause = err instanceof Error ? err : new Error(String(err));
+    const msg = String(cause.message || cause);
+    throw new Error(
+      `[quaid] extract pipeline parse/exec failed: ${msg.slice(0, 500)}`,
+      { cause }
+    );
   } finally {
     try {
       fs.unlinkSync(tmpPath);
