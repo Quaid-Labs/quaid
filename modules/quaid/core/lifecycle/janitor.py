@@ -278,10 +278,10 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         latest_tag = data.get("tag_name", "").lstrip("v")
         html_url = data.get("html_url", f"https://github.com/{REPO}/releases")
     except urllib.error.URLError as e:
-        print(f"  Update check failed (network): {e}")
+        janitor_logger.warn("update_check_network_failed", error=str(e))
         return None
     except Exception as e:
-        print(f"  Update check failed (non-network): {e}")
+        janitor_logger.warn("update_check_failed", error=str(e))
         return None
 
     # Cache the result via datastore helper
