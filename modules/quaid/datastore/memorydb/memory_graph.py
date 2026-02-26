@@ -738,8 +738,12 @@ class MemoryGraph:
             if result.rowcount > 0 and _lib_has_vec():
                 try:
                     conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node_id,))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "delete_node removed node %s but failed vec_nodes cleanup: %s",
+                        node_id,
+                        exc,
+                    )
             return result.rowcount > 0
 
     def supersede_node(self, old_id: str, new_id: str) -> bool:
