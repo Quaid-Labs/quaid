@@ -17,6 +17,8 @@ import pytest
 
 from core.llm.clients import (
     parse_json_response,
+    validate_llm_output,
+    ReviewDecision,
     reset_token_usage,
     get_token_usage,
     get_token_budget_usage,
@@ -59,6 +61,11 @@ class TestParseJsonResponse:
     def test_invalid_json_returns_none(self):
         assert parse_json_response("{not valid json}") is None
 
+    def test_invalid_json_emits_parse_diagnostics(self, capsys):
+        assert parse_json_response("{not valid json}") is None
+        captured = capsys.readouterr()
+        assert "parse_json_response failed" in captured.err
+
     def test_none_input_returns_none(self):
         assert parse_json_response(None) is None
 
@@ -83,6 +90,13 @@ class TestParseJsonResponse:
         assert result is not None
         # Should parse at least one of them
         assert "first" in result or "second" in result
+
+    def test_validate_llm_output_warns_on_unknown_keys(self, capsys):
+        parsed = [{"foo": "bar"}]
+        results = validate_llm_output(parsed, ReviewDecision)
+        captured = capsys.readouterr()
+        assert results == []
+        assert "dropping unknown keys" in captured.err
 
 
 # ---------------------------------------------------------------------------
