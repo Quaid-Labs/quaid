@@ -42,7 +42,7 @@ from datastore.memorydb.memory_graph import (
     store_edge_keywords,
 )
 from lib.config import get_db_path
-from lib.tokens import extract_key_tokens as _lib_extract_key_tokens, estimate_tokens
+from lib.tokens import extract_key_tokens, estimate_tokens
 from lib.archive import archive_node as _archive_node
 from config import get_config
 from lib.llm_clients import (
@@ -830,7 +830,7 @@ def recall_candidates(graph: MemoryGraph, text: str, exclude_id: str,
     Returns up to `limit` unique candidate nodes (excluding `exclude_id`).
     Scales as O(tokens * rows_matched) instead of O(total_nodes).
     """
-    tokens = _lib_extract_key_tokens(text)
+    tokens = extract_key_tokens(text)
     if not tokens:
         return []
 
