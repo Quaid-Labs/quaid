@@ -899,7 +899,9 @@ function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON
       if (code === 0) {
         resolve(stdout.trim());
       } else {
-        const detail = (stderr || stdout || "").trim().slice(0, 1e3);
+        const stderrText = stderr.trim();
+        const stdoutText = stdout.trim();
+        const detail = [stderrText ? `stderr: ${stderrText}` : "", stdoutText ? `stdout: ${stdoutText}` : ""].filter(Boolean).join(" | ").slice(0, 1e3);
         reject(new Error(`${label} error (exit=${String(code)}): ${detail}`));
       }
     });

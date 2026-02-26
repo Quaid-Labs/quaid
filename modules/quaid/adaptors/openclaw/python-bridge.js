@@ -43,7 +43,10 @@ export function createPythonBridgeExecutor(config) {
         if (code === 0) {
           resolve(stdout.trim());
         } else {
-          reject(new Error(`Python error: ${stderr || stdout}`));
+          const stderrText = stderr.trim();
+          const stdoutText = stdout.trim();
+          const detail = [stderrText ? `stderr: ${stderrText}` : "", stdoutText ? `stdout: ${stdoutText}` : ""].filter(Boolean).join(" | ").slice(0, 1e3);
+          reject(new Error(`Python error (exit=${String(code)}): ${detail}`));
         }
       });
       proc.on("error", (err) => {
