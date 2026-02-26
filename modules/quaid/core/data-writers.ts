@@ -39,6 +39,8 @@ export type DataWriter<TPayload = unknown> = {
 
 type DataWriteEngineOptions = {
   writers?: DataWriter[];
+  failHard?: boolean;
+  onError?: (message: string, error?: unknown) => void;
 };
 
 function cloneWriterSpec(spec: DataWriterSpec): DataWriterSpec {
@@ -51,6 +53,14 @@ function cloneWriterSpec(spec: DataWriterSpec): DataWriterSpec {
 
 export function createDataWriteEngine(opts: DataWriteEngineOptions = {}) {
   const writerMap = new Map<DataStoreKey, DataWriter>();
+  const failHard = Boolean(opts.failHard);
+  const onError = opts.onError || ((message: string, error?: unknown) => {
+    if (error) {
+      console.error(message, error);
+      return;
+    }
+    console.error(message);
+  });
 
   function registerDataWriter(writer: DataWriter): void {
     writerMap.set(writer.spec.datastore, writer);
@@ -82,6 +92,13 @@ export function createDataWriteEngine(opts: DataWriteEngineOptions = {}) {
     try {
       return await writer.write(envelope as DataWriteEnvelope<unknown>);
     } catch (err: unknown) {
+      onError(
+        `[quaid][data-writers] writeData failed datastore=${String(envelope.datastore)} action=${String(envelope.action)}`,
+        err,
+      );
+      if (failHard) {
+        throw err;
+      }
       const errObj = err as Error;
       const errType = errObj?.name || typeof err || "UnknownError";
       return {

@@ -109,4 +109,27 @@ describe("data writers", () => {
     const registry2 = engine.getDataWriterRegistry();
     expect(registry2[0].actions[0].key).toBe("append_entry");
   });
+
+  it("rethrows writer failures when failHard is enabled", async () => {
+    const engine = createDataWriteEngine({
+      failHard: true,
+      onError: vi.fn(),
+      writers: [{
+        spec: {
+          datastore: "vector",
+          description: "Vector facts",
+          actions: [{ key: "store_fact", description: "Store a fact" }],
+        },
+        write: vi.fn(async () => {
+          throw new Error("hard failure");
+        }),
+      }],
+    });
+
+    await expect(engine.writeData({
+      datastore: "vector",
+      action: "store_fact",
+      payload: { text: "Quaid likes espresso" },
+    })).rejects.toThrow("hard failure");
+  });
 });
