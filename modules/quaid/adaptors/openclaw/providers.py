@@ -50,6 +50,10 @@ class GatewayLLMProvider(LLMProvider):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise RuntimeError(
+                        f"Gateway LLM proxy returned non-object JSON payload: {type(data).__name__}"
+                    )
                 duration = time.time() - start_time
 
                 return LLMResult(
