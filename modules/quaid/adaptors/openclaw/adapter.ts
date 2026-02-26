@@ -98,7 +98,7 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
 
 function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<string, any> | null {
   const now = Date.now();
-  if (_cachedDatastoreStats && (now - _datastoreStatsTimestamp) < maxAgeMs) {
+  if ((now - _datastoreStatsTimestamp) < maxAgeMs) {
     return _cachedDatastoreStats;
   }
   try {
@@ -109,6 +109,8 @@ function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<s
     });
     const parsed = JSON.parse(output);
     if (!parsed || typeof parsed !== "object") {
+      _cachedDatastoreStats = null;
+      _datastoreStatsTimestamp = now;
       return null;
     }
     _cachedDatastoreStats = parsed;
@@ -119,6 +121,8 @@ function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<s
     if (isFailHardEnabled()) {
       throw new Error(msg);
     }
+    _cachedDatastoreStats = null;
+    _datastoreStatsTimestamp = now;
     console.warn(msg);
     return null;
   }

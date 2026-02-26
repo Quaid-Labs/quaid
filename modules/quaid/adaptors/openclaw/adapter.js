@@ -76,7 +76,7 @@ function buildPythonEnv(extra = {}) {
 }
 function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
   const now = Date.now();
-  if (_cachedDatastoreStats && now - _datastoreStatsTimestamp < maxAgeMs) {
+  if (now - _datastoreStatsTimestamp < maxAgeMs) {
     return _cachedDatastoreStats;
   }
   try {
@@ -87,6 +87,8 @@ function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     });
     const parsed = JSON.parse(output);
     if (!parsed || typeof parsed !== "object") {
+      _cachedDatastoreStats = null;
+      _datastoreStatsTimestamp = now;
       return null;
     }
     _cachedDatastoreStats = parsed;
@@ -97,6 +99,8 @@ function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     if (isFailHardEnabled()) {
       throw new Error(msg);
     }
+    _cachedDatastoreStats = null;
+    _datastoreStatsTimestamp = now;
     console.warn(msg);
     return null;
   }
