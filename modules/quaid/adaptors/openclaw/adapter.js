@@ -466,12 +466,35 @@ const _memoryNotes = /* @__PURE__ */ new Map();
 const _memoryNotesTouchedAt = /* @__PURE__ */ new Map();
 const MAX_MEMORY_NOTE_SESSIONS = 200;
 const MAX_MEMORY_NOTES_PER_SESSION = 400;
+const MAX_INJECTION_LOG_FILES = 400;
+const MAX_INJECTION_IDS_PER_SESSION = 4e3;
+const MAX_EXTRACTION_LOG_ENTRIES = 800;
 const NOTES_DIR = QUAID_NOTES_DIR;
 function getNotesPath(sessionId) {
   return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
 }
 function getInjectionLogPath(sessionId) {
   return path.join(QUAID_INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
+}
+function pruneInjectionLogFiles() {
+  try {
+    const files = fs.readdirSync(QUAID_INJECTION_LOG_DIR).filter((f) => f.startsWith("memory-injection-") && f.endsWith(".log")).map((f) => ({ name: f, full: path.join(QUAID_INJECTION_LOG_DIR, f), mtimeMs: fs.statSync(path.join(QUAID_INJECTION_LOG_DIR, f)).mtimeMs })).sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const stale of files.slice(MAX_INJECTION_LOG_FILES)) {
+      try {
+        fs.unlinkSync(stale.full);
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
+function trimExtractionLogEntries(log, maxEntries = MAX_EXTRACTION_LOG_ENTRIES) {
+  const entries = Object.entries(log || {});
+  if (entries.length <= maxEntries) {
+    return log || {};
+  }
+  const sorted = entries.map(([sid, payload]) => ({ sid, payload, ts: Date.parse(String(payload?.last_extracted_at || "")) || 0 })).sort((a, b) => b.ts - a.ts).slice(0, maxEntries);
+  return Object.fromEntries(sorted.map((row) => [row.sid, row.payload]));
 }
 function addMemoryNote(sessionId, text, category) {
   _memoryNotesTouchedAt.set(sessionId, Date.now());
@@ -2006,10 +2029,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         try {
           const newIds = toInject.map((m) => m.id || m.text);
+          const mergedIds = [...previouslyInjected, ...newIds];
           fs.writeFileSync(injectionLogPath, JSON.stringify({
-            injected: [...previouslyInjected, ...newIds],
+            injected: mergedIds.slice(-MAX_INJECTION_IDS_PER_SESSION),
             lastInjectedAt: (/* @__PURE__ */ new Date()).toISOString()
           }), { mode: 384 });
+          pruneInjectionLogFiles();
         } catch {
         }
       } catch (error) {
@@ -3068,7 +3093,8 @@ notify_memory_extraction(
           label,
           topic_hint: topicHint
         };
-        fs.writeFileSync(extractionLogPath, JSON.stringify(extractionLog, null, 2), { mode: 384 });
+        const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
+        fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 384 });
       } catch (logErr) {
         const msg = `[quaid] extraction log update failed: ${logErr.message}`;
         if (isFailHardEnabled()) {
