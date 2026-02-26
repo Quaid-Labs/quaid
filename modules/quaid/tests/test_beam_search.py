@@ -314,6 +314,27 @@ class TestBeamScoring:
         # Should be approximately 0.35 (with default hop_decay=0.7)
         assert abs(score - 0.35) < 0.05
 
+    def test_llm_scoring_failure_logs_debug_and_falls_back(self, graph):
+        """LLM scoring exceptions are visible via debug logs before heuristic fallback."""
+        node = _add_node(graph, "Test Node", confidence=0.8)
+
+        with patch("lib.llm_clients.call_fast_reasoning", side_effect=RuntimeError("llm down")), \
+             patch("datastore.memorydb.memory_graph.logger.debug") as log_debug:
+            score = graph._beam_score_candidate(
+                query="test",
+                node=node,
+                relation="knows",
+                edge_weight=1.0,
+                parent_score=1.0,
+                hop_depth=1,
+                intent=None,
+                type_boosts=None,
+                scoring_mode="llm",
+            )
+
+        assert score > 0
+        assert any("BEAM llm scoring failed" in str(call.args[0]) for call in log_debug.call_args_list)
+
     def test_hop_decay_reduces_score(self, graph):
         """Multi-hop propagation: each hop decays score by hop_decay factor.
 

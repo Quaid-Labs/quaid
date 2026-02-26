@@ -1560,7 +1560,7 @@ class MemoryGraph:
                         rescored.sort(key=lambda x: x[5], reverse=True)
                         next_candidates = rescored + rest
                     except Exception:
-                        pass  # Fall back to heuristic-only ranking
+                        logger.debug("BEAM reranker failed; using heuristic-only ranking", exc_info=True)
 
                 beam = []
 
@@ -1663,7 +1663,7 @@ class MemoryGraph:
                         llm_score = min(int(m.group(1)), 5) / 5.0
                         return min(1.0, base * llm_score)
             except Exception:
-                pass
+                logger.debug("BEAM llm scoring failed; falling back to heuristic", exc_info=True)
             # Fallback to heuristic on LLM failure
             return self._beam_score_candidate(
                 query, node, relation, edge_weight, parent_score,
