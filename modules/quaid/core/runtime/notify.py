@@ -156,7 +156,7 @@ def _resolve_channel(feature: Optional[str] = None) -> Optional[str]:
         if channel and channel != "last_used":
             return channel
     except Exception as exc:
-        logger.warning("Failed to resolve notification channel override for feature '%s': %s", feature, exc)
+        logger.debug("Failed to resolve notification channel override for feature '%s': %s", feature, exc)
     return None
 
 
