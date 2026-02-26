@@ -436,17 +436,26 @@ const configSchema = Type.Object({
   autoRecall: Type.Optional(Type.Boolean({ default: true }))
 });
 let _usersConfig = null;
+let _usersConfigMtimeMs = -1;
 function getUsersConfig() {
-  if (_usersConfig) {
+  const configPath = path.join(WORKSPACE, "config/memory.json");
+  let mtimeMs = -1;
+  try {
+    mtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch {
+    mtimeMs = -1;
+  }
+  if (_usersConfig && _usersConfigMtimeMs === mtimeMs) {
     return _usersConfig;
   }
   try {
-    const configPath = path.join(WORKSPACE, "config/memory.json");
     const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
     _usersConfig = raw.users || { defaultOwner: "quaid", identities: {} };
+    _usersConfigMtimeMs = mtimeMs;
   } catch (err) {
     console.error("[quaid] failed to load users config from config/memory.json:", err?.message || String(err));
     _usersConfig = { defaultOwner: "quaid", identities: {} };
+    _usersConfigMtimeMs = mtimeMs;
   }
   return _usersConfig;
 }
