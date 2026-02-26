@@ -488,10 +488,12 @@ function pruneInjectionLogFiles() {
     for (const stale of files.slice(MAX_INJECTION_LOG_FILES)) {
       try {
         fs.unlinkSync(stale.full);
-      } catch {
+      } catch (err) {
+        console.warn(`[quaid] Failed pruning stale injection log ${stale.full}: ${String(err?.message || err)}`);
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] Injection log pruning failed: ${String(err?.message || err)}`);
   }
 }
 function trimExtractionLogEntries(log, maxEntries = MAX_EXTRACTION_LOG_ENTRIES) {
@@ -1053,7 +1055,8 @@ async function callExtractPipeline(opts) {
   } finally {
     try {
       fs.unlinkSync(tmpPath);
-    } catch {
+    } catch (err) {
+      console.warn(`[quaid] Failed cleaning extraction temp file ${tmpPath}: ${String(err?.message || err)}`);
     }
   }
 }
