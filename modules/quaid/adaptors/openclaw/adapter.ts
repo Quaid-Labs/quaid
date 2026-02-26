@@ -1451,6 +1451,9 @@ function getJanitorHealthIssue(): string | null {
     }
     return null;
   } catch (err: unknown) {
+    if (isFailHardEnabled()) {
+      throw new Error("[quaid] Failed to evaluate janitor health under failHard", { cause: err as Error });
+    }
     console.warn(`[quaid] Failed to evaluate janitor health: ${String((err as Error)?.message || err)}`);
     return null;
   }
