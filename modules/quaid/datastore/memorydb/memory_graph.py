@@ -200,15 +200,9 @@ class MemoryGraph:
             schema = f.read()
 
         with self._get_conn() as conn:
-            # Execute schema statements individually (executescript auto-commits
-            # and bypasses the connection's transaction management)
-            for statement in schema.split(';'):
-                statement = statement.strip()
-                if statement and not statement.startswith('--'):
-                    try:
-                        conn.execute(statement)
-                    except sqlite3.OperationalError:
-                        pass  # CREATE IF NOT EXISTS / INSERT OR IGNORE handle idempotency
+            # Apply schema with sqlite's parser so inline comments do not
+            # accidentally suppress statements (e.g., FTS/triggers).
+            conn.executescript(schema)
 
             # Migrate: add new columns to existing DBs (safe, idempotent)
             for col, typedef in [
@@ -264,13 +258,7 @@ class MemoryGraph:
                 conn.execute("DROP TRIGGER IF EXISTS nodes_ad")
                 conn.execute("DROP TRIGGER IF EXISTS nodes_au")
                 conn.execute("DROP TABLE IF EXISTS nodes_fts")
-                for statement in schema.split(";"):
-                    stmt = statement.strip()
-                    if stmt:
-                        try:
-                            conn.execute(stmt)
-                        except sqlite3.OperationalError:
-                            pass
+                conn.executescript(schema)
                 conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
 
             # Migrate FTS to porter stemming tokenizer if not already using it
@@ -283,14 +271,8 @@ class MemoryGraph:
                     conn.execute("DROP TRIGGER IF EXISTS nodes_ad")
                     conn.execute("DROP TRIGGER IF EXISTS nodes_au")
                     conn.execute("DROP TABLE IF EXISTS nodes_fts")
-                    # Recreate with porter tokenizer (from schema.sql)
-                    for stmt in schema.split(';'):
-                        s = stmt.strip()
-                        if s and ('nodes_fts' in s or 'nodes_a' in s.lower()):
-                            try:
-                                conn.execute(s)
-                            except sqlite3.OperationalError:
-                                pass
+                    # Recreate with porter tokenizer (from schema.sql).
+                    conn.executescript(schema)
                     conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
             except Exception:
                 pass  # Fresh DB or FTS not yet created
