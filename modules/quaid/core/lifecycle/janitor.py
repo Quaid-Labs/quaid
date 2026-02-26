@@ -363,8 +363,8 @@ def _append_decision_log(kind: str, payload: Dict[str, Any]) -> None:
         }
         with _decision_log_path().open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        janitor_logger.warning(f"decision log append failed: {exc}")
 
 
 def _pending_approvals_json_path() -> Path:
