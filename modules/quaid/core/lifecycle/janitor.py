@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -184,38 +185,41 @@ def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
 def _lock_file_path() -> Path:
     return _data_dir() / ".janitor.lock"
 _lock_fd = None  # File descriptor for flock-based locking
+_lock_guard = threading.Lock()
 
 
 def _acquire_lock() -> bool:
     """Acquire janitor lock using fcntl.flock (atomic, auto-releases on crash)."""
     global _lock_fd
     import fcntl
-    try:
-        _lock_file_path().parent.mkdir(parents=True, exist_ok=True)
-        _lock_fd = open(_lock_file_path(), 'w')
-        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _lock_fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}")
-        _lock_fd.flush()
-        return True
-    except (IOError, OSError):
-        if _lock_fd:
-            _lock_fd.close()
-            _lock_fd = None
-        return False
+    with _lock_guard:
+        try:
+            _lock_file_path().parent.mkdir(parents=True, exist_ok=True)
+            _lock_fd = open(_lock_file_path(), 'w')
+            fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_fd.write(f"{os.getpid()}\n{datetime.now().isoformat()}")
+            _lock_fd.flush()
+            return True
+        except (IOError, OSError):
+            if _lock_fd:
+                _lock_fd.close()
+                _lock_fd = None
+            return False
 
 
 def _release_lock():
     """Release janitor lock."""
     global _lock_fd
     import fcntl
-    try:
-        if _lock_fd:
-            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
-            _lock_fd.close()
-            _lock_fd = None
-        _lock_file_path().unlink(missing_ok=True)
-    except Exception as exc:
-        janitor_logger.warning(f"Failed to release janitor lock cleanly: {exc}")
+    with _lock_guard:
+        try:
+            if _lock_fd:
+                fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+                _lock_fd.close()
+                _lock_fd = None
+            _lock_file_path().unlink(missing_ok=True)
+        except Exception as exc:
+            janitor_logger.warning(f"Failed to release janitor lock cleanly: {exc}")
 
 
 def _check_for_updates() -> Optional[Dict[str, str]]:
