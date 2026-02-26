@@ -573,7 +573,8 @@ class TestArchiveNode:
         from lib.archive import archive_node
 
         # Invalid path that can't be created
-        result = archive_node({"id": "x"}, "test", db_path=Path("/nonexistent/deeply/nested/dir/archive.db"))
+        with patch("lib.archive.is_fail_hard_enabled", return_value=False):
+            result = archive_node({"id": "x"}, "test", db_path=Path("/nonexistent/deeply/nested/dir/archive.db"))
         assert result is False
 
     def test_idempotent_archive(self, tmp_path):
@@ -956,7 +957,8 @@ class TestReviewFixTransaction:
             "edges": [{"subject": "Alice", "relation": "friend_of", "object": "Bob"}],
         }]
 
-        with patch("datastore.memorydb.maintenance_ops.create_edge", side_effect=RuntimeError("edge rebuild failed")):
+        with patch("datastore.memorydb.maintenance_ops.is_fail_hard_enabled", return_value=False), \
+             patch("datastore.memorydb.maintenance_ops.create_edge", side_effect=RuntimeError("edge rebuild failed")):
             with pytest.raises(RuntimeError, match="edge rebuild failed"):
                 apply_review_decisions_from_list(graph, decision, dry_run=False)
 
