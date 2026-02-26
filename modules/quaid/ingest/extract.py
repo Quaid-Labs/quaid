@@ -57,7 +57,8 @@ def _get_owner_id(override: Optional[str] = None) -> str:
     try:
         cfg = get_config()
         return cfg.users.default_owner
-    except Exception:
+    except Exception as exc:
+        logger.warning("[extract] owner resolution failed; defaulting to 'default': %s", exc)
         return "default"
 
 
@@ -265,8 +266,8 @@ def extract_from_transcript(
         raw_skip = getattr(capture_cfg, "skip_patterns", []) or []
         if isinstance(raw_skip, list):
             capture_skip_patterns = [str(p) for p in raw_skip if str(p).strip()]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[extract] capture config read failed; proceeding without skip patterns: %s", exc)
 
     transcript = _apply_capture_skip_patterns(transcript, capture_skip_patterns)
     if not transcript.strip():
@@ -279,7 +280,8 @@ def extract_from_transcript(
     # Chunk transcript for extraction (split at turn boundaries)
     try:
         chunk_size = get_config().capture.chunk_size
-    except Exception:
+    except Exception as exc:
+        logger.warning("[extract] capture.chunk_size config read failed; defaulting to 30000: %s", exc)
         chunk_size = 30_000
     transcript_chunks = _chunk_transcript_text(transcript, max_chars=chunk_size)
 
