@@ -7,6 +7,7 @@ Smart chunking, indexing, and semantic search of project documentation.
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -21,6 +22,8 @@ from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding a
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
 from lib.fail_policy import is_fail_hard_enabled
 from lib.runtime_context import get_workspace_dir
+
+logger = logging.getLogger(__name__)
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
@@ -199,7 +202,7 @@ class DocsRAG:
 
                 return file_time > indexed_time
         except Exception as e:
-            print(f"Error checking if {file_path} needs reindex: {e}")
+            logger.warning("Error checking if %s needs reindex: %s", file_path, e)
             return True  # When in doubt, reindex
 
     def index_document(self, file_path: str) -> int:
@@ -208,7 +211,7 @@ class DocsRAG:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except Exception as e:
-            print(f"Error reading {file_path}: {e}")
+            logger.warning("Error reading %s: %s", file_path, e)
             return 0
         
         # Chunk the content
@@ -224,7 +227,11 @@ class DocsRAG:
             section_header = self._extract_section_header(chunk_text)
             embedding = _lib_get_embedding(chunk_text)
             if not embedding:
-                print(f"Failed to get embedding for chunk {i} in {file_path}, aborting reindex to preserve old chunks")
+                logger.warning(
+                    "Failed embedding for chunk %s in %s; aborting reindex to preserve old chunks",
+                    i,
+                    file_path,
+                )
                 return 0
             prepared_chunks.append((
                 f"{file_path}:{i}",
@@ -236,7 +243,7 @@ class DocsRAG:
             ))
 
         if not prepared_chunks:
-            print(f"All embeddings failed for {file_path}, keeping old chunks")
+            logger.warning("All embeddings failed for %s; keeping old chunks", file_path)
             return 0
 
         # All embeddings succeeded — now safe to delete and replace
@@ -543,7 +550,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                     for proj_name in cfg.projects.definitions:
                         try:
                             docs_registry.sync_external_files(proj_name)
-                        except Exception:
+                        except Exception as exc:
+                            logger.warning("Project external sync failed for %s: %s", proj_name, exc)
                             continue
                 except Exception as exc:
                     result.errors.append(f"Project auto-discover failed: {exc}")
