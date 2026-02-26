@@ -16,6 +16,22 @@ from lib.runtime_context import get_workspace_dir
 logger = logging.getLogger(__name__)
 
 
+def _coerce_positive_int(raw: Any, default: int) -> int:
+    """Return a positive int; fallback to default for invalid values."""
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_nonnegative_int(raw: Any, default: int) -> int:
+    """Return a non-negative int; fallback to default for invalid values."""
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return default
+
+
 def _default_deep_reasoning_model_classes() -> Dict[str, str]:
     return {}
 
@@ -630,20 +646,29 @@ def _load_config_inner() -> MemoryConfig:
                 continue
     core_parallel = CoreParallelConfig(
         enabled=bool(parallel_data.get('enabled', True)),
-        llm_workers=max(1, int(parallel_data.get('llm_workers', parallel_data.get('llmWorkers', 4)))),
+        llm_workers=_coerce_positive_int(
+            parallel_data.get('llm_workers', parallel_data.get('llmWorkers', 4)),
+            4,
+        ),
         task_workers=task_workers,
-        lifecycle_prepass_workers=max(1, int(parallel_data.get(
-            'lifecycle_prepass_workers',
-            parallel_data.get('lifecyclePrepassWorkers', 3),
-        ))),
+        lifecycle_prepass_workers=_coerce_positive_int(
+            parallel_data.get(
+                'lifecycle_prepass_workers',
+                parallel_data.get('lifecyclePrepassWorkers', 3),
+            ),
+            3,
+        ),
         lock_enforcement_enabled=bool(parallel_data.get(
             'lock_enforcement_enabled',
             parallel_data.get('lockEnforcementEnabled', True),
         )),
-        lock_wait_seconds=max(1, int(parallel_data.get(
-            'lock_wait_seconds',
-            parallel_data.get('lockWaitSeconds', 120),
-        ))),
+        lock_wait_seconds=_coerce_positive_int(
+            parallel_data.get(
+                'lock_wait_seconds',
+                parallel_data.get('lockWaitSeconds', 120),
+            ),
+            120,
+        ),
         lock_require_registration=bool(parallel_data.get(
             'lock_require_registration',
             parallel_data.get('lockRequireRegistration', True),
@@ -656,8 +681,13 @@ def _load_config_inner() -> MemoryConfig:
         dry_run=config_data.get('janitor', {}).get('dry_run', False),
         apply_mode=config_data.get('janitor', {}).get('apply_mode',
                     config_data.get('janitor', {}).get('applyMode', 'auto')),
-        token_budget=int(config_data.get('janitor', {}).get('token_budget',
-                        config_data.get('janitor', {}).get('tokenBudget', 0))),
+        token_budget=_coerce_nonnegative_int(
+            config_data.get('janitor', {}).get(
+                'token_budget',
+                config_data.get('janitor', {}).get('tokenBudget', 0),
+            ),
+            0,
+        ),
         approval_policies={
             "core_markdown_writes": str(config_data.get('janitor', {}).get('approval_policies', {})
                                         .get('core_markdown_writes',
