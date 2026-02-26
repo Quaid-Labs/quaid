@@ -31,6 +31,11 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
         valueType: "enum",
         enumValues: ["personal", "technical", "any"],
       },
+      {
+        key: "project",
+        description: "Optional project/domain label filter for technical recall.",
+        valueType: "string",
+      },
     ],
   },
   {
@@ -63,6 +68,11 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
         description: "Filter graph-backed recalls by personal/technical/all facts.",
         valueType: "enum",
         enumValues: ["personal", "technical", "any"],
+      },
+      {
+        key: "project",
+        description: "Optional project/domain label filter for technical recall.",
+        valueType: "string",
       },
     ],
   },

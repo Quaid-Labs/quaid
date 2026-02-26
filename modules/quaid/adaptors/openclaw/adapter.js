@@ -1562,10 +1562,13 @@ function isLowInformationEntityNode(result) {
   if (words.length <= 2 && /^[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?$/.test(text)) return true;
   return false;
 }
-async function recall(query, limit = 5, currentSessionId, compactionTime, expandGraph = true, graphDepth = 1, technicalScope = "any", dateFrom, dateTo) {
+async function recall(query, limit = 5, currentSessionId, compactionTime, expandGraph = true, graphDepth = 1, technicalScope = "any", project, dateFrom, dateTo) {
   try {
     const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
     args.push("--technical-scope", technicalScope);
+    if (project && String(project).trim()) {
+      args.push("--project", String(project).trim());
+    }
     if (!expandGraph) {
       args.push("--json");
       if (currentSessionId) {
@@ -1721,7 +1724,7 @@ const knowledgeEngine = createKnowledgeEngine({
     const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
     return String(llm?.text || "");
   },
-  recallVector: async (query, limit, scope, dateFrom, dateTo) => {
+  recallVector: async (query, limit, scope, project, dateFrom, dateTo) => {
     const memoryResults = await recall(
       query,
       limit,
@@ -1730,12 +1733,13 @@ const knowledgeEngine = createKnowledgeEngine({
       false,
       1,
       scope,
+      project,
       dateFrom,
       dateTo
     );
     return memoryResults.map((r) => ({ ...r, via: "vector" }));
   },
-  recallGraph: async (query, limit, depth, scope, dateFrom, dateTo) => {
+  recallGraph: async (query, limit, depth, scope, project, dateFrom, dateTo) => {
     const graphResults = await recall(
       query,
       limit,
@@ -1744,6 +1748,7 @@ const knowledgeEngine = createKnowledgeEngine({
       true,
       depth,
       scope,
+      project,
       dateFrom,
       dateTo
     );
@@ -2346,6 +2351,9 @@ ${recallStoreGuidance}`,
                 dateTo: Type.Optional(
                   Type.String({ description: "Only return memories up to this date (YYYY-MM-DD)." })
                 ),
+                project: Type.Optional(
+                  Type.String({ description: "Optional project/domain filter for technical memory results." })
+                ),
                 docs: Type.Optional(
                   Type.Array(Type.String({ description: "Optional doc path/name filters when project-store recall is used." }))
                 )
@@ -2367,7 +2375,8 @@ ${recallStoreGuidance}`,
                       Type.Literal("technical"),
                       Type.Literal("any")
                     ])
-                  )
+                  ),
+                  project: Type.Optional(Type.String())
                 })),
                 graph: Type.Optional(Type.Object({
                   depth: Type.Optional(Type.Number()),
@@ -2377,7 +2386,8 @@ ${recallStoreGuidance}`,
                       Type.Literal("technical"),
                       Type.Literal("any")
                     ])
-                  )
+                  ),
+                  project: Type.Optional(Type.String())
                 })),
                 project: Type.Optional(Type.Object({
                   project: Type.Optional(Type.String()),
@@ -2411,6 +2421,7 @@ ${recallStoreGuidance}`,
               const technicalScope = options.technicalScope ?? "personal";
               const dateFrom = options.filters?.dateFrom;
               const dateTo = options.filters?.dateTo;
+              const project = options.filters?.project;
               const docs = options.filters?.docs;
               const ranking = options.ranking;
               const datastoreOptions = options.datastoreOptions;
@@ -2427,7 +2438,7 @@ ${recallStoreGuidance}`,
               const depth = Math.min(Math.max(graphDepth, 1), 3);
               const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
               const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
-              console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, technicalScope=${technicalScope}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
+              console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, technicalScope=${technicalScope}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
               const results = await recallMemories({
                 query,
                 limit,
@@ -2439,6 +2450,7 @@ ${recallStoreGuidance}`,
                 intent,
                 ranking,
                 technicalScope,
+                project,
                 datastoreOptions,
                 failOpen: routerFailOpen,
                 dateFrom,
@@ -3090,6 +3102,7 @@ ${factsOutput || "No facts found."}` }],
         intent = "general",
         ranking,
         technicalScope = "any",
+        project,
         dateFrom,
         dateTo,
         docs,
@@ -3099,7 +3112,7 @@ ${factsOutput || "No facts found."}` }],
       } = opts;
       const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
       console.log(
-        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} technicalScope=${technicalScope} waitForExtraction=${waitForExtraction}`
+        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} technicalScope=${technicalScope} project=${project || "any"} waitForExtraction=${waitForExtraction}`
       );
       if (waitForExtraction && extractionPromise) {
         let raceTimer;
@@ -3130,6 +3143,7 @@ ${factsOutput || "No facts found."}` }],
           intent,
           ranking,
           technicalScope,
+          project,
           dateFrom,
           dateTo,
           docs,
@@ -3143,6 +3157,7 @@ ${factsOutput || "No facts found."}` }],
         intent,
         ranking,
         technicalScope,
+        project,
         dateFrom,
         dateTo,
         docs,
