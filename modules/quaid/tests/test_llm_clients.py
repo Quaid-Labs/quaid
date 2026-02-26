@@ -1,8 +1,10 @@
 """Tests for llm_clients.py — JSON parsing, token usage, provider delegation."""
 
+from concurrent.futures import ThreadPoolExecutor
 import os
 import sys
 import json
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -203,6 +205,40 @@ class TestTokenUsage:
         finally:
             llm_clients._pricing_loaded = old_loaded
             llm_clients._pricing_error_logged = old_error_logged
+
+    def test_load_model_config_is_thread_safe_single_init(self):
+        import core.llm.clients as llm_clients
+        old_models_loaded = llm_clients._models_loaded
+        old_fast = llm_clients._fast_reasoning_model
+        old_deep = llm_clients._deep_reasoning_model
+        llm_clients._models_loaded = False
+        llm_clients._fast_reasoning_model = ""
+        llm_clients._deep_reasoning_model = ""
+        calls = {"count": 0}
+        count_lock = threading.Lock()
+
+        def _fake_get_config():
+            with count_lock:
+                calls["count"] += 1
+            import time
+            time.sleep(0.01)
+            return MagicMock(models=MagicMock(
+                fast_reasoning="mock-fast-model",
+                deep_reasoning="mock-deep-model",
+            ))
+
+        try:
+            with patch("config.get_config", side_effect=_fake_get_config):
+                with ThreadPoolExecutor(max_workers=12) as executor:
+                    list(executor.map(lambda _i: llm_clients._load_model_config(), range(24)))
+            assert calls["count"] == 1
+            assert llm_clients._models_loaded is True
+            assert llm_clients._fast_reasoning_model == "mock-fast-model"
+            assert llm_clients._deep_reasoning_model == "mock-deep-model"
+        finally:
+            llm_clients._models_loaded = old_models_loaded
+            llm_clients._fast_reasoning_model = old_fast
+            llm_clients._deep_reasoning_model = old_deep
 
 
 # ---------------------------------------------------------------------------
