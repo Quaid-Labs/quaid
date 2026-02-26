@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { queueDelayedRequest } from "./delayed-requests.js";
-import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
+import { createKnowledgeEngine } from "../../orchestrator/default-orchestrator.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 import { createPythonBridgeExecutor } from "./python-bridge.js";
@@ -25,7 +25,8 @@ function _resolveWorkspace() {
         return ws;
       }
     }
-  } catch {
+  } catch (err) {
+    console.error("[quaid][startup] workspace resolution failed:", err?.message || String(err));
   }
   return process.cwd();
 }
@@ -48,7 +49,8 @@ const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
     fs.mkdirSync(p, { recursive: true });
-  } catch {
+  } catch (err) {
+    console.error(`[quaid][startup] failed to create runtime dir: ${p}`, err?.message || String(err));
   }
 }
 let _cachedNodeCount = null;
@@ -2719,7 +2721,10 @@ ${factsOutput || "No facts found."}` }],
               raceTimer = setTimeout(() => rej(new Error("timeout")), 6e4);
             })
           ]);
-        } catch {
+        } catch (err) {
+          if (isFailHardEnabled()) {
+            throw err;
+          }
         } finally {
           if (raceTimer) clearTimeout(raceTimer);
         }
@@ -3050,6 +3055,9 @@ notify_memory_extraction(
           }
         }).then(() => doExtraction());
       } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.error("[quaid] before_compaction hook failed:", err);
       }
     }, {
@@ -3113,6 +3121,9 @@ notify_memory_extraction(
           throw doErr;
         });
       } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.error("[quaid] before_reset hook failed:", err);
       }
     }, {

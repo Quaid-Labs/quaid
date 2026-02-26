@@ -185,7 +185,6 @@ def _merge_nodes_into(
 
     # Migrate edges: repoint to merged node instead of deleting
     with graph._get_conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
         for oid in original_ids:
             # Repoint source_fact_id edges
             conn.execute(
