@@ -49,8 +49,8 @@ function createKnowledgeEngine(deps) {
     try {
       const cfg = deps.getMemoryConfig?.() || {};
       const retrieval = cfg?.retrieval || {};
-      if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
       if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
+      if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
     } catch {
     }
     return true;

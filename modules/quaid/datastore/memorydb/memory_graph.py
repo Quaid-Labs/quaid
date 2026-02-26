@@ -40,6 +40,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import urllib.request
 import urllib.error
 import uuid
@@ -2337,12 +2338,16 @@ def graph_aware_recall(
 # ==========================================================================
 
 _graph: Optional[MemoryGraph] = None
+_graph_lock = threading.Lock()
 
 def get_graph() -> MemoryGraph:
     """Get singleton graph instance."""
     global _graph
-    if _graph is None:
-        _graph = MemoryGraph()
+    if _graph is not None:
+        return _graph
+    with _graph_lock:
+        if _graph is None:
+            _graph = MemoryGraph()
     return _graph
 
 
