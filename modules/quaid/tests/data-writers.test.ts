@@ -59,6 +59,37 @@ describe("data writers", () => {
     expect(out.error).toContain("is not supported");
   });
 
+  it("preserves writer error type in failure details", async () => {
+    class RetryableWriteError extends Error {
+      constructor(msg: string) {
+        super(msg);
+        this.name = "RetryableWriteError";
+      }
+    }
+    const engine = createDataWriteEngine({
+      writers: [{
+        spec: {
+          datastore: "vector",
+          description: "Vector facts",
+          actions: [{ key: "store_fact", description: "Store a fact" }],
+        },
+        write: vi.fn(async () => {
+          throw new RetryableWriteError("temporary downstream error");
+        }),
+      }],
+    });
+
+    const out = await engine.writeData({
+      datastore: "vector",
+      action: "store_fact",
+      payload: { text: "Quaid likes tea" },
+    });
+
+    expect(out.status).toBe("failed");
+    expect(out.error).toContain("temporary downstream error");
+    expect(out.details?.error_type).toBe("RetryableWriteError");
+  });
+
   it("returns cloned writer registry specs", () => {
     const engine = createDataWriteEngine({
       writers: [{
