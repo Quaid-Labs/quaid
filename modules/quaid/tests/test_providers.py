@@ -662,6 +662,22 @@ class TestGatewayLLMProvider:
         assert result.text == "ok"
         assert mock_open.call_count == 2
 
+    def test_llm_call_http_error_with_non_object_json_body_falls_back_to_status_message(self):
+        import urllib.request
+        import urllib.error
+
+        p = GatewayLLMProvider(port=18789)
+        http_err = urllib.error.HTTPError(
+            url="http://127.0.0.1:18789/plugins/quaid/llm",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'["not-an-object"]'),
+        )
+        with patch.object(urllib.request, "urlopen", side_effect=http_err):
+            with pytest.raises(urllib.error.HTTPError):
+                p.llm_call([{"role": "user", "content": "test"}], timeout=1)
+
 
 class TestABCEnforcement:
     def test_llm_provider_cannot_instantiate(self):
