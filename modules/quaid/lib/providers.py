@@ -77,26 +77,6 @@ class LLMResult:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Model tier table — maps known providers to deep/fast reasoning models
-# ═══════════════════════════════════════════════════════════════════════
-
-MODEL_TIERS: Dict[str, Dict[str, object]] = {
-    "anthropic": {
-        "deep": ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5"],
-        "fast": ["claude-haiku-4-5"],
-        "default_deep": "claude-opus-4-6",
-        "default_fast": "claude-haiku-4-5",
-    },
-    "openai": {
-        "deep": ["gpt-5", "gpt-4o", "o4-mini"],
-        "fast": ["gpt-4o-mini"],
-        "default_deep": "gpt-4o",
-        "default_fast": "gpt-4o-mini",
-    },
-}
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # LLM Provider ABC
 # ═══════════════════════════════════════════════════════════════════════
 

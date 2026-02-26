@@ -20,7 +20,6 @@ from lib.providers import (
     TestLLMProvider,
     OllamaEmbeddingsProvider,
     MockEmbeddingsProvider,
-    MODEL_TIERS,
 )
 from adaptors.openclaw.providers import GatewayLLMProvider
 
@@ -53,22 +52,6 @@ class TestLLMResult:
     def test_none_text(self):
         r = LLMResult(text=None, duration=0.5)
         assert r.text is None
-
-
-# ---------------------------------------------------------------------------
-# MODEL_TIERS
-# ---------------------------------------------------------------------------
-
-class TestModelTiers:
-    def test_anthropic_tiers(self):
-        assert "anthropic" in MODEL_TIERS
-        assert "claude-opus-4-6" in MODEL_TIERS["anthropic"]["deep"]
-        assert "claude-haiku-4-5" in MODEL_TIERS["anthropic"]["fast"]
-
-    def test_openai_tiers(self):
-        assert "openai" in MODEL_TIERS
-        assert "gpt-4o" in MODEL_TIERS["openai"]["deep"]
-        assert "gpt-4o-mini" in MODEL_TIERS["openai"]["fast"]
 
 
 # ---------------------------------------------------------------------------
