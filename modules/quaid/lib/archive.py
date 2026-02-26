@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from .fail_policy import is_fail_hard_enabled
 
 
 def _default_archive_path() -> Path:
@@ -117,4 +118,6 @@ def search_archive(query: str, limit: int = 10,
         return [dict(row) for row in rows]
     except Exception as e:
         logger.warning("search_archive failed: %s", e)
+        if is_fail_hard_enabled():
+            raise RuntimeError("search_archive failed while fail-hard mode is enabled") from e
         return []
