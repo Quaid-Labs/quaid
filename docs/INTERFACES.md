@@ -11,9 +11,23 @@ This document defines Quaid's external interface model for host adapters and run
 
 ## Surfaces
 
-- `OpenClaw adapter` (`plugins/quaid/adapters/openclaw/adapter.ts`): richest integration path, lifecycle hooks + tools.
-- `MCP server` (`plugins/quaid/mcp_server.py`): host-agnostic RPC tools.
-- `CLI wrapper` (`plugins/quaid/quaid`): operational entrypoint to Python modules.
+- `OpenClaw adapter` (`modules/quaid/adaptors/openclaw/adapter.ts`): richest integration path, lifecycle hooks + tools.
+- `MCP server` (`modules/quaid/core/interface/mcp_server.py`): host-agnostic RPC tools.
+- `CLI wrapper` (`modules/quaid/quaid`): operational entrypoint to Python modules.
+
+## Plugin Foundation (Phase 1)
+
+Source:
+- `modules/quaid/core/runtime/plugins.py`
+- `docs/PLUGIN-SYSTEM.md`
+
+Current state:
+- strict manifest schema + validation exists,
+- plugin discovery and registry exist,
+- config supports plugin paths/allowlist/slots,
+- active production control flow is not fully moved to plugin runtime yet.
+
+This keeps migration risk low while locking extension contracts before public expansion.
 
 ## Capability Discovery
 
@@ -26,7 +40,7 @@ This document defines Quaid's external interface model for host adapters and run
 
 ### Event Capabilities
 
-- Source: `plugins/quaid/events.py` (`get_event_registry()`)
+- Source: `modules/quaid/core/runtime/events.py` (`get_event_registry()`)
 - Discovery:
   - MCP: `memory_event_capabilities`
   - CLI: `quaid event capabilities`
@@ -51,9 +65,39 @@ This allows orchestrators/agents to adapt strategy based on supported events and
 
 New datastores should register DataWriters rather than adding direct write calls throughout adapters.
 
+## Identity Contract (Multi-User Foundation)
+
+Source:
+- `modules/quaid/core/runtime/identity_runtime.py`
+- `modules/quaid/datastore/memorydb/identity_defaults.py`
+- `modules/quaid/core/services/memory_service.py`
+
+Rules:
+1. Core allows exactly one active identity resolver registration and one active privacy policy registration.
+2. In `identity.mode=multi_user`, write paths fail fast if required identity envelope fields are missing.
+3. In `identity.mode=multi_user`, read paths fail fast unless a privacy policy is registered.
+4. Core bootstraps datastore-owned default hooks (`memorydb-default`) automatically so unhooked deployments fail loudly only for true contract violations, not missing wiring.
+
+Required write envelope fields in multi-user mode:
+- `source_channel`
+- `source_conversation_id`
+- `source_author_id`
+
+Required read context in multi-user mode:
+- `viewer_entity_id`
+
+Optional scoped read context:
+- `participant_entity_ids`
+- `subject_entity_id`
+- `source_channel` / `source_conversation_id` / `source_author_id`
+
+Docs/project registry forward-compat surface:
+- `datastore/docsdb/registry.py` now supports additive identity/source context fields on `doc_registry` entries (`source_*`, `speaker_entity_id`, `subject_entity_id`, `conversation_id`, `visibility_scope`, `sensitivity`, `participant_entity_ids`, `provenance_confidence`).
+- These fields are schema-seeded now for future multi-user routing without destructive migrations.
+
 ## Event Contract
 
-- Source: `plugins/quaid/events.py`
+- Source: `modules/quaid/core/runtime/events.py`
 - Core functions:
   - `emit_event(name, payload, source, session_id, owner_id, priority)`
   - `list_events(status, limit)`

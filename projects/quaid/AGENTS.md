@@ -1,5 +1,18 @@
 # Knowledge Layer — Operational Guide
 
+## Operator Interrupt Policy
+
+- If the operator sends a new request while you are in the middle of an active task, do not immediately switch tasks.
+- Queue the new request and complete the current task first.
+- Only switch immediately when the operator uses explicit interruption language (for example: `wait`).
+
+## Fail-Hard Rule
+
+- Fail-hard control is config-driven through `retrieval.failHard` / `retrieval.fail_hard` in `config/memory.json`.
+- Do not implement fail-hard switching via env var toggles in product flows.
+- When fail-hard is `true`, never degrade/fallback silently.
+- When fail-hard is `false`, any fallback must emit loud warnings/diagnostics.
+
 ## Three Layers
 
 ### Layer 1: Core Markdown (Always Loaded)
@@ -11,7 +24,7 @@ The root markdown files. Loaded every turn. Your foundation.
 ### Layer 2: RAG Documentation (`projects/`)
 Detailed technical docs, searchable semantically:
 ```bash
-python3 plugins/quaid/docs_rag.py search "query"
+python3 modules/quaid/docs_rag.py search "query"
 ```
 - Project docs under `projects/<project>/` are auto-indexed nightly
 - **Use for:** Implementation details, system architecture, reference docs
@@ -20,7 +33,7 @@ python3 plugins/quaid/docs_rag.py search "query"
 ### Layer 3: Memory Database
 Personal facts about Quaid's world — people, places, preferences, relationships:
 ```bash
-python3 plugins/quaid/memory_graph.py search "query" --owner quaid
+python3 modules/quaid/memory_graph.py search "query" --owner quaid
 ```
 - ~424 facts (620 total nodes) with semantic embeddings (qwen3-embedding:8b)
 - Graph edges connect entities (parent_of, has_pet, lives_at)

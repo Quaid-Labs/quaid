@@ -24,13 +24,13 @@ const errors = [];
 let version = '';
 
 try {
-  const pkg = JSON.parse(read('plugins/quaid/package.json'));
+  const pkg = JSON.parse(read('modules/quaid/package.json'));
   version = String(pkg.version || '').trim();
-  if (!version) errors.push('plugins/quaid/package.json: missing version');
+  if (!version) errors.push('modules/quaid/package.json: missing version');
 
-  const versionFile = read('plugins/quaid/VERSION').trim();
+  const versionFile = read('modules/quaid/VERSION').trim();
   if (versionFile !== version) {
-    errors.push(`plugins/quaid/VERSION (${versionFile}) != package.json (${version})`);
+    errors.push(`modules/quaid/VERSION (${versionFile}) != package.json (${version})`);
   }
 
   const setupMjs = read('setup-quaid.mjs');

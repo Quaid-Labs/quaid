@@ -8,16 +8,16 @@
 
 ```bash
 # list projects
-python3 plugins/quaid/docs_registry.py list-projects
+python3 modules/quaid/docs_registry.py list-projects
 
 # list docs in a project
-python3 plugins/quaid/docs_registry.py list --project quaid
+python3 modules/quaid/docs_registry.py list --project quaid
 
 # inspect one project
-python3 plugins/quaid/docs_registry.py get-project quaid
+python3 modules/quaid/docs_registry.py get-project quaid
 
 # search docs
-python3 plugins/quaid/docs_rag.py search "memory extraction flow"
+python3 modules/quaid/docs_rag.py search "memory extraction flow"
 ```
 
 ## Notes

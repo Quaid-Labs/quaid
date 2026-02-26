@@ -1,0 +1,2 @@
+"""Core service adapters."""
+

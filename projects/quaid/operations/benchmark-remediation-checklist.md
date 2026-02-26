@@ -88,8 +88,8 @@ Promote current facts and suppress stale/conflicting facts.
 - Retrieval for temporal-current queries prefers latest facts in validation spot-checks.
 
 ### Validation commands
-- `python3 plugins/quaid/janitor.py --task review --apply`
-- `python3 plugins/quaid/janitor.py --task contradictions --apply`
+- `python3 modules/quaid/janitor.py --task review --apply`
+- `python3 modules/quaid/janitor.py --task contradictions --apply`
 - Query DB for stale/superseded markers and verify recall behavior on contested prompts.
 
 ## Exit Criteria For Next Benchmark Pass

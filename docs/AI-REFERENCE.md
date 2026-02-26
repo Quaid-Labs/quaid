@@ -44,28 +44,30 @@ Write request
 
 | File | Purpose | Key Exports / Functions |
 |------|---------|------------------------|
-| `memory_graph.py` | Graph operations, hybrid retrieval, CLI | `store()`, `recall()`, `search()`, `create_edge()`, `get_graph()`, `get_related_bidirectional()`, `_get_fusion_weights()`, `_normalize_edge()`, `_sanitize_for_context()`, `_forget()`, `_get_memory()`, `MemoryGraph`, `Node`, `Edge`, CLI (argparse at bottom) |
-| `janitor.py` | 17-task nightly maintenance pipeline | `run_task_optimized()`, `_merge_nodes_into()`, `_normalize_edge()`, `run_tests()`, task functions for backup/embeddings/review/temporal/dedup/contradictions/decay/workspace/docs/snippets/journal/rag/tests/cleanup |
-| `soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()`, `archive_entries()`, `insert_into_file()`, `apply_distillation()`, snippet/journal I/O helpers |
-| `config.py` | Typed config from memory.json | `get_config()`, `reload_config()`, `load_config()`, `MemoryConfig`, `CoreMarkdownConfig`, `NotificationsConfig`, `ModelsConfig`, `DecayConfig`, `JanitorConfig`, `DocsConfig`, `RetrievalConfig`, `CaptureConfig` |
-| `llm_clients.py` | Anthropic API wrapper with prompt caching | `call_deep_reasoning()`, `call_fast_reasoning()`, `get_api_key()`, `parse_json_response()`, prompt caching (~90% savings on repeated prompts) |
-| `docs_rag.py` | RAG indexing and search over project docs | `search()`, `index_docs()`, chunk management |
-| `docs_updater.py` | Auto-update docs from git diffs | `check_staleness()`, `update_doc_from_diffs()`, changelog, Haiku pre-filter gate (skips trivial diffs) |
-| `docs_registry.py` | Project/doc registry, CRUD, path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()`, `gc()`, `DocsRegistry`, `ensure_table()` |
-| `workspace_audit.py` | Core markdown monitoring and bloat detection | `run_workspace_check()`, `check_bloat()`, Opus review of changed files |
-| `notify.py` | User notifications via gateway | `notify_user()`, `notify_memory_extraction()`, `notify_memory_recall()`, `_check_janitor_health()` |
-| `events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
-| `project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
-| `extract.py` | Extraction module — transcript to memories | `extract_from_transcript()`, `parse_session_jsonl()`, `build_transcript()`, `_load_extraction_prompt()`, CLI (argparse at bottom) |
-| `mcp_server.py` | MCP server — memory tools over stdio | `memory_extract`, `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `projects_search`, `session_recall` |
-| `api.py` | Public API with simplified signatures | `store()`, `recall()`, `search()`, `create_edge()`, `forget()`, `get_memory()`, `get_graph()`, `Node`, `Edge` |
-| `logger.py` | Structured JSONL logger with rotation | `log()`, `Logger` class, `rotate_logs()`, `clean_old_archives()`, `get_log_path()`, module-level `memory_logger`, `janitor_logger` |
-| `semantic_clustering.py` | Groups memories by domain for O(n) contradiction checking | `classify_node_semantic_cluster()`, `get_memory_clusters()`, `get_contradiction_pairs_by_cluster()` |
-| `schema.sql` | Database DDL (nodes, edges, FTS5, indexes, operational tables) | Full schema definition |
-| `enable_wal.py` | One-time WAL mode enablement script | `enable_wal_mode()` |
-| `seed.py` | Seed database from MEMORY.md files | Parsing and population script |
-| `seed_optimized.py` | Seed with atomic facts via CLI | Uses `memory_graph.py store` subprocess |
-| `test_recall.py` | Manual recall test harness | Simulates injection and memory_recall paths |
+| `datastore/memorydb/memory_graph.py` | Graph operations, hybrid retrieval, CLI, datastore cleanup registration | `store()`, `recall()`, `search()`, `create_edge()`, `get_graph()`, `_sanitize_for_context()`, `MemoryGraph`, `Node`, `Edge`, `register_lifecycle_routines()` |
+| `datastore/memorydb/maintenance_ops.py` | Datastore-owned memory maintenance intelligence | dedup/contradiction/decay/review routines, `TokenBatchBuilder`, `JanitorMetrics` |
+| `datastore/memorydb/maintenance.py` | Datastore lifecycle registration facade | `register_lifecycle_routines()` for `memory_graph_maintenance` |
+| `core/lifecycle/janitor.py` | Janitor orchestration, scheduling, reporting, lifecycle dispatch | `run_task_optimized()`, `run_tests()`, task orchestration and policy gating |
+| `core/lifecycle/janitor_lifecycle.py` | Lifecycle routine registry and dispatch | `LifecycleRegistry`, `RoutineContext`, `RoutineResult`, `build_default_registry()` |
+| `adaptors/openclaw/maintenance.py` | OpenClaw-specific lifecycle registrations | `register_lifecycle_routines()` (workspace audit registration) |
+| `core/lifecycle/workspace_audit.py` | Workspace markdown audit implementation | `run_workspace_check()`, `check_bloat()` |
+| `datastore/notedb/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
+| `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search()`, `index_docs()`, `register_lifecycle_routines()` |
+| `core/docs/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
+| `core/docs/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
+| `core/docs/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
+| `core/runtime/events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
+| `core/runtime/notify.py` | User notifications via adapter/runtime context | `notify_user()`, retrieval/extraction/janitor/doc notifications |
+| `core/runtime/logger.py` | Structured JSONL logger with rotation | `Logger`, `rotate_logs()`, `memory_logger`, `janitor_logger` |
+| `core/interface/mcp_server.py` | MCP server surface | `memory_extract`, `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `projects_search`, `session_recall` |
+| `core/interface/api.py` | Public API facade | `store()`, `recall()`, `search()`, `create_edge()`, `forget()`, `get_memory()`, `stats()`, `extract_transcript()`, `projects_search_docs()` |
+| `lib/llm_clients.py` | Canonical LLM client wrapper with prompt parsing/usage tracking | `call_deep_reasoning()`, `call_fast_reasoning()`, `call_llm()`, `parse_json_response()` |
+| `core/llm/clients.py` | Compatibility alias to canonical LLM client module | module alias to `lib.llm_clients` |
+| `ingest/extract.py` | Extraction module — transcript to memories | `extract_from_transcript()`, `parse_session_jsonl()`, `build_transcript()` |
+| `ingest/docs_ingest.py` | Ingest pipeline for docs from transcript/source mapping | ingest orchestration helpers |
+| `datastore/memorydb/semantic_clustering.py` | Semantic clustering for contradiction candidate reduction | `classify_node_semantic_cluster()`, `get_memory_clusters()` |
+| `datastore/memorydb/schema.sql` | Database DDL (nodes, edges, FTS5, indexes, operational tables) | Full schema definition |
+| `datastore/memorydb/enable_wal.py` | WAL mode enablement helper | `enable_wal_mode()` |
 
 ### Shared Library (`lib/`)
 
@@ -85,19 +87,19 @@ Write request
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `adapters/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
-| `adapters/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
-| `adapters/openclaw/knowledge/orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
+| `adaptors/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
+| `adaptors/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
+| `orchestrator/default-orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
 | `core/data-writers.ts` | Canonical write routing/dispatch | `createDataWriteEngine()`, `writeData()`, DataWriter registry/specs |
-| `adapters/openclaw/index.js` / `adapter.js` / `knowledge/orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
+| `adaptors/openclaw/index.js` / `adapter.js` / `orchestrator/default-orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
 
 ### CI / Release Guard Scripts
 
 | File | Purpose |
 |------|---------|
-| `plugins/quaid/scripts/check-runtime-pairs.mjs` | Enforces TS/JS runtime pair sync (`--strict` checks HEAD commit too) |
-| `plugins/quaid/scripts/run-all-tests.sh` | Orchestrated quick/full test launcher with syntax, integration, and Python isolated suites |
-| `plugins/quaid/scripts/run-quaid-e2e-matrix.sh` | Bootstrap/runtime auth-path matrix runner with failure classification + JSON summary |
+| `modules/quaid/scripts/check-runtime-pairs.mjs` | Enforces TS/JS runtime pair sync (`--strict` checks HEAD commit too) |
+| `modules/quaid/scripts/run-all-tests.sh` | Orchestrated quick/full test launcher with syntax, integration, and Python isolated suites |
+| `modules/quaid/scripts/run-quaid-e2e-matrix.sh` | Bootstrap/runtime auth-path matrix runner with failure classification + JSON summary |
 | `scripts/check-docs-consistency.mjs` | GitHub-facing docs drift gate (README/ARCHITECTURE/AI-REFERENCE invariants) |
 | `scripts/release-verify.mjs` | Release/version consistency gate (package/setup/README/release-note alignment) |
 | `scripts/release-owner-check.mjs` | Ownership/attribution gate (author/committer identity + blocked bot/co-author tags) |
@@ -107,19 +109,13 @@ Write request
 
 | File | Purpose |
 |------|---------|
-| `extraction.txt` | Extraction system prompt for Opus (~160 lines, used by `extract.py`) |
+| `extraction.txt` | Extraction system prompt for Opus (~160 lines, used by `ingest/extract.py`) |
 | `project_onboarding.md` | Agent instructions for project discovery and registration workflow |
 
-### Database Migrations (`migrations/`)
+### Database Migrations
 
-| File | Purpose |
-|------|---------|
-| `001_add_owner_id.sql` | Add owner_id column to nodes |
-| `002_add_session_fields.sql` | Add session tracking fields |
-| `002_privacy_columns.sql` | Add privacy tier columns |
-| `003_add_doc_chunks.sql` | Add doc chunk support |
-
-> **Note:** Two migrations share the `002_` prefix (`002_add_session_fields.sql` and `002_privacy_columns.sql`). This is intentional -- migrations are applied by checking which have already run (tracked in the `metadata` table), not by sequential numbering. The numbering is a rough ordering hint, not a strict sequence.
+Quaid currently performs schema evolution in-place from `datastore/memorydb/memory_graph.py` during startup/DB init.
+There is no standalone `migrations/` directory in the current repository layout.
 
 ---
 
@@ -309,7 +305,7 @@ Conversation -> Opus extracts journal_entries (diary paragraphs)
 
 ### Merge Operations
 
-All three merge paths (dedup/contradiction/review) use the shared `_merge_nodes_into()` helper in `janitor.py`. This helper handles:
+All three merge paths (dedup/contradiction/review) use the shared `_merge_nodes_into()` helper in `datastore/memorydb/maintenance_ops.py`. This helper handles:
 - Confidence inheritance (max of the two nodes)
 - `confirmation_count` sum
 - Edge migration (all edges transferred to survivor)
@@ -400,7 +396,7 @@ The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The snake_c
 ### TypeScript / Gateway
 
 #### TS/JS Sync
-`adapters/openclaw/index.ts` is source of truth, `adapters/openclaw/index.js` must match manually. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
+`adaptors/openclaw/adapter.ts` is source of truth for runtime behavior; `adaptors/openclaw/adapter.js` must match manually. `adaptors/openclaw/index.ts` remains a minimal entry shim. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
 
 #### Gateway Stale Process
 `clawdbot gateway restart` does not reliably kill the old process. The reliable sequence is:
@@ -436,7 +432,7 @@ Without the `--create-missing` flag, the recovery wrapper silently fails on edge
 All 3 merge paths (dedup/contradiction/review) previously had 5 bugs: confidence reset to default, `confirmation_count` reset, wrong status, edges deleted instead of migrated, hardcoded owner. Now fixed with the shared `_merge_nodes_into()` helper. 19 tests cover: confidence inheritance, confirmation_count sum, edge migration, status="active", owner from originals.
 
 #### Dedup Merge owner_id
-`janitor.py` hardcodes the default `owner_id`. Benchmark reprocessing needs a post-janitor SQL fixup to correct the owner.
+`datastore/memorydb/maintenance_ops.py` currently defaults `owner_id` when merging without source nodes. Benchmark reprocessing may need a post-janitor SQL fixup to normalize owner IDs.
 
 #### Contradiction Detection Scope
 Only checks `pending` / `approved` facts. The ingest pipeline stores facts as `active`, making contradiction detection a no-op for benchmarks unless status is adjusted.
@@ -495,6 +491,8 @@ Architectural constraints that must not be broken. Violating these causes data c
 
 **Content hash dedup happens before embedding.** `store()` checks `content_hash` (SHA256) first for exact dedup, then generates the embedding, then checks semantic similarity. Reordering these steps wastes embedding compute on exact duplicates.
 
+**Datastore owns metadata preservation on dedup paths.** `store()` applies metadata flags (`source_type`, `is_technical`) on duplicate/update paths too. Ingest/API layers should not mutate graph internals after write.
+
 ---
 
 ## CLI Reference
@@ -535,35 +533,35 @@ quaid uninstall               # Clean removal (preserves DB, offers backup resto
 
 ### Python Module CLIs (Advanced)
 
-All commands run from the `plugins/quaid/` directory.
+All commands run from the `modules/quaid/` directory.
 
 ```bash
 # Memory operations
-python3 memory_graph.py store "fact text" --owner default --category preference
-python3 memory_graph.py search "query" --owner default --limit 10
-python3 memory_graph.py search-all "query"     # Memory + docs combined
-python3 memory_graph.py stats
-python3 memory_graph.py get-edges <node_id>
+python3 datastore/memorydb/memory_graph.py store "fact text" --owner default --category preference
+python3 datastore/memorydb/memory_graph.py search "query" --owner default --limit 10
+python3 datastore/memorydb/memory_graph.py search-all "query"     # Memory + docs combined
+python3 datastore/memorydb/memory_graph.py stats
+python3 datastore/memorydb/memory_graph.py get-edges <node_id>
 
 # Extraction
-python3 extract.py transcript.txt --owner default
-python3 extract.py session.jsonl --dry-run --json
-echo "User: hi" | python3 extract.py - --owner default
+python3 ingest/extract.py transcript.txt --owner default
+python3 ingest/extract.py session.jsonl --dry-run --json
+echo "User: hi" | python3 ingest/extract.py - --owner default
 
 # Janitor pipeline
-python3 janitor.py --task all --dry-run           # Preview (no changes)
-python3 janitor.py --task review --apply           # Opus review of pending facts
-python3 janitor.py --task snippets --apply         # FOLD/REWRITE/DISCARD snippet review
-python3 janitor.py --task journal --apply          # Journal distillation
-python3 janitor.py --task embeddings               # Backfill missing embeddings
-python3 janitor.py --task decay --apply            # Run Ebbinghaus decay
-python3 janitor.py --task duplicates --apply       # Dedup pass
-python3 janitor.py --task cleanup                  # Prune old logs
+python3 core/lifecycle/janitor.py --task all --dry-run           # Preview (no changes)
+python3 core/lifecycle/janitor.py --task review --apply           # Opus review of pending facts
+python3 core/lifecycle/janitor.py --task snippets --apply         # FOLD/REWRITE/DISCARD snippet review
+python3 core/lifecycle/janitor.py --task journal --apply          # Journal distillation
+python3 core/lifecycle/janitor.py --task embeddings               # Backfill missing embeddings
+python3 core/lifecycle/janitor.py --task decay --apply            # Run Ebbinghaus decay
+python3 core/lifecycle/janitor.py --task duplicates --apply       # Dedup pass
+python3 core/lifecycle/janitor.py --task cleanup                  # Prune old logs
 
 # Documentation
-python3 docs_updater.py check                      # Check doc staleness (free)
-python3 docs_updater.py update-stale --apply       # Fix stale docs (Opus calls)
-python3 docs_rag.py search "query text"            # RAG search (free, local)
+python3 core/docs/updater.py check                      # Check doc staleness (free)
+python3 core/docs/updater.py update-stale --apply       # Fix stale docs (Opus calls)
+python3 datastore/docsdb/rag.py search "query text"     # RAG search (free, local)
 
 # Projects
 python3 docs_registry.py list --project quaid
@@ -573,8 +571,8 @@ python3 docs_registry.py discover --project <name>
 python3 docs_registry.py gc                        # Garbage collect
 
 # Workspace audit
-python3 workspace_audit.py --bloat                 # Line counts vs limits
-python3 workspace_audit.py --check-only            # Changed files
+python3 core/lifecycle/workspace_audit.py --bloat                 # Line counts vs limits
+python3 core/lifecycle/workspace_audit.py --check-only            # Changed files
 ```
 
 ### Testing
@@ -737,7 +735,7 @@ SHA256 hash prefix on all janitor LLM decisions provides traceability. If the pr
 
 ### Adding a CLI Command
 
-Edit `memory_graph.py`, find the argparse section at the bottom:
+Edit `datastore/memorydb/memory_graph.py`, find the argparse section at the bottom:
 ```python
 subparsers.add_parser("my-command", help="...")
 # Then add handler:
@@ -754,7 +752,7 @@ if args.command == "my-command":
 
 ### Adding a Janitor Task
 
-1. Add a function in `janitor.py` following the pattern of existing tasks
+1. Add a function in `datastore/memorydb/maintenance_ops.py` for datastore intelligence and orchestrate it from `core/lifecycle/janitor.py`
 2. Register it in `run_task_optimized()` task dispatch
 3. Decide its position in the pipeline ordering
 4. Add `--task <name>` handling to the CLI argument parser
@@ -764,10 +762,10 @@ if args.command == "my-command":
 
 ```bash
 # Preview (no changes, no LLM calls for most tasks)
-python3 janitor.py --task all --dry-run
+python3 core/lifecycle/janitor.py --task all --dry-run
 
 # Apply all tasks (costs ~$0.10-0.50 depending on pending work)
-python3 janitor.py --task all --apply
+python3 core/lifecycle/janitor.py --task all --apply
 ```
 
 ---
@@ -804,8 +802,8 @@ python3 janitor.py --task all --apply
 | Deduplication | `projects/quaid/memory-deduplication-system.md` |
 | Model routing | `projects/infrastructure/model-strategy.md` |
 | Claude Code hooks | `projects/infrastructure/claude-code-integration.md` |
-| Project onboarding | `plugins/quaid/prompts/project_onboarding.md` |
+| Project onboarding | `modules/quaid/prompts/project_onboarding.md` |
 
 > **Note:** These documentation paths reference internal workspace files and are not included in the public release repo. They are available in development environments where the full workspace is present.
 
-**RAG search for docs:** `python3 docs_rag.py search "query"`
+**RAG search for docs:** `python3 datastore/docsdb/rag.py search "query"`

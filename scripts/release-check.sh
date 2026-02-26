@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PLUGIN_DIR="$ROOT_DIR/plugins/quaid"
+PLUGIN_DIR="$ROOT_DIR/modules/quaid"
 
 echo "[release-check] docs consistency"
 node "$ROOT_DIR/scripts/check-docs-consistency.mjs"
