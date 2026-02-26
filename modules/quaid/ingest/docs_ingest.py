@@ -53,6 +53,11 @@ def _run(transcript_path: Path, label: str, session_id: str | None = None) -> Di
     }
 
 
+def run(transcript_path: Path, label: str, session_id: str | None = None) -> Dict[str, Any]:
+    """Public runtime entrypoint for transcript-driven docs ingest."""
+    return _run(transcript_path, label, session_id)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run docs ingest pipeline from transcript")
     parser.add_argument("--transcript", required=True, help="Path to transcript file")
@@ -61,7 +66,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     args = parser.parse_args()
 
-    result = _run(Path(args.transcript), args.label, args.session_id)
+    result = run(Path(args.transcript), args.label, args.session_id)
     if args.json:
         print(json.dumps(result))
     else:
