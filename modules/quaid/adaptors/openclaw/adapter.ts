@@ -1786,80 +1786,69 @@ async function recall(
     const results: MemoryResult[] = [];
 
     try {
-      const parsed = JSON.parse(output) as {
-        direct_results: Array<{
-          text: string;
-          category: string;
-          similarity: number;
-          id?: string;
-          extraction_confidence?: number;
-          created_at?: string;
-          valid_from?: string;
-          valid_until?: string;
-          privacy?: string;
-          owner_id?: string;
-          source_type?: string;
-          verified?: boolean;
-          pinned?: boolean;
-        }>;
-        graph_results: Array<{
-          id: string;
-          name: string;
-          type: string;
-          relation: string;
-          direction: string;
-          depth: number;
-          source_name: string;
-        }>;
-        source_breakdown: {
-          vector_count: number;
-          graph_count: number;
-          pronoun_resolved: boolean;
-          owner_person: string | null;
-        };
-      };
+      const parsedRaw = JSON.parse(output);
+      if (!parsedRaw || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
+        throw new Error("graph-aware search output must be a JSON object");
+      }
+      const parsed = parsedRaw as Record<string, unknown>;
+      const directResults = Array.isArray(parsed.direct_results) ? parsed.direct_results : [];
+      const graphResults = Array.isArray(parsed.graph_results) ? parsed.graph_results : [];
 
       // Add direct (vector) results
-      for (const r of parsed.direct_results) {
+      for (const row of directResults) {
+        if (!row || typeof row !== "object") continue;
+        const r = row as Record<string, unknown>;
+        const text = typeof r.text === "string" ? r.text.trim() : "";
+        const category = typeof r.category === "string" ? r.category : "fact";
+        const similarity = typeof r.similarity === "number" ? r.similarity : Number(r.similarity ?? 0);
+        if (!text || !Number.isFinite(similarity)) continue;
+        const extractionConfidence = typeof r.extraction_confidence === "number"
+          ? r.extraction_confidence
+          : Number(r.extraction_confidence ?? 0.5);
         results.push({
-          text: r.text,
-          category: r.category,
-          similarity: r.similarity,
-          id: r.id,
-          extractionConfidence: r.extraction_confidence,
-          createdAt: r.created_at,
-          validFrom: r.valid_from,
-          validUntil: r.valid_until,
-          privacy: r.privacy,
-          ownerId: r.owner_id,
-          sourceType: r.source_type,
-          verified: r.verified,
+          text,
+          category,
+          similarity,
+          id: typeof r.id === "string" ? r.id : undefined,
+          extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
+          createdAt: typeof r.created_at === "string" ? r.created_at : undefined,
+          validFrom: typeof r.valid_from === "string" ? r.valid_from : undefined,
+          validUntil: typeof r.valid_until === "string" ? r.valid_until : undefined,
+          privacy: typeof r.privacy === "string" ? r.privacy : undefined,
+          ownerId: typeof r.owner_id === "string" ? r.owner_id : undefined,
+          sourceType: typeof r.source_type === "string" ? r.source_type : undefined,
+          verified: typeof r.verified === "boolean" ? r.verified : undefined,
           via: "vector",
         });
       }
 
       // Add graph results
-      for (const r of parsed.graph_results) {
+      for (const row of graphResults) {
+        if (!row || typeof row !== "object") continue;
+        const r = row as Record<string, unknown>;
+        const id = typeof r.id === "string" ? r.id : "";
+        const name = typeof r.name === "string" ? r.name : "";
+        const relation = typeof r.relation === "string" ? r.relation : "";
+        const direction = typeof r.direction === "string" ? r.direction : "out";
+        const sourceName = typeof r.source_name === "string" ? r.source_name : "";
+        if (!id || !name || !relation || !sourceName) continue;
+
         // Format: "Source --relation--> Target" or reversed for inbound
-        let text: string;
-        if (r.direction === "in") {
-          text = `${r.name} --${r.relation}--> ${r.source_name}`;
-        } else {
-          text = `${r.source_name} --${r.relation}--> ${r.name}`;
-        }
+        const text = direction === "in"
+          ? `${name} --${relation}--> ${sourceName}`
+          : `${sourceName} --${relation}--> ${name}`;
 
         results.push({
-          text: text,
+          text,
           category: "graph",
           similarity: 0.75, // Graph results get a fixed medium-high similarity
-          id: r.id,
-          relation: r.relation,
-          direction: r.direction,
-          sourceName: r.source_name,
+          id,
+          relation,
+          direction,
+          sourceName,
           via: "graph",
         });
       }
-
     } catch (_parseErr: unknown) {
       // Fallback: parse line-by-line output format if JSON parsing fails
       console.warn(`[quaid] JSON parse failed, trying line format: ${String((_parseErr as Error)?.message || _parseErr)}`);

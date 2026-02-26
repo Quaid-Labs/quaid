@@ -1546,40 +1546,56 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
     const output = await datastoreBridge.searchGraphAware(args);
     const results = [];
     try {
-      const parsed = JSON.parse(output);
-      for (const r of parsed.direct_results) {
+      const parsedRaw = JSON.parse(output);
+      if (!parsedRaw || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
+        throw new Error("graph-aware search output must be a JSON object");
+      }
+      const parsed = parsedRaw;
+      const directResults = Array.isArray(parsed.direct_results) ? parsed.direct_results : [];
+      const graphResults = Array.isArray(parsed.graph_results) ? parsed.graph_results : [];
+      for (const row of directResults) {
+        if (!row || typeof row !== "object") continue;
+        const r = row;
+        const text = typeof r.text === "string" ? r.text.trim() : "";
+        const category = typeof r.category === "string" ? r.category : "fact";
+        const similarity = typeof r.similarity === "number" ? r.similarity : Number(r.similarity ?? 0);
+        if (!text || !Number.isFinite(similarity)) continue;
+        const extractionConfidence = typeof r.extraction_confidence === "number" ? r.extraction_confidence : Number(r.extraction_confidence ?? 0.5);
         results.push({
-          text: r.text,
-          category: r.category,
-          similarity: r.similarity,
-          id: r.id,
-          extractionConfidence: r.extraction_confidence,
-          createdAt: r.created_at,
-          validFrom: r.valid_from,
-          validUntil: r.valid_until,
-          privacy: r.privacy,
-          ownerId: r.owner_id,
-          sourceType: r.source_type,
-          verified: r.verified,
+          text,
+          category,
+          similarity,
+          id: typeof r.id === "string" ? r.id : void 0,
+          extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
+          createdAt: typeof r.created_at === "string" ? r.created_at : void 0,
+          validFrom: typeof r.valid_from === "string" ? r.valid_from : void 0,
+          validUntil: typeof r.valid_until === "string" ? r.valid_until : void 0,
+          privacy: typeof r.privacy === "string" ? r.privacy : void 0,
+          ownerId: typeof r.owner_id === "string" ? r.owner_id : void 0,
+          sourceType: typeof r.source_type === "string" ? r.source_type : void 0,
+          verified: typeof r.verified === "boolean" ? r.verified : void 0,
           via: "vector"
         });
       }
-      for (const r of parsed.graph_results) {
-        let text;
-        if (r.direction === "in") {
-          text = `${r.name} --${r.relation}--> ${r.source_name}`;
-        } else {
-          text = `${r.source_name} --${r.relation}--> ${r.name}`;
-        }
+      for (const row of graphResults) {
+        if (!row || typeof row !== "object") continue;
+        const r = row;
+        const id = typeof r.id === "string" ? r.id : "";
+        const name = typeof r.name === "string" ? r.name : "";
+        const relation = typeof r.relation === "string" ? r.relation : "";
+        const direction = typeof r.direction === "string" ? r.direction : "out";
+        const sourceName = typeof r.source_name === "string" ? r.source_name : "";
+        if (!id || !name || !relation || !sourceName) continue;
+        const text = direction === "in" ? `${name} --${relation}--> ${sourceName}` : `${sourceName} --${relation}--> ${name}`;
         results.push({
           text,
           category: "graph",
           similarity: 0.75,
           // Graph results get a fixed medium-high similarity
-          id: r.id,
-          relation: r.relation,
-          direction: r.direction,
-          sourceName: r.source_name,
+          id,
+          relation,
+          direction,
+          sourceName,
           via: "graph"
         });
       }
