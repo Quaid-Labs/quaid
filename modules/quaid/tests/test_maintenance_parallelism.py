@@ -104,6 +104,32 @@ def test_run_llm_batches_parallel_preserves_exception_type(monkeypatch):
     assert "temporary failure" in out[1]["error"]
 
 
+def test_run_llm_batches_parallel_honors_overall_timeout(monkeypatch):
+    monkeypatch.setattr(
+        ops,
+        "_cfg",
+        SimpleNamespace(
+            core=SimpleNamespace(
+                parallel=SimpleNamespace(enabled=True, llm_workers=4, task_workers={})
+            )
+        ),
+    )
+    batches = ["a", "b", "c", "d"]
+
+    def runner(_batch_num, _batch):
+        time.sleep(0.2)
+        return {"ok": True}
+
+    out = _run_llm_batches_parallel(
+        batches,
+        "review_pending",
+        runner,
+        overall_timeout_seconds=0.05,
+    )
+    timed_out = [row for row in out if row.get("error_type") == "TimeoutError"]
+    assert timed_out
+
+
 def test_janitor_metrics_thread_safe_counters():
     metrics = JanitorMetrics()
     metrics.start_task("parallel")
