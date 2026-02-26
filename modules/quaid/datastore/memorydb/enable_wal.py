@@ -15,8 +15,6 @@ def _default_db_path() -> Path:
         return Path(env_path)
     return get_data_dir() / "memory.db"
 
-DB_PATH = None  # Lazy — resolved in enable_wal_mode()
-
 def enable_wal_mode():
     """Enable WAL mode and optimize for concurrent access."""
     db_path = _default_db_path()

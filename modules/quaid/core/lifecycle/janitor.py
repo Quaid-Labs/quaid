@@ -83,7 +83,6 @@ def _data_dir() -> Path:
 def _logs_dir() -> Path:
     return get_logs_dir()
 
-WORKSPACE = None  # Lazy — use _workspace() instead
 _LIFECYCLE_REGISTRY = build_default_registry()
 
 # Thresholds - now loaded from config/memory.json

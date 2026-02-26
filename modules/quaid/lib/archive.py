@@ -20,7 +20,6 @@ def _default_archive_path() -> Path:
         return get_adapter().data_dir() / "memory_archive.db"
 
 
-ARCHIVE_DB_PATH = None  # Resolved lazily
 logger = logging.getLogger(__name__)
 
 _SCHEMA = """
