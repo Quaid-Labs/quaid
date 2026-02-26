@@ -18,7 +18,22 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 MAX_THREAD_LOCK_CACHE = 1024
-LOCK_POLL_INTERVAL_SECONDS = 0.01
+def _lock_poll_interval_seconds(default_seconds: float = 0.005) -> float:
+    raw = os.environ.get("QUAID_LOCK_POLL_INTERVAL_MS", "")
+    if str(raw).strip():
+        try:
+            parsed_ms = float(raw)
+            if parsed_ms > 0:
+                return max(0.001, parsed_ms / 1000.0)
+        except (TypeError, ValueError):
+            logging.getLogger(__name__).warning(
+                "Invalid QUAID_LOCK_POLL_INTERVAL_MS=%r; using default",
+                raw,
+            )
+    return float(default_seconds)
+
+
+LOCK_POLL_INTERVAL_SECONDS = _lock_poll_interval_seconds()
 logger = logging.getLogger(__name__)
 
 
