@@ -36,13 +36,13 @@ from core.interface.api import (
     store,
     recall,
     search,
-    extract_transcript,
     create_edge,
     forget,
     get_memory,
     stats,
     projects_search_docs,
 )
+from ingest.extract import extract_from_transcript
 from lib.runtime_context import (
     get_adapter_instance,
     get_llm_provider,
@@ -90,7 +90,7 @@ def memory_extract(
     Returns:
         Dict with facts_stored, facts_skipped, edges_created, and extracted details.
     """
-    return extract_transcript(
+    return extract_from_transcript(
         transcript=transcript,
         owner_id=OWNER_ID,
         label=label,
