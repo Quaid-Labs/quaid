@@ -47,10 +47,8 @@ def get_connection(db_path: Optional[Path] = None):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 30000")  # 30s wait for concurrent access
-    # Ensure WAL mode (safe for concurrent reads, required for synchronous=NORMAL)
-    mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-    if mode.lower() != 'wal':
-        conn.execute("PRAGMA journal_mode=WAL")
+    # Force WAL mode on every connection open to avoid check-then-set races.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous = NORMAL")   # Safe with WAL, faster than FULL
     conn.execute("PRAGMA cache_size = -64000")     # 64MB page cache
     conn.execute("PRAGMA temp_store = MEMORY")     # Temp tables in memory
