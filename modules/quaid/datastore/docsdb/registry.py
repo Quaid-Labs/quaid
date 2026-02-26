@@ -25,6 +25,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import re
 import subprocess
@@ -37,6 +38,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from lib.config import get_db_path
 from lib.database import get_connection
 from lib.runtime_context import get_workspace_dir
+
+logger = logging.getLogger(__name__)
 
 def _workspace() -> Path:
     return get_workspace_dir()
@@ -1257,15 +1260,16 @@ class DocsRegistry:
                     match = re.match(r"^#\s+(.+)", line.strip())
                     if match:
                         return match.group(1).strip()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to extract markdown title from %s: %s", file_path, exc)
         return None
 
     def _extract_title_from_path(self, abs_path: str) -> Optional[str]:
         """Extract title from file at absolute path."""
         try:
             return self._extract_title(Path(abs_path))
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed title extraction from path %s: %s", abs_path, exc)
             return None
 
     def _row_to_dict(self, row) -> Dict[str, Any]:
