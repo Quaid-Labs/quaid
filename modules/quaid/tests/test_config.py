@@ -23,7 +23,6 @@ from config import (
     load_config,
     get_config,
     reload_config,
-    resolve_model,
     _config_paths,
 )
 
@@ -123,23 +122,6 @@ class TestModelConfig:
         assert cfg.fast_reasoning == "custom-model"
         assert cfg.deep_reasoning_context == 500000
         assert cfg.batch_budget_percent == 0.30
-
-
-# ---------------------------------------------------------------------------
-# resolve_model
-# ---------------------------------------------------------------------------
-
-class TestResolveModel:
-    """Tests for resolve_model()."""
-
-    def test_returns_input_unchanged(self):
-        assert resolve_model("claude-opus-4-6") == "claude-opus-4-6"
-
-    def test_returns_full_id_unchanged(self):
-        assert resolve_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5-20251001"
-
-    def test_returns_arbitrary_string(self):
-        assert resolve_model("my-custom-model") == "my-custom-model"
 
 
 # ---------------------------------------------------------------------------

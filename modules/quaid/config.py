@@ -1133,15 +1133,6 @@ def _load_config_inner() -> MemoryConfig:
     return _config
 
 
-def resolve_model(name_or_alias: str) -> str:
-    """Resolve a model alias to a full model ID.
-
-    Supports short aliases like 'claude-opus-4-6' by returning as-is.
-    The Anthropic API accepts both full IDs and short aliases.
-    """
-    return name_or_alias
-
-
 def get_config() -> MemoryConfig:
     """Get the loaded config (loads on first call)."""
     return load_config()
