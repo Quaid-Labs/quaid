@@ -381,14 +381,28 @@ class JanitorMetrics:
         self.task_meta = {}
         self.current_task = None
         self._thread_task: Dict[int, str] = {}
+        self._max_thread_task_entries = max(1, int(os.environ.get("JANITOR_METRICS_MAX_THREAD_TASKS", "1024") or 1024))
         self.llm_calls = 0
         self.llm_time = 0.0
         self.errors = []
         self.warnings = []
         self._max_event_entries = max(1, int(os.environ.get("JANITOR_METRICS_MAX_EVENTS", "500") or 500))
+
+    def _prune_thread_tasks_locked(self) -> None:
+        """Drop stale thread->task bindings to avoid unbounded growth."""
+        if not self._thread_task:
+            return
+        alive = {t.ident for t in threading.enumerate() if t.ident is not None}
+        for tid in list(self._thread_task.keys()):
+            if tid not in alive:
+                self._thread_task.pop(tid, None)
+        if len(self._thread_task) > self._max_thread_task_entries:
+            for tid in list(self._thread_task.keys())[:-self._max_thread_task_entries]:
+                self._thread_task.pop(tid, None)
     
     def start_task(self, task_name: str):
         with self._lock:
+            self._prune_thread_tasks_locked()
             self.task_times[task_name] = {"start": time.time(), "end": None}
             self.task_meta[task_name] = {
                 "llm_calls": 0,
@@ -419,6 +433,7 @@ class JanitorMetrics:
     
     def add_llm_call(self, duration: float):
         with self._lock:
+            self._prune_thread_tasks_locked()
             self.llm_calls += 1
             self.llm_time += duration
             task = self._thread_task.get(threading.get_ident()) or self.current_task
@@ -428,6 +443,7 @@ class JanitorMetrics:
     
     def add_error(self, error: str):
         with self._lock:
+            self._prune_thread_tasks_locked()
             self.errors.append({"time": datetime.now().isoformat(), "error": error})
             if len(self.errors) > self._max_event_entries:
                 self.errors = self.errors[-self._max_event_entries:]
@@ -437,6 +453,7 @@ class JanitorMetrics:
 
     def add_warning(self, warning: str):
         with self._lock:
+            self._prune_thread_tasks_locked()
             self.warnings.append({"time": datetime.now().isoformat(), "warning": warning})
             if len(self.warnings) > self._max_event_entries:
                 self.warnings = self.warnings[-self._max_event_entries:]

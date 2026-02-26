@@ -1,4 +1,5 @@
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -162,6 +163,17 @@ def test_janitor_metrics_caps_error_and_warning_buffers(monkeypatch):
     assert summary["warnings"] == 3
     assert summary["error_details"][0]["error"] == "e2"
     assert summary["warning_details"][0]["warning"] == "w2"
+
+
+def test_janitor_metrics_prunes_stale_thread_task_entries():
+    metrics = JanitorMetrics()
+    current_tid = threading.get_ident()
+    metrics._thread_task = {current_tid: "active", 999999: "stale"}  # white-box stale entry simulation
+    metrics._max_thread_task_entries = 1
+
+    metrics.add_warning("tick")
+
+    assert set(metrics._thread_task.keys()) == {current_tid}
 
 
 def test_find_contradictions_applies_remaining_budget_to_parallel_timeout(monkeypatch):
