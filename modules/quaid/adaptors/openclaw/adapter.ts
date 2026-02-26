@@ -1132,7 +1132,13 @@ async function callConfiguredLLM(
     }
   }
   if (!gatewayRes || !gatewayRes.ok) {
-    throw (lastError instanceof Error ? lastError : new Error(String(lastError || "gateway call failed")));
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error(
+      `[quaid][llm] gateway call failed with non-Error rejection: ${String(lastError || "unknown")}`,
+      { cause: lastError ? new Error(String(lastError)) : undefined },
+    );
   }
 
   const text = typeof data.output_text === "string"

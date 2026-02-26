@@ -990,7 +990,13 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
     }
   }
   if (!gatewayRes || !gatewayRes.ok) {
-    throw lastError instanceof Error ? lastError : new Error(String(lastError || "gateway call failed"));
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error(
+      `[quaid][llm] gateway call failed with non-Error rejection: ${String(lastError || "unknown")}`,
+      { cause: lastError ? new Error(String(lastError)) : void 0 }
+    );
   }
   const text = typeof data.output_text === "string" ? data.output_text : Array.isArray(data.output) ? data.output.flatMap((o) => Array.isArray(o?.content) ? o.content : []).filter((c) => (c?.type === "output_text" || c?.type === "text") && typeof c?.text === "string").map((c) => c.text).join("\n") : "";
   const durationMs = Date.now() - started;
