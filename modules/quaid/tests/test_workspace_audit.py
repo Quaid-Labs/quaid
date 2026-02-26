@@ -552,6 +552,16 @@ class TestProjectReviewQueue:
         with _adapter_patch(tmp_path):
             assert get_pending_project_reviews() == []
 
+    def test_get_logs_warning_for_corrupt_file(self, tmp_path, caplog):
+        from core.lifecycle.workspace_audit import get_pending_project_reviews
+        (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
+
+        pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
+        pending_file.write_text("not valid json!")
+        with _adapter_patch(tmp_path), caplog.at_level("WARNING"):
+            assert get_pending_project_reviews() == []
+        assert any("pending project reviews" in rec.message for rec in caplog.records)
+
     def test_clear_deletes_file(self, tmp_path):
         """clear_pending_project_reviews removes the file."""
         from core.lifecycle.workspace_audit import _queue_project_review, clear_pending_project_reviews
@@ -579,6 +589,21 @@ class TestProjectReviewQueue:
             _queue_project_review(
                 section="X", source_file="Y", bogus_arg="should fail"
             )
+
+
+class TestDefaultOwner:
+    def test_default_owner_fallback_when_fail_hard_disabled(self):
+        from core.lifecycle.workspace_audit import _default_owner_id
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=object()), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=False):
+            assert _default_owner_id() == "default"
+
+    def test_default_owner_raises_when_fail_hard_enabled(self):
+        from core.lifecycle.workspace_audit import _default_owner_id
+        with patch("core.lifecycle.workspace_audit.get_config", return_value=object()), \
+             patch("core.lifecycle.workspace_audit.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="default owner"):
+                _default_owner_id()
 
 
 # ---------------------------------------------------------------------------
