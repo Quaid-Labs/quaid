@@ -16,7 +16,6 @@ import json
 import os
 import re
 import signal
-import subprocess
 import sys
 import time
 from datetime import datetime
@@ -26,6 +25,7 @@ from typing import Dict, List, Optional
 from config import get_config
 from datastore.docsdb.registry import DocsRegistry
 from datastore.docsdb.updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
+from lib.delayed_requests import queue_delayed_request
 from lib.runtime_context import get_workspace_dir
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
 
@@ -473,8 +473,6 @@ def _notify_user(project_name: str, updates_applied: List[str], trigger: str) ->
         return
 
     try:
-        payload_source = "project_updater"
-        events_py = Path(__file__).resolve().parents[2] / "core" / "runtime" / "events.py"
         for doc_path in updates_applied:
             message = (
                 "[Quaid] 📋 Project Documentation Update\n"
@@ -482,33 +480,15 @@ def _notify_user(project_name: str, updates_applied: List[str], trigger: str) ->
                 f"Updated: `{Path(doc_path).name}`\n"
                 f"Trigger: project-{trigger}"
             )
-            payload = {
-                "message": message,
-                "kind": "project_doc_update",
-                "priority": "normal",
-            }
             try:
-                subprocess.run(
-                    [
-                        sys.executable,
-                        str(events_py),
-                        "emit",
-                        "--name",
-                        "notification.delayed",
-                        "--payload",
-                        json.dumps(payload, ensure_ascii=False),
-                        "--source",
-                        payload_source,
-                        "--dispatch",
-                        "queued",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=15,
+                queue_delayed_request(
+                    message,
+                    kind="project_doc_update",
+                    priority="normal",
+                    source="project_updater",
                 )
-            except subprocess.TimeoutExpired:
-                print("  Notification timed out while queueing delayed event")
+            except Exception:
+                print("  Notification queue failed")
     except Exception as e:
         print(f"  Notification failed: {e}")
 
