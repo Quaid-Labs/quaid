@@ -2783,6 +2783,22 @@ ${factsOutput || "No facts found."}` }],
       })
     );
     let extractionPromise = null;
+    const queueExtractionTask = (task, source) => {
+      const prior = extractionPromise || Promise.resolve();
+      extractionPromise = prior.then(
+        () => task(),
+        async (err) => {
+          const msg = err?.message || String(err);
+          console.error(`[quaid] extraction chain prior failure (${source}): ${msg}`);
+          if (isFailHardEnabled()) {
+            throw err;
+          }
+          await task();
+          throw err;
+        }
+      );
+      return extractionPromise;
+    };
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       timeoutMinutes: getCaptureTimeoutMinutes(),
@@ -2796,12 +2812,10 @@ ${factsOutput || "No facts found."}` }],
         console.log(msg);
       },
       extract: async (msgs, sid, label) => {
-        extractionPromise = (extractionPromise || Promise.resolve()).catch((err) => {
-          console.error("[quaid] extraction chain prior failure:", err?.message || String(err));
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-        }).then(() => extractMemoriesFromMessages(msgs, label || "Timeout", sid));
+        extractionPromise = queueExtractionTask(
+          () => extractMemoriesFromMessages(msgs, label || "Timeout", sid),
+          "timeout"
+        );
         await extractionPromise;
       }
     });
@@ -3170,12 +3184,7 @@ notify_memory_extraction(
             console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
           }
         };
-        extractionPromise = (extractionPromise || Promise.resolve()).catch((err) => {
-          console.error("[quaid] extraction chain prior failure:", err?.message || String(err));
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-        }).then(() => doExtraction());
+        extractionPromise = queueExtractionTask(doExtraction, "compaction");
       } catch (err) {
         if (isFailHardEnabled()) {
           throw err;
@@ -3239,12 +3248,7 @@ notify_memory_extraction(
           console.log(`[quaid][reset] extraction_end session=${sessionId || "unknown"}`);
         };
         console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${extractionPromise ? "yes" : "no"}`);
-        extractionPromise = (extractionPromise || Promise.resolve()).catch((chainErr) => {
-          console.warn(`[quaid][reset] prior_extraction_chain_error session=${sessionId || "unknown"} err=${String(chainErr?.message || chainErr)}`);
-          if (isFailHardEnabled()) {
-            throw chainErr;
-          }
-        }).then(() => doExtraction()).catch((doErr) => {
+        extractionPromise = queueExtractionTask(doExtraction, "reset").catch((doErr) => {
           console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
           throw doErr;
         });
