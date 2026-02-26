@@ -3,6 +3,7 @@
 import os
 import sys
 import json
+import sqlite3
 import tempfile
 import threading
 import time
@@ -402,6 +403,63 @@ class TestConfigLoading:
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
                 assert cfg.janitor.run_tests is True
+        finally:
+            config._config = old_config
+
+    def test_loads_project_definitions_from_db_with_list_type_validation(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            db_path = tmp_path / "memory.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                """
+                CREATE TABLE project_definitions (
+                    name TEXT PRIMARY KEY,
+                    label TEXT,
+                    home_dir TEXT,
+                    source_roots TEXT,
+                    auto_index INTEGER,
+                    patterns TEXT,
+                    exclude TEXT,
+                    description TEXT,
+                    state TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO project_definitions
+                (name, label, home_dir, source_roots, auto_index, patterns, exclude, description, state)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "db-proj",
+                    "DB Project",
+                    "projects/db-proj/",
+                    '{"bad":"type"}',
+                    1,
+                    '{"bad":"type"}',
+                    '{"bad":"type"}',
+                    "from db",
+                    "active",
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({}))
+
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("lib.config.get_db_path", return_value=db_path):
+                cfg = load_config()
+
+            loaded = cfg.projects.definitions["db-proj"]
+            assert loaded.source_roots == []
+            assert loaded.patterns == ["*.md"]
+            assert loaded.exclude == []
         finally:
             config._config = old_config
 
