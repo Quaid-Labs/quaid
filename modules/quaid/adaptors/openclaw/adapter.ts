@@ -1028,7 +1028,10 @@ function _spawnWithTimeout(
       settled = true;
       clearTimeout(timer);
       if (code === 0) { resolve(stdout.trim()); }
-      else { reject(new Error(`${label} error: ${stderr || stdout}`)); }
+      else {
+        const detail = (stderr || stdout || "").trim().slice(0, 1000);
+        reject(new Error(`${label} error (exit=${String(code)}): ${detail}`));
+      }
     });
     proc.on("error", (err: Error) => {
       if (settled) { return; }

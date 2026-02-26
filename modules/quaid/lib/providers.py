@@ -490,7 +490,17 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             data = json.loads(resp.read())
         elapsed = _time.time() - t0
 
-        text = data["choices"][0]["message"]["content"] or ""
+        if not isinstance(data, dict):
+            raise RuntimeError(f"OpenAI-compatible response must be a JSON object, got {type(data).__name__}")
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("OpenAI-compatible response missing non-empty choices array")
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        message = first.get("message") if isinstance(first, dict) else {}
+        content = message.get("content") if isinstance(message, dict) else None
+        if content is None:
+            raise RuntimeError("OpenAI-compatible response missing choices[0].message.content")
+        text = str(content)
         # Strip thinking tags (Qwen3 and similar models)
         text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
         usage = data.get("usage", {})
