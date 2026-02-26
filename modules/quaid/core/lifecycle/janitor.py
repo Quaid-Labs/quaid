@@ -26,6 +26,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -769,6 +770,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # Infrastructure tasks (0, 0b, 1, 7, 8) still run regardless.
         def _run_memory_graph_stage(stage: str, stage_dry_run: bool) -> Any:
             stage_cap = _stage_item_cap(stage)
+            remaining_budget = _time_remaining()
+            llm_timeout = 0.0
+            if math.isfinite(remaining_budget):
+                llm_timeout = max(0.0, float(remaining_budget))
             return _LIFECYCLE_REGISTRY.run(
                 "memory_graph_maintenance",
                 RoutineContext(
@@ -776,7 +781,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     dry_run=stage_dry_run,
                     workspace=_workspace(),
                     graph=graph,
-                    options={"subtask": stage, "max_items": stage_cap},
+                    options={
+                        "subtask": stage,
+                        "max_items": stage_cap,
+                        "llm_timeout_seconds": llm_timeout,
+                    },
                 ),
             )
 

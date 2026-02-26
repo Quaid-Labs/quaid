@@ -90,6 +90,19 @@ CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0  # Convert percent to de
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 
 
+def _effective_llm_timeout(requested_seconds: Optional[float], default_seconds: float) -> float:
+    """Bound per-call timeout by remaining budget when provided."""
+    if requested_seconds is None:
+        return float(default_seconds)
+    try:
+        requested = float(requested_seconds)
+    except Exception:
+        return float(default_seconds)
+    if requested <= 0:
+        return float(default_seconds)
+    return max(5.0, min(float(default_seconds), requested))
+
+
 def _owner_display_name() -> str:
     """Get the owner's display name from config for use in prompts."""
     try:
@@ -1272,6 +1285,7 @@ def resolve_contradictions_with_opus(
     metrics: JanitorMetrics,
     dry_run: bool = True,
     max_items: int = 0,
+    llm_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, int]:
     """Resolve pending contradictions using Opus for deep-reasoning decisions."""
     metrics.start_task("contradiction_resolution")
@@ -1348,7 +1362,11 @@ JSON array only:"""
             "batch_num": batch_num,
             "batch": batch,
             "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
-            "response_duration": call_deep_reasoning(prompt, max_tokens=300 * len(batch)),
+            "response_duration": call_deep_reasoning(
+                prompt,
+                max_tokens=300 * len(batch),
+                timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
+            ),
         }
 
     llm_results = _run_llm_batches_parallel(batches, "contradiction_resolution", _invoke_batch)
@@ -1834,6 +1852,7 @@ def review_dedup_rejections(
     metrics: JanitorMetrics,
     dry_run: bool = True,
     max_items: int = 0,
+    llm_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, int]:
     """Review recent dedup rejections using Opus to catch false positives."""
     metrics.start_task("dedup_review")
@@ -1938,7 +1957,11 @@ JSON array only:"""
             "batch_num": batch_num,
             "batch": batch,
             "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
-            "response_duration": call_deep_reasoning(prompt, max_tokens=200 * len(batch)),
+            "response_duration": call_deep_reasoning(
+                prompt,
+                max_tokens=200 * len(batch),
+                timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
+            ),
         }
 
     llm_results = _run_llm_batches_parallel(batches, "dedup_review", _invoke_batch)
@@ -2022,6 +2045,7 @@ def review_decayed_memories(
     metrics: JanitorMetrics,
     dry_run: bool = True,
     max_items: int = 0,
+    llm_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, int]:
     """Review memories queued for decay deletion using Opus."""
     metrics.start_task("decay_review")
@@ -2094,7 +2118,11 @@ JSON array only:"""
             "batch_num": batch_num,
             "batch": batch,
             "prompt_tag": f"[prompt:{_prompt_hash(prompt)}] ",
-            "response_duration": call_deep_reasoning(prompt, max_tokens=200 * len(batch)),
+            "response_duration": call_deep_reasoning(
+                prompt,
+                max_tokens=200 * len(batch),
+                timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
+            ),
         }
 
     llm_results = _run_llm_batches_parallel(batches, "decay_review", _invoke_batch)

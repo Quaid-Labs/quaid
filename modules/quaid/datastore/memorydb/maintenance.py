@@ -18,6 +18,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             graph = ctx.graph
             subtask = str((ctx.options or {}).get("subtask") or "all").strip().lower()
             max_items = int((ctx.options or {}).get("max_items") or 0)
+            llm_timeout_raw = float((ctx.options or {}).get("llm_timeout_seconds") or 0)
+            llm_timeout_seconds = llm_timeout_raw if llm_timeout_raw > 0 else None
             metrics = ops.JanitorMetrics()
 
             if subtask == "review":
@@ -46,7 +48,11 @@ def register_lifecycle_routines(registry, result_factory) -> None:
 
             if subtask == "dedup_review":
                 r = ops.review_dedup_rejections(
-                    graph, metrics, dry_run=ctx.dry_run, max_items=max_items
+                    graph,
+                    metrics,
+                    dry_run=ctx.dry_run,
+                    max_items=max_items,
+                    llm_timeout_seconds=llm_timeout_seconds,
                 )
                 result.metrics["dedup_reviewed"] = int(r.get("reviewed", 0))
                 result.metrics["dedup_confirmed"] = int(r.get("confirmed", 0))
@@ -94,7 +100,11 @@ def register_lifecycle_routines(registry, result_factory) -> None:
 
             if subtask == "contradictions_resolve":
                 r = ops.resolve_contradictions_with_opus(
-                    graph, metrics, dry_run=ctx.dry_run, max_items=max_items
+                    graph,
+                    metrics,
+                    dry_run=ctx.dry_run,
+                    max_items=max_items,
+                    llm_timeout_seconds=llm_timeout_seconds,
                 )
                 result.metrics["contradictions_resolved"] = int(r.get("resolved", 0))
                 result.metrics["contradictions_false_positive"] = int(r.get("false_positive", 0))
@@ -115,7 +125,11 @@ def register_lifecycle_routines(registry, result_factory) -> None:
 
             if subtask == "decay_review":
                 r = ops.review_decayed_memories(
-                    graph, metrics, dry_run=ctx.dry_run, max_items=max_items
+                    graph,
+                    metrics,
+                    dry_run=ctx.dry_run,
+                    max_items=max_items,
+                    llm_timeout_seconds=llm_timeout_seconds,
                 )
                 result.metrics["decay_reviewed"] = int(r.get("reviewed", 0))
                 result.metrics["decay_review_deleted"] = int(r.get("deleted", 0))
