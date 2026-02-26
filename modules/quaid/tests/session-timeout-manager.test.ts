@@ -469,4 +469,39 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(() => (manager as any).clearBuffer('session-bad-clear')).toThrow()
   })
+
+  it('throws on session message append failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-session-append-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const fp = (manager as any).sessionMessagePath('session-bad-append') as string
+    fs.mkdirSync(fp, { recursive: true })
+
+    expect(() => (manager as any).appendSessionMessages('session-bad-append', [{ role: 'user', content: 'hi' }])).toThrow()
+  })
+
+  it('throws on session cursor write failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-cursor-write-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const fp = (manager as any).cursorPath('session-bad-cursor-write') as string
+    fs.mkdirSync(path.dirname(fp), { recursive: true })
+    fs.mkdirSync(fp, { recursive: true })
+
+    expect(() => (manager as any).writeSessionCursor('session-bad-cursor-write', [{ role: 'user', content: 'hello' }])).toThrow()
+  })
 })

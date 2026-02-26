@@ -946,6 +946,9 @@ export class SessionTimeoutManager {
       this.writeQuaidLog("session_messages_appended", sessionId, { appended: sanitized.length });
     } catch (err: unknown) {
       this.writeQuaidLog("session_message_append_error", sessionId, { error: String((err as Error)?.message || err) });
+      if (this.failHard) {
+        throw err;
+      }
     }
   }
 
@@ -1024,6 +1027,9 @@ export class SessionTimeoutManager {
       });
     } catch (err: unknown) {
       this.writeQuaidLog("session_cursor_write_error", sessionId, { error: String((err as Error)?.message || err) });
+      if (this.failHard) {
+        throw err;
+      }
     }
   }
 
