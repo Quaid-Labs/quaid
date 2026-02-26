@@ -24,6 +24,7 @@ from core.runtime.notify import (
     ChannelInfo,
     _check_janitor_health,
     _notify_full_text,
+    _resolve_channel,
 )
 
 
@@ -600,6 +601,12 @@ class TestNotifyFallbackVisibility:
         assert warning is not None
         assert "Unable to verify janitor health" in warning
         assert "Failed to evaluate janitor health status" in caplog.text
+
+    def test_resolve_channel_config_error_logs_debug(self, caplog):
+        caplog.set_level("DEBUG")
+        with patch("config.get_config", side_effect=RuntimeError("bad config")):
+            assert _resolve_channel("memory_recall") is None
+        assert "Failed to resolve notification channel override" in caplog.text
 
     def test_dry_run_does_not_call_subprocess(self):
         """dry_run prints command but doesn't execute."""
