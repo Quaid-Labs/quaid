@@ -57,7 +57,7 @@ function withRequestsLock(requestsPath, fn) {
 function makeRequestId(kind, message) {
   return `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
 }
-function queueDelayedRequest(requestsPath, message, kind = "janitor", priority = "normal", source = "quaid_adapter") {
+function queueDelayedRequest(requestsPath, message, kind = "janitor", priority = "normal", source = "quaid_adapter", failHard = false) {
   try {
     return withRequestsLock(requestsPath, () => {
       const normalizedMessage = String(message || "").trim();
@@ -84,7 +84,12 @@ function queueDelayedRequest(requestsPath, message, kind = "janitor", priority =
       return true;
     });
   } catch (err) {
-    warnDelayed(`[quaid] delayed requests queue failed path=${requestsPath}: ${String(err?.message || err)}`);
+    const detail = `[quaid] delayed requests queue failed path=${requestsPath}: ${String(err?.message || err)}`;
+    if (failHard) {
+      const cause = err instanceof Error ? err : new Error(String(err));
+      throw new Error(detail, { cause });
+    }
+    warnDelayed(detail);
     return false;
   }
 }

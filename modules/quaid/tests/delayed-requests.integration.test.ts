@@ -68,4 +68,20 @@ describe("delayed request lifecycle integration", () => {
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it("throws when queue fails and failHard is enabled", () => {
+    const workspace = makeWorkspace("quaid-delayed-requests-failhard-");
+    const delayedRequestsPath = path.join(workspace, "missing-dir", "delayed-llm-requests.json");
+
+    expect(() =>
+      queueDelayedRequest(
+        delayedRequestsPath,
+        "message",
+        "janitor_health",
+        "high",
+        "event.notification.delayed",
+        true,
+      ),
+    ).toThrow(/delayed requests queue failed/i);
+  });
 });
