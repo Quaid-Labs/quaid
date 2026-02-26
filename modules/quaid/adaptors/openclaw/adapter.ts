@@ -934,12 +934,16 @@ async function callConfiguredLLM(
       rawBody = await readBodyWithTimeout(gatewayRes);
       try {
         data = rawBody ? JSON.parse(rawBody) : {};
-      } catch (_err: unknown) {
+      } catch (err: unknown) {
+        const parseMsg = String((err as Error)?.message || err);
         const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
         console.error(
-          `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
+          `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} parse_error=${JSON.stringify(parseMsg)} body_preview=${JSON.stringify(bodyPreview)}`
         );
-        throw new Error(`Gateway response parse failed (${gatewayRes.status} ${gatewayRes.statusText})`);
+        throw new Error(
+          `Gateway response parse failed (${gatewayRes.status} ${gatewayRes.statusText}): ${parseMsg}`,
+          { cause: err as Error }
+        );
       }
       if (!gatewayRes.ok) {
         const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
@@ -2074,13 +2078,19 @@ const quaidPlugin = {
     }
 
     // Log stats
-    void getStats().then((stats) => {
-      if (stats) {
-        console.log(
-          `[quaid] Database ready: ${(stats as any).total_nodes} nodes, ${(stats as any).edges} edges`
+    void getStats()
+      .then((stats) => {
+        if (stats) {
+          console.log(
+            `[quaid] Database ready: ${(stats as any).total_nodes} nodes, ${(stats as any).edges} edges`
+          );
+        }
+      })
+      .catch((err: unknown) => {
+        console.warn(
+          `[quaid] stats probe failed: ${String((err as Error)?.message || err)}`
         );
-      }
-    });
+      });
 
     // Register lifecycle hooks.
     const beforeAgentStartHandler = async (event: any, ctx: any) => {
