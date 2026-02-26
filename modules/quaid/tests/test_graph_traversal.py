@@ -259,6 +259,38 @@ class TestDepthTraversal:
         # and A is never re-added to results.
         assert len(results) <= 4  # bounded, not infinite
 
+
+class TestVecUpsertFailures:
+    def test_add_node_vec_upsert_warns_without_fail_hard(self, graph, caplog):
+        node = Node.create(type="Person", name="VecWarn", owner_id="quaid", status="approved")
+        node.embedding = [0.1, 0.2, 0.3]
+        with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch.object(MemoryGraph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+            caplog.set_level("WARNING")
+            graph.add_node(node, embed=False)
+        assert "failed vec_nodes upsert" in caplog.text
+
+    def test_add_node_vec_upsert_raises_with_fail_hard(self, graph):
+        node = Node.create(type="Person", name="VecFailHard", owner_id="quaid", status="approved")
+        node.embedding = [0.1, 0.2]
+        with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch.object(MemoryGraph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Vector index upsert failed during add_node"):
+                graph.add_node(node, embed=False)
+
+    def test_update_node_vec_upsert_raises_with_fail_hard(self, graph):
+        node = Node.create(type="Person", name="VecUpdateFailHard", owner_id="quaid", status="approved")
+        with patch.object(graph, "get_embedding", return_value=None):
+            graph.add_node(node, embed=False)
+        node.embedding = [0.3, 0.4, 0.5]
+        with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch.object(MemoryGraph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="Vector index upsert failed during update_node"):
+                graph.update_node(node, embed=False)
+
     def test_depth_zero_returns_empty(self, graph):
         """Depth=0 means no traversal at all."""
         a = _add_person(graph, "A")
