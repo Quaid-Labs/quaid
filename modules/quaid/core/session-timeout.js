@@ -591,11 +591,19 @@ class SessionTimeoutManager {
         this.ownsWorkerLock = false;
         return false;
       }
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed validating worker lock before release: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
     }
     try {
       fs.unlinkSync(this.workerLockPath);
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed releasing worker lock ${this.workerLockPath}: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
     }
     this.ownsWorkerLock = false;
     return true;
