@@ -151,6 +151,8 @@ def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, t
     set_adapter(StandaloneAdapter(home=tmp_path))
 
     class _Notifications:
+        full_text = False
+
         def should_notify(self, feature, detail=None):
             return feature == "janitor" and detail == "summary"
 
