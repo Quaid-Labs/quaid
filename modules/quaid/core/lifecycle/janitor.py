@@ -233,7 +233,7 @@ def _release_lock():
                 _lock_fd = None
             _lock_file_path().unlink(missing_ok=True)
         except Exception as exc:
-            janitor_logger.warning(f"Failed to release janitor lock cleanly: {exc}")
+            janitor_logger.warn("janitor_lock_release_failed", error=str(exc))
 
 
 def _check_for_updates() -> Optional[Dict[str, str]]:
@@ -265,7 +265,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
                 return cached
             return None
     except Exception as exc:
-        janitor_logger.warning("Update check cache read failed: %s", exc)
+        janitor_logger.warn("update_check_cache_read_failed", error=str(exc))
 
     # Fetch latest release from GitHub
     try:
@@ -290,7 +290,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
         graph = get_graph()
         write_update_check_cache(graph, result)
     except Exception as exc:
-        janitor_logger.warning("Update check cache write failed: %s", exc)
+        janitor_logger.warn("update_check_cache_write_failed", error=str(exc))
 
     if latest_tag and latest_tag != current:
         # Only notify if latest is actually newer (semver comparison)
@@ -300,7 +300,7 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
                 return None
         except Exception as exc:
             # Fallback: simple string comparison — still skip if equal.
-            janitor_logger.warning("Semantic version comparison failed; using fallback compare: %s", exc)
+            janitor_logger.warn("update_semver_compare_failed", error=str(exc))
         return result
     return None
 
@@ -600,21 +600,21 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     try:
         _default_stage_item_cap = int(os.environ.get("JANITOR_MAX_ITEMS_PER_STAGE", "0") or 0)
     except Exception as exc:
-        janitor_logger.warning("Invalid JANITOR_MAX_ITEMS_PER_STAGE value; defaulting to 0: %s", exc)
+        janitor_logger.warn("invalid_stage_item_cap_env", error=str(exc))
         _default_stage_item_cap = 0
     try:
         _stage_item_caps = json.loads(os.environ.get("JANITOR_STAGE_ITEM_CAPS", "{}") or "{}")
         if not isinstance(_stage_item_caps, dict):
             _stage_item_caps = {}
     except Exception as exc:
-        janitor_logger.warning("Invalid JANITOR_STAGE_ITEM_CAPS JSON; defaulting to {}: %s", exc)
+        janitor_logger.warn("invalid_stage_item_caps_env", error=str(exc))
         _stage_item_caps = {}
     try:
         _stage_budget_caps = json.loads(os.environ.get("JANITOR_STAGE_BUDGETS", "{}") or "{}")
         if not isinstance(_stage_budget_caps, dict):
             _stage_budget_caps = {}
     except Exception as exc:
-        janitor_logger.warning("Invalid JANITOR_STAGE_BUDGETS JSON; defaulting to {}: %s", exc)
+        janitor_logger.warn("invalid_stage_budgets_env", error=str(exc))
         _stage_budget_caps = {}
 
     def _stage_item_cap(stage_name: str) -> int:
@@ -703,19 +703,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         try:
             policy = str(_cfg.janitor.approval_policies.get(scope, "auto")).strip().lower()
             if policy not in ("auto", "ask", "dry_run"):
-                janitor_logger.warning(
-                    "Invalid approval policy for scope '%s': %r; defaulting to auto",
-                    scope,
-                    policy,
-                )
+                janitor_logger.warn("invalid_approval_policy", scope=str(scope), policy=repr(policy))
                 return "auto"
             return policy
         except Exception as exc:
-            janitor_logger.warning(
-                "Failed reading approval policy for scope '%s'; defaulting to auto: %s",
-                scope,
-                exc,
-            )
+            janitor_logger.warn("approval_policy_read_failed", scope=str(scope), error=str(exc))
             return "auto"
 
     def _can_apply_scope(scope: str, summary: str) -> bool:
@@ -894,7 +886,12 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 try:
                     carryover_report[str(key)] = int(value or 0)
                 except Exception as exc:
-                    janitor_logger.warning("Invalid carryover metric value for %s=%r: %s", key, value, exc)
+                    janitor_logger.warn(
+                        "invalid_carryover_metric_value",
+                        key=str(key),
+                        value=repr(value),
+                        error=str(exc),
+                    )
                     continue
             if not result.errors:
                 _checkpoint_save(stage=stage, status="running", completed=True)
