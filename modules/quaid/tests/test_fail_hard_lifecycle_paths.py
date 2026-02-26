@@ -103,3 +103,33 @@ def test_rag_lifecycle_raises_when_fail_hard_enabled(tmp_path):
          patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True):
         with pytest.raises(RuntimeError, match="RAG maintenance failed"):
             handler(ctx)
+
+
+def test_rag_lifecycle_raises_on_external_sync_error_when_fail_hard_enabled(tmp_path):
+    registry = _Registry()
+    register_rag_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["rag"]
+
+    cfg = SimpleNamespace(
+        rag=SimpleNamespace(docs_dir="docs"),
+        projects=SimpleNamespace(
+            enabled=True,
+            definitions={"quaid": SimpleNamespace(auto_index=False, home_dir="projects/quaid")},
+        ),
+    )
+    ctx = SimpleNamespace(cfg=cfg, dry_run=False, workspace=tmp_path)
+
+    class _FakeRegistry:
+        def auto_discover(self, _proj_name):
+            return []
+
+        def sync_external_files(self, _proj_name):
+            raise RuntimeError("sync failed")
+
+    with patch("datastore.docsdb.registry.DocsRegistry", return_value=_FakeRegistry()), \
+         patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value={"total_files": 0, "indexed_files": 0, "skipped_files": 0, "total_chunks": 0}), \
+         patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True):
+        with pytest.raises(RuntimeError, match="RAG maintenance failed") as exc:
+            handler(ctx)
+        assert exc.value.__cause__ is not None
+        assert "Project auto-discover failed" in str(exc.value.__cause__)
