@@ -816,12 +816,16 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
       rawBody = await readBodyWithTimeout(gatewayRes);
       try {
         data = rawBody ? JSON.parse(rawBody) : {};
-      } catch (_err) {
+      } catch (err) {
+        const parseMsg = String(err?.message || err);
         const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
         console.error(
-          `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} body_preview=${JSON.stringify(bodyPreview)}`
+          `[quaid][llm] gateway_parse_error tier=${modelTier} status=${gatewayRes.status} status_text=${gatewayRes.statusText} parse_error=${JSON.stringify(parseMsg)} body_preview=${JSON.stringify(bodyPreview)}`
         );
-        throw new Error(`Gateway response parse failed (${gatewayRes.status} ${gatewayRes.statusText})`);
+        throw new Error(
+          `Gateway response parse failed (${gatewayRes.status} ${gatewayRes.statusText}): ${parseMsg}`,
+          { cause: err }
+        );
       }
       if (!gatewayRes.ok) {
         const bodyPreview = rawBody.slice(0, 500).replace(/\s+/g, " ");
@@ -1772,6 +1776,10 @@ const quaidPlugin = {
           `[quaid] Database ready: ${stats.total_nodes} nodes, ${stats.edges} edges`
         );
       }
+    }).catch((err) => {
+      console.warn(
+        `[quaid] stats probe failed: ${String(err?.message || err)}`
+      );
     });
     const beforeAgentStartHandler = async (event, ctx) => {
       if (isInternalQuaidSession(ctx?.sessionId)) {
