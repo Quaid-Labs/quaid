@@ -1384,6 +1384,12 @@ function spawnNotifyScript(scriptBody: string): boolean {
     launched = true;
     proc.on("error", (err: Error) => {
       appendNotifyLog(`[notify-worker-error] spawn failed: ${err.message}`);
+      // If spawn fails asynchronously after launch, clean up the temp script.
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {
+        // best-effort only
+      }
     });
     proc.unref();
   } catch (err: unknown) {
