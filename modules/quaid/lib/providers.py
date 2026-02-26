@@ -328,6 +328,12 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)  # Allow nested invocation
+        # Claude CLI auth hygiene:
+        # If Anthropic key/token env vars leak into this subprocess, claude -p can
+        # switch away from subscription auth and hit the wrong workspace limits.
+        # For claude-code provider, always scrub these and rely on CLI auth state.
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
 
         # Ensure OAuth token is available (load from .env only when fail-hard is disabled)
         if "CLAUDE_CODE_OAUTH_TOKEN" not in env and not is_fail_hard_enabled():
