@@ -203,8 +203,11 @@ def process_all_events() -> Dict:
                 failed_dir = staging_dir / "failed"
                 failed_dir.mkdir(exist_ok=True)
                 event_file.rename(failed_dir / event_file.name)
-            except Exception:
-                pass
+            except Exception as move_err:
+                print(
+                    f"  Warning: failed to move event {event_file.name} into failed/: {move_err}",
+                    file=sys.stderr,
+                )
 
     # Cleanup: cap failed/ directory at 20 entries max
     try:
@@ -215,8 +218,8 @@ def process_all_events() -> Dict:
                 for old_file in failed_files[:-20]:
                     old_file.unlink()
                 print(f"  Cleaned up {len(failed_files) - 20} old failed event(s)")
-    except Exception:
-        pass
+    except Exception as cleanup_err:
+        print(f"  Warning: failed-event cleanup skipped: {cleanup_err}", file=sys.stderr)
 
     print(f"\nProcessed {processed} event(s), {errors} error(s)")
     return {"processed": processed, "errors": errors}
