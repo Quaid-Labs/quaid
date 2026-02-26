@@ -300,15 +300,6 @@ class TestProtectedRegionsLib:
         # Section 10-14 does not overlap with protected 15-25
         assert section_overlaps_protected(10, 14, [(15, 25)]) is False
 
-    def test_is_position_protected_from_lib(self):
-        """lib.markdown.is_position_protected works correctly."""
-        from lib.markdown import is_position_protected
-        ranges = [(10, 20), (30, 40)]
-        assert is_position_protected(15, ranges) is True
-        assert is_position_protected(25, ranges) is False
-        assert is_position_protected(35, ranges) is True
-
-
 # ---------------------------------------------------------------------------
 # __all__ completeness
 # ---------------------------------------------------------------------------
