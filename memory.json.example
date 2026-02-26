@@ -5,6 +5,20 @@
     "_notes": "Required. Set to 'standalone' for local CLI/MCP installs, or 'openclaw' when running under OpenClaw."
   },
 
+  "plugins": {
+    "enabled": true,
+    "strict": true,
+    "apiVersion": 1,
+    "paths": ["plugins"],
+    "allowList": [],
+    "slots": {
+      "adapter": "",
+      "ingest": [],
+      "dataStores": []
+    },
+    "_notes": "Phase-1 plugin runtime foundation. paths are scanned for plugin.json manifests. allowList empty means all discovered plugins are eligible. slots define active plugin IDs by zone. strict=true fails on invalid manifests/conflicts."
+  },
+
   "systems": {
     "memory": true,
     "journal": true,
@@ -68,6 +82,21 @@
     "enabled": true,
     "dryRun": false,
     "applyMode": "auto",
+    "parallel": {
+      "enabled": true,
+      "llmWorkers": 4,
+      "llmWorkersByTask": {
+        "review_pending": 2,
+        "dedup_review": 2,
+        "decay_review": 2,
+        "contradiction_resolution": 2
+      },
+      "lifecyclePrepassEnabled": true,
+      "lifecyclePrepassWorkers": 3,
+      "lockEnforcementEnabled": true,
+      "lockWaitSeconds": 120,
+      "lockRequireRegistration": true
+    },
     "approvalPolicies": {
       "coreMarkdownWrites": "ask",
       "projectDocsWrites": "ask",
@@ -93,7 +122,7 @@
       "minSimilarity": 0.6,
       "maxSimilarity": 0.85
     },
-    "_notes": "Nightly maintenance pipeline. approvalPolicies lets you set ask/auto per sensitive scope. Root markdown writes are usually ask; projects/quaid markdown is auto-managed by janitor. applyMode is a legacy master fallback (auto/ask/dry_run). opusReview: LLM reviews pending facts. dedup: similarity thresholds for duplicate detection. contradiction: detect conflicting facts."
+    "_notes": "Nightly maintenance pipeline. parallel is the global janitor parallelism control (on by default): llmWorkers controls datastore LLM batch concurrency and can be overridden per task via llmWorkersByTask; lifecyclePrepass controls janitor dry-run prepass concurrency. lockEnforcementEnabled requires registered write locks before maintenance routines can modify flat files/DB; lockRequireRegistration blocks routines that do not declare write resources; lockWaitSeconds controls lock timeout. approvalPolicies lets you set ask/auto per sensitive scope. Root markdown writes are usually ask; projects/quaid markdown is auto-managed by janitor. applyMode is a legacy master fallback (auto/ask/dry_run). opusReview: LLM reviews pending facts. dedup: similarity thresholds for duplicate detection. contradiction: detect conflicting facts."
   },
 
   "retrieval": {
@@ -123,6 +152,7 @@
     "recencyDecayDays": 90,
     "preInjectionPass": true,
     "routerFailOpen": true,
+    "failHard": true,
     "traversal": {
       "useBeam": true,
       "beamWidth": 5,
@@ -130,7 +160,8 @@
       "hopDecay": 0.7,
       "_notes": "BEAM search for graph traversal. hopDecay: score multiplier per hop depth."
     },
-    "_notes_router": "routerFailOpen=true (recommended default): if total_recall prepass cannot produce valid structured JSON after retry, log loudly and continue with deterministic default recall plan. Set false for strict fail-through behavior."
+    "_notes_router": "routerFailOpen=true (recommended default): if total_recall prepass cannot produce valid structured JSON after retry, log loudly and continue with deterministic default recall plan. Set false for strict fail-through behavior. If failHard=true, fallback behavior should be disabled.",
+    "_notes_fail_hard": "failHard=true (recommended in dev/benchmark): disable fallbacks and fail fast on provider/path errors. Set false only when you explicitly want noisy degrade behavior."
   },
 
   "logging": {

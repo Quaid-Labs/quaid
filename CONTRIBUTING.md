@@ -28,7 +28,7 @@ AI-assisted contributions are welcome, with explicit accountability.
 
 ```bash
 git clone https://github.com/Steadman-Labs/quaid.git
-cd quaid/plugins/quaid
+cd quaid/modules/quaid
 npm ci
 python3 -m pip install pytest ruff
 ```
@@ -43,7 +43,7 @@ pre-commit install
 
 ## Validation
 
-From `plugins/quaid`:
+From `modules/quaid`:
 
 ```bash
 npm run check:runtime-pairs:strict
@@ -70,6 +70,8 @@ See `docs/RELEASE.md` for ownership guard details and expected attribution setti
 
 - Keep adapter/orchestrator/core boundaries explicit.
 - Avoid silent fallback behavior that hides failures.
+- Treat `failHard` as config-owned (`retrieval.failHard` / `retrieval.fail_hard`), not env-owned.
+- `failHard=true`: do not fallback. `failHard=false`: fallback allowed only with loud diagnostics.
 - Use config-driven behavior where practical; avoid hardcoded operational constants.
 - Update docs when behavior changes.
 - Align major decisions with `VISION.md`.

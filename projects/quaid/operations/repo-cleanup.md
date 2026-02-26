@@ -9,7 +9,7 @@ Tracks repository hygiene actions while separating Quaid source from OpenClaw ru
 - Removed deprecated docs pointer file:
   - `docs/quaid/README.md`
 - Removed artifact files that are not part of Quaid runtime or release templates:
-  - `plugins/quaid/dashboard.html`
+  - `modules/quaid/dashboard.html`
   - `projects/staging/dev-flow.md`
 - Consolidated project docs so canonical docs live under `projects/quaid`.
 

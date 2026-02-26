@@ -1,0 +1,559 @@
+"""Tests for mcp_server.py — Quaid MCP Server."""
+
+import inspect
+import os
+import sys
+import json
+import tempfile
+from pathlib import Path
+
+# Ensure plugin root is on the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# Must set env BEFORE imports
+os.environ["MEMORY_DB_PATH"] = ":memory:"
+os.environ["QUAID_QUIET"] = "1"
+os.environ["QUAID_OWNER"] = "test-owner"
+_tmp_home = Path(tempfile.mkdtemp(prefix="quaid-mcp-test-"))
+(_tmp_home / "config").mkdir(parents=True, exist_ok=True)
+(_tmp_home / "config" / "memory.json").write_text(
+    json.dumps({"adapter": {"type": "standalone"}}), encoding="utf-8"
+)
+os.environ["QUAID_HOME"] = str(_tmp_home)
+
+import pytest
+from unittest.mock import patch, MagicMock
+
+
+# ---------------------------------------------------------------------------
+# Helpers — import the module with mocked heavy dependencies
+# ---------------------------------------------------------------------------
+
+def _import_mcp_server():
+    """Import mcp_server with heavy deps mocked out."""
+    # Mock the api module calls — we test the MCP wrapper, not the API itself
+    mock_api = MagicMock()
+    mock_api.store.return_value = {"id": "abc-123", "status": "created", "similarity": 0.0}
+    mock_api.recall.return_value = [
+        {"id": "r1", "text": "User likes coffee", "similarity": 0.95, "confidence": 0.8}
+    ]
+    mock_api.search.return_value = [
+        {"id": "s1", "text": "User drinks tea", "similarity": 0.7, "confidence": 0.6}
+    ]
+    mock_api.get_memory.return_value = {"id": "g1", "name": "Test memory", "type": "fact"}
+    mock_api.forget.return_value = True
+    mock_api.create_edge.return_value = {"edge_id": "e1", "status": "created"}
+    mock_api.extract_transcript.return_value = {
+        "facts_stored": 1,
+        "facts_skipped": 0,
+        "edges_created": 0,
+    }
+    mock_api.projects_search_docs.return_value = {
+        "chunks": [{"content": "Some doc chunk", "source_file": "README.md", "similarity": 0.8}]
+    }
+
+    mock_graph = MagicMock()
+    mock_graph.get_stats.return_value = {
+        "total_nodes": 100, "edges": 50, "by_type": {"fact": 80}, "by_status": {"active": 90}
+    }
+    mock_api.stats.return_value = mock_graph.get_stats.return_value
+
+    mock_rag = MagicMock()
+    mock_rag_instance = MagicMock()
+    mock_rag_instance.search_docs.return_value = [
+        {"content": "Some doc chunk", "source_file": "README.md", "similarity": 0.8}
+    ]
+    mock_rag.return_value = mock_rag_instance
+
+    # Patch at the api/docs_rag module level, then force reimport of mcp_server
+    # so its `from core.interface.api import store, ...` binds to the mocked functions.
+    with patch("core.interface.api.store", mock_api.store), \
+         patch("ingest.extract.extract_from_transcript", mock_api.extract_transcript), \
+         patch("core.interface.api.recall", mock_api.recall), \
+         patch("core.interface.api.search", mock_api.search), \
+         patch("core.interface.api.get_memory", mock_api.get_memory), \
+         patch("core.interface.api.forget", mock_api.forget), \
+         patch("core.interface.api.create_edge", mock_api.create_edge), \
+         patch("core.interface.api.stats", mock_api.stats), \
+         patch("core.interface.api.projects_search_docs", mock_api.projects_search_docs), \
+         patch("datastore.docsdb.rag.DocsRAG", mock_rag):
+        # Force reimport so mcp_server binds to mocked names
+        if "core.interface.mcp_server" in sys.modules:
+            del sys.modules["core.interface.mcp_server"]
+        import core.interface.mcp_server as mcp_server
+        return mcp_server, mock_api, mock_graph, mock_rag_instance
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def server():
+    """Return (mcp_server_module, mock_api, mock_graph, mock_rag)."""
+    return _import_mcp_server()
+
+
+# ---------------------------------------------------------------------------
+# Tests — Tool existence and registration
+# ---------------------------------------------------------------------------
+
+EXPECTED_TOOLS = {
+    "memory_extract",
+    "memory_store",
+    "memory_recall",
+    "memory_search",
+    "memory_get",
+    "memory_forget",
+    "memory_create_edge",
+    "memory_stats",
+    "memory_provider",
+    "memory_event_emit",
+    "memory_event_list",
+    "memory_event_process",
+    "memory_event_capabilities",
+    "memory_write",
+    "memory_capabilities",
+    "projects_search",
+    "session_recall",
+}
+
+
+class TestToolRegistration:
+    def test_mcp_instance_exists(self, server):
+        mod, *_ = server
+        assert hasattr(mod, "mcp")
+        assert mod.mcp.name == "quaid"
+
+    def test_owner_from_env(self, server):
+        mod, *_ = server
+        assert mod.OWNER_ID == "test-owner"
+
+    def test_quaid_quiet_set(self):
+        assert os.environ.get("QUAID_QUIET") == "1"
+
+    def test_all_expected_tools_registered(self, server):
+        """Verify all expected tools are registered with correct names."""
+        mod, *_ = server
+        registered = set(mod.mcp._tool_manager._tools.keys())
+        assert registered == EXPECTED_TOOLS
+
+    def test_stdout_redirected_to_stderr(self, server):
+        """The most critical safety feature: stdout redirected during import."""
+        mod, *_ = server
+        assert hasattr(mod, "_real_stdout"), "must preserve original stdout"
+        # After import, sys.stdout should still be redirected (restore happens only in __main__)
+        # The module sets sys.stdout = sys.stderr at import time
+
+
+# ---------------------------------------------------------------------------
+# Tests — Owner ID security
+# ---------------------------------------------------------------------------
+
+class TestOwnerSecurity:
+    """Verify owner_id cannot be overridden by MCP clients."""
+
+    def test_store_has_no_owner_param(self, server):
+        mod, *_ = server
+        sig = inspect.signature(mod.memory_store)
+        assert "owner_id" not in sig.parameters
+        assert "owner" not in sig.parameters
+
+    def test_recall_has_no_owner_param(self, server):
+        mod, *_ = server
+        sig = inspect.signature(mod.memory_recall)
+        assert "owner_id" not in sig.parameters
+
+    def test_search_has_no_owner_param(self, server):
+        mod, *_ = server
+        sig = inspect.signature(mod.memory_search)
+        assert "owner_id" not in sig.parameters
+
+    def test_create_edge_has_no_owner_param(self, server):
+        mod, *_ = server
+        sig = inspect.signature(mod.memory_create_edge)
+        assert "owner_id" not in sig.parameters
+
+    def test_store_rejects_owner_kwarg(self, server):
+        mod, *_ = server
+        with pytest.raises(TypeError):
+            mod.memory_store("test", owner_id="evil")
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_extract
+# ---------------------------------------------------------------------------
+
+class TestMemoryExtract:
+    def test_extract_routes_through_api(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_extract("User likes coffee", label="mcp", dry_run=False)
+        mock_api.extract_transcript.assert_called_once_with(
+            transcript="User likes coffee",
+            owner_id="test-owner",
+            label="mcp",
+            dry_run=False,
+        )
+        assert result["facts_stored"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_store
+# ---------------------------------------------------------------------------
+
+class TestMemoryStore:
+    def test_store_basic(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_store("User likes Python")
+        mock_api.store.assert_called_once_with(
+            text="User likes Python",
+            owner_id="test-owner",
+            category="fact",
+            confidence=0.5,
+            knowledge_type="fact",
+            source="mcp",
+            source_type="import",
+            pinned=False,
+        )
+        assert result["status"] == "created"
+
+    def test_store_with_category(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_store("Prefers dark mode", category="preference")
+        assert mock_api.store.call_args.kwargs["category"] == "preference"
+
+    def test_store_pinned(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_store("Important fact", pinned=True)
+        assert mock_api.store.call_args.kwargs["pinned"] is True
+
+    def test_store_source_type_always_import(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_store("A fact", source="telegram")
+        assert mock_api.store.call_args.kwargs["source_type"] == "import"
+        assert mock_api.store.call_args.kwargs["source"] == "telegram"
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_recall
+# ---------------------------------------------------------------------------
+
+class TestMemoryRecall:
+    def test_recall_basic(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_recall("coffee preferences")
+        mock_api.recall.assert_called_once_with(
+            query="coffee preferences",
+            owner_id="test-owner",
+            limit=5,
+            technical_scope="any",
+        )
+        assert len(result) == 1
+
+    def test_recall_limit_capped_at_20(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_recall("test", limit=100)
+        assert mock_api.recall.call_args.kwargs["limit"] == 20
+
+    def test_recall_limit_minimum_1(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_recall("test", limit=0)
+        assert mock_api.recall.call_args.kwargs["limit"] == 1
+
+    def test_recall_limit_negative(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_recall("test", limit=-5)
+        assert mock_api.recall.call_args.kwargs["limit"] == 1
+
+    def test_recall_scope_fields_route_through_advanced_path(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_recall(
+            "test",
+            source_channel="telegram",
+            source_conversation_id="group-1",
+            source_author_id="<redacted>",
+            actor_id="user:owner",
+            subject_entity_id="user:owner",
+            include_unscoped=False,
+        )
+        kwargs = mock_api.recall.call_args.kwargs
+        assert kwargs["source_channel"] == "telegram"
+        assert kwargs["source_conversation_id"] == "group-1"
+        assert kwargs["source_author_id"] == "<redacted>"
+        assert kwargs["actor_id"] == "user:owner"
+        assert kwargs["subject_entity_id"] == "user:owner"
+        assert kwargs["include_unscoped"] is False
+
+    def test_recall_participant_and_viewer_fields_route_through_advanced_path(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_recall(
+            "test",
+            viewer_entity_id="agent:bert",
+            participant_entity_ids_json='["user:owner","user:albert"]',
+        )
+        kwargs = mock_api.recall.call_args.kwargs
+        assert kwargs["viewer_entity_id"] == "agent:bert"
+        assert kwargs["participant_entity_ids"] == ["user:owner", "user:albert"]
+
+    def test_recall_invalid_participant_json_raises(self, server):
+        mod, _mock_api, *_ = server
+        with pytest.raises(ValueError):
+            mod.memory_recall(
+                "test",
+                participant_entity_ids_json='{"not":"array"}',
+            )
+
+    def test_recall_invalid_min_similarity_raises(self, server):
+        mod, _mock_api, *_ = server
+        with pytest.raises(ValueError, match="invalid min_similarity"):
+            mod.memory_recall("test", min_similarity="high")
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_search
+# ---------------------------------------------------------------------------
+
+class TestMemorySearch:
+    def test_search_basic(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_search("tea")
+        kwargs = mock_api.search.call_args.kwargs
+        assert kwargs["query"] == "tea"
+        assert kwargs["owner_id"] == "test-owner"
+        assert kwargs["limit"] == 10
+        assert len(result) == 1
+
+    def test_search_limit_capped_at_50(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_search("test", limit=200)
+        assert mock_api.search.call_args.kwargs["limit"] == 50
+
+    def test_search_limit_minimum_1(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_search("test", limit=-1)
+        assert mock_api.search.call_args.kwargs["limit"] == 1
+
+    def test_search_passes_identity_context_fields(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_search(
+            "test",
+            viewer_entity_id="agent:bert",
+            source_channel="telegram",
+            source_conversation_id="chat-1",
+            source_author_id="<redacted>",
+            subject_entity_id="user:owner",
+            participant_entity_ids_json='["user:owner","agent:bert"]',
+        )
+        kwargs = mock_api.search.call_args.kwargs
+        assert kwargs["viewer_entity_id"] == "agent:bert"
+        assert kwargs["source_channel"] == "telegram"
+        assert kwargs["source_conversation_id"] == "chat-1"
+        assert kwargs["source_author_id"] == "<redacted>"
+        assert kwargs["subject_entity_id"] == "user:owner"
+        assert kwargs["participant_entity_ids"] == ["user:owner", "agent:bert"]
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_write
+# ---------------------------------------------------------------------------
+
+class TestMemoryWrite:
+    def test_memory_write_invalid_confidence_returns_error(self, server):
+        mod, _mock_api, *_ = server
+        payload = {
+            "text": "User likes coffee",
+            "confidence": "very high",
+        }
+        result = mod.memory_write("vector", "store_fact", json.dumps(payload))
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "invalid confidence" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_get
+# ---------------------------------------------------------------------------
+
+class TestMemoryGet:
+    def test_get_existing(self, server):
+        mod, mock_api, *_ = server
+        node_id = "11111111-1111-4111-8111-111111111111"
+        mock_api.get_memory.return_value = {"id": node_id, "name": "Test memory", "type": "fact"}
+        result = mod.memory_get(node_id)
+        mock_api.get_memory.assert_called_once_with(node_id)
+        assert result["id"] == node_id
+
+    def test_get_not_found(self, server):
+        mod, mock_api, *_ = server
+        node_id = "22222222-2222-4222-8222-222222222222"
+        mock_api.get_memory.return_value = None
+        result = mod.memory_get(node_id)
+        assert "error" in result
+        assert node_id in result["error"]
+
+    def test_get_rejects_invalid_node_id(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_get("not-a-uuid")
+        assert "error" in result
+        assert "valid UUID" in result["error"]
+        mock_api.get_memory.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_forget
+# ---------------------------------------------------------------------------
+
+class TestMemoryForget:
+    def test_forget_by_id(self, server):
+        mod, mock_api, *_ = server
+        node_id = "33333333-3333-4333-8333-333333333333"
+        result = mod.memory_forget(node_id=node_id)
+        mock_api.forget.assert_called_once_with(node_id=node_id, query=None)
+        assert result["deleted"] is True
+
+    def test_forget_by_query(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_forget(query="coffee preferences")
+        mock_api.forget.assert_called_once_with(node_id=None, query="coffee preferences")
+        assert result["deleted"] is True
+
+    def test_forget_no_args_returns_error(self, server):
+        mod, *_ = server
+        result = mod.memory_forget()
+        assert "error" in result
+
+    def test_forget_empty_strings_returns_error(self, server):
+        mod, *_ = server
+        result = mod.memory_forget(node_id="", query="")
+        assert "error" in result
+
+    def test_forget_rejects_invalid_node_id(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_forget(node_id="abc-123")
+        assert "error" in result
+        assert "valid UUID" in result["error"]
+        mock_api.forget.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_create_edge
+# ---------------------------------------------------------------------------
+
+class TestMemoryCreateEdge:
+    def test_create_edge_basic(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_create_edge("Alice", "spouse_of", "Bob")
+        mock_api.create_edge.assert_called_once_with(
+            subject_name="Alice",
+            relation="spouse_of",
+            object_name="Bob",
+            owner_id="test-owner",
+        )
+        assert result["status"] == "created"
+
+
+# ---------------------------------------------------------------------------
+# Tests — memory_stats
+# ---------------------------------------------------------------------------
+
+class TestMemoryStats:
+    def test_stats(self, server):
+        mod, mock_api, mock_graph, _ = server
+        result = mod.memory_stats()
+        mock_api.stats.assert_called_once()
+        assert result["total_nodes"] == 100
+
+
+# ---------------------------------------------------------------------------
+# Tests — projects_search
+# ---------------------------------------------------------------------------
+
+class TestDocsSearch:
+    def test_docs_search_basic(self, server):
+        mod, mock_api, _, _ = server
+        result = mod.projects_search("architecture")
+        mock_api.projects_search_docs.assert_called_once_with(
+            query="architecture",
+            limit=5,
+            project=None,
+        )
+        assert isinstance(result, dict)
+        assert "chunks" in result
+        assert len(result["chunks"]) == 1
+
+    def test_docs_search_with_project(self, server):
+        mod, mock_api, _, _ = server
+        mod.projects_search("setup", project="quaid")
+        assert mock_api.projects_search_docs.call_args.kwargs["project"] == "quaid"
+
+    def test_docs_search_limit_capped(self, server):
+        mod, mock_api, _, _ = server
+        mod.projects_search("test", limit=100)
+        assert mock_api.projects_search_docs.call_args.kwargs["limit"] == 20
+
+    def test_docs_search_empty_project_becomes_none(self, server):
+        mod, mock_api, _, _ = server
+        mod.projects_search("test", project="")
+        assert mock_api.projects_search_docs.call_args.kwargs["project"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests — session_recall
+# ---------------------------------------------------------------------------
+
+class TestSessionRecall:
+    def test_session_recall_returns_fallback_when_failhard_disabled(self, server):
+        mod, *_ = server
+        with patch("core.interface.mcp_server.get_sessions_dir", return_value=None), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=False):
+            out = mod.session_recall(action="load", session_id="sess-1")
+        assert out["fallback"] is True
+
+    def test_session_recall_raises_when_failhard_enabled(self, server):
+        mod, *_ = server
+        with patch("core.interface.mcp_server.get_sessions_dir", return_value=None), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Sessions directory not available"):
+                mod.session_recall(action="load", session_id="sess-1")
+
+    def test_session_recall_bad_extraction_log_raises_when_failhard_enabled(self, server, tmp_path):
+        mod, *_ = server
+        bad_log = tmp_path / "data"
+        bad_log.mkdir(parents=True, exist_ok=True)
+        (bad_log / "extraction-log.json").write_text("{not-json", encoding="utf-8")
+        with patch("core.interface.mcp_server.get_workspace_dir", return_value=tmp_path), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to parse extraction log"):
+                mod.session_recall(action="list", limit=5)
+
+    def test_session_recall_non_object_extraction_log_raises_when_failhard_enabled(self, server, tmp_path):
+        mod, *_ = server
+        bad_log = tmp_path / "data"
+        bad_log.mkdir(parents=True, exist_ok=True)
+        (bad_log / "extraction-log.json").write_text('["not-an-object"]', encoding="utf-8")
+        with patch("core.interface.mcp_server.get_workspace_dir", return_value=tmp_path), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to parse extraction log"):
+                mod.session_recall(action="list", limit=5)
+
+
+class TestProvider:
+    def test_memory_provider_raises_when_failhard_enabled(self, server):
+        mod, *_ = server
+        with patch("core.interface.mcp_server.get_llm_provider", side_effect=RuntimeError("provider down")), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to resolve LLM provider details"):
+                mod.memory_provider()
+
+
+# ---------------------------------------------------------------------------
+# Tests — Error handling
+# ---------------------------------------------------------------------------
+
+class TestErrorHandling:
+    def test_store_valueerror_propagates(self, server):
+        """FastMCP catches exceptions and returns error responses."""
+        mod, mock_api, *_ = server
+        mock_api.store.side_effect = ValueError("Text too short")
+        with pytest.raises(ValueError, match="Text too short"):
+            mod.memory_store("hi")

@@ -2,8 +2,8 @@
 * @solstead
 
 # Core knowledge layer logic
-/plugins/quaid/core/ @solstead
-/plugins/quaid/adapters/ @solstead
+/modules/quaid/core/ @solstead
+/modules/quaid/adaptors/ @solstead
 
 # Release and installer flows
 /scripts/ @solstead

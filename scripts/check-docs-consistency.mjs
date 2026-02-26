@@ -26,8 +26,8 @@ const checks = [
     file: 'docs/ARCHITECTURE.md',
     require: [
       'projects_search',
-      'adapters/openclaw/adapter.ts',
-      'adapters/openclaw/knowledge/orchestrator.ts',
+      'adaptors/openclaw/adapter.ts',
+      'adaptors/openclaw/maintenance.py',
       'route datastores',
     ],
     forbid: [
@@ -38,13 +38,13 @@ const checks = [
     file: 'docs/AI-REFERENCE.md',
     require: [
       'projects_search',
-      'adapters/openclaw/adapter.ts',
-      'adapters/openclaw/knowledge/orchestrator.ts',
+      'adaptors/openclaw/adapter.ts',
+      'orchestrator/default-orchestrator.ts',
       'total_recall planning pass',
     ],
     forbid: [
       '| `docs_search` |',
-      'adapters/openclaw/index.ts` | Plugin entry point (SOURCE OF TRUTH)',
+      'adaptors/openclaw/index.ts` | Plugin entry point (SOURCE OF TRUTH)',
     ],
   },
 ];
