@@ -303,7 +303,15 @@ intent: ${intent}`;
     for (const store of datastores) {
       const descriptor = descriptors[store];
       if (!descriptor) continue;
-      all.push(...await descriptor.recall({ query, limit, opts }));
+      try {
+        all.push(...await descriptor.recall({ query, limit, opts }));
+      } catch (err) {
+        const msg = String(err?.message || err);
+        console.warn(`[quaid][recall] datastore=${store} failed: ${msg}`);
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+      }
     }
     const dedup = /* @__PURE__ */ new Map();
     for (const item of all) {

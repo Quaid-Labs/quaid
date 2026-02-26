@@ -427,7 +427,15 @@ ${projectHints}
     for (const store of datastores) {
       const descriptor = descriptors[store];
       if (!descriptor) continue;
-      all.push(...(await descriptor.recall({ query, limit, opts })));
+      try {
+        all.push(...(await descriptor.recall({ query, limit, opts })));
+      } catch (err: unknown) {
+        const msg = String((err as Error)?.message || err);
+        console.warn(`[quaid][recall] datastore=${store} failed: ${msg}`);
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+      }
     }
 
     const dedup = new Map<string, TMemoryResult>();

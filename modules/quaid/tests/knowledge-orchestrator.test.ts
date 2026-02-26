@@ -205,6 +205,33 @@ describe("knowledge orchestrator", () => {
     expect(results.some((r) => r.category === "graph")).toBe(true);
   });
 
+  it("preserves partial recall results when one datastore fails and failHard is disabled", async () => {
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({ retrieval: { failHard: false } }),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter: vi.fn(async () => '{"datastores":["vector_basic","graph"]}'),
+      recallVector: vi.fn(async () => [
+        { text: "vector survives", category: "fact", similarity: 0.8, via: "vector" },
+      ]),
+      recallGraph: vi.fn(async () => {
+        throw new Error("graph backend unavailable");
+      }),
+    });
+
+    const results = await engine.totalRecall("alpha", 5, {
+      datastores: ["vector_basic", "graph"],
+      expandGraph: true,
+      graphDepth: 1,
+      technicalScope: "any",
+    });
+
+    expect(results.some((r) => r.text === "vector survives")).toBe(true);
+  });
+
   it("passes project/docs filters through project store recall", async () => {
     const recallProjectStore = vi.fn(async () => [
       { text: "PROJECT.md > Overview", category: "project", similarity: 0.88, via: "project" },
