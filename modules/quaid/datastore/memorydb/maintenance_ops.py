@@ -236,8 +236,9 @@ def _merge_nodes_into(
             conn.execute("DELETE FROM decay_review_queue WHERE node_id = ?", (oid,))
             try:
                 conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (oid,))
-            except Exception:
-                pass  # vec_nodes may not exist
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
             conn.execute("DELETE FROM nodes WHERE id = ?", (oid,))
 
     return result
