@@ -26,12 +26,25 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from lib.fail_policy import is_fail_hard_enabled
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_url_for_logs(url: str) -> str:
+    """Redact credentials/query fragments from URLs before logging."""
+    try:
+        parsed = urllib.parse.urlsplit(str(url or ""))
+        netloc = parsed.hostname or ""
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+    except Exception:
+        return "<invalid-url>"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -601,7 +614,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
             logger.error(
                 "Ollama embeddings call failed provider=ollama model=%s url=%s text_len=%d error=%s",
                 self._model,
-                self._url,
+                _sanitize_url_for_logs(self._url),
                 len(str(text or "")),
                 e,
             )
