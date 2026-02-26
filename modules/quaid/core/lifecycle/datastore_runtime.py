@@ -19,7 +19,7 @@ from datastore.memorydb.maintenance_ops import (
     record_health_snapshot,
     record_janitor_run,
     write_update_check_cache,
-    _is_benchmark_mode,
+    is_benchmark_mode,
 )
 from datastore.docsdb.rag import DocsRAG
 from datastore.notedb.soul_snippets import write_journal_entry, write_snippet_entry
@@ -39,7 +39,7 @@ __all__ = [
     "record_health_snapshot",
     "record_janitor_run",
     "write_update_check_cache",
-    "_is_benchmark_mode",
+    "is_benchmark_mode",
     "DocsRAG",
     "write_journal_entry",
     "write_snippet_entry",

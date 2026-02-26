@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from adaptors.openclaw.providers import GatewayLLMProvider
-from lib.adapter import ChannelInfo, QuaidAdapter, _read_env_file
+from lib.adapter import ChannelInfo, QuaidAdapter, read_env_file
 from lib.fail_policy import is_fail_hard_enabled
 
 
@@ -176,7 +176,7 @@ class OpenClawAdapter(QuaidAdapter):
         )
         env_file = self.quaid_home() / ".env"
         if env_file.exists():
-            found = _read_env_file(env_file, env_var_name)
+            found = read_env_file(env_file, env_var_name)
             if found:
                 print(
                     f"[adapter][FALLBACK] Loaded {env_var_name} from {env_file}.",

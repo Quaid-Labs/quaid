@@ -53,7 +53,7 @@ from core.lifecycle.datastore_runtime import (
     record_health_snapshot,
     record_janitor_run,
     write_update_check_cache,
-    _is_benchmark_mode,
+    is_benchmark_mode,
 )
 from lib.llm_clients import (
     reset_token_usage,
@@ -467,7 +467,7 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
 
 def _benchmark_review_gate_triggered(applied_changes: Dict[str, Any], metrics: JanitorMetrics) -> bool:
     """In benchmark mode, fail fast if review stage left uncovered/carryover work."""
-    if not _is_benchmark_mode():
+    if not is_benchmark_mode():
         return False
     try:
         coverage_pct = float(applied_changes.get("review_coverage_ratio_pct", 100) or 0)
@@ -559,7 +559,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # Benchmark runs execute janitor in repeated per-chunk cycles. Reusing a
     # prior "running" checkpoint across cycles can skip early stages (e.g. review)
     # and invalidate the run. Keep benchmark cycles deterministic and isolated.
-    if _is_benchmark_mode() and task == "all" and resume_checkpoint:
+    if is_benchmark_mode() and task == "all" and resume_checkpoint:
         print("[checkpoint] Benchmark mode: disabling checkpoint resume for this cycle")
         resume_checkpoint = False
 
@@ -1286,7 +1286,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             # When janitor is driven as staged tasks (benchmark harness), `graduate`
             # runs in a separate process and must still perform a same-cycle catch-up
             # review before validating pending/approved invariants.
-            if _is_benchmark_mode() and task in ("all", "graduate") and memory_pipeline_ok:
+            if is_benchmark_mode() and task in ("all", "graduate") and memory_pipeline_ok:
                 if pending_before > 0:
                     print(
                         "[benchmark] Pending memories remain before graduate; "
@@ -1324,7 +1324,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             # review must have actually processed items in this janitor cycle.
             # This catches accidental stage skips from stale checkpoints/budget paths.
             if (
-                _is_benchmark_mode()
+                is_benchmark_mode()
                 and task == "all"
                 and pending_before > 0
                 and int(applied_changes.get("memories_reviewed", 0) or 0) <= 0
@@ -1359,7 +1359,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         _checkpoint_save(status="failed")
 
     # Benchmark-mode validity gate: janitor owns run validity semantics.
-    if _is_benchmark_mode() and not dry_run and task in ("all", "graduate"):
+    if is_benchmark_mode() and not dry_run and task in ("all", "graduate"):
         try:
             counts = count_nodes_by_status(graph, ["pending", "approved"])
             pending = int(counts.get("pending", 0))

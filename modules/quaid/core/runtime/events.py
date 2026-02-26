@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import base64
 import argparse
+import contextlib
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -148,7 +150,12 @@ def _read_json(path: Path, default: Any) -> Any:
 
 def _write_json(path: Path, payload: Any) -> None:
     _ensure_parent(path)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # Atomic write to avoid truncation races.
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent)) as tmp:
+        tmp.write(json.dumps(payload, indent=2))
+        tmp.flush()
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
     try:
         os.chmod(path, 0o600)
     except Exception:
@@ -159,6 +166,39 @@ def _append_jsonl(path: Path, payload: Any) -> None:
     _ensure_parent(path)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _lock_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".lock")
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path):
+    _ensure_parent(path)
+    lock_handle = open(path, "a+", encoding="utf-8")
+    try:
+        try:
+            import fcntl  # type: ignore
+            fcntl.flock(lock_handle, fcntl.LOCK_EX)
+        except Exception:
+            # Best-effort on non-POSIX environments.
+            pass
+        yield
+    finally:
+        try:
+            import fcntl  # type: ignore
+            fcntl.flock(lock_handle, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        lock_handle.close()
+
+
+def _read_modify_write_json(path: Path, default: Any, mutator: Callable[[Any], Any]) -> Any:
+    with _file_lock(_lock_path(path)):
+        current = _read_json(path, default)
+        updated = mutator(current)
+        _write_json(path, updated)
+        return updated
 
 
 def _next_event_id(name: str, ts: str) -> str:
@@ -175,26 +215,33 @@ def _queue_delayed_llm_request(message: str, kind: str = "janitor", priority: st
     if not message:
         return False
     paths = _event_paths()
-    payload = _read_json(paths["delayed_llm_requests"], {"version": 1, "requests": []})
-    requests = payload.get("requests") if isinstance(payload, dict) else []
-    if not isinstance(requests, list):
-        requests = []
     rid = _make_request_id(kind, message)
-    for item in requests:
-        if isinstance(item, dict) and item.get("id") == rid and item.get("status") == "pending":
-            return False
-    requests.append({
-        "id": rid,
-        "created_at": _now(),
-        "source": source,
-        "kind": kind,
-        "priority": priority,
-        "status": "pending",
-        "message": message,
-    })
-    payload = {"version": 1, "requests": requests}
-    _write_json(paths["delayed_llm_requests"], payload)
-    return True
+    queued = False
+
+    def _mutate(payload: Any) -> Any:
+        nonlocal queued
+        base = payload if isinstance(payload, dict) else {"version": 1, "requests": []}
+        requests = base.get("requests")
+        if not isinstance(requests, list):
+            requests = []
+        for item in requests:
+            if isinstance(item, dict) and item.get("id") == rid and item.get("status") == "pending":
+                queued = False
+                return {"version": 1, "requests": requests}
+        requests.append({
+            "id": rid,
+            "created_at": _now(),
+            "source": source,
+            "kind": kind,
+            "priority": priority,
+            "status": "pending",
+            "message": message,
+        })
+        queued = True
+        return {"version": 1, "requests": requests}
+
+    _read_modify_write_json(paths["delayed_llm_requests"], {"version": 1, "requests": []}, _mutate)
+    return queued
 
 
 def _handle_session_lifecycle(event: Event) -> Dict[str, Any]:
@@ -385,12 +432,15 @@ def emit_event(
         event["owner_id"] = str(owner_id)
 
     paths = _event_paths()
-    queue_payload = _read_json(paths["queue"], {"version": 1, "events": []})
-    events = queue_payload.get("events") if isinstance(queue_payload, dict) else []
-    if not isinstance(events, list):
-        events = []
-    events.append(event)
-    _write_json(paths["queue"], {"version": 1, "events": events})
+    def _mutate(payload: Any) -> Any:
+        queue_payload = payload if isinstance(payload, dict) else {"version": 1, "events": []}
+        events = queue_payload.get("events")
+        if not isinstance(events, list):
+            events = []
+        events.append(event)
+        return {"version": 1, "events": events}
+
+    _read_modify_write_json(paths["queue"], {"version": 1, "events": []}, _mutate)
     _append_jsonl(paths["history_jsonl"], {"ts": ts, "op": "emit", "event": event})
     return event
 
@@ -417,55 +467,59 @@ def list_events(status: str = "pending", limit: int = 50) -> List[Event]:
 
 def process_events(limit: int = 20, names: Optional[List[str]] = None) -> Dict[str, Any]:
     paths = _event_paths()
-    queue_payload = _read_json(paths["queue"], {"version": 1, "events": []})
-    events = queue_payload.get("events") if isinstance(queue_payload, dict) else []
-    if not isinstance(events, list):
-        events = []
+    events: List[Dict[str, Any]] = []
     name_filter = {str(n).strip() for n in (names or []) if str(n).strip()}
     processed = 0
     failed = 0
     touched = 0
     details: List[Dict[str, Any]] = []
 
-    for event in events:
-        if processed >= max(1, min(int(limit), 500)):
-            break
-        if not isinstance(event, dict):
-            continue
-        if event.get("status") != "pending":
-            continue
-        if name_filter and str(event.get("name") or "") not in name_filter:
-            continue
-        touched += 1
-        handler = EVENT_HANDLERS.get(str(event.get("name") or ""))
-        if not handler:
-            event["status"] = "processed"
-            event["processed_at"] = _now()
-            event["result"] = {"status": "ignored", "reason": "no_handler"}
-            processed += 1
-            details.append({"id": event.get("id"), "name": event.get("name"), "status": "ignored"})
-            continue
-        try:
-            result = handler(event)
-            result_status = str(result.get("status") or "ok").lower()
-            event["processed_at"] = _now()
-            event["result"] = result
-            if result_status == "failed":
-                event["status"] = "failed"
-                failed += 1
-                details.append({"id": event.get("id"), "name": event.get("name"), "status": "failed", "result": result})
-            else:
+    def _mutate(payload: Any) -> Any:
+        nonlocal events, processed, failed, touched
+        queue_payload = payload if isinstance(payload, dict) else {"version": 1, "events": []}
+        events = queue_payload.get("events")
+        if not isinstance(events, list):
+            events = []
+        for event in events:
+            if processed >= max(1, min(int(limit), 500)):
+                break
+            if not isinstance(event, dict):
+                continue
+            if event.get("status") != "pending":
+                continue
+            if name_filter and str(event.get("name") or "") not in name_filter:
+                continue
+            touched += 1
+            handler = EVENT_HANDLERS.get(str(event.get("name") or ""))
+            if not handler:
                 event["status"] = "processed"
+                event["processed_at"] = _now()
+                event["result"] = {"status": "ignored", "reason": "no_handler"}
                 processed += 1
-                details.append({"id": event.get("id"), "name": event.get("name"), "status": event["status"], "result": result})
-        except Exception as e:  # pragma: no cover
-            event["status"] = "failed"
-            event["processed_at"] = _now()
-            event["result"] = {"status": "failed", "error": str(e)}
-            failed += 1
-            details.append({"id": event.get("id"), "name": event.get("name"), "status": "failed", "error": str(e)})
+                details.append({"id": event.get("id"), "name": event.get("name"), "status": "ignored"})
+                continue
+            try:
+                result = handler(event)
+                result_status = str(result.get("status") or "ok").lower()
+                event["processed_at"] = _now()
+                event["result"] = result
+                if result_status == "failed":
+                    event["status"] = "failed"
+                    failed += 1
+                    details.append({"id": event.get("id"), "name": event.get("name"), "status": "failed", "result": result})
+                else:
+                    event["status"] = "processed"
+                    processed += 1
+                    details.append({"id": event.get("id"), "name": event.get("name"), "status": event["status"], "result": result})
+            except Exception as e:  # pragma: no cover
+                event["status"] = "failed"
+                event["processed_at"] = _now()
+                event["result"] = {"status": "failed", "error": str(e)}
+                failed += 1
+                details.append({"id": event.get("id"), "name": event.get("name"), "status": "failed", "error": str(e)})
+        return {"version": 1, "events": events}
 
-    _write_json(paths["queue"], {"version": 1, "events": events})
+    _read_modify_write_json(paths["queue"], {"version": 1, "events": []}, _mutate)
     _append_jsonl(paths["history_jsonl"], {
         "ts": _now(),
         "op": "process",
