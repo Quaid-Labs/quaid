@@ -326,7 +326,7 @@ export class SessionTimeoutManager {
     }, this.timeoutMinutes * 60 * 1000);
   }
 
-  async extractSessionFromLog(sessionId: string, label: string, fallbackMessages?: any[]): Promise<boolean> {
+  private async extractSessionFromLogDirect(sessionId: string, label: string, fallbackMessages?: any[]): Promise<boolean> {
     if (!sessionId) return false;
     const loggedMessages = this.readSessionMessages(sessionId);
     const fallback = filterEligibleMessages(fallbackMessages || []);
@@ -350,6 +350,25 @@ export class SessionTimeoutManager {
     this.writeQuaidLog("extract_done", sessionId, { label, message_count: messages.length, source });
     this.clearSession(sessionId);
     return true;
+  }
+
+  async extractSessionFromLog(sessionId: string, label: string, fallbackMessages?: any[]): Promise<boolean> {
+    let extracted = false;
+    const work = this.chain
+      .catch((err: unknown) => {
+        safeLog(this.logger, `[quaid][timeout] previous extraction chain error: ${String((err as Error)?.message || err)}`);
+        if (this.failHard) throw err;
+      })
+      .then(async () => {
+        extracted = await this.extractSessionFromLogDirect(sessionId, label, fallbackMessages);
+      })
+      .catch((err: unknown) => {
+        safeLog(this.logger, `[quaid][timeout] extraction queue failed: ${String((err as Error)?.message || err)}`);
+        if (this.failHard) throw err;
+      });
+    this.chain = work.then(() => undefined, () => undefined);
+    await work;
+    return extracted;
   }
 
   clearSession(sessionId?: string): void {
@@ -511,7 +530,7 @@ export class SessionTimeoutManager {
       }
       try {
         this.writeQuaidLog("signal_process_begin", sessionId, { label });
-        await this.extractSessionFromLog(sessionId, label);
+        await this.extractSessionFromLogDirect(sessionId, label);
         this.writeQuaidLog("signal_process_done", sessionId, { label });
       } catch (err: unknown) {
         this.writeQuaidLog("signal_process_error", sessionId, { label, error: String((err as Error)?.message || err) });
