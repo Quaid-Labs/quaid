@@ -1,12 +1,14 @@
 """OpenClaw-specific provider implementations."""
 
 import json
-import sys
+import logging
 import time
 import urllib.error
 import urllib.request
 
 from lib.providers import LLMProvider, LLMResult
+
+logger = logging.getLogger(__name__)
 
 
 class GatewayLLMProvider(LLMProvider):
@@ -74,7 +76,7 @@ class GatewayLLMProvider(LLMProvider):
                     err_msg = err_body.get("error", str(e))
                 except Exception:
                     err_msg = str(e)
-                print(f"[providers] Gateway LLM proxy error ({e.code}): {err_msg}", file=sys.stderr)
+                logger.warning("Gateway LLM proxy HTTP error (%s): %s", e.code, err_msg)
                 if e.code == 503:
                     raise RuntimeError(
                         f"No credential configured for selected model provider (HTTP {e.code}): {err_msg}"
@@ -86,14 +88,14 @@ class GatewayLLMProvider(LLMProvider):
                     continue
                 raise
             except (urllib.error.URLError, TimeoutError, OSError) as e:
-                print(f"[providers] Gateway LLM proxy transient error: {e}", file=sys.stderr)
+                logger.warning("Gateway LLM proxy transient error: %s", e)
                 last_error = e
                 if attempt < retries:
                     time.sleep(0.25 * (2 ** attempt))
                     continue
                 raise
             except Exception as e:
-                print(f"[providers] Gateway LLM proxy error: {e}", file=sys.stderr)
+                logger.error("Gateway LLM proxy error: %s", e)
                 raise
         if last_error is not None:
             raise last_error

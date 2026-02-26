@@ -1326,21 +1326,38 @@ function spawnNotifyScript(scriptBody: string): void {
   };
   const preamble = `import sys, os\nsys.path.insert(0, ${JSON.stringify(path.join(WORKSPACE, "plugins/quaid"))})\n`;
   const cleanup = `\nos.unlink(${JSON.stringify(tmpFile)})\n`;
+  let launched = false;
+  let notifyLogFd: number | null = null;
   fs.writeFileSync(tmpFile, preamble + scriptBody + cleanup, { mode: 0o600 });
   try {
-    const notifyLogFd = fs.openSync(notifyLogFile, "a");
+    notifyLogFd = fs.openSync(notifyLogFile, "a");
     const proc = spawn('python3', [tmpFile], {
       detached: true,
       stdio: ['ignore', notifyLogFd, notifyLogFd],
       env: buildPythonEnv(),
     });
-    fs.closeSync(notifyLogFd);
+    launched = true;
     proc.on("error", (err: Error) => {
       appendNotifyLog(`[notify-worker-error] spawn failed: ${err.message}`);
     });
     proc.unref();
   } catch (err: unknown) {
     appendNotifyLog(`[notify-worker-error] launch failed: ${String((err as Error)?.message || err)}`);
+    if (!launched) {
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {
+        // best-effort only
+      }
+    }
+  } finally {
+    if (notifyLogFd !== null) {
+      try {
+        fs.closeSync(notifyLogFd);
+      } catch {
+        // best-effort only
+      }
+    }
   }
 }
 
