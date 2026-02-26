@@ -393,6 +393,31 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_invalid_model_numeric_values_fall_back_to_defaults(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "models": {
+                    "fastReasoningContext": "huge",
+                    "deepReasoningContext": "massive",
+                    "fastReasoningMaxOutput": "many",
+                    "deepReasoningMaxOutput": "lots",
+                    "batchBudgetPercent": "half",
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.models.fast_reasoning_context == 200000
+                assert cfg.models.deep_reasoning_context == 200000
+                assert cfg.models.fast_reasoning_max_output == 8192
+                assert cfg.models.deep_reasoning_max_output == 16384
+                assert cfg.models.batch_budget_percent == 0.50
+        finally:
+            config._config = old_config
+
     def test_invalid_token_budget_falls_back_to_zero(self, tmp_path):
         import config
         old_config = config._config
