@@ -901,13 +901,21 @@ async function callConfiguredLLM(
       || msg.includes("fetch failed")
     );
   };
-  const readBodyWithTimeout = async (resp: Response): Promise<string> => {
-    return await Promise.race([
-      resp.text(),
-      new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error(`gateway response body timeout after ${timeoutMs}ms`)), timeoutMs)
-      ),
-    ]);
+  const readBodyWithTimeout = async (resp: Response, bodyTimeoutMs: number): Promise<string> => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        resp.text(),
+        new Promise<string>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`gateway response body timeout after ${bodyTimeoutMs}ms`)),
+            bodyTimeoutMs
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   };
 
   const maxAttempts = 2;
@@ -916,6 +924,7 @@ async function callConfiguredLLM(
   let rawBody = "";
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptStart = Date.now();
     try {
       gatewayRes = await fetch(gatewayUrl, {
         method: "POST",
@@ -931,7 +940,9 @@ async function callConfiguredLLM(
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });
-      rawBody = await readBodyWithTimeout(gatewayRes);
+      const elapsedMs = Date.now() - attemptStart;
+      const bodyTimeoutMs = Math.max(1, timeoutMs - elapsedMs);
+      rawBody = await readBodyWithTimeout(gatewayRes, bodyTimeoutMs);
       try {
         data = rawBody ? JSON.parse(rawBody) : {};
       } catch (err: unknown) {
