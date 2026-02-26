@@ -19,6 +19,7 @@ from lib.worker_pool import run_callables
 from lib.database import get_connection as _lib_get_connection
 from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding as _lib_pack_embedding, unpack_embedding as _lib_unpack_embedding
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
+from lib.fail_policy import is_fail_hard_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -190,11 +191,22 @@ def index_session_log(
         )
         for item in emb_results:
             if isinstance(item, Exception) or not item:
+                if isinstance(item, Exception):
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(
+                            f"Session log embedding generation failed for session {sid}"
+                        ) from item
+                    logger.warning("Session log embedding generation failed for session %s: %s", sid, item)
                 embedding_blobs.append(None)
             else:
                 try:
                     embedding_blobs.append(_lib_pack_embedding(item))
-                except Exception:
+                except Exception as exc:
+                    if is_fail_hard_enabled():
+                        raise RuntimeError(
+                            f"Session log embedding pack failed for session {sid}"
+                        ) from exc
+                    logger.warning("Session log embedding pack failed for session %s: %s", sid, exc)
                     embedding_blobs.append(None)
 
     with _lib_get_connection() as conn:
@@ -423,7 +435,10 @@ def search_session_logs(
             try:
                 emb = _lib_unpack_embedding(row["embedding"])
                 sem = _lib_cosine_similarity(q_emb, emb)
-            except Exception:
+            except Exception as exc:
+                if is_fail_hard_enabled():
+                    raise RuntimeError("Session log embedding unpack failed during search") from exc
+                logger.warning("Session log embedding unpack failed during search: %s", exc)
                 sem = 0.0
         lex = _lexical_score(q, content)
         score = max(sem, lex * 0.6)
