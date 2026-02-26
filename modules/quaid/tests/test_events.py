@@ -1,6 +1,8 @@
 import json
 import types
 
+import pytest
+
 from core.runtime.events import emit_event, get_event_registry, get_event_capability, list_events, process_events
 from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
 
@@ -218,3 +220,52 @@ def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
     last = json.loads(lines[-1])
     assert last.get("op") == "emit"
     assert last.get("event", {}).get("payload", {}).get("reason") == "trim-check"
+
+
+def test_process_events_handler_error_raises_in_fail_hard(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    import core.runtime.events as events
+
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("session transcript", encoding="utf-8")
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("ingest failed")
+
+    monkeypatch.setattr(events, "run_docs_ingest", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+
+    emit_event(
+        name="docs.ingest_transcript",
+        payload={"transcript_path": str(transcript), "label": "Compaction"},
+        source="pytest",
+    )
+
+    with pytest.raises(RuntimeError, match="fail-hard mode"):
+        process_events(limit=5, names=["docs.ingest_transcript"])
+
+
+def test_process_events_handler_error_marks_failed_when_not_fail_hard(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    import core.runtime.events as events
+
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("session transcript", encoding="utf-8")
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("ingest failed")
+
+    monkeypatch.setattr(events, "run_docs_ingest", _boom)
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
+
+    emit_event(
+        name="docs.ingest_transcript",
+        payload={"transcript_path": str(transcript), "label": "Compaction"},
+        source="pytest",
+    )
+
+    out = process_events(limit=5, names=["docs.ingest_transcript"])
+    assert out["processed"] == 0
+    assert out["failed"] >= 1

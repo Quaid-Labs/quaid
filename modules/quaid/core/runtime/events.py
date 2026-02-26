@@ -144,6 +144,15 @@ def _event_paths() -> Dict[str, Path]:
     }
 
 
+def _is_fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+
+        return bool(is_fail_hard_enabled())
+    except Exception:
+        return True
+
+
 def _read_json(path: Path, default: Any) -> Any:
     try:
         if not path.exists():
@@ -514,6 +523,11 @@ def process_events(limit: int = 20, names: Optional[List[str]] = None) -> Dict[s
                     event["status"] = "failed"
                     failed += 1
                     details.append({"id": event.get("id"), "name": event.get("name"), "status": "failed", "result": result})
+                    if _is_fail_hard_enabled():
+                        err_msg = str(result.get("error") or f"handler {event.get('name')} returned failed status")
+                        raise RuntimeError(
+                            f"Event handler failed while fail-hard mode is enabled: {err_msg}"
+                        )
                 else:
                     event["status"] = "processed"
                     processed += 1
@@ -524,6 +538,10 @@ def process_events(limit: int = 20, names: Optional[List[str]] = None) -> Dict[s
                 event["result"] = {"status": "failed", "error": str(e)}
                 failed += 1
                 details.append({"id": event.get("id"), "name": event.get("name"), "status": "failed", "error": str(e)})
+                if _is_fail_hard_enabled():
+                    raise RuntimeError(
+                        "Event handler failed while fail-hard mode is enabled"
+                    ) from e
         return {"version": 1, "events": events}
 
     _read_modify_write_json(paths["queue"], {"version": 1, "events": []}, _mutate)
