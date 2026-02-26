@@ -406,6 +406,24 @@ class TestOllamaEmbeddingsProvider:
             result = p.embed("test text")
             assert result is None
 
+    def test_embed_retries_once_on_transient_error(self):
+        p = OllamaEmbeddingsProvider()
+        embedding = [0.2] * 4096
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"embeddings": [embedding]}).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch(
+            "lib.providers.urllib.request.urlopen",
+            side_effect=[ConnectionError("refused"), mock_resp],
+        ) as urlopen, patch("lib.providers.time.sleep") as sleep:
+            result = p.embed("test text")
+
+        assert result == embedding
+        assert urlopen.call_count == 2
+        sleep.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # MockEmbeddingsProvider
