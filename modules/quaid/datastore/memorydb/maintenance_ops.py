@@ -1157,7 +1157,16 @@ def find_contradictions_from_pairs(contradiction_candidates: List[Dict[str, Any]
             "duration": time.time() - batch_start_time,
         }
 
-    llm_results = _run_llm_batches_parallel(batches, "contradictions", _invoke_batch)
+    overall_timeout = None
+    remaining_budget = MAX_EXECUTION_TIME - (time.time() - task_start_time)
+    if remaining_budget > 0:
+        overall_timeout = remaining_budget
+    llm_results = _run_llm_batches_parallel(
+        batches,
+        "contradictions",
+        _invoke_batch,
+        overall_timeout_seconds=overall_timeout,
+    )
     for result in llm_results:
         elapsed = time.time() - task_start_time
         if elapsed > MAX_EXECUTION_TIME:
