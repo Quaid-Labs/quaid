@@ -2924,7 +2924,7 @@ ${factsOutput || "No facts found."}` }],
             throw err;
           }
           await task();
-          throw err;
+          return;
         }
       );
       return extractionPromise;
@@ -3331,7 +3331,12 @@ notify_memory_extraction(
             console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
           }
         };
-        extractionPromise = queueExtractionTask(doExtraction, "compaction");
+        extractionPromise = queueExtractionTask(doExtraction, "compaction").catch((doErr) => {
+          console.error(`[quaid][compaction] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
+          if (isFailHardEnabled()) {
+            throw doErr;
+          }
+        });
       } catch (err) {
         if (isFailHardEnabled()) {
           throw err;
@@ -3397,7 +3402,9 @@ notify_memory_extraction(
         console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${extractionPromise ? "yes" : "no"}`);
         extractionPromise = queueExtractionTask(doExtraction, "reset").catch((doErr) => {
           console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
-          throw doErr;
+          if (isFailHardEnabled()) {
+            throw doErr;
+          }
         });
       } catch (err) {
         if (isFailHardEnabled()) {
