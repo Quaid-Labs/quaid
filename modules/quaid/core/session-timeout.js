@@ -821,6 +821,9 @@ class SessionTimeoutManager {
       return filterEligibleMessages(out);
     } catch (err) {
       safeLog(this.logger, `[quaid][timeout] failed reading session message log for ${sessionId}: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
       return [];
     }
   }
