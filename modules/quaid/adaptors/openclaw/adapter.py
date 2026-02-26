@@ -222,7 +222,8 @@ class OpenClawAdapter(QuaidAdapter):
                 return []
             paths = hook.get("paths") or hook.get("patterns") or hook.get("files") or []
             return paths if isinstance(paths, list) else []
-        except (json.JSONDecodeError, IOError, KeyError, UnicodeDecodeError):
+        except (json.JSONDecodeError, IOError, KeyError, UnicodeDecodeError) as e:
+            print(f"[adapter] bootstrap markdown globs unavailable: {e}", file=sys.stderr)
             return []
 
     def get_bootstrap_markdown_filenames(self) -> list:
@@ -247,7 +248,7 @@ class OpenClawAdapter(QuaidAdapter):
                 if isinstance(names, list) and names:
                     return [str(n) for n in names if str(n).strip()]
             except (json.JSONDecodeError, IOError, KeyError, UnicodeDecodeError):
-                pass
+                print("[adapter] bootstrap markdown filenames unavailable from gateway config", file=sys.stderr)
         # Conservative fallback matching gateway bootstrap file naming.
         return [
             "AGENTS.md",
@@ -292,7 +293,7 @@ class OpenClawAdapter(QuaidAdapter):
                     if token:
                         return token
             except (json.JSONDecodeError, IOError, OSError):
-                pass
+                print("[adapter] anthropic credential resolution from auth-profiles failed", file=sys.stderr)
 
         # No env/.env fallback here: avoid implicit paid API usage.
         return None
@@ -311,8 +312,8 @@ class OpenClawAdapter(QuaidAdapter):
                     "name": f"{profile.get('provider', 'unknown')} ({profile.get('mode', '')})",
                     "provider": profile.get("provider"),
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[adapter] discover_llm_providers fallback to default: {e}", file=sys.stderr)
         return providers
 
     def _get_gateway_auth(self):
@@ -326,8 +327,8 @@ class OpenClawAdapter(QuaidAdapter):
                     cfg.get("gateway", {}).get("port", 18789),
                     cfg.get("gateway", {}).get("auth", {}).get("token", ""),
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[adapter] gateway auth config read failed, using defaults: {e}", file=sys.stderr)
         return 18789, ""
 
     # ---- Internal helpers ----
@@ -358,5 +359,6 @@ class OpenClawAdapter(QuaidAdapter):
                 return None
             token = (proc.stdout or "").strip()
             return token or None
-        except Exception:
+        except Exception as e:
+            print(f"[adapter] keychain lookup failed for service={svc} account={acct}: {e}", file=sys.stderr)
             return None
