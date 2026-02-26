@@ -35,6 +35,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -92,6 +93,30 @@ def _queue_delayed_notification(message: str, kind: str, priority: str, source: 
     except Exception:
         logger.warning("Failed queuing delayed notification", extra={"source": source, "kind": kind})
 
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Atomically write UTF-8 text with temp file + replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 # Cleanup thresholds
 CLEANUP_UPDATE_THRESHOLD = 10  # Trigger cleanup after this many updates
 CLEANUP_GROWTH_THRESHOLD = 1.3  # Trigger cleanup if doc grew 30%+
@@ -124,7 +149,7 @@ def _save_changelog(entries: List[dict]) -> None:
     """Save changelog entries, keeping last 100."""
     entries = entries[-100:]  # Keep only last 100 entries
     _changelog_path().parent.mkdir(parents=True, exist_ok=True)
-    _changelog_path().write_text(json.dumps(entries, indent=2))
+    _atomic_write_text(_changelog_path(), json.dumps(entries, indent=2))
 
 
 def log_doc_update(
@@ -201,7 +226,7 @@ def _load_cleanup_state() -> Dict[str, dict]:
 def _save_cleanup_state(state: Dict[str, dict]) -> None:
     """Save cleanup state."""
     _cleanup_state_path().parent.mkdir(parents=True, exist_ok=True)
-    _cleanup_state_path().write_text(json.dumps(state, indent=2))
+    _atomic_write_text(_cleanup_state_path(), json.dumps(state, indent=2))
 
 
 def _increment_update_count(doc_path: str, chars_after: int) -> None:
@@ -353,7 +378,7 @@ def cleanup_doc(doc_path: str, purpose: str, dry_run: bool = True) -> bool:
                        dry_run, True, chars_before, chars_after)
         return True
 
-    doc_abs.write_text(response)
+    _atomic_write_text(doc_abs, response)
     print(f"  Cleaned up {doc_path}")
     log_doc_update(doc_path, "cleanup", [], summary,
                    dry_run, True, chars_before, chars_after)
@@ -856,7 +881,7 @@ def update_doc_from_diffs(
                        dry_run, True, chars_before, chars_after)
         return True
 
-    doc_abs.write_text(response)
+    _atomic_write_text(doc_abs, response)
     print(f"  Updated {doc_path} ({chars_before} -> {chars_after} chars)")
     log_doc_update(doc_path, trigger, stale_sources, summary,
                    dry_run, True, chars_before, chars_after)
@@ -998,7 +1023,7 @@ def update_doc_from_transcript(
             print(f"  Applying full replacement ({len(response)} chars)")
             chars_after = len(response)
             if not dry_run:
-                doc_abs.write_text(response)
+                _atomic_write_text(doc_abs, response)
                 print(f"  Updated {doc_path}")
             log_doc_update(doc_path, trigger, sources, f"Full replacement: {summary}",
                            dry_run, True, chars_before, chars_after)
@@ -1042,7 +1067,7 @@ def update_doc_from_transcript(
         if dry_run:
             print(f"  [DRY RUN] Would apply {applied} edit(s) to {doc_path}")
         else:
-            doc_abs.write_text(updated_doc)
+            _atomic_write_text(doc_abs, updated_doc)
             print(f"  Applied {applied} edit(s) to {doc_path}")
             # Sync modified timestamp to registry
             try:
