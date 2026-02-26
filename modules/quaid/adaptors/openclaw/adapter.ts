@@ -3660,6 +3660,9 @@ notify_memory_extraction(
           recovered++;
         } catch (err: unknown) {
           console.error(`[quaid] Recovery failed for session ${sessionId}:`, (err as Error).message);
+          if (isFailHardEnabled()) {
+            throw err;
+          }
         }
       }
 
