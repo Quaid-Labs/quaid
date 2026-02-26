@@ -1248,7 +1248,14 @@ function _saveJanitorNudgeState(state) {
   }
 }
 function queueDelayedLlmRequest(message, kind = "janitor", priority = "normal") {
-  return queueDelayedRequest(DELAYED_LLM_REQUESTS_PATH, message, kind, priority, "quaid_adapter");
+  return queueDelayedRequest(
+    DELAYED_LLM_REQUESTS_PATH,
+    message,
+    kind,
+    priority,
+    "quaid_adapter",
+    isFailHardEnabled()
+  );
 }
 function getJanitorHealthIssue() {
   try {
