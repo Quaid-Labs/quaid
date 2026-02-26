@@ -1439,15 +1439,17 @@ async function getQuickProjectSummary(messages: any[]): Promise<{project_name: s
     );
     const output = (llm.text || "").trim();
     const jsonMatch = output.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-          project_name: typeof parsed.project_name === "string" ? parsed.project_name : null,
-          text: typeof parsed.text === "string" ? parsed.text : "",
-        };
-      } catch {}
-    }
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          return {
+            project_name: typeof parsed.project_name === "string" ? parsed.project_name : null,
+            text: typeof parsed.text === "string" ? parsed.text : "",
+          };
+        } catch (err: unknown) {
+          console.warn(`[quaid] Quick project summary JSON parse failed: ${String((err as Error)?.message || err)}`);
+        }
+      }
   } catch (err: unknown) {
     console.error("[quaid] Quick project summary failed:", (err as Error).message);
   }
@@ -2910,7 +2912,9 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
                     projectMdContent = fs.readFileSync(mdPath, 'utf-8');
                   }
                 }
-              } catch {}
+              } catch (err: unknown) {
+                console.warn(`[quaid] projects_search PROJECT.md preload failed: ${String((err as Error)?.message || err)}`);
+              }
             }
 
             // Staleness check (lightweight mtime comparison)
@@ -2925,8 +2929,8 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
                 );
                 stalenessWarning = `\n\nSTALENESS WARNING: The following docs may be outdated:\n${warnings.join("\n")}\nConsider running: python3 docs_updater.py update-stale --apply`;
               }
-            } catch {
-              // Staleness check is non-critical
+            } catch (err: unknown) {
+              console.warn(`[quaid] projects_search staleness check failed: ${String((err as Error)?.message || err)}`);
             }
 
             const text = projectMdContent
@@ -3361,7 +3365,9 @@ notify_docs_search(data['query'], data['results'])
           } else if (entry.role) {
             messages.push(entry);
           }
-        } catch {} // Skip malformed lines
+        } catch (err: unknown) {
+          console.warn(`[quaid] session file line parse failed: ${String((err as Error)?.message || err)}`);
+        }
       }
       return messages;
     }
@@ -3472,7 +3478,9 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
             }
           }
         }
-      } catch {}
+      } catch (err: unknown) {
+        console.warn(`[quaid] extraction snippet/journal parsing failed: ${String((err as Error)?.message || err)}`);
+      }
 
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
@@ -3700,7 +3708,11 @@ notify_memory_extraction(
           if (isSystemEnabled("memory") && uniqueSessionId) {
             const logPath = getInjectionLogPath(uniqueSessionId);
             let logData: any = {};
-            try { logData = JSON.parse(fs.readFileSync(logPath, "utf8")); } catch {}
+            try {
+              logData = JSON.parse(fs.readFileSync(logPath, "utf8"));
+            } catch (err: unknown) {
+              console.warn(`[quaid] compaction injection log read failed for ${logPath}: ${String((err as Error)?.message || err)}`);
+            }
             logData.lastCompactionAt = new Date().toISOString();
             logData.memoryTexts = [];  // Reset — all memories eligible for re-injection
             fs.writeFileSync(logPath, JSON.stringify(logData, null, 2), { mode: 0o600 });
