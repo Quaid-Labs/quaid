@@ -32,6 +32,15 @@ def _coerce_nonnegative_int(raw: Any, default: int) -> int:
         return default
 
 
+def _coerce_positive_float(raw: Any, default: float) -> float:
+    """Return a positive float; fallback to default for invalid values."""
+    try:
+        value = float(raw)
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
 def _default_deep_reasoning_model_classes() -> Dict[str, str]:
     return {}
 
@@ -580,11 +589,11 @@ def _load_config_inner() -> MemoryConfig:
         deep_reasoning=models_data.get('deep_reasoning', ModelConfig.deep_reasoning),
         deep_reasoning_model_classes=deep_reasoning_model_classes,
         fast_reasoning_model_classes=fast_reasoning_model_classes,
-        fast_reasoning_context=models_data.get('fast_reasoning_context', 200000),
-        deep_reasoning_context=models_data.get('deep_reasoning_context', 200000),
-        fast_reasoning_max_output=models_data.get('fast_reasoning_max_output', 8192),
-        deep_reasoning_max_output=models_data.get('deep_reasoning_max_output', 16384),
-        batch_budget_percent=models_data.get('batch_budget_percent', 0.50),
+        fast_reasoning_context=_coerce_positive_int(models_data.get('fast_reasoning_context', 200000), 200000),
+        deep_reasoning_context=_coerce_positive_int(models_data.get('deep_reasoning_context', 200000), 200000),
+        fast_reasoning_max_output=_coerce_positive_int(models_data.get('fast_reasoning_max_output', 8192), 8192),
+        deep_reasoning_max_output=_coerce_positive_int(models_data.get('deep_reasoning_max_output', 16384), 16384),
+        batch_budget_percent=_coerce_positive_float(models_data.get('batch_budget_percent', 0.50), 0.50),
     )
 
     capture_data = config_data.get('capture', {})
