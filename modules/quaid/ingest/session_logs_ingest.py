@@ -142,6 +142,36 @@ def _run(
     return result
 
 
+def run(
+    *,
+    session_id: str,
+    owner_id: str,
+    label: str,
+    session_file: Optional[str] = None,
+    transcript_path: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    participant_ids: Optional[list[str]] = None,
+    participant_aliases: Optional[Dict[str, str]] = None,
+    message_count: int = 0,
+    topic_hint: str = "",
+) -> Dict[str, Any]:
+    """Public runtime entrypoint for session log ingest."""
+    return _run(
+        session_id=session_id,
+        owner_id=owner_id,
+        label=label,
+        session_file=session_file,
+        transcript_path=transcript_path,
+        source_channel=source_channel,
+        conversation_id=conversation_id,
+        participant_ids=participant_ids,
+        participant_aliases=participant_aliases,
+        message_count=message_count,
+        topic_hint=topic_hint,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Session log ingest and retrieval bridge")
     sub = parser.add_subparsers(dest="command")
@@ -180,7 +210,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "ingest":
-        out = _run(
+        out = run(
             session_id=args.session_id,
             owner_id=args.owner,
             label=args.label,
