@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 MAX_THREAD_LOCK_CACHE = 1024
+LOCK_POLL_INTERVAL_SECONDS = 0.01
 logger = logging.getLogger(__name__)
 
 
@@ -105,7 +106,7 @@ class ResourceLockRegistry:
                         if remaining <= 0:
                             os.close(fd)
                             raise TimeoutError(f"file lock timeout for {resource}")
-                        time.sleep(min(0.05, remaining))
+                        time.sleep(min(LOCK_POLL_INTERVAL_SECONDS, remaining))
                 acquired_fds.append(fd)
 
             yield

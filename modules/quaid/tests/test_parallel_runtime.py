@@ -54,3 +54,27 @@ def test_acquire_many_logs_close_failures(tmp_path: Path):
             pass
 
     assert any("Failed to close lock fd=" in str(call.args[0]) for call in log_warning.call_args_list)
+
+
+def test_acquire_many_uses_short_lock_poll_interval(tmp_path: Path):
+    reg = ResourceLockRegistry(tmp_path / "locks")
+    real_flock = fcntl.flock
+    sleep_calls = []
+    attempts = {"count": 0}
+
+    def _flock_once_blocking(fd, op):
+        if op == (fcntl.LOCK_EX | fcntl.LOCK_NB) and attempts["count"] == 0:
+            attempts["count"] += 1
+            raise BlockingIOError()
+        return real_flock(fd, op)
+
+    def _record_sleep(seconds):
+        sleep_calls.append(float(seconds))
+
+    with patch("core.runtime.parallel_runtime.fcntl.flock", side_effect=_flock_once_blocking), \
+         patch("core.runtime.parallel_runtime.time.sleep", side_effect=_record_sleep):
+        with reg.acquire_many(["resource-c"], timeout_seconds=1):
+            pass
+
+    assert sleep_calls
+    assert max(sleep_calls) <= 0.01
