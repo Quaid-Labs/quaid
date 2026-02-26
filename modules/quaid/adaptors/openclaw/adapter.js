@@ -764,7 +764,11 @@ function _readOpenClawConfig() {
       return {};
     }
     return JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-  } catch {
+  } catch (err) {
+    const msg = String(err?.message || err || "");
+    if (!msg.includes("ENOENT")) {
+      console.warn(`[quaid] openclaw config read failed; using gateway defaults: ${msg}`);
+    }
     return {};
   }
 }
