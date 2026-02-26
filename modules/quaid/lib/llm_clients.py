@@ -18,7 +18,6 @@ import json
 import hashlib
 import logging
 import os
-import sys
 import threading
 import time
 from typing import Dict, Optional, Tuple
@@ -503,10 +502,9 @@ def parse_json_response(text: str) -> Optional[object]:
     if parse_errors:
         content_len = len(cleaned)
         content_hash = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:16]
-        print(
+        logger.warning(
             "[llm_clients] parse_json_response failed: "
             f"{'; '.join(parse_errors[:3])}; content_len={content_len}; content_sha256_prefix={content_hash}",
-            file=sys.stderr,
         )
 
     return None
@@ -638,26 +636,23 @@ def validate_llm_output(parsed: object, schema_class: type, list_mode: bool = Tr
                     dropped_keys.append(k)
 
             if dropped_keys:
-                print(
+                logger.warning(
                     f"[llm_clients] Validation warning: dropping unknown keys {dropped_keys} "
-                    f"for schema {schema_class.__name__}",
-                    file=sys.stderr,
+                    f"for schema {schema_class.__name__}"
                 )
             if not mapped:
-                print(
+                logger.warning(
                     "[llm_clients] Validation warning: no recognized keys for schema "
-                    f"{schema_class.__name__} ({_item_log_summary(item)})",
-                    file=sys.stderr,
+                    f"{schema_class.__name__} ({_item_log_summary(item)})"
                 )
                 continue
 
             obj = schema_class(**mapped)
             results.append(obj)
         except (TypeError, ValueError) as e:
-            print(
+            logger.warning(
                 f"[llm_clients] Validation warning: {e} for schema {schema_class.__name__} "
-                f"({_item_log_summary(item)})",
-                file=sys.stderr,
+                f"({_item_log_summary(item)})"
             )
             continue
 
