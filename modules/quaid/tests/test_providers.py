@@ -148,6 +148,17 @@ class TestAnthropicLLMProvider:
             with pytest.raises(ConnectionError):
                 p.llm_call([{"role": "user", "content": "hi"}])
 
+    def test_llm_call_raises_on_non_object_json(self):
+        p = AnthropicLLMProvider(api_key="sk-test-key")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(["bad", "shape"]).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
+            with pytest.raises(RuntimeError, match="non-object JSON"):
+                p.llm_call([{"role": "user", "content": "hi"}])
+
 
 # ---------------------------------------------------------------------------
 # ClaudeCodeLLMProvider
@@ -230,6 +241,30 @@ class TestClaudeCodeLLMProvider:
 
         with patch("lib.providers.subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 120)):
             with pytest.raises(subprocess.TimeoutExpired):
+                p.llm_call([{"role": "user", "content": "hi"}])
+
+    def test_llm_call_raises_on_non_object_json(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(["bad", "shape"])
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="non-object JSON"):
+                p.llm_call([{"role": "user", "content": "hi"}])
+
+    def test_llm_call_raises_when_result_missing(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="missing result"):
                 p.llm_call([{"role": "user", "content": "hi"}])
 
     def test_oauth_env_file_fallback_used_when_failhard_disabled(self, tmp_path, monkeypatch):
