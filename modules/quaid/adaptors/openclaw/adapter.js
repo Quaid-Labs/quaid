@@ -808,21 +808,6 @@ function _getGatewayCredential(providers) {
 function _getAnthropicCredential() {
   return _getGatewayCredential(["anthropic"]);
 }
-function _getOpenAICredential() {
-  const gatewayKey = _getGatewayCredential(["openai-codex", "openai"]);
-  if (gatewayKey) return gatewayKey;
-  return void 0;
-}
-function _getProviderCredential(provider) {
-  const normalized = normalizeProvider(provider);
-  if (normalized === "openai") {
-    return _getOpenAICredential();
-  }
-  if (normalized === "anthropic") {
-    return _getAnthropicCredential();
-  }
-  return _getGatewayCredential([provider, normalized]);
-}
 function _readOpenClawConfig() {
   try {
     const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
