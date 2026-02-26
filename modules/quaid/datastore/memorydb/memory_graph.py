@@ -4307,7 +4307,7 @@ def create_edge(
         # Fallback: unknown relation → Fact (not Person)
         return "Fact"
 
-    def _find_entity(name: str) -> Optional[Node]:
+    def _find_entity(conn: sqlite3.Connection, name: str) -> Optional[Node]:
         """Find entity by exact name, then fuzzy match using SQL patterns.
 
         Resolution order:
@@ -4320,78 +4320,155 @@ def create_edge(
         entity nodes (Person/Place/Pet) have short names where pattern matching
         is more reliable than vector similarity for name resolution.
         """
-        node = graph.find_node_by_name(name)
-        if node:
-            return node
-        with graph._get_conn() as conn:
-            # Case-insensitive exact match
-            row = conn.execute(
-                "SELECT * FROM nodes WHERE LOWER(name) = LOWER(?) AND type IN ('Person', 'Place', 'Pet', 'Organization') LIMIT 1",
-                (name,)
-            ).fetchone()
-            if row:
-                return graph._row_to_node(row)
-            # Escape SQL LIKE wildcards in entity names to prevent unintended matches
-            escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            # Prefix match: "Alice" → "Alice Smith"
-            row = conn.execute(
-                "SELECT * FROM nodes WHERE name LIKE ? ESCAPE '\\' AND type IN ('Person', 'Place', 'Pet', 'Organization') ORDER BY LENGTH(name) LIMIT 1",
-                (escaped + "%",)
-            ).fetchone()
-            if row:
-                return graph._row_to_node(row)
-            # Suffix match: "Smith" → "Alice Smith"
-            row = conn.execute(
-                "SELECT * FROM nodes WHERE name LIKE ? ESCAPE '\\' AND type IN ('Person', 'Place', 'Pet', 'Organization') ORDER BY LENGTH(name) LIMIT 1",
-                ("%" + escaped,)
-            ).fetchone()
-            if row:
-                return graph._row_to_node(row)
+        row = conn.execute(
+            "SELECT * FROM nodes WHERE name = ? LIMIT 1",
+            (name,)
+        ).fetchone()
+        if row:
+            return graph._row_to_node(row)
+        # Case-insensitive exact match
+        row = conn.execute(
+            "SELECT * FROM nodes WHERE LOWER(name) = LOWER(?) AND type IN ('Person', 'Place', 'Pet', 'Organization') LIMIT 1",
+            (name,)
+        ).fetchone()
+        if row:
+            return graph._row_to_node(row)
+        # Escape SQL LIKE wildcards in entity names to prevent unintended matches
+        escaped = name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        # Prefix match: "Alice" → "Alice Smith"
+        row = conn.execute(
+            "SELECT * FROM nodes WHERE name LIKE ? ESCAPE '\\' AND type IN ('Person', 'Place', 'Pet', 'Organization') ORDER BY LENGTH(name) LIMIT 1",
+            (escaped + "%",)
+        ).fetchone()
+        if row:
+            return graph._row_to_node(row)
+        # Suffix match: "Smith" → "Alice Smith"
+        row = conn.execute(
+            "SELECT * FROM nodes WHERE name LIKE ? ESCAPE '\\' AND type IN ('Person', 'Place', 'Pet', 'Organization') ORDER BY LENGTH(name) LIMIT 1",
+            ("%" + escaped,)
+        ).fetchone()
+        if row:
+            return graph._row_to_node(row)
         return None
 
-    # Find or create subject entity
-    subject = _find_entity(subject_name)
-    subject_created = False
-    if not subject and create_missing_entities:
-        inferred_type = _infer_entity_type(subject_name, relation, is_subject=True)
-        subject = Node.create(type=inferred_type, name=subject_name)
-        subject.owner_id = owner_id
-        subject.status = "active"  # Entity nodes are structural, not claims needing review
-        graph.add_node(subject, embed=True)
-        subject_created = True
-    elif not subject:
-        return {"status": "error", "message": f"Subject entity '{subject_name}' not found"}
+    def _insert_entity(conn: sqlite3.Connection, node: Node) -> None:
+        if not node.embedding:
+            embed_text = node.name
+            if node.attributes:
+                embed_text += " " + " ".join(str(v) for v in node.attributes.values() if v)
+            node.embedding = graph.get_embedding(embed_text)
+        if not node.content_hash:
+            node.content_hash = content_hash(node.name)
 
-    # Find or create object entity
-    obj = _find_entity(object_name)
-    object_created = False
-    if not obj and create_missing_entities:
-        inferred_type = _infer_entity_type(object_name, relation, is_subject=False)
-        obj = Node.create(type=inferred_type, name=object_name)
-        obj.owner_id = owner_id
-        obj.status = "active"  # Entity nodes are structural, not claims needing review
-        graph.add_node(obj, embed=True)
-        object_created = True
-    elif not obj:
-        return {"status": "error", "message": f"Object entity '{object_name}' not found"}
+        conn.execute("""
+            INSERT OR REPLACE INTO nodes
+            (id, type, name, attributes, embedding, verified, pinned, confidence,
+             source, source_id, privacy, valid_from, valid_until,
+             created_at, updated_at, accessed_at, access_count, storage_strength, owner_id, session_id,
+             fact_type, knowledge_type, extraction_confidence, status, speaker, speaker_entity_id,
+             conversation_id, visibility_scope, sensitivity, provenance_confidence,
+             content_hash, superseded_by, confirmation_count, last_confirmed_at, keywords)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            node.id, node.type, node.name,
+            json.dumps(node.attributes),
+            graph._pack_embedding(node.embedding) if node.embedding else None,
+            1 if node.verified else 0,
+            1 if node.pinned else 0,
+            node.confidence,
+            node.source, node.source_id,
+            node.privacy,
+            node.valid_from, node.valid_until,
+            node.created_at or datetime.now().isoformat(),
+            datetime.now().isoformat(),
+            node.accessed_at or datetime.now().isoformat(),
+            node.access_count,
+            node.storage_strength,
+            node.owner_id,
+            node.session_id,
+            node.fact_type,
+            node.knowledge_type,
+            node.extraction_confidence,
+            node.status,
+            node.speaker,
+            node.speaker_entity_id,
+            node.conversation_id,
+            node.visibility_scope,
+            node.sensitivity,
+            node.provenance_confidence,
+            node.content_hash,
+            node.superseded_by,
+            node.confirmation_count,
+            node.last_confirmed_at,
+            node.keywords,
+        ))
+        if node.embedding and _lib_has_vec():
+            packed = graph._pack_embedding(node.embedding)
+            try:
+                graph._ensure_vec_table(conn, node.embedding)
+                conn.execute(
+                    "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+                    (node.id, packed),
+                )
+            except Exception:
+                pass
 
-    # Create edge
-    edge = Edge.create(
-        source_id=subject.id,
-        target_id=obj.id,
-        relation=relation,
-        source_fact_id=source_fact_id
-    )
-    edge_id = graph.add_edge(edge)
+    with graph._get_conn() as conn:
+        # Find or create subject entity
+        subject = _find_entity(conn, subject_name)
+        subject_created = False
+        if not subject and create_missing_entities:
+            inferred_type = _infer_entity_type(subject_name, relation, is_subject=True)
+            subject = Node.create(type=inferred_type, name=subject_name)
+            subject.owner_id = owner_id
+            subject.status = "active"  # Entity nodes are structural, not claims needing review
+            _insert_entity(conn, subject)
+            subject_created = True
+        elif not subject:
+            return {"status": "error", "message": f"Subject entity '{subject_name}' not found"}
 
-    return {
-        "edge_id": edge_id,
-        "status": "created",
-        "subject_id": subject.id,
-        "object_id": obj.id,
-        "subject_created": subject_created,
-        "object_created": object_created
-    }
+        # Find or create object entity
+        obj = _find_entity(conn, object_name)
+        object_created = False
+        if not obj and create_missing_entities:
+            inferred_type = _infer_entity_type(object_name, relation, is_subject=False)
+            obj = Node.create(type=inferred_type, name=object_name)
+            obj.owner_id = owner_id
+            obj.status = "active"  # Entity nodes are structural, not claims needing review
+            _insert_entity(conn, obj)
+            object_created = True
+        elif not obj:
+            return {"status": "error", "message": f"Object entity '{object_name}' not found"}
+
+        # Create edge in same transaction as any new entities.
+        edge = Edge.create(
+            source_id=subject.id,
+            target_id=obj.id,
+            relation=relation,
+            source_fact_id=source_fact_id
+        )
+        conn.execute("""
+            INSERT OR REPLACE INTO edges
+            (id, source_id, target_id, relation, attributes, weight,
+             valid_from, valid_until, created_at, source_fact_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            edge.id, edge.source_id, edge.target_id, edge.relation,
+            json.dumps(edge.attributes),
+            edge.weight,
+            edge.valid_from, edge.valid_until,
+            edge.created_at or datetime.now().isoformat(),
+            edge.source_fact_id,
+        ))
+
+        return {
+            "edge_id": edge.id,
+            "status": "created",
+            "subject_id": subject.id,
+            "object_id": obj.id,
+            "subject_created": subject_created,
+            "object_created": object_created
+        }
 
 
 def delete_edges_by_source_fact(source_fact_id: str) -> int:
