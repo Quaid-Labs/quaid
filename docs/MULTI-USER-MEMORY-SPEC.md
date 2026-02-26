@@ -470,7 +470,35 @@ To avoid compatibility shims later, seed these before launch:
 - Version policy engine decisions to support future migration and replay.
 - Keep trust/delegation TTL explicit and revocation-first.
 
-## 26. Domain Datastore Routing (Preseed Requirement)
+## 26. Enterprise/Compliance Forward-Seed
+
+To avoid painful retrofits for enterprise deployments, seed these contracts now:
+
+1. Data residency tagging:
+- add optional `region` / `residency_class` metadata for datastores and records.
+
+2. Right-to-delete propagation:
+- define deletion/tombstone propagation contract across source facts, derived summaries, edges, and indexes.
+
+3. Consent and purpose binding:
+- add `purpose_tag` / `consent_scope` in policy inputs so data collected for one purpose is not reused implicitly.
+
+4. Cache isolation:
+- require tenant/principal-aware cache keys for embedding/retrieval/reranker/session caches.
+
+5. Backup/restore scoping:
+- define encrypted backup metadata and tenant-scoped restore constraints.
+
+6. Break-glass admin access:
+- define explicit override flow with reason, approver, and post-access notification/audit.
+
+7. Output/log redaction sinks:
+- require redaction policy at notification/telemetry/debug log boundaries.
+
+8. Decision version pinning:
+- every policy decision record should include policy version and ruleset hash for replay/debug.
+
+## 27. Domain Datastore Routing (Preseed Requirement)
 
 Multi-user rollout requires explicit separation between:
 
