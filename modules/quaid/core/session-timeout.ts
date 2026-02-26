@@ -394,7 +394,11 @@ export class SessionTimeoutManager {
         const updatedAtMs = Date.parse(String(payload?.updatedAt || ""));
         const msgs = filterEligibleMessages(Array.isArray(payload?.messages) ? payload.messages : []);
         if (!sid || msgs.length === 0) {
-          try { fs.unlinkSync(lockedPath); } catch {}
+          try {
+            fs.unlinkSync(lockedPath);
+          } catch (unlinkErr: unknown) {
+            safeLog(this.logger, `[quaid][timeout] failed to delete invalid stale buffer claim ${lockedPath}: ${String((unlinkErr as Error)?.message || unlinkErr)}`);
+          }
           continue;
         }
         if (Number.isFinite(updatedAtMs) && now - updatedAtMs < staleMs) {
@@ -411,7 +415,11 @@ export class SessionTimeoutManager {
         });
         await this.extract(extractionMessages, sid);
         this.clearSession(sid);
-        try { fs.unlinkSync(lockedPath); } catch {}
+        try {
+          fs.unlinkSync(lockedPath);
+        } catch (unlinkErr: unknown) {
+          safeLog(this.logger, `[quaid][timeout] failed to delete processed stale buffer claim ${lockedPath}: ${String((unlinkErr as Error)?.message || unlinkErr)}`);
+        }
       } catch (err: unknown) {
         safeLog(this.logger, `[quaid][timeout] stale buffer recovery failed for ${filePath}: ${String((err as Error)?.message || err)}`);
         this.releaseBufferFile(lockedPath, filePath);
@@ -434,7 +442,9 @@ export class SessionTimeoutManager {
         try {
           const existing = JSON.parse(fs.readFileSync(signalPath, "utf8")) as PendingExtractionSignal;
           existingLabel = String(existing?.label || "Signal");
-        } catch {}
+        } catch (err: unknown) {
+          safeLog(this.logger, `[quaid][timeout] failed to parse existing extraction signal ${signalPath}: ${String((err as Error)?.message || err)}`);
+        }
         const incomingPriority = signalPriority(signal.label);
         const existingPriority = signalPriority(existingLabel);
         if (incomingPriority > existingPriority) {
@@ -469,14 +479,23 @@ export class SessionTimeoutManager {
       let signal: PendingExtractionSignal | null = null;
       try {
         signal = JSON.parse(fs.readFileSync(lockedPath, "utf8")) as PendingExtractionSignal;
-      } catch {
-        try { fs.unlinkSync(lockedPath); } catch {}
+      } catch (err: unknown) {
+        safeLog(this.logger, `[quaid][timeout] dropping malformed extraction signal ${lockedPath}: ${String((err as Error)?.message || err)}`);
+        try {
+          fs.unlinkSync(lockedPath);
+        } catch (unlinkErr: unknown) {
+          safeLog(this.logger, `[quaid][timeout] failed to delete malformed extraction signal ${lockedPath}: ${String((unlinkErr as Error)?.message || unlinkErr)}`);
+        }
         continue;
       }
       const sessionId = String(signal?.sessionId || path.basename(filePath, ".json")).trim();
       const label = String(signal?.label || "Signal");
       if (!sessionId) {
-        try { fs.unlinkSync(lockedPath); } catch {}
+        try {
+          fs.unlinkSync(lockedPath);
+        } catch (unlinkErr: unknown) {
+          safeLog(this.logger, `[quaid][timeout] failed to delete signal without session id ${lockedPath}: ${String((unlinkErr as Error)?.message || unlinkErr)}`);
+        }
         continue;
       }
       try {
