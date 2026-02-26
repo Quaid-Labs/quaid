@@ -33,6 +33,14 @@ _identity_mode_fallback_warned = False
 logger = logging.getLogger(__name__)
 
 
+def _is_fail_hard_enabled() -> bool:
+    try:
+        from lib.fail_policy import is_fail_hard_enabled
+        return bool(is_fail_hard_enabled())
+    except Exception:
+        return True
+
+
 def register_identity_resolver(owner: str, resolver: IdentityResolver) -> None:
     global _identity_resolver
     owner_name = str(owner or "").strip() or "unknown"
@@ -84,6 +92,10 @@ def identity_mode() -> str:
     try:
         mode = str(get_config().identity.mode or "single_user").strip().lower()
     except Exception as exc:
+        if _is_fail_hard_enabled():
+            raise RuntimeError(
+                "identity_mode config read failed while fail-hard mode is enabled"
+            ) from exc
         with _hooks_lock:
             if not _identity_mode_fallback_warned:
                 logger.warning(
