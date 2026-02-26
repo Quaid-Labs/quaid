@@ -215,3 +215,11 @@ def test_memory_service_search_passes_identity_scope_to_datastore(monkeypatch):
     assert captured["source_author_id"] == "<redacted>"
     assert captured["subject_entity_id"] == "user:a"
     assert captured["participant_entity_ids"] == ["user:a", "agent:bert"]
+
+
+def test_enrich_identity_payload_reports_resolver_return_type():
+    identity_runtime.clear_registrations()
+    identity_runtime.register_identity_resolver("memorydb", lambda payload: "not-a-dict")
+
+    with pytest.raises(RuntimeError, match="type=str"):
+        identity_runtime.enrich_identity_payload({"source_channel": "telegram"})
