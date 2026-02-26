@@ -15,9 +15,7 @@ import pytest
 from core.runtime.notify import (
     notify_memory_recall,
     notify_memory_extraction,
-    notify_janitor_summary,
     notify_docs_search,
-    notify_daily_memories,
     notify_user,
     get_last_channel,
     ChannelInfo,
@@ -288,97 +286,6 @@ class TestNotifyMemoryExtraction:
 
 
 # ---------------------------------------------------------------------------
-# notify_janitor_summary
-# ---------------------------------------------------------------------------
-
-class TestNotifyJanitorSummary:
-    """Tests for notify_janitor_summary() message formatting."""
-
-    def test_basic_summary(self):
-        """Shows duration and changes."""
-        metrics = {"total_duration_seconds": 45, "llm_calls": 12, "errors": 0}
-        changes = {"reviewed": 20, "kept": 18, "deleted": 2}
-        with _patch_notify_user() as mock_send:
-            result = notify_janitor_summary(metrics, changes)
-            assert result is True
-            msg = mock_send.call_args[0][0]
-            assert "Nightly Janitor Complete" in msg
-            assert "45s" in msg
-            assert "12" in msg  # LLM calls
-            assert "20" in msg  # reviewed
-
-    def test_duration_minutes(self):
-        """Duration >= 60s shown in minutes."""
-        metrics = {"total_duration_seconds": 120}
-        changes = {"kept": 5}
-        with _patch_notify_user() as mock_send:
-            notify_janitor_summary(metrics, changes)
-            msg = mock_send.call_args[0][0]
-            assert "2.0min" in msg
-
-    def test_errors_shown(self):
-        """Errors are displayed when present."""
-        metrics = {"total_duration_seconds": 10, "errors": 3}
-        changes = {}
-        with _patch_notify_user() as mock_send:
-            notify_janitor_summary(metrics, changes)
-            msg = mock_send.call_args[0][0]
-            assert "3" in msg
-
-    def test_no_changes_message(self):
-        """Empty changes dict shows 'No changes applied'."""
-        metrics = {"total_duration_seconds": 5}
-        changes = {}
-        with _patch_notify_user() as mock_send:
-            notify_janitor_summary(metrics, changes)
-            msg = mock_send.call_args[0][0]
-            assert "No changes applied" in msg
-
-    def test_all_change_types(self):
-        """All recognized change types are displayed."""
-        metrics = {"total_duration_seconds": 90}
-        changes = {
-            "reviewed": 10,
-            "kept": 8,
-            "deleted": 1,
-            "fixed": 2,
-            "merged": 3,
-            "edges_created": 5,
-            "contradictions_found": 1,
-            "duplicates_rejected": 4,
-            "decayed": 2,
-        }
-        with _patch_notify_user() as mock_send:
-            notify_janitor_summary(metrics, changes)
-            msg = mock_send.call_args[0][0]
-            assert "10" in msg  # reviewed
-            assert "8" in msg   # kept
-            assert "Merged" in msg
-            assert "Decayed" in msg
-            assert "Contradictions" in msg
-
-    def test_zero_counts_hidden(self):
-        """Zero-count changes are not shown."""
-        metrics = {"total_duration_seconds": 5}
-        changes = {"reviewed": 5, "deleted": 0, "merged": 0}
-        with _patch_notify_user() as mock_send:
-            notify_janitor_summary(metrics, changes)
-            msg = mock_send.call_args[0][0]
-            assert "Reviewed" in msg
-            # Deleted: 0 should not appear as a listed change
-            assert "Deleted" not in msg
-
-    def test_no_llm_calls_hidden(self):
-        """When llm_calls is 0, the line is not shown."""
-        metrics = {"total_duration_seconds": 5, "llm_calls": 0}
-        changes = {"kept": 1}
-        with _patch_notify_user() as mock_send:
-            notify_janitor_summary(metrics, changes)
-            msg = mock_send.call_args[0][0]
-            assert "LLM calls" not in msg
-
-
-# ---------------------------------------------------------------------------
 # notify_docs_search
 # ---------------------------------------------------------------------------
 
@@ -409,31 +316,6 @@ class TestNotifyDocsSearch:
             notify_docs_search("query", results)
             msg = mock_send.call_args[0][0]
             assert "3 more" in msg
-
-
-# ---------------------------------------------------------------------------
-# notify_daily_memories
-# ---------------------------------------------------------------------------
-
-class TestNotifyDailyMemories:
-    """Tests for notify_daily_memories() message formatting."""
-
-    def test_empty_returns_false(self):
-        assert notify_daily_memories([]) is False
-
-    def test_groups_by_category(self):
-        memories = [
-            {"text": "Quaid lives in Bali", "category": "fact"},
-            {"text": "Prefers dark mode", "category": "preference"},
-            {"text": "Another fact", "category": "fact"},
-        ]
-        with _patch_notify_user() as mock_send:
-            result = notify_daily_memories(memories)
-            assert result is True
-            msg = mock_send.call_args[0][0]
-            assert "3 memories" in msg
-            assert "Fact" in msg
-            assert "Preference" in msg
 
 
 # ---------------------------------------------------------------------------
