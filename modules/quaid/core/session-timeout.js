@@ -526,6 +526,7 @@ class SessionTimeoutManager {
       await this.recoverStaleBuffers();
     }).catch((err) => {
       safeLog(this.logger, `[quaid][timeout] worker tick failed: ${String(err?.message || err)}`);
+      if (this.failHard) throw err;
     });
   }
   signalPath(sessionId) {
