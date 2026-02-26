@@ -468,177 +468,198 @@ def apply_review_decisions(dry_run: bool = True,
         if not filepath.exists():
             continue
 
-        content = filepath.read_text()
-
-        # Detect protected regions so we can skip operations within them
-        _, protected_ranges = strip_protected_regions(content)
-
-        # First pass: resolve positions in original content (before any modifications)
-        # Then apply in reverse order to avoid position corruption
-        resolved_ops = []  # [(start_pos, end_pos, decision, section_content)]
-
-        for decision in file_decisions:
-            action = decision.get("action", "KEEP")
-            section = decision.get("section", "")
-            reason = decision.get("reason", "")
-
-            if action == "KEEP":
-                stats["kept"] += 1
-                continue
-
-            if action == "FLAG_BLOAT":
-                print(f"  BLOAT WARNING: {filename} - {reason}")
-                logger.warning(f"BLOAT: {filename} - {reason}")
-                stats["bloat_warnings"] += 1
-                continue
-
-            if not section:
-                continue
-
-            # Find the section in the file (simple header matching)
-            pattern = rf'^(#{{1,6}})\s+{re.escape(section)}\s*$'
-            match = re.search(pattern, content, re.MULTILINE)
-
-            if not match:
-                print(f"  Section not found: {section} in {filename}")
-                stats["errors"] += 1
-                continue
-
-            # Find section boundaries
-            start_pos = match.start()
-            header_level = len(match.group(1))
-
-            # Find next section of same or higher level
-            next_section = re.search(
-                rf'^#{{1,{header_level}}}\s+',
-                content[match.end():],
-                re.MULTILINE
-            )
-
-            if next_section:
-                end_pos = match.end() + next_section.start()
+        locked_file = None
+        try:
+            if dry_run:
+                content = filepath.read_text(encoding="utf-8")
             else:
-                end_pos = len(content)
+                locked_file = open(filepath, "r+", encoding="utf-8")
+                fcntl.flock(locked_file.fileno(), fcntl.LOCK_EX)
+                content = locked_file.read()
 
-            # Skip sections that overlap with protected regions
-            if section_overlaps_protected(start_pos, end_pos, protected_ranges):
-                print(f"  Skipping protected section: {section} in {filename}")
-                continue
+            # Detect protected regions so we can skip operations within them
+            _, protected_ranges = strip_protected_regions(content)
 
-            section_content = content[start_pos:end_pos].strip()
-            resolved_ops.append((start_pos, end_pos, decision, section_content, header_level))
+            # First pass: resolve positions in original content (before any modifications)
+            # Then apply in reverse order to avoid position corruption
+            resolved_ops = []  # [(start_pos, end_pos, decision, section_content)]
 
-        # Sort by start position descending so we modify from end of file backward
-        resolved_ops.sort(key=lambda x: x[0], reverse=True)
+            for decision in file_decisions:
+                action = decision.get("action", "KEEP")
+                section = decision.get("section", "")
+                reason = decision.get("reason", "")
 
-        for start_pos, end_pos, decision, section_content, header_level in resolved_ops:
-            action = decision.get("action", "KEEP")
-            section = decision.get("section", "")
-            reason = decision.get("reason", "")
+                if action == "KEEP":
+                    stats["kept"] += 1
+                    continue
 
-            try:
-                if action == "MOVE_TO_PROJECT":
-                    # Detection only — don't move anything.
-                    # Queue the finding for the agent to discuss with the user
-                    # on their next active conversation. The agent handles the
-                    # actual move after getting user approval.
-                    project_hint = decision.get("project_hint", section)
+                if action == "FLAG_BLOAT":
+                    print(f"  BLOAT WARNING: {filename} - {reason}")
+                    logger.warning(f"BLOAT: {filename} - {reason}")
+                    stats["bloat_warnings"] += 1
+                    continue
 
-                    if dry_run:
-                        print(f"  Detected project content: '{section}' in {filename} (hint: {project_hint})")
-                    else:
-                        print(f"  Detected project content: '{section}' in {filename}")
-                        try:
-                            _queue_project_review(
-                                section=section,
-                                source_file=filename,
-                                reason=reason,
-                                project_hint=project_hint,
-                                content_preview=section_content[:1000],
+                if not section:
+                    continue
+
+                # Find the section in the file (simple header matching)
+                pattern = rf'^(#{{1,6}})\s+{re.escape(section)}\s*$'
+                match = re.search(pattern, content, re.MULTILINE)
+
+                if not match:
+                    print(f"  Section not found: {section} in {filename}")
+                    stats["errors"] += 1
+                    continue
+
+                # Find section boundaries
+                start_pos = match.start()
+                header_level = len(match.group(1))
+
+                # Find next section of same or higher level
+                next_section = re.search(
+                    rf'^#{{1,{header_level}}}\s+',
+                    content[match.end():],
+                    re.MULTILINE
+                )
+
+                if next_section:
+                    end_pos = match.end() + next_section.start()
+                else:
+                    end_pos = len(content)
+
+                # Skip sections that overlap with protected regions
+                if section_overlaps_protected(start_pos, end_pos, protected_ranges):
+                    print(f"  Skipping protected section: {section} in {filename}")
+                    continue
+
+                section_content = content[start_pos:end_pos].strip()
+                resolved_ops.append((start_pos, end_pos, decision, section_content, header_level))
+
+            # Sort by start position descending so we modify from end of file backward
+            resolved_ops.sort(key=lambda x: x[0], reverse=True)
+
+            for start_pos, end_pos, decision, section_content, header_level in resolved_ops:
+                action = decision.get("action", "KEEP")
+                section = decision.get("section", "")
+                reason = decision.get("reason", "")
+
+                try:
+                    if action == "MOVE_TO_PROJECT":
+                        # Detection only — don't move anything.
+                        # Queue the finding for the agent to discuss with the user
+                        # on their next active conversation. The agent handles the
+                        # actual move after getting user approval.
+                        project_hint = decision.get("project_hint", section)
+
+                        if dry_run:
+                            print(f"  Detected project content: '{section}' in {filename} (hint: {project_hint})")
+                        else:
+                            print(f"  Detected project content: '{section}' in {filename}")
+                            try:
+                                _queue_project_review(
+                                    section=section,
+                                    source_file=filename,
+                                    reason=reason,
+                                    project_hint=project_hint,
+                                    content_preview=section_content[:1000],
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to queue project review: {e}")
+
+                        stats["project_detected"] = stats.get("project_detected", 0) + 1
+
+                    elif action == "MOVE_TO_DOCS":
+                        # Prefer MOVE_TO_PROJECT for project content
+                        target = decision.get("target", f"docs/{section.lower().replace(' ', '-')}.md")
+                        target_path = (_workspace_dir() / target).resolve()
+                        # Prevent path traversal from LLM-controlled target
+                        if not str(target_path).startswith(str(_workspace_dir().resolve())):
+                            logger.error(f"Path traversal blocked: {target}")
+                            stats["errors"] = stats.get("errors", 0) + 1
+                            continue
+
+                        if dry_run:
+                            print(f"  Would move '{section}' from {filename} -> {target}")
+                        else:
+                            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+                            doc_content = f"# {section}\n\n"
+                            doc_content += f"> Migrated from `{filename}` on {datetime.now().strftime('%Y-%m-%d')}\n"
+                            doc_content += f"> Reason: {reason}\n\n"
+                            doc_content += section_content
+
+                            target_path.write_text(doc_content)
+
+                            pointer = f"{'#' * header_level} {section}\n\n"
+                            pointer += f"**Detailed docs:** `{target}`\n"
+
+                            content = content[:start_pos] + pointer + content[end_pos:]
+
+                            logger.info(f"MOVE_TO_DOCS: '{section}' from {filename} -> {target}")
+                            print(f"  Moved '{section}' -> {target}")
+
+                        stats["moved_to_docs"] += 1
+
+                    elif action == "MOVE_TO_MEMORY":
+                        memory_type = decision.get("memory_type", "verified")
+
+                        if dry_run:
+                            print(f"  Would store '{section}' from {filename} as {memory_type} memory")
+                        else:
+                            cfg = get_config()
+                            try:
+                                default_owner = cfg.users.default_owner
+                            except Exception:
+                                default_owner = "default"
+                            get_memory_service().store(
+                                text=section_content[:2000],
+                                category="fact",
+                                source=f"workspace_audit:{filename}",
+                                owner_id=default_owner,
+                                verified=(memory_type == "verified"),
+                                pinned=(memory_type == "pinned"),
                             )
-                        except Exception as e:
-                            logger.warning(f"Failed to queue project review: {e}")
 
-                    stats["project_detected"] = stats.get("project_detected", 0) + 1
+                            content = content[:start_pos] + content[end_pos:]
 
-                elif action == "MOVE_TO_DOCS":
-                    # Prefer MOVE_TO_PROJECT for project content
-                    target = decision.get("target", f"docs/{section.lower().replace(' ', '-')}.md")
-                    target_path = (_workspace_dir() / target).resolve()
-                    # Prevent path traversal from LLM-controlled target
-                    if not str(target_path).startswith(str(_workspace_dir().resolve())):
-                        logger.error(f"Path traversal blocked: {target}")
-                        stats["errors"] = stats.get("errors", 0) + 1
-                        continue
+                            logger.info(f"MOVE_TO_MEMORY: '{section}' from {filename} -> {memory_type} memory")
+                            print(f"  Stored '{section}' as {memory_type} memory")
 
-                    if dry_run:
-                        print(f"  Would move '{section}' from {filename} -> {target}")
-                    else:
-                        target_path.parent.mkdir(parents=True, exist_ok=True)
+                        stats["moved_to_memory"] += 1
 
-                        doc_content = f"# {section}\n\n"
-                        doc_content += f"> Migrated from `{filename}` on {datetime.now().strftime('%Y-%m-%d')}\n"
-                        doc_content += f"> Reason: {reason}\n\n"
-                        doc_content += section_content
+                    elif action == "TRIM":
+                        if dry_run:
+                            print(f"  Would trim '{section}' from {filename}: {reason}")
+                        else:
+                            content = content[:start_pos] + content[end_pos:]
+                            logger.info(f"TRIM: '{section}' from {filename} - {reason}")
+                            print(f"  Trimmed '{section}' from {filename}")
 
-                        target_path.write_text(doc_content)
+                        stats["trimmed"] += 1
 
-                        pointer = f"{'#' * header_level} {section}\n\n"
-                        pointer += f"**Detailed docs:** `{target}`\n"
+                except Exception as e:
+                    logger.error(f"Error processing '{section}' in {filename}: {e}")
+                    print(f"  Error processing '{section}': {e}")
+                    stats["errors"] += 1
 
-                        content = content[:start_pos] + pointer + content[end_pos:]
-
-                        logger.info(f"MOVE_TO_DOCS: '{section}' from {filename} -> {target}")
-                        print(f"  Moved '{section}' -> {target}")
-
-                    stats["moved_to_docs"] += 1
-
-                elif action == "MOVE_TO_MEMORY":
-                    memory_type = decision.get("memory_type", "verified")
-
-                    if dry_run:
-                        print(f"  Would store '{section}' from {filename} as {memory_type} memory")
-                    else:
-                        cfg = get_config()
-                        try:
-                            default_owner = cfg.users.default_owner
-                        except Exception:
-                            default_owner = "default"
-                        result = get_memory_service().store(
-                            text=section_content[:2000],
-                            category="fact",
-                            source=f"workspace_audit:{filename}",
-                            owner_id=default_owner,
-                            verified=(memory_type == "verified"),
-                            pinned=(memory_type == "pinned"),
-                        )
-
-                        content = content[:start_pos] + content[end_pos:]
-
-                        logger.info(f"MOVE_TO_MEMORY: '{section}' from {filename} -> {memory_type} memory")
-                        print(f"  Stored '{section}' as {memory_type} memory")
-
-                    stats["moved_to_memory"] += 1
-
-                elif action == "TRIM":
-                    if dry_run:
-                        print(f"  Would trim '{section}' from {filename}: {reason}")
-                    else:
-                        content = content[:start_pos] + content[end_pos:]
-                        logger.info(f"TRIM: '{section}' from {filename} - {reason}")
-                        print(f"  Trimmed '{section}' from {filename}")
-
-                    stats["trimmed"] += 1
-
-            except Exception as e:
-                logger.error(f"Error processing '{section}' in {filename}: {e}")
-                print(f"  Error processing '{section}': {e}")
-                stats["errors"] += 1
-
-        # Write modified file
-        if not dry_run:
-            filepath.write_text(content)
-            print(f"  Updated {filename}")
+            # Write modified file
+            if not dry_run and locked_file is not None:
+                locked_file.seek(0)
+                locked_file.truncate(0)
+                locked_file.write(content)
+                locked_file.flush()
+                os.fsync(locked_file.fileno())
+                print(f"  Updated {filename}")
+        finally:
+            if locked_file is not None:
+                try:
+                    fcntl.flock(locked_file.fileno(), fcntl.LOCK_UN)
+                except Exception as unlock_err:
+                    logger.warning(f"Failed to unlock workspace file {filename}: {unlock_err}")
+                try:
+                    locked_file.close()
+                except Exception as close_err:
+                    logger.warning(f"Failed to close workspace file {filename}: {close_err}")
 
     # Update mtimes after successful application
     if not dry_run:
