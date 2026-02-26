@@ -1178,11 +1178,25 @@ function _spawnWithTimeout(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
 
     const timer = setTimeout(() => {
       if (!settled) {
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          // best-effort only
+        }
+        killTimer = setTimeout(() => {
+          if (!settled) {
+            try {
+              proc.kill("SIGKILL");
+            } catch {
+              // best-effort only
+            }
+          }
+        }, 5_000);
         settled = true;
-        proc.kill("SIGTERM");
         reject(new Error(`${label} timeout after ${timeoutMs}ms: ${command} ${args.join(" ")}`));
       }
     }, timeoutMs);
@@ -1193,6 +1207,10 @@ function _spawnWithTimeout(
       if (settled) { return; }
       settled = true;
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
       if (code === 0) { resolve(stdout.trim()); }
       else {
         const stderrText = stderr.trim();
@@ -1208,6 +1226,10 @@ function _spawnWithTimeout(
       if (settled) { return; }
       settled = true;
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
       reject(err);
     });
   });

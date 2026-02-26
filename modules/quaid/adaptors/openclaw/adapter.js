@@ -1020,10 +1020,22 @@ function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let killTimer = null;
     const timer = setTimeout(() => {
       if (!settled) {
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+        }
+        killTimer = setTimeout(() => {
+          if (!settled) {
+            try {
+              proc.kill("SIGKILL");
+            } catch {
+            }
+          }
+        }, 5e3);
         settled = true;
-        proc.kill("SIGTERM");
         reject(new Error(`${label} timeout after ${timeoutMs}ms: ${command} ${args.join(" ")}`));
       }
     }, timeoutMs);
@@ -1039,6 +1051,10 @@ function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON
       }
       settled = true;
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
       if (code === 0) {
         resolve(stdout.trim());
       } else {
@@ -1054,6 +1070,10 @@ function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON
       }
       settled = true;
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
       reject(err);
     });
   });
