@@ -21,6 +21,10 @@ Recommended framing:
 - Provider matrix smoke (`openai` + `anthropic`) is part of release gating.
 - Remaining compatibility shims are removed from active import paths (notably `core/docs/*` shim entrypoints).
 
+## Release Gate Doc
+
+- Canonical go/no-go checklist: `projects/quaid/operations/release-checklist.md`
+
 ## Known Issues To Publish
 
 - Some runtime/gateway restore flows can require a restart retry.
