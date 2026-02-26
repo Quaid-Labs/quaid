@@ -1,5 +1,6 @@
 import sys
 import sqlite3
+import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -244,6 +245,32 @@ def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):
     assert set(out.keys()) == {"a", "b"}
     assert out["a"].metrics["a"] == 1
     assert out["b"].metrics["b"] == 1
+
+
+def test_lifecycle_registry_run_many_times_out_pending_tasks(tmp_path):
+    registry = build_default_registry()
+
+    def _fast(_ctx):
+        return SimpleNamespace(metrics={"fast": 1}, logs=[], errors=[], data={})
+
+    def _slow(_ctx):
+        time.sleep(0.2)
+        return SimpleNamespace(metrics={"slow": 1}, logs=[], errors=[], data={})
+
+    registry.register("fast", _fast)
+    registry.register("slow", _slow)
+
+    out = registry.run_many(
+        [
+            ("fast", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path)),
+            ("slow", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path)),
+        ],
+        max_workers=2,
+        overall_timeout_seconds=0.05,
+    )
+    assert out["fast"].metrics.get("fast") == 1
+    assert out["slow"].errors
+    assert "timed out" in out["slow"].errors[0]
 
 
 def test_lifecycle_registry_requires_write_registration_when_enabled(tmp_path):

@@ -12,6 +12,7 @@ import logging
 import os
 import threading
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -113,20 +114,47 @@ class LifecycleRegistry:
         self,
         routines: List[tuple[str, RoutineContext]],
         max_workers: int = 3,
+        overall_timeout_seconds: Optional[float] = None,
     ) -> Dict[str, RoutineResult]:
         results: Dict[str, RoutineResult] = {}
         if not routines:
             return results
         worker_count = max(1, min(int(max_workers), len(routines)))
+        timeout_seconds = overall_timeout_seconds
+        if timeout_seconds is None:
+            try:
+                first_cfg = routines[0][1].cfg
+                parallel_cfg = get_parallel_config(first_cfg)
+                timeout_seconds = float(getattr(parallel_cfg, "lifecycle_prepass_timeout_seconds", 300) or 300)
+            except Exception:
+                timeout_seconds = 300.0
+        timeout_seconds = max(0.001, float(timeout_seconds))
+        deadline = time.monotonic() + timeout_seconds
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             fut_to_name = {
                 executor.submit(self.run, name, ctx): name
                 for name, ctx in routines
             }
-            for fut in as_completed(fut_to_name):
-                name = fut_to_name[fut]
+            pending = set(fut_to_name.keys())
+            while pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    for fut in list(pending):
+                        name = fut_to_name[fut]
+                        fut.cancel()
+                        results[name] = RoutineResult(
+                            errors=[f"Parallel lifecycle run timed out for {name} after {timeout_seconds:.2f}s"]
+                        )
+                        pending.discard(fut)
+                    break
                 try:
-                    results[name] = fut.result()
+                    done = next(as_completed(pending, timeout=remaining))
+                except TimeoutError:
+                    continue
+                name = fut_to_name[done]
+                pending.discard(done)
+                try:
+                    results[name] = done.result()
                 except Exception as exc:  # pragma: no cover
                     results[name] = RoutineResult(errors=[f"Parallel lifecycle run failed for {name}: {exc}"])
         return results
