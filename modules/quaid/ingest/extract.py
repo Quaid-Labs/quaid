@@ -81,28 +81,6 @@ def build_transcript(messages: List[Dict[str, str]]) -> str:
     return runtime_build_transcript(messages)
 
 
-def _chunk_messages(messages: List[Dict], max_chars: int = 30_000) -> List[List[Dict]]:
-    """Split messages into chunks, never splitting a single message."""
-    if not messages:
-        return []
-    chunks: List[List[Dict]] = []
-    current: List[Dict] = []
-    size = 0
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
-        msg_size = len(str(msg.get("role", ""))) + len(str(content)) + 10
-        if size + msg_size > max_chars and current:
-            chunks.append(current)
-            current, size = [], 0
-        current.append(msg)
-        size += msg_size
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 def _chunk_transcript_text(transcript: str, max_chars: int = 30_000) -> List[str]:
     """Split plain text transcript at turn boundaries."""
     if len(transcript) <= max_chars:
