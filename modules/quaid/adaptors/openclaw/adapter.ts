@@ -913,25 +913,6 @@ function _getAnthropicCredential(): string | undefined {
   return _getGatewayCredential(["anthropic"]);
 }
 
-function _getOpenAICredential(): string | undefined {
-  // OAuth/API creds managed by OpenClaw auth profiles only.
-  const gatewayKey = _getGatewayCredential(["openai-codex", "openai"]);
-  if (gatewayKey) return gatewayKey;
-
-  return undefined;
-}
-
-function _getProviderCredential(provider: string): string | undefined {
-  const normalized = normalizeProvider(provider);
-  if (normalized === "openai") {
-    return _getOpenAICredential();
-  }
-  if (normalized === "anthropic") {
-    return _getAnthropicCredential();
-  }
-  return _getGatewayCredential([provider, normalized]);
-}
-
 function _readOpenClawConfig(): any {
   try {
     const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");

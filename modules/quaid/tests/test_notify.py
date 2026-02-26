@@ -16,7 +16,6 @@ from core.runtime.notify import (
     notify_memory_recall,
     notify_memory_extraction,
     notify_janitor_summary,
-    notify_doc_update,
     notify_docs_search,
     notify_daily_memories,
     notify_user,
@@ -377,54 +376,6 @@ class TestNotifyJanitorSummary:
             notify_janitor_summary(metrics, changes)
             msg = mock_send.call_args[0][0]
             assert "LLM calls" not in msg
-
-
-# ---------------------------------------------------------------------------
-# notify_doc_update
-# ---------------------------------------------------------------------------
-
-class TestNotifyDocUpdate:
-    """Tests for notify_doc_update() message formatting."""
-
-    def test_basic_doc_update(self):
-        """Basic doc update notification includes filename and trigger."""
-        with _patch_notify_user() as mock_send:
-            result = notify_doc_update("/path/to/projects/quaid/janitor-reference.md", "janitor")
-            assert result is True
-            msg = mock_send.call_args[0][0]
-            assert "janitor-reference.md" in msg
-            assert "nightly maintenance" in msg
-
-    def test_summary_included(self):
-        """Summary is included when provided."""
-        with _patch_notify_user() as mock_send:
-            notify_doc_update("docs/foo.md", "compact", summary="Added new section")
-            msg = mock_send.call_args[0][0]
-            assert "Added new section" in msg
-
-    @patch("core.runtime.notify._notify_full_text", return_value=False)
-    def test_summary_truncated(self, _mock_ft):
-        """Long summary is truncated to 200 chars."""
-        long_summary = "A" * 300
-        with _patch_notify_user() as mock_send:
-            notify_doc_update("docs/foo.md", "compact", summary=long_summary)
-            msg = mock_send.call_args[0][0]
-            assert "..." in msg
-
-    def test_trigger_descriptions(self):
-        """All trigger types map to descriptions."""
-        triggers = {
-            "compact": "conversation compaction",
-            "reset": "session reset",
-            "janitor": "nightly maintenance",
-            "manual": "manual request",
-            "on-demand": "staleness detection",
-        }
-        for trigger, expected in triggers.items():
-            with _patch_notify_user() as mock_send:
-                notify_doc_update("docs/test.md", trigger)
-                msg = mock_send.call_args[0][0]
-                assert expected in msg
 
 
 # ---------------------------------------------------------------------------
