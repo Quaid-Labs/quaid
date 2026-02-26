@@ -176,6 +176,34 @@ class TestProcessAllEvents:
         assert result["processed"] == 0
 
 
+class TestProcessEventWatchdog:
+    def test_main_process_event_moves_file_to_failed_on_watchdog_timeout(self, setup_env, capsys):
+        import datastore.docsdb.project_updater as project_updater
+
+        tmp_path = setup_env
+        event_path = tmp_path / "projects" / "staging" / "watchdog-event.json"
+        event_path.write_text(json.dumps({
+            "project_hint": "test-project",
+            "files_touched": [],
+            "summary": "will timeout",
+            "trigger": "compact",
+        }))
+
+        argv = list(sys.argv)
+        try:
+            sys.argv = ["project_updater.py", "process-event", str(event_path)]
+            with patch.object(project_updater, "_watchdog_seconds", return_value=1), \
+                 patch.object(project_updater, "_run_with_watchdog", side_effect=TimeoutError("timed out")):
+                project_updater.main()
+        finally:
+            sys.argv = argv
+
+        failed_path = event_path.parent / "failed" / event_path.name
+        assert failed_path.exists()
+        out = capsys.readouterr().out
+        assert "watchdog_timeout" in out
+
+
 class TestRefreshProjectMd:
     def test_updates_file_list(self, setup_env):
         """Refresh regenerates the file list in PROJECT.md."""
@@ -269,4 +297,3 @@ class TestCascade:
         """_check_cascade was dead code and has been removed."""
         import datastore.docsdb.project_updater as project_updater
         assert not hasattr(project_updater, '_check_cascade')
-

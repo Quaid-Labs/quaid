@@ -147,3 +147,27 @@ def test_janitor_metrics_thread_safe_counters():
     assert summary["llm_calls"] == 200
     assert summary["warnings"] == 200
     assert summary["task_metrics"]["parallel"]["llm_calls"] == 200
+
+
+def test_find_contradictions_applies_remaining_budget_to_parallel_timeout(monkeypatch):
+    captured = {}
+
+    def _fake_parallel(batches, task_name, runner, overall_timeout_seconds=None):
+        captured["batches"] = batches
+        captured["task_name"] = task_name
+        captured["timeout"] = overall_timeout_seconds
+        return []
+
+    monkeypatch.setattr(ops, "_run_llm_batches_parallel", _fake_parallel)
+    monkeypatch.setattr(ops, "MAX_EXECUTION_TIME", 30)
+
+    metrics = JanitorMetrics()
+    ops.find_contradictions_from_pairs(
+        [{"text_a": "A", "text_b": "B"}],
+        metrics,
+        dry_run=True,
+    )
+
+    assert captured["task_name"] == "contradictions"
+    assert captured["timeout"] is not None
+    assert 0 < captured["timeout"] <= 30
