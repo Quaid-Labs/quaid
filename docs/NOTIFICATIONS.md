@@ -44,6 +44,8 @@ In OpenClaw, the adapter can queue delayed requests and HEARTBEAT instructions c
 
 If janitor appears unhealthy (never run, or stale), Quaid queues a delayed high-priority request through the adapter-owned delayed-request path instead of spamming immediate extraction notifications.
 
+Pending maintenance approval requests use immediate adapter notifications (cooldown-gated) so operators see approval backlog without waiting for delayed-request processing.
+
 ## Configuration
 
 Use either:

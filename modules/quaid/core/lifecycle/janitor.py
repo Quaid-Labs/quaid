@@ -214,8 +214,8 @@ def _release_lock():
             _lock_fd.close()
             _lock_fd = None
         _lock_file_path().unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        janitor_logger.warning(f"Failed to release janitor lock cleanly: {exc}")
 
 
 def _check_for_updates() -> Optional[Dict[str, str]]:

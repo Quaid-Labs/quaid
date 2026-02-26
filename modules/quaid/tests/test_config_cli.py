@@ -53,3 +53,33 @@ def test_set_builds_nested_paths():
 
     assert data["core"]["parallel"]["enabled"] is True
     assert data["retrieval"]["failHard"] is False
+
+
+def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeypatch, tmp_path):
+    path = tmp_path / "config" / "memory.json"
+    data = {
+        "ollama": {"embeddingModel": "nomic-embed-text"},
+        "capture": {"inactivity_timeout_minutes": 120},
+    }
+    answers = iter(
+        [
+            "4", "qwen3-embedding:8b",
+            "6", "60",
+            "13",
+        ]
+    )
+
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+    saved = {}
+
+    def _capture_save(save_path, save_data):
+        saved["path"] = save_path
+        saved["data"] = save_data
+
+    monkeypatch.setattr(config_cli, "_save_config", _capture_save)
+    changed = config_cli.interactive_edit(path, data)
+
+    assert changed is True
+    assert saved["path"] == path
+    assert saved["data"]["ollama"]["embeddingModel"] == "qwen3-embedding:8b"
+    assert saved["data"]["capture"]["inactivity_timeout_minutes"] == 60
