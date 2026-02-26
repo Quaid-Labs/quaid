@@ -1892,7 +1892,8 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
     let files: string[] = [];
     try {
       files = fs.readdirSync(journalDir).filter((f: string) => f.endsWith(".journal.md"));
-    } catch {
+    } catch (err: unknown) {
+      console.warn(`[quaid] Journal recall listing failed: ${String((err as Error)?.message || err)}`);
       return [];
     }
     const scored: MemoryResult[] = [];
@@ -1914,7 +1915,9 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
           similarity,
           via: "journal",
         });
-      } catch {}
+      } catch (err: unknown) {
+        console.warn(`[quaid] Journal recall read failed for ${file}: ${String((err as Error)?.message || err)}`);
+      }
     }
     scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
     return scored.slice(0, limit);
@@ -1978,7 +1981,9 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
               }
             }
           }
-        } catch {}
+        } catch (err: unknown) {
+          console.warn(`[quaid] PROJECT.md context preload failed for ${inferredProject}: ${String((err as Error)?.message || err)}`);
+        }
       }
       if (results.length === 0) {
         results.push({
@@ -2225,7 +2230,11 @@ const quaidPlugin = {
         if (journalMode === "full") {
           const journalDir = path.join(WORKSPACE, journalConfig.journalDir || "journal");
           let journalFiles: string[] = [];
-          try { journalFiles = fs.readdirSync(journalDir).filter((f: string) => f.endsWith('.journal.md')).sort(); } catch {}
+          try {
+            journalFiles = fs.readdirSync(journalDir).filter((f: string) => f.endsWith('.journal.md')).sort();
+          } catch (err: unknown) {
+            console.warn(`[quaid] Journal injection listing failed: ${String((err as Error)?.message || err)}`);
+          }
 
           let journalContent = '';
           for (const file of journalFiles) {
@@ -2234,7 +2243,9 @@ const quaidPlugin = {
               if (content.trim()) {
                 journalContent += `\n\n--- ${file} ---\n${content}`;
               }
-            } catch {}
+            } catch (err: unknown) {
+              console.warn(`[quaid] Journal injection read failed for ${file}: ${String((err as Error)?.message || err)}`);
+            }
           }
 
           if (journalContent) {

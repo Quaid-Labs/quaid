@@ -1651,7 +1651,8 @@ const knowledgeEngine = createKnowledgeEngine({
     let files = [];
     try {
       files = fs.readdirSync(journalDir).filter((f) => f.endsWith(".journal.md"));
-    } catch {
+    } catch (err) {
+      console.warn(`[quaid] Journal recall listing failed: ${String(err?.message || err)}`);
       return [];
     }
     const scored = [];
@@ -1673,7 +1674,8 @@ const knowledgeEngine = createKnowledgeEngine({
           similarity,
           via: "journal"
         });
-      } catch {
+      } catch (err) {
+        console.warn(`[quaid] Journal recall read failed for ${file}: ${String(err?.message || err)}`);
       }
     }
     scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
@@ -1735,7 +1737,8 @@ const knowledgeEngine = createKnowledgeEngine({
               }
             }
           }
-        } catch {
+        } catch (err) {
+          console.warn(`[quaid] PROJECT.md context preload failed for ${inferredProject}: ${String(err?.message || err)}`);
         }
       }
       if (results.length === 0) {
@@ -1898,7 +1901,8 @@ const quaidPlugin = {
             let journalFiles = [];
             try {
               journalFiles = fs.readdirSync(journalDir).filter((f) => f.endsWith(".journal.md")).sort();
-            } catch {
+            } catch (err) {
+              console.warn(`[quaid] Journal injection listing failed: ${String(err?.message || err)}`);
             }
             let journalContent = "";
             for (const file of journalFiles) {
@@ -1910,7 +1914,8 @@ const quaidPlugin = {
 --- ${file} ---
 ${content}`;
                 }
-              } catch {
+              } catch (err) {
+                console.warn(`[quaid] Journal injection read failed for ${file}: ${String(err?.message || err)}`);
               }
             }
             if (journalContent) {
