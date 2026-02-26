@@ -51,6 +51,7 @@ class LifecycleRegistry:
         self._routines: Dict[str, LifecycleRoutine] = {}
         self._owners: Dict[str, str] = {}
         self._write_resources: Dict[str, List[str]] = {}
+        self._registry_guard = threading.Lock()
         self._lock_registries: Dict[str, ResourceLockRegistry] = {}
         self._lock_registries_guard = threading.Lock()
         self._llm_executor: Optional[ThreadPoolExecutor] = None
@@ -64,25 +65,28 @@ class LifecycleRegistry:
         owner: str = "unknown",
         write_resources: Optional[List[str]] = None,
     ) -> None:
-        existing = self._routines.get(name)
-        if existing is not None:
-            existing_owner = self._owners.get(name, "unknown")
-            # Allow exact idempotent re-registration from same owner.
-            if existing is routine and existing_owner == owner:
-                return
-            raise ValueError(
-                f"Lifecycle routine '{name}' already registered by '{existing_owner}', "
-                f"cannot re-register from '{owner}'"
-            )
-        self._routines[name] = routine
-        self._owners[name] = owner
-        self._write_resources[name] = list(write_resources or [])
+        with self._registry_guard:
+            existing = self._routines.get(name)
+            if existing is not None:
+                existing_owner = self._owners.get(name, "unknown")
+                # Allow exact idempotent re-registration from same owner.
+                if existing is routine and existing_owner == owner:
+                    return
+                raise ValueError(
+                    f"Lifecycle routine '{name}' already registered by '{existing_owner}', "
+                    f"cannot re-register from '{owner}'"
+                )
+            self._routines[name] = routine
+            self._owners[name] = owner
+            self._write_resources[name] = list(write_resources or [])
 
     def has(self, name: str) -> bool:
-        return name in self._routines
+        with self._registry_guard:
+            return name in self._routines
 
     def run(self, name: str, ctx: RoutineContext) -> RoutineResult:
-        routine = self._routines.get(name)
+        with self._registry_guard:
+            routine = self._routines.get(name)
         if routine is None:
             return RoutineResult(errors=[f"No lifecycle routine registered: {name}"])
         bound_ctx = self._bind_core_runtime(ctx)
@@ -224,7 +228,8 @@ class LifecycleRegistry:
         }
 
     def _resolved_write_resources(self, name: str, ctx: RoutineContext) -> List[str]:
-        declared = self._write_resources.get(name) or _DEFAULT_WRITE_RESOURCES.get(name, [])
+        with self._registry_guard:
+            declared = self._write_resources.get(name) or _DEFAULT_WRITE_RESOURCES.get(name, [])
         out: List[str] = []
         for raw in declared:
             token = str(raw or "").strip()
