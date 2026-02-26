@@ -235,3 +235,10 @@ class TestDocsSearchFiltering:
 
         assert len(results) == 1
         assert "/projects/quaid/" in results[0]["source"]
+
+    @patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True)
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=None)
+    def test_search_docs_embedding_failure_raises_when_failhard_enabled(self, _embed, _failhard, tmp_path):
+        rag = _make_rag(tmp_path)
+        with pytest.raises(RuntimeError, match="failHard is enabled"):
+            rag.search_docs("memory", limit=5)

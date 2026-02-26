@@ -19,6 +19,7 @@ from lib.config import get_db_path
 from lib.database import get_connection as _lib_get_connection
 from lib.embeddings import get_embedding as _lib_get_embedding, pack_embedding as _lib_pack_embedding, unpack_embedding as _lib_unpack_embedding
 from lib.similarity import cosine_similarity as _lib_cosine_similarity
+from lib.fail_policy import is_fail_hard_enabled
 from lib.runtime_context import get_workspace_dir
 
 # Configuration — resolved from config system
@@ -357,6 +358,11 @@ class DocsRAG:
         """
         query_embedding = _lib_get_embedding(query)
         if not query_embedding:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    "Doc RAG embedding failed while failHard is enabled; "
+                    "no degraded docs fallback allowed."
+                )
             print("Failed to get embedding for query", file=sys.stderr)
             return []
 

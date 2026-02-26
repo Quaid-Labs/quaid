@@ -340,6 +340,11 @@ class ClaudeCodeLLMProvider(LLMProvider):
                         )
                     if "CLAUDE_CODE_OAUTH_TOKEN" in env:
                         break
+        if "CLAUDE_CODE_OAUTH_TOKEN" not in env and is_fail_hard_enabled():
+            raise RuntimeError(
+                "CLAUDE_CODE_OAUTH_TOKEN is required while failHard is enabled; "
+                "fallback token loading is disabled."
+            )
 
         start_time = time.time()
         try:

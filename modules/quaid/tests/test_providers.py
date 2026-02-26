@@ -172,8 +172,9 @@ class TestClaudeCodeLLMProvider:
         assert profiles["deep"]["model"] == "claude-opus-4-6"
         assert profiles["fast"]["model"] == "claude-haiku-4-5"
 
-    def test_llm_call_mock_subprocess(self):
+    def test_llm_call_mock_subprocess(self, monkeypatch):
         """Mock subprocess to verify claude CLI invocation."""
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
         p = ClaudeCodeLLMProvider()
         mock_result = MagicMock()
         mock_result.returncode = 0
@@ -206,8 +207,9 @@ class TestClaudeCodeLLMProvider:
             idx = cmd.index("--model")
             assert cmd[idx + 1] == "opus"
 
-    def test_llm_call_raises_on_cli_failure(self):
+    def test_llm_call_raises_on_cli_failure(self, monkeypatch):
         """Failed claude CLI should raise instead of returning a soft-null response."""
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
         p = ClaudeCodeLLMProvider()
         mock_result = MagicMock()
         mock_result.returncode = 1
@@ -220,8 +222,9 @@ class TestClaudeCodeLLMProvider:
                     [{"role": "user", "content": "hi"}],
                 )
 
-    def test_llm_call_raises_on_timeout(self):
+    def test_llm_call_raises_on_timeout(self, monkeypatch):
         """Timeout should propagate."""
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
         import subprocess
         p = ClaudeCodeLLMProvider()
 
@@ -261,9 +264,9 @@ class TestClaudeCodeLLMProvider:
         with patch("lib.providers.is_fail_hard_enabled", return_value=True), \
              patch("lib.adapter.get_adapter", return_value=MagicMock(quaid_home=lambda: tmp_path)), \
              patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
-            p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
-            passed_env = mock_run.call_args.kwargs["env"]
-            assert "CLAUDE_CODE_OAUTH_TOKEN" not in passed_env
+            with pytest.raises(RuntimeError, match="CLAUDE_CODE_OAUTH_TOKEN is required"):
+                p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+            mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
