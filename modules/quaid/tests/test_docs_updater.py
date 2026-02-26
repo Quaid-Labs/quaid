@@ -634,3 +634,26 @@ class TestAuditLogFallback:
 
             assert rows == []
             assert "Failed reading docs update audit log" in caplog.text
+
+
+class TestDriftDetectionFallback:
+    def test_detect_drift_logs_git_timestamp_failures(self, tmp_path, caplog):
+        cfg = _make_test_config(
+            source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
+        )
+        doc = tmp_path / "docs" / "doc.md"
+        src = tmp_path / "src.py"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n")
+        src.write_text("print('x')\n")
+
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             _adapter_patch(tmp_path), \
+             patch("datastore.docsdb.updater.subprocess.run", side_effect=RuntimeError("git unavailable")):
+            import datastore.docsdb.updater as updater
+
+            caplog.set_level("WARNING")
+            out = updater.detect_drift_from_git()
+
+        assert out == []
+        assert "Failed reading doc commit timestamp" in caplog.text

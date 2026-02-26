@@ -1275,8 +1275,8 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
         registry = DocsRegistry()
         for doc_path, sources in registry.get_source_mappings().items():
             doc_to_sources[doc_path] = sources
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Drift detection using config-only mappings; registry unavailable: %s", exc)
 
     source_mapping = cfg.docs.source_mapping
     if source_mapping:
@@ -1299,7 +1299,8 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                 capture_output=True, text=True, cwd=str(_workspace()), timeout=10
             ).stdout.strip()
             doc_commit_time = int(doc_commit_ts) if doc_commit_ts else 0
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed reading doc commit timestamp for %s: %s", doc_path, exc)
             doc_commit_time = 0
 
         # Check each source file
@@ -1318,7 +1319,8 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                     capture_output=True, text=True, cwd=str(_workspace()), timeout=10
                 ).stdout.strip()
                 src_commit_time = int(src_commit_ts) if src_commit_ts else 0
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed reading source commit timestamp for %s: %s", src_path, exc)
                 continue
 
             if src_commit_time > doc_commit_time:
@@ -1341,6 +1343,11 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                     else:
                         total_commits_behind += 1
                 except Exception:
+                    logger.warning(
+                        "Failed counting commits behind for %s relative to %s; using conservative fallback",
+                        src_path,
+                        doc_path,
+                    )
                     total_commits_behind += 1
 
                 # Lines changed
@@ -1354,7 +1361,7 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                         nums = re.findall(r'(\d+)\s+(?:insertion|deletion)', line)
                         total_lines_changed += sum(int(n) for n in nums)
                 except Exception:
-                    pass
+                    logger.warning("Failed parsing changed-line stats for %s", src_path)
 
         if stale_sources:
             days_stale = (time.time() - doc_commit_time) / 86400 if doc_commit_time > 0 else 0
