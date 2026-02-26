@@ -56,6 +56,22 @@ def _make_graph_with_data(tmp_path, items=None):
     return graph
 
 
+def _make_graph_with_edge(tmp_path):
+    """Create a graph containing one edge and return graph, source node id, edge id."""
+    from datastore.memorydb.memory_graph import MemoryGraph, Node, Edge
+
+    db_file = tmp_path / "search_edge_test.db"
+    with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+        graph = MemoryGraph(db_path=db_file)
+        src = Node.create(type="Fact", name="Source node", owner_id="quaid", status="approved")
+        dst = Node.create(type="Fact", name="Target node", owner_id="quaid", status="approved")
+        graph.add_node(src, embed=True)
+        graph.add_node(dst, embed=True)
+        edge = Edge.create(source_id=src.id, target_id=dst.id, relation="related_to")
+        graph.add_edge(edge)
+    return graph, src.id, edge.id
+
+
 # ---------------------------------------------------------------------------
 # search_fts
 # ---------------------------------------------------------------------------
@@ -248,3 +264,25 @@ class TestHasOwnerPronoun:
     def test_i_pronoun(self):
         from datastore.memorydb.memory_graph import has_owner_pronoun
         assert has_owner_pronoun("I like coffee") is True
+
+
+class TestRowAttributeParsing:
+    def test_malformed_node_attributes_dont_crash(self, tmp_path):
+        graph = _make_graph_with_data(tmp_path)
+        with graph._get_conn() as conn:
+            row = conn.execute("SELECT id FROM nodes LIMIT 1").fetchone()
+        assert row is not None
+        node_id = row[0]
+        with graph._get_conn() as conn:
+            conn.execute("UPDATE nodes SET attributes = ? WHERE id = ?", ("{bad json", node_id))
+        node = graph.get_node(node_id)
+        assert node is not None
+        assert node.attributes == {}
+
+    def test_malformed_edge_attributes_dont_crash(self, tmp_path):
+        graph, node_id, edge_id = _make_graph_with_edge(tmp_path)
+        with graph._get_conn() as conn:
+            conn.execute("UPDATE edges SET attributes = ? WHERE id = ?", ("{bad json", edge_id))
+        edges = graph.get_edges(node_id, direction="out")
+        assert len(edges) == 1
+        assert edges[0].attributes == {}
