@@ -37,6 +37,7 @@ FAST_REASONING_TIMEOUT = 120
 _models_loaded: bool = False
 _fast_reasoning_model: str = ""
 _deep_reasoning_model: str = ""
+_model_config_lock = threading.Lock()
 
 
 def _load_model_config():
@@ -44,17 +45,20 @@ def _load_model_config():
     global _models_loaded, _fast_reasoning_model, _deep_reasoning_model
     if _models_loaded:
         return
-    try:
-        from config import get_config
-        cfg = get_config()
-        _fast_reasoning_model = cfg.models.fast_reasoning
-        _deep_reasoning_model = cfg.models.deep_reasoning
-        _models_loaded = True  # Only after success — allows retry on transient failures
-    except ImportError:
-        pass  # Config not available (test environment) — defaults set by provider
-    except Exception as e:
-        print(f"[llm_clients] FATAL: Config loaded but model resolution failed: {e}", file=sys.stderr)
-        raise
+    with _model_config_lock:
+        if _models_loaded:
+            return
+        try:
+            from config import get_config
+            cfg = get_config()
+            _fast_reasoning_model = cfg.models.fast_reasoning
+            _deep_reasoning_model = cfg.models.deep_reasoning
+            _models_loaded = True  # Only after success — allows retry on transient failures
+        except ImportError:
+            pass  # Config not available (test environment) — defaults set by provider
+        except Exception as e:
+            print(f"[llm_clients] FATAL: Config loaded but model resolution failed: {e}", file=sys.stderr)
+            raise
 
 
 # Token usage accumulator — reset per janitor run, read at end for cost report
@@ -78,6 +82,7 @@ _PRICING: Dict[str, Dict[str, float]] = {
 }
 _pricing_loaded: bool = False
 _pricing_error_logged: bool = False
+_pricing_lock = threading.Lock()
 
 
 def _load_pricing():
@@ -85,23 +90,26 @@ def _load_pricing():
     global _pricing_loaded, _pricing_error_logged
     if _pricing_loaded:
         return
-    try:
-        from config import get_config
-        get_config()
-        # Config uses snake_case; pricing would be under models section
-        # but MemoryConfig doesn't expose raw_config — use ModelConfig fields instead.
-        # Custom pricing can be added to _PRICING dict directly or via env overrides.
-        _pricing_loaded = True
-    except ImportError:
-        _pricing_loaded = True
-    except Exception as exc:
-        if is_fail_hard_enabled():
-            raise RuntimeError(
-                "Failed to load pricing configuration while failHard is enabled."
-            ) from exc
-        if not _pricing_error_logged:
-            logger.warning("Pricing config load failed; using built-in defaults: %s", exc)
-            _pricing_error_logged = True
+    with _pricing_lock:
+        if _pricing_loaded:
+            return
+        try:
+            from config import get_config
+            get_config()
+            # Config uses snake_case; pricing would be under models section
+            # but MemoryConfig doesn't expose raw_config — use ModelConfig fields instead.
+            # Custom pricing can be added to _PRICING dict directly or via env overrides.
+            _pricing_loaded = True
+        except ImportError:
+            _pricing_loaded = True
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    "Failed to load pricing configuration while failHard is enabled."
+                ) from exc
+            if not _pricing_error_logged:
+                logger.warning("Pricing config load failed; using built-in defaults: %s", exc)
+                _pricing_error_logged = True
 
 
 def reset_token_usage():
