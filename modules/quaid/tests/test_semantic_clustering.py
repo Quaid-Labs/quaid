@@ -31,5 +31,5 @@ def test_classify_node_semantic_cluster_logs_fallback_for_unknown_response(caplo
     node = Node.create(type="Fact", name="zxqvplrtn")
     with patch.object(semantic_clustering, "call_ollama_clustering", return_value="unknown-label"):
         cluster = semantic_clustering.classify_node_semantic_cluster(node)
-    assert cluster == "technology"
+    assert cluster == "uncategorized"
     assert "semantic clustering fallback used" in caplog.text
