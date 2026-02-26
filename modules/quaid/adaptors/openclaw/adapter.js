@@ -1782,6 +1782,9 @@ const knowledgeEngine = createKnowledgeEngine({
     try {
       files = fs.readdirSync(journalDir).filter((f) => f.endsWith(".journal.md"));
     } catch (err) {
+      if (isFailHardEnabled()) {
+        throw new Error("[quaid] Journal recall listing failed under failHard", { cause: err });
+      }
       console.warn(`[quaid] Journal recall listing failed: ${String(err?.message || err)}`);
       return [];
     }
@@ -1805,6 +1808,9 @@ const knowledgeEngine = createKnowledgeEngine({
           via: "journal"
         });
       } catch (err) {
+        if (isFailHardEnabled()) {
+          throw new Error(`[quaid] Journal recall read failed for ${file} under failHard`, { cause: err });
+        }
         console.warn(`[quaid] Journal recall read failed for ${file}: ${String(err?.message || err)}`);
       }
     }
