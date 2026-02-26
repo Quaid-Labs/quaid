@@ -93,7 +93,7 @@ Rewrite into valid JSON matching the required schema exactly.`;
       } catch (err2) {
         const reason2 = err2?.message || String(err2);
         throw new Error(
-          `Fast recall prepass failed to produce valid structured output after retry (${label}). Use a stronger fast model (e.g. Haiku/GPT-class) or set retrieval.routerFailOpen=true. Last validation error: ${reason2}`
+          `Fast recall prepass failed to produce valid structured output after retry (${label}). Use a stronger fast model (e.g. Haiku/GPT-class) or set retrieval.routerFailOpen=true. First validation error: ${reason}. Retry validation error: ${reason2}`
         );
       }
     }
