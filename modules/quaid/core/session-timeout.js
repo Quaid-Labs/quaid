@@ -834,6 +834,9 @@ class SessionTimeoutManager {
       this.writeQuaidLog("session_messages_appended", sessionId, { appended: sanitized.length });
     } catch (err) {
       this.writeQuaidLog("session_message_append_error", sessionId, { error: String(err?.message || err) });
+      if (this.failHard) {
+        throw err;
+      }
     }
   }
   readSessionMessages(sessionId) {
@@ -913,6 +916,9 @@ class SessionTimeoutManager {
       });
     } catch (err) {
       this.writeQuaidLog("session_cursor_write_error", sessionId, { error: String(err?.message || err) });
+      if (this.failHard) {
+        throw err;
+      }
     }
   }
   filterReplayedMessages(sessionId, incoming) {
