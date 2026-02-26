@@ -629,8 +629,20 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     def _scope_policy(scope: str) -> str:
         try:
             policy = str(_cfg.janitor.approval_policies.get(scope, "auto")).strip().lower()
-            return policy if policy in ("auto", "ask", "dry_run") else "auto"
-        except Exception:
+            if policy not in ("auto", "ask", "dry_run"):
+                janitor_logger.warning(
+                    "Invalid approval policy for scope '%s': %r; defaulting to auto",
+                    scope,
+                    policy,
+                )
+                return "auto"
+            return policy
+        except Exception as exc:
+            janitor_logger.warning(
+                "Failed reading approval policy for scope '%s'; defaulting to auto: %s",
+                scope,
+                exc,
+            )
             return "auto"
 
     def _can_apply_scope(scope: str, summary: str) -> bool:
