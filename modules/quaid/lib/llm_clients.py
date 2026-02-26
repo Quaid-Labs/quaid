@@ -445,7 +445,13 @@ def call_deep_reasoning(prompt: str, system_prompt: str = "Respond with JSON onl
     Returns (None, duration) only for transient LLM failures after retries.
     """
     _load_model_config()
-    target_model = model or _deep_reasoning_model
+    # Benchmark/operator override: force all deep-tier janitor calls to a
+    # known-safe model when workspace/provider constraints require it.
+    forced_model = str(os.environ.get("QUAID_JANITOR_REVIEW_MODEL", "")).strip()
+    if forced_model:
+        target_model = forced_model
+    else:
+        target_model = model or _deep_reasoning_model
     return call_llm(
         system_prompt=system_prompt,
         user_message=prompt,
