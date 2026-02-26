@@ -1346,6 +1346,7 @@ const projectCatalogReader = createProjectCatalogReader({
   workspace: WORKSPACE,
   fs,
   path,
+  isFailHardEnabled,
 });
 const getProjectNames = () => projectCatalogReader.getProjectNames();
 const getProjectCatalog = () => projectCatalogReader.getProjectCatalog();

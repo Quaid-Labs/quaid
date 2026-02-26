@@ -1178,7 +1178,8 @@ async function callDocsRegistry(command, args = []) {
 const projectCatalogReader = createProjectCatalogReader({
   workspace: WORKSPACE,
   fs,
-  path
+  path,
+  isFailHardEnabled
 });
 const getProjectNames = () => projectCatalogReader.getProjectNames();
 const getProjectCatalog = () => projectCatalogReader.getProjectCatalog();

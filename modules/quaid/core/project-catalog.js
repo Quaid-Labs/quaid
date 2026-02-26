@@ -36,13 +36,28 @@ function getProjectDescriptionFromProjectMd(deps, homeDir) {
   }
 }
 function createProjectCatalogReader(deps) {
+  function shouldFailHard() {
+    try {
+      return deps.isFailHardEnabled?.() === true;
+    } catch {
+      return false;
+    }
+  }
+  function handleCatalogError(context, err) {
+    const detail = String(err?.message || err);
+    if (shouldFailHard()) {
+      const cause = err instanceof Error ? err : new Error(detail);
+      throw new Error(`[quaid] project catalog: ${context}: ${detail}`, { cause });
+    }
+    warnCatalog(`[quaid] project catalog: ${context}: ${detail}`);
+  }
   function getProjectNames() {
     try {
       const configPath = deps.path.join(deps.workspace, "config/memory.json");
       const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
       return Object.keys(configData?.projects?.definitions || {});
     } catch (err) {
-      warnCatalog(`[quaid] project catalog: failed to load project names: ${String(err?.message || err)}`);
+      handleCatalogError("failed to load project names", err);
       return [];
     }
   }
@@ -56,7 +71,7 @@ function createProjectCatalogReader(deps) {
         return { name, description };
       });
     } catch (err) {
-      warnCatalog(`[quaid] project catalog: failed to load full catalog: ${String(err?.message || err)}`);
+      handleCatalogError("failed to load full catalog", err);
       return getProjectNames().map((name) => ({ name, description: "No description" }));
     }
   }
