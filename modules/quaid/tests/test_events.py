@@ -301,3 +301,15 @@ def test_emit_event_recovers_on_malformed_queue_when_not_fail_hard(monkeypatch, 
     payload = json.loads(queue_path.read_text(encoding="utf-8"))
     queued = payload.get("events") or []
     assert len(queued) == 1
+
+
+def test_emit_event_raises_on_chmod_failure_when_fail_hard(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    import core.runtime.events as events
+
+    monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(events.os, "chmod", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("no chmod")))
+
+    with pytest.raises(RuntimeError, match="fail-hard mode"):
+        emit_event(name="session.reset", payload={"reason": "chmod-fail"}, source="pytest")

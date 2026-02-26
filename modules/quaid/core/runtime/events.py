@@ -179,6 +179,10 @@ def _write_json(path: Path, payload: Any) -> None:
         os.chmod(path, 0o600)
     except Exception as exc:
         logger.warning("Failed to apply chmod 600 to %s: %s", path, exc)
+        if _is_fail_hard_enabled():
+            raise RuntimeError(
+                f"Failed to chmod event-bus JSON file while fail-hard mode is enabled: {path}"
+            ) from exc
 
 
 def _append_jsonl(path: Path, payload: Any) -> None:
