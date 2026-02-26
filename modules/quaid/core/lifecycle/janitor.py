@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -387,6 +388,23 @@ def _pending_approvals_md_path() -> Path:
     return p
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent)) as tmp:
+        tmp.write(text)
+        tmp.flush()
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    _atomic_write_text(path, json.dumps(payload, indent=2) + "\n")
+
+
 def _queue_delayed_notification(
     message: str,
     kind: str = "janitor",
@@ -448,7 +466,7 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
     if is_new:
         reqs.append(entry)
     data["requests"] = reqs
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_json(path, data)
 
     md = _pending_approvals_md_path()
     lines = [
@@ -463,7 +481,7 @@ def _queue_approval_request(scope: str, task_name: str, summary: str) -> None:
             continue
         lines.append(f"- [{r.get('status', 'pending')}] `{r.get('scope', 'unknown')}` "
                      f"({r.get('created_at', '?')}): {r.get('summary', '')}")
-    md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(md, "\n".join(lines) + "\n")
     _append_decision_log("approval_queued", entry)
     if is_new:
         _queue_delayed_notification(
@@ -614,7 +632,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         except Exception as exc:
             print(f"[checkpoint] WARNING: failed to parse resume checkpoint {checkpoint_path}: {exc}")
     if task == "all":
-        checkpoint_path.write_text(json.dumps(checkpoint_state, indent=2) + "\n", encoding="utf-8")
+        _atomic_write_json(checkpoint_path, checkpoint_state)
 
     def _checkpoint_save(stage: str = "", status: Optional[str] = None, completed: bool = False) -> None:
         if task != "all":
@@ -628,7 +646,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             done = checkpoint_state.setdefault("completed_stages", [])
             if stage not in done:
                 done.append(stage)
-        checkpoint_path.write_text(json.dumps(checkpoint_state, indent=2) + "\n", encoding="utf-8")
+        _atomic_write_json(checkpoint_path, checkpoint_state)
 
     def _stage_completed(stage: str) -> bool:
         return stage in set(checkpoint_state.get("completed_stages", []) or [])
@@ -1647,8 +1665,7 @@ if __name__ == "__main__":
             "estimated_cost_usd": estimate_cost(),
         }
     }
-    with open(stats_file, "w") as f:
-        json.dump(stats_data, f, indent=2)
+    _atomic_write_json(Path(stats_file), stats_data)
     print(f"\n📊 Stats written to {stats_file}")
     
     # Exit with error code if janitor failed
