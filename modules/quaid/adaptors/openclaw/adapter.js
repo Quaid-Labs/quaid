@@ -97,7 +97,8 @@ function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
   } catch (err) {
     const msg = `[quaid] datastore stats read failed: ${err?.message || String(err)}`;
     if (isFailHardEnabled()) {
-      throw new Error(msg);
+      const cause = err instanceof Error ? err : new Error(String(err));
+      throw new Error(msg, { cause });
     }
     _cachedDatastoreStats = null;
     _datastoreStatsTimestamp = now;
