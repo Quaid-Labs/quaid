@@ -752,8 +752,16 @@ class TestGetOwnerId:
     def test_fallback_default(self):
         from ingest.extract import _get_owner_id
         # With config mocked to fail
-        with patch("ingest.extract.get_config", side_effect=Exception("no config")):
+        with patch("ingest.extract.get_config", side_effect=Exception("no config")), \
+             patch("ingest.extract.is_fail_hard_enabled", return_value=False):
             assert _get_owner_id(None) == "default"
+
+    def test_fallback_raises_when_fail_hard_enabled(self):
+        from ingest.extract import _get_owner_id
+        with patch("ingest.extract.get_config", side_effect=Exception("no config")), \
+             patch("ingest.extract.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="extract owner"):
+                _get_owner_id(None)
 
 
 class TestChunkCarryContext:
