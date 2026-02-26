@@ -171,6 +171,28 @@ def _get_snippet_review_model() -> str:
         return "default"
 
 
+def _snippet_review_timeout_seconds(default_seconds: int = 120) -> float:
+    """Timeout budget for snippet/journal LLM review calls."""
+    raw_env = os.environ.get("QUAID_SNIPPETS_REVIEW_TIMEOUT_SECONDS")
+    if raw_env is not None and str(raw_env).strip():
+        try:
+            parsed_env = float(raw_env)
+            if parsed_env > 0:
+                return parsed_env
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid QUAID_SNIPPETS_REVIEW_TIMEOUT_SECONDS=%r; using config/default",
+                raw_env,
+            )
+    try:
+        cfg_timeout = float(getattr(get_config().docs, "update_timeout_seconds", default_seconds))
+        if cfg_timeout > 0:
+            return cfg_timeout
+    except Exception:
+        pass
+    return float(default_seconds)
+
+
 def _review_model_tier(model_name: str) -> str:
     """Map configured review model hint to provider tier."""
     m = (model_name or "").lower()
@@ -1234,6 +1256,7 @@ def run_journal_distillation(
     system_prompt = "Respond with JSON only. No explanation, no markdown fencing."
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
+    llm_timeout = _snippet_review_timeout_seconds()
     review_model = _get_snippet_review_model()
     worker_count = min(max(1, int(llm_workers or 1)), len(work_items))
     print(
@@ -1248,6 +1271,7 @@ def run_journal_distillation(
             prompt,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
+            timeout=llm_timeout,
         )
         if not response_text:
             return {"filename": filename, "error": f"No response for {filename}"}
@@ -1394,6 +1418,7 @@ def run_soul_snippets_review(
     system_prompt = "Respond with JSON only. No explanation, no markdown fencing."
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
+    llm_timeout = _snippet_review_timeout_seconds()
     review_model = _get_snippet_review_model()
     worker_count = min(max(1, int(llm_workers or 1)), len(all_snippets))
     print(
@@ -1407,6 +1432,7 @@ def run_soul_snippets_review(
             prompt,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
+            timeout=llm_timeout,
         )
         if not response_text:
             return {"filename": filename, "error": f"No response from review model for {filename}"}
