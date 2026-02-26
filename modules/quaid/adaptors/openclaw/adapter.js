@@ -3201,6 +3201,9 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
           }
         }
       } catch (err) {
+        if (isFailHardEnabled()) {
+          throw new Error("[quaid] extraction snippet/journal parsing failed under failHard", { cause: err });
+        }
         console.warn(`[quaid] extraction snippet/journal parsing failed: ${String(err?.message || err)}`);
       }
       const hasSnippets = Object.keys(snippetDetails).length > 0;
