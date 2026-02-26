@@ -132,6 +132,16 @@ class DocsRegistry:
             return fallback
         return parsed
 
+    def _coerce_list_input(self, value: Any, *, field_name: str, default: Optional[List[Any]] = None) -> List[Any]:
+        """Normalize list-typed input from config payloads."""
+        fallback = list(default or [])
+        if value is None:
+            return fallback
+        if isinstance(value, list):
+            return value
+        logger.warning("Invalid type for %s (expected list, got %s); using default", field_name, type(value).__name__)
+        return fallback
+
     def ensure_table(self):
         """Create doc_registry table if it doesn't exist."""
         def _ensure_column(conn, table: str, column: str, definition: str) -> None:
@@ -236,10 +246,21 @@ class DocsRegistry:
                         name,
                         proj_data.get("label", ""),
                         proj_data.get("homeDir", ""),
-                        json.dumps(proj_data.get("sourceRoots", [])),
+                        json.dumps(self._coerce_list_input(
+                            proj_data.get("sourceRoots"),
+                            field_name=f"projects.definitions.{name}.sourceRoots",
+                        )),
                         1 if proj_data.get("autoIndex", True) else 0,
-                        json.dumps(proj_data.get("patterns", ["*.md"])),
-                        json.dumps(proj_data.get("exclude", ["*.db", "*.log", "*.pyc", "__pycache__/"])),
+                        json.dumps(self._coerce_list_input(
+                            proj_data.get("patterns"),
+                            field_name=f"projects.definitions.{name}.patterns",
+                            default=["*.md"],
+                        )),
+                        json.dumps(self._coerce_list_input(
+                            proj_data.get("exclude"),
+                            field_name=f"projects.definitions.{name}.exclude",
+                            default=["*.db", "*.log", "*.pyc", "__pycache__/"],
+                        )),
                         proj_data.get("description", ""),
                     ))
                 if definitions:
