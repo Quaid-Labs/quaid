@@ -568,12 +568,6 @@ def _warn_unknown_keys(section: str, data: Any, known_keys: set[str]) -> None:
             print(f"[config] Unknown config key ignored: {token}", file=sys.stderr)
 
 
-def _snake_to_camel(snake_str: str) -> str:
-    """Convert snake_case to camelCase."""
-    components = snake_str.split('_')
-    return components[0] + ''.join(x.title() for x in components[1:])
-
-
 def _camel_to_snake(camel_str: str) -> str:
     """Convert camelCase to snake_case."""
     result = []
