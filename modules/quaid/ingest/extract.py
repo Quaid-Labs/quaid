@@ -40,6 +40,7 @@ from lib.runtime_context import (
     parse_session_jsonl as runtime_parse_session_jsonl,
     build_transcript as runtime_build_transcript,
 )
+from lib.fail_policy import is_fail_hard_enabled
 
 logger = logging.getLogger(__name__)
 _memory = SimpleNamespace(store=store_memory, create_edge=create_memory_edge)
@@ -61,6 +62,8 @@ def _get_owner_id(override: Optional[str] = None) -> str:
         cfg = get_config()
         return cfg.users.default_owner
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to resolve extract owner from config") from exc
         logger.warning("[extract] owner resolution failed; defaulting to 'default': %s", exc)
         return "default"
 
