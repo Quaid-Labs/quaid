@@ -20,9 +20,17 @@ Programmatic:
 
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+
+_THIS_FILE = Path(__file__).resolve()
+_MODULE_ROOT = _THIS_FILE.parents[2]  # .../modules/quaid
+if str(_MODULE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_MODULE_ROOT))
 
 from lib.adapter import ChannelInfo
 from lib.runtime_context import (
@@ -34,6 +42,46 @@ from lib.runtime_context import (
 # Branding prefix for all notifications
 QUAID_HEADER = "**[Quaid]**"
 MAX_NOTIFY_CHARS = 3500
+
+
+def send_direct_notification(
+    message: str,
+    *,
+    channel: str,
+    target: str,
+    account: Optional[str] = None,
+    dry_run: bool = False,
+) -> bool:
+    """Send via message CLI directly, bypassing adapter/session lookup."""
+    if os.environ.get("QUAID_DISABLE_NOTIFICATIONS"):
+        return True
+    cli = shutil.which("clawdbot") or shutil.which("openclaw")
+    if not cli:
+        print("[notify] No message CLI found (expected openclaw or clawdbot)", file=sys.stderr)
+        return False
+    cmd = [
+        cli,
+        "message",
+        "send",
+        "--channel",
+        channel,
+        "--target",
+        target,
+        "--message",
+        message,
+    ]
+    if account:
+        cmd.extend(["--account", account])
+    if dry_run:
+        print(f"[notify] Would run: {' '.join(cmd)}")
+        return True
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode == 0:
+        print(f"[notify] Sent to {channel}:{target}")
+        return True
+    err = (result.stderr or result.stdout or "").strip()
+    print(f"[notify] Send failed: {err}", file=sys.stderr)
+    return False
 
 
 def _notify_full_text() -> bool:
@@ -682,6 +730,21 @@ def main():
         default="",
         help="Session key (default: adapter-managed)"
     )
+    parser.add_argument(
+        "--channel",
+        default="",
+        help="Send directly to this channel (bypass last-channel lookup)"
+    )
+    parser.add_argument(
+        "--target",
+        default="",
+        help="Direct channel target (chat/channel id). Required with --channel unless env provides fallback."
+    )
+    parser.add_argument(
+        "--account",
+        default="",
+        help="Optional account id for direct send"
+    )
 
     args = parser.parse_args()
 
@@ -700,7 +763,26 @@ def main():
     if not args.message:
         parser.error("Message required (or use --check)")
 
-    success = notify_user(args.message, args.session, args.dry_run)
+    if args.channel:
+        direct_target = args.target
+        if not direct_target and args.channel.lower() == "telegram":
+            direct_target = (
+                os.environ.get("QUAID_TELEGRAM_TARGET")
+                or os.environ.get("QUAID_NOTIFY_TARGET")
+                or os.environ.get("TELEGRAM_TARGET")
+                or ""
+            ).strip()
+        if not direct_target:
+            parser.error("--target is required for direct sends (or set QUAID_TELEGRAM_TARGET for --channel telegram)")
+        success = send_direct_notification(
+            args.message,
+            channel=args.channel,
+            target=direct_target,
+            account=(args.account or None),
+            dry_run=args.dry_run,
+        )
+    else:
+        success = notify_user(args.message, args.session, args.dry_run)
     sys.exit(0 if success else 1)
 
 
