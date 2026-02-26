@@ -394,4 +394,22 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(() => (manager as any).readSessionMessages('session-bad-read')).toThrow()
   })
+
+  it('throws on malformed session cursor when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-cursor-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const fp = (manager as any).cursorPath('session-bad-cursor') as string
+    fs.mkdirSync(path.dirname(fp), { recursive: true })
+    fs.writeFileSync(fp, '{bad json', 'utf8')
+
+    expect(() => (manager as any).readSessionCursor('session-bad-cursor')).toThrow()
+  })
 })
