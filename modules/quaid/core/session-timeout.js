@@ -831,13 +831,15 @@ class SessionTimeoutManager {
 `;
     try {
       fs.appendFileSync(this.logFilePath, line, "utf8");
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed writing timeout log file ${this.logFilePath}: ${String(err?.message || err)}`);
     }
     const payload = { ts: now, event, session_id: safeSessionId || void 0, ...data };
     try {
       fs.appendFileSync(this.eventFilePath, `${JSON.stringify(payload)}
 `, "utf8");
-    } catch {
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed writing timeout event log ${this.eventFilePath}: ${String(err?.message || err)}`);
     }
     if (safeSessionId) {
       const safeName = safeSessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -845,7 +847,8 @@ class SessionTimeoutManager {
       try {
         fs.appendFileSync(sessionPath, `${JSON.stringify(payload)}
 `, "utf8");
-      } catch {
+      } catch (err) {
+        safeLog(this.logger, `[quaid][timeout] failed writing timeout session log ${sessionPath}: ${String(err?.message || err)}`);
       }
     }
   }
