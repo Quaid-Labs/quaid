@@ -854,7 +854,10 @@ function _ensureGatewaySessionOverride(tier, resolved) {
     if (fs.existsSync(storePath)) {
       store = JSON.parse(fs.readFileSync(storePath, "utf8")) || {};
     }
-  } catch {
+  } catch (err) {
+    console.warn(
+      `[quaid][llm] failed to read gateway session override store; recreating: ${String(err?.message || err)}`
+    );
     store = {};
   }
   const prev = store[sessionKey] && typeof store[sessionKey] === "object" ? store[sessionKey] : {};
@@ -866,8 +869,15 @@ function _ensureGatewaySessionOverride(tier, resolved) {
     providerOverride: resolved.provider,
     modelOverride: resolved.model
   };
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { mode: 384 });
+  try {
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { mode: 384 });
+  } catch (err) {
+    const msg = String(err?.message || err);
+    throw new Error(`[quaid][llm] failed writing gateway session override store: ${msg}`, {
+      cause: err
+    });
+  }
   return sessionKey;
 }
 async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 6e5) {
