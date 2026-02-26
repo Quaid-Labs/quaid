@@ -420,12 +420,13 @@ def parse_json_response(text: str) -> Optional[object]:
         return None
 
     cleaned = text.strip()
+    parse_errors = []
 
     # Try direct parse first
     try:
         return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        parse_errors.append(f"direct parse failed at line {e.lineno}, col {e.colno}: {e.msg}")
 
     # Strip markdown fences
     if "```" in cleaned:
@@ -437,7 +438,8 @@ def parse_json_response(text: str) -> Optional[object]:
             if candidate and (candidate.startswith("{") or candidate.startswith("[")):
                 try:
                     return json.loads(candidate)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    parse_errors.append(f"fenced parse failed at line {e.lineno}, col {e.colno}: {e.msg}")
                     continue
 
     # Last resort: find first { or [ and try to parse from there
@@ -447,8 +449,19 @@ def parse_json_response(text: str) -> Optional[object]:
         if start_idx != -1 and end_idx > start_idx:
             try:
                 return json.loads(cleaned[start_idx:end_idx + 1])
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                parse_errors.append(
+                    f"substring parse ({start_char}...{end_char}) failed at line {e.lineno}, col {e.colno}: {e.msg}"
+                )
                 continue
+
+    if parse_errors:
+        excerpt = cleaned.replace("\n", "\\n")[:180]
+        print(
+            "[llm_clients] parse_json_response failed: "
+            f"{'; '.join(parse_errors[:3])}; excerpt={excerpt!r}",
+            file=sys.stderr,
+        )
 
     return None
 
@@ -562,12 +575,28 @@ def validate_llm_output(parsed: object, schema_class: type, list_mode: bool = Tr
             # Map dict keys to dataclass fields (case-insensitive for common typos)
             field_names = {f.name for f in schema_class.__dataclass_fields__.values()}
             mapped = {}
+            dropped_keys = []
             for k, v in item.items():
                 k_lower = k.lower().replace("-", "_")
                 if k_lower in field_names:
                     mapped[k_lower] = v
                 elif k in field_names:
                     mapped[k] = v
+                else:
+                    dropped_keys.append(k)
+
+            if dropped_keys:
+                print(
+                    f"[llm_clients] Validation warning: dropping unknown keys {dropped_keys} "
+                    f"for schema {schema_class.__name__}",
+                    file=sys.stderr,
+                )
+            if not mapped:
+                print(
+                    f"[llm_clients] Validation warning: no recognized keys for schema {schema_class.__name__}: {item}",
+                    file=sys.stderr,
+                )
+                continue
 
             obj = schema_class(**mapped)
             results.append(obj)
