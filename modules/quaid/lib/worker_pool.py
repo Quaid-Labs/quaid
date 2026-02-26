@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,6 +21,18 @@ def _pool(pool_name: str, max_workers: int) -> ThreadPoolExecutor:
             ex = ThreadPoolExecutor(max_workers=key[1], thread_name_prefix=f"quaid-{key[0]}")
             _POOLS[key] = ex
         return ex
+
+
+def shutdown_worker_pools(wait: bool = False) -> None:
+    """Shutdown and clear shared thread pools."""
+    with _POOL_GUARD:
+        pools = list(_POOLS.values())
+        _POOLS.clear()
+    for ex in pools:
+        ex.shutdown(wait=wait, cancel_futures=True)
+
+
+atexit.register(shutdown_worker_pools)
 
 
 def run_callables(
