@@ -113,6 +113,33 @@ describe("knowledge orchestrator", () => {
     expect(callFastRouter).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves first and retry validation errors from router repair flow", async () => {
+    const callFastRouter = vi
+      .fn(async () => '{"query":"one","datastores":["not_real"]}')
+      .mockResolvedValueOnce('{"query":"two","datastores":["still_wrong"]}');
+
+    const engine = createKnowledgeEngine<Result>({
+      workspace: "/tmp",
+      path: {} as any,
+      fs: {} as any,
+      getMemoryConfig: () => ({}),
+      isSystemEnabled: () => false,
+      callDocsRag: vi.fn(async () => ""),
+      callFastRouter,
+      recallVector: vi.fn(async () => []),
+      recallGraph: vi.fn(async () => []),
+    });
+
+    try {
+      await engine.routeRecallPlan("x", false, "fast");
+      throw new Error("expected routeRecallPlan to fail");
+    } catch (err: unknown) {
+      const msg = String((err as Error)?.message || err);
+      expect(msg).toContain("First validation error: router returned no valid datastores");
+      expect(msg).toContain("Retry validation error: router returned no valid datastores");
+    }
+  });
+
   it("skips router when datastores are explicitly supplied to totalRecall", async () => {
     const callFastRouter = vi.fn(async () => '{"datastores":["graph"]}');
     const recallVector = vi.fn(async () => [
