@@ -895,3 +895,39 @@ class TestCreateEdgeAtomicity:
 
         assert node_count == 0
         assert edge_count == 0
+
+
+class TestReviewFixTransaction:
+    def test_fix_rolls_back_when_edge_rebuild_fails(self, tmp_path):
+        from datastore.memorydb.maintenance_ops import apply_review_decisions_from_list
+
+        graph, _ = _make_graph(tmp_path, "review_fix_atomic.db")
+        node = _make_node(graph, "Original fact text", status="active")
+
+        with graph._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO edges (id, source_id, target_id, relation, source_fact_id) VALUES (?, ?, ?, ?, ?)",
+                ("e-fix-old", node.id, node.id, "related_to", node.id),
+            )
+
+        decision = [{
+            "id": node.id,
+            "action": "FIX",
+            "new_text": "Updated fact text",
+            "edges": [{"subject": "Alice", "relation": "friend_of", "object": "Bob"}],
+        }]
+
+        with patch("datastore.memorydb.maintenance_ops.create_edge", side_effect=RuntimeError("edge rebuild failed")):
+            with pytest.raises(RuntimeError, match="edge rebuild failed"):
+                apply_review_decisions_from_list(graph, decision, dry_run=False)
+
+        with graph._get_conn() as conn:
+            node_row = conn.execute("SELECT name, status FROM nodes WHERE id = ?", (node.id,)).fetchone()
+            old_edge_count = conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE source_fact_id = ?",
+                (node.id,),
+            ).fetchone()[0]
+
+        assert node_row["name"] == "Original fact text"
+        assert node_row["status"] == "active"
+        assert old_edge_count == 1

@@ -45,6 +45,7 @@ import threading
 import urllib.request
 import urllib.error
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -4253,7 +4254,8 @@ def create_edge(
     object_name: str,
     source_fact_id: Optional[str] = None,
     create_missing_entities: bool = True,
-    owner_id: Optional[str] = None
+    owner_id: Optional[str] = None,
+    _conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
     """Create an edge between two named entities.
 
@@ -4413,7 +4415,8 @@ def create_edge(
             except Exception:
                 pass
 
-    with graph._get_conn() as conn:
+    conn_ctx = nullcontext(_conn) if _conn is not None else graph._get_conn()
+    with conn_ctx as conn:
         # Find or create subject entity
         subject = _find_entity(conn, subject_name)
         subject_created = False
