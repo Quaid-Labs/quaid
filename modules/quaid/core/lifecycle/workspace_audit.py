@@ -31,6 +31,25 @@ def _workspace_dir() -> Path:
 
 logger = logging.getLogger(__name__)
 
+
+def _workspace_review_timeout_seconds(cfg: Any, default_seconds: int = 120) -> float:
+    """Resolve workspace audit LLM timeout from env/config with safe fallback."""
+    raw_env = os.environ.get("QUAID_WORKSPACE_AUDIT_TIMEOUT_SECONDS")
+    if raw_env is not None and str(raw_env).strip():
+        try:
+            parsed_env = float(raw_env)
+            if parsed_env > 0:
+                return parsed_env
+        except (TypeError, ValueError):
+            logger.warning("Invalid QUAID_WORKSPACE_AUDIT_TIMEOUT_SECONDS=%r; using config/default", raw_env)
+    try:
+        cfg_seconds = float(getattr(getattr(cfg, "docs", object()), "update_timeout_seconds", default_seconds))
+        if cfg_seconds > 0:
+            return cfg_seconds
+    except (TypeError, ValueError):
+        pass
+    return float(default_seconds)
+
 def _backup_dir() -> Path:
     return _workspace_dir() / "backups" / "workspace"
 
@@ -696,6 +715,7 @@ def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
     """
     _cfg = get_config()
     max_tokens = _cfg.janitor.opus_review.max_tokens
+    llm_timeout_seconds = _workspace_review_timeout_seconds(_cfg)
     files_config = get_monitored_files()
 
     print("\n" + "=" * 80)
@@ -769,7 +789,8 @@ def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
     response_text, duration = call_deep_reasoning(
         prompt=user_message,
         system_prompt=review_prompt,
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
+        timeout=llm_timeout_seconds,
     )
 
     if not response_text:

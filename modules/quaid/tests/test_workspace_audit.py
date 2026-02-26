@@ -6,6 +6,7 @@ import json
 import tempfile
 import fcntl
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, PropertyMock
 
 # Ensure the plugin root is on the path
@@ -647,3 +648,43 @@ class TestSectionOverlapsProtected:
         from lib.markdown import section_overlaps_protected
         # Two protected ranges, second one overlaps
         assert section_overlaps_protected(150, 250, [(0, 50), (200, 300)])
+
+
+def test_run_workspace_check_passes_configurable_llm_timeout(monkeypatch):
+    from core.lifecycle import workspace_audit as wa
+
+    cfg = SimpleNamespace(
+        janitor=SimpleNamespace(opus_review=SimpleNamespace(max_tokens=256)),
+        docs=SimpleNamespace(update_timeout_seconds=77),
+    )
+    captured: dict[str, float] = {}
+
+    def _fake_call(prompt, system_prompt, max_tokens, timeout):
+        captured["timeout"] = float(timeout)
+        return ('{"decisions": []}', 0.01)
+
+    monkeypatch.setenv("QUAID_WORKSPACE_AUDIT_TIMEOUT_SECONDS", "33")
+    monkeypatch.setattr(wa, "get_config", lambda: cfg)
+    monkeypatch.setattr(wa, "get_monitored_files", lambda: {"AGENTS.md": {"purpose": "ops", "maxLines": 10}})
+    monkeypatch.setattr(wa, "check_bloat", lambda: {"AGENTS.md": {"over_limit": False, "lines": 1, "maxLines": 10}})
+    monkeypatch.setattr(wa, "detect_changed_files", lambda: ["AGENTS.md"])
+    monkeypatch.setattr(wa, "_read_file_contents", lambda files: {"AGENTS.md": "line 1\nline 2"})
+    monkeypatch.setattr(wa, "build_review_prompt", lambda _cfg: "prompt")
+    monkeypatch.setattr(wa, "call_deep_reasoning", _fake_call)
+    monkeypatch.setattr(wa, "parse_json_response", lambda _text: {"decisions": []})
+    monkeypatch.setattr(
+        wa,
+        "apply_review_decisions",
+        lambda dry_run, decisions_data=None: {
+            "moved_to_docs": 0,
+            "moved_to_memory": 0,
+            "trimmed": 0,
+            "bloat_warnings": 0,
+            "project_detected": 0,
+            "kept": 0,
+            "errors": 0,
+        },
+    )
+
+    wa.run_workspace_check(dry_run=True)
+    assert captured["timeout"] == 33.0
