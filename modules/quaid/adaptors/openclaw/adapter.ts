@@ -3623,16 +3623,39 @@ notify_memory_extraction(
           return;
         }
 
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "JSON body must be an object" }));
+          return;
+        }
+
         const { system_prompt, user_message, model_tier, max_tokens = 4000 } = body;
-        if (!system_prompt || !user_message) {
+        if (typeof system_prompt !== "string" || !system_prompt.trim() ||
+            typeof user_message !== "string" || !user_message.trim()) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "system_prompt and user_message required" }));
+          return;
+        }
+        if (model_tier !== undefined && model_tier !== "fast" && model_tier !== "deep") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "model_tier must be 'fast' or 'deep'" }));
+          return;
+        }
+        if (typeof max_tokens !== "number" || !Number.isFinite(max_tokens)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "max_tokens must be a finite number" }));
+          return;
+        }
+        const requestedTokens = Math.trunc(max_tokens);
+        if (requestedTokens < 1 || requestedTokens > 100_000) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "max_tokens must be between 1 and 100000" }));
           return;
         }
 
         try {
           const tier: ModelTier = model_tier === "fast" ? "fast" : "deep";
-          const data = await callConfiguredLLM(system_prompt, user_message, tier, max_tokens, 600_000);
+          const data = await callConfiguredLLM(system_prompt, user_message, tier, requestedTokens, 600_000);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(data));
         } catch (err: unknown) {
