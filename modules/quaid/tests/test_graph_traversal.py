@@ -291,6 +291,22 @@ class TestVecUpsertFailures:
             with pytest.raises(RuntimeError, match="Vector index upsert failed during update_node"):
                 graph.update_node(node, embed=False)
 
+
+class TestEntitySummaryJsonHardening:
+    def test_summarize_all_entities_tolerates_malformed_attributes(self, graph, caplog):
+        from datastore.memorydb.memory_graph import summarize_all_entities
+
+        person = _add_person(graph, "Malformed Attr Person")
+        with graph._get_conn() as conn:
+            conn.execute("UPDATE nodes SET attributes = ? WHERE id = ?", ("{bad json", person.id))
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+            caplog.set_level("WARNING")
+            stats = summarize_all_entities(owner_id="quaid", use_llm=False)
+
+        assert stats["total"] >= 1
+        assert "malformed node attributes JSON for summary" in caplog.text
+
     def test_depth_zero_returns_empty(self, graph):
         """Depth=0 means no traversal at all."""
         a = _add_person(graph, "A")
