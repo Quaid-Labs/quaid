@@ -540,7 +540,12 @@ export class SessionTimeoutManager {
             if (!fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
               fs.renameSync(lockedPath, originalPath);
             }
-          } catch {}
+          } catch (restoreErr: unknown) {
+            safeLog(this.logger, `[quaid][timeout] failed restoring signal claim ${lockedPath}: ${String((restoreErr as Error)?.message || restoreErr)}`);
+            if ((restoreErr as NodeJS.ErrnoException)?.code !== "ENOENT") {
+              throw restoreErr;
+            }
+          }
           throw err;
         }
       } finally {
@@ -548,7 +553,12 @@ export class SessionTimeoutManager {
           if (fs.existsSync(lockedPath)) {
             fs.unlinkSync(lockedPath);
           }
-        } catch {}
+        } catch (unlinkErr: unknown) {
+          safeLog(this.logger, `[quaid][timeout] failed cleaning claimed signal ${lockedPath}: ${String((unlinkErr as Error)?.message || unlinkErr)}`);
+          if (this.failHard && (unlinkErr as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            throw unlinkErr;
+          }
+        }
       }
     }
   }
