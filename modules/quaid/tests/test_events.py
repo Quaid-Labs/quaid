@@ -1,5 +1,4 @@
 import json
-import sys
 import types
 
 from core.runtime.events import emit_event, get_event_registry, get_event_capability, list_events, process_events
@@ -86,8 +85,7 @@ def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
         called["session_id"] = session_id
         return {"status": "updated", "updatedDocs": 1, "staleDocs": 1}
 
-    fake_docs_ingest = types.SimpleNamespace(_run=_fake_run)
-    monkeypatch.setitem(sys.modules, "docs_ingest", fake_docs_ingest)
+    monkeypatch.setattr("core.runtime.events.run_docs_ingest", _fake_run)
 
     emit_event(
         name="docs.ingest_transcript",
@@ -117,8 +115,7 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
         called.update(kwargs)
         return {"status": "indexed", "session_id": kwargs["session_id"], "chunks": 2}
 
-    fake_ingest = types.SimpleNamespace(_run=_fake_run)
-    monkeypatch.setitem(sys.modules, "session_logs_ingest", fake_ingest)
+    monkeypatch.setattr("core.runtime.events.run_session_logs_ingest", _fake_run)
 
     emit_event(
         name="session.ingest_log",

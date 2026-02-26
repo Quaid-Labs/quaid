@@ -15,12 +15,12 @@ import contextlib
 import json
 import logging
 import os
-import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from lib.ingest_runtime import run_docs_ingest, run_session_logs_ingest
 from lib.runtime_context import get_workspace_dir
 
 Event = Dict[str, Any]
@@ -290,12 +290,7 @@ def _handle_docs_ingest_transcript(event: Event) -> Dict[str, Any]:
     if not transcript_path:
         return {"status": "failed", "error": "payload.transcript_path is required"}
     try:
-        docs_ingest_mod = sys.modules.get("docs_ingest")
-        if docs_ingest_mod is not None and hasattr(docs_ingest_mod, "_run"):
-            _docs_ingest_run = docs_ingest_mod._run
-        else:
-            from ingest.docs_ingest import _run as _docs_ingest_run
-        result = _docs_ingest_run(
+        result = run_docs_ingest(
             Path(transcript_path),
             label,
             str(session_id) if session_id else None,
@@ -327,12 +322,7 @@ def _handle_session_ingest_log(event: Event) -> Dict[str, Any]:
         return {"status": "failed", "error": "payload.session_id is required"}
 
     try:
-        session_ingest_mod = sys.modules.get("session_logs_ingest")
-        if session_ingest_mod is not None and hasattr(session_ingest_mod, "_run"):
-            _session_ingest_run = session_ingest_mod._run
-        else:
-            from ingest.session_logs_ingest import _run as _session_ingest_run
-        result = _session_ingest_run(
+        result = run_session_logs_ingest(
             session_id=session_id,
             owner_id=owner_id,
             label=label,
