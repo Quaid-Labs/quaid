@@ -178,7 +178,12 @@ class SessionTimeoutManager {
       fs.mkdirSync(this.sessionMessageLogDir, { recursive: true });
       fs.mkdirSync(this.sessionCursorDir, { recursive: true });
       fs.mkdirSync(this.pendingSignalDir, { recursive: true });
-    } catch {
+    } catch (err) {
+      const msg = String(err?.message || err || "unknown directory initialization error");
+      safeLog(this.logger, `[quaid][timeout] failed to initialize runtime directories: ${msg}`);
+      if (this.failHard) {
+        throw err;
+      }
     }
   }
   setTimeoutMinutes(minutes) {
