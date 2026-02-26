@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from ingest import session_logs_ingest
 from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
@@ -51,3 +52,22 @@ def test_ingest_from_transcript_path(monkeypatch, tmp_path):
     assert "telegram" in captured["args"]
     assert "--conversation-id" in captured["args"]
     assert "chat-42" in captured["args"]
+
+
+def test_call_session_logs_cli_includes_exit_code_and_streams(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    def _fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=7, stderr="boom", stdout="fallback")
+
+    monkeypatch.setattr("ingest.session_logs_ingest.subprocess.run", _fake_run)
+
+    try:
+        session_logs_ingest._call_session_logs_cli("ingest", ["--session-id", "s1"])
+    except RuntimeError as exc:
+        msg = str(exc)
+        assert "exit=7" in msg
+        assert "stderr: boom" in msg
+        assert "stdout: fallback" in msg
+    else:
+        raise AssertionError("expected RuntimeError")
