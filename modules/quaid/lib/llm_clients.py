@@ -188,6 +188,12 @@ def is_token_budget_exhausted() -> bool:
         return _token_budget > 0 and _token_budget_used >= _token_budget
 
 
+def get_token_budget_usage() -> Tuple[int, int]:
+    """Return a consistent snapshot of (used_tokens, budget_tokens)."""
+    with _usage_lock:
+        return _token_budget_used, _token_budget
+
+
 # Retry config
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0  # seconds, doubled each retry
@@ -281,10 +287,11 @@ def call_llm(system_prompt: str, user_message: str,
 
     # Token budget check
     if is_token_budget_exhausted():
-        print(f"[llm_clients] TOKEN BUDGET EXHAUSTED: {_token_budget_used:,} >= {_token_budget:,}, aborting call", file=sys.stderr)
+        budget_used, budget_total = get_token_budget_usage()
+        print(f"[llm_clients] TOKEN BUDGET EXHAUSTED: {budget_used:,} >= {budget_total:,}, aborting call", file=sys.stderr)
         if is_fail_hard_enabled():
             raise RuntimeError(
-                f"LLM token budget exhausted while failHard is enabled: {_token_budget_used:,} >= {_token_budget:,}"
+                f"LLM token budget exhausted while failHard is enabled: {budget_used:,} >= {budget_total:,}"
             )
         return (None, 0.0)
 
