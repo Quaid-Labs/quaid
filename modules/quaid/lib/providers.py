@@ -313,6 +313,10 @@ class ClaudeCodeLLMProvider(LLMProvider):
             deep_timeout = float(os.environ.get("CLAUDE_CODE_DEEP_TIMEOUT_S", "0") or 0)
         except ValueError:
             deep_timeout = 0.0
+        try:
+            timeout_cap = float(os.environ.get("CLAUDE_CODE_TIMEOUT_CAP_S", "0") or 0)
+        except ValueError:
+            timeout_cap = 0.0
 
         effective_timeout = float(timeout)
         if global_timeout > 0:
@@ -321,6 +325,8 @@ class ClaudeCodeLLMProvider(LLMProvider):
             effective_timeout = max(effective_timeout, fast_timeout)
         if model_tier != "fast" and deep_timeout > 0:
             effective_timeout = max(effective_timeout, deep_timeout)
+        if timeout_cap > 0:
+            effective_timeout = min(effective_timeout, timeout_cap)
 
         model_alias = self._resolve_alias(model_tier)
         system_prompt = ""
