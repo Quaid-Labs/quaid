@@ -489,7 +489,11 @@ def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -
     extraction_log: dict = {}
     try:
         extraction_log = _json.loads(log_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        extraction_log = {}
     except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed to parse extraction log: {log_path}") from exc
         logger.debug("session_recall failed to parse extraction log %s: %s", log_path, exc)
 
     if action == "list":
@@ -552,6 +556,8 @@ def memory_provider() -> str:
         llm_name = type(llm).__name__
         profiles = llm.get_profiles()
     except Exception as e:
+        if is_fail_hard_enabled():
+            raise RuntimeError("Failed to resolve LLM provider details.") from e
         llm_name = f"error: {e}"
         profiles = {}
     embed = _gep()

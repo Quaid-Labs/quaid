@@ -4568,17 +4568,39 @@ def store_contradiction(node_a_id: str, node_b_id: str, explanation: str) -> Opt
     contradiction_id = str(uuid.uuid4())
     # Normalize order so UNIQUE constraint works regardless of discovery direction
     a_id, b_id = sorted([node_a_id, node_b_id])
-    with graph._get_conn() as conn:
-        try:
+    try:
+        with graph._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT OR IGNORE INTO contradictions (id, node_a_id, node_b_id, explanation)
                 VALUES (?, ?, ?, ?)
             """, (contradiction_id, a_id, b_id, explanation))
             if cursor.rowcount > 0:
                 return contradiction_id
-            return None  # Duplicate pair already existed
-        except Exception:
+            existing = conn.execute(
+                "SELECT id FROM contradictions WHERE node_a_id = ? AND node_b_id = ?",
+                (a_id, b_id),
+            ).fetchone()
+            if existing:
+                return str(existing["id"])
             return None
+    except Exception as exc:
+        try:
+            from lib.fail_policy import is_fail_hard_enabled
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Failed to store contradiction for {a_id} vs {b_id}"
+                ) from exc
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+        logger.warning(
+            "store_contradiction failed for node_a=%s node_b=%s: %s",
+            a_id,
+            b_id,
+            exc,
+        )
+        return None
 
 
 def get_pending_contradictions(limit: int = 50) -> List[Dict[str, Any]]:

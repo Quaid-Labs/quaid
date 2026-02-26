@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
+from lib.fail_policy import is_fail_hard_enabled
 from lib.markdown import strip_protected_regions
 from lib.runtime_context import get_workspace_dir
 
@@ -1489,6 +1490,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             for err in (snippets_result.get("errors") or []):
                 result.errors.append(f"Snippets review failed: {err}")
         except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError("Snippets review failed") from exc
             result.errors.append(f"Snippets review failed: {exc}")
         return result
 
@@ -1507,6 +1510,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             for err in (journal_result.get("errors") or []):
                 result.errors.append(f"Journal distillation failed: {err}")
         except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError("Journal distillation failed") from exc
             result.errors.append(f"Journal distillation failed: {exc}")
         return result
 

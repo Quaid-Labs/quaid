@@ -516,6 +516,25 @@ class TestSessionRecall:
             with pytest.raises(RuntimeError, match="Sessions directory not available"):
                 mod.session_recall(action="load", session_id="sess-1")
 
+    def test_session_recall_bad_extraction_log_raises_when_failhard_enabled(self, server, tmp_path):
+        mod, *_ = server
+        bad_log = tmp_path / "data"
+        bad_log.mkdir(parents=True, exist_ok=True)
+        (bad_log / "extraction-log.json").write_text("{not-json", encoding="utf-8")
+        with patch("core.interface.mcp_server.get_workspace_dir", return_value=tmp_path), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to parse extraction log"):
+                mod.session_recall(action="list", limit=5)
+
+
+class TestProvider:
+    def test_memory_provider_raises_when_failhard_enabled(self, server):
+        mod, *_ = server
+        with patch("core.interface.mcp_server.get_llm_provider", side_effect=RuntimeError("provider down")), \
+             patch("core.interface.mcp_server.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="Failed to resolve LLM provider details"):
+                mod.memory_provider()
+
 
 # ---------------------------------------------------------------------------
 # Tests — Error handling
