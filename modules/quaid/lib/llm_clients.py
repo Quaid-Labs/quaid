@@ -568,6 +568,12 @@ def validate_llm_output(parsed: object, schema_class: type, list_mode: bool = Tr
     items = parsed if isinstance(parsed, list) else [parsed]
     results = []
 
+    def _item_log_summary(item_obj: object) -> str:
+        if isinstance(item_obj, dict):
+            keys = list(item_obj.keys())
+            return f"keys={keys}, key_count={len(keys)}"
+        return f"type={type(item_obj).__name__}"
+
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -593,7 +599,8 @@ def validate_llm_output(parsed: object, schema_class: type, list_mode: bool = Tr
                 )
             if not mapped:
                 print(
-                    f"[llm_clients] Validation warning: no recognized keys for schema {schema_class.__name__}: {item}",
+                    "[llm_clients] Validation warning: no recognized keys for schema "
+                    f"{schema_class.__name__} ({_item_log_summary(item)})",
                     file=sys.stderr,
                 )
                 continue
@@ -601,7 +608,11 @@ def validate_llm_output(parsed: object, schema_class: type, list_mode: bool = Tr
             obj = schema_class(**mapped)
             results.append(obj)
         except (TypeError, ValueError) as e:
-            print(f"[llm_clients] Validation warning: {e} for item {item}", file=sys.stderr)
+            print(
+                f"[llm_clients] Validation warning: {e} for schema {schema_class.__name__} "
+                f"({_item_log_summary(item)})",
+                file=sys.stderr,
+            )
             continue
 
     return results

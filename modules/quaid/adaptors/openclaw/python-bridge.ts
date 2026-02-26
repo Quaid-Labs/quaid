@@ -56,7 +56,12 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
         if (code === 0) {
           resolve(stdout.trim());
         } else {
-          const detail = (stderr || stdout || "").trim().slice(0, 1000);
+          const stderrText = stderr.trim();
+          const stdoutText = stdout.trim();
+          const detail = [stderrText ? `stderr: ${stderrText}` : "", stdoutText ? `stdout: ${stdoutText}` : ""]
+            .filter(Boolean)
+            .join(" | ")
+            .slice(0, 1000);
           reject(new Error(`Python error (exit=${String(code)}): ${detail}`));
         }
       });

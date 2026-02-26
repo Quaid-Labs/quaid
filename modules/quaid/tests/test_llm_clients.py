@@ -98,6 +98,13 @@ class TestParseJsonResponse:
         assert results == []
         assert "dropping unknown keys" in captured.err
 
+    def test_validate_llm_output_does_not_log_raw_values(self, capsys):
+        parsed = [{"foo": "my-super-secret-token"}]
+        results = validate_llm_output(parsed, ReviewDecision)
+        captured = capsys.readouterr()
+        assert results == []
+        assert "my-super-secret-token" not in captured.err
+
 
 # ---------------------------------------------------------------------------
 # Token usage tracking
