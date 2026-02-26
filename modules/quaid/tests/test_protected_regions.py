@@ -187,38 +187,6 @@ class TestStripProtectedRegions:
 
 
 # =============================================================================
-# is_position_protected tests
-# =============================================================================
-
-
-class TestIsPositionProtected:
-    def test_position_inside(self):
-        from lib.markdown import is_position_protected
-        ranges = [(10, 50)]
-        assert is_position_protected(10, ranges) is True
-        assert is_position_protected(25, ranges) is True
-        assert is_position_protected(49, ranges) is True
-
-    def test_position_outside(self):
-        from lib.markdown import is_position_protected
-        ranges = [(10, 50)]
-        assert is_position_protected(5, ranges) is False
-        assert is_position_protected(50, ranges) is False
-        assert is_position_protected(100, ranges) is False
-
-    def test_empty_ranges(self):
-        from lib.markdown import is_position_protected
-        assert is_position_protected(10, []) is False
-
-    def test_multiple_ranges(self):
-        from lib.markdown import is_position_protected
-        ranges = [(10, 20), (50, 60)]
-        assert is_position_protected(15, ranges) is True
-        assert is_position_protected(55, ranges) is True
-        assert is_position_protected(30, ranges) is False
-
-
-# =============================================================================
 # workspace_audit.py integration tests
 # =============================================================================
 

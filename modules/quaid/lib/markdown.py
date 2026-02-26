@@ -39,14 +39,6 @@ def strip_protected_regions(content: str) -> Tuple[str, List[Tuple[int, int]]]:
     return stripped, protected_ranges
 
 
-def is_position_protected(pos: int, protected_ranges: List[Tuple[int, int]]) -> bool:
-    """Check if a character position falls within a protected region."""
-    for start, end in protected_ranges:
-        if start <= pos < end:
-            return True
-    return False
-
-
 def section_overlaps_protected(section_start: int, section_end: int, protected_ranges: List[Tuple[int, int]]) -> bool:
     """Check if a section range overlaps with any protected region."""
     for p_start, p_end in protected_ranges:
