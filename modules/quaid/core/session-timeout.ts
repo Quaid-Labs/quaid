@@ -571,6 +571,7 @@ export class SessionTimeoutManager {
       })
       .catch((err: unknown) => {
         safeLog(this.logger, `[quaid][timeout] worker tick failed: ${String((err as Error)?.message || err)}`);
+        if (this.failHard) throw err;
       });
   }
 

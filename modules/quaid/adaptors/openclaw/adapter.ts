@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { queueDelayedRequest } from "./delayed-requests.js";
-import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
+import { createKnowledgeEngine } from "../../orchestrator/default-orchestrator.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 import { createPythonBridgeExecutor } from "./python-bridge.js";
@@ -37,7 +37,9 @@ function _resolveWorkspace(): string {
         return ws;
       }
     }
-  } catch {}
+  } catch (err: unknown) {
+    console.error("[quaid][startup] workspace resolution failed:", (err as Error)?.message || String(err));
+  }
 
   return process.cwd();
 }
@@ -59,7 +61,11 @@ const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-reques
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
-  try { fs.mkdirSync(p, { recursive: true }); } catch {}
+  try {
+    fs.mkdirSync(p, { recursive: true });
+  } catch (err: unknown) {
+    console.error(`[quaid][startup] failed to create runtime dir: ${p}`, (err as Error)?.message || String(err));
+  }
 }
 
 // Dynamic retrieval limit — scales logarithmically with graph size
@@ -3078,7 +3084,11 @@ notify_docs_search(data['query'], data['results'])
             extractionPromise,
             new Promise<void>((_, rej) => { raceTimer = setTimeout(() => rej(new Error("timeout")), 60_000); })
           ]);
-        } catch {} finally {
+        } catch (err: unknown) {
+          if (isFailHardEnabled()) {
+            throw err;
+          }
+        } finally {
           if (raceTimer) clearTimeout(raceTimer);
         }
       }
@@ -3469,6 +3479,9 @@ notify_memory_extraction(
           }) // Don't let previous failure block the chain when failHard=false
           .then(() => doExtraction());
       } catch (err: unknown) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.error("[quaid] before_compaction hook failed:", err);
       }
     }, {
@@ -3548,6 +3561,9 @@ notify_memory_extraction(
             throw doErr;
           });
       } catch (err: unknown) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.error("[quaid] before_reset hook failed:", err);
       }
     }, {
