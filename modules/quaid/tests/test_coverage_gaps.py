@@ -867,3 +867,31 @@ class TestDecayReviewAtomicity:
         assert queue_row["status"] == "reviewed"
         assert queue_row["decision"] == "extend"
         assert float(node_row["confidence"]) > 0.1
+
+
+class TestCreateEdgeAtomicity:
+    def test_create_edge_rolls_back_entities_when_edge_creation_fails(self, tmp_path):
+        from datastore.memorydb.memory_graph import create_edge, Edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_atomic.db")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch.object(Edge, "create", side_effect=RuntimeError("simulated edge creation failure")):
+            with pytest.raises(RuntimeError, match="simulated edge creation failure"):
+                create_edge(
+                    subject_name="Alice Example",
+                    relation="friend_of",
+                    object_name="Bob Example",
+                    owner_id="quaid",
+                )
+
+        with graph._get_conn() as conn:
+            node_count = conn.execute(
+                "SELECT COUNT(*) FROM nodes WHERE name IN (?, ?)",
+                ("Alice Example", "Bob Example"),
+            ).fetchone()[0]
+            edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+        assert node_count == 0
+        assert edge_count == 0
