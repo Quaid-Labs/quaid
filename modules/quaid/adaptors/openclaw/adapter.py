@@ -301,28 +301,3 @@ class OpenClawAdapter(QuaidAdapter):
         """Find the agent sessions.json file."""
         p = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
         return p if p.exists() else None
-
-    @staticmethod
-    def _keychain_lookup(service: str, account: str) -> Optional[str]:
-        """Best-effort macOS keychain lookup."""
-        if sys.platform != "darwin":
-            return None
-        svc = str(service or "").strip()
-        acct = str(account or "").strip()
-        if not svc or not acct:
-            return None
-        try:
-            proc = subprocess.run(
-                ["security", "find-generic-password", "-s", svc, "-a", acct, "-w"],
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-                check=False,
-            )
-            if proc.returncode != 0:
-                return None
-            token = (proc.stdout or "").strip()
-            return token or None
-        except Exception as e:
-            print(f"[adapter] keychain lookup failed for service={svc} account={acct}: {e}", file=sys.stderr)
-            return None

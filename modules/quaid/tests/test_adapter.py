@@ -586,22 +586,6 @@ class TestKeychainFallback:
         result = adapter.get_api_key("OPENAI_API_KEY")
         assert result is None
 
-    def test_keychain_lookup_is_stub(self):
-        """_keychain_lookup returns None outside macOS."""
-        adapter = OpenClawAdapter()
-        with patch("adaptors.openclaw.adapter.sys.platform", "linux"):
-            assert adapter._keychain_lookup("any-service", "any-account") is None
-
-    def test_keychain_lookup_reads_security_output_on_macos(self):
-        adapter = OpenClawAdapter()
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.stdout = "secret-token\n"
-        with patch("adaptors.openclaw.adapter.sys.platform", "darwin"), \
-             patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_proc):
-            assert adapter._keychain_lookup("svc", "acct") == "secret-token"
-
-
 class TestNotifyEdgeCases:
     def test_notify_cli_not_found(self, monkeypatch):
         """notify() returns False when no message CLI is available."""
