@@ -31,9 +31,14 @@ function createDataWriteEngine(opts = {}) {
     try {
       return await writer.write(envelope);
     } catch (err) {
+      const errObj = err;
+      const errType = errObj?.name || typeof err;
       return {
         status: "failed",
-        error: String(err?.message || err || "Unknown DataWriter error")
+        error: String(errObj?.message || err || "Unknown DataWriter error"),
+        details: {
+          error_type: errType
+        }
       };
     }
   }
