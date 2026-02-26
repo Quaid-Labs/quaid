@@ -10,8 +10,8 @@ Provider resolution order:
 """
 
 import os
+import logging
 import struct
-import sys
 import threading
 from typing import List, Optional
 
@@ -27,6 +27,7 @@ from lib.providers import (
 
 _provider: Optional[EmbeddingsProvider] = None
 _provider_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def get_embeddings_provider() -> EmbeddingsProvider:
@@ -56,10 +57,9 @@ def get_embeddings_provider() -> EmbeddingsProvider:
                 raise RuntimeError(
                     "Failed to resolve adapter embeddings provider while failHard is enabled."
                 ) from exc
-            print(
-                f"[embeddings][FALLBACK] Adapter embeddings provider unavailable: {exc}. "
-                "Falling back to standalone Ollama provider.",
-                file=sys.stderr,
+            logger.warning(
+                "Adapter embeddings provider unavailable; falling back to standalone Ollama provider: %s",
+                exc,
             )
 
         # 3. Default: standalone Ollama
@@ -75,10 +75,9 @@ def get_embeddings_provider() -> EmbeddingsProvider:
                 raise RuntimeError(
                     "Failed to build configured Ollama embeddings provider while failHard is enabled."
                 ) from exc
-            print(
-                f"[embeddings][FALLBACK] Configured Ollama embedding settings unavailable: {exc}. "
-                "Using default Ollama embedding provider settings.",
-                file=sys.stderr,
+            logger.warning(
+                "Configured Ollama embedding settings unavailable; using default provider settings: %s",
+                exc,
             )
             _provider = OllamaEmbeddingsProvider()  # defaults
 

@@ -1,6 +1,7 @@
 """Archive database for decayed memories."""
 
 import json
+import logging
 import sqlite3
 import sys
 from contextlib import contextmanager
@@ -20,6 +21,7 @@ def _default_archive_path() -> Path:
 
 
 ARCHIVE_DB_PATH = None  # Resolved lazily
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS archived_nodes (
@@ -49,9 +51,13 @@ def _get_archive_conn(db_path: Path = None):
     if db_path is None:
         db_path = _default_archive_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
-    conn.executescript(_SCHEMA)
+    conn.execute("PRAGMA busy_timeout = 30000")
+    for statement in _SCHEMA.split(";"):
+        stmt = statement.strip()
+        if stmt:
+            conn.execute(stmt)
     try:
         yield conn
         conn.commit()
@@ -93,7 +99,7 @@ def archive_node(node_dict: Dict[str, Any], reason: str,
             ))
         return True
     except Exception as e:
-        print(f"Archive error: {e}", file=sys.stderr)
+        logger.error("archive_node failed: %s", e)
         return False
 
 
@@ -110,5 +116,6 @@ def search_archive(query: str, limit: int = 10,
                 LIMIT ?
             """, (f"%{escaped}%", limit)).fetchall()
         return [dict(row) for row in rows]
-    except Exception:
+    except Exception as e:
+        logger.warning("search_archive failed: %s", e)
         return []

@@ -273,11 +273,19 @@ def call_llm(system_prompt: str, user_message: str,
     current_cost = estimate_cost()
     if current_cost > _COST_CAP:
         print(f"[llm_clients] COST CAP EXCEEDED: ${current_cost:.4f} > ${_COST_CAP:.2f}, aborting call", file=sys.stderr)
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                f"LLM cost cap exceeded while failHard is enabled: ${current_cost:.4f} > ${_COST_CAP:.2f}"
+            )
         return (None, 0.0)
 
     # Token budget check
     if is_token_budget_exhausted():
         print(f"[llm_clients] TOKEN BUDGET EXHAUSTED: {_token_budget_used:,} >= {_token_budget:,}, aborting call", file=sys.stderr)
+        if is_fail_hard_enabled():
+            raise RuntimeError(
+                f"LLM token budget exhausted while failHard is enabled: {_token_budget_used:,} >= {_token_budget:,}"
+            )
         return (None, 0.0)
 
     messages = [
