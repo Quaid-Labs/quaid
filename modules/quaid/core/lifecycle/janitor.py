@@ -246,8 +246,8 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
             if cached.get("latest") and cached["latest"] != current:
                 return cached
             return None
-    except Exception:
-        pass
+    except Exception as exc:
+        janitor_logger.warning("Update check cache read failed: %s", exc)
 
     # Fetch latest release from GitHub
     try:
@@ -271,8 +271,8 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
     try:
         graph = get_graph()
         write_update_check_cache(graph, result)
-    except Exception:
-        pass
+    except Exception as exc:
+        janitor_logger.warning("Update check cache write failed: %s", exc)
 
     if latest_tag and latest_tag != current:
         # Only notify if latest is actually newer (semver comparison)
@@ -280,9 +280,9 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
             from packaging.version import Version
             if Version(latest_tag) <= Version(current):
                 return None
-        except Exception:
-            # Fallback: simple string comparison — still skip if equal
-            pass
+        except Exception as exc:
+            # Fallback: simple string comparison — still skip if equal.
+            janitor_logger.warning("Semantic version comparison failed; using fallback compare: %s", exc)
         return result
     return None
 
@@ -522,19 +522,22 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # Stage-level caps/budgets and checkpoint resume (janitor bottleneck hardening).
     try:
         _default_stage_item_cap = int(os.environ.get("JANITOR_MAX_ITEMS_PER_STAGE", "0") or 0)
-    except Exception:
+    except Exception as exc:
+        janitor_logger.warning("Invalid JANITOR_MAX_ITEMS_PER_STAGE value; defaulting to 0: %s", exc)
         _default_stage_item_cap = 0
     try:
         _stage_item_caps = json.loads(os.environ.get("JANITOR_STAGE_ITEM_CAPS", "{}") or "{}")
         if not isinstance(_stage_item_caps, dict):
             _stage_item_caps = {}
-    except Exception:
+    except Exception as exc:
+        janitor_logger.warning("Invalid JANITOR_STAGE_ITEM_CAPS JSON; defaulting to {}: %s", exc)
         _stage_item_caps = {}
     try:
         _stage_budget_caps = json.loads(os.environ.get("JANITOR_STAGE_BUDGETS", "{}") or "{}")
         if not isinstance(_stage_budget_caps, dict):
             _stage_budget_caps = {}
-    except Exception:
+    except Exception as exc:
+        janitor_logger.warning("Invalid JANITOR_STAGE_BUDGETS JSON; defaulting to {}: %s", exc)
         _stage_budget_caps = {}
 
     def _stage_item_cap(stage_name: str) -> int:
@@ -801,7 +804,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     continue
                 try:
                     carryover_report[str(key)] = int(value or 0)
-                except Exception:
+                except Exception as exc:
+                    janitor_logger.warning("Invalid carryover metric value for %s=%r: %s", key, value, exc)
                     continue
             if not result.errors:
                 _checkpoint_save(stage=stage, status="running", completed=True)
