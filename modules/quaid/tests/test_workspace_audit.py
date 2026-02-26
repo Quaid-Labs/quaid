@@ -4,6 +4,7 @@ import sys
 import os
 import json
 import tempfile
+import fcntl
 from pathlib import Path
 from unittest.mock import patch, MagicMock, PropertyMock
 
@@ -431,6 +432,36 @@ class TestMtimePersistence:
             save_mtimes({"A.md": 123.0})
 
         assert mock_flock.call_count >= 2
+
+
+class TestReviewDecisionApplyLocking:
+    def test_apply_review_decisions_locks_file_transaction(self, tmp_path):
+        from core.lifecycle.workspace_audit import apply_review_decisions
+
+        (tmp_path / "A.md").write_text("# A\n\n## Trim Me\n\nold content\n")
+        cfg = _make_config_with_core_md(files={"A.md": {"purpose": "A", "maxLines": 100}})
+        decisions_data = {
+            "decisions": [
+                {
+                    "file": "A.md",
+                    "section": "Trim Me",
+                    "action": "TRIM",
+                    "reason": "cleanup",
+                }
+            ]
+        }
+
+        with _adapter_patch(tmp_path), \
+             patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
+             patch("core.lifecycle.workspace_audit.save_mtimes"), \
+             patch("core.lifecycle.workspace_audit.fcntl.flock") as mock_flock:
+            stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
+
+        lock_modes = [call.args[1] for call in mock_flock.call_args_list if len(call.args) >= 2]
+        assert stats["trimmed"] == 1
+        assert "old content" not in (tmp_path / "A.md").read_text()
+        assert lock_modes.count(fcntl.LOCK_EX) >= 1
+        assert lock_modes.count(fcntl.LOCK_UN) >= 1
 
 
 # ---------------------------------------------------------------------------
