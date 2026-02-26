@@ -621,3 +621,16 @@ class TestCleanupStateLocking:
 
             state = updater._load_cleanup_state()
             assert state["docs/test.md"]["updates_since_cleanup"] == 60
+
+
+class TestAuditLogFallback:
+    def test_get_update_log_warns_on_read_failure(self, tmp_path, caplog):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            caplog.set_level("WARNING")
+            with patch.object(updater, "_ensure_audit_table", side_effect=RuntimeError("db offline")):
+                rows = updater.get_update_log(limit=5)
+
+            assert rows == []
+            assert "Failed reading docs update audit log" in caplog.text

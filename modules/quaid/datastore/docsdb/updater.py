@@ -567,8 +567,8 @@ def check_staleness() -> Dict[str, StalenessInfo]:
         registry_mappings = registry.get_source_mappings()
         for doc_path, sources in registry_mappings.items():
             doc_to_sources[doc_path] = sources
-    except Exception:
-        pass  # Registry not available, fall back to config only
+    except Exception as exc:
+        logger.warning("Falling back to config source mappings; registry mappings unavailable: %s", exc)
 
     # 2. Config sourceMapping (fallback for unmigrated docs)
     source_mapping = cfg.docs.source_mapping
@@ -618,8 +618,8 @@ def check_staleness() -> Dict[str, StalenessInfo]:
                 if diff_sections:
                     combined_diff = "\n\n".join(diff_sections)
                     classification = classify_doc_change(combined_diff)
-            except Exception:
-                pass  # Classification is best-effort
+            except Exception as exc:
+                logger.warning("Failed diff classification for %s: %s", doc_path, exc)
 
             stale[doc_path] = StalenessInfo(
                 doc_path=doc_path,
@@ -766,8 +766,8 @@ def update_doc_from_diffs(
             if gate_response and gate_response.strip().upper().startswith("NO"):
                 print(f"  Haiku gate: skip {doc_path} — {gate_response.strip()}")
                 return True
-        except Exception:
-            pass  # Gate is best-effort; proceed to Opus if it fails
+        except Exception as exc:
+            logger.warning("Haiku gate failed for %s: %s", doc_path, exc)
 
     # Check if this is a core markdown file (TOOLS.md, AGENTS.md, etc.)
     core_info = _get_core_markdown_info(doc_path)
@@ -1450,7 +1450,8 @@ def get_update_log(limit: int = 50) -> List[Dict[str, Any]]:
                 "SELECT * FROM doc_update_log ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
             return [dict(row) for row in rows]
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading docs update audit log: %s", exc)
         return []
 
 
