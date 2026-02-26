@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -266,6 +267,23 @@ class TestExtractFromTranscript:
 
         result = extract_from_transcript("   \n  \n  ", owner_id="test")
         assert result["facts_stored"] == 0
+
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.get_config")
+    def test_capture_disabled_skips_extraction(self, mock_get_config, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_get_config.return_value = SimpleNamespace(
+            capture=SimpleNamespace(enabled=False, chunk_size=30000)
+        )
+        result = extract_from_transcript(
+            transcript="User: remember this detail\n\nAssistant: ok",
+            owner_id="test",
+        )
+
+        assert result["facts_stored"] == 0
+        assert result["facts_skipped"] == 0
+        mock_llm.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
