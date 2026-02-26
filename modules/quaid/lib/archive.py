@@ -100,6 +100,8 @@ def archive_node(node_dict: Dict[str, Any], reason: str,
         return True
     except Exception as e:
         logger.error("archive_node failed: %s", e)
+        if is_fail_hard_enabled():
+            raise RuntimeError("archive_node failed while fail-hard mode is enabled") from e
         return False
 
 
