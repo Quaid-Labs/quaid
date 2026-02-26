@@ -27,6 +27,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import difflib
 import json
 import logging
@@ -54,6 +55,30 @@ def _changelog_path() -> Path:
 
 def _cleanup_state_path() -> Path:
     return _workspace() / "logs" / "docs-cleanup-state.json"
+
+
+def _cleanup_state_lock_path() -> Path:
+    return _cleanup_state_path().with_suffix(".json.lock")
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+", encoding="utf-8")
+    try:
+        try:
+            import fcntl  # type: ignore
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        except Exception:
+            pass
+        yield
+    finally:
+        try:
+            import fcntl  # type: ignore
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        handle.close()
 
 
 def _queue_delayed_notification(message: str, kind: str, priority: str, source: str) -> None:
@@ -181,26 +206,28 @@ def _save_cleanup_state(state: Dict[str, dict]) -> None:
 
 def _increment_update_count(doc_path: str, chars_after: int) -> None:
     """Increment the update count for a doc after an auto-update."""
-    state = _load_cleanup_state()
-    if doc_path not in state:
-        state[doc_path] = {
-            "last_cleanup": None,
-            "chars_at_cleanup": chars_after,
-            "updates_since_cleanup": 0,
-        }
-    state[doc_path]["updates_since_cleanup"] = state[doc_path].get("updates_since_cleanup", 0) + 1
-    _save_cleanup_state(state)
+    with _file_lock(_cleanup_state_lock_path()):
+        state = _load_cleanup_state()
+        if doc_path not in state:
+            state[doc_path] = {
+                "last_cleanup": None,
+                "chars_at_cleanup": chars_after,
+                "updates_since_cleanup": 0,
+            }
+        state[doc_path]["updates_since_cleanup"] = state[doc_path].get("updates_since_cleanup", 0) + 1
+        _save_cleanup_state(state)
 
 
 def _reset_cleanup_state(doc_path: str, chars: int) -> None:
     """Reset cleanup state after a cleanup is performed."""
-    state = _load_cleanup_state()
-    state[doc_path] = {
-        "last_cleanup": datetime.now().isoformat(),
-        "chars_at_cleanup": chars,
-        "updates_since_cleanup": 0,
-    }
-    _save_cleanup_state(state)
+    with _file_lock(_cleanup_state_lock_path()):
+        state = _load_cleanup_state()
+        state[doc_path] = {
+            "last_cleanup": datetime.now().isoformat(),
+            "chars_at_cleanup": chars,
+            "updates_since_cleanup": 0,
+        }
+        _save_cleanup_state(state)
 
 
 @dataclass
