@@ -19,6 +19,7 @@ import os
 import sys
 import json
 import logging
+import uuid
 
 # MCP uses stdout for JSON-RPC — redirect stdout to stderr before any imports
 # to catch stray prints from memory_graph.py, lib/embeddings.py, etc.
@@ -356,6 +357,16 @@ def memory_search(
     )
 
 
+def _normalize_node_id(node_id: str) -> str | None:
+    raw = str(node_id or "").strip()
+    if not raw:
+        return None
+    try:
+        return str(uuid.UUID(raw))
+    except Exception:
+        return None
+
+
 @mcp.tool()
 def memory_get(node_id: str) -> dict:
     """Get a single memory by its ID.
@@ -367,9 +378,13 @@ def memory_get(node_id: str) -> dict:
         Full memory dict with id, type, name, content, confidence, attributes, etc.
         Returns error dict if not found.
     """
-    result = get_memory(node_id)
+    normalized = _normalize_node_id(node_id)
+    if not normalized:
+        return {"error": "node_id must be a valid UUID"}
+
+    result = get_memory(normalized)
     if result is None:
-        return {"error": f"Memory not found: {node_id}"}
+        return {"error": f"Memory not found: {normalized}"}
     return result
 
 
@@ -388,8 +403,14 @@ def memory_forget(node_id: str = "", query: str = "") -> dict:
     """
     if not node_id and not query:
         return {"error": "Provide either node_id or query"}
+    normalized = None
+    if node_id:
+        normalized = _normalize_node_id(node_id)
+        if not normalized:
+            return {"error": "node_id must be a valid UUID"}
+
     deleted = forget(
-        node_id=node_id if node_id else None,
+        node_id=normalized if normalized else None,
         query=query if query else None,
     )
     return {"deleted": deleted}
