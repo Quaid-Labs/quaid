@@ -387,6 +387,7 @@ def extract_from_transcript(
         privacy = fact.get("privacy", "shared")
         keywords = fact.get("keywords")
         is_technical = bool(fact.get("is_technical", False))
+        project = fact.get("project")
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = f"{label}-extraction"
         raw_source = str(fact.get("source", "user")).strip().lower()
@@ -414,6 +415,7 @@ def extract_from_transcript(
                 keywords=keywords,
                 source_type=source_type,
                 is_technical=is_technical,
+                project=project,
                 actor_id=actor_id,
                 speaker_entity_id=speaker_entity_id,
                 subject_entity_id=subject_entity_id,

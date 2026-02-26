@@ -2611,22 +2611,32 @@ def review_pending_memories(
     owner = _owner_display_name()
     owner_full = _owner_full_name()
     system_prompt = f"""You are reviewing memories in {owner}'s personal knowledge base.
-For each memory, decide: KEEP, DELETE, FIX, or MERGE.
+For each memory, decide: KEEP, DELETE, or FIX.
 
-This is a PERSONAL knowledge base — it stores facts about people ({owner}, family, friends,
-colleagues, pets), their preferences, relationships, decisions, and life events.
-System architecture, infrastructure configs, and operational rules belong in documentation, NOT here.
+This is a PERSONAL knowledge base with PROJECT continuity.
+It stores facts about people ({owner}, family, friends, colleagues, pets), their preferences,
+relationships, decisions, life events, and high-value project-state continuity.
+System architecture docs and generic infrastructure references belong in documentation, not memory.
 
 CRITERIA:
 - KEEP: Personal facts, preferences, opinions, decisions (with reasoning), relationships,
   significant life events, health info, locations, schedules, emotional reactions.
-  Personal tech decisions count ("{owner} chose X because Y") — the decision is about the person.
-- DELETE: Noise, conversational filler, temporary/ephemeral info, obvious duplicates,
-  vague/unactionable statements (e.g. "The user wants a specific workflow" with no detail).
-  Also DELETE: system architecture facts, infrastructure knowledge, operational rules for AI agents,
-  tool/config descriptions, code implementation details — these belong in docs/RAG, not personal memory.
+- KEEP: Technical/project-state facts that are specific and reusable later, including bugs,
+  fixes, root causes, architecture choices, schema/API details, version changes, deployment
+  choices, tests, and concrete implementation constraints.
+- KEEP: Assistant-originated technical guidance when it captures a concrete project decision,
+  implementation detail, or operational state.
+- DELETE: Conversational filler, generic platitudes, motivational chatter, one-off social
+  suggestions with no lasting value, obvious duplicates, and vague/unactionable statements.
+- DELETE: Generic tool boilerplate not tied to a specific project/work context.
 - FIX: Good info with attribution errors or clarity issues (fix "The user" -> "{owner}")
-- MERGE: Multiple related memories -> consolidate into one
+
+HARD RULES:
+- DO NOT delete a memory only because it is assistant-sourced.
+- DO NOT delete a memory only because it is technical.
+- For technical memories, prefer KEEP unless it is clearly generic boilerplate or clearly
+  ephemeral with no future utility.
+- Do NOT use MERGE in this pass. Return only KEEP/DELETE/FIX.
 
 TEMPORAL RESOLUTION — IMPORTANT:
 Each memory includes a "created_at" timestamp showing when it was recorded.
@@ -2652,15 +2662,14 @@ EDGE DIRECTION RULES:
 Only include edges when the fact describes a relationship between named entities.
 Do not include edges for facts that don't describe relationships (preferences, events, etc.).
 
-Any merged_text or new_text for facts MUST be at least 3 words (subject + verb + object). Entity names (people, places) can be 1-2 words.
+Any new_text for facts MUST be at least 3 words (subject + verb + object). Entity names (people, places) can be 1-2 words.
 
 Respond with a JSON array only, no markdown fencing:
 [
   {{"id": "uuid", "action": "KEEP"}},
   {{"id": "uuid", "action": "DELETE"}},
   {{"id": "uuid", "action": "FIX", "new_text": "corrected text"}},
-  {{"id": "uuid", "action": "FIX", "new_text": "Beth is {owner}'s sister", "edges": [{{"subject": "Beth", "relation": "sibling_of", "object": "{owner_full}"}}]}},
-  {{"action": "MERGE", "merge_ids": ["uuid1", "uuid2"], "merged_text": "consolidated"}}
+  {{"id": "uuid", "action": "FIX", "new_text": "Beth is {owner}'s sister", "edges": [{{"subject": "Beth", "relation": "sibling_of", "object": "{owner_full}"}}]}}
 ]"""
 
     # Split into token-aware batches (output_tokens_per_item=200 caps batch size
@@ -3029,14 +3038,26 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
             continue
 
         current_text = ""
+        source_type = None
+        source_value = None
+        speaker_value = None
         with graph._get_conn() as conn:
             row = conn.execute(
-                "SELECT name, status FROM nodes WHERE id = ?",
+                "SELECT name, status, source, speaker, attributes FROM nodes WHERE id = ?",
                 (memory_id,),
             ).fetchone()
             current_status = row["status"] if row else "missing"
             if row and row["name"]:
                 current_text = str(row["name"])
+            if row:
+                source_value = row["source"]
+                speaker_value = row["speaker"]
+                try:
+                    attrs = json.loads(row["attributes"] or "{}")
+                    if isinstance(attrs, dict):
+                        source_type = attrs.get("source_type")
+                except Exception:
+                    source_type = None
 
         if action == "DELETE":
             _diag_log_decision(
@@ -3045,6 +3066,9 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                 memory_id=memory_id,
                 current_status=current_status,
                 current_text=current_text,
+                source=source_value,
+                speaker=speaker_value,
+                source_type=source_type,
                 reason=reason,
             )
             if dry_run:
@@ -3078,6 +3102,9 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                 memory_id=memory_id,
                 current_status=current_status,
                 current_text=current_text,
+                source=source_value,
+                speaker=speaker_value,
+                source_type=source_type,
                 new_text=new_text,
                 reason=reason,
                 new_edges_count=len(new_edges or []),
@@ -3144,6 +3171,9 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
                 memory_id=memory_id,
                 current_status=current_status,
                 current_text=current_text,
+                source=source_value,
+                speaker=speaker_value,
+                source_type=source_type,
                 reason=reason,
             )
             if not dry_run:
