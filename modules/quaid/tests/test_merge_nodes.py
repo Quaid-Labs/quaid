@@ -13,7 +13,9 @@ Validates the fix for the destructive merge pattern:
 import os
 import sys
 import hashlib
+import sqlite3
 from datetime import datetime, timedelta
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 # Ensure plugin root is on the path
@@ -108,6 +110,44 @@ def _count_nodes(graph):
     """Count total nodes in the database."""
     with graph._get_conn() as conn:
         return conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+
+
+def test_merge_nodes_tolerates_missing_vec_table_cleanup(tmp_path):
+    from datastore.memorydb.maintenance_ops import _merge_nodes_into
+
+    graph, _ = _make_graph(tmp_path)
+    node_a = _store_and_get(graph, "Quaid likes strong coffee")
+    node_b = _store_and_get(graph, "Quaid prefers strong coffee")
+
+    original_get_conn = graph._get_conn
+
+    @contextmanager
+    def _conn_with_missing_vec_table():
+        with original_get_conn() as conn:
+            class _ProxyConn:
+                def __init__(self, inner):
+                    self._inner = inner
+
+                def execute(self, sql, params=()):
+                    text = str(sql).strip().lower()
+                    if text.startswith("delete from vec_nodes"):
+                        raise sqlite3.OperationalError("no such table: vec_nodes")
+                    return self._inner.execute(sql, params)
+
+            yield _ProxyConn(conn)
+
+    with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+         patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+         patch("datastore.memorydb.memory_graph._HAS_CONFIG", False), \
+         patch.object(graph, "_get_conn", _conn_with_missing_vec_table):
+        result = _merge_nodes_into(
+            graph,
+            "Quaid likes strong coffee",
+            [node_a.id, node_b.id],
+            source="dedup_merge",
+        )
+
+    assert result and result.get("id")
 
 
 # ===========================================================================
