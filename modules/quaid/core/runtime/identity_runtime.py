@@ -112,7 +112,9 @@ def enrich_identity_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         return payload
     resolved = _identity_resolver.fn(dict(payload))
     if not isinstance(resolved, dict):
-        raise RuntimeError("identity resolver returned non-dict payload")
+        raise RuntimeError(
+            f"identity resolver returned non-dict payload type={type(resolved).__name__}"
+        )
     return resolved
 
 
