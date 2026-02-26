@@ -479,6 +479,41 @@ const NOTES_DIR = QUAID_NOTES_DIR;
 function getNotesPath(sessionId) {
   return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
 }
+function _sleepMs(ms) {
+  const i32 = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(i32, 0, 0, Math.max(1, Math.floor(ms)));
+}
+function withNotesLock(sessionId, fn) {
+  const lockPath = `${getNotesPath(sessionId)}.lock`;
+  let fd;
+  let lastErr;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      fd = fs.openSync(lockPath, "wx", 384);
+      break;
+    } catch (err) {
+      const code = err?.code;
+      if (code !== "EEXIST") throw err;
+      lastErr = err;
+      _sleepMs(10);
+    }
+  }
+  if (fd === void 0) {
+    throw new Error(`failed to acquire memory-notes lock for session=${sessionId}: ${String(lastErr?.message || lastErr)}`);
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+    }
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+    }
+  }
+}
 function getInjectionLogPath(sessionId) {
   return path.join(QUAID_INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
 }
@@ -522,19 +557,21 @@ function addMemoryNote(sessionId, text, category) {
     noteList.splice(0, noteList.length - MAX_MEMORY_NOTES_PER_SESSION);
   }
   try {
-    const notesPath = getNotesPath(sessionId);
-    let existing = [];
-    try {
-      existing = JSON.parse(fs.readFileSync(notesPath, "utf8"));
-    } catch (err) {
-      const msg = String(err?.message || err);
-      if (!msg.includes("ENOENT") && isFailHardEnabled()) {
-        throw err;
+    withNotesLock(sessionId, () => {
+      const notesPath = getNotesPath(sessionId);
+      let existing = [];
+      try {
+        existing = JSON.parse(fs.readFileSync(notesPath, "utf8"));
+      } catch (err) {
+        const msg = String(err?.message || err);
+        if (!msg.includes("ENOENT") && isFailHardEnabled()) {
+          throw err;
+        }
+        console.warn(`[quaid] memory note read failed for ${notesPath}: ${msg}`);
       }
-      console.warn(`[quaid] memory note read failed for ${notesPath}: ${msg}`);
-    }
-    existing.push(`[${category}] ${text}`);
-    fs.writeFileSync(notesPath, JSON.stringify(existing), { mode: 384 });
+      existing.push(`[${category}] ${text}`);
+      fs.writeFileSync(notesPath, JSON.stringify(existing), { mode: 384 });
+    });
   } catch (err) {
     if (isFailHardEnabled()) {
       throw err;
@@ -543,23 +580,25 @@ function addMemoryNote(sessionId, text, category) {
   }
 }
 function getAndClearMemoryNotes(sessionId) {
-  const inMemory = _memoryNotes.get(sessionId) || [];
-  let onDisk = [];
-  const notesPath = getNotesPath(sessionId);
-  try {
-    onDisk = JSON.parse(fs.readFileSync(notesPath, "utf8"));
-  } catch (err) {
-    console.warn(`[quaid] memory note load failed for ${notesPath}: ${String(err?.message || err)}`);
-  }
-  const all = Array.from(/* @__PURE__ */ new Set([...inMemory, ...onDisk]));
-  _memoryNotes.delete(sessionId);
-  _memoryNotesTouchedAt.delete(sessionId);
-  try {
-    fs.unlinkSync(notesPath);
-  } catch (err) {
-    console.warn(`[quaid] memory note cleanup failed for ${notesPath}: ${String(err?.message || err)}`);
-  }
-  return all;
+  return withNotesLock(sessionId, () => {
+    const inMemory = _memoryNotes.get(sessionId) || [];
+    let onDisk = [];
+    const notesPath = getNotesPath(sessionId);
+    try {
+      onDisk = JSON.parse(fs.readFileSync(notesPath, "utf8"));
+    } catch (err) {
+      console.warn(`[quaid] memory note load failed for ${notesPath}: ${String(err?.message || err)}`);
+    }
+    const all = Array.from(/* @__PURE__ */ new Set([...inMemory, ...onDisk]));
+    _memoryNotes.delete(sessionId);
+    _memoryNotesTouchedAt.delete(sessionId);
+    try {
+      fs.unlinkSync(notesPath);
+    } catch (err) {
+      console.warn(`[quaid] memory note cleanup failed for ${notesPath}: ${String(err?.message || err)}`);
+    }
+    return all;
+  });
 }
 function extractSessionId(messages, ctx) {
   if (ctx?.sessionId) {
