@@ -548,6 +548,11 @@ class SessionTimeoutManager {
       const existing = JSON.parse(raw);
       const existingPid = Number(existing?.pid || 0);
       if (this.isPidAlive(existingPid)) return false;
+      const verifyRaw = fs.readFileSync(this.workerLockPath, "utf8");
+      const verify = JSON.parse(verifyRaw);
+      if (Number(verify?.pid || 0) !== existingPid || String(verify?.token || "") !== String(existing?.token || "")) {
+        return false;
+      }
       try {
         fs.unlinkSync(this.workerLockPath);
       } catch {
