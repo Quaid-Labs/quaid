@@ -582,11 +582,18 @@ class TestNotifyUser:
 
 
 class TestNotifyFallbackVisibility:
-    def test_notify_full_text_config_error_logs_warning(self, caplog):
+    def test_notify_full_text_config_error_logs_warning_when_fail_hard_disabled(self, caplog):
         caplog.set_level("WARNING")
-        with patch("config.get_config", side_effect=RuntimeError("bad config")):
+        with patch("config.get_config", side_effect=RuntimeError("bad config")), \
+             patch("core.runtime.notify.is_fail_hard_enabled", return_value=False):
             assert _notify_full_text() is False
         assert "Failed to read notifications.full_text config" in caplog.text
+
+    def test_notify_full_text_config_error_raises_when_fail_hard_enabled(self):
+        with patch("config.get_config", side_effect=RuntimeError("bad config")), \
+             patch("core.runtime.notify.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError, match="fail-hard mode"):
+                _notify_full_text()
 
     def test_check_janitor_health_returns_warning_on_runtime_error(self, caplog):
         caplog.set_level("WARNING")
