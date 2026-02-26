@@ -18,6 +18,7 @@ Environment variables:
 import os
 import sys
 import json
+import logging
 
 # MCP uses stdout for JSON-RPC — redirect stdout to stderr before any imports
 # to catch stray prints from memory_graph.py, lib/embeddings.py, etc.
@@ -52,6 +53,7 @@ from lib.runtime_context import (
 from lib.fail_policy import is_fail_hard_enabled
 
 OWNER_ID = os.environ.get("QUAID_OWNER", "default")
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP("quaid", instructions=(
     "Quaid is a persistent knowledge layer. Use memory_extract to extract memories "
@@ -455,8 +457,8 @@ def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -
     extraction_log: dict = {}
     try:
         extraction_log = _json.loads(log_path.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("session_recall failed to parse extraction log %s: %s", log_path, exc)
 
     if action == "list":
         entries = [
