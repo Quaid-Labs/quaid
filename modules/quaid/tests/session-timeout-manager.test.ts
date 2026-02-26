@@ -431,4 +431,42 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(() => (manager as any).releaseWorkerLock()).toThrow()
   })
+
+  it('throws on orphaned signal-claim recovery failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-orphan-signal-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const signalDir = (manager as any).pendingSignalDir as string
+    fs.mkdirSync(signalDir, { recursive: true })
+    const originalPath = path.join(signalDir, 'session-x.json')
+    fs.writeFileSync(originalPath, JSON.stringify({ sessionId: 'session-x' }), 'utf8')
+    const lockedPath = `${originalPath}.processing.1`
+    fs.mkdirSync(lockedPath, { recursive: true })
+
+    expect(() => (manager as any).recoverOrphanedSignalClaims()).toThrow()
+  })
+
+  it('throws on clearBuffer unlink failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-clear-buffer-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const fp = (manager as any).bufferPath('session-bad-clear') as string
+    fs.mkdirSync(fp, { recursive: true })
+
+    expect(() => (manager as any).clearBuffer('session-bad-clear')).toThrow()
+  })
 })
