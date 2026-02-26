@@ -21,6 +21,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -112,6 +113,30 @@ def _chunk_transcript_text(transcript: str, max_chars: int = 30_000) -> List[str
     if current:
         chunks.append('\n\n'.join(current))
     return chunks
+
+
+def _apply_capture_skip_patterns(transcript: str, patterns: List[str]) -> str:
+    """Remove transcript lines matching configured capture skip regex patterns."""
+    if not patterns:
+        return transcript
+    compiled = []
+    for pattern in patterns:
+        try:
+            compiled.append(re.compile(str(pattern), re.IGNORECASE))
+        except re.error:
+            logger.warning("[extract] invalid capture.skip_patterns regex ignored: %r", pattern)
+    if not compiled:
+        return transcript
+    kept_lines = []
+    removed = 0
+    for line in transcript.splitlines():
+        if any(rx.search(line) for rx in compiled):
+            removed += 1
+            continue
+        kept_lines.append(line)
+    if removed:
+        logger.info("[extract] capture.skip_patterns removed %d transcript line(s)", removed)
+    return "\n".join(kept_lines)
 
 
 def _build_chunk_carry_context(
@@ -231,13 +256,22 @@ def extract_from_transcript(
         logger.info(f"[extract] {label}: empty transcript, nothing to extract")
         return result
 
+    capture_skip_patterns: List[str] = []
     try:
         capture_cfg = get_config().capture
         if not bool(getattr(capture_cfg, "enabled", True)):
             logger.info(f"[extract] {label}: capture disabled, skipping extraction")
             return result
+        raw_skip = getattr(capture_cfg, "skip_patterns", []) or []
+        if isinstance(raw_skip, list):
+            capture_skip_patterns = [str(p) for p in raw_skip if str(p).strip()]
     except Exception:
         pass
+
+    transcript = _apply_capture_skip_patterns(transcript, capture_skip_patterns)
+    if not transcript.strip():
+        logger.info(f"[extract] {label}: transcript emptied by capture.skip_patterns")
+        return result
 
     # Load extraction prompt
     system_prompt = _load_extraction_prompt()
