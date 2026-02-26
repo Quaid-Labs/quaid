@@ -19,7 +19,11 @@ function isFailHardEnabled(workspace) {
     const retrieval = raw?.retrieval || {};
     if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
     if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
-  } catch {
+  } catch (err) {
+    const msg = String(err?.message || err || "");
+    if (!msg.includes("ENOENT")) {
+      console.warn(`[quaid][timeout] failed to read failHard config; defaulting to true: ${msg}`);
+    }
   }
   return true;
 }
@@ -502,7 +506,9 @@ class SessionTimeoutManager {
     return true;
   }
   queueExtraction(messages, sessionId, timeoutMinutes) {
-    this.chain = this.chain.catch(() => {
+    this.chain = this.chain.catch((err) => {
+      safeLog(this.logger, `[quaid][timeout] previous extraction chain error: ${String(err?.message || err)}`);
+      if (this.failHard) throw err;
     }).then(async () => {
       safeLog(this.logger, `[quaid] Inactivity timeout (${timeoutMinutes}m) \u2014 extracting ${messages.length} messages`);
       this.writeQuaidLog("extract_begin", sessionId, { message_count: messages.length, timeout_minutes: timeoutMinutes });
@@ -512,7 +518,9 @@ class SessionTimeoutManager {
     });
   }
   triggerWorkerTick() {
-    this.chain = this.chain.catch(() => {
+    this.chain = this.chain.catch((err) => {
+      safeLog(this.logger, `[quaid][timeout] previous worker chain error: ${String(err?.message || err)}`);
+      if (this.failHard) throw err;
     }).then(async () => {
       await this.processPendingExtractionSignals();
       await this.recoverStaleBuffers();

@@ -49,7 +49,12 @@ function isFailHardEnabled(workspace: string): boolean {
     const retrieval = raw?.retrieval || {};
     if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
     if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
-  } catch {}
+  } catch (err: unknown) {
+    const msg = String((err as Error)?.message || err || "");
+    if (!msg.includes("ENOENT")) {
+      console.warn(`[quaid][timeout] failed to read failHard config; defaulting to true: ${msg}`);
+    }
+  }
   return true;
 }
 
@@ -541,7 +546,10 @@ export class SessionTimeoutManager {
 
   private queueExtraction(messages: any[], sessionId: string, timeoutMinutes: number): void {
     this.chain = this.chain
-      .catch(() => {})
+      .catch((err: unknown) => {
+        safeLog(this.logger, `[quaid][timeout] previous extraction chain error: ${String((err as Error)?.message || err)}`);
+        if (this.failHard) throw err;
+      })
       .then(async () => {
         safeLog(this.logger, `[quaid] Inactivity timeout (${timeoutMinutes}m) — extracting ${messages.length} messages`);
         this.writeQuaidLog("extract_begin", sessionId, { message_count: messages.length, timeout_minutes: timeoutMinutes });
@@ -553,7 +561,10 @@ export class SessionTimeoutManager {
 
   private triggerWorkerTick(): void {
     this.chain = this.chain
-      .catch(() => {})
+      .catch((err: unknown) => {
+        safeLog(this.logger, `[quaid][timeout] previous worker chain error: ${String((err as Error)?.message || err)}`);
+        if (this.failHard) throw err;
+      })
       .then(async () => {
         await this.processPendingExtractionSignals();
         await this.recoverStaleBuffers();

@@ -44,7 +44,10 @@ export function queueDelayedRequest(
   try {
     const normalizedMessage = String(message || "").trim();
     if (!normalizedMessage) return false;
-    const payload = (readJson(requestsPath) || { version: 1, requests: [] }) as RequestsPayload;
+    const loaded = readJson(requestsPath);
+    const payload = (loaded && typeof loaded === "object" && !Array.isArray(loaded)
+      ? loaded
+      : { version: 1, requests: [] }) as RequestsPayload;
     const requests = Array.isArray(payload.requests) ? payload.requests : [];
     const id = makeRequestId(kind, normalizedMessage);
     if (requests.some((r: any) => r && String(r.id || "") === id && r.status === "pending")) {
@@ -75,7 +78,10 @@ export function resolveDelayedRequests(
 ): number {
   if (!Array.isArray(ids) || !ids.length) return 0;
   const idSet = new Set(ids.map((x) => String(x)));
-  const payload = (readJson(requestsPath) || { version: 1, requests: [] }) as RequestsPayload;
+  const loaded = readJson(requestsPath);
+  const payload = (loaded && typeof loaded === "object" && !Array.isArray(loaded)
+    ? loaded
+    : { version: 1, requests: [] }) as RequestsPayload;
   const requests = Array.isArray(payload.requests) ? payload.requests : [];
   let changed = 0;
   for (const req of requests) {
@@ -92,7 +98,10 @@ export function resolveDelayedRequests(
 }
 
 export function clearResolvedRequests(requestsPath: string): number {
-  const payload = (readJson(requestsPath) || { version: 1, requests: [] }) as RequestsPayload;
+  const loaded = readJson(requestsPath);
+  const payload = (loaded && typeof loaded === "object" && !Array.isArray(loaded)
+    ? loaded
+    : { version: 1, requests: [] }) as RequestsPayload;
   const requests = Array.isArray(payload.requests) ? payload.requests : [];
   const before = requests.length;
   const kept = requests.filter((r) => r && r.status !== "resolved");

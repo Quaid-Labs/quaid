@@ -55,7 +55,7 @@ from core.lifecycle.datastore_runtime import (
     write_update_check_cache,
     _is_benchmark_mode,
 )
-from core.llm.clients import (
+from lib.llm_clients import (
     reset_token_usage,
     get_token_usage,
     estimate_cost,
@@ -259,8 +259,11 @@ def _check_for_updates() -> Optional[Dict[str, str]]:
             data = json.loads(resp.read().decode())
         latest_tag = data.get("tag_name", "").lstrip("v")
         html_url = data.get("html_url", f"https://github.com/{REPO}/releases")
-    except (urllib.error.URLError, Exception) as e:
+    except urllib.error.URLError as e:
         print(f"  Update check failed (network): {e}")
+        return None
+    except Exception as e:
+        print(f"  Update check failed (non-network): {e}")
         return None
 
     # Cache the result via datastore helper
@@ -580,8 +583,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     "[checkpoint] Resuming janitor run with completed stages: "
                     f"{checkpoint_state.get('completed_stages', [])}"
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[checkpoint] WARNING: failed to parse resume checkpoint {checkpoint_path}: {exc}")
     if task == "all":
         checkpoint_path.write_text(json.dumps(checkpoint_state, indent=2) + "\n", encoding="utf-8")
 

@@ -539,6 +539,10 @@ The half-life is extended by access frequency (`access_bonus_factor * access_cou
 
 Quaid is fail-hard by default (`retrieval.fail_hard=true`). In this mode, provider failures raise immediately instead of silently degrading. If operators explicitly set `retrieval.fail_hard=false`, fallback paths are allowed but must emit explicit warnings.
 
+Runtime hardening notes:
+- `retrieval.fail_hard` is the canonical config key; `retrieval.failHard` is treated as compatibility alias.
+- Core LLM pool size and janitor lifecycle worker pool size are process-stable for safety. Changing worker counts in config takes effect on process restart (live semaphore/executor resize is intentionally blocked to avoid stranded waiters/tasks).
+
 The system encounters three main failure modes during operation.
 
 ### Anthropic API Unavailable

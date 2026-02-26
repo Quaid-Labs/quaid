@@ -17,7 +17,8 @@ function queueDelayedRequest(requestsPath, message, kind = "janitor", priority =
   try {
     const normalizedMessage = String(message || "").trim();
     if (!normalizedMessage) return false;
-    const payload = readJson(requestsPath) || { version: 1, requests: [] };
+    const loaded = readJson(requestsPath);
+    const payload = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? loaded : { version: 1, requests: [] };
     const requests = Array.isArray(payload.requests) ? payload.requests : [];
     const id = makeRequestId(kind, normalizedMessage);
     if (requests.some((r) => r && String(r.id || "") === id && r.status === "pending")) {
@@ -43,7 +44,8 @@ function queueDelayedRequest(requestsPath, message, kind = "janitor", priority =
 function resolveDelayedRequests(requestsPath, ids, resolutionNote = "resolved by agent") {
   if (!Array.isArray(ids) || !ids.length) return 0;
   const idSet = new Set(ids.map((x) => String(x)));
-  const payload = readJson(requestsPath) || { version: 1, requests: [] };
+  const loaded = readJson(requestsPath);
+  const payload = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? loaded : { version: 1, requests: [] };
   const requests = Array.isArray(payload.requests) ? payload.requests : [];
   let changed = 0;
   for (const req of requests) {
@@ -59,7 +61,8 @@ function resolveDelayedRequests(requestsPath, ids, resolutionNote = "resolved by
   return changed;
 }
 function clearResolvedRequests(requestsPath) {
-  const payload = readJson(requestsPath) || { version: 1, requests: [] };
+  const loaded = readJson(requestsPath);
+  const payload = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? loaded : { version: 1, requests: [] };
   const requests = Array.isArray(payload.requests) ? payload.requests : [];
   const before = requests.length;
   const kept = requests.filter((r) => r && r.status !== "resolved");

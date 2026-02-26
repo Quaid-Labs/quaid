@@ -146,6 +146,8 @@ def _merge_nodes_into(
         node = graph.get_node(oid)
         if node:
             originals.append(node)
+    if not originals:
+        return None
 
     # Inherit the strongest signals from originals
     max_confidence = max((n.confidence for n in originals), default=0.9)
@@ -185,6 +187,7 @@ def _merge_nodes_into(
 
     # Migrate edges: repoint to merged node instead of deleting
     with graph._get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         for oid in original_ids:
             # Repoint source_fact_id edges
             conn.execute(
@@ -341,6 +344,7 @@ class JanitorMetrics:
         self.task_times = {}
         self.task_meta = {}
         self.current_task = None
+        self._thread_task: Dict[int, str] = {}
         self.llm_calls = 0
         self.llm_time = 0.0
         self.errors = []
@@ -356,6 +360,7 @@ class JanitorMetrics:
                 "warnings": 0,
             }
             self.current_task = task_name
+            self._thread_task[threading.get_ident()] = task_name
     
     def end_task(self, task_name: str):
         with self._lock:
@@ -363,6 +368,9 @@ class JanitorMetrics:
                 self.task_times[task_name]["end"] = time.time()
             if self.current_task == task_name:
                 self.current_task = None
+            tid = threading.get_ident()
+            if self._thread_task.get(tid) == task_name:
+                self._thread_task.pop(tid, None)
     
     def task_duration(self, task_name: str) -> float:
         if task_name in self.task_times and self.task_times[task_name]["end"]:
@@ -376,21 +384,24 @@ class JanitorMetrics:
         with self._lock:
             self.llm_calls += 1
             self.llm_time += duration
-            if self.current_task and self.current_task in self.task_meta:
-                self.task_meta[self.current_task]["llm_calls"] += 1
-                self.task_meta[self.current_task]["llm_time_seconds"] += float(duration or 0.0)
+            task = self._thread_task.get(threading.get_ident()) or self.current_task
+            if task and task in self.task_meta:
+                self.task_meta[task]["llm_calls"] += 1
+                self.task_meta[task]["llm_time_seconds"] += float(duration or 0.0)
     
     def add_error(self, error: str):
         with self._lock:
             self.errors.append({"time": datetime.now().isoformat(), "error": error})
-            if self.current_task and self.current_task in self.task_meta:
-                self.task_meta[self.current_task]["errors"] += 1
+            task = self._thread_task.get(threading.get_ident()) or self.current_task
+            if task and task in self.task_meta:
+                self.task_meta[task]["errors"] += 1
 
     def add_warning(self, warning: str):
         with self._lock:
             self.warnings.append({"time": datetime.now().isoformat(), "warning": warning})
-            if self.current_task and self.current_task in self.task_meta:
-                self.task_meta[self.current_task]["warnings"] += 1
+            task = self._thread_task.get(threading.get_ident()) or self.current_task
+            if task and task in self.task_meta:
+                self.task_meta[task]["warnings"] += 1
 
     @property
     def has_errors(self) -> bool:

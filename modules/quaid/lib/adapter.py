@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
@@ -465,6 +466,7 @@ class TestAdapter(StandaloneAdapter):
 # ---------------------------------------------------------------------------
 
 _adapter: Optional[QuaidAdapter] = None
+_adapter_lock = threading.Lock()
 
 
 def _adapter_config_paths() -> List[Path]:
@@ -551,26 +553,23 @@ def get_adapter() -> QuaidAdapter:
     global _adapter
     if _adapter is not None:
         return _adapter
-
-    kind = _read_adapter_type_from_config()
-    if kind == "openclaw":
-        from adaptors.openclaw.adapter import OpenClawAdapter
-        _adapter = OpenClawAdapter()
-    elif kind == "standalone":
-        _adapter = StandaloneAdapter()
-    else:
-        raise RuntimeError(
-            f"Unsupported adapter type: {kind!r}. "
-            "Expected 'standalone' or 'openclaw'."
-        )
-
-    return _adapter
+    with _adapter_lock:
+        if _adapter is not None:
+            return _adapter
+        kind = _read_adapter_type_from_config()
+        if kind == "standalone":
+            _adapter = StandaloneAdapter()
+            return _adapter
+        from adaptors.factory import create_adapter
+        _adapter = create_adapter(kind)
+        return _adapter
 
 
 def set_adapter(adapter: QuaidAdapter) -> None:
     """Override the adapter (for tests)."""
     global _adapter
-    _adapter = adapter
+    with _adapter_lock:
+        _adapter = adapter
 
 
 def reset_adapter() -> None:
@@ -580,7 +579,8 @@ def reset_adapter() -> None:
     against the next adapter.
     """
     global _adapter
-    _adapter = None
+    with _adapter_lock:
+        _adapter = None
     # Clear embeddings provider cache so it re-resolves against the new adapter
     try:
         from lib.embeddings import reset_embeddings_provider
