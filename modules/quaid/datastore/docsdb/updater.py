@@ -82,6 +82,47 @@ def _file_lock(path: Path):
         handle.close()
 
 
+def _git_subprocess_budget_seconds() -> float:
+    raw = os.getenv("QUAID_DOCS_GIT_BUDGET_S", "").strip()
+    if not raw:
+        return 30.0
+    try:
+        parsed = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid QUAID_DOCS_GIT_BUDGET_S=%r; using default 30s",
+            raw,
+        )
+        return 30.0
+    if parsed <= 0:
+        logger.warning(
+            "Non-positive QUAID_DOCS_GIT_BUDGET_S=%r; using minimum 1s",
+            raw,
+        )
+        return 1.0
+    return parsed
+
+
+def _git_timeout_from_deadline(deadline: float, per_call_cap_seconds: float = 10.0) -> Optional[float]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    return max(0.05, min(per_call_cap_seconds, remaining))
+
+
+def _run_git_command(args: List[str], deadline: float) -> subprocess.CompletedProcess[str]:
+    timeout = _git_timeout_from_deadline(deadline)
+    if timeout is None:
+        raise TimeoutError("git subprocess budget exhausted")
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        cwd=str(_workspace()),
+        timeout=timeout,
+    )
+
+
 def _queue_delayed_notification(message: str, kind: str, priority: str, source: str) -> None:
     try:
         queue_delayed_request(
@@ -667,25 +708,28 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
     if not src_abs.exists():
         return ""
 
+    deadline = time.monotonic() + _git_subprocess_budget_seconds()
     parts = []
 
     # Git log since the doc was last modified
     since_iso = datetime.fromtimestamp(since_mtime).strftime("%Y-%m-%dT%H:%M:%S")
     try:
-        log_output = subprocess.run(
+        log_output = _run_git_command(
             ["git", "log", "--oneline", f"--after={since_iso}", "--", source_path],
-            capture_output=True, text=True, cwd=str(_workspace()), timeout=10
+            deadline,
         )
         if log_output.returncode == 0 and log_output.stdout.strip():
             parts.append(f"### Commits for {source_path}:\n{log_output.stdout.strip()}")
+    except TimeoutError:
+        logger.warning("Git subprocess budget exhausted while collecting git log for %s", source_path)
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
         logger.debug("Git log unavailable for %s since %s: %s", source_path, since_iso, exc)
 
     # Git diff (staged + unstaged changes)
     try:
-        diff_output = subprocess.run(
+        diff_output = _run_git_command(
             ["git", "diff", "HEAD", "--", source_path],
-            capture_output=True, text=True, cwd=str(_workspace()), timeout=10
+            deadline,
         )
         if diff_output.returncode == 0 and diff_output.stdout.strip():
             # Truncate very large diffs
@@ -693,6 +737,8 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
             if len(diff_text) > 8000:
                 diff_text = diff_text[:8000] + "\n... (truncated)"
             parts.append(f"### Diff for {source_path}:\n{diff_text}")
+    except TimeoutError:
+        logger.warning("Git subprocess budget exhausted while collecting git diff for %s", source_path)
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
         logger.debug("Git diff unavailable for %s: %s", source_path, exc)
 
@@ -1312,18 +1358,29 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                     sources.append(src_path)
 
     reports: List[DriftReport] = []
+    deadline = time.monotonic() + _git_subprocess_budget_seconds()
+    budget_exhausted = False
     for doc_path, source_paths in doc_to_sources.items():
+        if budget_exhausted:
+            break
         doc_abs = _resolve_path(doc_path)
         if not doc_abs.exists():
             continue
 
         # Get doc's last commit timestamp
         try:
-            doc_commit_ts = subprocess.run(
+            doc_commit_ts = _run_git_command(
                 ["git", "log", "-1", "--format=%ct", "--", doc_path],
-                capture_output=True, text=True, cwd=str(_workspace()), timeout=10
+                deadline,
             ).stdout.strip()
             doc_commit_time = int(doc_commit_ts) if doc_commit_ts else 0
+        except TimeoutError:
+            logger.warning(
+                "Git subprocess budget exhausted while reading doc commit timestamp for %s; returning partial drift report",
+                doc_path,
+            )
+            budget_exhausted = True
+            break
         except Exception as exc:
             logger.warning("Failed reading doc commit timestamp for %s: %s", doc_path, exc)
             doc_commit_time = 0
@@ -1334,16 +1391,25 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
         stale_sources = []
 
         for src_path in source_paths:
+            if budget_exhausted:
+                break
             src_abs = _resolve_path(src_path)
             if not src_abs.exists():
                 continue
 
             try:
-                src_commit_ts = subprocess.run(
+                src_commit_ts = _run_git_command(
                     ["git", "log", "-1", "--format=%ct", "--", src_path],
-                    capture_output=True, text=True, cwd=str(_workspace()), timeout=10
+                    deadline,
                 ).stdout.strip()
                 src_commit_time = int(src_commit_ts) if src_commit_ts else 0
+            except TimeoutError:
+                logger.warning(
+                    "Git subprocess budget exhausted while reading source commit timestamp for %s; returning partial drift report",
+                    src_path,
+                )
+                budget_exhausted = True
+                break
             except Exception as exc:
                 logger.warning("Failed reading source commit timestamp for %s: %s", src_path, exc)
                 continue
@@ -1353,20 +1419,27 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                 # Count commits source is ahead
                 try:
                     if doc_commit_time > 0:
-                        commit_hash = subprocess.run(
+                        commit_hash = _run_git_command(
                             ["git", "log", "-1", "--format=%H", f"--until={doc_commit_time}", "--", src_path],
-                            capture_output=True, text=True, cwd=str(_workspace()), timeout=10
+                            deadline,
                         ).stdout.strip()
                         if commit_hash:
-                            count_out = subprocess.run(
+                            count_out = _run_git_command(
                                 ["git", "rev-list", "--count", f"{commit_hash}..HEAD", "--", src_path],
-                                capture_output=True, text=True, cwd=str(_workspace()), timeout=10
+                                deadline,
                             ).stdout.strip()
                             total_commits_behind += int(count_out) if count_out else 1
                         else:
                             total_commits_behind += 1
                     else:
                         total_commits_behind += 1
+                except TimeoutError:
+                    logger.warning(
+                        "Git subprocess budget exhausted while counting commits behind for %s; returning partial drift report",
+                        src_path,
+                    )
+                    budget_exhausted = True
+                    break
                 except Exception:
                     logger.warning(
                         "Failed counting commits behind for %s relative to %s; using conservative fallback",
@@ -1377,14 +1450,21 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
 
                 # Lines changed
                 try:
-                    stat_out = subprocess.run(
+                    stat_out = _run_git_command(
                         ["git", "diff", "--stat", "--", src_path],
-                        capture_output=True, text=True, cwd=str(_workspace()), timeout=10
+                        deadline,
                     ).stdout
                     # Parse "N insertions, M deletions" from last line
                     for line in stat_out.strip().split("\n"):
                         nums = re.findall(r'(\d+)\s+(?:insertion|deletion)', line)
                         total_lines_changed += sum(int(n) for n in nums)
+                except TimeoutError:
+                    logger.warning(
+                        "Git subprocess budget exhausted while reading changed-line stats for %s; returning partial drift report",
+                        src_path,
+                    )
+                    budget_exhausted = True
+                    break
                 except Exception:
                     logger.warning("Failed parsing changed-line stats for %s", src_path)
                     total_lines_changed += 1
