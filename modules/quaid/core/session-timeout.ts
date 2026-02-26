@@ -160,6 +160,7 @@ export class SessionTimeoutManager {
   private pendingMessages: any[] | null = null;
   private pendingSessionId: string | undefined;
   private buffers = new Map<string, any[]>();
+  private bufferTouchedAt = new Map<string, number>();
   private bufferDir: string;
   private logDir: string;
   private sessionLogDir: string;
@@ -174,6 +175,7 @@ export class SessionTimeoutManager {
   private workerTimer: ReturnType<typeof setInterval> | null = null;
   private chain: Promise<void> = Promise.resolve();
   private failHard: boolean;
+  private readonly maxInMemoryBuffers = 200;
 
   constructor(opts: SessionTimeoutManagerOptions) {
     this.timeoutMinutes = opts.timeoutMinutes;
@@ -245,6 +247,8 @@ export class SessionTimeoutManager {
     const merged = mergeUniqueMessages(existing, gatedIncoming);
     const added = merged.slice(existing.length);
     this.buffers.set(sessionId, merged);
+    this.bufferTouchedAt.set(sessionId, Date.now());
+    this.evictInMemoryBuffersIfNeeded(sessionId);
     this.writeBuffer(sessionId, merged);
     this.appendSessionMessages(sessionId, added);
 
@@ -310,6 +314,7 @@ export class SessionTimeoutManager {
     const cursorMessages = loggedMessages.length > 0 ? loggedMessages : bufferedMessages;
     this.writeSessionCursor(sessionId, cursorMessages);
     this.buffers.delete(sessionId);
+    this.bufferTouchedAt.delete(sessionId);
     this.clearBuffer(sessionId);
     this.clearSessionMessageLog(sessionId);
     this.writeQuaidLog("session_cleared", sessionId);
@@ -321,6 +326,23 @@ export class SessionTimeoutManager {
         this.timer = null;
         this.writeQuaidLog("timer_cleared", sessionId, { reason: "session_cleared" });
       }
+    }
+  }
+
+  private evictInMemoryBuffersIfNeeded(currentSessionId: string): void {
+    while (this.buffers.size > this.maxInMemoryBuffers) {
+      const oldestSession = Array.from(this.bufferTouchedAt.entries())
+        .sort((a, b) => a[1] - b[1])
+        .find(([sid]) => sid !== currentSessionId && sid !== this.pendingSessionId)?.[0];
+      if (!oldestSession) {
+        break;
+      }
+      this.buffers.delete(oldestSession);
+      this.bufferTouchedAt.delete(oldestSession);
+      this.writeQuaidLog("buffer_evicted", oldestSession, {
+        reason: "in_memory_buffer_limit",
+        limit: this.maxInMemoryBuffers,
+      });
     }
   }
 

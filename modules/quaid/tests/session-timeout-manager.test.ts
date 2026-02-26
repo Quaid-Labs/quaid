@@ -195,4 +195,25 @@ describe('SessionTimeoutManager scheduling', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0].messages).toHaveLength(1)
   })
+
+  it('bounds in-memory buffers to avoid unbounded session growth', () => {
+    const workspace = makeWorkspace('quaid-timeout-buffer-cap-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    for (let i = 0; i < 240; i += 1) {
+      manager.onAgentEnd(
+        [{ role: 'user', content: `message ${i}`, timestamp: Date.now() + i }],
+        `session-${i}`,
+      )
+    }
+
+    const buffers: Map<string, unknown[]> = (manager as any).buffers
+    expect(buffers.size).toBeLessThanOrEqual(200)
+  })
 })
