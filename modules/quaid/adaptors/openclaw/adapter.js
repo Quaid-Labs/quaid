@@ -2236,13 +2236,13 @@ ${recallStoreGuidance}`,
           async execute(toolCallId, params) {
             try {
               const configPath = path.join(WORKSPACE, "config/memory.json");
-            let maxLimit = 50;
-            try {
-              const configData = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-              maxLimit = configData?.retrieval?.maxLimit ?? 50;
-            } catch (err) {
-              console.warn(`[quaid] memory_recall maxLimit config read failed: ${String(err?.message || err)}`);
-            }
+              let maxLimit = 50;
+              try {
+                const configData = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+                maxLimit = configData?.retrieval?.maxLimit ?? 50;
+              } catch (err) {
+                console.warn(`[quaid] memory_recall maxLimit config read failed: ${String(err?.message || err)}`);
+              }
               const dynamicK = computeDynamicK();
               const { query, options = {} } = params || {};
               const requestedLimit = options.limit;
@@ -3145,8 +3145,9 @@ notify_memory_extraction(
           return;
         }
       } catch (err) {
+        const code = err?.code;
         const msg = String(err?.message || err || "");
-        if (!msg.includes("ENOENT")) {
+        if (code !== "ENOENT") {
           console.warn(`[quaid] Recovery scan flag read failed: ${msg}`);
         }
       }

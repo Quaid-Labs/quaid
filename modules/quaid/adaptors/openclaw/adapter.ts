@@ -3601,8 +3601,9 @@ notify_memory_extraction(
           return;
         }
       } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException | undefined)?.code;
         const msg = String((err as Error)?.message || err || "");
-        if (!msg.includes("ENOENT")) {
+        if (code !== "ENOENT") {
           console.warn(`[quaid] Recovery scan flag read failed: ${msg}`);
         }
       } // Flag missing is expected on first run.
