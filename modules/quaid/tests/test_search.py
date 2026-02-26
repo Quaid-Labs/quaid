@@ -3,6 +3,7 @@
 import os
 import sys
 import hashlib
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -204,6 +205,46 @@ class TestSearchSemantic:
             graph = _make_graph_with_data(tmp_path)
             results = graph.search_semantic("Quaid", limit=2, min_similarity=0.0)
             assert len(results) <= 2
+
+    def test_brute_force_query_error_returns_empty_when_fail_hard_disabled(self, tmp_path):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            graph = _make_graph_with_data(tmp_path)
+
+            class _BrokenConn:
+                def execute(self, *_args, **_kwargs):
+                    raise sqlite3.OperationalError("db offline")
+
+            class _BrokenCtx:
+                def __enter__(self):
+                    return _BrokenConn()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            with patch.object(graph, "_get_conn", return_value=_BrokenCtx()), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+                out = graph._search_brute_force([0.1] * 128, None, None, None, 0.0, None, None)
+            assert out == []
+
+    def test_brute_force_query_error_raises_when_fail_hard_enabled(self, tmp_path):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            graph = _make_graph_with_data(tmp_path)
+
+            class _BrokenConn:
+                def execute(self, *_args, **_kwargs):
+                    raise sqlite3.OperationalError("db offline")
+
+            class _BrokenCtx:
+                def __enter__(self):
+                    return _BrokenConn()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            with patch.object(graph, "_get_conn", return_value=_BrokenCtx()), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+                with pytest.raises(RuntimeError, match="fail-hard mode"):
+                    graph._search_brute_force([0.1] * 128, None, None, None, 0.0, None, None)
 
 
 # ---------------------------------------------------------------------------

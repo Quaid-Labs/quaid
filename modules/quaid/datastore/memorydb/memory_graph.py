@@ -1055,7 +1055,11 @@ class MemoryGraph:
             try:
                 rows = conn.execute(sql, params).fetchall()
             except Exception as e:
-                print(f"[memory] Full-scan search error: {e}", file=sys.stderr)
+                logger.warning("Brute-force semantic search query failed: %s", e)
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "Brute-force semantic search failed while fail-hard mode is enabled"
+                    ) from e
                 rows = []
 
             for row in rows:
