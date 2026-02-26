@@ -68,6 +68,13 @@ class TestParseJsonResponse:
         captured = capsys.readouterr()
         assert "parse_json_response failed" in captured.err
 
+    def test_parse_diagnostics_do_not_leak_raw_content(self, capsys):
+        bad = '{"token":"my-super-secret-token",bad}'
+        assert parse_json_response(bad) is None
+        captured = capsys.readouterr()
+        assert "parse_json_response failed" in captured.err
+        assert "my-super-secret-token" not in captured.err
+
     def test_none_input_returns_none(self):
         assert parse_json_response(None) is None
 
