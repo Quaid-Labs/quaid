@@ -46,6 +46,7 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
     query: string,
     limit: number,
     scope: TechnicalScope,
+    project?: string,
     dateFrom?: string,
     dateTo?: string
   ) => Promise<TMemoryResult[]>;
@@ -54,6 +55,7 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
     limit: number,
     depth: number,
     scope: TechnicalScope,
+    project?: string,
     dateFrom?: string,
     dateTo?: string
   ) => Promise<TMemoryResult[]>;
@@ -382,16 +384,20 @@ ${projectHints}
           const scope = (scopeRaw === "personal" || scopeRaw === "technical" || scopeRaw === "any")
             ? scopeRaw
             : ctx.opts.technicalScope;
-          return deps.recallVector(ctx.query, ctx.limit, scope, ctx.opts.dateFrom, ctx.opts.dateTo);
+          const projectRaw = storeOption(ctx.opts, "vector", "project");
+          const project = typeof projectRaw === "string" && projectRaw.trim()
+            ? projectRaw.trim()
+            : ctx.opts.project;
+          return deps.recallVector(ctx.query, ctx.limit, scope, project, ctx.opts.dateFrom, ctx.opts.dateTo);
         },
       },
       vector_basic: {
         key: "vector_basic",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, "personal", ctx.opts.dateFrom, ctx.opts.dateTo),
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, "personal", ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo),
       },
       vector_technical: {
         key: "vector_technical",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, "technical", ctx.opts.dateFrom, ctx.opts.dateTo),
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, "technical", ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo),
       },
       graph: {
         key: "graph",
@@ -402,7 +408,11 @@ ${projectHints}
           const scope = (scopeRaw === "personal" || scopeRaw === "technical" || scopeRaw === "any")
             ? scopeRaw
             : ctx.opts.technicalScope;
-          return deps.recallGraph(ctx.query, ctx.limit, depth, scope, ctx.opts.dateFrom, ctx.opts.dateTo);
+          const projectRaw = storeOption(ctx.opts, "graph", "project");
+          const project = typeof projectRaw === "string" && projectRaw.trim()
+            ? projectRaw.trim()
+            : ctx.opts.project;
+          return deps.recallGraph(ctx.query, ctx.limit, depth, scope, project, ctx.opts.dateFrom, ctx.opts.dateTo);
         },
       },
       journal: {

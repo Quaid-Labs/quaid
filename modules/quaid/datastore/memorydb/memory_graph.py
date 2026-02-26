@@ -2250,7 +2250,9 @@ def graph_aware_recall(
     owner_id: str = None,
     limit: int = 5,
     min_similarity: float = 0.60,
-    graph_depth: int = 1
+    graph_depth: int = 1,
+    technical_scope: str = "any",
+    project: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Combined search: vector search + pronoun resolution + bidirectional graph expansion.
 
@@ -2312,7 +2314,14 @@ def graph_aware_recall(
 
     # 2. Vector search (fact-only): keep direct hits strictly factual, then
     # combine with graph traversal discoveries in this graph-aware pathway.
-    direct_all = recall(query, limit=limit * 3, owner_id=owner_id, min_similarity=min_similarity)
+    direct_all = recall(
+        query,
+        limit=limit * 3,
+        owner_id=owner_id,
+        min_similarity=min_similarity,
+        technical_scope=technical_scope,
+        project=project,
+    )
     direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
     results["direct_results"] = direct[:limit]  # Ensure limit is respected
     results["source_breakdown"]["vector_count"] = len(results["direct_results"])
@@ -3061,6 +3070,18 @@ def _log_recall(graph, query: str, owner_id: Optional[str], intent: str,
         pass  # Observability logging is strictly best-effort
 
 
+def _normalize_project_tag(value: Optional[str]) -> Optional[str]:
+    """Normalize project/domain labels used for technical memory filtering."""
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    norm = re.sub(r"[^a-z0-9._/-]+", "-", raw)
+    norm = re.sub(r"-{2,}", "-", norm).strip("-")
+    return norm[:64] if norm else None
+
+
 def recall(
     query: str,
     limit: int = 5,
@@ -3086,6 +3107,7 @@ def recall(
     include_unscoped: bool = True,
     debug: bool = False,
     technical_scope: str = "any",
+    project: Optional[str] = None,
     low_signal_retry: bool = True,
 ) -> List[Dict[str, Any]]:
     """
@@ -3109,6 +3131,7 @@ def recall(
         date_from: Only return memories created on or after this date (YYYY-MM-DD)
         date_to: Only return memories created on or before this date (YYYY-MM-DD)
         technical_scope: "personal", "technical", or "any" (default)
+        project: Optional project/domain label filter (applies to technical results)
     """
     if not query or not query.strip():
         return []
@@ -3138,6 +3161,7 @@ def recall(
     technical_scope = (technical_scope or "any").strip().lower()
     if technical_scope not in {"personal", "technical", "any"}:
         technical_scope = "any"
+    requested_project = _normalize_project_tag(project)
 
     # Strip gateway metadata from query (e.g. "[Telegram User id:...] actual message")
     clean_query = query
@@ -3548,6 +3572,11 @@ def recall(
         output = [r for r in output if bool(r.get("is_technical"))]
     elif technical_scope == "personal":
         output = [r for r in output if not bool(r.get("is_technical"))]
+    if requested_project:
+        output = [
+            r for r in output
+            if _normalize_project_tag(r.get("project")) == requested_project
+        ]
 
     # Apply date-range filter BEFORE limit (so we get `limit` results in range)
     if date_from or date_to:
@@ -3764,6 +3793,7 @@ def store(
     source_type: Optional[str] = None,  # user, assistant, tool, import
     target_datastore: Optional[str] = None,  # reserved routing seam (no-op in memorydb)
     is_technical: bool = False,  # technical/project-state memory flag
+    project: Optional[str] = None,  # project/domain label for technical facts
     source_channel: Optional[str] = None,  # conversation channel/source (telegram/discord/etc.)
     source_conversation_id: Optional[str] = None,  # stable thread/group identifier
     source_author_id: Optional[str] = None,  # external speaker/author identifier
@@ -3826,6 +3856,7 @@ def store(
             source_type = "assistant"
         if source_type not in {"user", "assistant", "both", "tool", "import"}:
             source_type = None
+    project = _normalize_project_tag(project)
 
     # Default speaker attribution for assistant-originated facts when omitted.
     if (not speaker) and source_type == "assistant":
@@ -3853,6 +3884,7 @@ def store(
             source_type
             or target_datastore
             or is_technical
+            or project
             or source_channel
             or source_conversation_id
             or source_author_id
@@ -3875,6 +3907,8 @@ def store(
             existing.speaker = speaker
         if is_technical:
             attrs["is_technical"] = True
+        if project and not attrs.get("project"):
+            attrs["project"] = project
         if source_channel and not attrs.get("source_channel"):
             attrs["source_channel"] = source_channel
         if source_conversation_id and not attrs.get("source_conversation_id"):
@@ -4213,6 +4247,7 @@ def store(
         source_type
         or target_datastore
         or is_technical
+        or project
         or source_channel
         or source_conversation_id
         or source_author_id
@@ -4232,6 +4267,8 @@ def store(
             attrs["target_datastore"] = target_datastore
         if is_technical:
             attrs["is_technical"] = True
+        if project:
+            attrs["project"] = project
         if source_channel:
             attrs["source_channel"] = source_channel
         if source_conversation_id:
@@ -5066,6 +5103,7 @@ if __name__ == "__main__":
         search_p.add_argument("--date-from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
         search_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
         search_p.add_argument("--technical-scope", default="any", choices=["personal", "technical", "any"], help="Filter by technical flag (default: any)")
+        search_p.add_argument("--project", default=None, help="Filter by project/domain label")
         search_p.add_argument("--session-id", default=None, help="Filter results to a specific session ID")
         search_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
         search_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
@@ -5090,6 +5128,8 @@ if __name__ == "__main__":
         search_ga_p.add_argument("--owner", default=None, help="Owner ID")
         search_ga_p.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
         search_ga_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
+        search_ga_p.add_argument("--technical-scope", default="any", choices=["personal", "technical", "any"], help="Filter by technical flag (default: any)")
+        search_ga_p.add_argument("--project", default=None, help="Filter by project/domain label")
         search_ga_p.add_argument("--json", action="store_true", help="JSON output")
 
         # --- store ---
@@ -5161,6 +5201,7 @@ if __name__ == "__main__":
         recall_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
         recall_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
         recall_p.add_argument("--technical-scope", default="any", choices=["personal", "technical", "any"], help="Filter by technical flag (default: any)")
+        recall_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
 
         # --- decay ---
@@ -5339,7 +5380,7 @@ if __name__ == "__main__":
                     if not rows:
                         print("No facts found for this session")
             else:
-                results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, current_session_id=args.current_session_id, compaction_time=args.compaction_time, date_from=getattr(args, 'date_from', None), date_to=getattr(args, 'date_to', None), debug=getattr(args, 'debug', False), technical_scope=getattr(args, 'technical_scope', 'any'))
+                results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, current_session_id=args.current_session_id, compaction_time=args.compaction_time, date_from=getattr(args, 'date_from', None), date_to=getattr(args, 'date_to', None), debug=getattr(args, 'debug', False), technical_scope=getattr(args, 'technical_scope', 'any'), project=getattr(args, 'project', None))
                 if args.json:
                     print(json.dumps(results))
                 else:
@@ -5384,6 +5425,7 @@ if __name__ == "__main__":
                     keywords=args.keywords,
                     source_type=args.source_type,
                     is_technical=args.is_technical,
+                    project=getattr(args, 'project', None),
                     created_at=getattr(args, 'created_at', None),
                     accessed_at=getattr(args, 'accessed_at', None),
                 )
@@ -5397,7 +5439,7 @@ if __name__ == "__main__":
                     if node:
                         attrs = node.attributes if isinstance(node.attributes, dict) else {}
                         if args.project:
-                            attrs["project"] = args.project
+                            attrs["project"] = _normalize_project_tag(args.project)
                         if args.is_technical:
                             attrs["is_technical"] = True
                         if args.sensitivity:
@@ -5501,7 +5543,14 @@ if __name__ == "__main__":
         elif args.command == "search-graph-aware":
             query = " ".join(args.query)
 
-            results = graph_aware_recall(query, owner_id=args.owner, limit=args.limit, graph_depth=args.depth)
+            results = graph_aware_recall(
+                query,
+                owner_id=args.owner,
+                limit=args.limit,
+                graph_depth=args.depth,
+                technical_scope=getattr(args, 'technical_scope', 'any'),
+                project=getattr(args, 'project', None),
+            )
 
             if args.json:
                 print(json.dumps(results, indent=2))
@@ -5618,7 +5667,7 @@ if __name__ == "__main__":
 
         elif args.command == "recall":
             query = " ".join(args.query)
-            results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, debug=getattr(args, 'debug', False), technical_scope=getattr(args, 'technical_scope', 'any'))
+            results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, debug=getattr(args, 'debug', False), technical_scope=getattr(args, 'technical_scope', 'any'), project=getattr(args, 'project', None))
 
             for r in results:
                 flags = []
