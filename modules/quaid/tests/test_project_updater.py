@@ -175,6 +175,27 @@ class TestProcessAllEvents:
         result = process_all_events()
         assert result["processed"] == 0
 
+    def test_warns_when_failed_event_move_errors(self, setup_env, capsys):
+        import datastore.docsdb.project_updater as project_updater
+
+        tmp_path = setup_env
+        staging = tmp_path / "projects" / "staging"
+        event_path = staging / "bad-event.json"
+        event_path.write_text(json.dumps({
+            "project_hint": "test-project",
+            "files_touched": [],
+            "summary": "bad event",
+            "trigger": "compact",
+        }))
+
+        with patch.object(project_updater, "process_event", side_effect=RuntimeError("boom")), \
+             patch.object(Path, "rename", side_effect=OSError("rename denied")):
+            result = project_updater.process_all_events()
+
+        assert result["errors"] == 1
+        err = capsys.readouterr().err
+        assert "failed to move event bad-event.json into failed/" in err
+
 
 class TestProcessEventWatchdog:
     def test_main_process_event_moves_file_to_failed_on_watchdog_timeout(self, setup_env, capsys):
