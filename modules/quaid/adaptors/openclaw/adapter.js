@@ -1352,6 +1352,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
     const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
     args.push("--technical-scope", technicalScope);
     if (!expandGraph) {
+      args.push("--json");
       if (currentSessionId) {
         args.push("--current-session-id", currentSessionId);
       }
@@ -1365,27 +1366,39 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
         args.push("--date-to", dateTo);
       }
       const output2 = await datastoreBridge.search(args);
-      const results2 = [];
-      for (const line of output2.split("\n")) {
-        const match = line.match(/\[(\d+\.\d+)\]\s+\[(\w+)\](?:\([^)]*\))?(?:\[[^\]]*\])*\[C:([\d.]+)\]\s*(.+?)(?:\s*\|ID:([^|]+))?(?:\|T:([^|]*))?(?:\|VF:([^|]*))?(?:\|VU:([^|]*))?(?:\|P:([^|]*))?(?:\|O:([^|]*))?(?:\|ST:(.*))?$/);
-        if (match) {
+      try {
+        const parsed = JSON.parse(output2);
+        if (!Array.isArray(parsed)) {
+          throw new Error("search output JSON must be an array");
+        }
+        const results2 = [];
+        for (const row of parsed) {
+          if (!row || typeof row !== "object") continue;
+          const text = typeof row.text === "string" ? row.text.trim() : "";
+          const category = typeof row.category === "string" ? row.category : "fact";
+          const similarity = typeof row.similarity === "number" ? row.similarity : Number(row.similarity ?? 0);
+          if (!text || !Number.isFinite(similarity)) continue;
+          const extractionConfidenceRaw = row.extraction_confidence ?? row.extractionConfidence;
+          const extractionConfidence = typeof extractionConfidenceRaw === "number" ? extractionConfidenceRaw : Number(extractionConfidenceRaw ?? 0.5);
           results2.push({
-            text: match[4].trim(),
-            category: match[2],
-            similarity: parseFloat(match[1]),
-            extractionConfidence: parseFloat(match[3]),
-            id: match[5]?.trim(),
-            createdAt: match[6]?.trim() || void 0,
-            validFrom: match[7]?.trim() || void 0,
-            validUntil: match[8]?.trim() || void 0,
-            privacy: match[9]?.trim() || "shared",
-            ownerId: match[10]?.trim() || void 0,
-            sourceType: match[11]?.trim() || void 0,
+            text,
+            category,
+            similarity,
+            extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
+            id: typeof row.id === "string" ? row.id : void 0,
+            createdAt: typeof row.created_at === "string" ? row.created_at : void 0,
+            validFrom: typeof row.valid_from === "string" ? row.valid_from : void 0,
+            validUntil: typeof row.valid_until === "string" ? row.valid_until : void 0,
+            privacy: typeof row.privacy === "string" ? row.privacy : "shared",
+            ownerId: typeof row.owner_id === "string" ? row.owner_id : void 0,
+            sourceType: typeof row.source_type === "string" ? row.source_type : void 0,
             via: "vector"
           });
         }
+        return results2.slice(0, limit);
+      } catch (err) {
+        throw new Error(`Failed to parse datastore search JSON output: ${err.message}`);
       }
-      return results2.slice(0, limit);
     }
     if (graphDepth > 1) {
       args.push("--depth", String(graphDepth));
