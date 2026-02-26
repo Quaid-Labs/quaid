@@ -3170,6 +3170,22 @@ notify_docs_search(data['query'], data['results'])
     // Extraction promise gate — memory_recall waits on this before querying
     // so that facts extracted from the just-compacted session are available.
     let extractionPromise: Promise<void> | null = null;
+    const queueExtractionTask = (task: () => Promise<void>, source: string): Promise<void> => {
+      const prior = extractionPromise || Promise.resolve();
+      extractionPromise = prior.then(
+        () => task(),
+        async (err: unknown) => {
+          const msg = (err as Error)?.message || String(err);
+          console.error(`[quaid] extraction chain prior failure (${source}): ${msg}`);
+          if (isFailHardEnabled()) {
+            throw err;
+          }
+          await task();
+          throw err;
+        },
+      );
+      return extractionPromise;
+    };
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       timeoutMinutes: getCaptureTimeoutMinutes(),
@@ -3183,14 +3199,10 @@ notify_docs_search(data['query'], data['results'])
         console.log(msg);
       },
       extract: async (msgs: any[], sid?: string, label?: string) => {
-        extractionPromise = (extractionPromise || Promise.resolve())
-          .catch((err: unknown) => {
-            console.error("[quaid] extraction chain prior failure:", (err as Error)?.message || String(err));
-            if (isFailHardEnabled()) {
-              throw err;
-            }
-          })
-          .then(() => extractMemoriesFromMessages(msgs, label || "Timeout", sid));
+        extractionPromise = queueExtractionTask(
+          () => extractMemoriesFromMessages(msgs, label || "Timeout", sid),
+          "timeout",
+        );
         await extractionPromise;
       },
     });
@@ -3607,14 +3619,7 @@ notify_memory_extraction(
         // Chain onto any in-flight extraction to avoid overwrite race
         // (if compaction and reset overlap, the .finally() from the first
         // extraction would clear the promise while the second is still running)
-        extractionPromise = (extractionPromise || Promise.resolve())
-          .catch((err: unknown) => {
-            console.error("[quaid] extraction chain prior failure:", (err as Error)?.message || String(err));
-            if (isFailHardEnabled()) {
-              throw err;
-            }
-          }) // Don't let previous failure block the chain when failHard=false
-          .then(() => doExtraction());
+        extractionPromise = queueExtractionTask(doExtraction, "compaction");
       } catch (err: unknown) {
         if (isFailHardEnabled()) {
           throw err;
@@ -3691,14 +3696,7 @@ notify_memory_extraction(
 
         // Chain onto any in-flight extraction to avoid overwrite race
         console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${extractionPromise ? "yes" : "no"}`);
-        extractionPromise = (extractionPromise || Promise.resolve())
-          .catch((chainErr: unknown) => {
-            console.warn(`[quaid][reset] prior_extraction_chain_error session=${sessionId || "unknown"} err=${String((chainErr as Error)?.message || chainErr)}`);
-            if (isFailHardEnabled()) {
-              throw chainErr;
-            }
-          })
-          .then(() => doExtraction())
+        extractionPromise = queueExtractionTask(doExtraction, "reset")
           .catch((doErr: unknown) => {
             console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String((doErr as Error)?.message || doErr)}`);
             throw doErr;
