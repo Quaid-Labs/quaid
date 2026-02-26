@@ -958,7 +958,10 @@ function _ensureGatewaySessionOverride(
     if (fs.existsSync(storePath)) {
       store = JSON.parse(fs.readFileSync(storePath, "utf8")) || {};
     }
-  } catch {
+  } catch (err: unknown) {
+    console.warn(
+      `[quaid][llm] failed to read gateway session override store; recreating: ${String((err as Error)?.message || err)}`
+    );
     store = {};
   }
 
@@ -975,8 +978,15 @@ function _ensureGatewaySessionOverride(
     modelOverride: resolved.model,
   };
 
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { mode: 0o600 });
+  try {
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { mode: 0o600 });
+  } catch (err: unknown) {
+    const msg = String((err as Error)?.message || err);
+    throw new Error(`[quaid][llm] failed writing gateway session override store: ${msg}`, {
+      cause: err as Error,
+    });
+  }
   return sessionKey;
 }
 
