@@ -1215,6 +1215,10 @@ os.unlink(${JSON.stringify(tmpFile)})
     launched = true;
     proc.on("error", (err) => {
       appendNotifyLog(`[notify-worker-error] spawn failed: ${err.message}`);
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch {
+      }
     });
     proc.unref();
   } catch (err) {
