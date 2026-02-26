@@ -377,4 +377,21 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(() => (manager as any).tryAcquireWorkerLock()).toThrow()
   })
+
+  it('throws on session message read failure when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-session-read-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+
+    const fp = (manager as any).sessionMessagePath('session-bad-read') as string
+    fs.mkdirSync(fp, { recursive: true })
+
+    expect(() => (manager as any).readSessionMessages('session-bad-read')).toThrow()
+  })
 })
