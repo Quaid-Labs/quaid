@@ -300,7 +300,7 @@ class StandaloneAdapter(QuaidAdapter):
         )
         env_file = self.quaid_home() / ".env"
         if env_file.exists():
-            found = _read_env_file(env_file, env_var_name)
+            found = read_env_file(env_file, env_var_name)
             if found:
                 print(
                     f"[adapter][FALLBACK] Loaded {env_var_name} from {env_file}.",
@@ -402,7 +402,7 @@ class StandaloneAdapter(QuaidAdapter):
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
-def _read_env_file(env_file: Path, var_name: str) -> Optional[str]:
+def read_env_file(env_file: Path, var_name: str) -> Optional[str]:
     """Read a variable from a .env file.
 
     Handles: KEY=value, KEY="value", KEY='value', inline # comments,
@@ -430,6 +430,11 @@ def _read_env_file(env_file: Path, var_name: str) -> Optional[str]:
     except (IOError, OSError):
         pass
     return None
+
+
+def _read_env_file(env_file: Path, var_name: str) -> Optional[str]:
+    """Backward-compatible alias for older imports."""
+    return read_env_file(env_file, var_name)
 
 
 # ---------------------------------------------------------------------------

@@ -243,11 +243,16 @@ MAX_EXECUTION_TIME = _cfg.janitor.task_timeout_minutes * 60  # From config (seco
 MAX_PARALLEL_WORKERS = 8
 
 
-def _is_benchmark_mode() -> bool:
+def is_benchmark_mode() -> bool:
     """True when janitor is running under benchmark harness semantics."""
     return str(os.environ.get("QUAID_BENCHMARK_MODE", "")).strip().lower() in {
         "1", "true", "yes", "on"
     }
+
+
+def _is_benchmark_mode() -> bool:
+    """Backward-compatible alias for older imports."""
+    return is_benchmark_mode()
 
 
 def _record_llm_batch_issue(metrics: "JanitorMetrics", message: str) -> None:
@@ -256,7 +261,7 @@ def _record_llm_batch_issue(metrics: "JanitorMetrics", message: str) -> None:
     In benchmark mode, these are treated as warnings so one bad JSON/provider
     response does not invalidate the whole run.
     """
-    if _is_benchmark_mode():
+    if is_benchmark_mode():
         print(f"    WARN: {message} (non-fatal in benchmark mode)")
         return
     metrics.add_error(message)
