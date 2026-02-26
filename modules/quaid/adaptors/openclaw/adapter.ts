@@ -2230,7 +2230,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             console.log("[quaid] Auto-inject recall notification dispatched");
           }
         } catch (notifyErr: unknown) {
-          console.log(`[quaid] Auto-inject recall notification skipped: ${(notifyErr as Error).message}`);
+          console.warn(`[quaid] Auto-inject recall notification skipped: ${(notifyErr as Error).message}`);
         }
 
         // Update injection log
@@ -2571,7 +2571,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               }
             } catch (notifyErr: unknown) {
               // Notification is best-effort
-              console.log(`[quaid] Memory recall notification skipped: ${(notifyErr as Error).message}`);
+              console.warn(`[quaid] Memory recall notification skipped: ${(notifyErr as Error).message}`);
             }
 
             return {
@@ -2774,7 +2774,7 @@ notify_docs_search(data['query'], data['results'])
               }
             } catch (notifyErr: unknown) {
               // Notification is best-effort
-              console.log(`[quaid] Docs search notification skipped: ${(notifyErr as Error).message}`);
+              console.warn(`[quaid] Docs search notification skipped: ${(notifyErr as Error).message}`);
             }
 
             return {
@@ -3054,7 +3054,14 @@ notify_docs_search(data['query'], data['results'])
       workspace: WORKSPACE,
       timeoutMinutes: getCaptureTimeoutMinutes(),
       isBootstrapOnly: isResetBootstrapOnlyConversation,
-      logger: (msg: string) => console.log(msg),
+      logger: (msg: string) => {
+        const lowered = String(msg || "").toLowerCase();
+        if (lowered.includes("fail") || lowered.includes("error")) {
+          console.warn(msg);
+          return;
+        }
+        console.log(msg);
+      },
       extract: async (msgs: any[], sid?: string, label?: string) => {
         extractionPromise = (extractionPromise || Promise.resolve())
           .catch((err: unknown) => {
@@ -3295,7 +3302,7 @@ notify_memory_extraction(
 )
 `);
         } catch (notifyErr: unknown) {
-          console.log(`[quaid] Extraction notification skipped: ${(notifyErr as Error).message}`);
+          console.warn(`[quaid] Extraction notification skipped: ${(notifyErr as Error).message}`);
         }
       }
 
