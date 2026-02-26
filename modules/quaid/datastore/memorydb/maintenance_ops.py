@@ -309,6 +309,7 @@ def _run_llm_batches_parallel(
     batches: List[list],
     task_name: str,
     runner,
+    overall_timeout_seconds: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Run batch LLM calls with bounded parallelism; preserve output order."""
     if not batches:
@@ -328,6 +329,7 @@ def _run_llm_batches_parallel(
         calls,
         max_workers=workers,
         pool_name="janitor-llm-batches",
+        timeout_seconds=overall_timeout_seconds,
         return_exceptions=True,
     )
     for idx, item in enumerate(results, 1):
