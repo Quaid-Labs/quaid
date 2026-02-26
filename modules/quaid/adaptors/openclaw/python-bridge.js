@@ -1,6 +1,13 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
-const PYTHON_BRIDGE_TIMEOUT_MS = 120000;
+function _resolveTimeoutMs(name, fallbackMs) {
+  const raw = Number(process.env[name] || "");
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return fallbackMs;
+  }
+  return Math.floor(raw);
+}
+const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 12e4);
 export function createPythonBridgeExecutor(config) {
   const pluginRoot = path.join(config.workspace, "plugins", "quaid");
   const sep = process.platform === "win32" ? ";" : ":";
