@@ -558,9 +558,15 @@ function pruneInjectionLogFiles(): void {
       .map((f: string) => ({ name: f, full: path.join(QUAID_INJECTION_LOG_DIR, f), mtimeMs: fs.statSync(path.join(QUAID_INJECTION_LOG_DIR, f)).mtimeMs }))
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
     for (const stale of files.slice(MAX_INJECTION_LOG_FILES)) {
-      try { fs.unlinkSync(stale.full); } catch {}
+      try {
+        fs.unlinkSync(stale.full);
+      } catch (err: unknown) {
+        console.warn(`[quaid] Failed pruning stale injection log ${stale.full}: ${String((err as Error)?.message || err)}`);
+      }
     }
-  } catch {}
+  } catch (err: unknown) {
+    console.warn(`[quaid] Injection log pruning failed: ${String((err as Error)?.message || err)}`);
+  }
 }
 
 function trimExtractionLogEntries(log: Record<string, any>, maxEntries: number = MAX_EXTRACTION_LOG_ENTRIES): Record<string, any> {
@@ -1207,7 +1213,11 @@ async function callExtractPipeline(opts: {
     const msg = String((err as Error)?.message || err);
     throw new Error(`[quaid] extract pipeline parse/exec failed: ${msg.slice(0, 500)}`);
   } finally {
-    try { fs.unlinkSync(tmpPath); } catch {}
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch (err: unknown) {
+      console.warn(`[quaid] Failed cleaning extraction temp file ${tmpPath}: ${String((err as Error)?.message || err)}`);
+    }
   }
 }
 
