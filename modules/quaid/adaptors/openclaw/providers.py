@@ -46,42 +46,58 @@ class GatewayLLMProvider(LLMProvider):
         req = urllib.request.Request(url, data=body, headers=headers,
                                      method="POST")
 
+        retries = 1
         start_time = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                if not isinstance(data, dict):
-                    raise RuntimeError(
-                        f"Gateway LLM proxy returned non-object JSON payload: {type(data).__name__}"
-                    )
-                duration = time.time() - start_time
-
-                return LLMResult(
-                    text=data.get("text"),
-                    duration=duration,
-                    input_tokens=data.get("input_tokens", 0),
-                    output_tokens=data.get("output_tokens", 0),
-                    cache_read_tokens=data.get("cache_read_tokens", 0),
-                    cache_creation_tokens=data.get("cache_creation_tokens", 0),
-                    model=data.get("model", ""),
-                    truncated=data.get("truncated", False),
-                )
-        except urllib.error.HTTPError as e:
+        last_error = None
+        for attempt in range(retries + 1):
             try:
-                err_body = json.loads(e.read().decode("utf-8"))
-                err_msg = err_body.get("error", str(e))
-            except Exception:
-                err_msg = str(e)
-            print(f"[providers] Gateway LLM proxy error ({e.code}): {err_msg}",
-                  file=sys.stderr)
-            if e.code == 503:
-                raise RuntimeError(
-                    f"No credential configured for selected model provider (HTTP {e.code}): {err_msg}"
-                ) from e
-            raise
-        except Exception as e:
-            print(f"[providers] Gateway LLM proxy error: {e}", file=sys.stderr)
-            raise
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if not isinstance(data, dict):
+                        raise RuntimeError(
+                            f"Gateway LLM proxy returned non-object JSON payload: {type(data).__name__}"
+                        )
+                    duration = time.time() - start_time
+                    return LLMResult(
+                        text=data.get("text"),
+                        duration=duration,
+                        input_tokens=data.get("input_tokens", 0),
+                        output_tokens=data.get("output_tokens", 0),
+                        cache_read_tokens=data.get("cache_read_tokens", 0),
+                        cache_creation_tokens=data.get("cache_creation_tokens", 0),
+                        model=data.get("model", ""),
+                        truncated=data.get("truncated", False),
+                    )
+            except urllib.error.HTTPError as e:
+                try:
+                    err_body = json.loads(e.read().decode("utf-8"))
+                    err_msg = err_body.get("error", str(e))
+                except Exception:
+                    err_msg = str(e)
+                print(f"[providers] Gateway LLM proxy error ({e.code}): {err_msg}", file=sys.stderr)
+                if e.code == 503:
+                    raise RuntimeError(
+                        f"No credential configured for selected model provider (HTTP {e.code}): {err_msg}"
+                    ) from e
+                retryable = e.code in {429, 500, 502, 503, 504}
+                last_error = e
+                if retryable and attempt < retries:
+                    time.sleep(0.25 * (2 ** attempt))
+                    continue
+                raise
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                print(f"[providers] Gateway LLM proxy transient error: {e}", file=sys.stderr)
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.25 * (2 ** attempt))
+                    continue
+                raise
+            except Exception as e:
+                print(f"[providers] Gateway LLM proxy error: {e}", file=sys.stderr)
+                raise
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Gateway LLM proxy call failed without error detail")
 
     def get_profiles(self):
         return {
