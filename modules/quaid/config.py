@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
@@ -476,6 +477,7 @@ class MemoryConfig:
 # Global config instance (lazy loaded)
 _config: Optional[MemoryConfig] = None
 _config_loading: bool = False  # Re-entrancy guard (load_config → get_db_path → get_config)
+_config_lock = threading.RLock()
 _warned_unknown_config_keys: set[str] = set()
 
 _KNOWN_TOP_LEVEL_CONFIG_KEYS = {
@@ -596,20 +598,21 @@ def load_config() -> MemoryConfig:
     """Load configuration from file or use defaults."""
     global _config, _config_loading
 
-    if _config is not None:
-        return _config
+    with _config_lock:
+        if _config is not None:
+            return _config
 
-    # Re-entrancy guard: load_config() → get_db_path() → _get_cfg() → load_config()
-    # The project definitions loader calls get_db_path which recurses back here.
-    # Return a default config to break the cycle.
-    if _config_loading:
-        return MemoryConfig()
+        # Re-entrancy guard: load_config() → get_db_path() → _get_cfg() → load_config()
+        # The project definitions loader calls get_db_path which recurses back here.
+        # Return a default config to break the cycle on the same thread.
+        if _config_loading:
+            return MemoryConfig()
 
-    _config_loading = True
-    try:
-        return _load_config_inner()
-    finally:
-        _config_loading = False
+        _config_loading = True
+        try:
+            return _load_config_inner()
+        finally:
+            _config_loading = False
 
 
 def _load_config_inner() -> MemoryConfig:
@@ -1143,7 +1146,8 @@ def reload_config() -> MemoryConfig:
     global _config
     from core.runtime.plugins import reset_plugin_runtime
 
-    _config = None
+    with _config_lock:
+        _config = None
     reset_plugin_runtime()
     return load_config()
 
