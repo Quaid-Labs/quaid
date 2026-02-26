@@ -1724,6 +1724,7 @@ const quaidPlugin = {
       console.log("[quaid] Database not found, initializing datastore...");
       try {
         execSync(`python3 "${PYTHON_SCRIPT}" init`, {
+          timeout: 2e4,
           env: buildPythonEnv()
         });
         console.log("[quaid] Datastore initialization complete");
