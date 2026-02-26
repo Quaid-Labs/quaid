@@ -7,6 +7,14 @@ function cloneWriterSpec(spec) {
 }
 function createDataWriteEngine(opts = {}) {
   const writerMap = /* @__PURE__ */ new Map();
+  const failHard = Boolean(opts.failHard);
+  const onError = opts.onError || ((message, error) => {
+    if (error) {
+      console.error(message, error);
+      return;
+    }
+    console.error(message);
+  });
   function registerDataWriter(writer) {
     writerMap.set(writer.spec.datastore, writer);
   }
@@ -31,8 +39,15 @@ function createDataWriteEngine(opts = {}) {
     try {
       return await writer.write(envelope);
     } catch (err) {
+      onError(
+        `[quaid][data-writers] writeData failed datastore=${String(envelope.datastore)} action=${String(envelope.action)}`,
+        err
+      );
+      if (failHard) {
+        throw err;
+      }
       const errObj = err;
-      const errType = errObj?.name || typeof err;
+      const errType = errObj?.name || typeof err || "UnknownError";
       return {
         status: "failed",
         error: String(errObj?.message || err || "Unknown DataWriter error"),
