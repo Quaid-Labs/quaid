@@ -614,6 +614,21 @@ def _decode_json_list(raw_value: Any, *, field_name: str, default: Optional[List
     return parsed
 
 
+def _coerce_list_field(value: Any, *, field_name: str, default: Optional[List[Any]] = None) -> List[Any]:
+    """Normalize list-like config fields from raw JSON."""
+    fallback = list(default or [])
+    if value is None:
+        return fallback
+    if isinstance(value, list):
+        return value
+    logger.warning(
+        "Invalid type for %s (expected list, got %s); using default",
+        field_name,
+        type(value).__name__,
+    )
+    return fallback
+
+
 def load_config() -> MemoryConfig:
     """Load configuration from file or use defaults."""
     global _config, _config_loading
@@ -981,10 +996,21 @@ def _load_config_inner() -> MemoryConfig:
             project_definitions[proj_name] = ProjectDefinition(
                 label=proj_data.get('label', ''),
                 home_dir=proj_data.get('homeDir', ''),
-                source_roots=proj_data.get('sourceRoots', []),
+                source_roots=_coerce_list_field(
+                    proj_data.get('sourceRoots'),
+                    field_name=f"projects.definitions.{proj_name}.sourceRoots",
+                ),
                 auto_index=proj_data.get('autoIndex', False),
-                patterns=proj_data.get('patterns', ['*.md']),
-                exclude=proj_data.get('exclude', ['*.db', '*.log', '*.pyc', '__pycache__/']),
+                patterns=_coerce_list_field(
+                    proj_data.get('patterns'),
+                    field_name=f"projects.definitions.{proj_name}.patterns",
+                    default=['*.md'],
+                ),
+                exclude=_coerce_list_field(
+                    proj_data.get('exclude'),
+                    field_name=f"projects.definitions.{proj_name}.exclude",
+                    default=['*.db', '*.log', '*.pyc', '__pycache__/'],
+                ),
                 description=proj_data.get('description', ''),
             )
     projects = ProjectsConfig(
