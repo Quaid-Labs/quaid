@@ -260,7 +260,13 @@ class MemoryGraph:
                 conn.execute("DROP TRIGGER IF EXISTS nodes_ad")
                 conn.execute("DROP TRIGGER IF EXISTS nodes_au")
                 conn.execute("DROP TABLE IF EXISTS nodes_fts")
-                conn.executescript(schema)  # Recreates FTS + triggers with keywords
+                for statement in schema.split(";"):
+                    stmt = statement.strip()
+                    if stmt:
+                        try:
+                            conn.execute(stmt)
+                        except sqlite3.OperationalError:
+                            pass
                 conn.execute("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild')")
 
             # Migrate FTS to porter stemming tokenizer if not already using it

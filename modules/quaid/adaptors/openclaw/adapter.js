@@ -112,6 +112,9 @@ function getActiveNodeCount() {
     _nodeCountTimestamp = now;
     return _cachedNodeCount;
   }
+  if (_cachedNodeCount === null && isFailHardEnabled()) {
+    throw new Error("[quaid] unable to derive active node count under failHard");
+  }
   return _cachedNodeCount ?? 100;
 }
 function computeDynamicK() {
@@ -1784,7 +1787,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
             }
           }
         } catch (err) {
-          console.log(`[quaid] Journal injection failed (non-fatal): ${err.message}`);
+          console.warn(`[quaid] Journal injection failed (non-fatal): ${err.message}`);
         }
       }
       const autoInjectEnabled = process.env.MEMORY_AUTO_INJECT === "1" || getMemoryConfig().retrieval?.autoInject === true;
@@ -3029,11 +3032,17 @@ notify_memory_extraction(
           try {
             await updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId);
           } catch (err) {
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             console.error("[quaid] Compaction doc update failed:", err.message);
           }
           try {
             await emitProjectEvent(conversationMessages, "compact", uniqueSessionId);
           } catch (err) {
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             console.error("[quaid] Compaction project event failed:", err.message);
           }
           if (isSystemEnabled("memory") && uniqueSessionId) {
@@ -3102,11 +3111,17 @@ notify_memory_extraction(
           try {
             await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);
           } catch (err) {
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             console.error("[quaid] Reset doc update failed:", err.message);
           }
           try {
             await emitProjectEvent(conversationMessages, "reset", uniqueSessionId);
           } catch (err) {
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             console.error("[quaid] Reset project event failed:", err.message);
           }
           console.log(`[quaid][reset] extraction_end session=${sessionId || "unknown"}`);

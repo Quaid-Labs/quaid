@@ -2111,7 +2111,6 @@ JSON array only:"""
 
             if action == "DELETE":
                 if not dry_run:
-                    resolve_decay_review(entry["id"], "delete", reason)
                     # Archive then hard delete (only delete if archive succeeds)
                     archived = _archive_node({
                         "id": node_id,
@@ -2124,6 +2123,7 @@ JSON array only:"""
                     }, "decay_review_delete")
                     if archived:
                         hard_delete_node(node_id)
+                        resolve_decay_review(entry["id"], "delete", reason)
                     else:
                         print(f"    SKIPPED delete (archive failed): {entry['node_text'][:50]}...", file=sys.stderr)
                         continue
@@ -2147,7 +2147,7 @@ JSON array only:"""
                 if not dry_run:
                     resolve_decay_review(entry["id"], "pin", reason)
                     # Use max of 0.7 and node's extraction_confidence so high-value facts keep their score
-                    node = node or graph.get_node(node_id)
+                    node = graph.get_node(node_id)
                     ext_conf = (node.attributes or {}).get("extraction_confidence", 0.7) if node else 0.7
                     pin_conf = max(0.7, float(ext_conf)) if ext_conf else 0.7
                     with graph._get_conn() as conn:
