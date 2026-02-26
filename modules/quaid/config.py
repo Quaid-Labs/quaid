@@ -981,6 +981,26 @@ def _load_config_inner() -> MemoryConfig:
         notifications=notifications
     )
 
+    if plugins.enabled:
+        from core.runtime.plugins import initialize_plugin_runtime
+
+        _, plugin_errors, plugin_warnings = initialize_plugin_runtime(
+            api_version=plugins.api_version,
+            paths=plugins.paths,
+            allowlist=plugins.allowlist,
+            strict=plugins.strict,
+            slots={
+                "adapter": plugins.slots.adapter,
+                "ingest": list(plugins.slots.ingest),
+                "datastores": list(plugins.slots.datastores),
+            },
+            workspace_root=str(_workspace_root()),
+        )
+        for msg in plugin_errors:
+            print(f"[plugins][error] {msg}", file=sys.stderr)
+        for msg in plugin_warnings:
+            print(f"[plugins][warn] {msg}", file=sys.stderr)
+
     return _config
 
 
@@ -1001,7 +1021,10 @@ def get_config() -> MemoryConfig:
 def reload_config() -> MemoryConfig:
     """Force reload configuration from file."""
     global _config
+    from core.runtime.plugins import reset_plugin_runtime
+
     _config = None
+    reset_plugin_runtime()
     return load_config()
 
 

@@ -8,6 +8,18 @@ Use this as the go/no-go gate for prelaunch and release candidates.
 - No silent fallback paths added in changed code.
 - `retrieval.failHard=true` remains the default in config.
 
+## 1.1) Plugin Contract Gate
+
+- Plugin runtime preflight executes during config boot when `plugins.enabled=true`.
+- `plugins.strict=true` hard-fails on:
+  - invalid manifests/schema,
+  - plugin ID conflicts,
+  - slot references to missing plugin IDs,
+  - slot/plugin type mismatches.
+- `plugins.strict=false` keeps booting but emits loud plugin diagnostics.
+- Contract suite passes:
+  - `python3 -m pytest -q tests/test_plugin_runtime.py`
+
 ## 2) Core Test Gates
 
 - Python janitor/failHard/provider suites pass:
