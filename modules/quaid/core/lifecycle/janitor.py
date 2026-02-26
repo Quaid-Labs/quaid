@@ -431,8 +431,10 @@ def _atomic_write_text(path: Path, text: str) -> None:
     os.replace(tmp_path, path)
     try:
         os.chmod(path, 0o600)
-    except Exception:
-        pass
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"Failed to chmod atomic write target: {path}") from exc
+        janitor_logger.warn("atomic_write_chmod_failed", path=str(path), error=str(exc))
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
