@@ -69,6 +69,23 @@ describe("delayed request lifecycle integration", () => {
     warnSpy.mockRestore();
   });
 
+  it("throws for malformed delayed request JSON when failHard is enabled", () => {
+    const workspace = makeWorkspace("quaid-delayed-requests-malformed-failhard-");
+    const delayedRequestsPath = path.join(workspace, "delayed-llm-requests.json");
+    fs.writeFileSync(delayedRequestsPath, "{not-valid-json", "utf8");
+
+    expect(() =>
+      queueDelayedRequest(
+        delayedRequestsPath,
+        "message",
+        "janitor_health",
+        "high",
+        "event.notification.delayed",
+        true,
+      ),
+    ).toThrow(/delayed requests file is unreadable or malformed/i);
+  });
+
   it("throws when queue fails and failHard is enabled", () => {
     const workspace = makeWorkspace("quaid-delayed-requests-failhard-");
     const delayedRequestsPath = path.join(workspace, "missing-dir", "delayed-llm-requests.json");
