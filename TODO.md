@@ -6,12 +6,20 @@
   - lock to `docs/MULTI-USER-MEMORY-SPEC.md` as canonical design
   - seed additive schema/indexes for `entities`, `entity_aliases`, `sources`, `source_participants`
   - unify identity fields across memory/session logs/journal/snippets/projects
+  - seed principal/trust/auth/delegation skeletons (`identity_credentials`, `identity_sessions`, `delegation_grants`, `trust_assertions`)
+  - add centralized policy decision contract (`allow`/`deny`/`allow_redacted`) and audit-log schema
   - keep runtime default in `identity.mode=single_user` until benchmark gates pass
   - implement resolver + privacy policy as registered providers (single active registration)
 - [ ] Group conversation context loading:
   - resolve participant set from source channel
+  - enforce participant membership timelines (`active_from`/`active_to`) in policy checks
   - load correct user/core markdown bundles per active participants
   - support direct-message vs group-message context switches
+- [ ] Domain datastore routing foundations:
+  - add ingest `target_datastore` classification contract
+  - add core routing policy for conversation-derived writes (memory vs domain stores)
+  - require explicit dual-write config + audit trail (no silent fan-out)
+  - declare datastore domain/policy class metadata in plugin manifests
 - [ ] Adapter portability contract:
   - adapter only reports source/channel/message identity and log locations
   - ingest/datastore own parsing/indexing/search behavior

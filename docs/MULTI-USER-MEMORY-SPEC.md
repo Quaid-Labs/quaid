@@ -298,3 +298,201 @@ Current code-level guarantees aligned with this spec:
 2. Multi-user write contract is fail-fast on missing required source identity fields.
 3. Multi-user read contract is fail-fast on missing `viewer_entity_id`.
 4. Core auto-bootstraps datastore-owned default resolver/policy hooks so missing registration does not become a silent runtime gap.
+
+## 16. Principal and Trust Model (Seed Now)
+
+Quaid should model requesters as principals with explicit trust state:
+
+- `human_user`
+- `trusted_agent`
+- `untrusted_agent`
+- `external_unknown`
+- `system_internal`
+- `owner_admin`
+
+Principal profile fields to seed now:
+
+- `principal_id` (canonical entity ID),
+- `principal_type` (`human`/`agent`/`service`),
+- `role` (viewer role in current context),
+- `trust_tier`,
+- `org_id` (optional tenant/org scope),
+- `auth_strength` (`anonymous`, `verified`, `strong_verified`),
+- `revoked_at` / `disabled`.
+
+Hard rule:
+
+- policy decisions are based on principal identity + trust state, not on claimed handle alone.
+
+## 17. Authentication and Delegation Model (Seed Now)
+
+Authentication methods to support:
+
+- `agent_key` (public/private key challenge-response),
+- `password` (human fallback; lower trust),
+- `cross_channel_proof` (verify identity over already trusted channel),
+- `delegated_assertion` (trusted principal vouches for another).
+
+Group patterns to support:
+
+- 1:1 channels should default to authentication-first handshake.
+- Group channels may run in low-friction mode, but sensitive scopes still require elevated auth.
+- Private groups can require stronger auth per group policy.
+- Delegation/keymaster is allowed only with bounded scope + TTL + audit log.
+
+Seed now (schema/interfaces only):
+
+- `identity_credentials`,
+- `identity_sessions`,
+- `delegation_grants`,
+- `trust_assertions`.
+
+## 18. Datastore Classification and Access Policy
+
+Datastores should declare policy metadata and minimum auth requirements:
+
+- `data_class`: `public` | `internal` | `confidential` | `restricted`
+- `default_scope`
+- `auth_min_level`
+- `supports_multi_user` (capability)
+- `supports_policy_metadata` (capability)
+- `supports_redaction` (capability)
+
+Examples:
+
+- `product_catalog` -> `public`
+- `sales_pipeline` -> `confidential`
+
+Record-level metadata can tighten datastore defaults:
+
+- `visibility_scope`,
+- `sensitivity`,
+- `subject_entity_id`,
+- `speaker_entity_id`,
+- `source_id` / `conversation_id`,
+- `participant_entity_ids`,
+- `org_id`,
+- `provenance_confidence`.
+
+Owner-admin behavior:
+
+- `owner_admin` can access all records, but every override must be explicitly audited.
+
+## 19. Plugin Enforcement Contract (Core-Owned Access Layer)
+
+Policy enforcement must be centralized in core, not reimplemented by each datastore plugin.
+
+Required model:
+
+1. Datastore plugins must emit normalized policy metadata per result/write.
+2. Core policy engine evaluates allow/deny/redact decisions.
+3. Retrieval path: plugin candidate results -> core policy filter -> scoring/rerank -> final output.
+4. Write path: core contract validation first, then plugin write.
+5. In `identity.mode=multi_user`, core blocks plugins missing required policy capabilities.
+
+This prevents policy drift across external datastores and reduces boundary leakage risk.
+
+## 20. Retrieval Surfaces for Multi-User Mode
+
+Seed API shapes now (behavior rollout can wait):
+
+- `search_self(viewer_entity_id, query, ...)`
+- `search_subject(viewer_entity_id, subject_entity_id, query, ...)`
+- `search_conversation(viewer_entity_id, source_id|channel+conversation, query, include_both_parties=true, ...)`
+- `search_network(viewer_entity_id, query, mode=metadata_only|content, ...)`
+
+Defaults:
+
+- cross-subject and cross-conversation reads are deny-by-default unless policy grants permit.
+- `private_subject` is always blocked unless subject/self/system-authorized path.
+- sensitive classes (`restricted`, `secret`) require explicit allow.
+
+## 21. Group Conversation Specific Requirements
+
+Group chat requires additional rules beyond DM:
+
+- participant membership must be time-bounded (`active_from`, `active_to`) and checked at event time.
+- source boundaries are strict; same user in different groups does not imply access transfer.
+- attribution uncertainty must be represented (`provenance_confidence` and optional status like `ambiguous`).
+- group-local facts must not auto-promote to global-person facts without policy.
+- public-group mode should favor low-friction auth but strict memory containment.
+
+## 22. Sensitive Scenarios (Normative Outcomes)
+
+1. Partner asks for surprise plans in DM/group:
+- deny private subject data unless explicit sharing policy allows.
+
+2. Unknown stranger asks for private info about owner:
+- deny; optional redacted response only.
+
+3. Trusted agent asks who might know X:
+- metadata-only network search allowed by policy; content access still scoped.
+
+4. Sales bot (public catalog + private customer pipeline):
+- product datastore can be broadly accessible,
+- customer pipeline records require org + role + auth checks,
+- employees with grants can read allowed scopes,
+- owner-admin may override with audit.
+
+## 23. Additional Cases to Track
+
+Cases often missed in early multi-user designs:
+
+- impersonation via alias collision across channels,
+- stale delegation grants and forgotten revocation,
+- replayed auth assertions from old sessions,
+- policy changes over time requiring deterministic historical replay,
+- mixed-agent orchestration where one agent has broader scope than another,
+- channel migration (group renamed/recreated) and source continuity,
+- redaction bypass via tool output formatting.
+
+## 24. Prelaunch Forward-Compatible Seeding (Must Do Now)
+
+To avoid compatibility shims later, seed these before launch:
+
+1. canonical envelope fields across all write/read paths,
+2. additive policy metadata columns across relevant stores (memory/session/docs/journal/snippets/projects),
+3. principal/trust/auth/delegation table skeletons,
+4. centralized policy decision contract in core (`allow`/`deny`/`allow_redacted`),
+5. policy audit log schema for every sensitive decision,
+6. datastore plugin capability flags for multi-user/policy compliance,
+7. required indexes for subject/source/scope/sensitivity/time access patterns,
+8. strict default-deny baseline in multi-user mode.
+
+## 25. Future-Proofing Checklist
+
+- Keep all schema additions additive and nullable with deterministic defaults.
+- Freeze API envelope names now; do not rename later.
+- Add conformance tests for plugin policy metadata contract.
+- Add E2E policy matrix tests for DM, private group, public group, and agent-to-agent channels.
+- Require explicit policy reason codes in logs (`deny_reason`, `redaction_reason`, `grant_source`).
+- Keep policy evaluation deterministic and side-effect free (auditable replays).
+- Version policy engine decisions to support future migration and replay.
+- Keep trust/delegation TTL explicit and revocation-first.
+
+## 26. Domain Datastore Routing (Preseed Requirement)
+
+Multi-user rollout requires explicit separation between:
+
+- conversational/personal memory (`memorydb`-like stores),
+- durable domain/business knowledge stores (for example `salesdb`, `recipesdb`, `productdb`).
+
+Hard rule:
+
+- memory is not a universal dumping ground.
+
+Seed now:
+
+1. Ingest classification contract must emit `target_datastore` (or ordered candidates).
+2. Core write path must resolve final datastore via policy + capability checks.
+3. Datastore manifests must declare domain + policy class metadata.
+4. Retrieval planner must support multi-store query plans with policy-first filtering.
+5. Dual-write behavior must be explicit + auditable (no silent fan-out).
+
+Conversation-derived data split guidance:
+
+- personal/session context -> memory datastore,
+- business/domain records -> domain datastore,
+- ambiguous records -> deterministic policy/routing fallback, never implicit "memory by default".
+
+This significantly reduces future migration pain when adding customer/enterprise use cases.
