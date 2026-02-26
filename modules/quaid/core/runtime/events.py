@@ -24,6 +24,9 @@ from lib.runtime_context import get_workspace_dir
 
 Event = Dict[str, Any]
 EventHandler = Callable[[Event], Dict[str, Any]]
+MAX_EVENT_QUEUE = 2000
+MAX_HISTORY_JSONL_BYTES = 5 * 1024 * 1024
+HISTORY_TRIM_TARGET_BYTES = 2 * 1024 * 1024
 
 EVENT_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -164,6 +167,15 @@ def _write_json(path: Path, payload: Any) -> None:
 
 def _append_jsonl(path: Path, payload: Any) -> None:
     _ensure_parent(path)
+    try:
+        if path.exists() and path.stat().st_size > MAX_HISTORY_JSONL_BYTES:
+            data = path.read_text(encoding="utf-8")
+            keep = data[-HISTORY_TRIM_TARGET_BYTES:]
+            if "\n" in keep:
+                keep = keep.split("\n", 1)[1]
+            path.write_text(keep, encoding="utf-8")
+    except Exception:
+        pass
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -438,6 +450,8 @@ def emit_event(
         if not isinstance(events, list):
             events = []
         events.append(event)
+        if len(events) > MAX_EVENT_QUEUE:
+            events = events[-MAX_EVENT_QUEUE:]
         return {"version": 1, "events": events}
 
     _read_modify_write_json(paths["queue"], {"version": 1, "events": []}, _mutate)
