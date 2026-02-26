@@ -582,6 +582,8 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             result.metrics["rag_files_skipped"] = skipped
             result.metrics["rag_chunks_created"] = chunks
         except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError("RAG maintenance failed") from exc
             result.errors.append(f"RAG maintenance failed: {exc}")
 
         return result
