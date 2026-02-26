@@ -476,6 +476,96 @@ class MemoryConfig:
 # Global config instance (lazy loaded)
 _config: Optional[MemoryConfig] = None
 _config_loading: bool = False  # Re-entrancy guard (load_config → get_db_path → get_config)
+_warned_unknown_config_keys: set[str] = set()
+
+_KNOWN_TOP_LEVEL_CONFIG_KEYS = {
+    "adapter",
+    "capture",
+    "core",
+    "database",
+    "decay",
+    "docs",
+    "identity",
+    "janitor",
+    "logging",
+    "models",
+    "notifications",
+    "ollama",
+    "plugins",
+    "privacy",
+    "rag",
+    "retrieval",
+    "systems",
+    "users",
+}
+
+_KNOWN_MODELS_KEYS = {
+    "llm_provider",
+    "provider",
+    "fast_reasoning_provider",
+    "deep_reasoning_provider",
+    "embeddings_provider",
+    "fast_reasoning",
+    "deep_reasoning",
+    "deep_reasoning_model_classes",
+    "fast_reasoning_model_classes",
+    "fast_reasoning_context",
+    "deep_reasoning_context",
+    "fast_reasoning_max_output",
+    "deep_reasoning_max_output",
+    "batch_budget_percent",
+}
+
+_KNOWN_CAPTURE_KEYS = {
+    "enabled",
+    "strictness",
+    "skip_patterns",
+    "inactivity_timeout_minutes",
+    "auto_compaction_on_timeout",
+    "chunk_size",
+}
+
+_KNOWN_RETRIEVAL_KEYS = {
+    "default_limit",
+    "max_limit",
+    "min_similarity",
+    "notify_min_similarity",
+    "boost_recent",
+    "boost_frequent",
+    "max_tokens",
+    "reranker_enabled",
+    "reranker_top_k",
+    "reranker_instruction",
+    "rrf_k",
+    "reranker_blend",
+    "composite_relevance_weight",
+    "composite_recency_weight",
+    "composite_frequency_weight",
+    "multi_pass_gate",
+    "mmr_lambda",
+    "co_session_decay",
+    "recency_decay_days",
+    "pre_injection_pass",
+    "router_fail_open",
+    "fail_hard",
+    "auto_inject",
+    "traversal",
+    "reranker",
+}
+
+
+def _warn_unknown_keys(section: str, data: Any, known_keys: set[str]) -> None:
+    if not isinstance(data, dict):
+        return
+    for key in data.keys():
+        token = f"{section}.{key}" if section else str(key)
+        if key in known_keys:
+            continue
+        if token in _warned_unknown_config_keys:
+            continue
+        _warned_unknown_config_keys.add(token)
+        if not os.environ.get("QUAID_QUIET"):
+            print(f"[config] Unknown config key ignored: {token}", file=sys.stderr)
 
 
 def _snake_to_camel(snake_str: str) -> str:
@@ -553,6 +643,10 @@ def _load_config_inner() -> MemoryConfig:
     
     # Convert camelCase to snake_case
     config_data = _load_nested(raw_config)
+    _warn_unknown_keys("", config_data, _KNOWN_TOP_LEVEL_CONFIG_KEYS)
+    _warn_unknown_keys("models", config_data.get("models", {}), _KNOWN_MODELS_KEYS)
+    _warn_unknown_keys("capture", config_data.get("capture", {}), _KNOWN_CAPTURE_KEYS)
+    _warn_unknown_keys("retrieval", config_data.get("retrieval", {}), _KNOWN_RETRIEVAL_KEYS)
     
     # Build config objects
     models_data = config_data.get('models', {})
