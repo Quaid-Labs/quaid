@@ -93,7 +93,6 @@ class TestCheckStaleness:
             assert "docs/doc.md" in stale
             assert stale["docs/doc.md"].gap_hours > 0
             assert "src.py" in stale["docs/doc.md"].stale_sources
-
     def test_up_to_date_doc_not_stale(self, tmp_path):
         """Source file older than doc → doc is not stale."""
         src_file = tmp_path / "src.py"
@@ -700,3 +699,11 @@ class TestDriftDetectionFallback:
         score_mock.assert_called_once()
         # args: commits_behind, lines_changed, days_stale
         assert score_mock.call_args.args[1] == 1
+
+
+def test_save_changelog_uses_atomic_replace(tmp_path):
+    with _adapter_patch(tmp_path):
+        from datastore.docsdb import updater
+        with patch("datastore.docsdb.updater.os.replace", wraps=updater.os.replace) as mock_replace:
+            updater._save_changelog([{"timestamp": "2026-02-26T00:00:00"}])
+        assert mock_replace.call_count >= 1
