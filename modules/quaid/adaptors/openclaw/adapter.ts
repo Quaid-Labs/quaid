@@ -3707,8 +3707,15 @@ notify_memory_extraction(
         const extractionLogPath = path.join(WORKSPACE, "data", "extraction-log.json");
         let extractionLog: Record<string, any> = {};
         try {
-          extractionLog = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
+          const parsed = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("extraction log must be a JSON object");
+          }
+          extractionLog = parsed as Record<string, any>;
         } catch (err: unknown) {
+          if (isFailHardEnabled()) {
+            throw new Error("[quaid] extraction log read failed under failHard", { cause: err as Error });
+          }
           console.warn(`[quaid] Extraction log read failed for ${extractionLogPath}: ${String((err as Error)?.message || err)}`);
         }
 
