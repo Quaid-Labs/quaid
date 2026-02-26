@@ -140,6 +140,49 @@ class TestSearchFTS:
             results = graph.search_fts("is a")
             assert results == []
 
+    def test_fts_query_error_uses_fallback_when_fail_hard_disabled(self, tmp_path):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            graph = _make_graph_with_data(tmp_path)
+
+            class _BrokenConn:
+                def execute(self, *_args, **_kwargs):
+                    raise sqlite3.OperationalError("fts unavailable")
+
+            class _BrokenCtx:
+                def __enter__(self):
+                    return _BrokenConn()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            fallback_result = [("fallback", 1.0)]
+            with patch.object(graph, "_get_conn", return_value=_BrokenCtx()), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+                 patch.object(graph, "_search_fts_fallback", return_value=fallback_result) as fallback_spy:
+                out = graph.search_fts("Quaid", limit=5)
+            assert out == fallback_result
+            assert fallback_spy.call_count == 1
+
+    def test_fts_query_error_raises_when_fail_hard_enabled(self, tmp_path):
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            graph = _make_graph_with_data(tmp_path)
+
+            class _BrokenConn:
+                def execute(self, *_args, **_kwargs):
+                    raise sqlite3.OperationalError("fts unavailable")
+
+            class _BrokenCtx:
+                def __enter__(self):
+                    return _BrokenConn()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            with patch.object(graph, "_get_conn", return_value=_BrokenCtx()), \
+                 patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+                with pytest.raises(RuntimeError, match="fail-hard mode"):
+                    graph.search_fts("Quaid", limit=5)
+
 
 # ---------------------------------------------------------------------------
 # search_semantic
@@ -285,6 +328,28 @@ class TestSearchHybrid:
                 # All quality scores should be in valid range
                 for node, score in results:
                     assert 0.0 <= score <= 1.0, f"Quality score {score} out of range"
+
+
+class TestRouteQueryFailHard:
+    def test_route_query_returns_original_when_fail_hard_disabled(self):
+        from datastore.memorydb.memory_graph import route_query
+
+        fake_mod = MagicMock()
+        fake_mod.call_fast_reasoning.side_effect = RuntimeError("llm unavailable")
+        with patch.dict(sys.modules, {"lib.llm_clients": fake_mod}), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False):
+            query = "Where do I keep my passport?"
+            assert route_query(query) == query
+
+    def test_route_query_raises_when_fail_hard_enabled(self):
+        from datastore.memorydb.memory_graph import route_query
+
+        fake_mod = MagicMock()
+        fake_mod.call_fast_reasoning.side_effect = RuntimeError("llm unavailable")
+        with patch.dict(sys.modules, {"lib.llm_clients": fake_mod}), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="fail-hard mode"):
+                route_query("Where do I keep my passport?")
 
 
 # ---------------------------------------------------------------------------
