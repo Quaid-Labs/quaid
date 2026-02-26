@@ -526,6 +526,23 @@ end = int(os.environ["SUMMARY_END_EPOCH"])
 status = os.environ["SUMMARY_E2E_STATUS"]
 if status == "running":
     status = "success" if int(os.environ["SUMMARY_EXIT_CODE"]) == 0 else "failed"
+stage_statuses = {
+    "bootstrap": os.environ["SUMMARY_STAGE_bootstrap"],
+    "gateway_smoke": os.environ["SUMMARY_STAGE_gateway_smoke"],
+    "integration": os.environ["SUMMARY_STAGE_integration"],
+    "live_events": os.environ["SUMMARY_STAGE_live_events"],
+    "resilience": os.environ["SUMMARY_STAGE_resilience"],
+    "memory_flow": os.environ["SUMMARY_STAGE_memory_flow"],
+    "notify_matrix": os.environ["SUMMARY_STAGE_notify_matrix"],
+    "ingest_stress": os.environ["SUMMARY_STAGE_ingest_stress"],
+    "janitor": os.environ["SUMMARY_STAGE_janitor"],
+}
+if status == "success":
+    running = [name for name, st in stage_statuses.items() if st == "running"]
+    if running:
+        status = "failed"
+        os.environ["SUMMARY_E2E_FAIL_REASON"] = "incomplete_stage_status"
+        os.environ["SUMMARY_CURRENT_STAGE"] = running[0]
 failure_stage = os.environ["SUMMARY_CURRENT_STAGE"] if status == "failed" else ""
 failure_line = os.environ["SUMMARY_E2E_FAIL_LINE"] if status == "failed" else ""
 failure_reason = os.environ["SUMMARY_E2E_FAIL_REASON"] if status == "failed" else ""
@@ -556,17 +573,7 @@ out = {
         "line": failure_line,
         "reason": failure_reason,
     },
-    "stages": {
-        "bootstrap": os.environ["SUMMARY_STAGE_bootstrap"],
-        "gateway_smoke": os.environ["SUMMARY_STAGE_gateway_smoke"],
-        "integration": os.environ["SUMMARY_STAGE_integration"],
-        "live_events": os.environ["SUMMARY_STAGE_live_events"],
-        "resilience": os.environ["SUMMARY_STAGE_resilience"],
-        "memory_flow": os.environ["SUMMARY_STAGE_memory_flow"],
-        "notify_matrix": os.environ["SUMMARY_STAGE_notify_matrix"],
-        "ingest_stress": os.environ["SUMMARY_STAGE_ingest_stress"],
-        "janitor": os.environ["SUMMARY_STAGE_janitor"],
-    },
+    "stages": stage_statuses,
     "stage_durations_seconds": {
         "bootstrap": int(os.environ["SUMMARY_STAGE_bootstrap_DURATION"]),
         "gateway_smoke": int(os.environ["SUMMARY_STAGE_gateway_smoke_DURATION"]),
