@@ -265,7 +265,7 @@ class SessionTimeoutManager {
       this.queueExtraction(extractionMessages, sid, this.timeoutMinutes);
     }, this.timeoutMinutes * 60 * 1e3);
   }
-  async extractSessionFromLog(sessionId, label, fallbackMessages) {
+  async extractSessionFromLogDirect(sessionId, label, fallbackMessages) {
     if (!sessionId) return false;
     const loggedMessages = this.readSessionMessages(sessionId);
     const fallback = filterEligibleMessages(fallbackMessages || []);
@@ -286,6 +286,21 @@ class SessionTimeoutManager {
     this.writeQuaidLog("extract_done", sessionId, { label, message_count: messages.length, source });
     this.clearSession(sessionId);
     return true;
+  }
+  async extractSessionFromLog(sessionId, label, fallbackMessages) {
+    let extracted = false;
+    const work = this.chain.catch((err) => {
+      safeLog(this.logger, `[quaid][timeout] previous extraction chain error: ${String(err?.message || err)}`);
+      if (this.failHard) throw err;
+    }).then(async () => {
+      extracted = await this.extractSessionFromLogDirect(sessionId, label, fallbackMessages);
+    }).catch((err) => {
+      safeLog(this.logger, `[quaid][timeout] extraction queue failed: ${String(err?.message || err)}`);
+      if (this.failHard) throw err;
+    });
+    this.chain = work.then(() => void 0, () => void 0);
+    await work;
+    return extracted;
   }
   clearSession(sessionId) {
     if (!sessionId) return;
@@ -443,7 +458,7 @@ class SessionTimeoutManager {
       }
       try {
         this.writeQuaidLog("signal_process_begin", sessionId, { label });
-        await this.extractSessionFromLog(sessionId, label);
+        await this.extractSessionFromLogDirect(sessionId, label);
         this.writeQuaidLog("signal_process_done", sessionId, { label });
       } catch (err) {
         this.writeQuaidLog("signal_process_error", sessionId, { label, error: String(err?.message || err) });
