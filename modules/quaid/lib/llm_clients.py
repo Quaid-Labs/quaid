@@ -349,7 +349,12 @@ def call_llm(system_prompt: str, user_message: str,
                 if timeout_for_attempt <= 0:
                     raise TimeoutError("LLM deadline exhausted before provider call")
             with acquire_llm_slot(timeout_seconds=timeout_for_attempt):
-                result = llm.llm_call(messages, resolved_tier, max_tokens, timeout_for_attempt)
+                call_timeout = timeout_for_attempt
+                if deadline is not None:
+                    call_timeout = deadline - time.time()
+                    if call_timeout <= 0:
+                        raise TimeoutError("LLM deadline exhausted while waiting for worker slot")
+                result = llm.llm_call(messages, resolved_tier, max_tokens, call_timeout)
             _track_usage(result)
             if result.truncated:
                 logger.warning(
