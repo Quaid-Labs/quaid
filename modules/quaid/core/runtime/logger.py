@@ -136,20 +136,9 @@ def clean_old_archives() -> None:
         print(f"[logger] Failed to clean old archives: {e}", file=sys.stderr)
 
 
-def get_log_path(component: str) -> Path:
-    """Get log file path for a component."""
-    return _log_dir() / f"{component}.log"
-
-
-def get_archive_dir() -> Path:
-    """Get archive directory path."""
-    return _archive_dir()
-
-
 # Module-level loggers for common components
 memory_logger = Logger("memory")
 janitor_logger = Logger("janitor")
-browser_logger = Logger("browser")
 
 
 if __name__ == "__main__":
@@ -167,6 +156,6 @@ if __name__ == "__main__":
         memory_logger.info("test_event", message="This is a test log entry")
         memory_logger.warn("test_warning", message="This is a test warning")
         memory_logger.error("test_error", message="This is a test error")
-        print(f"Test entries written to {get_log_path('memory')}")
+        print(f"Test entries written to {_log_dir() / 'memory.log'}")
     else:
         parser.print_help()
