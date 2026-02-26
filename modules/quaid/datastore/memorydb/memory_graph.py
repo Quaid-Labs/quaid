@@ -2501,9 +2501,11 @@ def _ollama_healthy(timeout: float = 0.2) -> bool:
     now = _time.monotonic()
     # Cache: (timestamp, result)
     if hasattr(_ollama_healthy, "_cache"):
-        ts, result = _ollama_healthy._cache
-        if now - ts < 30:
-            return result
+        cache = _ollama_healthy._cache
+        if isinstance(cache, tuple) and len(cache) == 2:
+            ts, result = cache
+            if now - ts < 30:
+                return bool(result)
     try:
         url = get_ollama_url()
         req = urllib.request.Request(f"{url}/api/tags", method="GET")

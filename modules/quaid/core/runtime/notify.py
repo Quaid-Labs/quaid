@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 """
 User Notification Module
 
@@ -20,14 +22,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
-from lib.adapter import ChannelInfo
 from lib.runtime_context import (
     get_install_url,
     get_last_channel as _ctx_get_last_channel,
     send_notification as _ctx_send_notification,
 )
+
+if TYPE_CHECKING:
+    from lib.adapter import ChannelInfo
 
 # Branding prefix for all notifications
 QUAID_HEADER = "**[Quaid]**"

@@ -57,6 +57,7 @@ const NODE_COUNT_CACHE_MS = 5 * 60 * 1e3;
 let _cachedDatastoreStats = null;
 let _datastoreStatsTimestamp = 0;
 let _memoryConfigErrorLogged = false;
+let _memoryConfigMtimeMs = -1;
 function buildPythonEnv(extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
@@ -119,11 +120,21 @@ function computeDynamicK() {
 }
 let _memoryConfig = null;
 function getMemoryConfig() {
-  if (_memoryConfig) {
+  const configPath = path.join(WORKSPACE, "config/memory.json");
+  let mtimeMs = -1;
+  try {
+    mtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch {
+  }
+  if (_memoryConfig && mtimeMs >= 0 && _memoryConfigMtimeMs === mtimeMs) {
+    return _memoryConfig;
+  }
+  if (_memoryConfig && mtimeMs < 0) {
     return _memoryConfig;
   }
   try {
-    _memoryConfig = JSON.parse(fs.readFileSync(path.join(WORKSPACE, "config/memory.json"), "utf8"));
+    _memoryConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    _memoryConfigMtimeMs = mtimeMs;
   } catch (err) {
     if (!_memoryConfigErrorLogged) {
       _memoryConfigErrorLogged = true;
@@ -481,27 +492,6 @@ function getAndClearMemoryNotes(sessionId) {
   }
   return all;
 }
-function getAndClearAllMemoryNotes() {
-  const all = [];
-  for (const [sid, notes] of _memoryNotes.entries()) {
-    all.push(...notes);
-    _memoryNotes.delete(sid);
-  }
-  try {
-    const files = fs.readdirSync(NOTES_DIR).filter((f) => f.startsWith("memory-notes-") && f.endsWith(".json"));
-    for (const f of files) {
-      const fp = path.join(NOTES_DIR, f);
-      try {
-        const notes = JSON.parse(fs.readFileSync(fp, "utf8"));
-        all.push(...notes);
-        fs.unlinkSync(fp);
-      } catch {
-      }
-    }
-  } catch {
-  }
-  return Array.from(new Set(all));
-}
 function extractSessionId(messages, ctx) {
   if (ctx?.sessionId) {
     return ctx.sessionId;
@@ -836,7 +826,9 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
           await new Promise((r) => setTimeout(r, 200 * attempt));
           continue;
         }
-        throw new Error(err);
+        throw new Error(
+          `[quaid][llm] tier=${modelTier} provider=${provider} model=${resolved.model} status=${gatewayRes.status} error=${String(err)}`
+        );
       }
       break;
     } catch (err) {
@@ -971,7 +963,14 @@ async function callExtractPipeline(opts) {
         reject(err);
       });
     });
-    return JSON.parse(output || "{}");
+    const parsed = JSON.parse(output || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("extract pipeline returned non-object JSON payload");
+    }
+    return parsed;
+  } catch (err) {
+    const msg = String(err?.message || err);
+    throw new Error(`[quaid] extract pipeline parse/exec failed: ${msg.slice(0, 500)}`);
   } finally {
     try {
       fs.unlinkSync(tmpPath);
@@ -1424,7 +1423,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
         });
       }
     } catch (_parseErr) {
-      console.warn("[quaid] JSON parse failed, trying line format");
+      console.warn(`[quaid] JSON parse failed, trying line format: ${String(_parseErr?.message || _parseErr)}`);
       for (const line of output.split("\n")) {
         if (line.startsWith("[direct]")) {
           const match = line.match(/\[direct\]\s+\[(\d+\.\d+)\]\s+\[(\w+)\]\s+(.+)/);
@@ -2187,17 +2186,16 @@ ${recallStoreGuidance}`,
                     via: m.via || "vector",
                     category: m.category || ""
                   }));
-                  const memoryJson = JSON.stringify(memoryData);
-                  const sourceBreakdown = JSON.stringify({
+                  const sourceBreakdown = {
                     vector_count: vectorResults.length,
                     graph_count: graphResults.length,
                     journal_count: journalResults.length,
                     project_count: projectResults.length,
                     query,
                     mode: "tool"
-                  });
+                  };
                   const dataFile2 = path.join(QUAID_TMP_DIR, `recall-data-${Date.now()}.json`);
-                  fs.writeFileSync(dataFile2, JSON.stringify({ memories: JSON.parse(memoryJson), source_breakdown: JSON.parse(sourceBreakdown) }), { mode: 384 });
+                  fs.writeFileSync(dataFile2, JSON.stringify({ memories: memoryData, source_breakdown: sourceBreakdown }), { mode: 384 });
                   spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_recall
@@ -2680,7 +2678,11 @@ ${factsOutput || "No facts found."}` }],
       isBootstrapOnly: isResetBootstrapOnlyConversation,
       logger: (msg) => console.log(msg),
       extract: async (msgs, sid, label) => {
-        extractionPromise = (extractionPromise || Promise.resolve()).catch(() => {
+        extractionPromise = (extractionPromise || Promise.resolve()).catch((err) => {
+          console.error("[quaid] extraction chain prior failure:", err?.message || String(err));
+          if (isFailHardEnabled()) {
+            throw err;
+          }
         }).then(() => extractMemoriesFromMessages(msgs, label || "Timeout", sid));
         await extractionPromise;
       }
@@ -2784,8 +2786,7 @@ ${factsOutput || "No facts found."}` }],
         });
       }
       const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
-      const globalNotes = getAndClearAllMemoryNotes();
-      const allNotes = Array.from(/* @__PURE__ */ new Set([...sessionNotes, ...globalNotes]));
+      const allNotes = Array.from(/* @__PURE__ */ new Set([...sessionNotes]));
       if (allNotes.length > 0) {
         console.log(`[quaid] ${label}: prepend ${allNotes.length} queued memory note(s)`);
       }
@@ -3042,7 +3043,11 @@ notify_memory_extraction(
             console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
           }
         };
-        extractionPromise = (extractionPromise || Promise.resolve()).catch(() => {
+        extractionPromise = (extractionPromise || Promise.resolve()).catch((err) => {
+          console.error("[quaid] extraction chain prior failure:", err?.message || String(err));
+          if (isFailHardEnabled()) {
+            throw err;
+          }
         }).then(() => doExtraction());
       } catch (err) {
         console.error("[quaid] before_compaction hook failed:", err);
@@ -3100,6 +3105,9 @@ notify_memory_extraction(
         console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${extractionPromise ? "yes" : "no"}`);
         extractionPromise = (extractionPromise || Promise.resolve()).catch((chainErr) => {
           console.warn(`[quaid][reset] prior_extraction_chain_error session=${sessionId || "unknown"} err=${String(chainErr?.message || chainErr)}`);
+          if (isFailHardEnabled()) {
+            throw chainErr;
+          }
         }).then(() => doExtraction()).catch((doErr) => {
           console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
           throw doErr;

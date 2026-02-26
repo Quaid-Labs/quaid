@@ -540,7 +540,11 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                 if embeddings and embeddings[0]:
                     return embeddings[0]
         except Exception as e:
-            print(f"Embedding error: {e}", file=sys.stderr)
+            print(
+                f"[embeddings] provider=ollama model={self._model} url={self._url} "
+                f"text_len={len(str(text or ''))} error={e}",
+                file=sys.stderr,
+            )
         return None
 
     def dimension(self):

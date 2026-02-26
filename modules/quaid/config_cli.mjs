@@ -186,8 +186,8 @@ function defaultMappedModel(cfg, tier, provider) {
 }
 
 function retrievalFailHard(cfg) {
-  if (typeof getPath(cfg, "retrieval.failHard") === "boolean") return !!getPath(cfg, "retrieval.failHard");
   if (typeof getPath(cfg, "retrieval.fail_hard") === "boolean") return !!getPath(cfg, "retrieval.fail_hard");
+  if (typeof getPath(cfg, "retrieval.failHard") === "boolean") return !!getPath(cfg, "retrieval.failHard");
   return true;
 }
 
@@ -618,14 +618,16 @@ async function runEdit() {
     } else if (menu === "fail_hard") {
       const current = retrievalFailHard(cfg);
       const next = handleCancel(await select({
-        message: "retrieval.failHard",
+        message: "retrieval.fail_hard",
         initialValue: current ? "on" : "off",
         options: [
           { value: "on", label: "on", hint: "strict mode: no fallback behavior; raise immediately" },
           { value: "off", label: "off", hint: "allow fallback behavior, but with noisy warnings" },
         ],
       }));
-      setPath(cfg, "retrieval.failHard", next === "on");
+      const val = next === "on";
+      setPath(cfg, "retrieval.fail_hard", val);
+      setPath(cfg, "retrieval.failHard", val);
     } else if (menu === "core_parallel_enabled") {
       const current = coreParallelEnabled(cfg);
       const next = handleCancel(await select({
@@ -748,7 +750,7 @@ function showConfig() {
   console.log(`embeddings model: ${effectiveEmbModel}`);
   console.log(`notify level:     ${getPath(cfg, "notifications.level", "normal")} (janitor:${getPath(cfg, "notifications.janitor.verbosity", "inherit")} extraction:${getPath(cfg, "notifications.extraction.verbosity", "inherit")} retrieval:${getPath(cfg, "notifications.retrieval.verbosity", "inherit")})`);
   console.log(`janitor apply:    ${getPath(cfg, "janitor.applyMode", "auto")}`);
-  console.log(`fail hard:        ${retrievalFailHard(cfg) ? "on" : "off"} (retrieval.failHard)`);
+  console.log(`fail hard:        ${retrievalFailHard(cfg) ? "on" : "off"} (retrieval.fail_hard)`);
   console.log(`core parallel:    ${coreParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${coreLlmWorkers(cfg)} prepassWorkers=${coreLifecyclePrepassWorkers(cfg)})`);
   console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} workspace=${getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
   console.log(`idle timeout:     ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`);
