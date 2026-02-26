@@ -1,5 +1,6 @@
 """Unit tests for docs_updater.py — staleness checking, source mapping, git diffs."""
 
+from concurrent.futures import ThreadPoolExecutor
 import sys
 import os
 import json
@@ -608,3 +609,15 @@ class TestClassifyDocChange:
         result = classify_doc_change(diff)
         assert result["classification"] == "significant"
         assert any("destructive" in r for r in result["reasons"])
+
+
+class TestCleanupStateLocking:
+    def test_increment_update_count_is_thread_safe(self, tmp_path):
+        with _adapter_patch(tmp_path):
+            import datastore.docsdb.updater as updater
+
+            with ThreadPoolExecutor(max_workers=12) as executor:
+                list(executor.map(lambda _i: updater._increment_update_count("docs/test.md", 100), range(60)))
+
+            state = updater._load_cleanup_state()
+            assert state["docs/test.md"]["updates_since_cleanup"] == 60
