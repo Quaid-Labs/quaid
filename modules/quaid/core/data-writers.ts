@@ -82,9 +82,14 @@ export function createDataWriteEngine(opts: DataWriteEngineOptions = {}) {
     try {
       return await writer.write(envelope as DataWriteEnvelope<unknown>);
     } catch (err: unknown) {
+      const errObj = err as Error;
+      const errType = errObj?.name || typeof err || "UnknownError";
       return {
         status: "failed",
-        error: String((err as Error)?.message || err || "Unknown DataWriter error"),
+        error: String(errObj?.message || err || "Unknown DataWriter error"),
+        details: {
+          error_type: errType,
+        },
       };
     }
   }
