@@ -260,6 +260,19 @@ class TestClaudeCodeLLMProvider:
             with pytest.raises(subprocess.TimeoutExpired):
                 p.llm_call([{"role": "user", "content": "hi"}])
 
+    def test_llm_call_timeout_cap_can_reduce_effective_timeout(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_TIMEOUT_CAP_S", "2")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
+            p.llm_call([{"role": "user", "content": "hi"}], timeout=30)
+        assert mock_run.call_args.kwargs["timeout"] == 2.0
+
     def test_llm_call_raises_on_non_object_json(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
         p = ClaudeCodeLLMProvider()
