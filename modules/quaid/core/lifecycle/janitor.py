@@ -102,6 +102,15 @@ MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 1
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 
 
+def _janitor_test_timeout_seconds(default_seconds: int = 600) -> int:
+    raw = os.environ.get("QUAID_JANITOR_TEST_TIMEOUT_S", "")
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        parsed = 0
+    return parsed if parsed > 0 else int(default_seconds)
+
+
 def _default_owner_id() -> str:
     """Resolve default owner from config with safe fallback."""
     try:
@@ -126,7 +135,7 @@ def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
             cwd=plugin_dir,
             capture_output=True,
             text=True,
-            timeout=600  # vitest suite needs ~5min with Ollama embedding calls
+            timeout=_janitor_test_timeout_seconds(),  # vitest suite may take several minutes
         )
 
         output = proc.stdout + proc.stderr
