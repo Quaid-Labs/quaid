@@ -380,6 +380,7 @@ class TestDistillation:
         assert "model_tier" not in kwargs
         assert kwargs.get("system_prompt", "").startswith("Respond with JSON only")
         assert isinstance(kwargs.get("max_tokens"), int)
+        assert isinstance(kwargs.get("timeout"), (int, float))
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_full_distillation_apply(self, mock_opus, workspace_dir, mock_config):
@@ -1035,6 +1036,7 @@ class TestSnippetReview:
         assert "model_tier" not in kwargs
         assert kwargs.get("system_prompt", "").startswith("Respond with JSON only")
         assert isinstance(kwargs.get("max_tokens"), int)
+        assert isinstance(kwargs.get("timeout"), (int, float))
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_apply_folds_into_parent(self, mock_opus, workspace_dir, mock_config):
