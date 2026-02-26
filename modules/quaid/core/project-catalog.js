@@ -1,3 +1,9 @@
+function warnCatalog(message) {
+  try {
+    console.warn(message);
+  } catch {
+  }
+}
 function firstUsefulLine(content) {
   return String(content || "").split("\n").map((line) => line.trim()).find((line) => line && !line.startsWith("#") && !line.startsWith("|")) || "";
 }
@@ -10,7 +16,8 @@ function getProjectDescriptionFromToolsMd(deps, homeDir) {
     const m = content.match(/^\s*(?:Project\s+Description|Description)\s*:\s*(.+)$/im);
     if (m && m[1]) return m[1].trim().slice(0, 180);
     return firstUsefulLine(content).slice(0, 180);
-  } catch {
+  } catch (err) {
+    warnCatalog(`[quaid] project catalog: TOOLS.md description read failed: ${String(err?.message || err)}`);
     return "";
   }
 }
@@ -23,7 +30,8 @@ function getProjectDescriptionFromProjectMd(deps, homeDir) {
     const m = content.match(/^\s*Description\s*:\s*(.+)$/im);
     if (m && m[1]) return m[1].trim().slice(0, 180);
     return firstUsefulLine(content).slice(0, 180);
-  } catch {
+  } catch (err) {
+    warnCatalog(`[quaid] project catalog: PROJECT.md description read failed: ${String(err?.message || err)}`);
     return "";
   }
 }
@@ -33,7 +41,8 @@ function createProjectCatalogReader(deps) {
       const configPath = deps.path.join(deps.workspace, "config/memory.json");
       const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
       return Object.keys(configData?.projects?.definitions || {});
-    } catch {
+    } catch (err) {
+      warnCatalog(`[quaid] project catalog: failed to load project names: ${String(err?.message || err)}`);
       return [];
     }
   }
@@ -46,7 +55,8 @@ function createProjectCatalogReader(deps) {
         const description = String(def?.description || "").trim() || getProjectDescriptionFromToolsMd(deps, String(def?.homeDir || "").trim()) || getProjectDescriptionFromProjectMd(deps, String(def?.homeDir || "").trim()) || "No description";
         return { name, description };
       });
-    } catch {
+    } catch (err) {
+      warnCatalog(`[quaid] project catalog: failed to load full catalog: ${String(err?.message || err)}`);
       return getProjectNames().map((name) => ({ name, description: "No description" }));
     }
   }

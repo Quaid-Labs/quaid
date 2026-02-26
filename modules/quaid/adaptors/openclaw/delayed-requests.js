@@ -1,9 +1,16 @@
 import * as fs from "node:fs";
+function warnDelayed(message) {
+  try {
+    console.warn(message);
+  } catch {
+  }
+}
 function readJson(path) {
   try {
     if (!fs.existsSync(path)) return null;
     return JSON.parse(fs.readFileSync(path, "utf8"));
-  } catch {
+  } catch (err) {
+    warnDelayed(`[quaid] delayed requests read failed path=${path}: ${String(err?.message || err)}`);
     return null;
   }
 }
@@ -37,7 +44,8 @@ function queueDelayedRequest(requestsPath, message, kind = "janitor", priority =
     payload.requests = requests;
     writeJson(requestsPath, payload);
     return true;
-  } catch {
+  } catch (err) {
+    warnDelayed(`[quaid] delayed requests queue failed path=${requestsPath}: ${String(err?.message || err)}`);
     return false;
   }
 }
