@@ -344,6 +344,21 @@ class TestCallLlmProvider:
             with pytest.raises(RuntimeError, match="failHard is enabled"):
                 llm_clients.call_llm("system", "user", max_retries=0)
 
+    def test_no_response_error_includes_provider_context(self, test_adapter):
+        import core.llm.clients as llm_clients
+
+        def no_response(*_args, **_kwargs):
+            return LLMResult(text=None, duration=0.01, model="null-model")
+
+        test_adapter._llm.llm_call = no_response
+        with patch("core.llm.clients.is_fail_hard_enabled", return_value=True):
+            with pytest.raises(RuntimeError) as exc:
+                llm_clients.call_llm("system", "user", max_retries=0, timeout=12.0)
+        msg = str(exc.value)
+        assert "provider=" in msg
+        assert "error_type=" in msg
+        assert "null-model" in msg
+
     def test_no_response_degrades_when_failhard_disabled(self, test_adapter):
         """Provider null responses should degrade only when failHard is disabled."""
         import core.llm.clients as llm_clients
