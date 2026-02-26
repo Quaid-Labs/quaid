@@ -2231,8 +2231,10 @@ JSON array only:"""
                         "created_at": entry.get("created_at_node"),
                     }, "decay_review_delete")
                     if archived:
-                        hard_delete_node(node_id)
-                        resolve_decay_review(entry["id"], "delete", reason)
+                        # Keep delete + queue resolution in one transaction.
+                        with graph._get_conn() as conn:
+                            hard_delete_node(node_id, conn=conn)
+                            resolve_decay_review(entry["id"], "delete", reason, conn=conn)
                     else:
                         print(f"    SKIPPED delete (archive failed): {entry['node_text'][:50]}...", file=sys.stderr)
                         continue
