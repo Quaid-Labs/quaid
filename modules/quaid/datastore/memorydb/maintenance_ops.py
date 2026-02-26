@@ -385,6 +385,7 @@ class JanitorMetrics:
         self.llm_time = 0.0
         self.errors = []
         self.warnings = []
+        self._max_event_entries = max(1, int(os.environ.get("JANITOR_METRICS_MAX_EVENTS", "500") or 500))
     
     def start_task(self, task_name: str):
         with self._lock:
@@ -428,6 +429,8 @@ class JanitorMetrics:
     def add_error(self, error: str):
         with self._lock:
             self.errors.append({"time": datetime.now().isoformat(), "error": error})
+            if len(self.errors) > self._max_event_entries:
+                self.errors = self.errors[-self._max_event_entries:]
             task = self._thread_task.get(threading.get_ident()) or self.current_task
             if task and task in self.task_meta:
                 self.task_meta[task]["errors"] += 1
@@ -435,6 +438,8 @@ class JanitorMetrics:
     def add_warning(self, warning: str):
         with self._lock:
             self.warnings.append({"time": datetime.now().isoformat(), "warning": warning})
+            if len(self.warnings) > self._max_event_entries:
+                self.warnings = self.warnings[-self._max_event_entries:]
             task = self._thread_task.get(threading.get_ident()) or self.current_task
             if task and task in self.task_meta:
                 self.task_meta[task]["warnings"] += 1
