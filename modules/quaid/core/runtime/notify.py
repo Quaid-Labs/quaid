@@ -20,6 +20,7 @@ Programmatic:
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -42,6 +43,7 @@ from lib.runtime_context import (
 # Branding prefix for all notifications
 QUAID_HEADER = "**[Quaid]**"
 MAX_NOTIFY_CHARS = 3500
+logger = logging.getLogger(__name__)
 
 
 def send_direct_notification(
@@ -89,7 +91,8 @@ def _notify_full_text() -> bool:
     try:
         from config import get_config
         return get_config().notifications.full_text
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to read notifications.full_text config: %s", exc)
         return False
 
 
@@ -130,8 +133,12 @@ def _check_janitor_health() -> Optional[str]:
             )
 
         return None
-    except Exception:
-        return None  # Never crash extraction over a health check
+    except Exception as exc:
+        logger.warning("Failed to evaluate janitor health status: %s", exc)
+        return (
+            "⚠️ **Unable to verify janitor health.**\n"
+            "Please check database/runtime status and your HEARTBEAT.md schedule."
+        )
 
 def get_last_channel(session_key: str = "") -> Optional[ChannelInfo]:
     """Get the user's last active channel from session state (delegates to adapter)."""
@@ -148,8 +155,8 @@ def _resolve_channel(feature: Optional[str] = None) -> Optional[str]:
         channel = get_config().notifications.effective_channel(feature)
         if channel and channel != "last_used":
             return channel
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to resolve notification channel override for feature '%s': %s", feature, exc)
     return None
 
 

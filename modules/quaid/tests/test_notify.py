@@ -22,6 +22,8 @@ from core.runtime.notify import (
     notify_user,
     get_last_channel,
     ChannelInfo,
+    _check_janitor_health,
+    _notify_full_text,
 )
 
 
@@ -576,6 +578,28 @@ class TestNotifyUser:
             assert notify_user("test message") is False
         finally:
             reset_adapter()
+
+
+class TestNotifyFallbackVisibility:
+    def test_notify_full_text_config_error_logs_warning(self, caplog):
+        caplog.set_level("WARNING")
+        with patch("config.get_config", side_effect=RuntimeError("bad config")):
+            assert _notify_full_text() is False
+        assert "Failed to read notifications.full_text config" in caplog.text
+
+    def test_check_janitor_health_returns_warning_on_runtime_error(self, caplog):
+        caplog.set_level("WARNING")
+        with patch(
+            "core.lifecycle.datastore_runtime.get_last_successful_janitor_completed_at",
+            side_effect=RuntimeError("db offline"),
+        ), patch(
+            "core.lifecycle.datastore_runtime.get_graph",
+            side_effect=RuntimeError("db offline"),
+        ):
+            warning = _check_janitor_health()
+        assert warning is not None
+        assert "Unable to verify janitor health" in warning
+        assert "Failed to evaluate janitor health status" in caplog.text
 
     def test_dry_run_does_not_call_subprocess(self):
         """dry_run prints command but doesn't execute."""
