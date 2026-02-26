@@ -1208,20 +1208,6 @@ def reload_config() -> MemoryConfig:
     return load_config()
 
 
-# For convenience, export commonly used config values
-def get_decay_threshold_days() -> int:
-    return get_config().decay.threshold_days
-
-def get_duplicate_threshold() -> float:
-    return get_config().janitor.dedup.similarity_threshold
-
-def get_retrieval_limit() -> int:
-    return get_config().retrieval.default_limit
-
-def get_retrieval_min_similarity() -> float:
-    return get_config().retrieval.min_similarity
-
-
 if __name__ == "__main__":
     # Test loading
     config = load_config()
