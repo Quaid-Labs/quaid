@@ -231,6 +231,14 @@ def extract_from_transcript(
         logger.info(f"[extract] {label}: empty transcript, nothing to extract")
         return result
 
+    try:
+        capture_cfg = get_config().capture
+        if not bool(getattr(capture_cfg, "enabled", True)):
+            logger.info(f"[extract] {label}: capture disabled, skipping extraction")
+            return result
+    except Exception:
+        pass
+
     # Load extraction prompt
     system_prompt = _load_extraction_prompt()
 
