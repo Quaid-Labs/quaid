@@ -979,6 +979,36 @@ class TestProjectDefinitionsTable:
         assert loaded.description == "A test project definition"
         assert loaded.auto_index is True
 
+    def test_get_project_definition_falls_back_when_json_list_columns_are_wrong_type(self, setup_env):
+        from config import ProjectDefinition
+        from lib.database import get_connection
+
+        r = _get_registry()
+        defn = ProjectDefinition(
+            label="Bad JSON Project",
+            home_dir="projects/bad-json/",
+            source_roots=["src/"],
+            patterns=["*.md"],
+            exclude=["*.log"],
+        )
+        r.save_project_definition("bad-json-proj", defn)
+
+        with get_connection(r.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE project_definitions
+                SET source_roots = ?, patterns = ?, exclude = ?
+                WHERE name = ?
+                """,
+                ('{"oops":"not-a-list"}', '{"patterns":"bad"}', '{"exclude":"bad"}', "bad-json-proj"),
+            )
+
+        loaded = r.get_project_definition("bad-json-proj")
+        assert loaded is not None
+        assert loaded.source_roots == []
+        assert loaded.patterns == ["*.md"]
+        assert loaded.exclude == []
+
     def test_delete_project_definition_sets_state(self, setup_env):
         """Soft delete sets state to 'deleted', not hard delete."""
         from lib.database import get_connection
