@@ -456,7 +456,7 @@ def call_deep_reasoning(prompt: str, system_prompt: str = "Respond with JSON onl
         system_prompt=system_prompt,
         user_message=prompt,
         model=target_model,
-        model_tier=_resolve_tier(target_model),
+        model_tier="deep",
         max_tokens=max_tokens,
         timeout=timeout,
     )

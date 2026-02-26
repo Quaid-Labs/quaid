@@ -45,9 +45,17 @@ function _resolveWorkspace(): string {
   return process.cwd();
 }
 const WORKSPACE = _resolveWorkspace();
-const PYTHON_PLUGIN_ROOT = path.join(WORKSPACE, "plugins", "quaid");
-const PYTHON_SCRIPT = path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py");
-const EXTRACT_SCRIPT = path.join(WORKSPACE, "plugins/quaid/ingest/extract.py");
+function _resolvePythonPluginRoot(): string {
+  const modulesRoot = path.join(WORKSPACE, "modules", "quaid");
+  if (fs.existsSync(modulesRoot)) {
+    return modulesRoot;
+  }
+  // Backward compatibility for older workspace layouts.
+  return path.join(WORKSPACE, "plugins", "quaid");
+}
+const PYTHON_PLUGIN_ROOT = _resolvePythonPluginRoot();
+const PYTHON_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "datastore/memorydb/memory_graph.py");
+const EXTRACT_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "ingest/extract.py");
 const DB_PATH = path.join(WORKSPACE, "data/memory.db");
 const QUAID_RUNTIME_DIR = path.join(WORKSPACE, ".quaid", "runtime");
 const QUAID_TMP_DIR = path.join(QUAID_RUNTIME_DIR, "tmp");
@@ -889,9 +897,9 @@ function maybeForceCompactionAfterTimeout(sessionId?: string): void {
 
 const DOCS_UPDATER = path.join(WORKSPACE, "modules/quaid/datastore/docsdb/updater.py");
 const DOCS_RAG = path.join(WORKSPACE, "modules/quaid/datastore/docsdb/rag.py");
-const DOCS_REGISTRY = path.join(WORKSPACE, "plugins/quaid/core/docs/registry.py");
+const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 const PROJECT_UPDATER = path.join(WORKSPACE, "modules/quaid/datastore/docsdb/project_updater.py");
-const EVENTS_SCRIPT = path.join(WORKSPACE, "plugins/quaid/core/runtime/events.py");
+const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 
 function _getGatewayCredential(providers: string[]): string | undefined {
   try {
@@ -3647,14 +3655,25 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const journalConfig = getMemoryConfig().docs?.journal || {};
       const journalEnabled = isSystemEnabled("journal") && journalConfig.enabled !== false;
       const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
-      const extracted = await callExtractPipeline({
-        transcript: transcriptForExtraction,
-        owner: resolveOwner(),
-        label: resolveExtractionTrigger(label),
-        sessionId,
-        writeSnippets: snippetsEnabled,
-        writeJournal: journalEnabled,
-      });
+      const triggerLabel = resolveExtractionTrigger(label);
+      let extracted: any;
+      try {
+        extracted = await callExtractPipeline({
+          transcript: transcriptForExtraction,
+          owner: resolveOwner(),
+          label: triggerLabel,
+          sessionId,
+          writeSnippets: snippetsEnabled,
+          writeJournal: journalEnabled,
+        });
+      } catch (err: unknown) {
+        const msg = String((err as Error)?.message || err);
+        console.error(`[quaid] ${label} extraction failed: ${msg}`);
+        // Extraction is best-effort at this adapter boundary. Lower layers still
+        // enforce failHard semantics where configured, but we avoid crashing the
+        // active gateway/session loop on background extraction failures.
+        return;
+      }
 
       const stored = Number(extracted?.facts_stored || 0);
       const skipped = Number(extracted?.facts_skipped || 0);

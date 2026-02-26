@@ -702,6 +702,7 @@ class TestDefaultOwnerId:
         mock_cfg.users.default_owner = None  # Triggers except branch
         # Force attribute access to raise
         mock_cfg.users = MagicMock(spec=[])  # spec=[] means no attributes
-        with patch("datastore.memorydb.maintenance_ops._cfg", mock_cfg):
+        with patch("datastore.memorydb.maintenance_ops._cfg", mock_cfg), \
+             patch("datastore.memorydb.maintenance_ops.is_fail_hard_enabled", return_value=False):
             result = _default_owner_id()
             assert result == "default"
