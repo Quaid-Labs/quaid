@@ -1037,6 +1037,13 @@ const getProjectCatalog = () => projectCatalogReader.getProjectCatalog();
 function spawnNotifyScript(scriptBody) {
   const tmpFile = path.join(QUAID_NOTIFY_DIR, `notify-${Date.now()}-${Math.random().toString(36).slice(2)}.py`);
   const notifyLogFile = path.join(QUAID_LOGS_DIR, "notify-worker.log");
+  const appendNotifyLog = (msg) => {
+    try {
+      fs.appendFileSync(notifyLogFile, `${(/* @__PURE__ */ new Date()).toISOString()} ${msg}
+`);
+    } catch {
+    }
+  };
   const preamble = `import sys, os
 sys.path.insert(0, ${JSON.stringify(path.join(WORKSPACE, "plugins/quaid"))})
 `;
@@ -1044,14 +1051,21 @@ sys.path.insert(0, ${JSON.stringify(path.join(WORKSPACE, "plugins/quaid"))})
 os.unlink(${JSON.stringify(tmpFile)})
 `;
   fs.writeFileSync(tmpFile, preamble + scriptBody + cleanup, { mode: 384 });
-  const notifyLogFd = fs.openSync(notifyLogFile, "a");
-  const proc = spawn("python3", [tmpFile], {
-    detached: true,
-    stdio: ["ignore", notifyLogFd, notifyLogFd],
-    env: buildPythonEnv()
-  });
-  fs.closeSync(notifyLogFd);
-  proc.unref();
+  try {
+    const notifyLogFd = fs.openSync(notifyLogFile, "a");
+    const proc = spawn("python3", [tmpFile], {
+      detached: true,
+      stdio: ["ignore", notifyLogFd, notifyLogFd],
+      env: buildPythonEnv()
+    });
+    fs.closeSync(notifyLogFd);
+    proc.on("error", (err) => {
+      appendNotifyLog(`[notify-worker-error] spawn failed: ${err.message}`);
+    });
+    proc.unref();
+  } catch (err) {
+    appendNotifyLog(`[notify-worker-error] launch failed: ${String(err?.message || err)}`);
+  }
 }
 function _loadJanitorNudgeState() {
   try {
