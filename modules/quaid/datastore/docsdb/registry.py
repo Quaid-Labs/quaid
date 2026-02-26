@@ -117,6 +117,21 @@ class DocsRegistry:
             self._config = get_config()
         return self._config
 
+    def _decode_json_list(self, raw_value: Any, *, field_name: str, default: Optional[List[Any]] = None) -> List[Any]:
+        """Decode a JSON list column defensively."""
+        fallback = list(default or [])
+        if not raw_value:
+            return fallback
+        try:
+            parsed = json.loads(raw_value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("Invalid JSON for %s; using default: %s", field_name, exc)
+            return fallback
+        if not isinstance(parsed, list):
+            logger.warning("Invalid JSON type for %s (expected list, got %s); using default", field_name, type(parsed).__name__)
+            return fallback
+        return parsed
+
     def ensure_table(self):
         """Create doc_registry table if it doesn't exist."""
         def _ensure_column(conn, table: str, column: str, definition: str) -> None:
@@ -249,10 +264,10 @@ class DocsRegistry:
             return ProjectDefinition(
                 label=row["label"],
                 home_dir=row["home_dir"],
-                source_roots=json.loads(row["source_roots"]) if row["source_roots"] else [],
+                source_roots=self._decode_json_list(row["source_roots"], field_name="project_definitions.source_roots"),
                 auto_index=bool(row["auto_index"]),
-                patterns=json.loads(row["patterns"]) if row["patterns"] else ["*.md"],
-                exclude=json.loads(row["exclude"]) if row["exclude"] else [],
+                patterns=self._decode_json_list(row["patterns"], field_name="project_definitions.patterns", default=["*.md"]),
+                exclude=self._decode_json_list(row["exclude"], field_name="project_definitions.exclude"),
                 description=row["description"] or "",
                 state=row["state"],
             )
@@ -269,10 +284,10 @@ class DocsRegistry:
                 result[row["name"]] = ProjectDefinition(
                     label=row["label"],
                     home_dir=row["home_dir"],
-                    source_roots=json.loads(row["source_roots"]) if row["source_roots"] else [],
+                    source_roots=self._decode_json_list(row["source_roots"], field_name="project_definitions.source_roots"),
                     auto_index=bool(row["auto_index"]),
-                    patterns=json.loads(row["patterns"]) if row["patterns"] else ["*.md"],
-                    exclude=json.loads(row["exclude"]) if row["exclude"] else [],
+                    patterns=self._decode_json_list(row["patterns"], field_name="project_definitions.patterns", default=["*.md"]),
+                    exclude=self._decode_json_list(row["exclude"], field_name="project_definitions.exclude"),
                     description=row["description"] or "",
                     state=row["state"],
                 )
@@ -1281,10 +1296,10 @@ class DocsRegistry:
             "asset_type": row["asset_type"],
             "title": row["title"],
             "description": row["description"],
-            "tags": json.loads(row["tags"]) if row["tags"] else [],
+            "tags": self._decode_json_list(row["tags"], field_name="docs_registry.tags"),
             "state": row["state"],
             "auto_update": bool(row["auto_update"]),
-            "source_files": json.loads(row["source_files"]) if row["source_files"] else [],
+            "source_files": self._decode_json_list(row["source_files"], field_name="docs_registry.source_files"),
             "source_channel": row["source_channel"] if "source_channel" in row.keys() else None,
             "source_conversation_id": row["source_conversation_id"] if "source_conversation_id" in row.keys() else None,
             "source_author_id": row["source_author_id"] if "source_author_id" in row.keys() else None,
@@ -1293,7 +1308,10 @@ class DocsRegistry:
             "conversation_id": row["conversation_id"] if "conversation_id" in row.keys() else None,
             "visibility_scope": row["visibility_scope"] if "visibility_scope" in row.keys() else None,
             "sensitivity": row["sensitivity"] if "sensitivity" in row.keys() else None,
-            "participant_entity_ids": json.loads(row["participant_entity_ids"]) if "participant_entity_ids" in row.keys() and row["participant_entity_ids"] else [],
+            "participant_entity_ids": self._decode_json_list(
+                row["participant_entity_ids"] if "participant_entity_ids" in row.keys() else None,
+                field_name="docs_registry.participant_entity_ids",
+            ),
             "provenance_confidence": row["provenance_confidence"] if "provenance_confidence" in row.keys() else None,
             "last_indexed_at": row["last_indexed_at"],
             "last_modified_at": row["last_modified_at"],
