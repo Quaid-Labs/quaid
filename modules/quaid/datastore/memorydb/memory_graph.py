@@ -3681,6 +3681,17 @@ def _sanitize_for_context(text: str) -> str:
     return result
 
 
+def _validate_confidence_unit_interval(value: Any, field_name: str) -> float:
+    """Normalize confidence-like values and enforce [0.0, 1.0]."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a number between 0.0 and 1.0") from exc
+    if parsed < 0.0 or parsed > 1.0:
+        raise ValueError(f"{field_name} must be between 0.0 and 1.0 (got {parsed})")
+    return parsed
+
+
 def store(
     text: str,
     category: str = "fact",
@@ -3748,6 +3759,17 @@ def store(
 
     if not owner_id:
         raise ValueError("Owner is required")
+
+    confidence = _validate_confidence_unit_interval(confidence, "confidence")
+    extraction_confidence = _validate_confidence_unit_interval(
+        extraction_confidence,
+        "extraction_confidence",
+    )
+    if provenance_confidence is not None:
+        provenance_confidence = _validate_confidence_unit_interval(
+            provenance_confidence,
+            "provenance_confidence",
+        )
     # Normalize source_type aliases at storage boundary.
     if source_type is not None:
         source_type = str(source_type).strip().lower()

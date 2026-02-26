@@ -97,6 +97,24 @@ class TestStoreValidation:
             with pytest.raises(ValueError, match="[Oo]wner"):
                 store("Quaid likes espresso coffee", owner_id="")
 
+    def test_confidence_above_one_raises(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        with patch("datastore.memorydb.memory_graph.get_graph") as mock_gg:
+            mock_gg.return_value = _make_graph(tmp_path)[0]
+            with pytest.raises(ValueError, match="confidence must be between 0.0 and 1.0"):
+                store("Quaid likes espresso coffee", owner_id="quaid", confidence=1.2)
+
+    def test_extraction_confidence_below_zero_raises(self, tmp_path):
+        from datastore.memorydb.memory_graph import store
+        with patch("datastore.memorydb.memory_graph.get_graph") as mock_gg:
+            mock_gg.return_value = _make_graph(tmp_path)[0]
+            with pytest.raises(ValueError, match="extraction_confidence must be between 0.0 and 1.0"):
+                store(
+                    "Quaid likes espresso coffee",
+                    owner_id="quaid",
+                    extraction_confidence=-0.1,
+                )
+
 
 # ---------------------------------------------------------------------------
 # store() basic behavior

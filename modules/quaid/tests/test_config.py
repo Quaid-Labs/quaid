@@ -370,6 +370,42 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_invalid_parallel_numeric_values_fall_back_to_defaults(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "core": {
+                    "parallel": {
+                        "llmWorkers": "four",
+                        "lifecyclePrepassWorkers": "three",
+                        "lockWaitSeconds": "sixty",
+                    }
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.core.parallel.llm_workers == 4
+                assert cfg.core.parallel.lifecycle_prepass_workers == 3
+                assert cfg.core.parallel.lock_wait_seconds == 120
+        finally:
+            config._config = old_config
+
+    def test_invalid_token_budget_falls_back_to_zero(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({"janitor": {"tokenBudget": "many"}}))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.janitor.token_budget == 0
+        finally:
+            config._config = old_config
+
     def test_invalid_json_uses_defaults(self, tmp_path):
         """Invalid JSON in config file falls back to defaults."""
         import config
