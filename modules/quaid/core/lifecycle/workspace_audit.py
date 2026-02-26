@@ -15,11 +15,12 @@ import logging
 import os
 import re
 import shutil
+import fcntl
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from core.llm.clients import call_deep_reasoning, parse_json_response
+from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from lib.runtime_context import get_workspace_dir, get_bootstrap_markdown_globs
 
@@ -78,25 +79,34 @@ def _queue_project_review(
     """
     _data_dir().mkdir(parents=True, exist_ok=True)
 
-    pending = []
-    if _pending_project_review().exists():
-        try:
-            with open(_pending_project_review(), "r") as f:
-                pending = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pending = []
-
-    pending.append({
+    queue_path = _pending_project_review()
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
         "section": section,
         "source_file": source_file,
         "project_hint": project_hint,
         "content_preview": content_preview,
         "reason": reason,
         "timestamp": datetime.now().isoformat(),
-    })
+    }
 
-    with open(_pending_project_review(), "w") as f:
+    with open(queue_path, "a+", encoding="utf-8") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            raw = f.read().strip()
+            pending = json.loads(raw) if raw else []
+            if not isinstance(pending, list):
+                pending = []
+        except (json.JSONDecodeError, IOError):
+            pending = []
+        pending.append(entry)
+        f.seek(0)
+        f.truncate(0)
         json.dump(pending, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     logger.info(f"Queued project review: '{section}' in {source_file}")
 

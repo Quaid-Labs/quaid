@@ -73,6 +73,7 @@ const NODE_COUNT_CACHE_MS = 5 * 60 * 1000; // 5 minutes
 let _cachedDatastoreStats: Record<string, any> | null = null;
 let _datastoreStatsTimestamp = 0;
 let _memoryConfigErrorLogged = false;
+let _memoryConfigMtimeMs = -1;
 
 function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   const sep = process.platform === "win32" ? ";" : ":";
@@ -141,9 +142,20 @@ function computeDynamicK(): number {
 // Model resolution — reads from config/memory.json, no hardcoded model IDs
 let _memoryConfig: any = null;
 function getMemoryConfig(): any {
-  if (_memoryConfig) { return _memoryConfig; }
+  const configPath = path.join(WORKSPACE, "config/memory.json");
+  let mtimeMs = -1;
   try {
-    _memoryConfig = JSON.parse(fs.readFileSync(path.join(WORKSPACE, "config/memory.json"), "utf8"));
+    mtimeMs = fs.statSync(configPath).mtimeMs;
+  } catch {}
+  if (_memoryConfig && mtimeMs >= 0 && _memoryConfigMtimeMs === mtimeMs) {
+    return _memoryConfig;
+  }
+  if (_memoryConfig && mtimeMs < 0) {
+    return _memoryConfig;
+  }
+  try {
+    _memoryConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    _memoryConfigMtimeMs = mtimeMs;
   } catch (err: unknown) {
     if (!_memoryConfigErrorLogged) {
       _memoryConfigErrorLogged = true;
@@ -543,32 +555,6 @@ function getAndClearMemoryNotes(sessionId: string): string[] {
   return all;
 }
 
-// Also collect notes from ALL sessions (for cases where session ID isn't matched)
-function getAndClearAllMemoryNotes(): string[] {
-  const all: string[] = [];
-
-  // In-memory
-  for (const [sid, notes] of _memoryNotes.entries()) {
-    all.push(...notes);
-    _memoryNotes.delete(sid);
-  }
-
-  // Disk — glob for memory-notes-*.json
-  try {
-    const files = fs.readdirSync(NOTES_DIR).filter(f => f.startsWith("memory-notes-") && f.endsWith(".json"));
-    for (const f of files) {
-      const fp = path.join(NOTES_DIR, f);
-      try {
-        const notes: string[] = JSON.parse(fs.readFileSync(fp, "utf8"));
-        all.push(...notes);
-        fs.unlinkSync(fp);
-      } catch {}
-    }
-  } catch {}
-
-  return Array.from(new Set(all));
-}
-
 // ============================================================================
 // Session ID Helper
 // ============================================================================
@@ -954,7 +940,10 @@ async function callConfiguredLLM(
           await new Promise((r) => setTimeout(r, 200 * attempt));
           continue;
         }
-        throw new Error(err);
+        throw new Error(
+          `[quaid][llm] tier=${modelTier} provider=${provider} model=${resolved.model} `
+          + `status=${gatewayRes.status} error=${String(err)}`
+        );
       }
       break;
     } catch (err: unknown) {
@@ -1102,7 +1091,14 @@ async function callExtractPipeline(opts: {
         reject(err);
       });
     });
-    return JSON.parse(output || "{}");
+    const parsed = JSON.parse(output || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("extract pipeline returned non-object JSON payload");
+    }
+    return parsed;
+  } catch (err: unknown) {
+    const msg = String((err as Error)?.message || err);
+    throw new Error(`[quaid] extract pipeline parse/exec failed: ${msg.slice(0, 500)}`);
   } finally {
     try { fs.unlinkSync(tmpPath); } catch {}
   }
@@ -1666,7 +1662,7 @@ async function recall(
 
     } catch (_parseErr: unknown) {
       // Fallback: parse line-by-line output format if JSON parsing fails
-      console.warn("[quaid] JSON parse failed, trying line format");
+      console.warn(`[quaid] JSON parse failed, trying line format: ${String((_parseErr as Error)?.message || _parseErr)}`);
       for (const line of output.split("\n")) {
         // [direct] format
         if (line.startsWith("[direct]")) {
@@ -2541,21 +2537,19 @@ ${recallStoreGuidance}`,
                   via: m.via || "vector",
                   category: m.category || "",
                 }));
-                const memoryJson = JSON.stringify(memoryData);
-
                 // Build source breakdown for notification
-                const sourceBreakdown = JSON.stringify({
+                const sourceBreakdown = {
                   vector_count: vectorResults.length,
                   graph_count: graphResults.length,
                   journal_count: journalResults.length,
                   project_count: projectResults.length,
                   query: query,
                   mode: "tool",
-                });
+                };
 
                 // Fire and forget notification
                 const dataFile2 = path.join(QUAID_TMP_DIR, `recall-data-${Date.now()}.json`);
-                fs.writeFileSync(dataFile2, JSON.stringify({ memories: JSON.parse(memoryJson), source_breakdown: JSON.parse(sourceBreakdown) }), { mode: 0o600 });
+                fs.writeFileSync(dataFile2, JSON.stringify({ memories: memoryData, source_breakdown: sourceBreakdown }), { mode: 0o600 });
                 spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_recall
@@ -3053,7 +3047,12 @@ notify_docs_search(data['query'], data['results'])
       logger: (msg: string) => console.log(msg),
       extract: async (msgs: any[], sid?: string, label?: string) => {
         extractionPromise = (extractionPromise || Promise.resolve())
-          .catch(() => {})
+          .catch((err: unknown) => {
+            console.error("[quaid] extraction chain prior failure:", (err as Error)?.message || String(err));
+            if (isFailHardEnabled()) {
+              throw err;
+            }
+          })
           .then(() => extractMemoriesFromMessages(msgs, label || "Timeout", sid));
         await extractionPromise;
       },
@@ -3154,8 +3153,8 @@ notify_docs_search(data['query'], data['results'])
       }
 
       const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
-      const globalNotes = getAndClearAllMemoryNotes();
-      const allNotes = Array.from(new Set([...sessionNotes, ...globalNotes]));
+      // Avoid cross-session leakage: extraction only consumes notes for the active session.
+      const allNotes = Array.from(new Set([...sessionNotes]));
       if (allNotes.length > 0) {
         console.log(`[quaid] ${label}: prepend ${allNotes.length} queued memory note(s)`);
       }
@@ -3462,7 +3461,12 @@ notify_memory_extraction(
         // (if compaction and reset overlap, the .finally() from the first
         // extraction would clear the promise while the second is still running)
         extractionPromise = (extractionPromise || Promise.resolve())
-          .catch(() => {}) // Don't let previous failure block the chain
+          .catch((err: unknown) => {
+            console.error("[quaid] extraction chain prior failure:", (err as Error)?.message || String(err));
+            if (isFailHardEnabled()) {
+              throw err;
+            }
+          }) // Don't let previous failure block the chain when failHard=false
           .then(() => doExtraction());
       } catch (err: unknown) {
         console.error("[quaid] before_compaction hook failed:", err);
@@ -3534,6 +3538,9 @@ notify_memory_extraction(
         extractionPromise = (extractionPromise || Promise.resolve())
           .catch((chainErr: unknown) => {
             console.warn(`[quaid][reset] prior_extraction_chain_error session=${sessionId || "unknown"} err=${String((chainErr as Error)?.message || chainErr)}`);
+            if (isFailHardEnabled()) {
+              throw chainErr;
+            }
           })
           .then(() => doExtraction())
           .catch((doErr: unknown) => {

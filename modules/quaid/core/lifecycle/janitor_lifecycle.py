@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import os
 import threading
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -145,10 +146,11 @@ class LifecycleRegistry:
                 self._llm_executor = ThreadPoolExecutor(max_workers=worker_count)
                 self._llm_executor_workers = worker_count
             elif worker_count != self._llm_executor_workers:
-                old = self._llm_executor
-                self._llm_executor = ThreadPoolExecutor(max_workers=worker_count)
-                self._llm_executor_workers = worker_count
-                old.shutdown(wait=False)
+                print(
+                    f"[janitor_lifecycle] Requested executor resize {self._llm_executor_workers} -> {worker_count} "
+                    "ignored for safety; restart process to apply.",
+                    file=sys.stderr,
+                )
             return self._llm_executor
 
     def _core_parallel_map(

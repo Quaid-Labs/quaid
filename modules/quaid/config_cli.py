@@ -72,7 +72,7 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"fast reasoning:    {_get(data, 'models.fastReasoning', 'default')}")
     print(f"embeddings model: {_get(data, 'ollama.embeddingModel', _get(data, 'ollama.embedding_model', 'qwen3-embedding:8b'))}")
     print(f"notify level:     {_get(data, 'notifications.level', 'normal')}")
-    print(f"fail hard:        {_get(data, 'retrieval.failHard', _get(data, 'retrieval.fail_hard', True))}")
+    print(f"fail hard:        {_get(data, 'retrieval.fail_hard', _get(data, 'retrieval.failHard', True))}")
     print(f"identity mode:    {_get(data, 'identity.mode', 'single_user')}")
     print(f"strict privacy:   {_get(data, 'privacy.enforceStrictFilters', _get(data, 'privacy.enforce_strict_filters', True))}")
     print(f"core parallel:    {_get(data, 'core.parallel.enabled', True)}")
@@ -136,7 +136,7 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
         print("4. Embeddings model")
         print("5. Notification level")
         print("6. Idle timeout (minutes)")
-        print("7. Fail hard (retrieval.failHard)")
+        print("7. Fail hard (retrieval.fail_hard)")
         print("8. Core parallel enabled")
         print("9. Core LLM workers")
         print("10. Core prepass workers")
@@ -166,9 +166,11 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = int(_get(staged, "capture.inactivity_timeout_minutes", _get(staged, "capture.inactivityTimeoutMinutes", 120)))
                 _set(staged, "capture.inactivity_timeout_minutes", _prompt_int("capture.inactivity_timeout_minutes", cur))
             elif choice == "7":
-                cur = bool(_get(staged, "retrieval.failHard", _get(staged, "retrieval.fail_hard", True)))
-                raw = _prompt_str("retrieval.failHard (true/false)", "true" if cur else "false").lower()
-                _set(staged, "retrieval.failHard", raw in {"1", "true", "yes", "on"})
+                cur = bool(_get(staged, "retrieval.fail_hard", _get(staged, "retrieval.failHard", True)))
+                raw = _prompt_str("retrieval.fail_hard (true/false)", "true" if cur else "false").lower()
+                val = raw in {"1", "true", "yes", "on"}
+                _set(staged, "retrieval.fail_hard", val)
+                _set(staged, "retrieval.failHard", val)
             elif choice == "8":
                 cur = bool(_get(staged, "core.parallel.enabled", True))
                 raw = _prompt_str("core.parallel.enabled (true/false)", "true" if cur else "false").lower()

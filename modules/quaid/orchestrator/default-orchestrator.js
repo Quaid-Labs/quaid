@@ -20,12 +20,24 @@ function createKnowledgeEngine(deps) {
       const similarity = Number.isFinite(simRaw) ? Math.max(0, Math.min(1, simRaw)) : 0.5;
       const viaRaw = String(obj.via || "").trim().toLowerCase();
       const via = viaRaw === "vector" || viaRaw === "graph" || viaRaw === "journal" || viaRaw === "project" ? viaRaw : "vector";
-      out.push({
-        ...obj,
+      const shaped = {
         text,
         category,
         similarity,
         via
+      };
+      if (typeof obj.id === "string" && obj.id.trim()) shaped.id = obj.id.trim();
+      if (typeof obj.sourceType === "string" && obj.sourceType.trim()) shaped.sourceType = obj.sourceType.trim();
+      if (typeof obj.createdAt === "string" && obj.createdAt.trim()) shaped.createdAt = obj.createdAt.trim();
+      if (typeof obj.validFrom === "string" && obj.validFrom.trim()) shaped.validFrom = obj.validFrom.trim();
+      if (typeof obj.validUntil === "string" && obj.validUntil.trim()) shaped.validUntil = obj.validUntil.trim();
+      if (typeof obj.ownerId === "string" && obj.ownerId.trim()) shaped.ownerId = obj.ownerId.trim();
+      if (typeof obj.privacy === "string" && obj.privacy.trim()) shaped.privacy = obj.privacy.trim();
+      if (typeof obj.extractionConfidence === "number" && Number.isFinite(obj.extractionConfidence)) {
+        shaped.extractionConfidence = obj.extractionConfidence;
+      }
+      out.push({
+        ...shaped
       });
     }
     return out;
@@ -51,7 +63,8 @@ function createKnowledgeEngine(deps) {
       const retrieval = cfg?.retrieval || {};
       if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
       if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
-    } catch {
+    } catch (err) {
+      console.warn(`[quaid][recall-router] failed to read failHard config; defaulting to true: ${String(err?.message || err)}`);
     }
     return true;
   }
