@@ -871,7 +871,11 @@ function _readOpenClawConfig(): any {
     const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
     if (!fs.existsSync(cfgPath)) { return {}; }
     return JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-  } catch {
+  } catch (err: unknown) {
+    const msg = String((err as Error)?.message || err || "");
+    if (!msg.includes("ENOENT")) {
+      console.warn(`[quaid] openclaw config read failed; using gateway defaults: ${msg}`);
+    }
     return {};
   }
 }
