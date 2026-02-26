@@ -82,6 +82,18 @@ let _datastoreStatsTimestamp = 0;
 let _memoryConfigErrorLogged = false;
 let _memoryConfigMtimeMs = -1;
 
+function _envTimeoutMs(name: string, fallbackMs: number): number {
+  const raw = Number(process.env[name] || "");
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return fallbackMs;
+  }
+  return Math.floor(raw);
+}
+
+const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOUT_MS", 300_000);
+const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 300_000);
+const QUICK_PROJECT_SUMMARY_TIMEOUT_MS = _envTimeoutMs("QUAID_PROJECT_SUMMARY_TIMEOUT_MS", 60_000);
+
 function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
@@ -1228,7 +1240,7 @@ async function callExtractPipeline(opts: {
       args.slice(1),
       "extract",
       {},
-      300_000,
+      EXTRACT_PIPELINE_TIMEOUT_MS,
     );
     const parsed = JSON.parse(output || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -1272,7 +1284,7 @@ async function emitEvent(
   ];
   const out = await _spawnWithTimeout(EVENTS_SCRIPT, "emit", args.slice(1), "events", {
     QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
-  }, 300_000);
+  }, EVENTS_EMIT_TIMEOUT_MS);
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(out || "{}");
@@ -1502,6 +1514,7 @@ async function getQuickProjectSummary(messages: any[]): Promise<{project_name: s
       `Summarize this session:\n\n${transcript.slice(0, 4000)}`,
       "fast",
       300,
+      QUICK_PROJECT_SUMMARY_TIMEOUT_MS,
     );
     const output = (llm.text || "").trim();
     const jsonMatch = output.match(/\{[\s\S]*\}/);
