@@ -1738,10 +1738,33 @@ async function totalRecall(query, limit, opts) {
 async function total_recall(query, limit, opts) {
   return knowledgeEngine.total_recall(query, limit, opts);
 }
+function parseDatastoreStats(raw) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw || "{}");
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const totalNodes = Number(parsed.total_nodes);
+  const edges = Number(parsed.edges);
+  if (!Number.isFinite(totalNodes) || totalNodes < 0) {
+    return null;
+  }
+  if (!Number.isFinite(edges) || edges < 0) {
+    return null;
+  }
+  return {
+    total_nodes: totalNodes,
+    edges
+  };
+}
 async function getStats() {
   try {
     const output = await datastoreBridge.stats();
-    return JSON.parse(output);
+    return parseDatastoreStats(output);
   } catch (err) {
     console.error("[quaid] stats error:", err.message);
     return null;
