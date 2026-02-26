@@ -182,6 +182,14 @@ QUAID_E2E_PATHS="openai-oauth,openai-api,anthropic-api" npm run test:all:full
   - `~/quaid/e2e-test` removed on success (unless `--keep-on-success`).
   - Workspace restored to `~/quaid/test`.
   - Gateway health recovered.
+- Summary integrity guard:
+  - E2E summary must not report `status=success` while any stage remains `running`.
+  - If a stage is still `running` at summary time, runner marks the run failed with `failure.reason=incomplete_stage_status`.
+
+### Janitor E2E mode guidance
+- Use `--janitor-dry-run` for non-interactive hardening sweeps.
+- Reason: apply mode can legitimately wait on approval-policy `ask` requests, which is not a regression by itself.
+- Use apply mode for release/benchmark validation only when approval policy is explicitly controlled.
 
 ## Determinism Policy
 - Blocking tests must not depend on live model text exactness.
