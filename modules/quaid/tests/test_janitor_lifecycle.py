@@ -193,36 +193,39 @@ def test_docs_lifecycle_staleness_and_cleanup(monkeypatch, tmp_path):
 
 def test_datastore_cleanup_lifecycle_runs_with_graph_override(tmp_path):
     conn = sqlite3.connect(":memory:")
-    conn.executescript(
-        """
-        CREATE TABLE recall_log (created_at TEXT);
-        CREATE TABLE dedup_log (review_status TEXT, created_at TEXT);
-        CREATE TABLE health_snapshots (created_at TEXT);
-        CREATE TABLE embedding_cache (created_at TEXT);
-        CREATE TABLE janitor_metadata (key TEXT, value TEXT, updated_at TEXT);
-        CREATE TABLE janitor_runs (completed_at TEXT);
-        INSERT INTO recall_log VALUES ('2000-01-01');
-        INSERT INTO dedup_log VALUES ('done', '2000-01-01');
-        INSERT INTO health_snapshots VALUES ('2000-01-01');
-        INSERT INTO embedding_cache VALUES ('2000-01-01');
-        INSERT INTO janitor_metadata VALUES ('update_check', '{}', '2000-01-01');
-        INSERT INTO janitor_runs VALUES ('2000-01-01');
-        """
-    )
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE recall_log (created_at TEXT);
+            CREATE TABLE dedup_log (review_status TEXT, created_at TEXT);
+            CREATE TABLE health_snapshots (created_at TEXT);
+            CREATE TABLE embedding_cache (created_at TEXT);
+            CREATE TABLE janitor_metadata (key TEXT, value TEXT, updated_at TEXT);
+            CREATE TABLE janitor_runs (completed_at TEXT);
+            INSERT INTO recall_log VALUES ('2000-01-01');
+            INSERT INTO dedup_log VALUES ('done', '2000-01-01');
+            INSERT INTO health_snapshots VALUES ('2000-01-01');
+            INSERT INTO embedding_cache VALUES ('2000-01-01');
+            INSERT INTO janitor_metadata VALUES ('update_check', '{}', '2000-01-01');
+            INSERT INTO janitor_runs VALUES ('2000-01-01');
+            """
+        )
 
-    class _Graph:
-        def _get_conn(self):
-            return conn
+        class _Graph:
+            def _get_conn(self):
+                return conn
 
-    registry = build_default_registry()
-    result = registry.run(
-        "datastore_cleanup",
-        RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, graph=_Graph()),
-    )
-    assert result.errors == []
-    assert result.data["cleanup"]["recall_log"] == 1
-    assert result.data["cleanup"]["janitor_metadata"] == 1
-    assert result.data["cleanup"]["janitor_runs"] == 1
+        registry = build_default_registry()
+        result = registry.run(
+            "datastore_cleanup",
+            RoutineContext(cfg=_make_cfg(False), dry_run=False, workspace=tmp_path, graph=_Graph()),
+        )
+        assert result.errors == []
+        assert result.data["cleanup"]["recall_log"] == 1
+        assert result.data["cleanup"]["janitor_metadata"] == 1
+        assert result.data["cleanup"]["janitor_runs"] == 1
+    finally:
+        conn.close()
 
 
 def test_lifecycle_registry_run_many_executes_in_parallel_shape(tmp_path):
