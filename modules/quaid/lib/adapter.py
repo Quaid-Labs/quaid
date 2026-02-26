@@ -124,14 +124,6 @@ class QuaidAdapter(abc.ABC):
         """
         return []
 
-    def get_bootstrap_markdown_filenames(self) -> List[str]:
-        """Return host-managed markdown bootstrap file name allowlist.
-
-        When provided, callers should treat this as the source of truth for which
-        matched files from bootstrap globs are actually in scope.
-        """
-        return []
-
     def should_filter_transcript_message(self, text: str) -> bool:
         """Adapter-specific transcript noise filtering."""
         return self.filter_system_messages(text)

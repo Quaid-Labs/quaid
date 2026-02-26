@@ -226,42 +226,6 @@ class OpenClawAdapter(QuaidAdapter):
             print(f"[adapter] bootstrap markdown globs unavailable: {e}", file=sys.stderr)
             return []
 
-    def get_bootstrap_markdown_filenames(self) -> list:
-        gateway_config_path = self.get_gateway_config_path()
-        if gateway_config_path:
-            try:
-                with open(gateway_config_path, "r", encoding="utf-8") as f:
-                    gw_cfg = json.load(f)
-                hook = (
-                    gw_cfg.get("hooks", {})
-                    .get("internal", {})
-                    .get("entries", {})
-                    .get("bootstrap-extra-files", {})
-                )
-                names = (
-                    hook.get("fileNames")
-                    or hook.get("filenames")
-                    or hook.get("names")
-                    or hook.get("allowedFileNames")
-                    or []
-                )
-                if isinstance(names, list) and names:
-                    return [str(n) for n in names if str(n).strip()]
-            except (json.JSONDecodeError, IOError, KeyError, UnicodeDecodeError):
-                print("[adapter] bootstrap markdown filenames unavailable from gateway config", file=sys.stderr)
-        # Conservative fallback matching gateway bootstrap file naming.
-        return [
-            "AGENTS.md",
-            "SOUL.md",
-            "TOOLS.md",
-            "USER.md",
-            "MEMORY.md",
-            "IDENTITY.md",
-            "HEARTBEAT.md",
-            "TODO.md",
-            "PROJECT.md",
-        ]
-
     def get_llm_provider(self, model_tier: Optional[str] = None):
         port, token = self._get_gateway_auth()
         return GatewayLLMProvider(port=port, token=token)
