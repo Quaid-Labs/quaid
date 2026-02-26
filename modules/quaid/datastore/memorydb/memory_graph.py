@@ -767,13 +767,12 @@ class MemoryGraph:
         """
         history = []
         visited = set()
-
-        # Walk backwards: find nodes that were superseded to arrive at this one
-        def _find_predecessors(nid):
-            if nid in visited:
-                return
-            visited.add(nid)
-            with self._get_conn() as conn:
+        with self._get_conn() as conn:
+            # Walk backwards: find nodes that were superseded to arrive at this one.
+            def _find_predecessors(nid: str) -> None:
+                if nid in visited:
+                    return
+                visited.add(nid)
                 rows = conn.execute(
                     "SELECT * FROM nodes WHERE superseded_by = ?", (nid,)
                 ).fetchall()
@@ -782,12 +781,12 @@ class MemoryGraph:
                     _find_predecessors(pred.id)
                     history.append(pred)
 
-        _find_predecessors(node_id)
+            _find_predecessors(node_id)
 
-        # Add the current node at the end
-        current = self.get_node(node_id)
-        if current:
-            history.append(current)
+            # Add the current node at the end.
+            row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
+            if row:
+                history.append(self._row_to_node(row))
 
         return history
 

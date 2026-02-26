@@ -275,6 +275,25 @@ class TestFactVersioning:
             assert history[1].id == v2.id  # Middle
             assert history[2].id == v3.id  # Current
 
+    def test_get_fact_history_uses_single_connection_scope(self, tmp_path):
+        from datastore.memorydb.memory_graph import Node
+        with patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+            graph = _make_graph(tmp_path)
+            v1 = Node.create(type="Fact", name="Quaid started in Austin", owner_id="quaid")
+            v2 = Node.create(type="Fact", name="Quaid moved to Bali", owner_id="quaid")
+            v3 = Node.create(type="Fact", name="Quaid settled in Ubud", owner_id="quaid")
+            graph.add_node(v1)
+            graph.add_node(v2)
+            graph.add_node(v3)
+            graph.supersede_node(v1.id, v2.id)
+            graph.supersede_node(v2.id, v3.id)
+
+            with patch.object(graph, "_get_conn", wraps=graph._get_conn) as conn_spy:
+                history = graph.get_fact_history(v3.id)
+
+            assert len(history) == 3
+            assert conn_spy.call_count == 1
+
     def test_double_supersede_noop(self, tmp_path):
         """Superseding an already-superseded node should be a no-op."""
         from datastore.memorydb.memory_graph import Node
