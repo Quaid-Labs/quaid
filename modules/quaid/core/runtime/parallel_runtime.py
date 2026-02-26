@@ -7,7 +7,9 @@ Provides:
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
+import logging
 import os
 import threading
 import time
@@ -16,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 MAX_THREAD_LOCK_CACHE = 1024
+logger = logging.getLogger(__name__)
 
 
 def get_parallel_config(cfg: Any) -> Any:
@@ -75,8 +78,6 @@ class ResourceLockRegistry:
 
     @contextmanager
     def acquire_many(self, resources: List[str], timeout_seconds: int = 120):
-        import fcntl
-
         ordered = sorted(set(str(r).strip() for r in (resources or []) if str(r).strip()))
         if not ordered:
             yield
@@ -112,14 +113,14 @@ class ResourceLockRegistry:
             for fd in reversed(acquired_fds):
                 try:
                     fcntl.flock(fd, fcntl.LOCK_UN)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to release file lock fd=%s: %s", fd, exc)
                 try:
                     os.close(fd)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to close lock fd=%s: %s", fd, exc)
             for lock in reversed(acquired_thread):
                 try:
                     lock.release()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to release thread lock: %s", exc)
