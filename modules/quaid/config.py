@@ -594,6 +594,26 @@ def _load_nested(data: Dict[str, Any], keys_map: Dict[str, str] = None) -> Dict[
     return result
 
 
+def _decode_json_list(raw_value: Any, *, field_name: str, default: Optional[List[Any]] = None) -> List[Any]:
+    """Decode list-typed JSON fields defensively."""
+    fallback = list(default or [])
+    if not raw_value:
+        return fallback
+    try:
+        parsed = json.loads(raw_value)
+    except (TypeError, ValueError) as exc:
+        logger.warning("Invalid JSON for %s; using default: %s", field_name, exc)
+        return fallback
+    if not isinstance(parsed, list):
+        logger.warning(
+            "Invalid JSON type for %s (expected list, got %s); using default",
+            field_name,
+            type(parsed).__name__,
+        )
+        return fallback
+    return parsed
+
+
 def load_config() -> MemoryConfig:
     """Load configuration from file or use defaults."""
     global _config, _config_loading
@@ -936,10 +956,20 @@ def _load_config_inner() -> MemoryConfig:
                     project_definitions[_row["name"]] = ProjectDefinition(
                         label=_row["label"],
                         home_dir=_row["home_dir"],
-                        source_roots=json.loads(_row["source_roots"]) if _row["source_roots"] else [],
+                        source_roots=_decode_json_list(
+                            _row["source_roots"],
+                            field_name="project_definitions.source_roots",
+                        ),
                         auto_index=bool(_row["auto_index"]),
-                        patterns=json.loads(_row["patterns"]) if _row["patterns"] else ["*.md"],
-                        exclude=json.loads(_row["exclude"]) if _row["exclude"] else [],
+                        patterns=_decode_json_list(
+                            _row["patterns"],
+                            field_name="project_definitions.patterns",
+                            default=["*.md"],
+                        ),
+                        exclude=_decode_json_list(
+                            _row["exclude"],
+                            field_name="project_definitions.exclude",
+                        ),
                         description=_row["description"] or "",
                         state=_row["state"],
                     )
