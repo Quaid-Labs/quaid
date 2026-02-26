@@ -533,6 +533,35 @@ class TestGatewayLLMProvider:
                 p.llm_call([{"role": "user", "content": "test"}], timeout=1)
         assert excinfo.value.__cause__ is http_err
 
+    def test_llm_call_retries_once_on_transient_http_502(self):
+        import urllib.request
+        import urllib.error
+
+        p = GatewayLLMProvider(port=18789)
+        first_err = urllib.error.HTTPError(
+            url="http://127.0.0.1:18789/plugins/quaid/llm",
+            code=502,
+            msg="Bad Gateway",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":"upstream temporary failure"}'),
+        )
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "text": "ok",
+            "model": "m",
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "truncated": False,
+        }).encode()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("adaptors.openclaw.providers.time.sleep", return_value=None), \
+             patch.object(urllib.request, "urlopen", side_effect=[first_err, mock_resp]) as mock_open:
+            result = p.llm_call([{"role": "user", "content": "test"}], timeout=1)
+        assert result.text == "ok"
+        assert mock_open.call_count == 2
+
 
 class TestABCEnforcement:
     def test_llm_provider_cannot_instantiate(self):
