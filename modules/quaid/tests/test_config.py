@@ -4,6 +4,8 @@ import os
 import sys
 import json
 import tempfile
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -172,6 +174,48 @@ class TestConfigLoading:
                 assert cfg1 is not cfg2
         finally:
             config._config = old_config
+
+    def test_load_config_thread_safe_singleton(self):
+        import config
+
+        old_config = config._config
+        old_loading = config._config_loading
+        config._config = None
+        config._config_loading = False
+        try:
+            calls = {"n": 0}
+
+            def _slow_inner():
+                calls["n"] += 1
+                time.sleep(0.05)
+                cfg = MemoryConfig()
+                config._config = cfg
+                return cfg
+
+            results = []
+            errors = []
+
+            def _worker():
+                try:
+                    results.append(load_config())
+                except Exception as exc:
+                    errors.append(exc)
+
+            with patch.object(config, "_load_config_inner", side_effect=_slow_inner):
+                threads = [threading.Thread(target=_worker) for _ in range(6)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+            assert not errors
+            assert calls["n"] == 1
+            assert len(results) == 6
+            first = results[0]
+            assert all(r is first for r in results)
+        finally:
+            config._config = old_config
+            config._config_loading = old_loading
 
     def test_load_from_json_file(self, tmp_path):
         """Config can be loaded from a JSON file."""
