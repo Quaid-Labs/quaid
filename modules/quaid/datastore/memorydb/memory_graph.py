@@ -1101,7 +1101,11 @@ class MemoryGraph:
                     ORDER BY bm25(nodes_fts, 2.0, 1.0)
                     LIMIT ?
                 """, params).fetchall()
-            except Exception:
+            except Exception as e:
+                if _is_fail_hard_mode():
+                    raise RuntimeError(
+                        "FTS search failed while fail-hard mode is enabled"
+                    ) from e
                 # FTS5 index may not be rebuilt yet; fall back to LIKE
                 raw_words = re.sub(r'[^\w\s]', '', query).split()
                 words = [w for w in raw_words if len(w) >= 3 and w.lower() not in _LIB_STOPWORDS]
@@ -2600,8 +2604,11 @@ def route_query(query: str, timeout_ms: int = 3000) -> str:
             result = result.strip().strip('"\'')
             if len(result) > 5 and len(result) < 500:
                 return result
-    except Exception:
-        pass
+    except Exception as e:
+        if _is_fail_hard_mode():
+            raise RuntimeError(
+                "HyDE routing failed while fail-hard mode is enabled"
+            ) from e
 
     return query
 
