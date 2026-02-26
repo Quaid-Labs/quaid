@@ -671,8 +671,20 @@ export class SessionTimeoutManager {
         this.ownsWorkerLock = false;
         return false;
       }
-    } catch {}
-    try { fs.unlinkSync(this.workerLockPath); } catch {}
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed validating worker lock before release: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
+    try {
+      fs.unlinkSync(this.workerLockPath);
+    } catch (err: unknown) {
+      safeLog(this.logger, `[quaid][timeout] failed releasing worker lock ${this.workerLockPath}: ${String((err as Error)?.message || err)}`);
+      if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+    }
     this.ownsWorkerLock = false;
     return true;
   }

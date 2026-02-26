@@ -412,4 +412,23 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(() => (manager as any).readSessionCursor('session-bad-cursor')).toThrow()
   })
+
+  it('throws on worker lock validation parse failure during release when failHard=true', () => {
+    const workspace = makeWorkspace('quaid-timeout-release-lock-failhard-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = true
+    ;(manager as any).ownsWorkerLock = true
+
+    const lockPath = (manager as any).workerLockPath as string
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true })
+    fs.writeFileSync(lockPath, '{bad json', 'utf8')
+
+    expect(() => (manager as any).releaseWorkerLock()).toThrow()
+  })
 })
