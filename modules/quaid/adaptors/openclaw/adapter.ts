@@ -591,10 +591,16 @@ function addMemoryNote(sessionId: string, text: string, category: string): void 
   try {
     const notesPath = getNotesPath(sessionId);
     let existing: string[] = [];
-    try { existing = JSON.parse(fs.readFileSync(notesPath, "utf8")); } catch {}
+    try {
+      existing = JSON.parse(fs.readFileSync(notesPath, "utf8"));
+    } catch (err: unknown) {
+      console.warn(`[quaid] memory note read failed for ${notesPath}: ${String((err as Error)?.message || err)}`);
+    }
     existing.push(`[${category}] ${text}`);
     fs.writeFileSync(notesPath, JSON.stringify(existing), { mode: 0o600 });
-  } catch {}
+  } catch (err: unknown) {
+    console.warn(`[quaid] memory note write failed for session ${sessionId}: ${String((err as Error)?.message || err)}`);
+  }
 }
 
 function getAndClearMemoryNotes(sessionId: string): string[] {
@@ -602,7 +608,11 @@ function getAndClearMemoryNotes(sessionId: string): string[] {
   const inMemory = _memoryNotes.get(sessionId) || [];
   let onDisk: string[] = [];
   const notesPath = getNotesPath(sessionId);
-  try { onDisk = JSON.parse(fs.readFileSync(notesPath, "utf8")); } catch {}
+  try {
+    onDisk = JSON.parse(fs.readFileSync(notesPath, "utf8"));
+  } catch (err: unknown) {
+    console.warn(`[quaid] memory note load failed for ${notesPath}: ${String((err as Error)?.message || err)}`);
+  }
 
   // Deduplicate (in case both sources have the same note)
   const all = Array.from(new Set([...inMemory, ...onDisk]));
@@ -610,7 +620,11 @@ function getAndClearMemoryNotes(sessionId: string): string[] {
   // Clear both
   _memoryNotes.delete(sessionId);
   _memoryNotesTouchedAt.delete(sessionId);
-  try { fs.unlinkSync(notesPath); } catch {}
+  try {
+    fs.unlinkSync(notesPath);
+  } catch (err: unknown) {
+    console.warn(`[quaid] memory note cleanup failed for ${notesPath}: ${String((err as Error)?.message || err)}`);
+  }
 
   return all;
 }
