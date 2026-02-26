@@ -377,16 +377,26 @@ class TestMemoryWrite:
 class TestMemoryGet:
     def test_get_existing(self, server):
         mod, mock_api, *_ = server
-        result = mod.memory_get("g1")
-        mock_api.get_memory.assert_called_once_with("g1")
-        assert result["id"] == "g1"
+        node_id = "11111111-1111-4111-8111-111111111111"
+        mock_api.get_memory.return_value = {"id": node_id, "name": "Test memory", "type": "fact"}
+        result = mod.memory_get(node_id)
+        mock_api.get_memory.assert_called_once_with(node_id)
+        assert result["id"] == node_id
 
     def test_get_not_found(self, server):
         mod, mock_api, *_ = server
+        node_id = "22222222-2222-4222-8222-222222222222"
         mock_api.get_memory.return_value = None
-        result = mod.memory_get("nonexistent")
+        result = mod.memory_get(node_id)
         assert "error" in result
-        assert "nonexistent" in result["error"]
+        assert node_id in result["error"]
+
+    def test_get_rejects_invalid_node_id(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_get("not-a-uuid")
+        assert "error" in result
+        assert "valid UUID" in result["error"]
+        mock_api.get_memory.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -396,8 +406,9 @@ class TestMemoryGet:
 class TestMemoryForget:
     def test_forget_by_id(self, server):
         mod, mock_api, *_ = server
-        result = mod.memory_forget(node_id="abc-123")
-        mock_api.forget.assert_called_once_with(node_id="abc-123", query=None)
+        node_id = "33333333-3333-4333-8333-333333333333"
+        result = mod.memory_forget(node_id=node_id)
+        mock_api.forget.assert_called_once_with(node_id=node_id, query=None)
         assert result["deleted"] is True
 
     def test_forget_by_query(self, server):
@@ -415,6 +426,13 @@ class TestMemoryForget:
         mod, *_ = server
         result = mod.memory_forget(node_id="", query="")
         assert "error" in result
+
+    def test_forget_rejects_invalid_node_id(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_forget(node_id="abc-123")
+        assert "error" in result
+        assert "valid UUID" in result["error"]
+        mock_api.forget.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
