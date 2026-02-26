@@ -25,6 +25,28 @@ def _normalize_session_id(value: Any) -> str:
     return sid
 
 
+def _normalize_participant_aliases(value: Any) -> Optional[Dict[str, str]]:
+    """Validate participant alias mapping payload."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        payload = value.strip()
+        if not payload:
+            return None
+        parsed = json.loads(payload)
+    else:
+        parsed = value
+    if not isinstance(parsed, dict):
+        raise ValueError("participant_aliases must be a JSON object")
+    normalized: Dict[str, str] = {}
+    for raw_key, raw_val in parsed.items():
+        key = str(raw_key).strip()
+        val = str(raw_val).strip()
+        if key and val:
+            normalized[key] = val
+    return normalized or None
+
+
 def _build_transcript_from_session_file(path: Path) -> str:
     return get_adapter_instance().parse_session_jsonl(path)
 
@@ -100,6 +122,7 @@ def _run(
     topic_hint: str = "",
 ) -> Dict[str, Any]:
     sid = _normalize_session_id(session_id)
+    normalized_aliases = _normalize_participant_aliases(participant_aliases)
     src_path, transcript, source_kind = _resolve_transcript_source(
         session_id=sid,
         session_file=session_file,
@@ -127,7 +150,7 @@ def _run(
                 *(["--source-channel", str(source_channel)] if source_channel else []),
                 *(["--conversation-id", str(conversation_id)] if conversation_id else []),
                 *(["--participant-ids", ",".join(str(p).strip() for p in (participant_ids or []) if str(p).strip())] if participant_ids else []),
-                *(["--participant-aliases", json.dumps(participant_aliases or {}, ensure_ascii=True)] if participant_aliases else []),
+                *(["--participant-aliases", json.dumps(normalized_aliases or {}, ensure_ascii=True)] if normalized_aliases else []),
                 "--message-count", str(int(message_count or 0)),
                 "--topic-hint", str(topic_hint or ""),
                 *(["--source-path", str(src_path)] if src_path else []),
@@ -210,6 +233,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "ingest":
+        aliases = _normalize_participant_aliases(args.participant_aliases)
         out = run(
             session_id=args.session_id,
             owner_id=args.owner,
@@ -219,7 +243,7 @@ def main() -> int:
             source_channel=(str(args.source_channel or "").strip() or None),
             conversation_id=(str(args.conversation_id or "").strip() or None),
             participant_ids=[p.strip() for p in str(args.participant_ids or "").split(",") if p.strip()],
-            participant_aliases=json.loads(args.participant_aliases) if args.participant_aliases else None,
+            participant_aliases=aliases,
             message_count=args.message_count,
             topic_hint=args.topic_hint,
         )

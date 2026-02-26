@@ -71,3 +71,17 @@ def test_call_session_logs_cli_includes_exit_code_and_streams(monkeypatch, tmp_p
         assert "stdout: fallback" in msg
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_normalize_participant_aliases_accepts_json_object_string():
+    out = session_logs_ingest._normalize_participant_aliases('{" ownerAlias ":" user:owner ","":"x"}')
+    assert out == {"ownerAlias": "user:owner"}
+
+
+def test_normalize_participant_aliases_rejects_non_object_json():
+    try:
+        session_logs_ingest._normalize_participant_aliases('["not","an","object"]')
+    except ValueError as exc:
+        assert "JSON object" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
