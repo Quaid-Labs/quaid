@@ -36,6 +36,7 @@ __all__ = [
 
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -64,6 +65,8 @@ from lib.tokens import (
     STOPWORDS as _LIB_STOPWORDS,
 )
 from lib.runtime_context import get_workspace_dir, get_adapter_instance
+
+logger = logging.getLogger(__name__)
 
 # Prompt injection blocklist — defense-in-depth for stored facts
 _INJECTION_PATTERNS = [
@@ -1889,8 +1892,17 @@ def get_edge_keywords() -> Dict[str, List[str]]:
             result = {}
             for row in rows:
                 try:
-                    result[row["relation"]] = json.loads(row["keywords"])
-                except json.JSONDecodeError:
+                    parsed = json.loads(row["keywords"])
+                    if not isinstance(parsed, list):
+                        raise ValueError("keywords payload must be a JSON array")
+                    keywords = [str(k).strip() for k in parsed if str(k).strip()]
+                    result[row["relation"]] = keywords
+                except Exception as exc:
+                    logger.warning(
+                        "[memory_graph] invalid edge_keywords payload relation=%s error=%s",
+                        row["relation"],
+                        exc,
+                    )
                     result[row["relation"]] = []
             return result
         except Exception:
