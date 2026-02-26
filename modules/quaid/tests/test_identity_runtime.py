@@ -99,16 +99,28 @@ def test_multi_user_runtime_readiness_requires_hooks(monkeypatch):
         identity_runtime.assert_multi_user_runtime_ready(require_read=True)
 
 
-def test_identity_mode_warns_on_config_error(monkeypatch, caplog):
+def test_identity_mode_warns_on_config_error_when_fail_hard_disabled(monkeypatch, caplog):
     def _boom():
         raise RuntimeError("config unavailable")
 
     monkeypatch.setattr("core.runtime.identity_runtime.get_config", _boom)
+    monkeypatch.setattr("core.runtime.identity_runtime._is_fail_hard_enabled", lambda: False)
     caplog.set_level("WARNING")
     mode = identity_runtime.identity_mode()
 
     assert mode == "single_user"
     assert "identity_mode config read failed" in caplog.text
+
+
+def test_identity_mode_raises_on_config_error_when_fail_hard_enabled(monkeypatch):
+    def _boom():
+        raise RuntimeError("config unavailable")
+
+    monkeypatch.setattr("core.runtime.identity_runtime.get_config", _boom)
+    monkeypatch.setattr("core.runtime.identity_runtime._is_fail_hard_enabled", lambda: True)
+
+    with pytest.raises(RuntimeError, match="identity_mode config read failed while fail-hard mode is enabled"):
+        identity_runtime.identity_mode()
 
 
 def test_memory_service_bootstraps_default_identity_runtime(monkeypatch):
