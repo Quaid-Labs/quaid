@@ -2368,6 +2368,9 @@ const quaidPlugin = {
           try {
             journalFiles = fs.readdirSync(journalDir).filter((f: string) => f.endsWith('.journal.md')).sort();
           } catch (err: unknown) {
+            if (isFailHardEnabled()) {
+              throw new Error("[quaid] Journal injection listing failed under failHard", { cause: err as Error });
+            }
             console.warn(`[quaid] Journal injection listing failed: ${String((err as Error)?.message || err)}`);
           }
 
@@ -2379,6 +2382,9 @@ const quaidPlugin = {
                 journalContent += `\n\n--- ${file} ---\n${content}`;
               }
             } catch (err: unknown) {
+              if (isFailHardEnabled()) {
+                throw new Error(`[quaid] Journal injection read failed for ${file} under failHard`, { cause: err as Error });
+              }
               console.warn(`[quaid] Journal injection read failed for ${file}: ${String((err as Error)?.message || err)}`);
             }
           }
@@ -2393,6 +2399,9 @@ const quaidPlugin = {
           }
         }
       } catch (err: unknown) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
         console.warn(`[quaid] Journal injection failed (non-fatal): ${(err as Error).message}`);
       }
       } // end journal system gate
