@@ -338,11 +338,17 @@ def load_last_mtimes() -> Dict[str, float]:
 def save_mtimes(mtimes: Dict[str, float]):
     """Save current modification times."""
     _data_dir().mkdir(parents=True, exist_ok=True)
-    with open(_mtime_tracker(), 'w') as f:
-        json.dump({
-            "mtimes": mtimes,
-            "updated_at": datetime.now().isoformat()
-        }, f, indent=2)
+    with open(_mtime_tracker(), "w", encoding="utf-8") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            json.dump({
+                "mtimes": mtimes,
+                "updated_at": datetime.now().isoformat()
+            }, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def detect_changed_files() -> List[str]:
