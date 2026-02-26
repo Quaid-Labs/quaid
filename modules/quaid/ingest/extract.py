@@ -24,19 +24,20 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 # Ensure plugin root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.llm_clients import call_deep_reasoning, parse_json_response
-from core.services.memory_service import get_memory_service
 from config import get_config
-from core.lifecycle.datastore_runtime import write_journal_entry, write_snippet_entry
+from datastore.memorydb.memory_graph import store as store_memory, create_edge as create_memory_edge
+from datastore.notedb.soul_snippets import write_journal_entry, write_snippet_entry
 from lib.runtime_context import parse_session_jsonl as _ctx_parse_session_jsonl, build_transcript as _ctx_build_transcript
 
 logger = logging.getLogger(__name__)
-_memory = get_memory_service()
+_memory = SimpleNamespace(store=store_memory, create_edge=create_memory_edge)
 
 PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "extraction.txt"
 
