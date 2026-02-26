@@ -128,7 +128,8 @@ def _get_journal_config():
     """Get journal config from MemoryConfig."""
     try:
         return get_config().docs.journal
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed loading journal config from memory config: %s", exc)
         return None
 
 
@@ -140,7 +141,8 @@ def _get_snippet_review_model() -> str:
         if model:
             return model
         return str(getattr(cfg.models, "deep_reasoning", "default") or "default")
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed resolving snippet review model; defaulting to 'default': %s", exc)
         return "default"
 
 
@@ -196,7 +198,8 @@ def _get_core_markdown_config(filename: str) -> Dict[str, Any]:
     try:
         cfg = get_config()
         return cfg.docs.core_markdown.files.get(filename, {})
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed reading core markdown config for %s: %s", filename, exc)
         return {}
 
 
