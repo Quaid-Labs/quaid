@@ -217,7 +217,7 @@ class DocsRAG:
         # Chunk the content
         chunk_texts = self.chunk_markdown(content)
         if not chunk_texts:
-            print(f"No chunks generated for {file_path}")
+            logger.info("No chunks generated for %s", file_path)
             return 0
 
         # Collect all embeddings BEFORE deleting old chunks.
@@ -258,7 +258,7 @@ class DocsRAG:
                 """, chunk_data)
                 chunks_created += 1
         
-        print(f"[docs] Indexed {chunks_created} chunks from {file_path}")
+        logger.info("[docs] Indexed %s chunks from %s", chunks_created, file_path)
 
         # Sync indexed timestamp to registry
         if chunks_created > 0:
@@ -551,9 +551,15 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         try:
                             docs_registry.sync_external_files(proj_name)
                         except Exception as exc:
+                            if is_fail_hard_enabled():
+                                raise RuntimeError(
+                                    f"Project external sync failed for {proj_name}"
+                                ) from exc
                             logger.warning("Project external sync failed for %s: %s", proj_name, exc)
                             continue
                 except Exception as exc:
+                    if is_fail_hard_enabled():
+                        raise RuntimeError("Project auto-discover failed") from exc
                     result.errors.append(f"Project auto-discover failed: {exc}")
 
             rag = DocsRAG()
