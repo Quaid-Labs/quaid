@@ -236,6 +236,29 @@ class TestDocsSearchFiltering:
         assert len(results) == 1
         assert "/projects/quaid/" in results[0]["source"]
 
+    @patch("datastore.docsdb.rag._lib_get_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_unpack_embedding", return_value=[0.1, 0.2, 0.3])
+    @patch("datastore.docsdb.rag._lib_cosine_similarity", return_value=0.95)
+    def test_search_docs_docs_filter_escapes_like_wildcards(self, _sim, _unpack, _embed, tmp_path):
+        rag = _make_rag(tmp_path)
+        db = sqlite3.connect(rag.db_path)
+        try:
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("lit:0", "/tmp/docs/report_100%_complete.md", 0, "literal", "# Lit", b"e"),
+            )
+            db.execute(
+                "INSERT INTO doc_chunks (id, source_file, chunk_index, content, section_header, embedding) VALUES (?, ?, ?, ?, ?, ?)",
+                ("other:0", "/tmp/docs/report_100X_complete.md", 0, "wildcard-ish", "# O", b"e"),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        results = rag.search_docs("report", limit=10, docs=["report_100%_complete.md"])
+        assert len(results) == 1
+        assert results[0]["source"].endswith("report_100%_complete.md")
+
     @patch("datastore.docsdb.rag.is_fail_hard_enabled", return_value=True)
     @patch("datastore.docsdb.rag._lib_get_embedding", return_value=None)
     def test_search_docs_embedding_failure_raises_when_failhard_enabled(self, _embed, _failhard, tmp_path):

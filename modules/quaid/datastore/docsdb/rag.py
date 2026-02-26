@@ -49,6 +49,12 @@ def _chunk_overlap_tokens() -> int:
     return cfg.chunk_overlap_tokens if cfg else 100
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE wildcards for literal matching."""
+    s = str(value or "")
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class DocumentChunk:
     """A chunk of a document with metadata."""
     def __init__(self, content: str, source_file: str, chunk_index: int, 
@@ -390,16 +396,16 @@ class DocsRAG:
             if project and (project_paths or registry_paths):
                 params = []
                 if project_paths and project_paths["home_dir"]:
-                    like_clauses.append("source_file LIKE ?")
-                    params.append(project_paths["home_dir"] + "%")
+                    like_clauses.append("source_file LIKE ? ESCAPE '\\'")
+                    params.append(_escape_like(project_paths["home_dir"]) + "%")
                 if project_paths:
                     for root in project_paths.get("source_roots", []):
-                        like_clauses.append("source_file LIKE ?")
-                        params.append(root + "%")
+                        like_clauses.append("source_file LIKE ? ESCAPE '\\'")
+                        params.append(_escape_like(root) + "%")
                 # Include registered external files by exact path prefix
                 for rp in registry_paths:
-                    like_clauses.append("source_file LIKE ?")
-                    params.append(rp + "%")
+                    like_clauses.append("source_file LIKE ? ESCAPE '\\'")
+                    params.append(_escape_like(rp) + "%")
                 if like_clauses:
                     like_clauses = [f"({ ' OR '.join(like_clauses) })"]
                 else:
@@ -411,8 +417,8 @@ class DocsRAG:
             if doc_filters:
                 doc_like = []
                 for df in doc_filters:
-                    doc_like.append("source_file LIKE ?")
-                    params.append(f"%{df}%")
+                    doc_like.append("source_file LIKE ? ESCAPE '\\'")
+                    params.append(f"%{_escape_like(df)}%")
                 if doc_like:
                     like_clauses.append(f"({ ' OR '.join(doc_like) })")
 

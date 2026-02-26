@@ -1048,7 +1048,17 @@ async function emitEvent(name, payload, dispatch = "auto") {
     QUAID_HOME: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE
   }, 3e5);
-  return JSON.parse(out || "{}");
+  let parsed = null;
+  try {
+    parsed = JSON.parse(out || "{}");
+  } catch (err) {
+    const msg = String(err?.message || err);
+    throw new Error(`[quaid] events emit returned invalid JSON: ${msg}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("[quaid] events emit returned non-object payload");
+  }
+  return parsed;
 }
 async function callDocsRag(command, args = []) {
   return _spawnWithTimeout(DOCS_RAG, command, args, "docs_rag", {
