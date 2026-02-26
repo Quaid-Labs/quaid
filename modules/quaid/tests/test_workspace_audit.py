@@ -422,6 +422,17 @@ class TestDetectChangedFiles:
             assert "A.md" not in changed
 
 
+class TestMtimePersistence:
+    def test_save_mtimes_uses_file_lock(self, tmp_path):
+        from core.lifecycle.workspace_audit import save_mtimes
+
+        with _adapter_patch(tmp_path), \
+             patch("core.lifecycle.workspace_audit.fcntl.flock") as mock_flock:
+            save_mtimes({"A.md": 123.0})
+
+        assert mock_flock.call_count >= 2
+
+
 # ---------------------------------------------------------------------------
 # _queue_project_review / get_pending_project_reviews / clear
 # ---------------------------------------------------------------------------
