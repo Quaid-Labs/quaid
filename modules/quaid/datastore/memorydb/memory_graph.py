@@ -2385,12 +2385,10 @@ _graph_lock = threading.Lock()
 def get_graph() -> MemoryGraph:
     """Get singleton graph instance."""
     global _graph
-    if _graph is not None:
-        return _graph
     with _graph_lock:
         if _graph is None:
             _graph = MemoryGraph()
-    return _graph
+        return _graph
 
 
 def stats() -> Dict[str, Any]:
