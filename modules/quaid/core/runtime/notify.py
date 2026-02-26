@@ -509,26 +509,6 @@ def notify_memory_extraction(
     return sent_any
 
 
-def notify_janitor_summary(
-    metrics: dict,
-    applied_changes: dict,
-    dry_run: bool = False
-) -> bool:
-    """
-    Notify user about janitor run summary.
-
-    Args:
-        metrics: Dict with total_duration_seconds, llm_calls, errors, task_durations
-        applied_changes: Dict with counts of changes made
-        dry_run: If True, don't actually send
-
-    Returns:
-        True if notification sent
-    """
-    message = format_janitor_summary_message(metrics, applied_changes)
-    return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("janitor"))
-
-
 def format_janitor_summary_message(metrics: dict, applied_changes: dict) -> str:
     """Format janitor summary content for either direct or delayed delivery."""
     msg_parts = [f"{QUAID_HEADER} 🧹 **Nightly Janitor Complete:**", ""]
@@ -605,26 +585,6 @@ def format_janitor_summary_message(metrics: dict, applied_changes: dict) -> str:
         msg_parts.append(f"Release notes: {update_info.get('url', '')}")
 
     return "\n".join(msg_parts)
-
-
-def notify_daily_memories(
-    memories: list,
-    dry_run: bool = False
-) -> bool:
-    """
-    Notify user about memories created today.
-
-    Args:
-        memories: List of memory dicts with 'text', 'category', 'created_at'
-        dry_run: If True, don't actually send
-
-    Returns:
-        True if notification sent
-    """
-    message = format_daily_memories_message(memories)
-    if not message:
-        return False
-    return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("retrieval"))
 
 
 def format_daily_memories_message(memories: list) -> Optional[str]:
