@@ -1,7 +1,15 @@
 import { spawn } from "child_process";
 import * as path from "node:path";
 
-const PYTHON_BRIDGE_TIMEOUT_MS = 120_000; // 2 minutes
+function _resolveTimeoutMs(name: string, fallbackMs: number): number {
+  const raw = Number(process.env[name] || "");
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return fallbackMs;
+  }
+  return Math.floor(raw);
+}
+
+const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 120_000); // 2 minutes
 
 type PythonBridgeConfig = {
   scriptPath: string;
