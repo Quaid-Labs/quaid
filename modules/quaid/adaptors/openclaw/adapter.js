@@ -1990,7 +1990,8 @@ ${header}${journalContent}` : `${header}${journalContent}`;
         try {
           const logData = JSON.parse(fs.readFileSync(injectionLogPath, "utf8"));
           previouslyInjected = logData.injected || logData.memoryTexts || [];
-        } catch {
+        } catch (err) {
+          console.warn(`[quaid] Injection log read failed for ${injectionLogPath}: ${String(err?.message || err)}`);
         }
         const newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
         const toInject = newMemories.slice(0, injectLimit);
@@ -2040,7 +2041,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             lastInjectedAt: (/* @__PURE__ */ new Date()).toISOString()
           }), { mode: 384 });
           pruneInjectionLogFiles();
-        } catch {
+        } catch (err) {
+          console.warn(`[quaid] Injection log write failed for ${injectionLogPath}: ${String(err?.message || err)}`);
         }
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
@@ -2736,7 +2738,8 @@ notify_docs_search(data['query'], data['results'])
             let extractionLog = {};
             try {
               extractionLog = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
-            } catch {
+            } catch (err) {
+              console.warn(`[quaid] session_recall extraction log read failed: ${String(err?.message || err)}`);
             }
             if (action === "list") {
               const sessions = Object.entries(extractionLog).filter(([, v]) => v && v.last_extracted_at).sort(([, a], [, b]) => (b.last_extracted_at || "").localeCompare(a.last_extracted_at || "")).slice(0, Math.min(listLimit, 20));
@@ -3080,7 +3083,8 @@ notify_memory_extraction(
         let extractionLog = {};
         try {
           extractionLog = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
-        } catch {
+        } catch (err) {
+          console.warn(`[quaid] Extraction log read failed for ${extractionLogPath}: ${String(err?.message || err)}`);
         }
         let topicHint = "";
         for (const m of messages) {
@@ -3130,7 +3134,8 @@ notify_memory_extraction(
       let extractionLog = {};
       try {
         extractionLog = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
-      } catch {
+      } catch (err) {
+        console.warn(`[quaid] Recovery scan extraction log read failed: ${String(err?.message || err)}`);
       }
       const sessionFiles = fs.readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
       let recovered = 0;
