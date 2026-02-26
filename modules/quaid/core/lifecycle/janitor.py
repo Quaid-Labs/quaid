@@ -622,7 +622,17 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         try:
             cap = int(raw or 0)
             return cap if cap > 0 else 0
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Invalid JANITOR_STAGE_ITEM_CAPS value for stage={stage_name!r}: {raw!r}"
+                ) from exc
+            janitor_logger.warn(
+                "invalid_stage_item_cap_value",
+                stage=str(stage_name),
+                raw_value=repr(raw),
+                error=str(exc),
+            )
             return 0
 
     def _stage_budget_cap(stage_name: str) -> int:
@@ -630,7 +640,17 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         try:
             cap = int(raw or 0)
             return cap if cap > 0 else 0
-        except Exception:
+        except Exception as exc:
+            if is_fail_hard_enabled():
+                raise RuntimeError(
+                    f"Invalid JANITOR_STAGE_BUDGETS value for stage={stage_name!r}: {raw!r}"
+                ) from exc
+            janitor_logger.warn(
+                "invalid_stage_budget_cap_value",
+                stage=str(stage_name),
+                raw_value=repr(raw),
+                error=str(exc),
+            )
             return 0
 
     stage_budget_report: Dict[str, Any] = {}
