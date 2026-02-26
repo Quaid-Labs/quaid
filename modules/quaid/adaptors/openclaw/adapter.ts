@@ -3326,7 +3326,7 @@ notify_docs_search(data['query'], data['results'])
             throw err;
           }
           await task();
-          throw err;
+          return;
         },
       );
       return extractionPromise;
@@ -3791,7 +3791,13 @@ notify_memory_extraction(
         // Chain onto any in-flight extraction to avoid overwrite race
         // (if compaction and reset overlap, the .finally() from the first
         // extraction would clear the promise while the second is still running)
-        extractionPromise = queueExtractionTask(doExtraction, "compaction");
+        extractionPromise = queueExtractionTask(doExtraction, "compaction")
+          .catch((doErr: unknown) => {
+            console.error(`[quaid][compaction] extraction_failed session=${sessionId || "unknown"} err=${String((doErr as Error)?.message || doErr)}`);
+            if (isFailHardEnabled()) {
+              throw doErr;
+            }
+          });
       } catch (err: unknown) {
         if (isFailHardEnabled()) {
           throw err;
@@ -3871,7 +3877,9 @@ notify_memory_extraction(
         extractionPromise = queueExtractionTask(doExtraction, "reset")
           .catch((doErr: unknown) => {
             console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String((doErr as Error)?.message || doErr)}`);
-            throw doErr;
+            if (isFailHardEnabled()) {
+              throw doErr;
+            }
           });
       } catch (err: unknown) {
         if (isFailHardEnabled()) {
