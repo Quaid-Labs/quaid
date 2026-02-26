@@ -1260,14 +1260,18 @@ function _loadJanitorNudgeState(): Record<string, any> {
     if (fs.existsSync(JANITOR_NUDGE_STATE_PATH)) {
       return JSON.parse(fs.readFileSync(JANITOR_NUDGE_STATE_PATH, "utf8")) || {};
     }
-  } catch {}
+  } catch (err: unknown) {
+    console.warn(`[quaid] Failed to load janitor nudge state: ${String((err as Error)?.message || err)}`);
+  }
   return {};
 }
 
 function _saveJanitorNudgeState(state: Record<string, any>): void {
   try {
     fs.writeFileSync(JANITOR_NUDGE_STATE_PATH, JSON.stringify(state, null, 2), { mode: 0o600 });
-  } catch {}
+  } catch (err: unknown) {
+    console.warn(`[quaid] Failed to save janitor nudge state: ${String((err as Error)?.message || err)}`);
+  }
 }
 
 function queueDelayedLlmRequest(message: string, kind: string = "janitor", priority: string = "normal"): boolean {
@@ -1291,7 +1295,8 @@ function getJanitorHealthIssue(): string | null {
       return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
     }
     return null;
-  } catch {
+  } catch (err: unknown) {
+    console.warn(`[quaid] Failed to evaluate janitor health: ${String((err as Error)?.message || err)}`);
     return null;
   }
 }
@@ -1330,7 +1335,9 @@ notify_user("Hey, I see you just installed Quaid. Want me to help migrate import
         state.lastInstallNudgeAt = now;
       }
     }
-  } catch {}
+  } catch (err: unknown) {
+    console.warn(`[quaid] Install nudge check failed: ${String((err as Error)?.message || err)}`);
+  }
 
   try {
     if (fs.existsSync(PENDING_APPROVAL_REQUESTS_PATH) && now - lastApprovalNudge > NUDGE_COOLDOWN_MS) {
@@ -1345,7 +1352,9 @@ notify_user("Quaid has ${pendingCount} pending approval request(s). Review pendi
         state.lastApprovalNudgeAt = now;
       }
     }
-  } catch {}
+  } catch (err: unknown) {
+    console.warn(`[quaid] Approval nudge check failed: ${String((err as Error)?.message || err)}`);
+  }
 
   _saveJanitorNudgeState(state);
 }
@@ -2169,8 +2178,12 @@ const quaidPlugin = {
       if (isInternalQuaidSession(ctx?.sessionId)) {
         return;
       }
-      try { maybeSendJanitorNudges(); } catch {}
-      try { maybeQueueJanitorHealthAlert(); } catch {}
+      try { maybeSendJanitorNudges(); } catch (err: unknown) {
+        console.warn(`[quaid] Janitor nudge dispatch failed: ${String((err as Error)?.message || err)}`);
+      }
+      try { maybeQueueJanitorHealthAlert(); } catch (err: unknown) {
+        console.warn(`[quaid] Janitor health alert dispatch failed: ${String((err as Error)?.message || err)}`);
+      }
       // Cancel inactivity timer — agent is active again
       timeoutManager.onAgentStart();
 

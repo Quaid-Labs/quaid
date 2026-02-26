@@ -1117,14 +1117,16 @@ function _loadJanitorNudgeState() {
     if (fs.existsSync(JANITOR_NUDGE_STATE_PATH)) {
       return JSON.parse(fs.readFileSync(JANITOR_NUDGE_STATE_PATH, "utf8")) || {};
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] Failed to load janitor nudge state: ${String(err?.message || err)}`);
   }
   return {};
 }
 function _saveJanitorNudgeState(state) {
   try {
     fs.writeFileSync(JANITOR_NUDGE_STATE_PATH, JSON.stringify(state, null, 2), { mode: 384 });
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] Failed to save janitor nudge state: ${String(err?.message || err)}`);
   }
 }
 function queueDelayedLlmRequest(message, kind = "janitor", priority = "normal") {
@@ -1147,7 +1149,8 @@ function getJanitorHealthIssue() {
       return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
     }
     return null;
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] Failed to evaluate janitor health: ${String(err?.message || err)}`);
     return null;
   }
 }
@@ -1182,7 +1185,8 @@ notify_user("Hey, I see you just installed Quaid. Want me to help migrate import
         state.lastInstallNudgeAt = now;
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] Install nudge check failed: ${String(err?.message || err)}`);
   }
   try {
     if (fs.existsSync(PENDING_APPROVAL_REQUESTS_PATH) && now - lastApprovalNudge > NUDGE_COOLDOWN_MS) {
@@ -1197,7 +1201,8 @@ notify_user("Quaid has ${pendingCount} pending approval request(s). Review pendi
         state.lastApprovalNudgeAt = now;
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[quaid] Approval nudge check failed: ${String(err?.message || err)}`);
   }
   _saveJanitorNudgeState(state);
 }
@@ -1851,11 +1856,13 @@ const quaidPlugin = {
       }
       try {
         maybeSendJanitorNudges();
-      } catch {
+      } catch (err) {
+        console.warn(`[quaid] Janitor nudge dispatch failed: ${String(err?.message || err)}`);
       }
       try {
         maybeQueueJanitorHealthAlert();
-      } catch {
+      } catch (err) {
+        console.warn(`[quaid] Janitor health alert dispatch failed: ${String(err?.message || err)}`);
       }
       timeoutManager.onAgentStart();
       if (!isSystemEnabled("journal")) {
