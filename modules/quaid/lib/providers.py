@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -352,10 +351,12 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
         # Ensure OAuth token is available (load from .env only when fail-hard is disabled)
         if "CLAUDE_CODE_OAUTH_TOKEN" not in env and not is_fail_hard_enabled():
-            print(
-                "[providers][FALLBACK] CLAUDE_CODE_OAUTH_TOKEN not present in env; "
-                "attempting ~/.quaid/.env fallback because failHard is disabled.",
-                file=sys.stderr,
+            logger.warning(
+                "CLAUDE_CODE_OAUTH_TOKEN missing for ClaudeCode provider; "
+                "attempting adapter .env fallback because failHard is disabled "
+                "(tier=%s model=%s).",
+                model_tier,
+                model_alias,
             )
             adapter_env_path = ""
             try:
@@ -371,15 +372,21 @@ class ClaudeCodeLLMProvider(LLMProvider):
                             for line in f:
                                 if line.strip().startswith("CLAUDE_CODE_OAUTH_TOKEN="):
                                     env["CLAUDE_CODE_OAUTH_TOKEN"] = line.strip().split("=", 1)[1].strip()
-                                    print(
-                                        f"[providers][FALLBACK] Loaded CLAUDE_CODE_OAUTH_TOKEN from {env_path}.",
-                                        file=sys.stderr,
+                                    logger.warning(
+                                        "Loaded CLAUDE_CODE_OAUTH_TOKEN from adapter env fallback path=%s "
+                                        "(tier=%s model=%s).",
+                                        env_path,
+                                        model_tier,
+                                        model_alias,
                                     )
                                     break
                     except OSError:
-                        print(
-                            f"[providers][FALLBACK] Failed reading {env_path} for CLAUDE_CODE_OAUTH_TOKEN.",
-                            file=sys.stderr,
+                        logger.error(
+                            "Failed reading adapter env fallback path=%s for CLAUDE_CODE_OAUTH_TOKEN "
+                            "(tier=%s model=%s).",
+                            env_path,
+                            model_tier,
+                            model_alias,
                         )
                     if "CLAUDE_CODE_OAUTH_TOKEN" in env:
                         break
