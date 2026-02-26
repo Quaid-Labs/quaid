@@ -36,7 +36,10 @@ from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from datastore.memorydb.memory_graph import store as store_memory, create_edge as create_memory_edge
 from datastore.notedb.soul_snippets import write_journal_entry, write_snippet_entry
-from lib.runtime_context import parse_session_jsonl as _ctx_parse_session_jsonl, build_transcript as _ctx_build_transcript
+from lib.runtime_context import (
+    parse_session_jsonl as runtime_parse_session_jsonl,
+    build_transcript as runtime_build_transcript,
+)
 
 logger = logging.getLogger(__name__)
 _memory = SimpleNamespace(store=store_memory, create_edge=create_memory_edge)
@@ -64,7 +67,7 @@ def _get_owner_id(override: Optional[str] = None) -> str:
 
 def parse_session_jsonl(path: str) -> str:
     """Parse a platform session JSONL file into a human-readable transcript."""
-    return _ctx_parse_session_jsonl(Path(path))
+    return runtime_parse_session_jsonl(Path(path))
 
 
 def build_transcript(messages: List[Dict[str, str]]) -> str:
@@ -72,7 +75,7 @@ def build_transcript(messages: List[Dict[str, str]]) -> str:
 
     Filters out system messages via the active adapter contract.
     """
-    return _ctx_build_transcript(messages)
+    return runtime_build_transcript(messages)
 
 
 def _chunk_messages(messages: List[Dict], max_chars: int = 30_000) -> List[List[Dict]]:
