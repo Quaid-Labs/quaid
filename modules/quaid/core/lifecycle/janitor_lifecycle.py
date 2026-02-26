@@ -186,6 +186,15 @@ class LifecycleRegistry:
             results[idx] = value
         return results
 
+    def shutdown(self, wait: bool = False) -> None:
+        """Release lifecycle-owned executors."""
+        with self._llm_executor_guard:
+            ex = self._llm_executor
+            self._llm_executor = None
+            self._llm_executor_workers = 0
+        if ex is not None:
+            ex.shutdown(wait=wait, cancel_futures=True)
+
     def _bind_core_runtime(self, ctx: RoutineContext) -> RoutineContext:
         llm_workers = self._llm_workers(ctx)
         options = dict(ctx.options or {})

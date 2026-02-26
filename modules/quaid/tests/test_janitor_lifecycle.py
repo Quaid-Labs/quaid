@@ -330,3 +330,15 @@ def test_lifecycle_registry_resolves_write_resources_to_absolute_paths(tmp_path)
     assert "files:global" in resolved
     assert f"db:{(tmp_path / 'state' / 'memory.db').resolve()}" in resolved
     assert f"file:{(tmp_path / 'docs' / 'AGENTS.md').resolve()}" in resolved
+
+
+def test_lifecycle_registry_shutdown_releases_llm_executor():
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    ex = registry._ensure_llm_executor(2)
+    assert ex is not None
+    assert registry._llm_executor is not None
+
+    registry.shutdown(wait=False)
+    assert registry._llm_executor is None
