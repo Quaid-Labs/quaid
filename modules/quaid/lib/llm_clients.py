@@ -296,6 +296,9 @@ def call_llm(system_prompt: str, user_message: str,
     llm = get_llm_provider(model_tier=resolved_tier)
 
     start_time = time.time()
+    deadline = None
+    if timeout is not None:
+        deadline = start_time + max(0.0, float(timeout))
     retries = _MAX_RETRIES if max_retries is None else max_retries
     last_error = None
 
@@ -304,8 +307,13 @@ def call_llm(system_prompt: str, user_message: str,
 
     for attempt in range(retries + 1):
         try:
-            with acquire_llm_slot(timeout_seconds=timeout):
-                result = llm.llm_call(messages, resolved_tier, max_tokens, timeout)
+            timeout_for_attempt = timeout
+            if deadline is not None:
+                timeout_for_attempt = deadline - time.time()
+                if timeout_for_attempt <= 0:
+                    raise TimeoutError("LLM deadline exhausted before provider call")
+            with acquire_llm_slot(timeout_seconds=timeout_for_attempt):
+                result = llm.llm_call(messages, resolved_tier, max_tokens, timeout_for_attempt)
             _track_usage(result)
             if result.truncated:
                 print(f"[llm_clients] WARNING: Response truncated (max_tokens) for model={result.model}", file=sys.stderr)
@@ -324,6 +332,13 @@ def call_llm(system_prompt: str, user_message: str,
                 retryable = e.code in _RETRYABLE_HTTP_CODES
             if retryable and attempt < retries:
                 delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                if deadline is not None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        break
+                    delay = min(delay, max(0.0, remaining))
+                    if delay <= 0:
+                        break
                 code = getattr(e, 'code', type(e).__name__)
                 print(f"[llm_clients] Retryable error ({code}), "
                       f"attempt {attempt + 1}/{retries + 1}, retrying in {delay:.1f}s",

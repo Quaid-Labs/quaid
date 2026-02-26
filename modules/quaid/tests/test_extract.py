@@ -596,6 +596,29 @@ class TestExtractFromTranscript:
         assert "EARLIER CHUNK CONTEXT" in second_prompt
         assert "Maya changed jobs from TechFlow to Stripe" in second_prompt
 
+    @patch("ingest.extract.time.time")
+    @patch("ingest.extract._chunk_transcript_text")
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_stops_processing_when_extract_deadline_expires(self, mock_llm, mock_chunk, mock_time):
+        from ingest.extract import extract_from_transcript
+
+        mock_chunk.return_value = [
+            "User: first chunk",
+            "User: second chunk",
+        ]
+        mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
+        # deadline init, chunk1 remaining check, chunk2 remaining check (expired)
+        mock_time.side_effect = [100.0, 100.0, 701.0]
+
+        result = extract_from_transcript(
+            transcript="dummy",
+            owner_id="test",
+            label="deadline-test",
+        )
+
+        assert result["facts_stored"] == 0
+        assert mock_llm.call_count == 1
+
 
 # ---------------------------------------------------------------------------
 # _format_human_summary tests
