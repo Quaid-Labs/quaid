@@ -661,3 +661,42 @@ class TestDriftDetectionFallback:
 
         assert out == []
         assert "Failed reading doc commit timestamp" in caplog.text
+
+    def test_detect_drift_uses_conservative_lines_changed_fallback(self, tmp_path, caplog):
+        cfg = _make_test_config(
+            source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
+        )
+        doc = tmp_path / "docs" / "doc.md"
+        src = tmp_path / "src.py"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# Doc\n")
+        src.write_text("print('x')\n")
+
+        def _fake_run(cmd, *args, **kwargs):
+            command = " ".join(cmd)
+            if "--format=%ct" in command and "docs/doc.md" in command:
+                return MagicMock(stdout="100\n")
+            if "--format=%ct" in command and "src.py" in command:
+                return MagicMock(stdout="200\n")
+            if "--format=%H" in command and "src.py" in command:
+                return MagicMock(stdout="abc123\n")
+            if "rev-list --count" in command and "src.py" in command:
+                return MagicMock(stdout="3\n")
+            if "diff --stat" in command and "src.py" in command:
+                raise RuntimeError("stat unavailable")
+            return MagicMock(stdout="")
+
+        with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
+             _adapter_patch(tmp_path), \
+             patch("datastore.docsdb.updater.subprocess.run", side_effect=_fake_run), \
+             patch("datastore.docsdb.updater._compute_staleness_score", return_value=42.0) as score_mock:
+            import datastore.docsdb.updater as updater
+
+            caplog.set_level("WARNING")
+            out = updater.detect_drift_from_git()
+
+        assert len(out) == 1
+        assert "Failed parsing changed-line stats for src.py" in caplog.text
+        score_mock.assert_called_once()
+        # args: commits_behind, lines_changed, days_stale
+        assert score_mock.call_args.args[1] == 1

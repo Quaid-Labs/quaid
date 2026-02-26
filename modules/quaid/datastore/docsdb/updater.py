@@ -1362,6 +1362,7 @@ def detect_drift_from_git(since_hours: int = 24) -> List[DriftReport]:
                         total_lines_changed += sum(int(n) for n in nums)
                 except Exception:
                     logger.warning("Failed parsing changed-line stats for %s", src_path)
+                    total_lines_changed += 1
 
         if stale_sources:
             days_stale = (time.time() - doc_commit_time) / 86400 if doc_commit_time > 0 else 0
