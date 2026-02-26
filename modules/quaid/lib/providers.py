@@ -567,23 +567,37 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
         self._dim = dim
 
     def embed(self, text):
-        try:
-            data = json.dumps({
-                "model": self._model,
-                "input": text,
-                "keep_alive": -1,
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                f"{self._url}/api/embed",
-                data=data,
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                embeddings = result.get("embeddings", [])
-                if embeddings and embeddings[0]:
-                    return embeddings[0]
-        except Exception as e:
+        retries = 1
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                data = json.dumps({
+                    "model": self._model,
+                    "input": text,
+                    "keep_alive": -1,
+                }).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{self._url}/api/embed",
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
+                    embeddings = result.get("embeddings", [])
+                    if embeddings and embeddings[0]:
+                        return embeddings[0]
+                    return None
+            except (urllib.error.URLError, TimeoutError, OSError, ConnectionError) as e:
+                last_error = e
+                if attempt < retries:
+                    time.sleep(0.2 * (2 ** attempt))
+                    continue
+                break
+            except Exception as e:
+                last_error = e
+                break
+        if last_error is not None:
+            e = last_error
             logger.error(
                 "Ollama embeddings call failed provider=ollama model=%s url=%s text_len=%d error=%s",
                 self._model,
