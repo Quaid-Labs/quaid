@@ -93,6 +93,9 @@ function _envTimeoutMs(name: string, fallbackMs: number): number {
 const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOUT_MS", 300_000);
 const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 300_000);
 const QUICK_PROJECT_SUMMARY_TIMEOUT_MS = _envTimeoutMs("QUAID_PROJECT_SUMMARY_TIMEOUT_MS", 60_000);
+const FAST_ROUTER_TIMEOUT_MS = _envTimeoutMs("QUAID_ROUTER_FAST_TIMEOUT_MS", 45_000);
+const DEEP_ROUTER_TIMEOUT_MS = _envTimeoutMs("QUAID_ROUTER_DEEP_TIMEOUT_MS", 60_000);
+const DATASTORE_STATS_TIMEOUT_MS = _envTimeoutMs("QUAID_DATASTORE_STATS_TIMEOUT_MS", 5_000);
 
 function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   const sep = process.platform === "win32" ? ";" : ":";
@@ -116,7 +119,7 @@ function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<s
   try {
     const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
       encoding: "utf-8",
-      timeout: 5000,
+      timeout: DATASTORE_STATS_TIMEOUT_MS,
       env: buildPythonEnv(),
     });
     const parsed = JSON.parse(output);
@@ -1356,7 +1359,7 @@ const getProjectCatalog = () => projectCatalogReader.getProjectCatalog();
  * Writes code to a temp file to avoid shell injection via inline -c strings.
  * The script auto-deletes its temp file on completion.
  */
-function spawnNotifyScript(scriptBody: string): void {
+function spawnNotifyScript(scriptBody: string): boolean {
   const tmpFile = path.join(QUAID_NOTIFY_DIR, `notify-${Date.now()}-${Math.random().toString(36).slice(2)}.py`);
   const notifyLogFile = path.join(QUAID_LOGS_DIR, "notify-worker.log");
   const appendNotifyLog = (msg: string) => {
@@ -1401,6 +1404,7 @@ function spawnNotifyScript(scriptBody: string): void {
       }
     }
   }
+  return launched;
 }
 
 function _loadJanitorNudgeState(): Record<string, any> {
@@ -1964,11 +1968,11 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
   isSystemEnabled,
   getProjectCatalog,
   callFastRouter: async (systemPrompt: string, userPrompt: string) => {
-    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, 45_000);
+    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, FAST_ROUTER_TIMEOUT_MS);
     return String(llm?.text || "");
   },
   callDeepRouter: async (systemPrompt: string, userPrompt: string) => {
-    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, 60_000);
+    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
     return String(llm?.text || "");
   },
   recallVector: async (query, limit, scope, dateFrom, dateTo) => {
@@ -2551,7 +2555,7 @@ const quaidPlugin = {
                 mode: "auto_inject",
               },
             }), { mode: 0o600 });
-            spawnNotifyScript(`
+            const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_recall
 with open(${JSON.stringify(dataFile)}, 'r') as f:
@@ -2559,6 +2563,9 @@ with open(${JSON.stringify(dataFile)}, 'r') as f:
 os.unlink(${JSON.stringify(dataFile)})
 notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown'])
 `);
+            if (!launchedNotify) {
+              try { fs.unlinkSync(dataFile); } catch {}
+            }
             console.log("[quaid] Auto-inject recall notification dispatched");
           }
         } catch (notifyErr: unknown) {
@@ -2898,7 +2905,7 @@ ${recallStoreGuidance}`,
                 // Fire and forget notification
                 const dataFile2 = path.join(QUAID_TMP_DIR, `recall-data-${Date.now()}.json`);
                 fs.writeFileSync(dataFile2, JSON.stringify({ memories: memoryData, source_breakdown: sourceBreakdown }), { mode: 0o600 });
-                spawnNotifyScript(`
+                const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_recall
 with open(${JSON.stringify(dataFile2)}, 'r') as f:
@@ -2906,6 +2913,9 @@ with open(${JSON.stringify(dataFile2)}, 'r') as f:
 os.unlink(${JSON.stringify(dataFile2)})
 notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown'])
 `);
+                if (!launchedNotify) {
+                  try { fs.unlinkSync(dataFile2); } catch {}
+                }
               }
             } catch (notifyErr: unknown) {
               // Notification is best-effort
@@ -3119,7 +3129,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
                   // Fire and forget notification
                   const dataFile3 = path.join(QUAID_TMP_DIR, `docs-search-data-${Date.now()}.json`);
                   fs.writeFileSync(dataFile3, JSON.stringify({ query, results: docResults }), { mode: 0o600 });
-                  spawnNotifyScript(`
+                  const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_docs_search
 with open(${JSON.stringify(dataFile3)}, 'r') as f:
@@ -3127,6 +3137,9 @@ with open(${JSON.stringify(dataFile3)}, 'r') as f:
 os.unlink(${JSON.stringify(dataFile3)})
 notify_docs_search(data['query'], data['results'])
 `);
+                  if (!launchedNotify) {
+                    try { fs.unlinkSync(dataFile3); } catch {}
+                  }
                 }
               }
             } catch (notifyErr: unknown) {
@@ -3678,7 +3691,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
             snippet_details: hasMerged ? mergedDetails : null,
             always_notify: alwaysNotifyCompletion,
           }), { mode: 0o600 });
-          spawnNotifyScript(`
+          const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_extraction
 with open(${JSON.stringify(detailsPath)}, 'r') as f:
@@ -3694,6 +3707,9 @@ notify_memory_extraction(
     always_notify=data.get('always_notify', False),
 )
 `);
+          if (!launchedNotify) {
+            try { fs.unlinkSync(detailsPath); } catch {}
+          }
         } catch (notifyErr: unknown) {
           console.warn(`[quaid] Extraction notification skipped: ${(notifyErr as Error).message}`);
         }
