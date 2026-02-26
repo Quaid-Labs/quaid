@@ -364,3 +364,20 @@ def test_lifecycle_registry_shutdown_releases_llm_executor():
 
     registry.shutdown(wait=False)
     assert registry._llm_executor is None
+
+
+def test_lifecycle_registry_caps_workspace_lock_registry_cache(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    registry._max_lock_registries = 2  # White-box cap to force eviction behavior.
+
+    reg1 = registry._lock_registry_for_workspace(tmp_path / "a")
+    reg2 = registry._lock_registry_for_workspace(tmp_path / "b")
+    reg3 = registry._lock_registry_for_workspace(tmp_path / "c")
+
+    assert reg1 is not None and reg2 is not None and reg3 is not None
+    assert len(registry._lock_registries) == 2
+    keys = set(registry._lock_registries.keys())
+    assert str((tmp_path / "b" / ".quaid" / "runtime" / "locks" / "janitor").resolve()) in keys
+    assert str((tmp_path / "c" / ".quaid" / "runtime" / "locks" / "janitor").resolve()) in keys
