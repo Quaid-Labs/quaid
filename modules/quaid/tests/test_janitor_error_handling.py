@@ -79,3 +79,17 @@ def test_run_tests_uses_configurable_timeout(monkeypatch):
     out = janitor.run_tests(metrics)
     assert captured["timeout"] == 42
     assert out["success"] is True
+
+
+def test_append_decision_log_trims_to_configured_tail(tmp_path, monkeypatch):
+    decision_path = tmp_path / "janitor" / "decision-log.jsonl"
+    monkeypatch.setenv("QUAID_DECISION_LOG_MAX_LINES", "3")
+    monkeypatch.setattr(janitor, "_decision_log_path", lambda: decision_path)
+
+    for idx in range(5):
+        janitor._append_decision_log("test", {"idx": idx})
+
+    lines = decision_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    payloads = [janitor.json.loads(line) for line in lines]
+    assert [p["idx"] for p in payloads] == [2, 3, 4]
