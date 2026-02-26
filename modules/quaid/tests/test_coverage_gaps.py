@@ -896,6 +896,45 @@ class TestCreateEdgeAtomicity:
         assert node_count == 0
         assert edge_count == 0
 
+    def test_create_edge_vec_upsert_warns_when_fail_hard_disabled(self, tmp_path, caplog):
+        from datastore.memorydb.memory_graph import create_edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_vec_warn.db")
+        caplog.set_level("WARNING")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=False), \
+             patch.object(graph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")):
+            result = create_edge(
+                subject_name="Alice Example",
+                relation="friend_of",
+                object_name="Bob Example",
+                owner_id="quaid",
+            )
+
+        assert result["status"] == "created"
+        assert "failed vec_nodes upsert" in caplog.text
+
+    def test_create_edge_vec_upsert_raises_when_fail_hard_enabled(self, tmp_path):
+        from datastore.memorydb.memory_graph import create_edge
+
+        graph, _ = _make_graph(tmp_path, "create_edge_vec_failhard.db")
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True), \
+             patch.object(graph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")):
+            with pytest.raises(RuntimeError, match="Vector index upsert failed during create_edge"):
+                create_edge(
+                    subject_name="Alice Example",
+                    relation="friend_of",
+                    object_name="Bob Example",
+                    owner_id="quaid",
+                )
+
 
 class TestReviewFixTransaction:
     def test_fix_rolls_back_when_edge_rebuild_fails(self, tmp_path):
