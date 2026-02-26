@@ -99,6 +99,18 @@ def test_multi_user_runtime_readiness_requires_hooks(monkeypatch):
         identity_runtime.assert_multi_user_runtime_ready(require_read=True)
 
 
+def test_identity_mode_warns_on_config_error(monkeypatch, caplog):
+    def _boom():
+        raise RuntimeError("config unavailable")
+
+    monkeypatch.setattr("core.runtime.identity_runtime.get_config", _boom)
+    caplog.set_level("WARNING")
+    mode = identity_runtime.identity_mode()
+
+    assert mode == "single_user"
+    assert "identity_mode config read failed" in caplog.text
+
+
 def test_memory_service_bootstraps_default_identity_runtime(monkeypatch):
     identity_runtime.clear_registrations()
     monkeypatch.setattr(

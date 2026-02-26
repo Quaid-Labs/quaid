@@ -7,6 +7,7 @@ use it to apply resolver/policy hooks while keeping single-registration safety.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
@@ -28,6 +29,8 @@ _identity_resolver: Optional[_RegisteredHook] = None
 _privacy_policy: Optional[_RegisteredHook] = None
 _ALLOWED_POLICY_ACTIONS = {"allow", "deny", "allow_redacted"}
 _hooks_lock = threading.RLock()
+_identity_mode_fallback_warned = False
+logger = logging.getLogger(__name__)
 
 
 def register_identity_resolver(owner: str, resolver: IdentityResolver) -> None:
@@ -55,10 +58,11 @@ def register_privacy_policy(owner: str, policy: PrivacyPolicy) -> None:
 
 
 def clear_registrations() -> None:
-    global _identity_resolver, _privacy_policy
+    global _identity_resolver, _privacy_policy, _identity_mode_fallback_warned
     with _hooks_lock:
         _identity_resolver = None
         _privacy_policy = None
+        _identity_mode_fallback_warned = False
 
 
 def _normalize_policy_decision(raw: Any) -> AccessDecision:
@@ -76,9 +80,17 @@ def _normalize_policy_decision(raw: Any) -> AccessDecision:
 
 
 def identity_mode() -> str:
+    global _identity_mode_fallback_warned
     try:
         mode = str(get_config().identity.mode or "single_user").strip().lower()
-    except Exception:
+    except Exception as exc:
+        with _hooks_lock:
+            if not _identity_mode_fallback_warned:
+                logger.warning(
+                    "identity_mode config read failed; defaulting to single_user: %s",
+                    exc,
+                )
+                _identity_mode_fallback_warned = True
         mode = "single_user"
     return mode if mode in {"single_user", "multi_user"} else "single_user"
 
