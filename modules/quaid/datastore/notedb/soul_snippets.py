@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -41,6 +42,29 @@ def _backup_dir() -> Path:
 
 logger = logging.getLogger(__name__)
 _SNIPPETS_REVIEW_MAX_PER_FILE = int(os.environ.get("QUAID_SNIPPETS_REVIEW_MAX_PER_FILE", "50") or 50)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Atomically write UTF-8 text via temp file + os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 # Voice guidance for distillation prompts per target file
 _FILE_VOICE_GUIDANCE = {
@@ -311,7 +335,7 @@ def write_journal_entry(filename: str, content: str, trigger: str = "Compaction"
         # Rebuild content with only the kept entries
         updated = _rebuild_journal_content(base_name, entries[:max_entries])
 
-    journal_path.write_text(updated, encoding='utf-8')
+    _atomic_write_text(journal_path, updated)
     logger.info(f"Wrote journal entry to {base_name}.journal.md ({date_str} — {trigger})")
     return True
 
@@ -397,7 +421,7 @@ def _archive_oldest_entries(filename: str, entries_to_archive: List[Dict[str, An
             if f"## {entry['date']} — {entry['trigger']}" not in existing:
                 existing += section
 
-        archive_path.write_text(existing, encoding='utf-8')
+        _atomic_write_text(archive_path, existing)
         logger.info(f"Archived {len(month_entries)} entries to {archive_path.name}")
 
 
@@ -462,7 +486,7 @@ def write_snippet_entry(filename: str, snippets: List[str],
         header_end = existing.index('\n') if '\n' in existing else len(existing)
         updated = existing[:header_end + 1] + new_section + existing[header_end + 1:]
 
-    snippets_path.write_text(updated, encoding='utf-8')
+    _atomic_write_text(snippets_path, updated)
     logger.info(f"Wrote {len(valid)} snippets to {base_name}.snippets.md ({date_str} — {trigger})")
     return True
 
@@ -489,9 +513,9 @@ def archive_entries(filename: str, entries_to_archive: List[Dict[str, Any]]) -> 
     kept = [e for e in all_entries if (e["date"], e["trigger"]) not in archived_keys]
 
     if kept:
-        journal_path.write_text(_rebuild_journal_content(base_name, kept), encoding='utf-8')
+        _atomic_write_text(journal_path, _rebuild_journal_content(base_name, kept))
     else:
-        journal_path.write_text(f"# {base_name} Journal\n", encoding='utf-8')
+        _atomic_write_text(journal_path, f"# {base_name} Journal\n")
 
 
 # =============================================================================
@@ -518,7 +542,7 @@ def _save_distillation_state(state: Dict[str, Any]) -> None:
     journal_dir = _get_journal_dir()
     journal_dir.mkdir(parents=True, exist_ok=True)
     state_path = journal_dir / ".distillation-state.json"
-    state_path.write_text(json.dumps(state, indent=2), encoding='utf-8')
+    _atomic_write_text(state_path, json.dumps(state, indent=2))
 
 
 def _is_distillation_due(filename: str) -> bool:
@@ -661,7 +685,7 @@ def apply_distillation(filename: str, result: Dict[str, Any],
 
     # Flush edits to disk before additions (so _insert_into_file sees edited content)
     if not dry_run and stats["edits"] > 0:
-        file_path.write_text(content, encoding='utf-8')
+        _atomic_write_text(file_path, content)
 
     # Apply additions
     for addition in result.get("additions", []):
@@ -895,7 +919,7 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
         lines.insert(insert_idx + 1, formatted_text.rstrip())
         content = '\n'.join(lines)
 
-    file_path.write_text(content, encoding='utf-8')
+    _atomic_write_text(file_path, content)
     logger.info(f"Inserted into {filename} after '{insert_after}'")
     return True
 
@@ -944,7 +968,7 @@ def _clear_processed_snippets(filename: str, processed_texts: List[str]) -> None
         snippets_path.unlink()
         logger.info(f"Removed empty {base_name}.snippets.md")
     else:
-        snippets_path.write_text(final, encoding='utf-8')
+        _atomic_write_text(snippets_path, final)
         logger.info(f"Cleaned {base_name}.snippets.md: removed {len(processed_texts)} processed snippets")
 
 

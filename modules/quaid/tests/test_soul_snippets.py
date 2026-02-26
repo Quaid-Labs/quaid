@@ -230,6 +230,13 @@ class TestDistillationState:
         assert state["SOUL.md"]["last_distilled"] == "2026-02-10"
         assert state["SOUL.md"]["entries_distilled"] == 3
 
+    def test_state_persist_uses_atomic_replace(self, workspace_dir, mock_config):
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb import soul_snippets
+            with patch("datastore.notedb.soul_snippets.os.replace", wraps=soul_snippets.os.replace) as mock_replace:
+                soul_snippets._save_distillation_state({"SOUL.md": {"last_distilled": "2026-02-10"}})
+        assert mock_replace.call_count >= 1
+
     def test_distillation_due_when_no_state(self, workspace_dir, mock_config):
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import _is_distillation_due
