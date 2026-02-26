@@ -735,7 +735,10 @@ function _getGatewayCredential(providers) {
         }
       }
     }
-  } catch {
+  } catch (err) {
+    if (isFailHardEnabled()) {
+      throw err;
+    }
   }
   return void 0;
 }
@@ -1291,6 +1294,9 @@ ${transcript.slice(0, 4e3)}`,
     }
   } catch (err) {
     console.error("[quaid] Quick project summary failed:", err.message);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
   }
   return { project_name: null, text: transcript.slice(0, 500) };
 }
@@ -1339,6 +1345,9 @@ async function emitProjectEvent(messages, trigger, sessionId) {
     console.log(`[quaid] Emitted project event: ${trigger} -> ${summary.project_name || "unknown"}`);
   } catch (err) {
     console.error("[quaid] Failed to emit project event:", err.message);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
   }
 }
 function buildTranscript(messages) {
@@ -1816,6 +1825,9 @@ async function getStats() {
     return parseDatastoreStats(output);
   } catch (err) {
     console.error("[quaid] stats error:", err.message);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
     return null;
   }
 }
@@ -2429,6 +2441,9 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
               };
             } catch (err) {
               console.error("[quaid] memory_store error:", err);
+              if (isFailHardEnabled()) {
+                throw err;
+              }
               return {
                 content: [{ type: "text", text: `Error queuing memory note: ${String(err)}` }],
                 details: { error: String(err) }
@@ -2581,6 +2596,9 @@ notify_docs_search(data['query'], data['results'])
             };
           } catch (err) {
             console.error("[quaid] projects_search error:", err);
+            if (isFailHardEnabled()) {
+              throw err;
+            }
             return {
               content: [{ type: "text", text: `Error searching docs: ${String(err)}` }],
               details: { error: String(err) }
