@@ -345,9 +345,24 @@ def extract_from_transcript(
             continue
 
         parsed_facts = parsed.get("facts", []) or []
-        all_facts.extend(parsed_facts)
         if isinstance(parsed_facts, list):
-            carry_facts.extend([f for f in parsed_facts if isinstance(f, dict)])
+            valid_facts: List[Dict[str, Any]] = []
+            invalid_fact_count = 0
+            for raw_fact in parsed_facts:
+                if not isinstance(raw_fact, dict):
+                    invalid_fact_count += 1
+                    continue
+                if not isinstance(raw_fact.get("text"), str):
+                    invalid_fact_count += 1
+                    continue
+                valid_facts.append(raw_fact)
+            if invalid_fact_count:
+                logger.warning(
+                    f"[extract] {label} chunk {ci + 1}: skipped {invalid_fact_count} invalid fact payload(s)"
+                )
+                result["facts_skipped"] += invalid_fact_count
+            all_facts.extend(valid_facts)
+            carry_facts.extend(valid_facts)
 
         for file, snips in (parsed.get("soul_snippets", {}) or {}).items():
             if isinstance(snips, list):

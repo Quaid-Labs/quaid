@@ -216,4 +216,27 @@ describe('SessionTimeoutManager scheduling', () => {
     const buffers: Map<string, unknown[]> = (manager as any).buffers
     expect(buffers.size).toBeLessThanOrEqual(200)
   })
+
+  it('caches failHard config reads between extraction calls', async () => {
+    const workspace = makeWorkspace('quaid-timeout-failhard-cache-')
+    writeFailHardConfig(workspace, false)
+
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    const payload = [{ role: 'user', content: 'remember this', timestamp: Date.now() }]
+    const firstOk = await manager.extractSessionFromLog('session-cache-1', 'Reset', payload)
+    expect(firstOk).toBe(true)
+
+    // Flip config immediately; second call should use cached failHard state.
+    writeFailHardConfig(workspace, true)
+    const secondOk = await manager.extractSessionFromLog('session-cache-2', 'Reset', payload)
+
+    expect(secondOk).toBe(true)
+  })
 })
