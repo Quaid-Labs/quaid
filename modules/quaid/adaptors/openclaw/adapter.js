@@ -1890,7 +1890,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             console.log("[quaid] Auto-inject recall notification dispatched");
           }
         } catch (notifyErr) {
-          console.log(`[quaid] Auto-inject recall notification skipped: ${notifyErr.message}`);
+          console.warn(`[quaid] Auto-inject recall notification skipped: ${notifyErr.message}`);
         }
         try {
           const newIds = toInject.map((m) => m.id || m.text);
@@ -2212,7 +2212,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 `);
                 }
               } catch (notifyErr) {
-                console.log(`[quaid] Memory recall notification skipped: ${notifyErr.message}`);
+                console.warn(`[quaid] Memory recall notification skipped: ${notifyErr.message}`);
               }
               return {
                 content: [
@@ -2405,7 +2405,7 @@ notify_docs_search(data['query'], data['results'])
                 }
               }
             } catch (notifyErr) {
-              console.log(`[quaid] Docs search notification skipped: ${notifyErr.message}`);
+              console.warn(`[quaid] Docs search notification skipped: ${notifyErr.message}`);
             }
             return {
               content: [{ type: "text", text }],
@@ -2682,7 +2682,14 @@ ${factsOutput || "No facts found."}` }],
       workspace: WORKSPACE,
       timeoutMinutes: getCaptureTimeoutMinutes(),
       isBootstrapOnly: isResetBootstrapOnlyConversation,
-      logger: (msg) => console.log(msg),
+      logger: (msg) => {
+        const lowered = String(msg || "").toLowerCase();
+        if (lowered.includes("fail") || lowered.includes("error")) {
+          console.warn(msg);
+          return;
+        }
+        console.log(msg);
+      },
       extract: async (msgs, sid, label) => {
         extractionPromise = (extractionPromise || Promise.resolve()).catch((err) => {
           console.error("[quaid] extraction chain prior failure:", err?.message || String(err));
@@ -2903,7 +2910,7 @@ notify_memory_extraction(
 )
 `);
         } catch (notifyErr) {
-          console.log(`[quaid] Extraction notification skipped: ${notifyErr.message}`);
+          console.warn(`[quaid] Extraction notification skipped: ${notifyErr.message}`);
         }
       }
       if (triggerType === "timeout") {
