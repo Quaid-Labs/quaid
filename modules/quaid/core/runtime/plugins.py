@@ -1,19 +1,14 @@
-"""Core plugin manifest loader and registry (phase-1 foundation).
-
-This module intentionally seeds strict plugin contracts without changing active
-runtime behavior yet. Current built-ins can migrate onto this registry in later
-phases.
-"""
+"""Core plugin manifest loader and runtime registry."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
-
-from lib.runtime_context import get_workspace_dir
 
 _PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _PLUGIN_TYPES = {"adapter", "ingest", "datastore"}
@@ -23,6 +18,10 @@ _DATASTORE_REQUIRED_CAPABILITIES = (
     "supports_policy_metadata",
     "supports_redaction",
 )
+_RUNTIME_LOCK = Lock()
+_RUNTIME_REGISTRY: Optional["PluginRegistry"] = None
+_RUNTIME_ERRORS: List[str] = []
+_RUNTIME_WARNINGS: List[str] = []
 
 
 @dataclass(frozen=True)
@@ -156,8 +155,18 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
     )
 
 
-def _resolve_plugin_paths(paths: List[str]) -> List[Path]:
-    root = get_workspace_dir()
+def _workspace_root() -> Path:
+    env_root = (
+        os.environ.get("QUAID_HOME", "").strip()
+        or os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
+    )
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return Path.cwd().resolve()
+
+
+def _resolve_plugin_paths(paths: List[str], *, workspace_root: Optional[Path] = None) -> List[Path]:
+    root = (workspace_root or _workspace_root()).resolve()
     out: List[Path] = []
     for raw in paths:
         token = str(raw or "").strip()
@@ -184,12 +193,13 @@ def discover_plugin_manifests(
     paths: List[str],
     allowlist: Optional[List[str]] = None,
     strict: bool = True,
+    workspace_root: Optional[Path] = None,
 ) -> Tuple[List[PluginManifest], List[str]]:
     """Discover plugin manifests from configured plugin directories.
 
     Returns (manifests, errors). In strict mode, malformed manifests raise.
     """
-    resolved_paths = _resolve_plugin_paths(paths)
+    resolved_paths = _resolve_plugin_paths(paths, workspace_root=workspace_root)
     allowed = {str(x).strip() for x in (allowlist or []) if str(x).strip()}
     manifests: List[PluginManifest] = []
     errors: List[str] = []
@@ -217,3 +227,121 @@ def discover_plugin_manifests(
                     raise ValueError(msg) from exc
                 errors.append(msg)
     return manifests, errors
+
+
+def _validate_slot_selection(
+    registry: PluginRegistry,
+    *,
+    plugin_id: str,
+    expected_type: str,
+    slot_label: str,
+    strict: bool,
+    errors: List[str],
+) -> None:
+    pid = str(plugin_id or "").strip()
+    if not pid:
+        return
+    rec = registry.get(pid)
+    if rec is None:
+        msg = f"Plugin slot '{slot_label}' references unknown plugin_id '{pid}'"
+        if strict:
+            raise ValueError(msg)
+        errors.append(msg)
+        return
+    if rec.manifest.plugin_type != expected_type:
+        msg = (
+            f"Plugin slot '{slot_label}' expected type '{expected_type}', "
+            f"but '{pid}' is '{rec.manifest.plugin_type}'"
+        )
+        if strict:
+            raise ValueError(msg)
+        errors.append(msg)
+
+
+def initialize_plugin_runtime(
+    *,
+    api_version: int,
+    paths: List[str],
+    allowlist: Optional[List[str]] = None,
+    strict: bool = True,
+    slots: Optional[Dict[str, Any]] = None,
+    workspace_root: Optional[str] = None,
+) -> Tuple[PluginRegistry, List[str], List[str]]:
+    """Build and cache plugin runtime registry from config."""
+    registry = PluginRegistry(api_version=max(1, int(api_version or 1)))
+    root: Optional[Path] = None
+    if workspace_root:
+        root = Path(str(workspace_root)).expanduser().resolve()
+    manifests, errors = discover_plugin_manifests(
+        paths=paths,
+        allowlist=allowlist,
+        strict=strict,
+        workspace_root=root,
+    )
+    warnings: List[str] = []
+    for manifest in manifests:
+        try:
+            registry.register(manifest)
+        except Exception as exc:
+            msg = f"Plugin registration failed for '{manifest.plugin_id}': {exc}"
+            if strict:
+                raise ValueError(msg) from exc
+            warnings.append(msg)
+    slot_data = slots or {}
+    adapter_slot = str(slot_data.get("adapter", "")).strip()
+    _validate_slot_selection(
+        registry,
+        plugin_id=adapter_slot,
+        expected_type="adapter",
+        slot_label="adapter",
+        strict=strict,
+        errors=errors,
+    )
+    if adapter_slot and registry.get(adapter_slot):
+        registry.activate_singleton("adapter", adapter_slot)
+    for idx, plugin_id in enumerate(slot_data.get("ingest", []) or []):
+        _validate_slot_selection(
+            registry,
+            plugin_id=str(plugin_id),
+            expected_type="ingest",
+            slot_label=f"ingest[{idx}]",
+            strict=strict,
+            errors=errors,
+        )
+    for idx, plugin_id in enumerate(slot_data.get("datastores", []) or []):
+        _validate_slot_selection(
+            registry,
+            plugin_id=str(plugin_id),
+            expected_type="datastore",
+            slot_label=f"datastores[{idx}]",
+            strict=strict,
+            errors=errors,
+        )
+
+    with _RUNTIME_LOCK:
+        global _RUNTIME_REGISTRY, _RUNTIME_ERRORS, _RUNTIME_WARNINGS
+        _RUNTIME_REGISTRY = registry
+        _RUNTIME_ERRORS = list(errors)
+        _RUNTIME_WARNINGS = list(warnings)
+    return registry, list(errors), list(warnings)
+
+
+def get_runtime_plugin_registry() -> Optional[PluginRegistry]:
+    with _RUNTIME_LOCK:
+        return _RUNTIME_REGISTRY
+
+
+def get_runtime_plugin_diagnostics() -> Dict[str, List[str]]:
+    with _RUNTIME_LOCK:
+        return {
+            "errors": list(_RUNTIME_ERRORS),
+            "warnings": list(_RUNTIME_WARNINGS),
+        }
+
+
+def reset_plugin_runtime() -> None:
+    with _RUNTIME_LOCK:
+        global _RUNTIME_REGISTRY, _RUNTIME_ERRORS, _RUNTIME_WARNINGS
+        _RUNTIME_REGISTRY = None
+        _RUNTIME_ERRORS = []
+        _RUNTIME_WARNINGS = []

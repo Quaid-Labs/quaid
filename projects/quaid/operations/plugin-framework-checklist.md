@@ -7,7 +7,8 @@ Purpose: convert the plugin framework notes into an execution plan with clear pr
 - `core/runtime/plugins.py` exists with:
   - strict manifest validation,
   - discovery by configured paths,
-  - conflict-safe registry/singleton activation.
+  - conflict-safe registry/singleton activation,
+  - config-boot initialization with slot/type validation and runtime diagnostics.
 - Config already seeds plugin controls in `config/memory.json` via `config.py`:
   - `plugins.enabled`, `plugins.strict`, `plugins.apiVersion`,
   - `plugins.paths`, `plugins.allowList`, `plugins.slots`.
@@ -19,7 +20,7 @@ Purpose: convert the plugin framework notes into an execution plan with clear pr
 ## Phase 1 (Prelaunch Safe, Do Now)
 
 1. Plugin Boot Preflight (no runtime takeover)
-- Add a boot/preflight check that discovers manifests and validates them.
+- [x] Add a boot/preflight check that discovers manifests and validates them.
 - Keep behavior non-owning: no switching active control flow to plugin runtime yet.
 - Fail behavior:
   - `plugins.strict=true`: hard fail on invalid manifest/conflict.
@@ -33,11 +34,11 @@ Purpose: convert the plugin framework notes into an execution plan with clear pr
 - Ensure IDs are stable and slot-compatible.
 
 3. Conformance Test Baseline
-- Add contract tests for each plugin type:
+- [x] Add contract tests for each plugin type:
   - manifest required fields and capability typing,
   - slot conflict rejection,
-  - discovery allowlist behavior,
-  - strict vs non-strict error handling.
+  - discovery allowlist behavior.
+- [x] Add strict vs non-strict slot validation tests.
 
 4. Observability
 - Emit startup report:

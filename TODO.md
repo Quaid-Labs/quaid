@@ -43,6 +43,7 @@
   - fail loudly with actionable diagnostics instead of introducing adapter-level soft fallbacks
 
 - [ ] Plugin runtime migration (foundation seeded in phase 1):
+  - [x] enforce plugin manifest + slot/type preflight at config boot (`plugins.strict` hard-fail, non-strict loud diagnostics)
   - convert first-party OpenClaw adapter to plugin registration contract
   - convert ingest flows to plugin registration contract
   - convert memorydb/docsdb/notedb to datastore plugin registration contract
