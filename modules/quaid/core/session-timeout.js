@@ -164,6 +164,7 @@ class SessionTimeoutManager {
   workerTimer = null;
   chain = Promise.resolve();
   failHard;
+  extractTimeoutMs;
   maxInMemoryBuffers = 200;
   constructor(opts) {
     this.timeoutMinutes = opts.timeoutMinutes;
@@ -181,6 +182,8 @@ class SessionTimeoutManager {
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
     this.eventFilePath = path.join(this.logDir, "session-timeout-events.jsonl");
     this.failHard = isFailHardEnabled(opts.workspace);
+    const configuredTimeoutMs = Number(process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS || "");
+    this.extractTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? Math.floor(configuredTimeoutMs) : 6e5;
     try {
       fs.mkdirSync(this.logDir, { recursive: true });
       fs.mkdirSync(this.sessionLogDir, { recursive: true });
@@ -193,6 +196,27 @@ class SessionTimeoutManager {
       if (this.failHard) {
         throw err;
       }
+    }
+  }
+  async runExtractWithTimeout(messages, sessionId, label) {
+    const timeoutMs = Number(this.extractTimeoutMs);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      await this.extract(messages, sessionId, label);
+      return;
+    }
+    let timer = null;
+    try {
+      await Promise.race([
+        this.extract(messages, sessionId, label),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`session-timeout extraction timed out after ${timeoutMs}ms`)),
+            timeoutMs
+          );
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
   setTimeoutMinutes(minutes) {
@@ -282,7 +306,7 @@ class SessionTimeoutManager {
       return false;
     }
     this.writeQuaidLog("extract_begin", sessionId, { label, message_count: messages.length, source });
-    await this.extract(messages, sessionId, label);
+    await this.runExtractWithTimeout(messages, sessionId, label);
     this.writeQuaidLog("extract_done", sessionId, { label, message_count: messages.length, source });
     this.clearSession(sessionId);
     return true;
@@ -371,7 +395,7 @@ class SessionTimeoutManager {
           message_count: extractionMessages.length,
           source: loggedMessages.length > 0 ? "session_message_log" : "pending_buffer"
         });
-        await this.extract(extractionMessages, sid);
+        await this.runExtractWithTimeout(extractionMessages, sid);
         this.clearSession(sid);
         try {
           fs.unlinkSync(lockedPath);
@@ -619,7 +643,7 @@ class SessionTimeoutManager {
     }).then(async () => {
       safeLog(this.logger, `[quaid] Inactivity timeout (${timeoutMinutes}m) \u2014 extracting ${messages.length} messages`);
       this.writeQuaidLog("extract_begin", sessionId, { message_count: messages.length, timeout_minutes: timeoutMinutes });
-      await this.extract(messages, sessionId, "Timeout");
+      await this.runExtractWithTimeout(messages, sessionId, "Timeout");
       this.writeQuaidLog("extract_done", sessionId, { message_count: messages.length });
       this.clearSession(sessionId);
     }).catch((err) => {
