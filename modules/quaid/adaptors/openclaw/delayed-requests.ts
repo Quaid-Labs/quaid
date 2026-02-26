@@ -32,7 +32,9 @@ function readJson(path: string): any {
 }
 
 function writeJson(path: string, payload: any): void {
-  fs.writeFileSync(path, JSON.stringify(payload, null, 2), { mode: 0o600 });
+  const tmpPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+  fs.renameSync(tmpPath, path);
 }
 
 function _sleepMs(ms: number): void {
