@@ -2182,29 +2182,63 @@ JSON array only:"""
                 results["deleted"] += 1
             elif action == "EXTEND":
                 if not dry_run:
-                    resolve_decay_review(entry["id"], "extend", reason)
-                    # Scale from node's extraction_confidence if available, otherwise 0.3
-                    node = graph.get_node(node_id)
-                    ext_conf = (node.attributes or {}).get("extraction_confidence", 0.3) if node else 0.3
-                    extend_conf = max(0.3, float(ext_conf) * 0.5) if ext_conf else 0.3
+                    # Apply node update and queue resolution together to avoid partial commit.
+                    ext_conf = 0.3
                     with graph._get_conn() as conn:
+                        row = conn.execute("SELECT attributes FROM nodes WHERE id = ?", (node_id,)).fetchone()
+                        if row:
+                            attrs_raw = row["attributes"] if "attributes" in row.keys() else None
+                            if attrs_raw:
+                                try:
+                                    attrs = json.loads(attrs_raw)
+                                    ext_conf = float(attrs.get("extraction_confidence", 0.3) or 0.3)
+                                except Exception:
+                                    ext_conf = 0.3
+                        # Scale from node's extraction_confidence if available, otherwise 0.3
+                        extend_conf = max(0.3, float(ext_conf) * 0.5) if ext_conf else 0.3
                         conn.execute(
                             "UPDATE nodes SET confidence = ?, accessed_at = ? WHERE id = ?",
                             (extend_conf, datetime.now().isoformat(), node_id)
+                        )
+                        conn.execute(
+                            """
+                            UPDATE decay_review_queue
+                            SET decision = ?, decision_reason = ?, status = 'reviewed',
+                                reviewed_at = datetime('now')
+                            WHERE id = ?
+                            """,
+                            ("extend", reason, entry["id"]),
                         )
                 print(f"    EXTEND: {entry['node_text'][:50]}...")
                 results["extended"] += 1
             elif action == "PIN":
                 if not dry_run:
-                    resolve_decay_review(entry["id"], "pin", reason)
-                    # Use max of 0.7 and node's extraction_confidence so high-value facts keep their score
-                    node = graph.get_node(node_id)
-                    ext_conf = (node.attributes or {}).get("extraction_confidence", 0.7) if node else 0.7
-                    pin_conf = max(0.7, float(ext_conf)) if ext_conf else 0.7
+                    # Apply node update and queue resolution together to avoid partial commit.
+                    ext_conf = 0.7
                     with graph._get_conn() as conn:
+                        row = conn.execute("SELECT attributes FROM nodes WHERE id = ?", (node_id,)).fetchone()
+                        if row:
+                            attrs_raw = row["attributes"] if "attributes" in row.keys() else None
+                            if attrs_raw:
+                                try:
+                                    attrs = json.loads(attrs_raw)
+                                    ext_conf = float(attrs.get("extraction_confidence", 0.7) or 0.7)
+                                except Exception:
+                                    ext_conf = 0.7
+                        # Use max of 0.7 and node's extraction_confidence so high-value facts keep their score
+                        pin_conf = max(0.7, float(ext_conf)) if ext_conf else 0.7
                         conn.execute(
                             "UPDATE nodes SET pinned = 1, confidence = ? WHERE id = ?",
                             (pin_conf, node_id)
+                        )
+                        conn.execute(
+                            """
+                            UPDATE decay_review_queue
+                            SET decision = ?, decision_reason = ?, status = 'reviewed',
+                                reviewed_at = datetime('now')
+                            WHERE id = ?
+                            """,
+                            ("pin", reason, entry["id"]),
                         )
                 print(f"    PIN: {entry['node_text'][:50]}...")
                 results["pinned"] += 1
@@ -2757,11 +2791,22 @@ def apply_review_decisions_from_list(graph: MemoryGraph, decisions: List[Dict[st
             if dry_run:
                 print(f"    Would DELETE: {memory_id}")
             else:
-                # Delete edges created from this fact before deleting the fact
-                edges_deleted = delete_edges_by_source_fact(memory_id)
+                # Delete fact edges + node in one transaction so crashes cannot leave partial state.
+                with graph._get_conn() as conn:
+                    edges_deleted = conn.execute(
+                        "DELETE FROM edges WHERE source_fact_id = ?",
+                        (memory_id,),
+                    ).rowcount
+                    conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (memory_id, memory_id))
+                    conn.execute("DELETE FROM contradictions WHERE node_a_id = ? OR node_b_id = ?", (memory_id, memory_id))
+                    conn.execute("DELETE FROM decay_review_queue WHERE node_id = ?", (memory_id,))
+                    try:
+                        conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (memory_id,))
+                    except Exception:
+                        pass
+                    conn.execute("DELETE FROM nodes WHERE id = ?", (memory_id,))
                 if edges_deleted > 0:
                     print(f"    DELETED {edges_deleted} edges from fact")
-                hard_delete_node(memory_id)
                 print(f"    DELETED: {memory_id}")
             deleted += 1
 
