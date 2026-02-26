@@ -258,3 +258,38 @@ def test_memory_service_bootstrap_is_thread_safe(monkeypatch):
 
     assert calls["resolver"] == 1
     assert calls["policy"] == 1
+
+
+def test_concurrent_conflicting_identity_resolver_registration_is_serialized(monkeypatch):
+    identity_runtime.clear_registrations()
+
+    # Widen the race window around resolver construction.
+    original_registered_hook = identity_runtime._RegisteredHook
+
+    class SlowRegisteredHook(original_registered_hook):
+        def __init__(self, owner, fn):
+            import time
+            time.sleep(0.01)
+            super().__init__(owner=owner, fn=fn)
+
+    monkeypatch.setattr(identity_runtime, "_RegisteredHook", SlowRegisteredHook)
+
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def _register(owner_name: str):
+        try:
+            barrier.wait(timeout=1)
+            identity_runtime.register_identity_resolver(owner_name, lambda payload: payload)
+        except Exception as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=_register, args=("owner-a",))
+    t2 = threading.Thread(target=_register, args=("owner-b",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
