@@ -15,7 +15,9 @@ function readJson(path) {
   }
 }
 function writeJson(path, payload) {
-  fs.writeFileSync(path, JSON.stringify(payload, null, 2), { mode: 384 });
+  const tmpPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 384 });
+  fs.renameSync(tmpPath, path);
 }
 function _sleepMs(ms) {
   const i32 = new Int32Array(new SharedArrayBuffer(4));
