@@ -2607,7 +2607,9 @@ ${recallStoreGuidance}`,
             try {
               const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
               maxLimit = configData?.retrieval?.maxLimit ?? 50;
-            } catch {}
+            } catch (err: unknown) {
+              console.warn(`[quaid] memory_recall maxLimit config read failed: ${String((err as Error)?.message || err)}`);
+            }
 
             const dynamicK = computeDynamicK();
             const { query, options = {} } = params || {};
