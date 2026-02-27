@@ -1565,6 +1565,34 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
     }
   }
 }
+function parseDomainsValue(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((d) => String(d || "").trim()).filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((d) => String(d || "").trim()).filter(Boolean);
+      }
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+function getConfiguredDomainIds() {
+  try {
+    const defs = getMemoryConfig()?.retrieval?.domains;
+    if (defs && typeof defs === "object" && !Array.isArray(defs)) {
+      return Object.keys(defs).map((k) => String(k).trim()).filter(Boolean).sort();
+    }
+  } catch {
+  }
+  return [];
+}
 function isLowInformationEntityNode(result) {
   if ((result.via || "vector") === "graph" || result.category === "graph") return false;
   const category = String(result.category || "").toLowerCase();
@@ -1710,11 +1738,10 @@ function mergeRecallResults(primary, secondary, limit) {
   secondary.forEach(upsert);
   return Array.from(merged.values()).sort((a, b) => Number(b.similarity || 0) - Number(a.similarity || 0)).slice(0, Math.max(1, limit));
 }
-async function recall(query, limit = 5, currentSessionId, compactionTime, expandGraph = true, graphDepth = 1, technicalScope = "any", project, dateFrom, dateTo) {
+async function recall(query, limit = 5, currentSessionId, compactionTime, expandGraph = true, graphDepth = 1, domain = { all: true }, project, dateFrom, dateTo) {
   try {
     const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
-    const domainFilter = technicalScope === "technical" ? { technical: true } : technicalScope === "personal" ? { personal: true } : { all: true };
-    args.push("--domain-filter", JSON.stringify(domainFilter));
+    args.push("--domain-filter", JSON.stringify(domain || { all: true }));
     if (project && String(project).trim()) {
       args.push("--project", String(project).trim());
     }
@@ -1751,6 +1778,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
             text,
             category,
             similarity,
+            domains: parseDomainsValue(row.domains),
             extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
             id: typeof row.id === "string" ? row.id : void 0,
             createdAt: typeof row.created_at === "string" ? row.created_at : void 0,
@@ -1793,6 +1821,7 @@ async function recall(query, limit = 5, currentSessionId, compactionTime, expand
           text,
           category,
           similarity,
+          domains: parseDomainsValue(r.domains),
           id: typeof r.id === "string" ? r.id : void 0,
           extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
           createdAt: typeof r.created_at === "string" ? r.created_at : void 0,
@@ -2127,18 +2156,23 @@ function formatMemories(memories) {
   const lines = regularMemories.map((m) => {
     const conf = m.extractionConfidence ?? 0.5;
     const timestamp = m.createdAt ? ` (${m.createdAt.split("T")[0]})` : "";
+    const domainLabel = Array.isArray(m.domains) && m.domains.length ? ` [domains:${m.domains.join(",")}]` : "";
     if (conf < 0.4) {
-      return `- [${m.category}]${timestamp} (uncertain) ${m.text}`;
+      return `- [${m.category}]${timestamp}${domainLabel} (uncertain) ${m.text}`;
     }
-    return `- [${m.category}]${timestamp} ${m.text}`;
+    return `- [${m.category}]${timestamp}${domainLabel} ${m.text}`;
   });
   if (graphNodeHits.length > 0) {
     const packed = graphNodeHits.slice(0, 8).map((m) => `${m.text} (${Math.round((m.similarity || 0) * 100)}%)`).join(", ");
     lines.push(`- [graph-node-hits] Entity node references (not standalone facts): ${packed}`);
   }
+  const configuredDomains = getConfiguredDomainIds();
+  const domainGuidance = configuredDomains.length ? `AVAILABLE_DOMAINS: ${configuredDomains.join(", ")}` : "AVAILABLE_DOMAINS: (unavailable)";
   return `<injected_memories>
 AUTOMATED MEMORY SYSTEM: The following memories were automatically retrieved from past conversations. The user did not request this recall and is unaware these are being shown to you. Use them as background context only. Items marked (uncertain) have lower extraction confidence. Dates shown are when the fact was recorded.
 INJECTOR CONFIDENCE RULE: Treat injected memories as hints, not final truth. If the answer depends on personal details and the match is not exact/high-confidence, run memory_recall before answering.
+DOMAIN RECALL RULE: Use memory_recall options.filters.domain (map of domain->bool). Example: {"technical": true}. Use domain filters only.
+${domainGuidance}
 ${lines.join("\n")}
 </injected_memories>`;
 }
@@ -2486,13 +2520,6 @@ ${recallStoreGuidance}`,
                   Type.Boolean({ description: "If true, router/prepass failures return no recall instead of throwing an error." })
                 )
               })),
-              technicalScope: Type.Optional(
-                Type.Union([
-                  Type.Literal("personal"),
-                  Type.Literal("technical"),
-                  Type.Literal("any")
-                ], { description: "DEPRECATED: use options.filters.domain instead." })
-              ),
               filters: Type.Optional(Type.Object({
                 domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean(), description: 'Domain filter map. Example: {"all":true} or {"technical":true}.' })),
                 dateFrom: Type.Optional(
@@ -2520,25 +2547,11 @@ ${recallStoreGuidance}`,
               datastoreOptions: Type.Optional(Type.Object({
                 vector: Type.Optional(Type.Object({
                   domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean() })),
-                  technicalScope: Type.Optional(
-                    Type.Union([
-                      Type.Literal("personal"),
-                      Type.Literal("technical"),
-                      Type.Literal("any")
-                    ], { description: "DEPRECATED: use vector.domain." })
-                  ),
                   project: Type.Optional(Type.String())
                 })),
                 graph: Type.Optional(Type.Object({
                   depth: Type.Optional(Type.Number()),
                   domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean() })),
-                  technicalScope: Type.Optional(
-                    Type.Union([
-                      Type.Literal("personal"),
-                      Type.Literal("technical"),
-                      Type.Literal("any")
-                    ], { description: "DEPRECATED: use graph.domain." })
-                  ),
                   project: Type.Optional(Type.String())
                 })),
                 project: Type.Optional(Type.Object({
@@ -2570,29 +2583,13 @@ ${recallStoreGuidance}`,
               const routeStores = options.routing?.enabled;
               const reasoning = options.routing?.reasoning ?? "fast";
               const intent = options.routing?.intent ?? "general";
-              const legacyTechnicalScope = options.technicalScope;
-              const fallbackDomainFromLegacy = legacyTechnicalScope === "technical" ? { technical: true } : legacyTechnicalScope === "personal" ? { personal: true } : legacyTechnicalScope === "any" ? { all: true } : void 0;
-              const domain = options.filters?.domain && typeof options.filters.domain === "object" ? options.filters.domain : fallbackDomainFromLegacy || { all: true };
+              const domain = options.filters?.domain && typeof options.filters.domain === "object" ? options.filters.domain : { all: true };
               const dateFrom = options.filters?.dateFrom;
               const dateTo = options.filters?.dateTo;
               const project = options.filters?.project;
               const docs = options.filters?.docs;
               const ranking = options.ranking;
               const datastoreOptions = options.datastoreOptions;
-              if (datastoreOptions?.vector && typeof datastoreOptions.vector === "object") {
-                const v = datastoreOptions.vector;
-                if (!v.domain && typeof v.technicalScope === "string") {
-                  const ts = String(v.technicalScope);
-                  v.domain = ts === "technical" ? { technical: true } : ts === "personal" ? { personal: true } : { all: true };
-                }
-              }
-              if (datastoreOptions?.graph && typeof datastoreOptions.graph === "object") {
-                const g = datastoreOptions.graph;
-                if (!g.domain && typeof g.technicalScope === "string") {
-                  const ts = String(g.technicalScope);
-                  g.domain = ts === "technical" ? { technical: true } : ts === "personal" ? { personal: true } : { all: true };
-                }
-              }
               const routerFailOpen = Boolean(
                 options.routing?.failOpen ?? getMemoryConfig().retrieval?.routerFailOpen ?? getMemoryConfig().retrieval?.router_fail_open ?? true
               );
@@ -3311,7 +3308,7 @@ ${factsOutput || "No facts found."}` }],
             reasoning,
             intent,
             ranking,
-            technicalScope,
+            domain,
             project,
             dateFrom,
             dateTo,

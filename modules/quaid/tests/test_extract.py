@@ -66,6 +66,7 @@ def mock_opus_response():
             {
                 "text": "Test user likes coffee",
                 "category": "preference",
+                "domains": ["personal"],
                 "extraction_confidence": "high",
                 "keywords": "beverage drink caffeine morning",
                 "privacy": "shared",
@@ -75,6 +76,7 @@ def mock_opus_response():
             {
                 "text": "Test user's sister lives in Portland",
                 "category": "fact",
+                "domains": ["personal"],
                 "extraction_confidence": "medium",
                 "keywords": "family sibling location oregon",
                 "privacy": "shared",
@@ -390,7 +392,7 @@ class TestExtractFromTranscript:
         mock_llm.return_value = (json.dumps({
             "facts": [
                 {"text": "hi", "category": "fact"},
-                {"text": "User likes coffee very much", "category": "preference"},
+                {"text": "User likes coffee very much", "category": "preference", "domains": ["personal"]},
             ]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -410,8 +412,8 @@ class TestExtractFromTranscript:
 
         mock_llm.return_value = (json.dumps({
             "facts": [
-                {"text": "User likes coffee a lot", "extraction_confidence": "high"},
-                {"text": "User might enjoy tea sometimes", "extraction_confidence": "low"},
+                {"text": "User likes coffee a lot", "extraction_confidence": "high", "domains": ["personal"]},
+                {"text": "User might enjoy tea sometimes", "extraction_confidence": "low", "domains": ["personal"]},
             ]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -436,7 +438,7 @@ class TestExtractFromTranscript:
                 "not-a-dict",
                 {"text": 123, "category": "fact"},
                 {"category": "fact"},
-                {"text": "User likes orange juice", "category": "preference"},
+                {"text": "User likes orange juice", "category": "preference", "domains": ["personal"]},
             ]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
@@ -455,7 +457,7 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
-            "facts": [{"text": "User likes oolong tea", "category": "fact"}]
+            "facts": [{"text": "User likes oolong tea", "category": "fact", "domains": ["personal"]}]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
 
@@ -482,7 +484,7 @@ class TestExtractFromTranscript:
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
-            "facts": [{"text": "User likes green tea", "category": "fact"}]
+            "facts": [{"text": "User likes green tea", "category": "fact", "domains": ["personal"]}]
         }), 1.0)
         mock_store.return_value = {"id": "n1", "status": "created"}
 
@@ -494,6 +496,38 @@ class TestExtractFromTranscript:
 
         kwargs = mock_store.call_args.kwargs
         assert kwargs["target_datastore"] == "memorydb"
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_missing_domains_raises(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "facts": [{"text": "User likes jasmine tea in the morning", "category": "fact"}]
+        }), 1.0)
+
+        with pytest.raises(RuntimeError, match="missing required domains"):
+            extract_from_transcript(
+                transcript="User: test\n\nAssistant: ok",
+                owner_id="test",
+            )
+
+    @patch("ingest.extract.call_deep_reasoning")
+    def test_invalid_domain_raises(self, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "facts": [{
+                "text": "User likes jasmine tea in the morning",
+                "category": "fact",
+                "domains": ["not_a_real_domain"],
+            }]
+        }), 1.0)
+
+        with pytest.raises(RuntimeError, match="unsupported domains"):
+            extract_from_transcript(
+                transcript="User: test\n\nAssistant: ok",
+                owner_id="test",
+            )
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
@@ -602,6 +636,7 @@ class TestExtractFromTranscript:
             "facts": [{
                 "text": "Alice is friends with Bob the great",
                 "category": "relationship",
+                "domains": ["personal"],
                 "edges": [{"subject": "Alice", "relation": "friend_of", "object": "Bob"}],
             }],
         }), 1.0)
@@ -637,6 +672,7 @@ class TestExtractFromTranscript:
                         {
                             "text": "Maya changed jobs from TechFlow to Stripe",
                             "category": "fact",
+                            "domains": ["work"],
                             "extraction_confidence": "high",
                         }
                     ]
