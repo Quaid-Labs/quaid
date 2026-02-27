@@ -1841,8 +1841,13 @@ function temporalCuePresent(query: string): boolean {
 
 function attributionCuePresent(query: string): boolean {
   const lowered = String(query || "").toLowerCase();
-  const cues = ["who", "whose", "did", "does", "maya", "david", "rachel", "linda", "ethan", "priya"];
+  const cues = ["who", "whose", "did", "does", "said", "asked", "told", "mentioned", "attributed"];
   return cues.some((cue) => lowered.includes(cue));
+}
+
+function isVectorRecallResult(result: MemoryResult): boolean {
+  const via = String(result.via || "").toLowerCase();
+  return via === "vector" || via === "vector_basic" || via === "vector_technical";
 }
 
 function computeEntityCoverage(query: string, results: MemoryResult[]): number {
@@ -1880,8 +1885,7 @@ function shouldRetryRecall(query: string, results: MemoryResult[]): { retry: boo
   }
 
   const vectorResults = results.filter((r) => {
-    const via = String(r.via || "vector").toLowerCase();
-    return via === "vector" || via === "vector_basic" || via === "vector_technical";
+    return isVectorRecallResult(r);
   });
   if (!vectorResults.length) {
     reasons.push("no_vector_hits");
@@ -3017,7 +3021,7 @@ ${recallStoreGuidance}`,
             }
 
             // Group by source type for better formatting
-            const vectorResults = results.filter(r => (r.via || "vector") === "vector");
+            const vectorResults = results.filter((r) => isVectorRecallResult(r));
             const graphResults = results.filter(r => (r.via || "") === "graph" || r.category === "graph");
             const journalResults = results.filter(r => (r.via || "") === "journal");
             const projectResults = results.filter(r => (r.via || "") === "project");
