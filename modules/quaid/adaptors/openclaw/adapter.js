@@ -199,6 +199,12 @@ function isFailHardEnabled() {
   if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
   return true;
 }
+function isMissingFileError(err) {
+  const code = err?.code;
+  if (code === "ENOENT") return true;
+  const msg = String(err?.message || "");
+  return msg.includes("ENOENT");
+}
 function getCaptureTimeoutMinutes() {
   const capture = getMemoryConfig().capture || {};
   const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
@@ -2974,7 +2980,7 @@ notify_docs_search(data['query'], data['results'])
               }
               extractionLog = parsed;
             } catch (err) {
-              if (isFailHardEnabled()) {
+              if (isFailHardEnabled() && !isMissingFileError(err)) {
                 throw new Error("[quaid] session_recall extraction log read failed under failHard", { cause: err });
               }
               console.warn(`[quaid] session_recall extraction log read failed: ${String(err?.message || err)}`);
@@ -3348,7 +3354,7 @@ notify_memory_extraction(
           }
           extractionLog = parsed;
         } catch (err) {
-          if (isFailHardEnabled()) {
+          if (isFailHardEnabled() && !isMissingFileError(err)) {
             throw new Error("[quaid] extraction log read failed under failHard", { cause: err });
           }
           console.warn(`[quaid] Extraction log read failed for ${extractionLogPath}: ${String(err?.message || err)}`);
@@ -3411,7 +3417,7 @@ notify_memory_extraction(
         }
         extractionLog = parsed;
       } catch (err) {
-        if (isFailHardEnabled()) {
+        if (isFailHardEnabled() && !isMissingFileError(err)) {
           throw new Error("[quaid] recovery extraction log read failed under failHard", { cause: err });
         }
         console.warn(`[quaid] Recovery scan extraction log read failed: ${String(err?.message || err)}`);
