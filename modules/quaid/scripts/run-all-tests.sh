@@ -51,10 +51,14 @@ has_vitest() {
 }
 
 # 1) Build/syntax checks
+run_stage "Runtime build" npm run build:runtime
 run_stage "Runtime TS/JS pair sync check (strict)" npm run check:runtime-pairs:strict
+run_stage "Boundary import check" npm run check:boundaries
 run_stage "Python compile check" python3 -m compileall -q .
 run_stage "JavaScript syntax check" node --check adaptors/openclaw/index.js
 run_stage "JavaScript syntax check (timeout manager)" node --check core/session-timeout.js
+run_stage "TypeScript lint" npm run lint:ts
+run_stage "Python lint" npm run lint:py
 run_optional_repo_checks
 
 # 2) Deterministic TypeScript integration coverage

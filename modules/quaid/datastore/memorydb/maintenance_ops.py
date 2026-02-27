@@ -67,7 +67,6 @@ from lib.runtime_context import (
 )
 from lib.worker_pool import run_callables
 from lib.fail_policy import is_fail_hard_enabled
-from core.runtime.logger import janitor_logger
 
 logger = logging.getLogger(__name__)
 
@@ -350,7 +349,7 @@ def _diag_log_decision(event: str, **payload: Any) -> None:
         else:
             safe_payload[k] = v
     try:
-        janitor_logger.info(event, **safe_payload)
+        logger.info("[janitor:%s] %s", event, json.dumps(safe_payload, default=str))
     except Exception:
         pass
 

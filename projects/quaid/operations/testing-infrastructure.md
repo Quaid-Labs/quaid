@@ -47,6 +47,10 @@ This document defines the current test stack, execution commands, and pass/fail 
 ### 5) Build/Syntax (blocking)
 - Purpose: catch syntax/build breakage early.
 - Checks:
+  - Runtime build (`npm run build:runtime`)
+  - Boundary import check (`npm run check:boundaries`)
+  - TypeScript lint (`npm run lint:ts`)
+  - Python lint (`npm run lint:py`)
   - Python compile check (`compileall`)
   - Node syntax checks on key JS runtime files
 
