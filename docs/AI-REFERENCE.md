@@ -52,14 +52,14 @@ Write request
 | `adaptors/openclaw/maintenance.py` | OpenClaw-specific lifecycle registrations | `register_lifecycle_routines()` (workspace audit registration) |
 | `core/lifecycle/workspace_audit.py` | Workspace markdown audit implementation | `run_workspace_check()`, `check_bloat()` |
 | `datastore/notedb/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
-| `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search()`, `index_docs()`, `register_lifecycle_routines()` |
+| `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search_docs()`, `index_document()`, `register_lifecycle_routines()` |
 | `datastore/docsdb/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
 | `datastore/docsdb/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
 | `datastore/docsdb/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
 | `core/runtime/events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
 | `core/runtime/notify.py` | User notifications via adapter/runtime context | `notify_user()`, retrieval/extraction/janitor/doc notifications |
 | `core/runtime/logger.py` | Structured JSONL logger with rotation | `Logger`, `rotate_logs()`, `memory_logger`, `janitor_logger` |
-| `core/interface/mcp_server.py` | MCP server surface | `memory_extract`, `memory_store`, `memory_recall`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `projects_search`, `session_recall` |
+| `core/interface/mcp_server.py` | MCP server surface | `memory_extract`, `memory_store`, `memory_recall`, `memory_write`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `projects_search`, `session_recall`, `memory_provider`, `memory_capabilities`, `memory_event_*` |
 | `core/interface/api.py` | Public API facade | `store()`, `recall()`, `search()`, `create_edge()`, `forget()`, `get_memory()`, `stats()`, `extract_transcript()`, `projects_search_docs()` |
 | `lib/llm_clients.py` | Canonical LLM client wrapper with prompt parsing/usage tracking | `call_deep_reasoning()`, `call_fast_reasoning()`, `call_llm()`, `parse_json_response()` |
 | `core/llm/clients.py` | Compatibility alias to canonical LLM client module | module alias to `lib.llm_clients` |
@@ -110,7 +110,8 @@ Write request
 | File | Purpose |
 |------|---------|
 | `extraction.txt` | Extraction system prompt for Opus (~160 lines, used by `ingest/extract.py`) |
-| `project_onboarding.md` | Agent instructions for project discovery and registration workflow |
+
+Project onboarding instructions live at `projects/quaid/operations/project_onboarding.md`.
 
 ### Database Migrations
 
@@ -408,9 +409,6 @@ clawdbot gateway start
 clawdbot gateway install
 ```
 
-#### recovery_wrapper.js storeFact
-Returns a node ID (parsed from stdout), not a boolean. This is needed for `source_fact_id` edge linkage. Treating the return value as boolean will break edge association.
-
 ### Janitor Pipeline
 
 #### Edge Normalization
@@ -426,7 +424,7 @@ Has a 30-second cache. To force a re-check, clear `_ollama_healthy._cache`.
 `TokenBatchBuilder` now has an `output_tokens_per_item` param. The review task uses `models.max_output('high')` (16384) instead of `opusReview.maxTokens` (4000) to avoid output truncation.
 
 #### create-edge --create-missing
-Without the `--create-missing` flag, the recovery wrapper silently fails on edges for entities not yet in the graph. Always include this flag when creating edges programmatically.
+Use `create-edge --create-missing` when you want missing entities auto-created before edge insertion.
 
 #### Merge Destructive Pattern (FIXED)
 All 3 merge paths (dedup/contradiction/review) previously had 5 bugs: confidence reset to default, `confirmation_count` reset, wrong status, edges deleted instead of migrated, hardcoded owner. Now fixed with the shared `_merge_nodes_into()` helper. 19 tests cover: confidence inheritance, confirmation_count sum, edge migration, status="active", owner from originals.
@@ -536,7 +534,7 @@ All commands run from the `modules/quaid/` directory.
 # Memory operations
 python3 datastore/memorydb/memory_graph.py store "fact text" --owner default --category preference
 python3 datastore/memorydb/memory_graph.py search "query" --owner default --limit 10
-python3 datastore/memorydb/memory_graph.py search-all "query"     # Memory + docs combined
+python3 datastore/memorydb/memory_graph.py search-all "query"     # Unified memory search (datastore only)
 python3 datastore/memorydb/memory_graph.py stats
 python3 datastore/memorydb/memory_graph.py get-edges <node_id>
 
