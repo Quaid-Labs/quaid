@@ -113,6 +113,9 @@ Docs/project registry forward-compat surface:
 - `session.timeout`
 - `session.agent_start`
 - `session.agent_end`
+- `docs.ingest_transcript`
+- `session.ingest_log`
+- `janitor.run_completed`
 - `notification.delayed`
 - `memory.force_compaction`
 
