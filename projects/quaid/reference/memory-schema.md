@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     updated_at TEXT DEFAULT (datetime('now')),
     accessed_at TEXT DEFAULT (datetime('now')),
     access_count INTEGER DEFAULT 0,
-    storage_strength REAL DEFAULT 0.0,       -- Bjork: cumulative encoding strength (never decreases, caps at 10.0)
+    storage_strength REAL DEFAULT 0.0,       -- Bjork: cumulative encoding strength (can increase/decrease, clamped to [0.0, 10.0])
     confirmation_count INTEGER DEFAULT 0,    -- How many times re-confirmed by extraction
     last_confirmed_at TEXT                   -- When last confirmed
 );

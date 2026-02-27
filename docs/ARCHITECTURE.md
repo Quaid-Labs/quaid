@@ -677,7 +677,7 @@ python3 datastore/docsdb/registry.py discover --project myproject    # Auto-disc
 
 **RAG Search** (`datastore/docsdb/rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
 
-**Project Updater** (`project_updater.py`): Processes file change events and refreshes project documentation. Integrates with Claude Code hooks (PostToolUse tracks edited files, PreCompact stages update events).
+**Project Updater** (`datastore/docsdb/project_updater.py`): Processes file change events and refreshes project documentation. Integrates with Claude Code hooks (PostToolUse tracks edited files, PreCompact stages update events).
 
 ### Auto-Discovery
 

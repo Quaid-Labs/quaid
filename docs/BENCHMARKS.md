@@ -72,7 +72,7 @@ Percentage of full-context baseline performance retained (higher is better):
 | Multi-hop | 98.3% | 93.3% |
 | Temporal | 106.4% | 85.5% |
 | Open-domain | 94.2% | 91.3% |
-| **Overall** | **86.8%** | **86.6%** |
+| **Overall** | **88.3%** | **86.6%** |
 
 The recommended Opus configuration captures 86.6% of full-context performance while injecting only the relevant memories -- typically a few thousand tokens instead of the entire transcript.
 
@@ -171,7 +171,7 @@ Mem0 uses GPT-4o-mini for answer generation. We report both Haiku answers (simil
 
 ## Next Benchmarks
 
-- **LongMemEval** (ICLR 2025): Code written and smoke-tested at `benchmark/longmemeval/`. 500 QA pairs across 7 question types and 19,195 sessions. Pending full evaluation run. Top reported scores: Emergence AI 86%, Supermemory 81.6%, Zep+GPT-4o 71.2%.
+- **LongMemEval** (ICLR 2025): Code written and smoke-tested at `benchmark/memory-stress-test/runner/longmemeval/`. 500 QA pairs across 7 question types and 19,195 sessions. Pending full evaluation run. Top reported scores: Emergence AI 86%, Supermemory 81.6%, Zep+GPT-4o 71.2%.
 - **Purpose-built lifecycle benchmark**: A longer-term project to build a dataset that tests the full memory lifecycle -- multi-session accumulation, fact evolution, maintenance decisions, and project-level awareness. No existing benchmark covers this. See [ROADMAP.md](../ROADMAP.md).
 
 ---
@@ -181,7 +181,7 @@ Mem0 uses GPT-4o-mini for answer generation. We report both Haiku answers (simil
 The benchmark suite lives in `benchmark/` (public repo) or `memory-stress-test/runner/locomo/` (development). To run the LoCoMo evaluation:
 
 ```bash
-cd benchmark/locomo
+cd benchmark/memory-stress-test/runner/locomo
 python3 run_locomo.py --config standard --answer-model haiku --trials 3
 python3 run_locomo.py --rejudge --results-dir data/results/  # Re-score cached predictions
 python3 run_locomo.py --full-context  # Full-context baseline (no knowledge layer)
