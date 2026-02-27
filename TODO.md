@@ -30,6 +30,11 @@
   - add core routing policy for conversation-derived writes (memory vs domain stores)
   - require explicit dual-write config + audit trail (no silent fan-out)
   - declare datastore domain/policy class metadata in plugin manifests
+- [ ] Domain-tag migration tooling:
+  - current limitation: historical memories may be untagged because domain tagging is strongest at extraction time
+  - add `scripts/migrate-memory-domains.py` to backfill domains with dry-run + confidence scoring
+  - support review-first mode (emit candidates for operator approval before applying)
+  - document recommendation: configure domain set at bot creation time for highest recall quality
 - [ ] Enterprise/compliance forward-seed contracts:
   - add residency metadata (`region`, `residency_class`) to datastore/record policy envelope
   - define right-to-delete propagation contract (facts, edges, derived summaries/indexes)

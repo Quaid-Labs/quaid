@@ -216,6 +216,7 @@ class RetrievalConfig:
     router_fail_open: bool = True  # If true, total_recall router failures use deterministic fallback recall instead of raising
     fail_hard: bool = True  # If true, embedding outages raise instead of silent degraded fallback
     auto_inject: bool = False  # Auto-inject memories into context (Mem0-style)
+    domains: Dict[str, str] = field(default_factory=dict)  # Domain id -> brief description
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
 
 
@@ -553,8 +554,23 @@ _KNOWN_RETRIEVAL_KEYS = {
     "router_fail_open",
     "fail_hard",
     "auto_inject",
+    "domains",
     "traversal",
     "reranker",
+}
+
+_DEFAULT_DOMAIN_DESCRIPTIONS = {
+    "personal": "identity, preferences, relationships, life events",
+    "technical": "code, infra, APIs, architecture",
+    "project": "project status, tasks, files, milestones",
+    "work": "job/team/process decisions not deeply technical",
+    "health": "training, injuries, routines, wellness",
+    "finance": "budgeting, purchases, salary, bills",
+    "travel": "trips, moves, places, logistics",
+    "schedule": "dates, appointments, deadlines",
+    "research": "options considered, comparisons, tradeoff analysis",
+    "household": "home, chores, food planning, shared logistics",
+    "legal": "contracts, policy, and regulatory constraints",
 }
 
 
@@ -874,6 +890,26 @@ def _load_config_inner() -> MemoryConfig:
             file=sys.stderr,
         )
 
+    domains_data = retrieval_data.get("domains", {})
+    parsed_domains: Dict[str, str] = {}
+    if isinstance(domains_data, dict):
+        for raw_key, raw_desc in domains_data.items():
+            key = str(raw_key or "").strip().lower()
+            if not key:
+                continue
+            parsed_domains[key] = str(raw_desc or "").strip() or _DEFAULT_DOMAIN_DESCRIPTIONS.get(key, "")
+    elif isinstance(domains_data, list):
+        for item in domains_data:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("id") or item.get("domain") or "").strip().lower()
+            if not key:
+                continue
+            desc = str(item.get("description") or item.get("desc") or "").strip()
+            parsed_domains[key] = desc or _DEFAULT_DOMAIN_DESCRIPTIONS.get(key, "")
+    if not parsed_domains:
+        parsed_domains = dict(_DEFAULT_DOMAIN_DESCRIPTIONS)
+
     retrieval = RetrievalConfig(
         default_limit=retrieval_data.get('default_limit', 5),
         max_limit=retrieval_data.get('max_limit', 8),
@@ -898,6 +934,7 @@ def _load_config_inner() -> MemoryConfig:
         pre_injection_pass=retrieval_data.get('pre_injection_pass', retrieval_data.get('preInjectionPass', True)),
         fail_hard=retrieval_data.get('fail_hard', retrieval_data.get('failHard', True)),
         auto_inject=retrieval_data.get('auto_inject', False),
+        domains=parsed_domains,
         traversal=traversal,
     )
     

@@ -1,5 +1,5 @@
 export type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
-export type TechnicalScope = "personal" | "technical" | "any";
+export type DomainFilter = Record<string, boolean>;
 export type SourceType = "user" | "assistant" | "both" | "tool" | "import";
 export type RecallIntent = "general" | "agent_actions" | "relationship" | "technical";
 
@@ -26,10 +26,9 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
     defaultWhenFlatRecall: false,
     options: [
       {
-        key: "technicalScope",
-        description: "Override scope for this store.",
-        valueType: "enum",
-        enumValues: ["personal", "technical", "any"],
+        key: "domain",
+        description: "Optional domain filter map JSON for this store (e.g. {\"all\":true} or {\"technical\":true}).",
+        valueType: "string",
       },
       {
         key: "project",
@@ -64,10 +63,9 @@ const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
         valueType: "number",
       },
       {
-        key: "technicalScope",
-        description: "Filter graph-backed recalls by personal/technical/all facts.",
-        valueType: "enum",
-        enumValues: ["personal", "technical", "any"],
+        key: "domain",
+        description: "Optional domain filter map JSON for this store (e.g. {\"all\":true} or {\"technical\":true}).",
+        valueType: "string",
       },
       {
         key: "project",

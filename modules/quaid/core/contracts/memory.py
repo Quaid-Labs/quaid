@@ -17,7 +17,7 @@ class MemoryServicePort(Protocol):
         source: Optional[str] = None,
         knowledge_type: str = "fact",
         source_type: Optional[str] = None,
-        is_technical: bool = False,
+        domains: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]: ...
 

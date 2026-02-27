@@ -41,7 +41,7 @@ class DatastoreMemoryService(MemoryServicePort):
         source: Optional[str] = None,
         knowledge_type: str = "fact",
         source_type: Optional[str] = None,
-        is_technical: bool = False,
+        domains: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         _ensure_identity_runtime_bootstrap()
@@ -73,7 +73,7 @@ class DatastoreMemoryService(MemoryServicePort):
             source=source,
             knowledge_type=knowledge_type,
             source_type=source_type,
-            is_technical=is_technical,
+            domains=domains,
             **kwargs,
         )
 

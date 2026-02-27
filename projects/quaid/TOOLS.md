@@ -12,6 +12,32 @@ It is not a full API schema or implementation spec.
 ### `memory_recall`
 Use this for user facts, relationships, timelines, and project-state recall.
 
+Parameter highlights (most relevant):
+- `query` (string): natural-language recall query.
+- `options.limit` (number): max result count.
+- `options.datastores` (array): choose stores (`vector`, `graph`, `journal`, `project`).
+- `options.filters.project` (string): optional project label filter.
+- `options.filters.domain` (object map): domain filter map.
+  - default: `{"all": true}` (all tagged + untagged memories)
+  - strict example: `{"technical": true}` (only technical-tagged memories)
+  - rule: if any domain key is `true`, `all` is ignored and only true domains are included.
+
+Available domains:
+- `personal`: identity, preferences, relationships, life events
+- `technical`: code, infra, APIs, architecture
+- `project`: project status, tasks, files, milestones
+- `work`: job/team/process decisions not deeply technical
+- `health`: training, injuries, routines, wellness
+- `finance`: budgeting, purchases, salary, bills
+- `travel`: trips, moves, places, logistics
+- `schedule`: dates, appointments, deadlines
+- `research`: options considered, comparisons, tradeoff analysis
+- `household`: home, chores, food planning, shared logistics
+- `legal`: contracts, policy, and regulatory constraints
+
+Domain list maintenance:
+- This section is generated from the runtime domain registry and should be reconstructed when domains are added/updated.
+
 Use cases:
 - relationship questions (`family`, `who is X`, `how are X and Y connected`)
 - current state questions (`what changed`, `what is true now`)
