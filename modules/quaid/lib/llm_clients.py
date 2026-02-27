@@ -424,7 +424,7 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
     Returns (None, duration) only for transient LLM failures after retries.
     """
     _load_model_config()
-    effective_system_prompt = system_prompt or get_prompt("llm.json_only")
+    effective_system_prompt = get_prompt("llm.json_only") if system_prompt is None else system_prompt
     return call_llm(
         system_prompt=effective_system_prompt,
         user_message=prompt,
@@ -454,7 +454,7 @@ def call_deep_reasoning(prompt: str, system_prompt: Optional[str] = None,
         target_model = forced_model
     else:
         target_model = model or _deep_reasoning_model
-    effective_system_prompt = system_prompt or get_prompt("llm.json_only")
+    effective_system_prompt = get_prompt("llm.json_only") if system_prompt is None else system_prompt
     return call_llm(
         system_prompt=effective_system_prompt,
         user_message=prompt,
