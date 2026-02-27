@@ -2351,6 +2351,13 @@ ${recallStoreGuidance}`,
                   Type.Boolean({ description: "If true, router/prepass failures return no recall instead of throwing an error." })
                 )
               })),
+              technicalScope: Type.Optional(
+                Type.Union([
+                  Type.Literal("personal"),
+                  Type.Literal("technical"),
+                  Type.Literal("any")
+                ], { description: "DEPRECATED: use options.filters.domain instead." })
+              ),
               filters: Type.Optional(Type.Object({
                 domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean(), description: 'Domain filter map. Example: {"all":true} or {"technical":true}.' })),
                 dateFrom: Type.Optional(
@@ -2378,11 +2385,25 @@ ${recallStoreGuidance}`,
               datastoreOptions: Type.Optional(Type.Object({
                 vector: Type.Optional(Type.Object({
                   domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean() })),
+                  technicalScope: Type.Optional(
+                    Type.Union([
+                      Type.Literal("personal"),
+                      Type.Literal("technical"),
+                      Type.Literal("any")
+                    ], { description: "DEPRECATED: use vector.domain." })
+                  ),
                   project: Type.Optional(Type.String())
                 })),
                 graph: Type.Optional(Type.Object({
                   depth: Type.Optional(Type.Number()),
                   domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean() })),
+                  technicalScope: Type.Optional(
+                    Type.Union([
+                      Type.Literal("personal"),
+                      Type.Literal("technical"),
+                      Type.Literal("any")
+                    ], { description: "DEPRECATED: use graph.domain." })
+                  ),
                   project: Type.Optional(Type.String())
                 })),
                 project: Type.Optional(Type.Object({
@@ -2414,13 +2435,29 @@ ${recallStoreGuidance}`,
               const routeStores = options.routing?.enabled;
               const reasoning = options.routing?.reasoning ?? "fast";
               const intent = options.routing?.intent ?? "general";
-              const domain = options.filters?.domain && typeof options.filters.domain === "object" ? options.filters.domain : { all: true };
+              const legacyTechnicalScope = options.technicalScope;
+              const fallbackDomainFromLegacy = legacyTechnicalScope === "technical" ? { technical: true } : legacyTechnicalScope === "personal" ? { personal: true } : legacyTechnicalScope === "any" ? { all: true } : void 0;
+              const domain = options.filters?.domain && typeof options.filters.domain === "object" ? options.filters.domain : fallbackDomainFromLegacy || { all: true };
               const dateFrom = options.filters?.dateFrom;
               const dateTo = options.filters?.dateTo;
               const project = options.filters?.project;
               const docs = options.filters?.docs;
               const ranking = options.ranking;
               const datastoreOptions = options.datastoreOptions;
+              if (datastoreOptions?.vector && typeof datastoreOptions.vector === "object") {
+                const v = datastoreOptions.vector;
+                if (!v.domain && typeof v.technicalScope === "string") {
+                  const ts = String(v.technicalScope);
+                  v.domain = ts === "technical" ? { technical: true } : ts === "personal" ? { personal: true } : { all: true };
+                }
+              }
+              if (datastoreOptions?.graph && typeof datastoreOptions.graph === "object") {
+                const g = datastoreOptions.graph;
+                if (!g.domain && typeof g.technicalScope === "string") {
+                  const ts = String(g.technicalScope);
+                  g.domain = ts === "technical" ? { technical: true } : ts === "personal" ? { personal: true } : { all: true };
+                }
+              }
               const routerFailOpen = Boolean(
                 options.routing?.failOpen ?? getMemoryConfig().retrieval?.routerFailOpen ?? getMemoryConfig().retrieval?.router_fail_open ?? true
               );

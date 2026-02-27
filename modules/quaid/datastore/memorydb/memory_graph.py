@@ -3701,11 +3701,27 @@ def recall(
                             "project": _rel_attrs.get("project"),
                         })
 
-    if not include_all_domains and included_domains:
-        output = [
-            r for r in output
-            if bool(set(_normalize_domains(r.get("domains"))) & included_domains)
-        ]
+    if not include_all_domains:
+        if included_domains:
+            # Primary path: use indexed node_domains lookup for domain filtering.
+            try:
+                with graph._get_conn() as conn:
+                    placeholders = ",".join("?" for _ in included_domains)
+                    rows = conn.execute(
+                        f"SELECT DISTINCT node_id FROM node_domains WHERE domain IN ({placeholders})",
+                        list(included_domains),
+                    ).fetchall()
+                    allowed_ids = {r[0] for r in rows}
+                output = [r for r in output if r.get("id") in allowed_ids]
+            except Exception:
+                # Fallback to attribute-based filtering if join table is unavailable.
+                output = [
+                    r for r in output
+                    if bool(set(_normalize_domains(r.get("domains"))) & included_domains)
+                ]
+        else:
+            # Explicit {"all": false} with no selected domains means return nothing.
+            output = []
     if requested_project:
         output = [
             r for r in output
@@ -5620,7 +5636,9 @@ if __name__ == "__main__":
                         if args.project:
                             attrs["project"] = _normalize_project_tag(args.project)
                         if parsed_domains:
-                            attrs["domains"] = _normalize_domains(parsed_domains)
+                            attrs["domains"] = _normalize_domains(
+                                (attrs.get("domains") or []) + parsed_domains
+                            )
                         if args.sensitivity:
                             attrs["sensitivity"] = args.sensitivity
                         if args.sensitivity_handling:

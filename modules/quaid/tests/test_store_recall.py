@@ -460,6 +460,17 @@ class TestRecallBasic:
             assert results
             assert all("technical" in (r.get("domains") or []) for r in results)
 
+    def test_recall_domain_all_false_returns_empty(self, tmp_path):
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store("Quaid prefers espresso drinks", owner_id="quaid", skip_dedup=True, domains=["personal"])
+            store("Quaid fixed a failing deployment script", owner_id="quaid", skip_dedup=True, domains=["technical"])
+            results = recall("Quaid", owner_id="quaid", use_routing=False, min_similarity=0.0, domain={"all": False})
+            assert results == []
+
 
 # ---------------------------------------------------------------------------
 # store() dedup behavior
