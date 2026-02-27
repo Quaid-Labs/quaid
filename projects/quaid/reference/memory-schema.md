@@ -338,7 +338,7 @@ LLM-generated keywords map edge types to natural language triggers. Used by `sho
 
 ## Doc Registry — Project & Document Tracking
 
-Managed by `docs_registry.py` `ensure_table()` — NOT in schema.sql.
+Managed by `datastore/docsdb/registry.py` `ensure_table()` — NOT in schema.sql.
 
 ```sql
 CREATE TABLE IF NOT EXISTS doc_registry (
@@ -363,7 +363,7 @@ In-directory files auto-belong to their project via `homeDir` matching. Registry
 
 ## Project Definitions — Project Configuration (DB)
 
-Managed by `docs_registry.py` `ensure_table()` — NOT in schema.sql. Source of truth for project definitions (migrated from JSON config).
+Managed by `datastore/docsdb/registry.py` `ensure_table()` — NOT in schema.sql. Source of truth for project definitions (migrated from JSON config).
 
 ```sql
 CREATE TABLE IF NOT EXISTS project_definitions (

@@ -80,7 +80,7 @@ cat projects/test-essay/PROJECT.md
 
 **Cleanup (CLI):** The doc was already registered under infrastructure, so this will move it. To restore:
 ```bash
-python3 docs_registry.py register projects/infrastructure/clawdbot-wishlist.md --project infrastructure --description "Feature wishlist and priorities"
+python3 datastore/docsdb/registry.py register projects/infrastructure/clawdbot-wishlist.md --project infrastructure --description "Feature wishlist and priorities"
 ```
 
 ---
@@ -158,7 +158,7 @@ echo "# Research Notes" > projects/spark-agents/research-notes.md
 
 **Run janitor task:**
 ```bash
-cd modules/quaid && python3 janitor.py --task rag --dry-run
+cd modules/quaid && python3 core/lifecycle/janitor.py --task rag --dry-run
 ```
 
 **Expected:** Output should mention discovering `projects/spark-agents/research-notes.md`.
@@ -187,8 +187,8 @@ rm projects/spark-agents/research-notes.md
 **Cleanup:**
 ```bash
 rm -rf projects/weekend-plans/
-python3 docs_registry.py unregister projects/weekend-plans/ideas.md
-python3 docs_registry.py unregister projects/weekend-plans/PROJECT.md
+python3 datastore/docsdb/registry.py unregister projects/weekend-plans/ideas.md
+python3 datastore/docsdb/registry.py unregister projects/weekend-plans/PROJECT.md
 ```
 
 ---
@@ -201,20 +201,20 @@ Run these to verify the system state is correct:
 cd ~/clawd/modules/quaid
 
 # All projects visible
-python3 docs_registry.py list --project quaid
-python3 docs_registry.py list --project spark-agents
-python3 docs_registry.py list --project infrastructure
-python3 docs_registry.py list --project integrations
+python3 datastore/docsdb/registry.py list --project quaid
+python3 datastore/docsdb/registry.py list --project spark-agents
+python3 datastore/docsdb/registry.py list --project infrastructure
+python3 datastore/docsdb/registry.py list --project integrations
 
 # Path resolution
-python3 docs_registry.py find-project modules/quaid/janitor.py     # → quaid
-python3 docs_registry.py find-project projects/spark-agents/spark-planning.md      # → spark-agents
-python3 docs_registry.py find-project projects/infrastructure/ollama-setup.md     # → infrastructure
-python3 docs_registry.py find-project projects/integrations/voice-calls.md        # → integrations
-python3 docs_registry.py find-project projects/infrastructure/01-git-versioning.md  # → infrastructure
+python3 datastore/docsdb/registry.py find-project modules/quaid/janitor.py     # → quaid
+python3 datastore/docsdb/registry.py find-project projects/spark-agents/spark-planning.md      # → spark-agents
+python3 datastore/docsdb/registry.py find-project projects/infrastructure/ollama-setup.md     # → infrastructure
+python3 datastore/docsdb/registry.py find-project projects/integrations/voice-calls.md        # → integrations
+python3 datastore/docsdb/registry.py find-project projects/infrastructure/01-git-versioning.md  # → infrastructure
 
 # Source mappings (for staleness checks)
-python3 docs_registry.py source-mappings --project quaid
+python3 datastore/docsdb/registry.py source-mappings --project quaid
 
 # Tests
 python3 -m pytest tests/ -v

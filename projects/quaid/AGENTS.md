@@ -1,4 +1,4 @@
-# Knowledge Layer — Operational Guide
+# Knowledge Layer — Agent Operating Guide
 
 ## Operator Interrupt Policy
 
@@ -13,31 +13,49 @@
 - When fail-hard is `true`, never degrade/fallback silently.
 - When fail-hard is `false`, any fallback must emit loud warnings/diagnostics.
 
-## Three Layers
+## Project Navigation (Start Here)
 
-### Layer 1: Core Markdown (Always Loaded)
-The root markdown files. Loaded every turn. Your foundation.
-- **Cost:** Every token counts — loaded on every API call
-- **Use for:** Essential context, personality, operational rules
-- **Keep clean:** Janitor monitors for bloat
+### 1) Core Markdown (always loaded context)
+- `AGENTS.md`: this operational guide.
+- `TOOLS.md`: tool behavior and parameter reference.
+- `PROJECT.md`: architecture map and doc index.
+- `MEMORY.md`, `USER.md`, `SOUL.md`, `CONSTITUTION.md`: long-lived behavioral memory/context.
 
-### Layer 2: RAG Documentation (`projects/`)
-Detailed technical docs, searchable semantically:
-```bash
-python3 modules/quaid/docs_rag.py search "query"
-```
-- Project docs under `projects/<project>/` are auto-indexed nightly
-- **Use for:** Implementation details, system architecture, reference docs
-- **Rule:** If it's >10 lines of detail, it goes in `projects/<project>/`, not core files
+### 2) Project docs (`projects/quaid/`)
+- `operations/`: runbooks, release/checkpoint/testing procedures.
+- `reference/`: deep technical docs and implementation details.
+- Keep details here when they are too large/noisy for always-loaded files.
 
-### Layer 3: Memory Database
-Personal facts about Quaid's world — people, places, preferences, relationships:
-```bash
-python3 modules/quaid/memory_graph.py search "query" --owner quaid
-```
-- ~424 facts (620 total nodes) with semantic embeddings (qwen3-embedding:8b)
-- Graph edges connect entities (parent_of, has_pet, lives_at)
-- Searched via `memory_recall` tool (hybrid search, RRF fusion, intent-aware)
+### 3) Runtime code map (`modules/quaid/`)
+- `adaptors/openclaw/adapter.ts`: tool registration and runtime hook wiring.
+- `core/interface/mcp_server.py`: MCP tool surface.
+- `datastore/memorydb/`: memory graph, schema, janitor maintenance.
+- `datastore/docsdb/`: docs registry/search/update pipelines.
+- `core/lifecycle/`: janitor/workspace lifecycle orchestration.
+
+## Best Practices
+
+### Documentation Discipline
+- Keep `AGENTS.md` focused on navigation and operations.
+- Keep `TOOLS.md` focused on tool contracts and parameter maps.
+- Keep `PROJECT.md` as the “where things live” architecture index.
+- When behavior changes, update docs in the same commit.
+
+### Retrieval Discipline
+- Use memory/project tools before claiming missing context.
+- Treat auto-injected memory as hints; verify concrete claims via explicit recall.
+- Prefer scoped retrieval (project/domain/date) when available to reduce noise.
+- Use session transcript retrieval only when conversation continuity is required.
+
+### Fail-Hard Discipline
+- Fail-hard behavior is config-driven (`retrieval.failHard` / `retrieval.fail_hard`).
+- Do not hide errors in strict mode.
+- In non-strict mode, degraded behavior must log clearly.
+
+### Change Discipline
+- Make changes in `~/quaid/dev` only.
+- Treat `~/quaid/benchmark-checkpoint` as a cut artifact, not a dev workspace.
+- Keep benchmark/checkpoint operations in their own runbooks under `operations/`.
 
 ## Memory Lifecycle
 
@@ -57,61 +75,10 @@ Nightly janitor -> Review -> Dedup -> Decay -> Graduate to 'active'
 - Technical/project-state facts are third priority.
 - Agent/technical extraction must never reduce baseline user-memory coverage.
 
-## Using Memory
+## Retrieval Notes
 
-**When to search memory:**
-- User mentions people (family, friends, staff)
-- Questions about preferences or history
-- References to past events or decisions
-- Needs personal context to answer well
-
-**How to search:**
-```text
-memory_recall query="Hauser birthday" options={graph:{expand:true}}
-```
-- Use **names** not pronouns ("Hauser" not "my sister")
-- Add **context** ("Lori gift ideas" not "mom")
-- Set `expandGraph: true` for relationship queries
-- Prefer explicit `datastores` when you know the target source:
-  - `vector_basic` for personal/life facts
-  - `vector_technical` for technical/project facts
-  - `graph` for relationship traversal
-  - `journal` for reflective context
-  - `project` for docs-derived project knowledge
-- Use catch-all routing (`options.routing.enabled: true`) only when uncertain.
-  - `total_recall` triggers an extra fast-LLM planning pass (better recall plan, higher cost/latency).
-  - Routing output must be valid structured JSON; the router auto-retries once with validation feedback.
-  - If the retry still fails, recall throws by default. Use a stronger fast model.
-  - Default behavior is fail-open (`retrieval.routerFailOpen: true`): log loudly and continue with deterministic default recall plan if prepass fails.
-  - Set `options.routing.failOpen: false` (or config `retrieval.routerFailOpen: false`) for strict fail-through behavior.
-  - If the query is obvious, explicit `datastores` via plain recall is cheaper and usually faster.
-  - Optional: `options.routing.reasoning: "deep"` for a higher-quality routing pass when you can afford extra cost/latency.
-  - Optional: `options.routing.intent: "agent_actions"` when asking what the assistant/agent did or suggested.
-  - Optional: `options.filters.docs: [...]` to constrain project-doc recall to specific docs.
-  - Optional: `options.datastoreOptions.<store>` for store-local controls (for example, project-specific doc scope in `options.datastoreOptions.project`).
-
-**Injector confidence policy:**
-- Auto-injected memories are hints.
-- If retrieval is not a clear high-confidence match, call `memory_recall` before committing to specifics.
-- Do not treat injected context as final authority for names, dates, or relationship facts unless it is a direct/high-confidence hit.
-
-- Project metadata for routing:
-  - Put a one-line `Project Description: ...` at the top of each project `TOOLS.md`.
-  - Keep deep details in `PROJECT.md` (long-form, not meant for always-loaded context).
-
-**When to skip:** Pure coding tasks, general knowledge, short acks.
-
-## Docs Retrieval Behavior (Current)
-
-- `projects_search` is still the richest docs path:
-  - RAG search over project docs
-  - optional project filter
-  - prepends matching `PROJECT.md` when project is known
-  - includes staleness warnings
-- `memory_recall` with `options.datastores: ["project"]` is lighter:
-  - project-store recall only
-  - no project bootstrap preface
-  - no staleness report
+- For exact tool parameter maps and usage patterns, refer to `projects/quaid/TOOLS.md`.
+- Keep this file focused on operating rules and project navigation.
 
 ## Dual Extraction: Snippets + Journal
 

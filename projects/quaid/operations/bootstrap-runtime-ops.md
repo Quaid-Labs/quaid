@@ -30,10 +30,5 @@ This doc defines where bootstrap automation lives, how it relates to `~/quaid/de
   - `checkpoint` (NAS/local backup remote for normal pushes)
   - `origin`/`github` (GitHub remotes for release publishing)
 - Default policy: push to `checkpoint` only.
-- Use `scripts/push-backup.sh` for normal push intent.
-- Use `scripts/release-push.sh` for GitHub release intent.
-- `main` pushes are blocked by default in local hook policy unless explicit release override is set.
-- GitHub pushes require explicit release mode:
-  - `QUAID_RELEASE=1 ...` (handled by `scripts/release-push.sh`)
-- Enforcement is in repo hook path:
-  - `git-hooks/pre-push` -> `scripts/push-guard.sh`
+- Keep machine-specific push policies and helper scripts in `~/quaid/scripts` (private/local), not in tracked repo files.
+- Repository-level release gate remains `scripts/release-check.sh`.
