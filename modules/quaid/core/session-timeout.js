@@ -165,6 +165,7 @@ class SessionTimeoutManager {
   chain = Promise.resolve();
   failHard;
   extractTimeoutMs;
+  maxSignalRetries;
   maxInMemoryBuffers = 200;
   constructor(opts) {
     this.timeoutMinutes = opts.timeoutMinutes;
@@ -184,6 +185,8 @@ class SessionTimeoutManager {
     this.failHard = isFailHardEnabled(opts.workspace);
     const configuredTimeoutMs = Number(process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS || "");
     this.extractTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? Math.floor(configuredTimeoutMs) : 6e5;
+    const configuredSignalRetries = Number(process.env.QUAID_SIGNAL_MAX_RETRIES || "");
+    this.maxSignalRetries = Number.isFinite(configuredSignalRetries) && configuredSignalRetries >= 0 ? Math.floor(configuredSignalRetries) : 3;
     try {
       fs.mkdirSync(this.logDir, { recursive: true });
       fs.mkdirSync(this.sessionLogDir, { recursive: true });
@@ -413,7 +416,8 @@ class SessionTimeoutManager {
     const signal = {
       sessionId,
       label: String(label || "Signal"),
-      queuedAt: (/* @__PURE__ */ new Date()).toISOString()
+      queuedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      attemptCount: 0
     };
     try {
       fs.mkdirSync(this.pendingSignalDir, { recursive: true });
@@ -423,6 +427,7 @@ class SessionTimeoutManager {
         try {
           const existing = JSON.parse(fs.readFileSync(signalPath, "utf8"));
           existingLabel = String(existing?.label || "Signal");
+          signal.attemptCount = Math.max(0, Number(existing?.attemptCount || 0));
         } catch (err) {
           safeLog(this.logger, `[quaid][timeout] failed to parse existing extraction signal ${signalPath}: ${String(err?.message || err)}`);
         }
@@ -472,6 +477,7 @@ class SessionTimeoutManager {
       }
       const sessionId = String(signal?.sessionId || path.basename(filePath, ".json")).trim();
       const label = String(signal?.label || "Signal");
+      const attemptCount = Math.max(0, Number(signal?.attemptCount || 0));
       if (!sessionId) {
         try {
           fs.unlinkSync(lockedPath);
@@ -487,12 +493,32 @@ class SessionTimeoutManager {
         this.writeQuaidLog("signal_process_done", sessionId, { label });
       } catch (err) {
         this.writeQuaidLog("signal_process_error", sessionId, { label, error: String(err?.message || err) });
+        const nextAttemptCount = attemptCount + 1;
+        const canRetry = nextAttemptCount <= this.maxSignalRetries;
         try {
           const originalPath = filePath;
-          if (!fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
+          if (canRetry && !fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
+            const nextSignal = {
+              sessionId,
+              label,
+              queuedAt: String(signal?.queuedAt || (/* @__PURE__ */ new Date()).toISOString()),
+              attemptCount: nextAttemptCount
+            };
+            fs.writeFileSync(lockedPath, JSON.stringify(nextSignal), { mode: 384 });
             fs.renameSync(lockedPath, originalPath);
             restoredClaim = true;
-            this.writeQuaidLog("signal_process_requeued", sessionId, { label });
+            this.writeQuaidLog("signal_process_requeued", sessionId, {
+              label,
+              attempt_count: nextAttemptCount,
+              max_retries: this.maxSignalRetries
+            });
+          } else if (!canRetry) {
+            this.writeQuaidLog("signal_process_dropped", sessionId, {
+              label,
+              attempt_count: nextAttemptCount,
+              max_retries: this.maxSignalRetries,
+              reason: "max_retries_exceeded"
+            });
           }
         } catch (restoreErr) {
           safeLog(this.logger, `[quaid][timeout] failed restoring signal claim ${lockedPath}: ${String(restoreErr?.message || restoreErr)}`);

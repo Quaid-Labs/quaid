@@ -18,6 +18,7 @@ type PendingExtractionSignal = {
   sessionId: string;
   label: string;
   queuedAt: string;
+  attemptCount?: number;
 };
 
 function signalPriority(label: string): number {
@@ -215,6 +216,7 @@ export class SessionTimeoutManager {
   private chain: Promise<void> = Promise.resolve();
   private failHard: boolean;
   private extractTimeoutMs: number;
+  private maxSignalRetries: number;
   private readonly maxInMemoryBuffers = 200;
 
   constructor(opts: SessionTimeoutManagerOptions) {
@@ -237,6 +239,10 @@ export class SessionTimeoutManager {
     this.extractTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
       ? Math.floor(configuredTimeoutMs)
       : 600_000;
+    const configuredSignalRetries = Number(process.env.QUAID_SIGNAL_MAX_RETRIES || "");
+    this.maxSignalRetries = Number.isFinite(configuredSignalRetries) && configuredSignalRetries >= 0
+      ? Math.floor(configuredSignalRetries)
+      : 3;
     try {
       fs.mkdirSync(this.logDir, { recursive: true });
       fs.mkdirSync(this.sessionLogDir, { recursive: true });
@@ -490,6 +496,7 @@ export class SessionTimeoutManager {
       sessionId,
       label: String(label || "Signal"),
       queuedAt: new Date().toISOString(),
+      attemptCount: 0,
     };
     try {
       fs.mkdirSync(this.pendingSignalDir, { recursive: true });
@@ -499,6 +506,7 @@ export class SessionTimeoutManager {
         try {
           const existing = JSON.parse(fs.readFileSync(signalPath, "utf8")) as PendingExtractionSignal;
           existingLabel = String(existing?.label || "Signal");
+          signal.attemptCount = Math.max(0, Number(existing?.attemptCount || 0));
         } catch (err: unknown) {
           safeLog(this.logger, `[quaid][timeout] failed to parse existing extraction signal ${signalPath}: ${String((err as Error)?.message || err)}`);
         }
@@ -547,6 +555,7 @@ export class SessionTimeoutManager {
       }
       const sessionId = String(signal?.sessionId || path.basename(filePath, ".json")).trim();
       const label = String(signal?.label || "Signal");
+      const attemptCount = Math.max(0, Number(signal?.attemptCount || 0));
       if (!sessionId) {
         try {
           fs.unlinkSync(lockedPath);
@@ -562,12 +571,32 @@ export class SessionTimeoutManager {
         this.writeQuaidLog("signal_process_done", sessionId, { label });
       } catch (err: unknown) {
         this.writeQuaidLog("signal_process_error", sessionId, { label, error: String((err as Error)?.message || err) });
+        const nextAttemptCount = attemptCount + 1;
+        const canRetry = nextAttemptCount <= this.maxSignalRetries;
         try {
           const originalPath = filePath;
-          if (!fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
+          if (canRetry && !fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
+            const nextSignal: PendingExtractionSignal = {
+              sessionId,
+              label,
+              queuedAt: String(signal?.queuedAt || new Date().toISOString()),
+              attemptCount: nextAttemptCount,
+            };
+            fs.writeFileSync(lockedPath, JSON.stringify(nextSignal), { mode: 0o600 });
             fs.renameSync(lockedPath, originalPath);
             restoredClaim = true;
-            this.writeQuaidLog("signal_process_requeued", sessionId, { label });
+            this.writeQuaidLog("signal_process_requeued", sessionId, {
+              label,
+              attempt_count: nextAttemptCount,
+              max_retries: this.maxSignalRetries,
+            });
+          } else if (!canRetry) {
+            this.writeQuaidLog("signal_process_dropped", sessionId, {
+              label,
+              attempt_count: nextAttemptCount,
+              max_retries: this.maxSignalRetries,
+              reason: "max_retries_exceeded",
+            });
           }
         } catch (restoreErr: unknown) {
           safeLog(this.logger, `[quaid][timeout] failed restoring signal claim ${lockedPath}: ${String((restoreErr as Error)?.message || restoreErr)}`);
