@@ -66,7 +66,8 @@ Parameter map:
 - `options.ranking.sourceTypeBoosts` (object): optional source-type weighting.
 - `options.datastoreOptions.<store>`: per-store options.
 
-Available domains:
+<!-- AUTO-GENERATED:DOMAIN-LIST:START -->
+Available domains (from `config/memory.json -> retrieval.domains`):
 - `personal`: identity, preferences, relationships, life events
 - `technical`: code, infra, APIs, architecture
 - `project`: project status, tasks, files, milestones
@@ -78,9 +79,11 @@ Available domains:
 - `research`: options considered, comparisons, tradeoff analysis
 - `household`: home, chores, food planning, shared logistics
 - `legal`: contracts, policy, and regulatory constraints
+<!-- AUTO-GENERATED:DOMAIN-LIST:END -->
 
 Domain list maintenance:
-- This section is generated from the runtime domain registry and should be reconstructed when domains are added/updated.
+- Source of truth is `config/memory.json -> retrieval.domains`.
+- Rebuild this block whenever domains change so tool docs stay aligned with runtime filtering behavior.
 
 Use cases:
 - relationship questions (`family`, `who is X`, `how are X and Y connected`)
