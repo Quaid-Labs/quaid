@@ -1635,8 +1635,12 @@ function temporalCuePresent(query) {
 }
 function attributionCuePresent(query) {
   const lowered = String(query || "").toLowerCase();
-  const cues = ["who", "whose", "did", "does", "maya", "david", "rachel", "linda", "ethan", "priya"];
+  const cues = ["who", "whose", "did", "does", "said", "asked", "told", "mentioned", "attributed"];
   return cues.some((cue) => lowered.includes(cue));
+}
+function isVectorRecallResult(result) {
+  const via = String(result.via || "").toLowerCase();
+  return via === "vector" || via === "vector_basic" || via === "vector_technical";
 }
 function computeEntityCoverage(query, results) {
   const resultBlob = results.map((r) => `${String(r.text || "").toLowerCase()} ${String(r.sourceName || "").toLowerCase()}`).join(" ");
@@ -1668,8 +1672,7 @@ function shouldRetryRecall(query, results) {
     return { retry: true, reasons };
   }
   const vectorResults = results.filter((r) => {
-    const via = String(r.via || "vector").toLowerCase();
-    return via === "vector" || via === "vector_basic" || via === "vector_technical";
+    return isVectorRecallResult(r);
   });
   if (!vectorResults.length) {
     reasons.push("no_vector_hits");
@@ -2630,7 +2633,7 @@ ${recallStoreGuidance}`,
                   details: { count: 0 }
                 };
               }
-              const vectorResults = results.filter((r) => (r.via || "vector") === "vector");
+              const vectorResults = results.filter((r) => isVectorRecallResult(r));
               const graphResults = results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
               const journalResults = results.filter((r) => (r.via || "") === "journal");
               const projectResults = results.filter((r) => (r.via || "") === "project");
