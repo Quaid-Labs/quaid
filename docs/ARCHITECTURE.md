@@ -311,10 +311,10 @@ def _get_fusion_weights(intent):
 
 ### LLM Reranker
 
-After fusion, the top 20 candidates are sent to a fast-reasoning LLM in a single API call for graded relevance scoring (0-5 scale). The reranker score is blended with the original score at a configurable ratio. Benchmarks showed the LLM reranker contributes significantly to accuracy, so the blend favors the reranker score:
+After fusion, the top 20 candidates are sent to a fast-reasoning LLM in a single API call for graded relevance scoring (0-5 scale). The reranker score is blended with the original score at a configurable ratio. The default blend is neutral (0.5/0.5):
 
 ```
-blended = 0.6 * (reranker_grade / 5.0) + 0.4 * original_score
+blended = 0.5 * (reranker_grade / 5.0) + 0.5 * original_score
 ```
 
 ### Competitive Inhibition
@@ -355,18 +355,27 @@ Connection management is centralized in `lib/database.py`:
 ```python
 @contextmanager
 def get_connection(db_path=None):
-    conn = sqlite3.connect(db_path or get_db_path(), timeout=10)
+    path = db_path or get_db_path()
+    conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 30000")
-    mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-    if mode.lower() != 'wal':
-        conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")  # 30s wait for concurrent access
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA cache_size = -64000")
     conn.execute("PRAGMA temp_store = MEMORY")
-    yield conn
-    conn.close()
+    if _has_sqlite_vec:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 ```
 
 ### Core Tables
@@ -436,7 +445,7 @@ In practice, extraction (write) and retrieval (read) can run simultaneously. The
 
 ## 5. Janitor Pipeline (Nightly Maintenance)
 
-The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 17 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
+The janitor (`modules/quaid/core/lifecycle/janitor.py`) runs 18 tasks in a defined order, grouped by phase. It is designed to be triggered by the bot's heartbeat (which provides the API key), not standalone cron.
 
 ### Execution Order
 
@@ -475,9 +484,10 @@ The task numbering is historical -- tasks were added over time and the numbers r
 | Task | Purpose | LLM? |
 |------|---------|------|
 | rag | Reindex docs for RAG search + auto-discover new projects | No |
-| tests | Run pytest suite (dev/CI only, gated by `QUAID_DEV=1`) | No |
+| tests | Run vitest suite via `npm test` (dev/CI only, gated by `QUAID_DEV=1`) | No |
 | cleanup | Prune old logs and orphaned embeddings | No |
 | update_check | Check for Quaid updates (version comparison) | No |
+| graduate | Promote approved memories to active after a healthy memory pipeline | No |
 
 ### Fail-Fast Behavior
 

@@ -1214,7 +1214,7 @@ function spawnNotifyScript(scriptBody) {
     }
   };
   const preamble = `import sys, os
-sys.path.insert(0, ${JSON.stringify(path.join(WORKSPACE, "plugins/quaid"))})
+sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})
 `;
   const cleanup = `
 os.unlink(${JSON.stringify(tmpFile)})

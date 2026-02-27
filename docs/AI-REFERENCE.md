@@ -336,7 +336,6 @@ Merges are crash-safe, executed in single database transactions.
 
 | Task | Name | Purpose | LLM Cost |
 |------|------|---------|----------|
-| 0 | backup | Keychain + core file backups | Free |
 | 0b | embeddings | Backfill missing embeddings | Free (local Ollama) |
 | 2 | review | Opus reviews pending facts | ~$0.01-0.05 per batch |
 | 2a | temporal | Resolve relative dates (no LLM) | Free |
@@ -350,10 +349,11 @@ Merges are crash-safe, executed in single database transactions.
 | 1c | docs_cleanup | Clean bloated docs (churn-based) | ~$0.01-0.05 |
 | 1d | snippets | Soul snippets review (FOLD/REWRITE/DISCARD into core markdown) | ~$0.01-0.05 |
 | 1d | journal | Distill journal entries into core markdown | ~$0.05-0.10 |
-| 6 | edges | Edge extraction (deprecated, skipped -- moved to capture time) | N/A |
 | 7 | rag | Reindex docs for RAG + project discovery | Free (local) |
-| 8 | tests | Run pytest suite | Free |
+| 8 | tests | Run vitest suite (`npm test`) | Free |
 | 9 | cleanup | Prune old logs, orphaned embeddings | Free |
+| 10 | update_check | Check for Quaid updates (version comparison + cache) | Free |
+| 11 | graduate | Promote approved memories to active after a healthy memory pipeline | Free |
 
 **Fail-fast:** If any memory task (2-5) fails, remaining memory tasks are SKIPPED and graduation is BLOCKED.
 
@@ -609,7 +609,7 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOM
 
 ### Overview
 
-- 1127 pytest tests + 163 vitest tests = ~1290 total tests
+- Current baseline: 1224 selected pytest tests (+333 deselected) and 222 vitest tests
 - All tests passing as of Feb 2026
 
 ### Test Files (pytest)
