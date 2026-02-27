@@ -679,7 +679,7 @@ python3 datastore/docsdb/registry.py discover --project myproject    # Auto-disc
 
 **RAG Search** (`datastore/docsdb/rag.py`): Chunks project documentation, embeds via Ollama, and provides semantic search. Chunks are sized by token count (default: 800 tokens with 100-token overlap) and split on section headers.
 
-**Project Updater** (`datastore/docsdb/project_updater.py`): Processes file change events and refreshes project documentation. Integrates with Claude Code hooks (PostToolUse tracks edited files, PreCompact stages update events).
+**Project Updater** (`datastore/docsdb/project_updater.py`): Processes file change events and refreshes project documentation. Integrates with OpenClaw runtime events/hook paths (`docs.ingest_transcript`, `before_compaction`) to stage and process documentation updates.
 
 ### Auto-Discovery
 
@@ -798,12 +798,12 @@ The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The `camelC
 `llm_clients.py` provides two functions that abstract over the underlying model:
 
 ```python
-def call_deep_reasoning(prompt, max_tokens=4000, timeout=120, system_prompt=None):
+def call_deep_reasoning(prompt, system_prompt=None, max_tokens=2000, timeout=600, model=None):
     """High-reasoning model. Used for fact review, contradiction resolution,
     workspace audits, journal distillation."""
 
-def call_fast_reasoning(prompt, max_tokens=500, timeout=30, system_prompt=None):
-    """Low-reasoning model. Used for dedup verification, reranking,
+def call_fast_reasoning(prompt, max_tokens=200, timeout=120, system_prompt=None, max_retries=None):
+    """Fast-reasoning model. Used for dedup verification, reranking,
     HyDE expansion, doc pre-filtering."""
 ```
 

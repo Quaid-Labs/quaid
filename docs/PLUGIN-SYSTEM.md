@@ -42,9 +42,9 @@ Phase 1 introduces:
 
 Runtime preflight is invoked from config boot when `plugins.enabled=true`. It validates discovery, registration, and configured slots without taking over adapter/ingest/datastore activation yet.
 
-## Config (seeded)
+## Config (optional template)
 
-`config/memory.json` now supports:
+`config/memory.json` supports this `plugins` block when explicitly configured:
 
 ```json
 {

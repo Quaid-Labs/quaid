@@ -185,7 +185,7 @@ Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 - [x] Agent-driven recall (auto-injection optional via config/env)
 - [x] Projects system: registry, event processing, auto-discover
 - [x] Mock embeddings for testing (`MOCK_EMBEDDINGS=1`)
-- [x] 1108 tests (945 pytest + 163 vitest)
+- [x] 1400+ tests in default gate (1224 selected pytest + 222 vitest)
 
 ---
 
@@ -210,7 +210,7 @@ Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 - **Token-based batching**: `TokenBatchBuilder` dynamically packs items based on model context window
 - **Projects system**: Registry CRUD, event-driven updates, auto-discover, 5 projects
 - **Mock embeddings**: `MOCK_EMBEDDINGS=1` env var for testing without Ollama
-- **1108 tests**: 945 pytest + 163 vitest, all passing
+- **1400+ tests in default gate**: 1224 selected pytest + 222 vitest, all passing
 - **Journal system**: Diary-style entries written to `journal/*.journal.md`, distilled into core markdown themes by janitor, archived monthly to `journal/archive/`. Two modes: `distilled` (default, token-efficient) and `full` (richer self-awareness)
 - **Config-driven models**: All model IDs read from `config/memory.json`
 - **Fail-fast pipeline**: `memory_pipeline_ok` flag — if any memory task fails, graduation blocked

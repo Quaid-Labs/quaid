@@ -36,7 +36,7 @@ Purpose: evaluate current `quaid` CLI commands for practical runtime value in al
 2. CLI consistency:
 - Wired config subcommands in both:
   - `modules/quaid/quaid`
-  - `scripts/release-templates/quaid`
+  - release wrapper path used by packaging scripts in `scripts/`
 - Added `doctor` alias in the dev wrapper (`health` parity).
 
 3. Install/bootstrap schedule default:

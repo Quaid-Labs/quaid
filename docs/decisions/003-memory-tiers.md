@@ -30,7 +30,7 @@ Not all memories are equal. Some are core identity facts that should never disap
 - **Normal decay** — Confidence reduces after 30 days unused
 - **Background context** — Surfaces when semantically relevant
 - **Use for:** Conversation extractions, casual facts
-- **Set by:** Automatic extraction via qwen2.5:7b classifier
+- **Set by:** Extraction at compaction/reset via deep-reasoning review path (auto-capture classifier is deprecated)
 
 ### 4. Archived Memories (`status = 'archived'`)
 - **Fully decayed** — Confidence dropped below minimum threshold

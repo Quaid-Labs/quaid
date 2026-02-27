@@ -73,7 +73,7 @@ Write request
 
 | File | Purpose | Key Exports |
 |------|---------|-------------|
-| `adapter.py` | Platform adapter layer (Standalone/OpenClaw) | `QuaidAdapter`, `StandaloneAdapter`, `OpenClawAdapter`, `get_adapter()`, `set_adapter()`, `reset_adapter()`, `ChannelInfo` |
+| `adapter.py` | Platform adapter layer base/standalone adapters | `QuaidAdapter`, `StandaloneAdapter`, `get_adapter()`, `set_adapter()`, `reset_adapter()`, `ChannelInfo` |
 | `config.py` | Path resolution, env overrides for tests | `get_db_path()`, `get_ollama_url()`, `get_embedding_model()`, `get_archive_db_path()` |
 | `database.py` | SQLite connection factory | `get_connection()` -- @contextmanager, enables WAL mode, FK ON, busy_timeout=30000 |
 | `embeddings.py` | Ollama embedding calls | `get_embedding()`, `pack_embedding()`, `unpack_embedding()` |
