@@ -125,9 +125,10 @@ Parameter map:
 - `docs_list`
   - `project` (optional string), `type` (optional string).
 - `docs_register`
-  - `file_path` (required), plus optional `project`, `title`, `description`, `auto_update`, `source_files`.
+  - `file_path` (required workspace-relative path), plus optional `project`, `title`, `description`, `auto_update`, `source_files`.
+  - `auto_update` defaults to `false`; set it to `true` only for docs that should be drift-tracked from mapped source files.
 - `project_create`
-  - `name` (required), plus optional `label`, `description`, `source_roots`.
+  - `name` (required, kebab-case; regex: `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`), plus optional `label`, `description`, `source_roots`.
 - `project_list`
   - no parameters.
 

@@ -32,7 +32,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 
 ### Medium Priority (now resolved in this pass)
 3. Lifecycle/datastore direct adapter imports for runtime/provider resolution
-- Files: `modules/quaid/janitor.py`, `modules/quaid/llm_clients.py`
+- Files: `modules/quaid/core/lifecycle/janitor.py`, `modules/quaid/lib/llm_clients.py`
 - Previous evidence: direct `get_adapter()` calls for workspace/log paths and provider checks.
 - Resolution: added `modules/quaid/lib/runtime_context.py` port and rewired lifecycle/datastore/ingestor modules:
   - `janitor.py`
@@ -57,7 +57,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 
 ### Low Priority
 5. Mixed ownership in notification/report routing policy
-- Files: `modules/quaid/janitor.py`, `modules/quaid/notify.py`, `modules/quaid/events.py`
+- Files: `modules/quaid/core/lifecycle/janitor.py`, `modules/quaid/core/runtime/notify.py`, `modules/quaid/core/runtime/events.py`
 - Target: lifecycle emits report events; adapter decides immediate vs delayed transport.
 - Resolution:
   - janitor now emits `janitor.run_completed` lifecycle event with metrics/change payload
@@ -120,25 +120,25 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - adapter now routes memory bridge operations via `datastoreBridge`.
 - Added docs ingest pipeline entrypoint and adapter integration:
   - `modules/quaid/docs_ingest.py`
-  - adapter now dispatches `docs.ingest_transcript` through event bus (`modules/quaid/events.py`) with immediate active processing
+  - adapter now dispatches `docs.ingest_transcript` through event bus (`modules/quaid/core/runtime/events.py`) with immediate active processing
   - docs ingestion executes in events handler (`_handle_docs_ingest_transcript`) instead of direct adapter subprocess ownership
   - removed import-time cycle (`docs_updater -> events -> docs_ingest -> docs_updater`)
     by loading docs-updater entrypoints lazily via `importlib` wrappers in `docs_ingest.py`
 - Delayed notification flow unified through event bus:
-  - `modules/quaid/events.py` added `queue_delayed_notification(...)`
-  - `modules/quaid/janitor.py` now uses event bus for delayed messages
+  - `modules/quaid/core/runtime/events.py` added `queue_delayed_notification(...)`
+  - `modules/quaid/core/lifecycle/janitor.py` now uses event bus for delayed messages
   - `modules/quaid/adaptors/openclaw/adapter.ts` no longer flushes delayed notification files
   - removed legacy `flushDelayedNotificationsToRequestQueue(...)` helper from delayed-request bridge
   - updated delayed-request integration test to validate canonical queue/resolve/clear lifecycle
 - MCP API boundary enforced:
-  - `modules/quaid/api.py` now exposes `stats()` and richer `recall(...)` options
-  - `modules/quaid/mcp_server.py` uses API entrypoints only for recall/stats
-  - `projects_search` in `modules/quaid/mcp_server.py` now routes through `api.projects_search_docs(...)`
+  - `modules/quaid/core/interface/api.py` now exposes `stats()` and richer `recall(...)` options
+  - `modules/quaid/core/interface/mcp_server.py` uses API entrypoints only for recall/stats
+  - `projects_search` in `modules/quaid/core/interface/mcp_server.py` now routes through `api.projects_search_docs(...)`
     instead of directly constructing `DocsRAG` datastore calls
-  - `memory_extract` in `modules/quaid/mcp_server.py` now routes through
+  - `memory_extract` in `modules/quaid/core/interface/mcp_server.py` now routes through
     `api.extract_transcript(...)` instead of direct ingestor imports
   - API no longer re-exports datastore model internals (`Node`, `Edge`) from
-    `modules/quaid/api.py`, tightening facade boundaries for external callers
+    `modules/quaid/core/interface/api.py`, tightening facade boundaries for external callers
 - Orchestrator store implementation moved out:
   - `modules/quaid/orchestrator/default-orchestrator.ts` uses injected store callbacks
   - `modules/quaid/adaptors/openclaw/adapter.ts` supplies journal/project store handlers
@@ -146,21 +146,21 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 - Janitor lifecycle ownership expanded:
   - `modules/quaid/janitor_lifecycle.py` is now orchestration-only: it loads module-owned routine registrars
   - datastore/workspace modules now own registration + maintenance logic:
-    - `modules/quaid/workspace_audit.py` registers `workspace`
-    - `modules/quaid/docs_updater.py` registers `docs_staleness` and `docs_cleanup`
+    - `modules/quaid/core/lifecycle/workspace_audit.py` registers `workspace`
+    - `modules/quaid/datastore/docsdb/updater.py` registers `docs_staleness` and `docs_cleanup`
     - `modules/quaid/datastore/notedb/soul_snippets.py` registers `snippets` and `journal`
-    - `modules/quaid/docs_rag.py` registers `rag`
-    - `modules/quaid/memory_graph.py` registers `datastore_cleanup`
-  - `modules/quaid/janitor.py` now dispatches those tasks through lifecycle registry instead of inline task bodies
+    - `modules/quaid/datastore/docsdb/rag.py` registers `rag`
+    - `modules/quaid/datastore/memorydb/memory_graph.py` registers `datastore_cleanup`
+  - `modules/quaid/core/lifecycle/janitor.py` now dispatches those tasks through lifecycle registry instead of inline task bodies
   - docs write policy checks are preserved via `allow_doc_apply` callback passed through routine context
   - added lifecycle tests for workspace/docs/snippets/journal in `modules/quaid/tests/test_janitor_lifecycle.py`
   - janitor datastore imports now route through `modules/quaid/datastore_maintenance.py`
     as a single datastore maintenance facade over `memory_graph` primitives
   - workspace audit datastore writes now route through the same facade (`store_memory`)
   - ingestor/clustering modules now route datastore graph access through the facade:
-    - `modules/quaid/extract.py`
-    - `modules/quaid/semantic_clustering.py`
-  - ingestor write path in `modules/quaid/extract.py` now uses datastore facade writes
+    - `modules/quaid/ingest/extract.py`
+    - `modules/quaid/datastore/memorydb/semantic_clustering.py`
+  - ingestor write path in `modules/quaid/ingest/extract.py` now uses datastore facade writes
     (`store_memory`/`create_edge`) instead of importing API write wrappers, removing
     ingestor -> api coupling and the api <-> extract cycle
   - API search now routes through datastore interface function `memory_graph.search(...)`
@@ -168,7 +168,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - memory-store maintenance ownership consolidated into one datastore routine:
     - added `modules/quaid/memory_graph_pipeline.py` with unified
       `memory_graph_maintenance` routine
-    - `modules/quaid/janitor.py` memory tasks now dispatch to that single routine
+    - `modules/quaid/core/lifecycle/janitor.py` memory tasks now dispatch to that single routine
       via `options.subtask` (review/temporal/dedup_review/duplicates/
       contradictions/contradictions_resolve/decay/decay_review)
     - `modules/quaid/janitor_lifecycle.py` now registers only the unified
@@ -176,8 +176,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 - Core project catalog no longer shells to python:
   - `modules/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:
-  - `modules/quaid/docs_updater.py`
-  - `modules/quaid/project_updater.py`
+  - `modules/quaid/datastore/docsdb/updater.py`
+  - `modules/quaid/datastore/docsdb/project_updater.py`
 - Added/updated test coverage:
   - `modules/quaid/tests/knowledge-orchestrator.test.ts`
   - `modules/quaid/tests/test_mcp_server.py`

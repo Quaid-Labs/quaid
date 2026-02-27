@@ -41,4 +41,4 @@ The original memory system used LanceDB with cloud storage. We needed to decide 
 ## See Also
 
 - [002-local-ollama-embeddings.md](./002-local-ollama-embeddings.md)
-- `plugins/memory-local/memory_graph.py`
+- `modules/quaid/datastore/memorydb/memory_graph.py`

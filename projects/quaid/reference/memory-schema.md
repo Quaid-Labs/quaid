@@ -433,7 +433,7 @@ CREATE TABLE IF NOT EXISTS metadata (
 
 ## Janitor Metadata — Janitor System State
 
-Created by `janitor.py` `init_janitor_metadata()` — NOT in schema.sql.
+Created by `datastore/memorydb/maintenance_ops.py` `init_janitor_metadata()` — NOT in schema.sql.
 
 ```sql
 CREATE TABLE IF NOT EXISTS janitor_metadata (
@@ -447,7 +447,7 @@ Used by the janitor to persist key-value state across runs (e.g. last workspace 
 
 ## Janitor Runs — Janitor Execution History
 
-Created by `janitor.py` `init_janitor_metadata()` — NOT in schema.sql.
+Created by `datastore/memorydb/maintenance_ops.py` `init_janitor_metadata()` — NOT in schema.sql.
 
 ```sql
 CREATE TABLE IF NOT EXISTS janitor_runs (
