@@ -141,7 +141,7 @@ All three paths converge on the same extraction logic and produce identical resu
    - Embedding generated via Ollama (local, no API cost)
    - Semantic dedup check against existing facts (cosine similarity > 0.95)
    - If duplicate found: confirmation count incremented, confidence boosted
-   - Datastore-owned dedup paths preserve metadata flags like `source_type` and `is_technical`
+   - Datastore-owned dedup paths preserve metadata flags like `source_type` and `domains`
    - If new: stored with `status="pending"`, awaiting janitor review
 
 4. **Edge creation** -- Edges are normalized via `_normalize_edge()` and stored with `source_fact_id` linking back to the originating fact. Entity nodes are created on-the-fly if they don't exist.
@@ -650,13 +650,13 @@ The projects system tracks documentation across the codebase and keeps it up to 
 
 ### Components
 
-**Doc Registry** (`docs_registry.py`): SQLite-backed CRUD for documents and projects. Maps file paths to projects, tracks document metadata (type, title, last indexed), and provides CLI for management.
+**Doc Registry** (`datastore/docsdb/registry.py`): SQLite-backed CRUD for documents and projects. Maps file paths to projects, tracks document metadata (type, title, last indexed), and provides CLI for management.
 
 ```bash
-docs_registry.py create-project myproject --label "My Project"
-docs_registry.py register path/to/doc.md --project myproject
-docs_registry.py find-project path/to/file.py   # Which project owns this file?
-docs_registry.py discover --project myproject    # Auto-discover docs in project dir
+python3 datastore/docsdb/registry.py create-project myproject --label "My Project"
+python3 datastore/docsdb/registry.py register path/to/doc.md --project myproject
+python3 datastore/docsdb/registry.py find-project path/to/file.py   # Which project owns this file?
+python3 datastore/docsdb/registry.py discover --project myproject    # Auto-discover docs in project dir
 ```
 
 **Doc Auto-Update** (`core/docs/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:

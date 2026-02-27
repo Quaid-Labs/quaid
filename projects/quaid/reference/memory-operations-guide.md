@@ -14,7 +14,7 @@ and the systems you operate. Without it, every conversation starts from zero.
    and operational context, loaded every turn. This is "who you are."
 
 2. **Docs/RAG** (searched on demand): `docs/<project>/` docs with detailed reference docs.
-   Searched semantically via the `projects_search` tool or `docs_rag.py`. This is
+   Searched semantically via the `projects_search` tool or `datastore/docsdb/rag.py`. This is
    "how systems work internally" — architecture, schemas, pipelines.
 
 3. **Memory DB** (semantic recall per message): SQLite graph of personal facts about

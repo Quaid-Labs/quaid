@@ -1,6 +1,6 @@
 # Memory-Local Plugin Implementation — Total Recall (quaid)
 <!-- PURPOSE: Implementation details: schema, modules, config, shared lib, CLI, hooks, test suite, projects system -->
-<!-- SOURCES: memory_graph.py, adaptors/openclaw/index.ts, docs_rag.py, config.py, docs_registry.py, project_updater.py, config/memory.json -->
+<!-- SOURCES: datastore/memorydb/memory_graph.py, adaptors/openclaw/index.ts, datastore/docsdb/rag.py, config.py, datastore/docsdb/registry.py, datastore/docsdb/project_updater.py, config/memory.json -->
 
 **Status:** Production Ready (updated 2026-02-08)
 **Location:** `modules/quaid/`
@@ -41,7 +41,7 @@ Graph database schema with:
 - `description`, `created_at`, `updated_at`
 - Used for graph expansion triggers during search
 
-**Project Definitions table** (managed by `docs_registry.py`):
+**Project Definitions table** (managed by `datastore/docsdb/registry.py`):
 - `name` (PRIMARY KEY), `label`, `home_dir`, `source_roots` (JSON array), `patterns`, `exclude`
 - `state` (active/archived/deleted), `auto_index`
 - Source of truth for project config (migrated from JSON)
@@ -86,7 +86,7 @@ The search system uses a multi-stage pipeline with RRF fusion:
 7. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
 8. **Multi-hop traversal** — `get_related_bidirectional()` with depth=2, hop score decay 0.7^depth
 9. **Access tracking** — `_update_access()` increments access_count and accessed_at for returned results
-10. **Technical fact filtering** — Non-PROJECT intent queries automatically filter out technical/project facts (nodes with `is_technical` attribute), preventing generic project facts from displacing personal memories in rankings
+10. **Domain filtering** — Recall applies domain-map filters (for example `{all:true}` or `{technical:true}`), preventing unrelated domains from displacing relevant memories in rankings
 
 **BEAM Search (graph traversal enhancement):**
 - BEAM search replaces naive BFS for graph traversal, using scored frontier expansion
@@ -121,7 +121,7 @@ Key search functions:
 - `invalidate_edge_keywords_cache()` — clears cache after adding new keywords
 
 **High-level API:**
-- `recall(query, limit, privacy, owner_id, current_session_id, compaction_time, date_from, date_to)` — returns results with `extraction_confidence`, `created_at`, `valid_from`, `valid_until`, `privacy`, `owner_id`, `is_technical`, `project`. Runs hybrid search + raw FTS on unrouted query to catch proper nouns. Results pass through `_sanitize_for_context()` which strips injection patterns from recalled text before it enters the agent's context window. Recalled facts are tagged with `[MEMORY]` prefix in output. **Date range filtering:** optional `date_from` and `date_to` parameters (YYYY-MM-DD) filter results by `created_at` date, applied before limit truncation (so limit returns N results within range). Results without dates are included by default. **Technical fact filtering:** when intent is not PROJECT, results with `is_technical: true` are automatically excluded to prevent project facts from displacing personal memories.
+- `recall(query, limit, privacy, owner_id, current_session_id, compaction_time, date_from, date_to)` — returns results with `extraction_confidence`, `created_at`, `valid_from`, `valid_until`, `privacy`, `owner_id`, `domains`, `project`. Runs hybrid search + raw FTS on unrouted query to catch proper nouns. Results pass through `_sanitize_for_context()` which strips injection patterns from recalled text before it enters the agent's context window. Recalled facts are tagged with `[MEMORY]` prefix in output. **Date range filtering:** optional `date_from` and `date_to` parameters (YYYY-MM-DD) filter results by `created_at` date, applied before limit truncation (so limit returns N results within range). Results without dates are included by default. **Domain filtering:** results are filtered by the provided domain map when present.
 - `store(text, category, verified, privacy, source, owner_id, session_id, extraction_confidence, speaker, status, keywords, source_type)` — creates nodes with dedup (threshold 0.95, FTS bounded to LIMIT 500). Validates owner is present. **Enforces 3-word minimum** for facts to prevent storing meaningless fragments. Optional `keywords` parameter stores derived search terms for FTS vocabulary bridging. Optional `source_type` (user/assistant/tool/import) stored in attributes JSON; assistant-inferred facts get 0.9x confidence multiplier.
 - `store_contradiction(node_a_id, node_b_id, explanation)` — persists janitor-detected contradictions
 - `forget(query, node_id)` — deletes by query or ID
@@ -132,7 +132,7 @@ Each result dict from `recall()` includes:
 - `text`, `category`, `similarity`, `confidence`, `source`, `id`
 - `extraction_confidence`, `created_at`, `valid_from`, `valid_until`
 - `privacy`, `owner_id`
-- `is_technical` — boolean flag from node attributes indicating a technical/project fact
+- `domains` — list of domain tags attached to the memory (for example `["technical"]`)
 - `project` — project name from node attributes (if applicable)
 - `_multi_pass` — whether result came from multi-pass broadened search
 - Graph results additionally include: `via_relation`, `hop_depth`, `graph_path`, `direction`, `source_name`
@@ -351,7 +351,7 @@ The previous per-message approach (Haiku classifier on each message pair) was:
 
 ### 7. Shared Library (`lib/`)
 
-Centralized modules extracted from duplicated code across `memory_graph.py`, `docs_rag.py`, and `janitor.py`:
+Centralized modules extracted from duplicated code across `datastore/memorydb/memory_graph.py`, `datastore/docsdb/rag.py`, and `core/lifecycle/janitor.py`:
 
 | Module | Purpose |
 |--------|---------|

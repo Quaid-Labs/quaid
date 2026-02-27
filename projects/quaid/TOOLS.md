@@ -7,20 +7,45 @@ Project Description: Quaid is an active knowledge layer for agentic systems. Use
 `TOOLS.md` explains how to use tools effectively.
 It is not a full API schema or implementation spec.
 
-## Core Tools and When to Use Them
+## Current Tool Surface
+
+Tools currently exposed in runtime:
+- `memory_recall`
+- `memory_store`
+- `memory_forget`
+- `projects_search`
+- `docs_read`
+- `docs_list`
+- `docs_register`
+- `project_create`
+- `project_list`
+- `session_recall`
+
+## Core Tools and Param Maps
 
 ### `memory_recall`
 Use this for user facts, relationships, timelines, and project-state recall.
 
-Parameter highlights (most relevant):
+Parameter map:
 - `query` (string): natural-language recall query.
-- `options.limit` (number): max result count.
-- `options.datastores` (array): choose stores (`vector`, `graph`, `journal`, `project`).
-- `options.filters.project` (string): optional project label filter.
+- `options.limit` (number): max result count (clamped by config).
+- `options.datastores` (array): choose stores (`vector`, `vector_basic`, `vector_technical`, `graph`, `journal`, `project`).
+- `options.graph.expand` (bool): graph traversal toggle.
+- `options.graph.depth` (number): graph traversal depth (1-3 practical range).
+- `options.routing.enabled` (bool): enable routed/plan-first recall (`total_recall`).
+- `options.routing.reasoning` (`fast|deep`): router reasoning tier.
+- `options.routing.intent` (`general|agent_actions|relationship|technical`): intent bias.
+- `options.routing.failOpen` (bool): router failure behavior.
+- `options.filters.project` (string): optional project filter.
+- `options.filters.docs` (string[]): optional docs filter when project store is involved.
+- `options.filters.dateFrom` / `options.filters.dateTo` (YYYY-MM-DD).
 - `options.filters.domain` (object map): domain filter map.
   - default: `{"all": true}` (all tagged + untagged memories)
   - strict example: `{"technical": true}` (only technical-tagged memories)
   - rule: if any domain key is `true`, `all` is ignored and only true domains are included.
+- `options.ranking.sourceTypeBoosts` (object): optional source-type weighting.
+- `options.datastoreOptions.<store>`: per-store options.
+- `options.technicalScope`: deprecated legacy shim; prefer `options.filters.domain`.
 
 Available domains:
 - `personal`: identity, preferences, relationships, life events
@@ -49,6 +74,21 @@ Recommended usage patterns:
 - Ambiguous query: use routed recall (`total_recall` path)
 - Agent-action query: use routed recall with `agent_actions` intent
 
+### `session_recall`
+Use this for recent-session discovery and transcript retrieval.
+
+Parameter map:
+- `action` (`list|load`):
+  - `list`: returns recent extracted sessions.
+  - `load`: loads one session transcript by `session_id` (or falls back to extracted facts when transcript file is unavailable).
+- `session_id` (string): required for `load`. Pattern: `[a-zA-Z0-9_-]{1,128}`.
+- `limit` (number): list size for `action=list` (default 5, max 20).
+
+“Load last session” workflow:
+1. call `session_recall` with `action="list", limit=1`
+2. take returned session id
+3. call `session_recall` with `action="load", session_id="<id>"`
+
 ### `projects_search`
 Use this for project docs and implementation references.
 
@@ -61,31 +101,32 @@ Notes:
 - `projects_search` is docs-focused and project-aware.
 - `memory_recall` can include `project` store, but `projects_search` is still the better doc workflow for broad doc lookup.
 
-### `session_recall`
-Use this for indexed lifecycle session transcripts (`list`, `load`, `last`).
-
-Use cases:
-- user references a previous session explicitly and you need exact transcript context
-- operator asks for what happened in a specific session ID
-
-Strict usage notes:
-- `action=last` is dangerous and high-volume; use it only if the user clearly refers to the immediately prior session and normal memory retrieval likely missed context.
-- prefer `memory_recall` first for normal fact recall.
-
-### `session_logs_search`
-Use this as a hail-mary retrieval path over indexed session logs.
-
-Use cases:
-- all normal retrieval paths failed (`memory_recall`, `projects_search`, targeted docs reads)
-- you need to find a detail that likely only exists in indexed raw session logs
-
-Strict usage notes:
-- expensive and high-noise; run only when you are genuinely stuck/desperate.
-- keep `limit` low and start with very specific query terms (names, file paths, unique phrases).
-
 ### `memory_store`
 Use this only for explicit/manual memory insertion when needed.
 Default behavior should favor automatic extraction.
+
+Parameter map:
+- `text` (string): exact memory note text to queue for extraction.
+- `category` (`preference|fact|decision|entity|other`, optional): lightweight hint.
+
+### `memory_forget`
+Use this for explicit deletion requests.
+
+Parameter map:
+- `memoryId` (string): delete one specific memory by id.
+- `query` (string): delete matching memories by query.
+
+### Docs/Project Admin Tools
+- `docs_read`
+  - `identifier` (string): doc path or title.
+- `docs_list`
+  - `project` (optional string), `type` (optional string).
+- `docs_register`
+  - `file_path` (required), plus optional `project`, `title`, `description`, `auto_update`, `source_files`.
+- `project_create`
+  - `name` (required), plus optional `label`, `description`, `source_roots`.
+- `project_list`
+  - no parameters.
 
 ## Knowledge Stores
 
@@ -114,8 +155,7 @@ Default behavior should favor automatic extraction.
 
 ### Previous-session reference looks missing
 1. Run `memory_recall` first with specific entities.
-2. If still missing and user clearly means last session, run `session_recall action=last`.
-3. If still missing, run `session_logs_search` as last resort.
+2. If still missing and user clearly means the latest session: `session_recall(action=list, limit=1)` then `session_recall(action=load, session_id=...)`.
 
 ### Conflicting or stale facts
 1. Recall with recency-sensitive ranking.
@@ -128,23 +168,23 @@ Default behavior should favor automatic extraction.
 cd modules/quaid
 
 # Recall and inspection
-python3 memory_graph.py search "query" --owner quaid --limit 50 --min-similarity 0.6
-python3 memory_graph.py search-graph "query" --owner quaid
-python3 memory_graph.py stats
-python3 memory_graph.py health
+python3 datastore/memorydb/memory_graph.py search "query" --owner quaid --limit 50 --min-similarity 0.6
+python3 datastore/memorydb/memory_graph.py search-graph "query" --owner quaid
+python3 datastore/memorydb/memory_graph.py stats
+python3 datastore/memorydb/memory_graph.py health
 
 # Manual memory operations
-python3 memory_graph.py store "text" --owner quaid --category fact
-python3 memory_graph.py fact-history <node_id>
-python3 memory_graph.py get-edges <node_id>
+python3 datastore/memorydb/memory_graph.py store "text" --owner quaid --category fact
+python3 datastore/memorydb/memory_graph.py fact-history <node_id>
+python3 datastore/memorydb/memory_graph.py get-edges <node_id>
 
 # Project docs search
-python3 docs_rag.py search "query"
-python3 docs_registry.py list --project quaid
+python3 datastore/docsdb/rag.py search "query"
+python3 datastore/docsdb/registry.py list --project quaid
 
 # Janitor maintenance
-python3 janitor.py --task all --dry-run
-python3 janitor.py --task all --apply
+python3 core/lifecycle/janitor.py --task all --dry-run
+python3 core/lifecycle/janitor.py --task all --apply
 ```
 
 ## Related Docs

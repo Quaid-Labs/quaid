@@ -206,7 +206,7 @@ Enhanced from simple reindex to include project management:
 
 **7c: Sync PROJECT.md External Files** — parses PROJECT.md "External Files" sections and creates registry entries for declared external files.
 
-**7d: RAG reindex** — original behavior: `docs_rag.py reindex` + indexes project directories for projects with `autoIndex: true`.
+**7d: RAG reindex** — original behavior: `datastore/docsdb/rag.py reindex` + indexes project directories for projects with `autoIndex: true`.
 
 ### Task 8: Tests
 Runs the vitest test suite. Output parser handles both vitest format (`Tests X failed | Y passed (Z)`) and test-runner.js summary format (`Total: X / Passed: Y / Failed: Z`).
@@ -325,16 +325,16 @@ The janitor uses argparse for CLI argument parsing.
 
 ```bash
 # Dry run (report only)
-python3 janitor.py --task all --dry-run
+python3 core/lifecycle/janitor.py --task all --dry-run
 
 # Apply changes
-python3 janitor.py --task all --apply
+python3 core/lifecycle/janitor.py --task all --apply
 
 # Single task
-python3 janitor.py --task duplicates --dry-run
+python3 core/lifecycle/janitor.py --task duplicates --dry-run
 
 # Full scan (ignore last-run timestamp)
-python3 janitor.py --task all --apply --full-scan
+python3 core/lifecycle/janitor.py --task all --apply --full-scan
 ```
 
 ## Dashboard Integration
