@@ -234,6 +234,13 @@ function isFailHardEnabled(): boolean {
   return true;
 }
 
+function isMissingFileError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOENT") return true;
+  const msg = String((err as Error | undefined)?.message || "");
+  return msg.includes("ENOENT");
+}
+
 function getCaptureTimeoutMinutes(): number {
   const capture = getMemoryConfig().capture || {};
   const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
@@ -3371,7 +3378,7 @@ notify_docs_search(data['query'], data['results'])
               }
               extractionLog = parsed as Record<string, any>;
             } catch (err: unknown) {
-              if (isFailHardEnabled()) {
+              if (isFailHardEnabled() && !isMissingFileError(err)) {
                 throw new Error("[quaid] session_recall extraction log read failed under failHard", { cause: err as Error });
               }
               console.warn(`[quaid] session_recall extraction log read failed: ${String((err as Error)?.message || err)}`);
@@ -3778,7 +3785,7 @@ notify_memory_extraction(
           }
           extractionLog = parsed as Record<string, any>;
         } catch (err: unknown) {
-          if (isFailHardEnabled()) {
+          if (isFailHardEnabled() && !isMissingFileError(err)) {
             throw new Error("[quaid] extraction log read failed under failHard", { cause: err as Error });
           }
           console.warn(`[quaid] Extraction log read failed for ${extractionLogPath}: ${String((err as Error)?.message || err)}`);
@@ -3849,7 +3856,7 @@ notify_memory_extraction(
         }
         extractionLog = parsed as Record<string, { last_extracted_at: string; message_count: number }>;
       } catch (err: unknown) {
-        if (isFailHardEnabled()) {
+        if (isFailHardEnabled() && !isMissingFileError(err)) {
           throw new Error("[quaid] recovery extraction log read failed under failHard", { cause: err as Error });
         }
         console.warn(`[quaid] Recovery scan extraction log read failed: ${String((err as Error)?.message || err)}`);
