@@ -28,6 +28,7 @@
 
 ### 3) Runtime code map (`modules/quaid/`)
 - `adaptors/openclaw/adapter.ts`: tool registration and runtime hook wiring.
+- `adaptors/openclaw/adapter.py`: Python adaptor bridge and lifecycle wiring.
 - `core/interface/mcp_server.py`: MCP tool surface.
 - `datastore/memorydb/`: memory graph, schema, janitor maintenance.
 - `datastore/docsdb/`: docs registry/search/update pipelines.
@@ -61,8 +62,8 @@
 
 ```
 Conversation -> /compact or /reset -> Opus extracts facts+edges -> Store in DB
-                                                         |
-Nightly janitor -> Review -> Dedup -> Decay -> Graduate to 'active'
+
+Nightly janitor (independent scheduler) -> Review -> Dedup -> Decay -> Graduate to 'active'
 ```
 
 - **Extraction:** Opus analyzes transcript at compaction, extracts personal facts with relationships
@@ -84,5 +85,5 @@ Nightly janitor -> Review -> Dedup -> Decay -> Graduate to 'active'
 
 Both systems extract entries at compaction/reset time:
 
-- **Soul Snippets (fast path)** — Bullet-point observations to `*.snippets.md`. Nightly janitor FOLDs/REWRITEs/DISCARDs into core files (SOUL.md, USER.md, etc).
+- **Soul Snippets (fast path)** — Bullet-point observations to `*.snippets.md`. Nightly janitor FOLDs/REWRITEs/DISCARDs into core files (SOUL.md, USER.md, MEMORY.md, AGENTS.md).
 - **Journal (slow path)** — Diary paragraphs to `journal/*.journal.md`. Opus distills themes into core markdown. Old entries archived monthly.

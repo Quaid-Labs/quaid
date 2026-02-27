@@ -2,8 +2,8 @@
 <!-- PURPOSE: Database schema: nodes, edges, FTS5, indexes, doc_registry -->
 <!-- SOURCES: schema.sql -->
 
-> Auto-generated from `modules/quaid/schema.sql` — 2026-02-07
-> Schema version: 3 | Embedding model: qwen3-embedding:8b (4096-dim)
+> Auto-generated from `modules/quaid/datastore/memorydb/schema.sql` — 2026-02-27
+> Schema version: 6 | Embedding model: qwen3-embedding:8b (4096-dim)
 
 ## Nodes — All Memory Entities
 
@@ -24,12 +24,22 @@ CREATE TABLE IF NOT EXISTS nodes (
 
     -- Multi-user support
     owner_id TEXT,                          -- Who owns this memory (null = shared/legacy)
+    actor_id TEXT,                          -- Canonical entity that asserted/performed this memory event
+    subject_entity_id TEXT,                 -- Canonical entity this memory is primarily about
 
     -- Privacy tiers
     privacy TEXT DEFAULT 'shared' CHECK(privacy IN ('private', 'shared', 'public')),
 
-    -- Session tracking
+    -- Session and provenance tracking
     session_id TEXT,                        -- Session where this memory was created (for dedup)
+    source_channel TEXT,                    -- Channel/source type (telegram/discord/slack/dm/etc.)
+    source_conversation_id TEXT,            -- Stable conversation/thread/group identifier
+    source_author_id TEXT,                  -- External speaker/author handle or ID
+    speaker_entity_id TEXT,                 -- Canonical entity that produced the source utterance
+    conversation_id TEXT,                   -- Canonical conversation/thread identifier (normalized)
+    visibility_scope TEXT DEFAULT 'source_shared', -- private_subject/source_shared/global_shared/system
+    sensitivity TEXT DEFAULT 'normal',      -- normal/restricted/secret
+    provenance_confidence REAL DEFAULT 0.5, -- confidence in ownership/attribution chain
 
     -- Classification
     fact_type TEXT DEFAULT 'unknown',       -- Subcategory (e.g. financial, health, family)
@@ -163,12 +173,143 @@ CREATE TABLE IF NOT EXISTS entity_aliases (
     canonical_name TEXT NOT NULL,  -- The canonical name (e.g., "Douglas Quaid")
     canonical_node_id TEXT,        -- Optional: link to the Person/entity node
     owner_id TEXT,                 -- Owner who defined this alias
+    entity_id TEXT,                -- Canonical identity entity ID
+    platform TEXT,                 -- telegram/discord/openclaw/etc.
+    source_id TEXT,                -- Canonical source/group/thread scope
+    handle TEXT,                   -- Source-native handle
+    display_name TEXT,             -- Human-facing display name for this alias
+    confidence REAL DEFAULT 1.0,   -- Alias link confidence
+    updated_at TEXT DEFAULT (datetime('now')),
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE(alias, owner_id)
 );
 ```
 
 Maps alternate names and nicknames to canonical entity names. `canonical_node_id` optionally links to the corresponding Person/entity node. Scoped per `owner_id` — the same alias can map to different canonical names for different users.
+
+## Domain Registry and Node Mapping
+
+```sql
+CREATE TABLE IF NOT EXISTS domain_registry (
+    domain TEXT PRIMARY KEY,
+    description TEXT DEFAULT '',
+    active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS node_domains (
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    domain TEXT NOT NULL REFERENCES domain_registry(domain) ON DELETE RESTRICT,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (node_id, domain)
+);
+```
+
+Domain tags are normalized through `domain_registry` and attached to each node via `node_domains`.
+
+## Identity and Source Model
+
+```sql
+CREATE TABLE IF NOT EXISTS entities (
+    entity_id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL DEFAULT 'unknown'
+        CHECK(entity_type IN ('human', 'agent', 'org', 'system', 'unknown')),
+    canonical_name TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS sources (
+    source_id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL DEFAULT 'dm'
+        CHECK(source_type IN ('dm', 'group', 'thread', 'workspace')),
+    platform TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    parent_source_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS source_participants (
+    source_id TEXT NOT NULL REFERENCES sources(source_id) ON DELETE CASCADE,
+    entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member'
+        CHECK(role IN ('member', 'owner', 'agent', 'observer')),
+    active_from TEXT DEFAULT (datetime('now')),
+    active_to TEXT,
+    PRIMARY KEY (source_id, entity_id, active_from)
+);
+
+CREATE TABLE IF NOT EXISTS identity_handles (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT,
+    source_channel TEXT NOT NULL,
+    conversation_id TEXT,
+    handle TEXT NOT NULL,
+    canonical_entity_id TEXT NOT NULL,
+    confidence REAL DEFAULT 1.0,
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(owner_id, source_channel, conversation_id, handle)
+);
+
+CREATE TABLE IF NOT EXISTS identity_credentials (
+    credential_id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    credential_type TEXT NOT NULL DEFAULT 'api_token'
+        CHECK(credential_type IN ('api_token', 'oauth', 'pubkey', 'password', 'external')),
+    key_id TEXT,
+    metadata TEXT DEFAULT '{}',
+    revoked INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS identity_sessions (
+    session_auth_id TEXT PRIMARY KEY,
+    source_id TEXT REFERENCES sources(source_id) ON DELETE SET NULL,
+    entity_id TEXT REFERENCES entities(entity_id) ON DELETE SET NULL,
+    authn_method TEXT NOT NULL DEFAULT 'unknown',
+    trust_level INTEGER NOT NULL DEFAULT 0,
+    issued_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT,
+    revoked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS delegation_grants (
+    grant_id TEXT PRIMARY KEY,
+    grantor_entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    grantee_entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    scope TEXT NOT NULL DEFAULT 'none',
+    constraints TEXT DEFAULT '{}',
+    issued_at TEXT DEFAULT (datetime('now')),
+    expires_at TEXT,
+    revoked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS trust_assertions (
+    assertion_id TEXT PRIMARY KEY,
+    source_entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    subject_entity_id TEXT NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
+    assertion_type TEXT NOT NULL DEFAULT 'identity_link'
+        CHECK(assertion_type IN ('identity_link', 'trust_delegate', 'ownership')),
+    confidence REAL DEFAULT 0.5,
+    evidence TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS policy_audit_log (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT DEFAULT (datetime('now')),
+    policy_name TEXT NOT NULL,
+    decision_action TEXT NOT NULL,
+    viewer_entity_id TEXT,
+    row_id TEXT,
+    context TEXT DEFAULT '{}'
+);
+```
 
 ## Contradictions — Detected Conflicting Facts
 
@@ -196,8 +337,8 @@ CREATE TABLE IF NOT EXISTS dedup_log (
     existing_node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL,
     existing_text TEXT NOT NULL,
     similarity REAL NOT NULL,
-    decision TEXT NOT NULL,  -- auto_reject, haiku_reject, haiku_accept, fallback_reject
-    haiku_reasoning TEXT,
+    decision TEXT NOT NULL,  -- auto_reject, llm_reject, llm_accept, fallback_reject
+    llm_reasoning TEXT,
     review_status TEXT DEFAULT 'unreviewed'
         CHECK(review_status IN ('unreviewed', 'confirmed', 'reversed')),
     review_resolution TEXT,
@@ -285,7 +426,7 @@ CREATE TABLE IF NOT EXISTS metadata (
 );
 
 -- Seeded values:
--- schema_version = '3'
+-- schema_version = '6'
 -- embedding_model = 'qwen3-embedding:8b'
 -- embedding_dim = '4096'
 ```
@@ -411,7 +552,15 @@ CREATE INDEX idx_nodes_pinned ON nodes(pinned);
 CREATE INDEX idx_nodes_source ON nodes(source);
 CREATE INDEX idx_nodes_owner ON nodes(owner_id);
 CREATE INDEX idx_nodes_owner_status ON nodes(owner_id, status);
+CREATE INDEX idx_nodes_actor ON nodes(actor_id);
+CREATE INDEX idx_nodes_subject_entity ON nodes(subject_entity_id);
 CREATE INDEX idx_nodes_session ON nodes(session_id);
+CREATE INDEX idx_nodes_source_conversation ON nodes(source_conversation_id);
+CREATE INDEX idx_nodes_conversation ON nodes(conversation_id, created_at);
+CREATE INDEX idx_nodes_speaker_entity ON nodes(speaker_entity_id, status);
+CREATE INDEX idx_nodes_visibility_scope ON nodes(visibility_scope, sensitivity, status);
+CREATE INDEX idx_nodes_subject_status_updated ON nodes(subject_entity_id, status, updated_at);
+CREATE INDEX idx_nodes_source_status_updated ON nodes(source_conversation_id, status, updated_at);
 CREATE INDEX idx_nodes_status ON nodes(status);
 CREATE INDEX idx_nodes_accessed ON nodes(accessed_at);
 CREATE INDEX idx_nodes_confidence ON nodes(confidence);

@@ -378,7 +378,7 @@ edges                   -- Relationships between nodes
   source_fact_id FK -> nodes(id) ON DELETE SET NULL
 
 nodes_fts               -- FTS5 virtual table (Porter stemming, name + keywords)
-node_embeddings         -- sqlite-vec ANN index (float32 vectors)
+vec_nodes               -- sqlite-vec ANN index (float32 vectors)
 
 contradictions          -- Detected conflicting facts (pending/resolved/false_positive)
 dedup_log               -- All dedup decisions (for review)
@@ -455,7 +455,7 @@ The task numbering is historical -- tasks were added over time and the numbers r
 | review | High-reasoning LLM reviews pending facts (approve/reject/rewrite) | High |
 | temporal | Resolve relative dates ("last Tuesday") to absolute dates | No |
 | dedup_review | Review recent dedup rejections (were they correct?) | High |
-| duplicates + contradictions | Shared recall pass, then dedup (cosine > 0.85) + contradiction detection | Low |
+| duplicates + contradictions | Shared recall pass, then dedup (auto-reject >=0.98, LLM verify 0.88-0.98) + contradiction detection | Low |
 | contradictions (resolve) | High-reasoning LLM resolves detected contradictions (keep_a/keep_b/merge) | High |
 | decay | Ebbinghaus exponential confidence decay on old unused facts | No |
 | decay_review | Review memories that decayed below threshold (delete/extend/pin) | High |
@@ -659,7 +659,7 @@ python3 datastore/docsdb/registry.py find-project path/to/file.py   # Which proj
 python3 datastore/docsdb/registry.py discover --project myproject    # Auto-discover docs in project dir
 ```
 
-**Doc Auto-Update** (`core/docs/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
+**Doc Auto-Update** (`datastore/docsdb/updater.py`): Detects when documentation has drifted from the code it describes. Uses a two-stage filter:
 1. **Low-reasoning pre-filter**: Classifies git diffs as "trivial" (whitespace, comments) or "significant" (logic changes). Trivial diffs skip the expensive update step.
 2. **High-reasoning update**: Reads the stale doc + relevant diffs, proposes targeted edits.
 
