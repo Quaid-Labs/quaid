@@ -102,6 +102,20 @@ except ImportError:
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
 
+_DEFAULT_DOMAIN_DESCRIPTIONS = {
+    "personal": "identity, preferences, relationships, life events",
+    "technical": "code, infra, APIs, architecture",
+    "project": "project status, tasks, files, milestones",
+    "work": "job/team/process decisions not deeply technical",
+    "health": "training, injuries, routines, wellness",
+    "finance": "budgeting, purchases, salary, bills",
+    "travel": "trips, moves, places, logistics",
+    "schedule": "dates, appointments, deadlines",
+    "research": "options considered, comparisons, tradeoff analysis",
+    "household": "home, chores, food planning, shared logistics",
+    "legal": "contracts, policy, and regulatory constraints",
+}
+
 
 @dataclass
 class Node:
@@ -356,6 +370,20 @@ class MemoryGraph:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity ON entity_aliases(entity_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_aliases_lookup ON entity_aliases(platform, source_id, handle)")
 
+            # Seed/update domain registry from configured defaults.
+            for domain_id, description in _registered_domains().items():
+                conn.execute(
+                    """
+                    INSERT INTO domain_registry(domain, description, active)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(domain) DO UPDATE SET
+                      description = excluded.description,
+                      active = 1,
+                      updated_at = datetime('now')
+                    """,
+                    (domain_id, description),
+                )
+
             # Default/backfill attribution values for legacy rows.
             conn.execute(
                 """
@@ -542,6 +570,37 @@ class MemoryGraph:
         """Calculate cosine similarity. Delegates to lib.similarity."""
         return _lib_cosine_similarity(a, b)
 
+    def _extract_domains_from_attrs(self, attrs: Any) -> List[str]:
+        if not isinstance(attrs, dict):
+            return []
+        return _normalize_domains(attrs.get("domains"))
+
+    def _sync_node_domains(
+        self,
+        conn: sqlite3.Connection,
+        node_id: str,
+        domains: List[str],
+    ) -> None:
+        conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
+        if not domains:
+            return
+        registered = _registered_domains()
+        for domain in domains:
+            if domain not in registered:
+                # Auto-register newly introduced domains with blank description.
+                conn.execute(
+                    """
+                    INSERT INTO domain_registry(domain, description, active)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(domain) DO UPDATE SET active = 1, updated_at = datetime('now')
+                    """,
+                    (domain, ""),
+                )
+            conn.execute(
+                "INSERT OR IGNORE INTO node_domains(node_id, domain) VALUES (?, ?)",
+                (node_id, domain),
+            )
+
     # ==========================================================================
     # Node Operations
     # ==========================================================================
@@ -624,6 +683,7 @@ class MemoryGraph:
                         raise RuntimeError(
                             "Vector index upsert failed during add_node while fail-hard mode is enabled"
                         ) from exc
+            self._sync_node_domains(conn, node.id, self._extract_domains_from_attrs(node.attributes))
         return node.id
 
     def update_node(self, node: Node, embed: bool = False) -> bool:
@@ -726,6 +786,8 @@ class MemoryGraph:
                             "update_node updated node %s but vec_nodes sync was skipped",
                             node.id,
                         )
+            if result.rowcount > 0:
+                self._sync_node_domains(conn, node.id, self._extract_domains_from_attrs(node.attributes))
             return result.rowcount > 0
 
     def get_node(self, node_id: str) -> Optional[Node]:
@@ -2254,7 +2316,7 @@ def graph_aware_recall(
     limit: int = 5,
     min_similarity: float = 0.60,
     graph_depth: int = 1,
-    technical_scope: str = "any",
+    domain: Optional[Dict[str, bool]] = None,
     project: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Combined search: vector search + pronoun resolution + bidirectional graph expansion.
@@ -2322,7 +2384,7 @@ def graph_aware_recall(
         limit=limit * 3,
         owner_id=owner_id,
         min_similarity=min_similarity,
-        technical_scope=technical_scope,
+        domain=domain,
         project=project,
     )
     direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
@@ -3073,8 +3135,79 @@ def _log_recall(graph, query: str, owner_id: Optional[str], intent: str,
         pass  # Observability logging is strictly best-effort
 
 
+def _normalize_domain_tag(value: Optional[str]) -> Optional[str]:
+    """Normalize domain labels for registry and memory attributes."""
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    norm = re.sub(r"[^a-z0-9_]+", "_", raw)
+    norm = re.sub(r"_{2,}", "_", norm).strip("_")
+    return norm[:64] if norm else None
+
+
+def _registered_domains() -> Dict[str, str]:
+    """Read registered domains from config, with sane defaults."""
+    domains = dict(_DEFAULT_DOMAIN_DESCRIPTIONS)
+    if not _HAS_CONFIG:
+        return domains
+    try:
+        cfg_domains = getattr(_get_memory_config().retrieval, "domains", {}) or {}
+        if isinstance(cfg_domains, dict):
+            normalized = {}
+            for raw_key, raw_desc in cfg_domains.items():
+                key = _normalize_domain_tag(raw_key)
+                if not key:
+                    continue
+                normalized[key] = str(raw_desc or "").strip() or domains.get(key, "")
+            if normalized:
+                domains = normalized
+    except Exception:
+        pass
+    return domains
+
+
+def _normalize_domains(values: Any) -> List[str]:
+    """Normalize domains from input into a deduplicated list."""
+    if values is None:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list):
+        return []
+    seen = set()
+    out: List[str] = []
+    for value in values:
+        norm = _normalize_domain_tag(value)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return out
+
+
+def _normalize_domain_filter(value: Any) -> Tuple[bool, set[str]]:
+    """Normalize recall domain filter map.
+
+    Returns:
+      (include_all, included_domains)
+    """
+    if not isinstance(value, dict):
+        return True, set()
+    include = {
+        _normalize_domain_tag(k)
+        for k, v in value.items()
+        if bool(v) and _normalize_domain_tag(k) and _normalize_domain_tag(k) != "all"
+    }
+    if include:
+        return False, include
+    include_all = bool(value.get("all", True))
+    return include_all, set()
+
+
 def _normalize_project_tag(value: Optional[str]) -> Optional[str]:
-    """Normalize project/domain labels used for technical memory filtering."""
+    """Normalize project label."""
     if value is None:
         return None
     raw = str(value).strip().lower()
@@ -3109,7 +3242,7 @@ def recall(
     participant_entity_ids: Optional[List[str]] = None,
     include_unscoped: bool = True,
     debug: bool = False,
-    technical_scope: str = "any",
+    domain: Optional[Dict[str, bool]] = None,
     project: Optional[str] = None,
     low_signal_retry: bool = True,
 ) -> List[Dict[str, Any]]:
@@ -3133,8 +3266,8 @@ def recall(
         use_reranker: Override config reranker_enabled (None = use config)
         date_from: Only return memories created on or after this date (YYYY-MM-DD)
         date_to: Only return memories created on or before this date (YYYY-MM-DD)
-        technical_scope: "personal", "technical", or "any" (default)
-        project: Optional project/domain label filter (applies to technical results)
+        domain: Optional domain filter map (default {"all": true})
+        project: Optional project label filter
     """
     if not query or not query.strip():
         return []
@@ -3161,9 +3294,7 @@ def recall(
     if privacy is None:
         privacy = ["private", "shared", "public"]
     graph = get_graph()
-    technical_scope = (technical_scope or "any").strip().lower()
-    if technical_scope not in {"personal", "technical", "any"}:
-        technical_scope = "any"
+    include_all_domains, included_domains = _normalize_domain_filter(domain)
     requested_project = _normalize_project_tag(project)
 
     # Strip gateway metadata from query (e.g. "[Telegram User id:...] actual message")
@@ -3392,7 +3523,7 @@ def recall(
             "privacy": node.privacy,
             "owner_id": node.owner_id,
             "_multi_pass": node.id in _multi_pass_ids,
-            "is_technical": _attrs.get("is_technical", False),
+            "domains": _normalize_domains(_attrs.get("domains")),
             "source_type": _attrs.get("source_type"),
             "project": _attrs.get("project"),
             "source_channel": _attrs.get("source_channel"),
@@ -3455,7 +3586,7 @@ def recall(
                                     "id": co_node.id,
                                     "via_relation": "co_session",
                                     "hop_depth": 0,
-                                    "is_technical": _co_attrs.get("is_technical", False),
+                                    "domains": _normalize_domains(_co_attrs.get("domains")),
                                     "source_type": _co_attrs.get("source_type"),
                                     "project": _co_attrs.get("project"),
                                 })
@@ -3531,7 +3662,7 @@ def recall(
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
                             "_multi_pass": rel_node.id in _multi_pass_ids,
-                            "is_technical": _rel_attrs.get("is_technical", False),
+                            "domains": _normalize_domains(_rel_attrs.get("domains")),
                             "project": _rel_attrs.get("project"),
                         })
             else:
@@ -3566,15 +3697,15 @@ def recall(
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
                             "_multi_pass": rel_node.id in _multi_pass_ids,
-                            "is_technical": _rel_attrs.get("is_technical", False),
+                            "domains": _normalize_domains(_rel_attrs.get("domains")),
                             "project": _rel_attrs.get("project"),
                         })
 
-    # Explicit scope filter for technical vs personal retrieval.
-    if technical_scope == "technical":
-        output = [r for r in output if bool(r.get("is_technical"))]
-    elif technical_scope == "personal":
-        output = [r for r in output if not bool(r.get("is_technical"))]
+    if not include_all_domains and included_domains:
+        output = [
+            r for r in output
+            if bool(set(_normalize_domains(r.get("domains"))) & included_domains)
+        ]
     if requested_project:
         output = [
             r for r in output
@@ -3718,7 +3849,7 @@ def recall(
                         date_from=date_from,
                         date_to=date_to,
                         debug=False,
-                        technical_scope=technical_scope,
+                        domain=domain,
                         low_signal_retry=False,
                     )
                     if len(retry_output) > len(final_output):
@@ -3795,8 +3926,8 @@ def store(
     keywords: Optional[str] = None,  # Space-separated derived search terms
     source_type: Optional[str] = None,  # user, assistant, tool, import
     target_datastore: Optional[str] = None,  # reserved routing seam (no-op in memorydb)
-    is_technical: bool = False,  # technical/project-state memory flag
-    project: Optional[str] = None,  # project/domain label for technical facts
+    domains: Optional[List[str]] = None,  # optional domain tags
+    project: Optional[str] = None,  # project label for project-state facts
     source_channel: Optional[str] = None,  # conversation channel/source (telegram/discord/etc.)
     source_conversation_id: Optional[str] = None,  # stable thread/group identifier
     source_author_id: Optional[str] = None,  # external speaker/author identifier
@@ -3866,6 +3997,7 @@ def store(
         if source_type not in {"user", "assistant", "both", "tool", "import"}:
             source_type = None
     project = _normalize_project_tag(project)
+    domains = _normalize_domains(domains)
 
     # Default speaker attribution for assistant-originated facts when omitted.
     if (not speaker) and source_type == "assistant":
@@ -3888,11 +4020,11 @@ def store(
     graph = get_graph()
 
     def _apply_metadata_flags(existing: Node) -> None:
-        """Persist source/technical metadata on dedup-update paths."""
+        """Persist source/domain metadata on dedup-update paths."""
         if not (
             source_type
             or target_datastore
-            or is_technical
+            or domains
             or project
             or source_channel
             or source_conversation_id
@@ -3914,8 +4046,8 @@ def store(
             attrs["target_datastore"] = target_datastore
         if speaker and not existing.speaker:
             existing.speaker = speaker
-        if is_technical:
-            attrs["is_technical"] = True
+        if domains:
+            attrs["domains"] = _normalize_domains((attrs.get("domains") or []) + domains)
         if project and not attrs.get("project"):
             attrs["project"] = project
         if source_channel and not attrs.get("source_channel"):
@@ -4255,7 +4387,7 @@ def store(
     if (
         source_type
         or target_datastore
-        or is_technical
+        or domains
         or project
         or source_channel
         or source_conversation_id
@@ -4274,8 +4406,8 @@ def store(
             attrs["source_type"] = source_type
         if target_datastore:
             attrs["target_datastore"] = target_datastore
-        if is_technical:
-            attrs["is_technical"] = True
+        if domains:
+            attrs["domains"] = domains
         if project:
             attrs["project"] = project
         if source_channel:
@@ -5144,7 +5276,7 @@ if __name__ == "__main__":
         search_p.add_argument("--compaction-time", default=None, help="Compaction timestamp for filtering")
         search_p.add_argument("--date-from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
         search_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
-        search_p.add_argument("--technical-scope", default="any", choices=["personal", "technical", "any"], help="Filter by technical flag (default: any)")
+        search_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
         search_p.add_argument("--project", default=None, help="Filter by project/domain label")
         search_p.add_argument("--session-id", default=None, help="Filter results to a specific session ID")
         search_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
@@ -5170,7 +5302,7 @@ if __name__ == "__main__":
         search_ga_p.add_argument("--owner", default=None, help="Owner ID")
         search_ga_p.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
         search_ga_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
-        search_ga_p.add_argument("--technical-scope", default="any", choices=["personal", "technical", "any"], help="Filter by technical flag (default: any)")
+        search_ga_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
         search_ga_p.add_argument("--project", default=None, help="Filter by project/domain label")
         search_ga_p.add_argument("--json", action="store_true", help="JSON output")
 
@@ -5195,7 +5327,7 @@ if __name__ == "__main__":
         store_p.add_argument("--created-at", default=None, help="Override created_at timestamp (ISO format)")
         store_p.add_argument("--accessed-at", default=None, help="Override accessed_at timestamp (ISO format)")
         store_p.add_argument("--project", default=None, help="Project name this fact belongs to (stored in attributes)")
-        store_p.add_argument("--is-technical", action="store_true", help="Mark as technical/project implementation detail")
+        store_p.add_argument("--domains", default="", help='Comma-separated domain tags (e.g., "technical,research")')
         store_p.add_argument("--sensitivity", default=None, help="Sensitivity tag (private_health, financial, relationship_conflict, family_trauma, emotional_vulnerability)")
         store_p.add_argument("--sensitivity-handling", default=None, help="Handling guidance for sensitive facts")
 
@@ -5242,7 +5374,7 @@ if __name__ == "__main__":
         recall_p.add_argument("--owner", default=None, help="Owner ID")
         recall_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
         recall_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
-        recall_p.add_argument("--technical-scope", default="any", choices=["personal", "technical", "any"], help="Filter by technical flag (default: any)")
+        recall_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
         recall_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
 
@@ -5422,7 +5554,8 @@ if __name__ == "__main__":
                     if not rows:
                         print("No facts found for this session")
             else:
-                results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, current_session_id=args.current_session_id, compaction_time=args.compaction_time, date_from=getattr(args, 'date_from', None), date_to=getattr(args, 'date_to', None), debug=getattr(args, 'debug', False), technical_scope=getattr(args, 'technical_scope', 'any'), project=getattr(args, 'project', None))
+                domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
+                results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, current_session_id=args.current_session_id, compaction_time=args.compaction_time, date_from=getattr(args, 'date_from', None), date_to=getattr(args, 'date_to', None), debug=getattr(args, 'debug', False), domain=domain_filter, project=getattr(args, 'project', None))
                 if args.json:
                     print(json.dumps(results))
                 else:
@@ -5449,6 +5582,10 @@ if __name__ == "__main__":
         elif args.command == "store":
             try:
                 owner = args.owner or _get_memory_config().users.default_owner
+                parsed_domains = [
+                    d.strip() for d in str(getattr(args, "domains", "") or "").split(",")
+                    if d.strip()
+                ]
                 result = store(
                     args.text,
                     category=args.category,
@@ -5466,7 +5603,7 @@ if __name__ == "__main__":
                     knowledge_type=args.knowledge_type,
                     keywords=args.keywords,
                     source_type=args.source_type,
-                    is_technical=args.is_technical,
+                    domains=parsed_domains,
                     project=getattr(args, 'project', None),
                     created_at=getattr(args, 'created_at', None),
                     accessed_at=getattr(args, 'accessed_at', None),
@@ -5475,15 +5612,15 @@ if __name__ == "__main__":
                 # Apply on ALL statuses (created, duplicate, updated) — dedup
                 # returns existing node ID, and we still want to tag it.
                 tag_node_id = result.get("id") or result.get("existing_id")
-                if tag_node_id and (args.project or args.is_technical or args.sensitivity):
+                if tag_node_id and (args.project or parsed_domains or args.sensitivity):
                     graph = get_graph()
                     node = graph.get_node(tag_node_id)
                     if node:
                         attrs = node.attributes if isinstance(node.attributes, dict) else {}
                         if args.project:
                             attrs["project"] = _normalize_project_tag(args.project)
-                        if args.is_technical:
-                            attrs["is_technical"] = True
+                        if parsed_domains:
+                            attrs["domains"] = _normalize_domains(parsed_domains)
                         if args.sensitivity:
                             attrs["sensitivity"] = args.sensitivity
                         if args.sensitivity_handling:
@@ -5590,7 +5727,7 @@ if __name__ == "__main__":
                 owner_id=args.owner,
                 limit=args.limit,
                 graph_depth=args.depth,
-                technical_scope=getattr(args, 'technical_scope', 'any'),
+                domain=json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}'),
                 project=getattr(args, 'project', None),
             )
 
@@ -5709,7 +5846,8 @@ if __name__ == "__main__":
 
         elif args.command == "recall":
             query = " ".join(args.query)
-            results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, debug=getattr(args, 'debug', False), technical_scope=getattr(args, 'technical_scope', 'any'), project=getattr(args, 'project', None))
+            domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
+            results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, debug=getattr(args, 'debug', False), domain=domain_filter, project=getattr(args, 'project', None))
 
             for r in results:
                 flags = []

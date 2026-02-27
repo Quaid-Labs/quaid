@@ -1792,6 +1792,7 @@ type MemoryResult = {
 };
 
 type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
+type DomainFilter = Record<string, boolean>;
 
 function isLowInformationEntityNode(result: MemoryResult): boolean {
   if ((result.via || "vector") === "graph" || result.category === "graph") return false;
@@ -1819,7 +1820,12 @@ async function recall(
 ): Promise<MemoryResult[]> {
   try {
     const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
-    args.push("--technical-scope", technicalScope);
+    const domainFilter = technicalScope === "technical"
+      ? { technical: true }
+      : technicalScope === "personal"
+        ? { personal: true }
+        : { all: true };
+    args.push("--domain-filter", JSON.stringify(domainFilter));
     if (project && String(project).trim()) {
       args.push("--project", String(project).trim());
     }
@@ -2186,7 +2192,7 @@ async function totalRecall(
     graphDepth: number;
     intent?: "general" | "agent_actions" | "relationship" | "technical";
     ranking?: { sourceTypeBoosts?: Record<string, number> };
-    technicalScope: "personal" | "technical" | "any";
+    domain: DomainFilter;
     project?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -2207,7 +2213,7 @@ async function total_recall(
     reasoning?: "fast" | "deep";
     intent?: "general" | "agent_actions" | "relationship" | "technical";
     ranking?: { sourceTypeBoosts?: Record<string, number> };
-    technicalScope: "personal" | "technical" | "any";
+    domain: DomainFilter;
     project?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -2224,7 +2230,7 @@ interface RecallOptions {
   limit?: number;
   expandGraph?: boolean;
   graphDepth?: number;
-  technicalScope?: "personal" | "technical" | "any";
+  domain?: DomainFilter;
   project?: string;
   datastores?: KnowledgeDatastore[];
   routeStores?: boolean;
@@ -2512,7 +2518,7 @@ const quaidPlugin = {
         );
         const injectLimit = autoInjectK;
         const injectIntent: "general" = "general";
-        const injectTechnicalScope: "personal" | "technical" | "any" = "personal";
+        const injectDomain: DomainFilter = { personal: true };
         const injectDatastores: KnowledgeDatastore[] | undefined = useTotalRecallForInject
           ? undefined
           : ["vector_basic", "graph"];
@@ -2523,7 +2529,7 @@ const quaidPlugin = {
           datastores: injectDatastores,
           routeStores: useTotalRecallForInject,
           intent: injectIntent,
-          technicalScope: injectTechnicalScope,
+          domain: injectDomain,
           failOpen: routerFailOpen,
           waitForExtraction: false,
           sourceTag: "auto_inject"
@@ -2740,14 +2746,8 @@ ${recallStoreGuidance}`,
                 Type.Boolean({ description: "If true, router/prepass failures return no recall instead of throwing an error." })
               ),
             })),
-            technicalScope: Type.Optional(
-              Type.Union([
-                Type.Literal("personal"),
-                Type.Literal("technical"),
-                Type.Literal("any"),
-              ], { description: "Filter memory type: personal=non-technical only, technical=technical only, any=both (default personal)." })
-            ),
             filters: Type.Optional(Type.Object({
+              domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean(), description: "Domain filter map. Example: {\"all\":true} or {\"technical\":true}." })),
               dateFrom: Type.Optional(
                 Type.String({ description: "Only return memories from this date onward (YYYY-MM-DD)." })
               ),
@@ -2772,24 +2772,12 @@ ${recallStoreGuidance}`,
             })),
             datastoreOptions: Type.Optional(Type.Object({
               vector: Type.Optional(Type.Object({
-                technicalScope: Type.Optional(
-                  Type.Union([
-                    Type.Literal("personal"),
-                    Type.Literal("technical"),
-                    Type.Literal("any"),
-                  ])
-                ),
+                domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean() })),
                 project: Type.Optional(Type.String()),
               })),
               graph: Type.Optional(Type.Object({
                 depth: Type.Optional(Type.Number()),
-                technicalScope: Type.Optional(
-                  Type.Union([
-                    Type.Literal("personal"),
-                    Type.Literal("technical"),
-                    Type.Literal("any"),
-                  ])
-                ),
+                domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean() })),
                 project: Type.Optional(Type.String()),
               })),
               project: Type.Optional(Type.Object({
@@ -2823,7 +2811,9 @@ ${recallStoreGuidance}`,
             const routeStores = options.routing?.enabled;
             const reasoning = options.routing?.reasoning ?? "fast";
             const intent = options.routing?.intent ?? "general";
-            const technicalScope = options.technicalScope ?? "personal";
+            const domain = (options.filters?.domain && typeof options.filters.domain === "object")
+              ? options.filters.domain
+              : { all: true };
             const dateFrom = options.filters?.dateFrom;
             const dateTo = options.filters?.dateTo;
             const project = options.filters?.project;
@@ -2847,9 +2837,9 @@ ${recallStoreGuidance}`,
             const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
             const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
 
-            console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, technicalScope=${technicalScope}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
+            console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
             const results = await recallMemories({
-              query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, technicalScope,
+              query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, domain,
               project, datastoreOptions,
               failOpen: routerFailOpen,
               dateFrom, dateTo, docs, waitForExtraction: true, sourceTag: "tool"
@@ -3518,12 +3508,12 @@ notify_docs_search(data['query'], data['results'])
     async function recallMemories(opts: RecallOptions): Promise<MemoryResult[]> {
       const {
         query, limit = 10, expandGraph = false,
-        graphDepth = 1, datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, technicalScope = "any", project, dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown"
+        graphDepth = 1, datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, domain = { all: true }, project, dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown"
       } = opts;
       const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
 
       console.log(
-        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} technicalScope=${technicalScope} project=${project || "any"} waitForExtraction=${waitForExtraction}`
+        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} domain=${JSON.stringify(domain)} project=${project || "any"} waitForExtraction=${waitForExtraction}`
       );
 
       // Wait for in-flight extraction if requested
@@ -3554,7 +3544,7 @@ notify_docs_search(data['query'], data['results'])
           reasoning,
           intent,
           ranking,
-          technicalScope,
+          domain,
           project,
           dateFrom,
           dateTo,
@@ -3569,7 +3559,7 @@ notify_docs_search(data['query'], data['results'])
         graphDepth,
         intent,
         ranking,
-        technicalScope,
+        domain,
         project,
         dateFrom,
         dateTo,

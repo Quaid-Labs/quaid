@@ -243,7 +243,7 @@ class TestStoreBasic:
             node = graph.get_node(result["id"])
             assert node.owner_id == "quaid"
 
-    def test_store_marks_is_technical_attribute(self, tmp_path):
+    def test_store_marks_domains_attribute(self, tmp_path):
         from datastore.memorydb.memory_graph import store
         graph, _ = _make_graph(tmp_path)
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
@@ -252,11 +252,11 @@ class TestStoreBasic:
                 "Quaid added SQL injection regression tests to recipe app",
                 owner_id="quaid",
                 skip_dedup=True,
-                is_technical=True,
+                domains=["technical"],
             )
             node = graph.get_node(result["id"])
             attrs = json.loads(node.attributes) if isinstance(node.attributes, str) else (node.attributes or {})
-            assert attrs.get("is_technical") is True
+            assert attrs.get("domains") == ["technical"]
 
     def test_store_preserves_privacy(self, tmp_path):
         from datastore.memorydb.memory_graph import store
@@ -426,24 +426,24 @@ class TestRecallBasic:
             for r in results:
                 assert r["similarity"] >= 0.999
 
-    def test_recall_technical_scope_personal_filters_technical(self, tmp_path):
+    def test_recall_domain_personal_filters_technical(self, tmp_path):
         from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
              patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
-            store("Quaid's sister is named Shannon", owner_id="quaid", skip_dedup=True)
+            store("Quaid's sister is named Shannon", owner_id="quaid", skip_dedup=True, domains=["personal"])
             store(
                 "Quaid added Docker compose deployment to recipe app",
                 owner_id="quaid",
                 skip_dedup=True,
-                is_technical=True,
+                domains=["technical"],
             )
-            results = recall("Quaid recipe app family", owner_id="quaid", use_routing=False, min_similarity=0.0, technical_scope="personal")
+            results = recall("Quaid recipe app family", owner_id="quaid", use_routing=False, min_similarity=0.0, domain={"personal": True})
             assert results
-            assert all(not bool(r.get("is_technical")) for r in results)
+            assert all("technical" not in (r.get("domains") or []) for r in results)
 
-    def test_recall_technical_scope_technical_filters_personal(self, tmp_path):
+    def test_recall_domain_technical_filters_personal(self, tmp_path):
         from datastore.memorydb.memory_graph import store, recall
         graph, _ = _make_graph(tmp_path)
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
@@ -454,11 +454,11 @@ class TestRecallBasic:
                 "Quaid fixed SQL injection in search endpoint",
                 owner_id="quaid",
                 skip_dedup=True,
-                is_technical=True,
+                domains=["technical"],
             )
-            results = recall("search endpoint SQL injection", owner_id="quaid", use_routing=False, min_similarity=0.0, technical_scope="technical")
+            results = recall("search endpoint SQL injection", owner_id="quaid", use_routing=False, min_similarity=0.0, domain={"technical": True})
             assert results
-            assert all(bool(r.get("is_technical")) for r in results)
+            assert all("technical" in (r.get("domains") or []) for r in results)
 
 
 # ---------------------------------------------------------------------------
