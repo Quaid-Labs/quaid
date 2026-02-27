@@ -66,6 +66,7 @@ from lib.tokens import (
     STOPWORDS as _LIB_STOPWORDS,
 )
 from lib.runtime_context import get_workspace_dir, get_adapter_instance
+from lib.tools_domain_sync import sync_tools_domain_block as _sync_tools_domain_block
 
 logger = logging.getLogger(__name__)
 
@@ -582,22 +583,47 @@ class MemoryGraph:
         conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
         if not domains:
             return
-        registered = _registered_domains()
+        registered = dict(_registered_domains())
+        added_new_domain = False
         for domain in domains:
             if domain not in registered:
-                # Auto-register newly introduced domains with blank description.
+                description = _default_domain_description(domain)
+                # Auto-register newly introduced domains with a generated description.
                 conn.execute(
                     """
                     INSERT INTO domain_registry(domain, description, active)
                     VALUES (?, ?, 1)
-                    ON CONFLICT(domain) DO UPDATE SET active = 1, updated_at = datetime('now')
+                    ON CONFLICT(domain) DO UPDATE SET
+                      description = CASE
+                        WHEN domain_registry.description IS NULL
+                          OR TRIM(domain_registry.description) = ''
+                        THEN excluded.description
+                        ELSE domain_registry.description
+                      END,
+                      active = 1,
+                      updated_at = datetime('now')
                     """,
-                    (domain, ""),
+                    (domain, description),
                 )
+                registered[domain] = description
+                added_new_domain = True
             conn.execute(
                 "INSERT OR IGNORE INTO node_domains(node_id, domain) VALUES (?, ?)",
                 (node_id, domain),
             )
+        if added_new_domain:
+            try:
+                rows = conn.execute(
+                    "SELECT domain, description FROM domain_registry WHERE active = 1 ORDER BY domain"
+                ).fetchall()
+                domain_map = {
+                    str(r["domain"]): str(r["description"] or "").strip()
+                    for r in rows
+                    if str(r["domain"] or "").strip()
+                }
+                _sync_tools_domain_block(domain_map or registered)
+            except Exception as exc:
+                logger.debug("tools_domain_sync_failed: %s", exc)
 
     # ==========================================================================
     # Node Operations
@@ -3164,6 +3190,15 @@ def _registered_domains() -> Dict[str, str]:
     except Exception:
         pass
     return domains
+
+
+def _default_domain_description(domain_id: str) -> str:
+    """Generate a fallback description for runtime-added domains."""
+    label = re.sub(r"[_-]+", " ", str(domain_id or "").strip()).strip()
+    label = re.sub(r"\s+", " ", label)
+    if not label:
+        return "runtime-added domain"
+    return f"runtime-added domain: {label}"
 
 
 def _normalize_domains(values: Any) -> List[str]:

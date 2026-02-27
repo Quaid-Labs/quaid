@@ -22,7 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- Constants ---
-const VERSION = "0.2.0-alpha";
+const VERSION = "0.2.1-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw"; // Hooks merged in PR #13287
 const PROJECT_URL = "https://github.com/steadman-labs/quaid";
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
@@ -1563,6 +1563,13 @@ print(len(found))
     const regQuaidResult = spawnSync("python3", ["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
     const quaidDocCount = (regQuaidResult.stdout || "").trim();
     log.info(`Quaid project installed (${quaidDocCount} docs registered)`);
+
+    // Keep projects/quaid/TOOLS.md domain block aligned after install.
+    spawnSync("python3", ["scripts/sync-tools-domain-block.py", "--workspace", WORKSPACE], {
+      cwd: PLUGIN_DIR,
+      stdio: "pipe",
+      env: { ...process.env, QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE },
+    });
   }
 
   log.success("Installation complete!");
