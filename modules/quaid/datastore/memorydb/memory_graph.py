@@ -3999,7 +3999,7 @@ def store(
 
     if not owner_id:
         try:
-            owner_id = get_config().users.default_owner
+            owner_id = _get_memory_config().users.default_owner
         except Exception:
             owner_id = "default"
     owner_id = str(owner_id).strip()
