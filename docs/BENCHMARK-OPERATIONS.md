@@ -74,6 +74,7 @@ For `janitor-parallel-bench` (3 successful samples), use these provisional caps:
 
 Example:
 ```bash
+cd ~/quaid/dev
 QUAID_E2E_RUNTIME_BUDGET_SECONDS=479 \
 QUAID_E2E_STAGE_BUDGETS_JSON='{"bootstrap":48,"janitor":394}' \
 bash modules/quaid/scripts/run-quaid-e2e.sh --suite janitor-parallel-bench

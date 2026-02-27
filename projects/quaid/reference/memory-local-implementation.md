@@ -79,14 +79,13 @@ The search system uses a multi-stage pipeline with RRF fusion:
 
 1. **Intent classification** — `classify_intent(query)` categorizes as WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY/PROJECT to adjust scoring weights
 2. **Parallel search** — `search_hybrid()` runs BM25 (FTS5) and semantic (cosine) concurrently via `ThreadPoolExecutor(max_workers=2)`
-3. **RRF fusion** — Reciprocal Rank Fusion (k=60) combines results with dynamic fusion weights via `_get_fusion_weights(intent)`: default vector 0.7 / FTS 0.3, but WHO/WHERE boost FTS to 0.5/0.5, WHEN boosts FTS to 0.6, PREFERENCE/WHY boost vector to 0.8, PROJECT uses 0.6/0.4 (moderate FTS boost for tech terms)
-4. **Content hash pre-filter** — SHA256 exact-dedup removes identical results before scoring
-5. **Composite scoring** — Base weighted score is 60% relevance + 20% recency + 15% access frequency, then additive bonuses apply (confidence, confirmation count, temporal metadata, storage strength)
-6. **Temporal validity filtering** — Expired facts penalized, future facts deprioritized
-7. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
-8. **Multi-hop traversal** — `get_related_bidirectional()` with depth=2, hop score decay 0.7^depth
-9. **Access tracking** — `_update_access()` increments access_count and accessed_at for returned results
-10. **Domain filtering** — Recall applies domain-map filters (for example `{all:true}` or `{technical:true}`), preventing unrelated domains from displacing relevant memories in rankings
+3. **RRF fusion** — Reciprocal Rank Fusion (k=60) combines results with dynamic fusion weights via `_get_fusion_weights(intent)`: default vector 0.7 / FTS 0.3, but WHO/WHERE/RELATION boost FTS to 0.5/0.5, WHEN boosts FTS to 0.6, PREFERENCE/WHY boost vector to 0.8, PROJECT uses 0.6/0.4 (moderate FTS boost for tech terms)
+4. **Composite scoring** — Base weighted score is 60% relevance + 20% recency + 15% access frequency, then additive bonuses apply (confidence, confirmation count, temporal metadata, storage strength)
+5. **Temporal validity filtering** — Expired facts penalized, future facts deprioritized
+6. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
+7. **Multi-hop traversal** — `get_related_bidirectional()` with depth=2, hop score decay 0.7^depth
+8. **Access tracking** — `_update_access()` increments access_count and accessed_at for returned results
+9. **Domain filtering** — Recall applies domain-map filters (for example `{all:true}` or `{technical:true}`), preventing unrelated domains from displacing relevant memories in rankings
 
 **BEAM Search (graph traversal enhancement):**
 - BEAM search replaces naive BFS for graph traversal, using scored frontier expansion
@@ -204,7 +203,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 **Hooks:**
 - `before_agent_start` — optional auto-injection pipeline (gated by config/env)
 - `agent_end` — inactivity-timeout extraction (per-message classifier deprecated)
-- `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Now includes combined fact+edge extraction in a single LLM call.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, MEMORY.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
+- `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Combined fact+edge extraction runs across transcript chunks with carry-forward context.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, MEMORY.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
 - `before_reset` — same extraction as compaction, triggered on `/new` or `/reset`
 
 **LLM timeouts:**
@@ -323,7 +322,7 @@ The previous per-message approach (Haiku classifier on each message pair) was:
 - Low context: only saw the last user + assistant message pair
 - Noisy: extracted many system/infrastructure facts that required janitor cleanup
 
-**Current extraction** happens in `before_compaction` and `before_reset` hooks via Opus (full transcript), plus inactivity-timeout extraction when enabled. **Combined fact+edge extraction** performs both fact extraction and relationship detection in a single LLM call for efficiency.
+**Current extraction** happens in `before_compaction` and `before_reset` hooks via Opus (full transcript), plus inactivity-timeout extraction when enabled. **Combined fact+edge extraction** performs both fact extraction and relationship detection in a chunked deep-reasoning loop for efficiency and context-window safety.
 
 ---
 
