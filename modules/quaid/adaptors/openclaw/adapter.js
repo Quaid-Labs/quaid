@@ -1575,6 +1575,138 @@ function isLowInformationEntityNode(result) {
   if (words.length <= 2 && /^[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?$/.test(text)) return true;
   return false;
 }
+const RECALL_RETRY_STOPWORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "do",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "our",
+  "that",
+  "the",
+  "their",
+  "they",
+  "this",
+  "to",
+  "was",
+  "we",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "with",
+  "you",
+  "your"
+]);
+function normalizeToken(raw) {
+  return String(raw || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+function stemToken(token) {
+  if (token.length > 6 && token.endsWith("ing")) return token.slice(0, -3);
+  if (token.length > 5 && token.endsWith("ed")) return token.slice(0, -2);
+  if (token.length > 4 && token.endsWith("s")) return token.slice(0, -1);
+  return token;
+}
+function tokenizeQuery(query) {
+  return String(query || "").split(/\s+/).map((part) => normalizeToken(part)).map((token) => stemToken(token)).filter((token) => token.length >= 3 && !RECALL_RETRY_STOPWORDS.has(token));
+}
+function temporalCuePresent(query) {
+  const lowered = String(query || "").toLowerCase();
+  const cues = ["latest", "current", "currently", "still", "now", "as of", "when", "last", "updated"];
+  return cues.some((cue) => lowered.includes(cue));
+}
+function attributionCuePresent(query) {
+  const lowered = String(query || "").toLowerCase();
+  const cues = ["who", "whose", "did", "does", "maya", "david", "rachel", "linda", "ethan", "priya"];
+  return cues.some((cue) => lowered.includes(cue));
+}
+function computeEntityCoverage(query, results) {
+  const resultBlob = results.map((r) => `${String(r.text || "").toLowerCase()} ${String(r.sourceName || "").toLowerCase()}`).join(" ");
+  const tokens = tokenizeQuery(query);
+  if (!tokens.length) return 1;
+  const matched = tokens.filter((token) => resultBlob.includes(token)).length;
+  return matched / tokens.length;
+}
+function buildExpandedRecallQuery(query) {
+  const tokens = tokenizeQuery(query);
+  const expanded = new Set(tokens);
+  for (const token of tokens) {
+    expanded.add(stemToken(token));
+  }
+  if (temporalCuePresent(query)) {
+    ["latest", "current", "timeline", "asof", "status"].forEach((t) => expanded.add(t));
+  }
+  if (attributionCuePresent(query)) {
+    ["person", "speaker", "attribution"].forEach((t) => expanded.add(t));
+  }
+  const expansionTail = Array.from(expanded).slice(0, 16).join(" ");
+  if (!expansionTail) return query;
+  return `${query} ${expansionTail}`;
+}
+function shouldRetryRecall(query, results) {
+  const reasons = [];
+  if (!results.length) {
+    reasons.push("no_results");
+    return { retry: true, reasons };
+  }
+  const vectorResults = results.filter((r) => {
+    const via = String(r.via || "vector").toLowerCase();
+    return via === "vector" || via === "vector_basic" || via === "vector_technical";
+  });
+  if (!vectorResults.length) {
+    reasons.push("no_vector_hits");
+    return { retry: true, reasons };
+  }
+  const avgSimilarity = vectorResults.reduce((sum, r) => sum + Number(r.similarity || 0), 0) / vectorResults.length;
+  const maxSimilarity = Math.max(...vectorResults.map((r) => Number(r.similarity || 0)));
+  if (avgSimilarity < 0.48 && maxSimilarity < 0.62) {
+    reasons.push("low_similarity");
+  }
+  const coverage = computeEntityCoverage(query, results);
+  if (coverage < 0.35) {
+    reasons.push("low_entity_coverage");
+  }
+  if (temporalCuePresent(query)) {
+    const hasTemporalFields = results.some((r) => Boolean(r.createdAt || r.validFrom || r.validUntil));
+    if (!hasTemporalFields) reasons.push("missing_temporal_context");
+  }
+  return { retry: reasons.length > 0, reasons };
+}
+function mergeRecallResults(primary, secondary, limit) {
+  const merged = /* @__PURE__ */ new Map();
+  const upsert = (row) => {
+    const key = String(row.id || `${row.category}:${row.text}`).trim();
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, row);
+      return;
+    }
+    if (Number(row.similarity || 0) > Number(current.similarity || 0)) {
+      merged.set(key, row);
+    }
+  };
+  primary.forEach(upsert);
+  secondary.forEach(upsert);
+  return Array.from(merged.values()).sort((a, b) => Number(b.similarity || 0) - Number(a.similarity || 0)).slice(0, Math.max(1, limit));
+}
 async function recall(query, limit = 5, currentSessionId, compactionTime, expandGraph = true, graphDepth = 1, technicalScope = "any", project, dateFrom, dateTo) {
   try {
     const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
@@ -3167,12 +3299,27 @@ ${factsOutput || "No facts found."}` }],
           if (raceTimer) clearTimeout(raceTimer);
         }
       }
-      if (routeStores) {
-        return total_recall(query, limit, {
+      const runRecall = (q) => {
+        if (routeStores) {
+          return total_recall(q, limit, {
+            datastores: selectedStores,
+            expandGraph,
+            graphDepth,
+            reasoning,
+            intent,
+            ranking,
+            technicalScope,
+            project,
+            dateFrom,
+            dateTo,
+            docs,
+            datastoreOptions
+          });
+        }
+        return totalRecall(q, limit, {
           datastores: selectedStores,
           expandGraph,
           graphDepth,
-          reasoning,
           intent,
           ranking,
           domain,
@@ -3182,20 +3329,24 @@ ${factsOutput || "No facts found."}` }],
           docs,
           datastoreOptions
         });
+      };
+      const primary = await runRecall(query);
+      if (sourceTag !== "tool") {
+        return primary;
       }
-      return totalRecall(query, limit, {
-        datastores: selectedStores,
-        expandGraph,
-        graphDepth,
-        intent,
-        ranking,
-        domain,
-        project,
-        dateFrom,
-        dateTo,
-        docs,
-        datastoreOptions
-      });
+      const retryDecision = shouldRetryRecall(query, primary);
+      if (!retryDecision.retry) {
+        return primary;
+      }
+      const expanded = buildExpandedRecallQuery(query);
+      if (expanded === query) {
+        return primary;
+      }
+      console.log(
+        `[quaid][recall] retry source=${sourceTag} reasons=${retryDecision.reasons.join(",")} expanded="${expanded.slice(0, 160)}"`
+      );
+      const secondary = await runRecall(expanded);
+      return mergeRecallResults(primary, secondary, limit);
     }
     function readMessagesFromSessionFile(sessionFile) {
       const content = fs.readFileSync(sessionFile, "utf8");
