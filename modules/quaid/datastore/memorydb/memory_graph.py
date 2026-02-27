@@ -4348,6 +4348,36 @@ def create_edge(
         Dict with edge_id, status, and any created entity IDs
     """
     graph = get_graph()
+    relation = (relation or "").strip().lower().replace(" ", "_")
+    if not relation:
+        return {"status": "error", "message": "Relation is required"}
+
+    # Canonicalize common aliases so edge types stay queryable and deduplicated.
+    relation_aliases = {
+        "family_member": "family_of",
+        "family_member_of": "family_of",
+        "relative_of": "family_of",
+        "partner_with": "partner_of",
+        "partnered_with": "partner_of",
+        "married_to": "spouse_of",
+        "engaged_to": "partner_of",
+    }
+    relation = relation_aliases.get(relation, relation)
+
+    # Keep symmetric relations deterministic to avoid A->B and B->A duplicates.
+    symmetric_relations = {
+        "spouse_of",
+        "partner_of",
+        "sibling_of",
+        "family_of",
+        "friend_of",
+        "neighbor_of",
+        "colleague_of",
+        "related_to",
+        "knows",
+    }
+    if relation in symmetric_relations and subject_name.strip().lower() > object_name.strip().lower():
+        subject_name, object_name = object_name, subject_name
 
     # Infer entity type from relation name
     _RELATION_OBJECT_TYPES = {

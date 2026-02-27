@@ -1893,6 +1893,8 @@ _SYNONYM_MAP = {
     "father_of": "parent_of",
     "married_to": "spouse_of",
     "engaged_to": "partner_of",
+    "partner_with": "partner_of",
+    "partnered_with": "partner_of",
     "lives_next_to": "neighbor_of",
     "resides_in": "lives_in",
     "lives_at": "lives_in",
@@ -1906,6 +1908,9 @@ _SYNONYM_MAP = {
     "graduated_from": "attended",
     "works_for": "works_at",
     "occupation": "works_as",
+    "family_member": "family_of",
+    "family_member_of": "family_of",
+    "relative_of": "family_of",
     "because_of": "caused_by",  # because_of(A, B) → caused_by(A, B) — same direction
     "due_to": "caused_by",      # due_to(A, B) → caused_by(A, B) — same direction
 }
