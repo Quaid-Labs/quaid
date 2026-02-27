@@ -3840,7 +3840,13 @@ def store(
         raise ValueError(f"Facts must be at least 3 words (got {word_count}: '{text}'). A fact needs a subject, verb, and object (e.g., 'X is Y').")
 
     if not owner_id:
-        raise ValueError("Owner is required")
+        try:
+            owner_id = get_config().users.default_owner
+        except Exception:
+            owner_id = "default"
+    owner_id = str(owner_id).strip()
+    if not owner_id:
+        owner_id = "default"
 
     confidence = _validate_confidence_unit_interval(confidence, "confidence")
     extraction_confidence = _validate_confidence_unit_interval(
