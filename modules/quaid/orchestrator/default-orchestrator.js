@@ -263,31 +263,31 @@ intent: ${intent}`;
       vector: {
         key: "vector",
         recall: async (ctx) => {
-          const scopeRaw = storeOption(ctx.opts, "vector", "technicalScope");
-          const scope = scopeRaw === "personal" || scopeRaw === "technical" || scopeRaw === "any" ? scopeRaw : ctx.opts.technicalScope;
+          const domainRaw = storeOption(ctx.opts, "vector", "domain");
+          const domain = domainRaw && typeof domainRaw === "object" && !Array.isArray(domainRaw) ? domainRaw : ctx.opts.domain || { all: true };
           const projectRaw = storeOption(ctx.opts, "vector", "project");
           const project = typeof projectRaw === "string" && projectRaw.trim() ? projectRaw.trim() : ctx.opts.project;
-          return deps.recallVector(ctx.query, ctx.limit, scope, project, ctx.opts.dateFrom, ctx.opts.dateTo);
+          return deps.recallVector(ctx.query, ctx.limit, domain, project, ctx.opts.dateFrom, ctx.opts.dateTo);
         }
       },
       vector_basic: {
         key: "vector_basic",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, "personal", ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { personal: true }, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
       },
       vector_technical: {
         key: "vector_technical",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, "technical", ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { technical: true }, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
       },
       graph: {
         key: "graph",
         recall: async (ctx) => {
           const depthRaw = Number(storeOption(ctx.opts, "graph", "depth"));
           const depth = Number.isFinite(depthRaw) && depthRaw > 0 ? Math.floor(depthRaw) : ctx.opts.graphDepth;
-          const scopeRaw = storeOption(ctx.opts, "graph", "technicalScope");
-          const scope = scopeRaw === "personal" || scopeRaw === "technical" || scopeRaw === "any" ? scopeRaw : ctx.opts.technicalScope;
+          const domainRaw = storeOption(ctx.opts, "graph", "domain");
+          const domain = domainRaw && typeof domainRaw === "object" && !Array.isArray(domainRaw) ? domainRaw : ctx.opts.domain || { all: true };
           const projectRaw = storeOption(ctx.opts, "graph", "project");
           const project = typeof projectRaw === "string" && projectRaw.trim() ? projectRaw.trim() : ctx.opts.project;
-          return deps.recallGraph(ctx.query, ctx.limit, depth, scope, project, ctx.opts.dateFrom, ctx.opts.dateTo);
+          return deps.recallGraph(ctx.query, ctx.limit, depth, domain, project, ctx.opts.dateFrom, ctx.opts.dateTo);
         }
       },
       journal: {

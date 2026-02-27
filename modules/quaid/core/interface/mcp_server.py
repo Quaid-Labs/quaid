@@ -44,6 +44,7 @@ from core.interface.api import (
     stats,
     projects_search_docs,
 )
+from config import get_config
 from ingest.extract import extract_from_transcript
 from lib.runtime_context import (
     get_adapter_instance,
@@ -139,7 +140,7 @@ def memory_store(
 def memory_recall(
     query: str,
     limit: int = 5,
-    technical_scope: str = "any",
+    domain_json: str = '{"all": true}',
     min_similarity: float = 0.0,
     debug: bool = False,
     use_routing: bool = True,
@@ -166,7 +167,7 @@ def memory_recall(
     Args:
         query: Natural language query (e.g. "What are the user's hobbies?").
         limit: Maximum number of results (1-20).
-        technical_scope: "personal", "technical", or "any".
+        domain_json: Domain filter map JSON, e.g. {"all": true} or {"technical": true}.
         min_similarity: Optional floor (0.0 uses config/default behavior).
         debug: Include scoring breakdown payloads.
         use_routing: Enable intent/routing search heuristics.
@@ -180,9 +181,12 @@ def memory_recall(
         List of memory dicts with text, category, similarity score, and related graph paths.
     """
     limit = max(1, min(limit, 20))
-    technical_scope = (technical_scope or "any").strip().lower()
-    if technical_scope not in {"personal", "technical", "any"}:
-        technical_scope = "any"
+    try:
+        parsed_domain = json.loads(domain_json or '{"all": true}')
+        if not isinstance(parsed_domain, dict):
+            raise ValueError("domain_json must decode to a JSON object")
+    except Exception as e:
+        raise ValueError(f"invalid domain_json: {e}")
     try:
         parsed_min_similarity = float(min_similarity) if min_similarity is not None else 0.0
     except (TypeError, ValueError):
@@ -209,7 +213,7 @@ def memory_recall(
 
     # Fast path for common/default usage: stay on the stable API wrapper.
     if not has_advanced:
-        return recall(query=query, owner_id=OWNER_ID, limit=limit, technical_scope=technical_scope)
+        return recall(query=query, owner_id=OWNER_ID, limit=limit, domain=parsed_domain)
 
     participant_entity_ids = None
     if participant_entity_ids_json and participant_entity_ids_json.strip():
@@ -226,7 +230,7 @@ def memory_recall(
         query=query,
         owner_id=OWNER_ID,
         limit=limit,
-        technical_scope=technical_scope,
+        domain=parsed_domain,
         min_similarity=(parsed_min_similarity if parsed_min_similarity > 0 else None),
         debug=bool(debug),
         use_routing=bool(use_routing),
@@ -290,7 +294,7 @@ def memory_write(
             source=str(payload.get("source") or "mcp"),
             source_type=str(payload.get("source_type") or "import"),
             pinned=bool(payload.get("pinned") or False),
-            is_technical=bool(payload.get("is_technical") or False),
+            domains=payload.get("domains") if isinstance(payload.get("domains"), list) else None,
         )
 
     if ds == "graph" and act == "create_edge":
@@ -579,10 +583,15 @@ def memory_provider() -> str:
 def memory_capabilities() -> dict:
     """Return read/write/event capabilities for runtime orchestration."""
     from core.runtime.events import get_event_registry
+    try:
+        available_domains = list((get_config().retrieval.domains or {}).keys())
+    except Exception:
+        available_domains = []
     return {
         "owner_id": OWNER_ID,
         "recall": {
-            "technical_scope": ["personal", "technical", "any"],
+            "domain_filter_default": {"all": True},
+            "available_domains": available_domains,
             "supports": [
                 "min_similarity", "debug", "use_routing", "use_aliases",
                 "use_intent", "use_multi_pass", "use_reranker", "date_from", "date_to",
@@ -594,7 +603,7 @@ def memory_capabilities() -> dict:
                 "action": "store_fact",
                 "payload_keys": [
                     "text", "category", "confidence", "knowledge_type",
-                    "source", "source_type", "pinned", "is_technical",
+                    "source", "source_type", "pinned", "domains",
                 ],
             },
             {

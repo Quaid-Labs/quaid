@@ -135,6 +135,24 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
 CREATE INDEX IF NOT EXISTS idx_edges_source_fact ON edges(source_fact_id);
 
+-- Domain registry + node-to-domain mapping
+CREATE TABLE IF NOT EXISTS domain_registry (
+    domain TEXT PRIMARY KEY,
+    description TEXT DEFAULT '',
+    active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS node_domains (
+    node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    domain TEXT NOT NULL REFERENCES domain_registry(domain) ON DELETE RESTRICT,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (node_id, domain)
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id);
+
 -- Contradictions table - detected conflicting facts
 CREATE TABLE IF NOT EXISTS contradictions (
     id TEXT PRIMARY KEY,

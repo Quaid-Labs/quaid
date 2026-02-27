@@ -51,7 +51,17 @@ MAX_EXTRACT_WALL_SECONDS = 600.0
 
 def _load_extraction_prompt() -> str:
     """Load the extraction system prompt from file."""
-    return get_prompt("ingest.extraction.system")
+    prompt = get_prompt("ingest.extraction.system")
+    try:
+        domain_defs = getattr(get_config().retrieval, "domains", {}) or {}
+        if isinstance(domain_defs, dict) and domain_defs:
+            lines = ["", "AVAILABLE DOMAINS (use exact ids in facts[].domains):"]
+            for domain_id, desc in sorted(domain_defs.items()):
+                lines.append(f"- {domain_id}: {str(desc or '').strip()}")
+            prompt += "\n".join(lines) + "\n"
+    except Exception:
+        pass
+    return prompt
 
 
 def _get_owner_id(override: Optional[str] = None) -> str:
@@ -386,7 +396,11 @@ def extract_from_transcript(
         category = fact.get("category", "fact")
         privacy = fact.get("privacy", "shared")
         keywords = fact.get("keywords")
-        is_technical = bool(fact.get("is_technical", False))
+        domains = fact.get("domains")
+        if isinstance(domains, str):
+            domains = [domains]
+        if not isinstance(domains, list):
+            domains = []
         project = fact.get("project")
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = f"{label}-extraction"
@@ -414,7 +428,7 @@ def extract_from_transcript(
                 knowledge_type=knowledge_type,
                 keywords=keywords,
                 source_type=source_type,
-                is_technical=is_technical,
+                domains=domains,
                 project=project,
                 actor_id=actor_id,
                 speaker_entity_id=speaker_entity_id,

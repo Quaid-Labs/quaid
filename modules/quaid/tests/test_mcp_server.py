@@ -246,7 +246,7 @@ class TestMemoryRecall:
             query="coffee preferences",
             owner_id="test-owner",
             limit=5,
-            technical_scope="any",
+            domain={"all": True},
         )
         assert len(result) == 1
 

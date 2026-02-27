@@ -80,7 +80,7 @@ describe("knowledge orchestrator", () => {
       datastores: [],
       expandGraph: true,
       graphDepth: 1,
-      technicalScope: "personal",
+      domain: { personal: true },
       reasoning: "fast",
       failOpen: true,
     });
@@ -166,7 +166,7 @@ describe("knowledge orchestrator", () => {
       datastores: ["vector_basic"],
       expandGraph: false,
       graphDepth: 1,
-      technicalScope: "personal",
+      domain: { personal: true },
     });
 
     expect(callFastRouter).not.toHaveBeenCalled();
@@ -201,7 +201,7 @@ describe("knowledge orchestrator", () => {
       datastores: ["vector_basic", "graph"],
       expandGraph: true,
       graphDepth: 1,
-      technicalScope: "personal",
+      domain: { personal: true },
     });
 
     expect(results.length).toBe(2);
@@ -230,7 +230,7 @@ describe("knowledge orchestrator", () => {
       datastores: ["vector_basic", "graph"],
       expandGraph: true,
       graphDepth: 1,
-      technicalScope: "any",
+      domain: { all: true },
     });
 
     expect(results.some((r) => r.text === "vector survives")).toBe(true);
@@ -254,7 +254,7 @@ describe("knowledge orchestrator", () => {
       datastores: ["project"],
       expandGraph: false,
       graphDepth: 1,
-      technicalScope: "any",
+      domain: { all: true },
       project: "quaid",
       docs: ["PROJECT.md", "reference/memory-local-implementation.md"],
     });
@@ -287,7 +287,7 @@ describe("knowledge orchestrator", () => {
       datastores: ["project"],
       expandGraph: false,
       graphDepth: 1,
-      technicalScope: "any",
+      domain: { all: true },
       project: "wrong-default",
       docs: ["wrong.md"],
       datastoreOptions: {
@@ -324,13 +324,13 @@ describe("knowledge orchestrator", () => {
       datastores: ["vector"],
       expandGraph: false,
       graphDepth: 1,
-      technicalScope: "personal",
+      domain: { personal: true },
       datastoreOptions: {
-        vector: { technicalScope: "technical" },
+        vector: { domain: { technical: true } },
       },
     });
 
-    expect(recallVector).toHaveBeenCalledWith("api limits", 3, "technical", undefined, undefined, undefined);
+    expect(recallVector).toHaveBeenCalledWith("api limits", 3, { technical: true }, undefined, undefined, undefined);
   });
 
   it("handles total_recall planning within latency budget for mocked dependencies", async () => {
@@ -351,7 +351,7 @@ describe("knowledge orchestrator", () => {
       datastores: [],
       expandGraph: true,
       graphDepth: 1,
-      technicalScope: "any",
+      domain: { all: true },
       reasoning: "fast",
     });
     const elapsedMs = Date.now() - started;
@@ -387,7 +387,7 @@ describe("knowledge orchestrator", () => {
       datastores: [],
       expandGraph: false,
       graphDepth: 1,
-      technicalScope: "any",
+      domain: { all: true },
       reasoning: "deep",
     });
 
@@ -441,7 +441,7 @@ describe("knowledge orchestrator", () => {
       datastores: ["vector_basic"],
       expandGraph: false,
       graphDepth: 1,
-      technicalScope: "any",
+      domain: { all: true },
       intent: "agent_actions",
     });
 

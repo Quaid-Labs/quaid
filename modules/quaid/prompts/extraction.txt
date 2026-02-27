@@ -47,8 +47,8 @@ QUALITY RULES:
 - Each fact must be self-contained and understandable without context
 - Be specific: "User likes spicy Thai food" > "User likes food"
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
-- Mark is_technical=true for project/code/implementation state facts; false for personal/life facts
-- For technical facts, include "project" when you can identify a concrete project/domain label from context
+- Add "domains" as an array of domain tags from the available domain list
+- Use only domains explicitly supported by the system prompt's domain registry block
 - Extract personal facts comprehensively — the nightly janitor handles noise, but missed facts are gone forever
 
 KEYWORDS (per fact):
@@ -104,7 +104,7 @@ Respond with JSON only:
       "text": "the extracted fact",
       "category": "fact|preference|decision|relationship",
       "extraction_confidence": "high|medium|low",
-      "is_technical": true,
+      "domains": ["personal", "technical"],
       "project": "optional-project-or-domain-label",
       "keywords": "space separated search terms",
       "privacy": "private|shared|public",

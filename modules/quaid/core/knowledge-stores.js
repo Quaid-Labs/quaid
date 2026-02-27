@@ -6,10 +6,9 @@ const STORE_REGISTRY = [
     defaultWhenFlatRecall: false,
     options: [
       {
-        key: "technicalScope",
-        description: "Override scope for this store.",
-        valueType: "enum",
-        enumValues: ["personal", "technical", "any"]
+        key: "domain",
+        description: 'Optional domain filter map JSON for this store (e.g. {"all":true} or {"technical":true}).',
+        valueType: "string"
       },
       {
         key: "project",
@@ -44,10 +43,9 @@ const STORE_REGISTRY = [
         valueType: "number"
       },
       {
-        key: "technicalScope",
-        description: "Filter graph-backed recalls by personal/technical/all facts.",
-        valueType: "enum",
-        enumValues: ["personal", "technical", "any"]
+        key: "domain",
+        description: 'Optional domain filter map JSON for this store (e.g. {"all":true} or {"technical":true}).',
+        valueType: "string"
       },
       {
         key: "project",

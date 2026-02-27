@@ -33,7 +33,7 @@ def store(
     source: Optional[str] = None,
     knowledge_type: str = "fact",
     source_type: Optional[str] = None,
-    is_technical: bool = False,
+    domains: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Store a new memory with automatic deduplication.
 
@@ -47,7 +47,7 @@ def store(
         source: Where this fact came from (e.g. "telegram", "manual").
         knowledge_type: "fact", "belief", "preference", or "experience".
         source_type: Who stated it — "user", "assistant", "tool", or "import".
-        is_technical: True for technical/project-state memories.
+        domains: Optional domain tags (e.g. ["technical", "research"]).
 
     Returns:
         Dict with keys:
@@ -74,7 +74,7 @@ def store(
         source=source,
         knowledge_type=knowledge_type,
         source_type=source_type,
-        is_technical=is_technical,
+        domains=domains,
     )
 
 
@@ -84,7 +84,7 @@ def recall(
     limit: int = 5,
     min_similarity: Optional[float] = None,
     debug: bool = False,
-    technical_scope: str = "any",
+    domain: Optional[Dict[str, bool]] = None,
     use_routing: bool = True,
     use_aliases: bool = True,
     use_intent: bool = True,
@@ -113,7 +113,7 @@ def recall(
         limit: Maximum number of results. Default 5.
         min_similarity: Minimum similarity threshold. None uses config default.
         debug: If True, include scoring breakdown in results.
-        technical_scope: "personal", "technical", or "any".
+        domain: Domain filter map (default {"all": true}).
 
     Returns:
         List of dicts, each with:
@@ -136,7 +136,7 @@ def recall(
         limit=limit,
         min_similarity=min_similarity,
         debug=debug,
-        technical_scope=technical_scope,
+        domain=domain,
         use_routing=use_routing,
         use_aliases=use_aliases,
         use_intent=use_intent,
