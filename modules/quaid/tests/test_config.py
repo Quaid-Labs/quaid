@@ -146,6 +146,7 @@ class TestConfigLoading:
                 # Verify defaults
                 assert cfg.decay.threshold_days == 30
                 assert cfg.retrieval.default_limit == 5
+                assert cfg.prompt_set == "default"
         finally:
             config._config = old_config
 
@@ -239,6 +240,19 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_loads_prompt_set_from_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({"promptSet": "default"}))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.prompt_set == "default"
+        finally:
+            config._config = old_config
+
     def test_warns_on_unknown_keys(self, tmp_path, capsys):
         import config
         old_config = config._config
@@ -251,7 +265,8 @@ class TestConfigLoading:
                 "models": {"llmProvider": "default", "llmProvderTypo": "bad"},
                 "totallyUnknownSection": {"enabled": True},
             }))
-            with patch.object(config, "_config_paths", lambda: [config_file]):
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.dict(os.environ, {"QUAID_QUIET": ""}, clear=False):
                 _ = load_config()
             err = capsys.readouterr().err
             assert "Unknown config key ignored: models.llm_provder_typo" in err
