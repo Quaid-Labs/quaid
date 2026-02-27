@@ -104,6 +104,28 @@ describe('SessionTimeoutManager scheduling', () => {
     expect(queued.label).toBe('Reset')
   })
 
+  it('resets retry attempt count when promoting to a higher-priority signal', () => {
+    const workspace = makeWorkspace('quaid-timeout-signal-promote-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    manager.queueExtractionSignal('session-promote', 'Compaction')
+    const signalPath = (manager as any).signalPath('session-promote') as string
+    const existing = JSON.parse(fs.readFileSync(signalPath, 'utf8'))
+    existing.attemptCount = 3
+    fs.writeFileSync(signalPath, JSON.stringify(existing), 'utf8')
+
+    manager.queueExtractionSignal('session-promote', 'Reset')
+    const promoted = JSON.parse(fs.readFileSync(signalPath, 'utf8'))
+    expect(promoted.label).toBe('Reset')
+    expect(promoted.attemptCount).toBe(0)
+  })
+
   it('processes signal extraction from per-session message log', async () => {
     const workspace = makeWorkspace('quaid-timeout-extract-')
     const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
