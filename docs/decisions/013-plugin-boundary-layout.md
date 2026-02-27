@@ -9,7 +9,7 @@ The plugin architecture uses explicit directory ownership and strict import boun
 Directory ownership:
 - `ingest/` for transcript/document ingestion orchestration
 - `core/` for orchestration and composition logic
-- `adapters/` for host/runtime integration
+- `adaptors/` for host/runtime integration
 - `orchestrator/` for runtime orchestration
 - `datastore/` for datastore ownership and maintenance internals
 

@@ -52,7 +52,6 @@ The janitor requires LLM access for review/dedup/contradiction tasks. Provider/m
 
 | # | Task | LLM | Category | Description |
 |---|------|-----|----------|-------------|
-| 0 | **backup** | None | Infra | Backup keychain + workspace to NAS |
 | 0b | **embeddings** | None | Infra | Backfill missing embeddings |
 | 1 | **workspace** | Opus | Infra | Single-pass audit of changed workspace files |
 | 1b | **docs_staleness** | Opus | Infra | Update stale docs from git diffs |
@@ -70,11 +69,13 @@ The janitor requires LLM access for review/dedup/contradiction tasks. Provider/m
 | 7 | **rag** | None | Infra | RAG reindex + project discovery + event processing |
 | 8 | **tests** | None | Infra | Run vitest suite (npm test; only when `--task tests`, `QUAID_DEV=1`, or `janitor.run_tests=true`) |
 | 9 | **cleanup** | None | Infra | Prune old recall_log (90d), dedup_log (90d), health_snapshots (180d), orphaned embeddings |
+| 10 | **update_check** | None | Infra | Check for Quaid updates (version comparison + cache) |
+| 11 | **graduate** | None | Memory | Promote approved memories to active after a healthy memory pipeline |
 
 > **Category** determines fail-fast behavior — see "Fail-Fast Pipeline Guard" below.
 
-### Task 0: Backup
-Runs NAS backup scripts (`scripts/backup-*.sh`) before any maintenance, ensuring a rollback snapshot exists.
+### Task 0b: Embeddings
+Backfills missing vector embeddings before memory pipeline tasks.
 
 ### Task 1: Workspace Audit (Opus)
 Single-pass review of changed workspace markdown files:
