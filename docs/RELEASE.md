@@ -68,13 +68,16 @@ Build installer artifact locally:
 
 ## Optional: Git Hook
 
-Install as a `pre-push` hook:
+This repo uses `core.hooksPath=git-hooks`. Ensure the tracked hook is executable:
 
 ```bash
-cat > .git/hooks/pre-push <<'HOOK'
-#!/usr/bin/env bash
-set -euo pipefail
-bash scripts/release-check.sh
-HOOK
-chmod +x .git/hooks/pre-push
+chmod +x git-hooks/pre-push scripts/push-guard.sh
 ```
+
+The push guard blocks accidental GitHub/main pushes by default:
+
+- Allowed by default: `./scripts/push-backup.sh` (push to `checkpoint`)
+- Blocked by default: `git push origin ...` / `git push github ...`
+- Preferred release path: `./scripts/release-push.sh`
+- One-shot manual override for intentional GitHub push:
+  - `QUAID_RELEASE=1 git push github <refspec>`
