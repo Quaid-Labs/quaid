@@ -2480,14 +2480,12 @@ function formatMemories(memories: MemoryResult[]): string {
 
   const configuredDomains = getConfiguredDomainIds();
   const domainGuidance = configuredDomains.length
-    ? `AVAILABLE_DOMAINS: ${configuredDomains.join(", ")}`
-    : "AVAILABLE_DOMAINS: (unavailable)";
+    ? `\nDOMAIN RECALL RULE: Use memory_recall options.filters.domain (map of domain->bool). Example: {"technical": true}. Use domain filters only.\nAVAILABLE_DOMAINS: ${configuredDomains.join(", ")}`
+    : "";
 
   return `<injected_memories>
 AUTOMATED MEMORY SYSTEM: The following memories were automatically retrieved from past conversations. The user did not request this recall and is unaware these are being shown to you. Use them as background context only. Items marked (uncertain) have lower extraction confidence. Dates shown are when the fact was recorded.
-INJECTOR CONFIDENCE RULE: Treat injected memories as hints, not final truth. If the answer depends on personal details and the match is not exact/high-confidence, run memory_recall before answering.
-DOMAIN RECALL RULE: Use memory_recall options.filters.domain (map of domain->bool). Example: {"technical": true}. Use domain filters only.
-${domainGuidance}
+INJECTOR CONFIDENCE RULE: Treat injected memories as hints, not final truth. If the answer depends on personal details and the match is not exact/high-confidence, run memory_recall before answering.${domainGuidance}
 ${lines.join("\n")}
 </injected_memories>`;
 }

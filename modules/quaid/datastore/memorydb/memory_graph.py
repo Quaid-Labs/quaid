@@ -413,8 +413,8 @@ class MemoryGraph:
                             (json.dumps(attrs), node_id),
                         )
                     self._sync_node_domains(conn, node_id, inferred_domains)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[memory_graph] legacy domain backfill failed: %s", exc)
 
             # Default/backfill attribution values for legacy rows.
             conn.execute(
