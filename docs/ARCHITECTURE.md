@@ -804,11 +804,19 @@ If preflight fails, plugin initialization aborts with explicit error details ins
 ```python
 @dataclass
 class ModelConfig:
-    provider: str = "anthropic"     # "anthropic" or "openai" (OpenAI-compatible APIs)
-    api_key_env: str = "ANTHROPIC_API_KEY"
-    base_url: Optional[str] = None  # Custom endpoint (e.g. OpenRouter, local server)
+    llm_provider: str = "default"
+    fast_reasoning_provider: str = "default"
+    deep_reasoning_provider: str = "default"
+    embeddings_provider: str = "ollama"
     fast_reasoning: str = "claude-haiku-4-5"
     deep_reasoning: str = "claude-opus-4-6"
+    fast_reasoning_model_classes: Dict[str, str] = field(default_factory=...)
+    deep_reasoning_model_classes: Dict[str, str] = field(default_factory=...)
+    fast_reasoning_context: int = 200000
+    deep_reasoning_context: int = 200000
+    fast_reasoning_max_output: int = 8192
+    deep_reasoning_max_output: int = 16384
+    batch_budget_percent: float = 0.5
 ```
 
 #### API Key Resolution
@@ -849,12 +857,14 @@ core/interface/mcp_server.py (FastMCP)
     +-- memory_extract  -> ingest/extract.py -> lib/llm_clients.py + core/services/memory_service.py
     +-- memory_store    -> core/interface/api.py
     +-- memory_recall   -> core/interface/api.py
+    +-- memory_write    -> core/interface/api.py
     +-- memory_search   -> core/interface/api.py
     +-- memory_get      -> core/interface/api.py
     +-- memory_forget   -> core/interface/api.py
     +-- memory_create_edge -> core/interface/api.py
     +-- memory_stats    -> core/interface/api.py
     +-- projects_search -> datastore/docsdb/rag.py
+    +-- session_recall  -> core/interface/mcp_server.py
 ```
 
 ### Tools
@@ -864,12 +874,14 @@ core/interface/mcp_server.py (FastMCP)
 | `memory_extract` | Full Opus-powered extraction from transcript | ~$0.05-0.20 |
 | `memory_store` | Store a single fact | Free (local embedding only) |
 | `memory_recall` | Full retrieval pipeline (HyDE + reranking) | ~$0.01 (reranker) |
+| `memory_write` | Generic datastore write interface (`vector`/`graph`) | Free |
 | `memory_search` | Fast keyword search (no reranking) | Free |
 | `memory_get` | Fetch a memory by ID | Free |
 | `memory_forget` | Delete a memory | Free |
 | `memory_create_edge` | Create a relationship edge | Free |
 | `memory_stats` | Database statistics | Free |
 | `projects_search` | Search project documentation via RAG | Free |
+| `session_recall` | List/load extracted session transcripts | Free |
 
 ### Stdout Isolation
 

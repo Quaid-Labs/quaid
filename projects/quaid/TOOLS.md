@@ -9,7 +9,7 @@ It is not a full API schema or implementation spec.
 
 ## Current Tool Surface
 
-Tools currently exposed in runtime:
+OpenClaw adapter tool surface:
 - `memory_recall`
 - `memory_store`
 - `memory_forget`
@@ -20,6 +20,25 @@ Tools currently exposed in runtime:
 - `project_create`
 - `project_list`
 - `session_recall`
+
+MCP server tool surface (`core/interface/mcp_server.py`):
+- `memory_extract`
+- `memory_store`
+- `memory_recall`
+- `memory_write`
+- `memory_search`
+- `memory_get`
+- `memory_forget`
+- `memory_create_edge`
+- `memory_stats`
+- `projects_search`
+- `session_recall`
+- `memory_provider`
+- `memory_capabilities`
+- `memory_event_emit`
+- `memory_event_list`
+- `memory_event_process`
+- `memory_event_capabilities`
 
 ## Core Tools and Param Maps
 
