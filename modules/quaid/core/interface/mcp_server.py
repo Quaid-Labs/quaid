@@ -110,6 +110,7 @@ def memory_store(
     knowledge_type: str = "fact",
     source: str = "mcp",
     pinned: bool = False,
+    domains_json: str = "[]",
 ) -> dict:
     """Store a new memory in the knowledge graph.
 
@@ -120,20 +121,36 @@ def memory_store(
         knowledge_type: "fact", "belief", "preference", or "experience".
         source: Where this fact came from (e.g. "user", "conversation").
         pinned: If true, this memory never decays.
+        domains_json: Optional JSON array of domain tags.
 
     Returns:
         Dict with id, status ("created"/"duplicate"/"updated"), and similarity if duplicate.
     """
-    return store(
-        text=text,
-        owner_id=OWNER_ID,
-        category=category,
-        confidence=confidence,
-        knowledge_type=knowledge_type,
-        source=source,
-        source_type="import",
-        pinned=pinned,
-    )
+    domains = None
+    if domains_json and domains_json.strip():
+        try:
+            parsed_domains = json.loads(domains_json)
+            if not isinstance(parsed_domains, list):
+                raise ValueError("domains_json must decode to a JSON array")
+            domains = [str(d).strip() for d in parsed_domains if str(d).strip()]
+            if not domains:
+                domains = None
+        except Exception as e:
+            raise ValueError(f"invalid domains_json: {e}")
+
+    store_kwargs = {
+        "text": text,
+        "owner_id": OWNER_ID,
+        "category": category,
+        "confidence": confidence,
+        "knowledge_type": knowledge_type,
+        "source": source,
+        "source_type": "import",
+        "pinned": pinned,
+    }
+    if domains:
+        store_kwargs["domains"] = domains
+    return store(**store_kwargs)
 
 
 @mcp.tool()

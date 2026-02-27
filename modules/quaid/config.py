@@ -8,6 +8,7 @@ Falls back to sensible defaults if config is missing.
 import json
 import logging
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -574,6 +575,15 @@ _DEFAULT_DOMAIN_DESCRIPTIONS = {
 }
 
 
+def _normalize_domain_key(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    norm = re.sub(r"[^a-z0-9_]+", "_", raw)
+    norm = re.sub(r"_{2,}", "_", norm).strip("_")
+    return norm[:64]
+
+
 def _warn_unknown_keys(section: str, data: Any, known_keys: set[str]) -> None:
     if not isinstance(data, dict):
         return
@@ -894,7 +904,7 @@ def _load_config_inner() -> MemoryConfig:
     parsed_domains: Dict[str, str] = {}
     if isinstance(domains_data, dict):
         for raw_key, raw_desc in domains_data.items():
-            key = str(raw_key or "").strip().lower()
+            key = _normalize_domain_key(raw_key)
             if not key:
                 continue
             parsed_domains[key] = str(raw_desc or "").strip() or _DEFAULT_DOMAIN_DESCRIPTIONS.get(key, "")
@@ -902,7 +912,7 @@ def _load_config_inner() -> MemoryConfig:
         for item in domains_data:
             if not isinstance(item, dict):
                 continue
-            key = str(item.get("id") or item.get("domain") or "").strip().lower()
+            key = _normalize_domain_key(item.get("id") or item.get("domain") or "")
             if not key:
                 continue
             desc = str(item.get("description") or item.get("desc") or "").strip()
