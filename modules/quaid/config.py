@@ -472,6 +472,7 @@ class MemoryConfig:
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     rag: RagConfig = field(default_factory=RagConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    prompt_set: str = "default"
 
 
 # Global config instance (lazy loaded)
@@ -499,6 +500,7 @@ _KNOWN_TOP_LEVEL_CONFIG_KEYS = {
     "retrieval",
     "systems",
     "users",
+    "prompt_set",
 }
 
 _KNOWN_MODELS_KEYS = {
@@ -1146,6 +1148,7 @@ def _load_config_inner() -> MemoryConfig:
         projects=systems_data.get('projects', True),
         workspace=systems_data.get('workspace', True),
     )
+    prompt_set = str(config_data.get("prompt_set", raw_config.get("promptSet", "default"))).strip() or "default"
 
     _config = MemoryConfig(
         adapter=adapter,
@@ -1166,8 +1169,14 @@ def _load_config_inner() -> MemoryConfig:
         database=database,
         ollama=ollama,
         rag=rag,
-        notifications=notifications
+        notifications=notifications,
+        prompt_set=prompt_set,
     )
+
+    # Fail fast on unknown prompt sets to keep prompt-family swaps explicit and safe.
+    from prompt_sets import validate_prompt_set_exists
+
+    validate_prompt_set_exists(_config.prompt_set)
 
     if plugins.enabled:
         from core.runtime.plugins import initialize_plugin_runtime
