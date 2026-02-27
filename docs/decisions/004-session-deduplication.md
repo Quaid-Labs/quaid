@@ -54,5 +54,5 @@ On recall:
 
 ## See Also
 
-- `projects/quaid/memory-deduplication-system.md`
-- `plugins/memory-local/memory_graph.py` § recall()
+- `projects/quaid/reference/memory-deduplication-system.md`
+- `modules/quaid/datastore/memorydb/memory_graph.py` § recall()

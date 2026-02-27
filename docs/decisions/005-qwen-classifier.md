@@ -61,5 +61,5 @@ Prompt optimized for:
 
 ## See Also
 
-- `plugins/memory-local/extractor.py`
-- `projects/quaid/memory-classifier-v2.md`
+- `modules/quaid/ingest/extract.py`
+- `projects/quaid/reference/memory-local-implementation.md`

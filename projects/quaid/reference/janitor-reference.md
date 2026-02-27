@@ -7,14 +7,14 @@ Nightly memory maintenance pipeline. Cleans, decays, deduplicates, detects contr
 ## Schedule
 - **Cron name:** `sandman`
 - **Time:** 4:30 AM Asia/Makassar (WITA)
-- **Script:** `modules/quaid/janitor.py`
+- **Script:** `modules/quaid/core/lifecycle/janitor.py`
 - **Logs:** `logs/janitor.log` (structured JSON)
 - **Stats:** `data/janitor-stats.json` (run metrics + API cost)
-- **Session:** `isolated` (dedicated session per run, not main Alfie session)
+- **Session:** `isolated` (dedicated session per run, not the main interactive session)
 
 ### Session Isolation (Critical)
 
-The sandman cron MUST run with `sessionTarget: "isolated"` to prevent context window overflow. If configured with `sessionTarget: "main"`, the janitor output accumulates in Alfie's main session across runs, eventually hitting the 200K token limit.
+The sandman cron MUST run with `sessionTarget: "isolated"` to prevent context window overflow. If configured with `sessionTarget: "main"`, janitor output accumulates in the main session across runs and can eventually hit token limits.
 
 **Cron configuration requirements:**
 - `sessionTarget: "isolated"` — Creates fresh session per run
@@ -218,7 +218,7 @@ Runs the vitest test suite. Output parser handles both vitest format (`Tests X f
 The janitor uses a `memory_pipeline_ok` boolean to protect memory quality:
 
 - **Memory tasks** (2, 2a, 2b, 3, 4, 4b, 5, 5b): If any fails, the flag is set to `False`. Remaining memory tasks are **skipped** and graduation is **blocked**.
-- **Infrastructure tasks** (0, 0b, 1, 1b, 1c, 1d-snippets, 1d-journal, 6, 7, 8, 9): Always run regardless of pipeline health.
+- **Infrastructure tasks** (0, 0b, 1, 1b, 1c, 1d-snippets, 1d-journal, 7, 8, 9): Always run regardless of pipeline health.
 - **Graduation** (`approved → active`): Only happens at the end of `--task all --apply` when `memory_pipeline_ok` is `True`. If blocked, facts remain as `approved/pending` and will be reprocessed next run.
 
 This prevents partially-processed facts from graduating to `active` status where they would never be reprocessed.
