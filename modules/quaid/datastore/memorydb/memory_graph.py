@@ -384,6 +384,38 @@ class MemoryGraph:
                     (domain_id, description),
                 )
 
+            # Legacy domain migration: older rows may only have attributes.is_technical.
+            # Backfill attrs.domains and node_domains so domain filters continue to work.
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT n.id, n.attributes
+                    FROM nodes n
+                    LEFT JOIN node_domains nd ON nd.node_id = n.id
+                    GROUP BY n.id
+                    HAVING COUNT(nd.domain) = 0
+                    """
+                ).fetchall()
+                for row in rows:
+                    node_id = row["id"]
+                    attrs_raw = row["attributes"] or "{}"
+                    try:
+                        attrs = json.loads(attrs_raw) if isinstance(attrs_raw, str) else (attrs_raw or {})
+                    except Exception:
+                        attrs = {}
+                    inferred_domains = _domains_from_attrs(attrs)
+                    if not inferred_domains:
+                        continue
+                    if "domains" not in attrs or not _normalize_domains(attrs.get("domains")):
+                        attrs["domains"] = inferred_domains
+                        conn.execute(
+                            "UPDATE nodes SET attributes = ?, updated_at = datetime('now') WHERE id = ?",
+                            (json.dumps(attrs), node_id),
+                        )
+                    self._sync_node_domains(conn, node_id, inferred_domains)
+            except Exception:
+                pass
+
             # Default/backfill attribution values for legacy rows.
             conn.execute(
                 """
@@ -571,9 +603,7 @@ class MemoryGraph:
         return _lib_cosine_similarity(a, b)
 
     def _extract_domains_from_attrs(self, attrs: Any) -> List[str]:
-        if not isinstance(attrs, dict):
-            return []
-        return _normalize_domains(attrs.get("domains"))
+        return _domains_from_attrs(attrs)
 
     def _sync_node_domains(
         self,
@@ -3187,6 +3217,27 @@ def _normalize_domains(values: Any) -> List[str]:
     return out
 
 
+def _domains_from_attrs(attrs: Any) -> List[str]:
+    """Read domains from attrs with legacy `is_technical` fallback."""
+    if not isinstance(attrs, dict):
+        return []
+    domains = _normalize_domains(attrs.get("domains"))
+    if domains:
+        return domains
+    # Legacy fallback for older DB rows that were tagged with is_technical only.
+    if "is_technical" in attrs:
+        raw = attrs.get("is_technical")
+        is_technical = False
+        if isinstance(raw, bool):
+            is_technical = raw
+        elif isinstance(raw, (int, float)):
+            is_technical = bool(raw)
+        elif isinstance(raw, str):
+            is_technical = raw.strip().lower() in {"1", "true", "yes", "y", "technical"}
+        return ["technical"] if is_technical else ["personal"]
+    return []
+
+
 def _normalize_domain_filter(value: Any) -> Tuple[bool, set[str]]:
     """Normalize recall domain filter map.
 
@@ -3523,7 +3574,7 @@ def recall(
             "privacy": node.privacy,
             "owner_id": node.owner_id,
             "_multi_pass": node.id in _multi_pass_ids,
-            "domains": _normalize_domains(_attrs.get("domains")),
+            "domains": _domains_from_attrs(_attrs),
             "source_type": _attrs.get("source_type"),
             "project": _attrs.get("project"),
             "source_channel": _attrs.get("source_channel"),
@@ -3586,7 +3637,7 @@ def recall(
                                     "id": co_node.id,
                                     "via_relation": "co_session",
                                     "hop_depth": 0,
-                                    "domains": _normalize_domains(_co_attrs.get("domains")),
+                                    "domains": _domains_from_attrs(_co_attrs),
                                     "source_type": _co_attrs.get("source_type"),
                                     "project": _co_attrs.get("project"),
                                 })
@@ -3662,7 +3713,7 @@ def recall(
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
                             "_multi_pass": rel_node.id in _multi_pass_ids,
-                            "domains": _normalize_domains(_rel_attrs.get("domains")),
+                            "domains": _domains_from_attrs(_rel_attrs),
                             "project": _rel_attrs.get("project"),
                         })
             else:
@@ -3697,7 +3748,7 @@ def recall(
                             "hop_depth": hop_depth,
                             "graph_path": graph_path,
                             "_multi_pass": rel_node.id in _multi_pass_ids,
-                            "domains": _normalize_domains(_rel_attrs.get("domains")),
+                            "domains": _domains_from_attrs(_rel_attrs),
                             "project": _rel_attrs.get("project"),
                         })
 
@@ -3712,12 +3763,18 @@ def recall(
                         list(included_domains),
                     ).fetchall()
                     allowed_ids = {r[0] for r in rows}
-                output = [r for r in output if r.get("id") in allowed_ids]
+                output = [
+                    r for r in output
+                    if (
+                        r.get("id") in allowed_ids
+                        or bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
+                    )
+                ]
             except Exception:
                 # Fallback to attribute-based filtering if join table is unavailable.
                 output = [
                     r for r in output
-                    if bool(set(_normalize_domains(r.get("domains"))) & included_domains)
+                    if bool(set(_domains_from_attrs({"domains": r.get("domains")})) & included_domains)
                 ]
         else:
             # Explicit {"all": false} with no selected domains means return nothing.

@@ -1164,7 +1164,8 @@ begin_stage "integration"
 echo "[e2e] Running Quaid integration tests..."
 for required in \
   "${E2E_WS}/modules/quaid/tests/session-timeout-manager.test.ts" \
-  "${E2E_WS}/modules/quaid/tests/chat-flow.integration.test.ts"; do
+  "${E2E_WS}/modules/quaid/tests/chat-flow.integration.test.ts" \
+  "${E2E_WS}/modules/quaid/scripts/e2e-domain-contract.py"; do
   if [[ ! -f "$required" ]]; then
     echo "[e2e] Missing required integration test file: $required" >&2
     echo "[e2e] Ensure test files are committed in ${DEV_WS} before running e2e." >&2
@@ -1172,6 +1173,7 @@ for required in \
   fi
 done
 (cd "${E2E_WS}/modules/quaid" && npx vitest run tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts --reporter=verbose)
+(cd "${E2E_WS}/modules/quaid" && python3 scripts/e2e-domain-contract.py "${E2E_WS}")
 pass_stage "integration"
 else
   skip_stage "integration"

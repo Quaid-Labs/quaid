@@ -55,9 +55,17 @@ def _load_extraction_prompt() -> str:
     try:
         domain_defs = getattr(get_config().retrieval, "domains", {}) or {}
         if isinstance(domain_defs, dict) and domain_defs:
-            lines = ["", "AVAILABLE DOMAINS (use exact ids in facts[].domains):"]
+            lines = [
+                "",
+                "AVAILABLE DOMAINS (use exact ids in facts[].domains):",
+            ]
             for domain_id, desc in sorted(domain_defs.items()):
                 lines.append(f"- {domain_id}: {str(desc or '').strip()}")
+            lines.extend([
+                "",
+                "DOMAIN OUTPUT CONTRACT (MANDATORY):",
+                '- Every fact MUST include "domains": ["..."] with at least one allowed domain id.',
+            ])
             prompt += "\n".join(lines) + "\n"
     except Exception:
         pass
@@ -375,6 +383,14 @@ def extract_from_transcript(
     logger.info(f"[extract] {label}: LLM returned {len(facts)} candidate facts{f' from {len(transcript_chunks)} chunks' if len(transcript_chunks) > 1 else ''}")
 
     # Process facts
+    allowed_domains = set()
+    try:
+        domain_defs = getattr(get_config().retrieval, "domains", {}) or {}
+        if isinstance(domain_defs, dict):
+            allowed_domains = {str(k).strip() for k in domain_defs.keys() if str(k).strip()}
+    except Exception:
+        allowed_domains = set()
+
     for fact in facts:
         if not isinstance(fact, dict):
             continue
@@ -401,6 +417,18 @@ def extract_from_transcript(
             domains = [domains]
         if not isinstance(domains, list):
             domains = []
+        domains = [str(d).strip() for d in domains if str(d).strip()]
+        if not domains:
+            raise RuntimeError(
+                f"[extract] fact missing required domains array (fact={text[:120]!r})"
+            )
+        if allowed_domains:
+            invalid_domains = [d for d in domains if d not in allowed_domains]
+            if invalid_domains:
+                raise RuntimeError(
+                    "[extract] fact contains unsupported domains "
+                    f"{invalid_domains} (allowed={sorted(allowed_domains)}, fact={text[:120]!r})"
+                )
         project = fact.get("project")
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = f"{label}-extraction"

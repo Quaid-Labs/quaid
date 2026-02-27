@@ -45,7 +45,6 @@ Parameter map:
   - rule: if any domain key is `true`, `all` is ignored and only true domains are included.
 - `options.ranking.sourceTypeBoosts` (object): optional source-type weighting.
 - `options.datastoreOptions.<store>`: per-store options.
-- `options.technicalScope`: deprecated legacy shim; prefer `options.filters.domain`.
 
 Available domains:
 - `personal`: identity, preferences, relationships, life events
