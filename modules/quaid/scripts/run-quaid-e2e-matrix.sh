@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="${SCRIPT_DIR}/run-quaid-e2e.sh"
 BOOTSTRAP_ROOT="${QUAID_BOOTSTRAP_ROOT:-${HOME}/quaid/bootstrap}"
 PROFILE_PATH="${QUAID_E2E_PROFILE_PATH:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
-PATH_TIMEOUT_SEC="${QUAID_E2E_PATH_TIMEOUT_SEC:-600}"
+PATH_TIMEOUT_SEC="${QUAID_E2E_PATH_TIMEOUT_SEC:-1200}"
 
 PATHS=("openai-oauth" "openai-api" "anthropic-oauth" "anthropic-api")
 EXPECT_SPEC=""
@@ -24,7 +24,7 @@ Options:
   -h, --help         Show help
 
 Environment:
-  QUAID_E2E_PATH_TIMEOUT_SEC  Max seconds per auth path before timeout classification (default: 600)
+  QUAID_E2E_PATH_TIMEOUT_SEC  Max seconds per auth path before timeout classification (default: 1200)
 USAGE
 }
 

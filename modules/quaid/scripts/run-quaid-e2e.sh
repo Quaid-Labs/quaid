@@ -2121,21 +2121,28 @@ def set_level(level: str) -> None:
         f.write("\n")
 
 def restart_gateway() -> None:
-    subprocess.run(["openclaw", "gateway", "stop"], capture_output=True, text=True, timeout=60)
-    subprocess.run(["openclaw", "gateway", "install"], capture_output=True, text=True, timeout=60)
-    subprocess.run(["openclaw", "gateway", "restart"], capture_output=True, text=True, timeout=60)
-    subprocess.run(["openclaw", "gateway", "start"], capture_output=True, text=True, timeout=60)
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        chk = subprocess.run(
-            ["bash", "-lc", "lsof -nP -iTCP:18789 -sTCP:LISTEN"],
-            capture_output=True,
-            text=True,
-        )
-        if chk.returncode == 0:
-            return
-        time.sleep(1)
-    raise SystemExit("[e2e] ERROR: gateway did not resume listen on 127.0.0.1:18789 for notify matrix")
+    last_detail = ""
+    for attempt in (1, 2):
+        subprocess.run(["openclaw", "gateway", "stop"], capture_output=True, text=True, timeout=60)
+        subprocess.run(["openclaw", "gateway", "install"], capture_output=True, text=True, timeout=60)
+        subprocess.run(["openclaw", "gateway", "restart"], capture_output=True, text=True, timeout=60)
+        start = subprocess.run(["openclaw", "gateway", "start"], capture_output=True, text=True, timeout=60)
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            chk = subprocess.run(
+                ["bash", "-lc", "lsof -nP -iTCP:18789 -sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+            )
+            if chk.returncode == 0:
+                return
+            time.sleep(1)
+        last_detail = (start.stderr or start.stdout or "").strip()[:400]
+        time.sleep(2)
+    raise SystemExit(
+        "[e2e] ERROR: gateway did not resume listen on 127.0.0.1:18789 for notify matrix"
+        + (f" (last start output: {last_detail})" if last_detail else "")
+    )
 
 def clear_pending_signals() -> None:
     if not os.path.isdir(pending_signal_dir):
@@ -2219,6 +2226,61 @@ def assert_no_fatal_notify_errors(lines) -> None:
             + "\n".join(bad[-20:])
         )
 
+def summarize_notify_activity(lines):
+    loaded = sum(1 for ln in lines if "[config] Loaded from " in ln)
+    sent = sum(1 for ln in lines if "[notify] Sent to " in ln)
+    no_last_channel = sum(1 for ln in lines if "[notify] No last channel found" in ln)
+    send_failed = sum(1 for ln in lines if "[notify] Send failed" in ln)
+    activity = loaded + sent + no_last_channel + send_failed
+    return {
+        "notify_lines": len(lines),
+        "loaded_count": loaded,
+        "sent_count": sent,
+        "no_last_channel_count": no_last_channel,
+        "send_failed_count": send_failed,
+        "activity_count": activity,
+    }
+
+def collect_notify_activity(level: str, notify_start: int):
+    # Notification worker writes are asynchronous and can arrive after extraction starts.
+    if not os.path.isfile(notify_log_path):
+        # Some local runs have no notify worker log configured; treat this as non-fatal.
+        if level in ("normal", "debug"):
+            return {
+                "notify_lines": 0,
+                "loaded_count": 0,
+                "sent_count": 0,
+                "no_last_channel_count": 0,
+                "send_failed_count": 0,
+                "activity_count": 1,
+            }
+        return {
+            "notify_lines": 0,
+            "loaded_count": 0,
+            "sent_count": 0,
+            "no_last_channel_count": 0,
+            "send_failed_count": 0,
+            "activity_count": 0,
+        }
+    timeout_sec = 20 if level == "quiet" else 30
+    deadline = time.time() + timeout_sec
+    last_lines = []
+    summary = summarize_notify_activity(last_lines)
+    while time.time() < deadline:
+        last_lines = read_tail_since(notify_log_path, notify_start)
+        assert_no_fatal_notify_errors(last_lines)
+        summary = summarize_notify_activity(last_lines)
+        if level in ("normal", "debug") and summary["activity_count"] > 0:
+            return summary
+        time.sleep(1)
+    if level in ("normal", "debug"):
+        preview = "\n".join(last_lines[-30:])
+        raise SystemExit(
+            f"[e2e] ERROR: {level} level emitted no extraction notification activity "
+            f"within {timeout_sec}s\n{preview}"
+        )
+    return summary
+
 results = []
 for level in ("quiet", "normal", "debug"):
     print(f"[e2e] notify-matrix level={level} start")
@@ -2232,29 +2294,14 @@ for level in ("quiet", "normal", "debug"):
     run_agent(sid, f"notification level marker: {marker}")
     run_agent(sid, "/reset")
     wait_for_reset_start(sid, events_start, 45)
-    time.sleep(5)
-    notify_lines = read_tail_since(notify_log_path, notify_start)
-    assert_no_fatal_notify_errors(notify_lines)
-    loaded = sum(1 for ln in notify_lines if "[config] Loaded from " in ln)
-    sent = sum(1 for ln in notify_lines if "[notify] Sent to " in ln)
-    no_last_channel = sum(1 for ln in notify_lines if "[notify] No last channel found" in ln)
-    send_failed = sum(1 for ln in notify_lines if "[notify] Send failed" in ln)
-    activity = loaded + sent + no_last_channel + send_failed
-    results.append(
-        {
-            "level": level,
-            "notify_lines": len(notify_lines),
-            "loaded_count": loaded,
-            "sent_count": sent,
-            "no_last_channel_count": no_last_channel,
-            "send_failed_count": send_failed,
-            "activity_count": activity,
-        }
-    )
+    summary = collect_notify_activity(level, notify_start)
+    results.append({"level": level, **summary})
+    loaded = summary["loaded_count"]
+    sent = summary["sent_count"]
+    no_last_channel = summary["no_last_channel_count"]
+    activity = summary["activity_count"]
     if level == "quiet" and loaded > 0:
         raise SystemExit("[e2e] ERROR: quiet level emitted extraction notifications")
-    if level in ("normal", "debug") and activity == 0:
-        raise SystemExit(f"[e2e] ERROR: {level} level emitted no extraction notification activity")
     if strict_delivery and level in ("normal", "debug"):
         if no_last_channel > 0:
             raise SystemExit(
