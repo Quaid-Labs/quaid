@@ -40,6 +40,7 @@
 - Keep `AGENTS.md` focused on navigation and operations.
 - Keep `TOOLS.md` focused on tool contracts and parameter maps.
 - Keep `PROJECT.md` as the “where things live” architecture index.
+- Keep the `TOOLS.md` domain list aligned with `config/memory.json -> retrieval.domains`.
 - When behavior changes, update docs in the same commit.
 
 ### Retrieval Discipline
