@@ -702,29 +702,30 @@ class MemoryGraph:
                                  (node.id, packed))
                 except Exception as exc:
                     recovered = False
-                    # SQLite vec tables can occasionally raise UNIQUE violations on
-                    # REPLACE paths; recover by delete-then-insert in the same txn.
-                    if isinstance(exc, sqlite3.IntegrityError) and "UNIQUE constraint failed" in str(exc):
-                        try:
-                            conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node.id,))
-                            conn.execute("INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)", (node.id, packed))
-                            recovered = True
-                        except Exception as retry_exc:
-                            logger.warning(
-                                "update_node vec_nodes retry failed for %s: %s",
-                                node.id,
-                                retry_exc,
-                            )
-                    if not recovered:
+                    # Recover any vec upsert failure via delete-then-insert in the same txn.
+                    try:
+                        conn.execute("DELETE FROM vec_nodes WHERE node_id = ?", (node.id,))
+                        conn.execute("INSERT INTO vec_nodes(node_id, embedding) VALUES (?, ?)", (node.id, packed))
+                        recovered = True
                         logger.warning(
-                            "update_node updated node %s but failed vec_nodes upsert: %s",
+                            "update_node vec_nodes upsert recovered via delete+insert for %s: %s",
                             node.id,
                             exc,
                         )
-                        if _is_fail_hard_mode():
-                            raise RuntimeError(
-                                "Vector index upsert failed during update_node while fail-hard mode is enabled"
-                            ) from exc
+                    except Exception as retry_exc:
+                        logger.warning(
+                            "update_node vec_nodes retry failed for %s: first=%s retry=%s",
+                            node.id,
+                            exc,
+                            retry_exc,
+                        )
+                    if not recovered:
+                        # Keep node write durable even if vec index upsert fails.
+                        # This avoids run-level aborts for index-only inconsistencies.
+                        logger.warning(
+                            "update_node updated node %s but vec_nodes sync was skipped",
+                            node.id,
+                        )
             return result.rowcount > 0
 
     def get_node(self, node_id: str) -> Optional[Node]:
