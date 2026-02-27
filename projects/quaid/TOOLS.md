@@ -108,6 +108,7 @@ Default behavior should favor automatic extraction.
 Parameter map:
 - `text` (string): exact memory note text to queue for extraction.
 - `category` (`preference|fact|decision|entity|other`, optional): lightweight hint.
+- `domains_json` (string, MCP path): optional JSON array of domain tags (for example `["technical","project"]`) used to attach domains at write time.
 
 ### `memory_forget`
 Use this for explicit deletion requests.
