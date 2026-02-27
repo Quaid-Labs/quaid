@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from lib.ingest_runtime import run_docs_ingest, run_session_logs_ingest
+from core.ingest_runtime import run_docs_ingest, run_session_logs_ingest
 from lib.runtime_context import get_workspace_dir
 
 Event = Dict[str, Any]
