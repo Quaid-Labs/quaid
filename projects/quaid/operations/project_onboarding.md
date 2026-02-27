@@ -48,7 +48,7 @@ For each detected item, walk the user through:
    <!-- /protected -->
    ```
 
-Only move content after the user confirms. Use `docs_registry.py` to create projects
+Only move content after the user confirms. Use `datastore/docsdb/registry.py` to create projects
 and register files.
 
 ## Discovery Steps
@@ -58,7 +58,7 @@ and register files.
 Search the memory graph for any previously mentioned projects:
 
 ```bash
-cd modules/quaid && python3 memory_graph.py search "project" --owner <OWNER> --limit 10
+cd modules/quaid && python3 datastore/memorydb/memory_graph.py search "project" --owner <OWNER> --limit 10
 ```
 
 If results mention specific project names or paths, note them.
@@ -116,13 +116,13 @@ For each confirmed project:
 cd modules/quaid
 
 # Register the project
-python3 docs_registry.py create-project <name> \
+python3 datastore/docsdb/registry.py create-project <name> \
   --label "<Label>" \
   --home-dir "<relative/path>" \
   --description "<description>"
 
 # If the project has docs to index
-python3 docs_registry.py register <relative/path/to/doc.md> --project <name>
+python3 datastore/docsdb/registry.py register <relative/path/to/doc.md> --project <name>
 ```
 
 ### 6. Create PROJECT.md (Optional)
@@ -149,7 +149,7 @@ The janitor's doc auto-update system will keep this file current as the project 
 After registering, verify:
 
 ```bash
-python3 docs_registry.py list --project <name>
+python3 datastore/docsdb/registry.py list --project <name>
 ```
 
 Tell the user what was registered and that the system will now:
@@ -174,4 +174,4 @@ projects/
 ```
 
 Projects in `projects/` are auto-discovered by the janitor's RAG indexing task.
-Projects elsewhere in the workspace need manual registration via `docs_registry.py`.
+Projects elsewhere in the workspace need manual registration via `datastore/docsdb/registry.py`.

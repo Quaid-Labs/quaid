@@ -8,20 +8,20 @@
 
 ```bash
 # list projects
-python3 modules/quaid/docs_registry.py list-projects
+python3 modules/quaid/datastore/docsdb/registry.py list-projects
 
 # list docs in a project
-python3 modules/quaid/docs_registry.py list --project quaid
+python3 modules/quaid/datastore/docsdb/registry.py list --project quaid
 
 # inspect one project
-python3 modules/quaid/docs_registry.py get-project quaid
+python3 modules/quaid/datastore/docsdb/registry.py get-project quaid
 
 # search docs
-python3 modules/quaid/docs_rag.py search "memory extraction flow"
+python3 modules/quaid/datastore/docsdb/rag.py search "memory extraction flow"
 ```
 
 ## Notes
 
-- Project metadata is managed by the docs registry.
-- Search/index behavior is managed by `docs_rag.py`.
-- Project update events are processed by `project_updater.py`.
+- Project metadata is managed by `datastore/docsdb/registry.py`.
+- Search/index behavior is managed by `datastore/docsdb/rag.py`.
+- Project update events are processed by `datastore/docsdb/project_updater.py`.

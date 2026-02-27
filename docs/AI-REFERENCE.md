@@ -189,7 +189,7 @@ UNIQUE(source_id, target_id, relation)
 - **recall_log** -- Every recall() call with latency, result counts, reranker stats
 - **health_snapshots** -- Periodic DB health metrics (written by janitor)
 - **doc_update_log** -- Documentation update audit trail
-- **doc_registry** -- Project/doc tracking (schema in docs_registry.py `ensure_table()`)
+- **doc_registry** -- Project/doc tracking (schema in `datastore/docsdb/registry.py` `ensure_table()`)
 
 ### FTS Sync Triggers
 
@@ -491,7 +491,7 @@ Architectural constraints that must not be broken. Violating these causes data c
 
 **Content hash dedup happens before embedding.** `store()` checks `content_hash` (SHA256) first for exact dedup, then generates the embedding, then checks semantic similarity. Reordering these steps wastes embedding compute on exact duplicates.
 
-**Datastore owns metadata preservation on dedup paths.** `store()` applies metadata flags (`source_type`, `is_technical`) on duplicate/update paths too. Ingest/API layers should not mutate graph internals after write.
+**Datastore owns metadata preservation on dedup paths.** `store()` applies metadata flags (`source_type`, `domains`) on duplicate/update paths too. Ingest/API layers should not mutate graph internals after write.
 
 ---
 
@@ -564,11 +564,11 @@ python3 core/docs/updater.py update-stale --apply       # Fix stale docs (Opus c
 python3 datastore/docsdb/rag.py search "query text"     # RAG search (free, local)
 
 # Projects
-python3 docs_registry.py list --project quaid
-python3 docs_registry.py find-project <file_path>
-python3 docs_registry.py create-project <name> --label "Human Name"
-python3 docs_registry.py discover --project <name>
-python3 docs_registry.py gc                        # Garbage collect
+python3 datastore/docsdb/registry.py list --project quaid
+python3 datastore/docsdb/registry.py find-project <file_path>
+python3 datastore/docsdb/registry.py create-project <name> --label "Human Name"
+python3 datastore/docsdb/registry.py discover --project <name>
+python3 datastore/docsdb/registry.py gc                        # Garbage collect
 
 # Workspace audit
 python3 core/lifecycle/workspace_audit.py --bloat                 # Line counts vs limits
