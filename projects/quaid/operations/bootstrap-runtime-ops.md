@@ -24,3 +24,16 @@ This doc defines where bootstrap automation lives, how it relates to `~/quaid/de
 ## Sync discipline
 - Changes to runtime/bootstrap scripts should be reflected in project docs under `projects/quaid/operations/`.
 - Changes to core/plugin behavior must be implemented in `~/quaid/dev` and then validated through bootstrap/test runtime.
+
+## Git remote policy
+- `~/quaid/dev` may have both:
+  - `checkpoint` (NAS/local backup remote for normal pushes)
+  - `origin`/`github` (GitHub remotes for release publishing)
+- Default policy: push to `checkpoint` only.
+- Use `scripts/push-backup.sh` for normal push intent.
+- Use `scripts/release-push.sh` for GitHub release intent.
+- `main` pushes are blocked by default in local hook policy unless explicit release override is set.
+- GitHub pushes require explicit release mode:
+  - `QUAID_RELEASE=1 ...` (handled by `scripts/release-push.sh`)
+- Enforcement is in repo hook path:
+  - `git-hooks/pre-push` -> `scripts/push-guard.sh`
