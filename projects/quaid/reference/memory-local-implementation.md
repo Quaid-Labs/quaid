@@ -140,7 +140,7 @@ Each result dict from `recall()` includes:
 
 **LLM/Embeddings provider architecture:**
 - Core Quaid code is provider-agnostic. Only the adapter/provider layer and config are provider-aware.
-- LLM calls route through the OpenClaw gateway adapter (`/modules/quaid/llm`) and are resolved by model tier (`high`/`low`), not by hardcoded provider branches in core logic.
+- LLM calls route through the OpenClaw gateway adapter (`/modules/quaid/llm`) and are resolved by model tier (`deep_reasoning`/`fast_reasoning`), not by hardcoded provider branches in core logic.
 - Provider/model selection is fully config-driven via `models.llmProvider`, tier settings, and `models.providerModelClasses` in `config/memory.json`.
 
 **Data sanitization:**
@@ -365,7 +365,7 @@ Centralized modules extracted from duplicated code across `datastore/memorydb/me
 
 All shared library modules use `__all__` exports to define explicit public API boundaries, ensuring clean module interfaces and preventing accidental coupling to internal helpers.
 
-**Provider/adapter pattern:** LLM and embedding functionality is routed through adapters/providers. The core memory pipeline does not choose providers directly; it requests `high` or `low` reasoning and the adapter resolves provider + model from config and gateway state.
+**Provider/adapter pattern:** LLM and embedding functionality is routed through adapters/providers. The core memory pipeline does not choose providers directly; it requests `deep_reasoning` or `fast_reasoning` and the adapter resolves provider + model from config and gateway state.
 
 ### 8. Configuration System
 
@@ -468,13 +468,13 @@ Resolution rules:
 ```json
 {
   "retrieval": {
-    "defaultLimit": 5,
-    "maxLimit": 8,
-    "minSimilarity": 0.80,
-    "notifyMinSimilarity": 0.85,
-    "boostRecent": true,
-    "boostFrequent": true,
-    "maxTokens": 2000,
+    "default_limit": 5,
+    "max_limit": 8,
+    "min_similarity": 0.80,
+    "notify_min_similarity": 0.85,
+    "boost_recent": true,
+    "boost_frequent": true,
+    "max_tokens": 2000,
     "_note": "Recall notifications follow notifications.level / notifications.retrieval.verbosity",
     "dynamicK": {
       "enabled": true,
@@ -486,7 +486,7 @@ Resolution rules:
 }
 ```
 
-The `dynamicK` section controls the automatic retrieval limit scaling. When `enabled`, the retrieval limit K is computed as `round(11.5 * ln(N) - 61.7)` where N is the total node count, clamped to `[min, max]`. The `defaultLimit` and `maxLimit` fields serve as fallbacks when dynamic K is disabled. Research TODOs remain for further tuning the formula coefficients against real-world recall quality.
+The `dynamicK` section controls the automatic retrieval limit scaling. When `enabled`, the retrieval limit K is computed as `round(11.5 * ln(N) - 61.7)` where N is the total node count, clamped to `[min, max]`. The `default_limit` and `max_limit` fields serve as fallbacks when dynamic K is disabled. Research TODOs remain for further tuning the formula coefficients against real-world recall quality.
 
 **User identity config** includes `personNodeName`:
 ```json
@@ -528,7 +528,7 @@ The `dynamicK` section controls the automatic retrieval limit scaling. When `ena
 
 `default` model resolution is adapter/gateway-driven:
 
-- Tier requests (`high`/`low`) are resolved in `adaptors/openclaw/index.ts`.
+- Tier requests (`deep_reasoning`/`fast_reasoning`) are resolved in `adaptors/openclaw/index.ts`.
 - Provider resolution uses `models.llmProvider` + active gateway provider state.
 - Tier model resolution uses `models.deepReasoning` / `models.fastReasoning`; if either is `default`, Quaid looks up `models.providerModelClasses`.
 - Missing provider mappings fail loudly (no implicit hardcoded provider fallback).
