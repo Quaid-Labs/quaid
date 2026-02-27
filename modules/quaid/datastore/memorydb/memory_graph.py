@@ -384,38 +384,6 @@ class MemoryGraph:
                     (domain_id, description),
                 )
 
-            # Legacy domain migration: older rows may only have attributes.is_technical.
-            # Backfill attrs.domains and node_domains so domain filters continue to work.
-            try:
-                rows = conn.execute(
-                    """
-                    SELECT n.id, n.attributes
-                    FROM nodes n
-                    LEFT JOIN node_domains nd ON nd.node_id = n.id
-                    GROUP BY n.id
-                    HAVING COUNT(nd.domain) = 0
-                    """
-                ).fetchall()
-                for row in rows:
-                    node_id = row["id"]
-                    attrs_raw = row["attributes"] or "{}"
-                    try:
-                        attrs = json.loads(attrs_raw) if isinstance(attrs_raw, str) else (attrs_raw or {})
-                    except Exception:
-                        attrs = {}
-                    inferred_domains = _domains_from_attrs(attrs)
-                    if not inferred_domains:
-                        continue
-                    if "domains" not in attrs or not _normalize_domains(attrs.get("domains")):
-                        attrs["domains"] = inferred_domains
-                        conn.execute(
-                            "UPDATE nodes SET attributes = ?, updated_at = datetime('now') WHERE id = ?",
-                            (json.dumps(attrs), node_id),
-                        )
-                    self._sync_node_domains(conn, node_id, inferred_domains)
-            except Exception as exc:
-                logger.warning("[memory_graph] legacy domain backfill failed: %s", exc)
-
             # Default/backfill attribution values for legacy rows.
             conn.execute(
                 """
@@ -3218,24 +3186,10 @@ def _normalize_domains(values: Any) -> List[str]:
 
 
 def _domains_from_attrs(attrs: Any) -> List[str]:
-    """Read domains from attrs with legacy `is_technical` fallback."""
+    """Read normalized domains from attrs."""
     if not isinstance(attrs, dict):
         return []
-    domains = _normalize_domains(attrs.get("domains"))
-    if domains:
-        return domains
-    # Legacy fallback for older DB rows that were tagged with is_technical only.
-    if "is_technical" in attrs:
-        raw = attrs.get("is_technical")
-        is_technical = False
-        if isinstance(raw, bool):
-            is_technical = raw
-        elif isinstance(raw, (int, float)):
-            is_technical = bool(raw)
-        elif isinstance(raw, str):
-            is_technical = raw.strip().lower() in {"1", "true", "yes", "y", "technical"}
-        return ["technical"] if is_technical else ["personal"]
-    return []
+    return _normalize_domains(attrs.get("domains"))
 
 
 def _normalize_domain_filter(value: Any) -> Tuple[bool, set[str]]:
