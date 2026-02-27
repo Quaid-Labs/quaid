@@ -128,7 +128,7 @@ Parameter map:
   - `file_path` (required workspace-relative path), plus optional `project`, `title`, `description`, `auto_update`, `source_files`.
   - `auto_update` defaults to `false`; set it to `true` only for docs that should be drift-tracked from mapped source files.
 - `project_create`
-  - `name` (required, kebab-case; regex: `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`), plus optional `label`, `description`, `source_roots`.
+  - `name` (required; validated by `registry.py` regex `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`; kebab-case is recommended for consistency), plus optional `label`, `description`, `source_roots`.
 - `project_list`
   - no parameters.
 
