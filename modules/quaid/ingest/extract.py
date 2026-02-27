@@ -41,17 +41,17 @@ from lib.runtime_context import (
     build_transcript as runtime_build_transcript,
 )
 from lib.fail_policy import is_fail_hard_enabled
+from prompt_sets import get_prompt
 
 logger = logging.getLogger(__name__)
 _memory = SimpleNamespace(store=store_memory, create_edge=create_memory_edge)
 
-PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "extraction.txt"
 MAX_EXTRACT_WALL_SECONDS = 600.0
 
 
 def _load_extraction_prompt() -> str:
     """Load the extraction system prompt from file."""
-    return PROMPT_PATH.read_text(encoding="utf-8")
+    return get_prompt("ingest.extraction.system")
 
 
 def _get_owner_id(override: Optional[str] = None) -> str:

@@ -26,6 +26,7 @@ from lib.fail_policy import is_fail_hard_enabled
 from lib.llm_pool import acquire_llm_slot
 from lib.providers import LLMResult
 from lib.runtime_context import get_llm_provider
+from prompt_sets import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -414,7 +415,7 @@ def call_llm(system_prompt: str, user_message: str,
 
 def call_fast_reasoning(prompt: str, max_tokens: int = 200,
                        timeout: float = FAST_REASONING_TIMEOUT,
-                       system_prompt: str = "Respond with JSON only. No explanation, no markdown fencing.",
+                       system_prompt: Optional[str] = None,
                        max_retries: Optional[int] = None) -> Tuple[Optional[str], float]:
     """Call the fast-reasoning model and return (response text, duration).
 
@@ -423,8 +424,9 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
     Returns (None, duration) only for transient LLM failures after retries.
     """
     _load_model_config()
+    effective_system_prompt = system_prompt or get_prompt("llm.json_only")
     return call_llm(
-        system_prompt=system_prompt,
+        system_prompt=effective_system_prompt,
         user_message=prompt,
         model=_fast_reasoning_model,
         model_tier="fast",
@@ -434,7 +436,7 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
     )
 
 
-def call_deep_reasoning(prompt: str, system_prompt: str = "Respond with JSON only. No explanation, no markdown fencing.",
+def call_deep_reasoning(prompt: str, system_prompt: Optional[str] = None,
                         max_tokens: int = 2000,
                         timeout: float = DEEP_REASONING_TIMEOUT,
                         model: Optional[str] = None) -> Tuple[Optional[str], float]:
@@ -452,8 +454,9 @@ def call_deep_reasoning(prompt: str, system_prompt: str = "Respond with JSON onl
         target_model = forced_model
     else:
         target_model = model or _deep_reasoning_model
+    effective_system_prompt = system_prompt or get_prompt("llm.json_only")
     return call_llm(
-        system_prompt=system_prompt,
+        system_prompt=effective_system_prompt,
         user_message=prompt,
         model=target_model,
         model_tier="deep",

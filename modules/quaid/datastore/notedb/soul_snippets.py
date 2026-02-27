@@ -33,6 +33,7 @@ from config import get_config
 from lib.fail_policy import is_fail_hard_enabled
 from lib.markdown import strip_protected_regions
 from lib.runtime_context import get_workspace_dir
+from prompt_sets import get_prompt
 
 # Configuration
 def _workspace_dir() -> Path:
@@ -1280,7 +1281,7 @@ def run_journal_distillation(
             "errors": all_errors,
         }
 
-    system_prompt = "Respond with JSON only. No explanation, no markdown fencing."
+    system_prompt = get_prompt("llm.json_only")
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
     llm_timeout = _snippet_review_timeout_seconds()
@@ -1443,7 +1444,7 @@ def run_soul_snippets_review(
 
     print(f"  Found {total_snippet_count} snippets across {len(all_snippets)} files")
 
-    system_prompt = "Respond with JSON only. No explanation, no markdown fencing."
+    system_prompt = get_prompt("llm.json_only")
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
     llm_timeout = _snippet_review_timeout_seconds()
