@@ -146,6 +146,7 @@ cd ~/quaid/test/modules/quaid
 cd ~/quaid/test/modules/quaid
 ./scripts/run-quaid-e2e-matrix.sh --paths openai-oauth,openai-api,anthropic-api -- --skip-janitor
 ```
+Per-path timeout defaults to `1200` seconds. Override with `QUAID_E2E_PATH_TIMEOUT_SEC=<seconds>` when needed.
 
 Default full-suite matrix lanes intentionally exclude `anthropic-oauth` (known unstable refresh behavior).
 Current default lanes in `run-all-tests.sh`:

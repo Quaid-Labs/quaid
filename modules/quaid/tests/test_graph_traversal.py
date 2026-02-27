@@ -280,7 +280,7 @@ class TestVecUpsertFailures:
             with pytest.raises(RuntimeError, match="Vector index upsert failed during add_node"):
                 graph.add_node(node, embed=False)
 
-    def test_update_node_vec_upsert_raises_with_fail_hard(self, graph):
+    def test_update_node_vec_upsert_keeps_node_write_even_with_fail_hard(self, graph, caplog):
         node = Node.create(type="Person", name="VecUpdateFailHard", owner_id="quaid", status="approved")
         with patch.object(graph, "get_embedding", return_value=None):
             graph.add_node(node, embed=False)
@@ -288,8 +288,11 @@ class TestVecUpsertFailures:
         with patch("datastore.memorydb.memory_graph._lib_has_vec", return_value=True), \
              patch.object(MemoryGraph, "_ensure_vec_table", side_effect=RuntimeError("vec unavailable")), \
              patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
-            with pytest.raises(RuntimeError, match="Vector index upsert failed during update_node"):
-                graph.update_node(node, embed=False)
+            caplog.set_level("WARNING")
+            updated = graph.update_node(node, embed=False)
+        assert updated is True
+        assert "vec_nodes retry failed" in caplog.text
+        assert "vec_nodes sync was skipped" in caplog.text
 
 
 class TestEntitySummaryJsonHardening:
