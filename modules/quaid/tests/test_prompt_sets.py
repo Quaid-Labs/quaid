@@ -10,7 +10,14 @@ import pytest
 # Ensure plugin root is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from prompt_sets import get_prompt, list_prompt_sets, register_prompt_set
+from prompt_sets import get_prompt, list_prompt_sets, register_prompt_set, reset_registry
+
+
+@pytest.fixture(autouse=True)
+def _reset_prompt_registry():
+    reset_registry()
+    yield
+    reset_registry()
 
 
 def test_default_prompt_set_is_registered():
@@ -55,3 +62,8 @@ def test_config_fails_fast_for_unknown_prompt_set(tmp_path):
                 config.load_config()
     finally:
         config._config = old_config
+
+
+def test_register_prompt_set_rejects_invalid_set_id():
+    with pytest.raises(ValueError, match="prompt set id must match"):
+        register_prompt_set("invalid space", {"llm.json_only": "ok"}, source="tests")

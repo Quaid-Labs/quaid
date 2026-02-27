@@ -1669,7 +1669,12 @@ class MemoryGraph:
                     f"Connected via: {relation}\n"
                     f"Respond with just a number 0-5."
                 )
-                response, _ = call_fast_reasoning(prompt, max_tokens=10, timeout=5.0)
+                response, _ = call_fast_reasoning(
+                    prompt,
+                    max_tokens=10,
+                    timeout=5.0,
+                    system_prompt="You are a strict scorer. Respond with a single digit 0-5 only.",
+                )
                 if response:
                     import re
                     m = re.search(r'(\d)', response.strip())
@@ -4972,7 +4977,10 @@ def generate_entity_summary(node_id: str, use_llm: bool = True) -> Optional[str]
 Write a natural, flowing paragraph. Only include information from the facts above — do not add anything new. Be concise."""
 
         try:
-            response, _ = call_fast_reasoning(prompt)
+            response, _ = call_fast_reasoning(
+                prompt,
+                system_prompt="Write plain prose only. Do not use JSON, bullets, or markdown.",
+            )
             if response:
                 summary = response.strip()
                 # Store in node attributes
