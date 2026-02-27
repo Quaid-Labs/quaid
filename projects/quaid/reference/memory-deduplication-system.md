@@ -1,5 +1,5 @@
 # Memory Deduplication System
-<!-- PURPOSE: Dedup pipeline: content hash, store-time similarity, token recall, Haiku verification -->
+<!-- PURPOSE: Dedup pipeline: content hash, store-time similarity, token recall, fast-tier verification -->
 <!-- SOURCES: janitor.py (dedup tasks), memory_graph.py (store dedup) -->
 
 ## Overview
@@ -25,9 +25,9 @@ When `store()` is called, three dedup checks run before embedding:
 - Logged as `auto_reject` in dedup_log
 
 ### 3. Gray Zone (0.88-0.98 similarity)
-- When `haiku_verify_enabled: true` in config
-- Haiku is asked to confirm whether the texts are truly duplicates
-- Logged as `haiku_reject` or `haiku_keep` in dedup_log
+- When `llm_verify_enabled: true` in config
+- Fast-tier verifier model is asked to confirm whether the texts are truly duplicates
+- Logged as `llm_reject` or `llm_accept` in dedup_log
 - **Cost:** ~$0.001 per verification
 
 ### 4. Below 0.88
@@ -44,7 +44,7 @@ When `store()` is called, three dedup checks run before embedding:
 1. Extract key tokens per memory (nouns, proper names — not stopwords)
 2. SQL LIKE search for candidates sharing tokens (~30 per memory vs full scan)
 3. Vector similarity on candidates only
-4. Batch pairs to Haiku for confirmation
+4. Batch pairs to the configured fast-tier verifier for confirmation
 
 ### Batching
 `TokenBatchBuilder` dynamically packs items based on model context window × budget percent (default 50%). Safety cap of 500 items per batch.
@@ -67,15 +67,15 @@ All dedup decisions are recorded in the `dedup_log` table:
 | `existing_node_id` | The node it matched against |
 | `existing_text` | Text of the existing node |
 | `similarity` | Cosine similarity score |
-| `decision` | `hash_exact`, `auto_reject`, `haiku_reject`, `haiku_keep`, `fallback_reject` |
-| `haiku_reasoning` | LLM explanation (if Haiku was called) |
+| `decision` | `hash_exact`, `auto_reject`, `llm_reject`, `llm_accept`, `fallback_reject` |
+| `llm_reasoning` | LLM explanation (if verifier model was called) |
 | `review_status` | `unreviewed` / `confirmed` / `reversed` |
 | `owner_id` | Owner of the fact being checked |
 
 ### Review Pipeline (Task 2b)
 Nightly janitor reviews recent dedup rejections via `recall_pass`:
 - **`hash_exact` entries are auto-confirmed** — identical text matches need no LLM review. These are excluded from the Opus review query and auto-confirmed at the start of the task.
-- Embedding-based rejections (`auto_reject`, `haiku_reject`, `fallback_reject`) are sent to Opus for review
+- Embedding-based rejections (`auto_reject`, `llm_reject`, `fallback_reject`) are sent to Opus for review
 - Status: `unreviewed` → `confirmed` or `reversed`
 - **REVERSE safety check**: Before restoring a reversed fact, checks if a living node with the same content hash already exists. If so, skips restoration to prevent duplicate creation.
 

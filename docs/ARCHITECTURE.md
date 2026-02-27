@@ -130,7 +130,7 @@ All three paths converge on the same extraction logic and produce identical resu
 
 1. **Transcript preparation** -- The input is normalized to a human-readable transcript. JSONL session files are parsed (handling both wrapped `{"type": "message", "message": {...}}` and direct `{"role": ..., "content": ...}` formats). Plain text is passed through as-is. In the OpenClaw path, queued memory notes (from the `memory_note` tool) are prepended.
 
-2. **LLM extraction** -- A single deep-reasoning LLM call processes the transcript and produces:
+2. **LLM extraction** -- Deep-reasoning LLM extraction processes the transcript in bounded chunks (with carry-forward context) and produces:
    - **Facts**: Structured observations with name, category, confidence, speaker, knowledge_type
    - **Edges**: Relationships between entities (subject, relation, object)
    - **Soul snippets**: Bullet-point observations for core markdown files
