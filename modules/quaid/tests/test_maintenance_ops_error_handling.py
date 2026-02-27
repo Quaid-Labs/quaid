@@ -76,31 +76,49 @@ def test_recall_candidates_fail_hard_behavior():
 
 
 def test_fix_vec_nodes_insert_error_respects_fail_hard():
-    class _Conn:
+    class _ConnRecovering:
         def execute(self, sql, params):
             if "INSERT OR REPLACE INTO vec_nodes" in sql:
                 raise RuntimeError("vec write failed")
             return _DummyResult(rowcount=1)
 
-    class _Graph:
+    class _ConnAlwaysFail:
+        def execute(self, sql, params):
+            if "vec_nodes" in sql:
+                raise RuntimeError("vec write failed")
+            return _DummyResult(rowcount=1)
+
+    class _GraphRecovering:
         @contextmanager
         def _get_conn(self):
-            yield _Conn()
+            yield _ConnRecovering()
 
-    graph = _Graph()
+    class _GraphAlwaysFail:
+        @contextmanager
+        def _get_conn(self):
+            yield _ConnAlwaysFail()
+
     decisions = [{"id": "n1", "action": "FIX", "new_text": "updated text", "edges": []}]
 
     with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=False), \
          patch("lib.embeddings.get_embedding", return_value=[0.1]), \
          patch("lib.embeddings.pack_embedding", return_value=b"x"):
-        out = maintenance_ops.apply_review_decisions_from_list(graph, decisions, dry_run=False)
+        out = maintenance_ops.apply_review_decisions_from_list(_GraphRecovering(), decisions, dry_run=False)
         assert out["fixed"] == 1
 
+    # Fail-hard should not raise when delete+insert recovery succeeds.
+    with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True), \
+         patch("lib.embeddings.get_embedding", return_value=[0.1]), \
+         patch("lib.embeddings.pack_embedding", return_value=b"x"):
+        out = maintenance_ops.apply_review_decisions_from_list(_GraphRecovering(), decisions, dry_run=False)
+        assert out["fixed"] == 1
+
+    # Fail-hard should raise only if both primary upsert and fallback fail.
     with patch.object(maintenance_ops, "is_fail_hard_enabled", return_value=True), \
          patch("lib.embeddings.get_embedding", return_value=[0.1]), \
          patch("lib.embeddings.pack_embedding", return_value=b"x"):
         with pytest.raises(RuntimeError, match="vec_nodes update failed"):
-            maintenance_ops.apply_review_decisions_from_list(graph, decisions, dry_run=False)
+            maintenance_ops.apply_review_decisions_from_list(_GraphAlwaysFail(), decisions, dry_run=False)
 
 
 def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
