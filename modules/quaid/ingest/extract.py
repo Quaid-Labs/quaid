@@ -26,7 +26,6 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 # Ensure plugin root is importable
@@ -34,12 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
-from datastore.memorydb.memory_graph import (
-    store as store_memory,
-    create_edge as create_memory_edge,
-    _registered_domains as registered_domains,
-)
-from datastore.notedb.soul_snippets import write_journal_entry, write_snippet_entry
+from core.services.memory_service import get_memory_service
 from lib.runtime_context import (
     parse_session_jsonl as runtime_parse_session_jsonl,
     build_transcript as runtime_build_transcript,
@@ -48,9 +42,21 @@ from lib.fail_policy import is_fail_hard_enabled
 from prompt_sets import get_prompt
 
 logger = logging.getLogger(__name__)
-_memory = SimpleNamespace(store=store_memory, create_edge=create_memory_edge)
+_memory = get_memory_service()
 
 MAX_EXTRACT_WALL_SECONDS = 600.0
+_SOUL_SNIPPETS_MODULE = None
+
+
+def _load_soul_snippets_module():
+    global _SOUL_SNIPPETS_MODULE
+    if _SOUL_SNIPPETS_MODULE is not None:
+        return _SOUL_SNIPPETS_MODULE
+    _SOUL_SNIPPETS_MODULE = __import__(
+        "datastore.notedb.soul_snippets",
+        fromlist=["write_journal_entry", "write_snippet_entry"],
+    )
+    return _SOUL_SNIPPETS_MODULE
 
 
 def _load_extraction_prompt() -> str:
@@ -394,12 +400,6 @@ def extract_from_transcript(
             allowed_domains = {str(k).strip() for k in domain_defs.keys() if str(k).strip()}
     except Exception:
         allowed_domains = set()
-    if not allowed_domains:
-        try:
-            allowed_domains = {str(k).strip() for k in registered_domains().keys() if str(k).strip()}
-        except Exception:
-            allowed_domains = set()
-
     for fact in facts:
         if not isinstance(fact, dict):
             continue
@@ -563,7 +563,7 @@ def extract_from_transcript(
             "Reset" if "reset" in label.lower() else "CLI"
         )
         for filename, items in result["snippets"].items():
-            write_snippet_entry(filename, items, trigger=trigger)
+            _load_soul_snippets_module().write_snippet_entry(filename, items, trigger=trigger)
 
     # Process journal entries (from merged chunk results)
     if isinstance(all_journal, dict):
@@ -576,7 +576,7 @@ def extract_from_transcript(
             "Reset" if "reset" in label.lower() else "CLI"
         )
         for filename, text in result["journal"].items():
-            write_journal_entry(filename, text, trigger=trigger)
+            _load_soul_snippets_module().write_journal_entry(filename, text, trigger=trigger)
 
     logger.info(
         f"[extract] {label}: {result['facts_stored']} stored, "
