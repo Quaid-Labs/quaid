@@ -81,7 +81,7 @@ The search system uses a multi-stage pipeline with RRF fusion:
 2. **Parallel search** — `search_hybrid()` runs BM25 (FTS5) and semantic (cosine) concurrently via `ThreadPoolExecutor(max_workers=2)`
 3. **RRF fusion** — Reciprocal Rank Fusion (k=60) combines results with dynamic fusion weights via `_get_fusion_weights(intent)`: default vector 0.7 / FTS 0.3, but WHO/WHERE boost FTS to 0.5/0.5, WHEN boosts FTS to 0.6, PREFERENCE/WHY boost vector to 0.8, PROJECT uses 0.6/0.4 (moderate FTS boost for tech terms)
 4. **Content hash pre-filter** — SHA256 exact-dedup removes identical results before scoring
-5. **Composite scoring** — Final score = 60% relevance + 20% recency + 15% access frequency + 5% extraction confidence
+5. **Composite scoring** — Base weighted score is 60% relevance + 20% recency + 15% access frequency, then additive bonuses apply (confidence, confirmation count, temporal metadata, storage strength)
 6. **Temporal validity filtering** — Expired facts penalized, future facts deprioritized
 7. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
 8. **Multi-hop traversal** — `get_related_bidirectional()` with depth=2, hop score decay 0.7^depth
@@ -490,8 +490,8 @@ The `dynamicK` section controls the automatic retrieval limit scaling. When `ena
 {
   "logging": {
     "enabled": true,
-    "level": "debug",
-    "retention_days": 36500
+    "level": "info",
+    "retention_days": 7
   }
 }
 ```
