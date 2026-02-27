@@ -457,7 +457,12 @@ CREATE TABLE IF NOT EXISTS janitor_runs (
     completed_at TEXT,
     memories_processed INTEGER DEFAULT 0,
     actions_taken INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'running'        -- running, completed, failed
+    status TEXT DEFAULT 'running',       -- running, completed, failed
+    skipped_tasks_json TEXT,
+    carryover_json TEXT,
+    stage_budget_json TEXT,
+    checkpoint_path TEXT,
+    task_summary_json TEXT
 );
 ```
 

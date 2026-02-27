@@ -1,6 +1,6 @@
 # Janitor (Sandman) Reference
 <!-- PURPOSE: Complete reference for nightly janitor pipeline: task list, schedule, thresholds, fail-fast, edge normalization, cost tracking -->
-<!-- SOURCES: janitor.py, workspace_audit.py, adaptors/openclaw/index.ts, lib/adapter.py, lib/providers.py -->
+<!-- SOURCES: core/lifecycle/janitor.py, core/lifecycle/workspace_audit.py, adaptors/openclaw/adapter.ts, lib/adapter.py, lib/providers.py -->
 
 Nightly memory maintenance pipeline. Cleans, decays, deduplicates, detects contradictions, and maintains memory quality.
 
@@ -9,7 +9,7 @@ Nightly memory maintenance pipeline. Cleans, decays, deduplicates, detects contr
 - **Time:** 4:30 AM Asia/Makassar (WITA)
 - **Script:** `modules/quaid/core/lifecycle/janitor.py`
 - **Logs:** `logs/janitor.log` (structured JSON)
-- **Stats:** `data/janitor-stats.json` (run metrics + API cost)
+- **Stats:** `logs/janitor-stats.json` (run metrics + API cost)
 - **Session:** `isolated` (dedicated session per run, not the main interactive session)
 
 ### Session Isolation (Critical)
@@ -32,7 +32,7 @@ clawdbot cron edit <JOB_ID> --session isolated --message "Run janitor..."
 
 ## Concurrency Lock
 
-The janitor uses a lock file at `data/.janitor.lock` to prevent concurrent runs. If a second instance is launched while the first is running, it exits immediately with an error. The lock file is considered stale after 2 hours (7200 seconds) and is auto-removed, allowing a new run to proceed. To force a run when the lock is stuck, manually delete the lock file.
+The janitor uses a lock file at `data/.janitor.lock` to prevent concurrent runs. If a second instance is launched while the first is running, it exits immediately with an error. Locking uses OS-level file locks (`fcntl.flock`) and releases automatically when the process exits.
 
 **Lock file path resolution:** The lock file path is resolved using the `CLAWDBOT_WORKSPACE` environment variable if set, falling back to the script's relative parent directory (`Path(__file__).parent.parent.parent`). This ensures the lock file is placed in the correct workspace `data/` directory even when the janitor is invoked from a non-standard working directory or when the workspace root differs from the script's location.
 
@@ -94,7 +94,7 @@ Detects and updates stale docs using git-based drift detection via `detect_drift
 ### Task 1c: Documentation Cleanup (Opus)
 Cleans bloated docs based on churn heuristics (not time-based):
 - **Triggers:** 10+ updates since last cleanup OR 30%+ size growth
-- **State tracking:** `data/docs-cleanup-state.json`
+- **State tracking:** `logs/docs-cleanup-state.json`
 - **Cleanup prompt:** Remove stale sections, consolidate redundant explanations, trim verbosity
 - Preserves all current, accurate information
 - Resets churn counters after cleanup
@@ -102,10 +102,10 @@ Cleans bloated docs based on churn heuristics (not time-based):
 ### Task 1d-snippets: Soul Snippets Review (Opus)
 Reviews pending soul snippets (from `.snippets.md` files) and decides whether to fold them into core markdown files:
 - **Source:** `*.snippets.md` files written by extraction hook during compaction/reset
-- **Target files:** SOUL.md, USER.md, MEMORY.md, AGENTS.md
+- **Target files:** default is SOUL.md, USER.md, MEMORY.md (AGENTS.md can be added via `docs.journal.targetFiles`)
 - **Decisions per snippet:** FOLD (add as-is), REWRITE (rephrase then add), DISCARD (remove)
 - **Backups:** Created before any parent file modification
-- **Config:** `docs.journal` in memory.json (`snippetsEnabled`, `targetFiles`, `maxSnippetsPerFile`). Note: config key was renamed from `docs.soulSnippets` to `docs.journal` for the unified journal system; snippets are controlled by the `snippetsEnabled` sub-key.
+- **Config:** `docs.journal` in memory.json (`snippetsEnabled`, `targetFiles`, `maxEntriesPerFile`; legacy fallback `maxSnippetsPerFile`). Note: config key was renamed from `docs.soulSnippets` to `docs.journal` for the unified journal system; snippets are controlled by the `snippetsEnabled` sub-key.
 - **Module:** `soul_snippets.py`
 
 ### Task 1d-journal: Journal Distillation (Opus)
@@ -180,7 +180,7 @@ Resolves pending contradictions detected by Task 4:
 Uses the Ebbinghaus forgetting curve with access-scaled half-life:
 
 **Formula:** `R = 2^(-t / half_life)` where:
-- `half_life = baseHalfLifeDays × (1 + accessBonusFactor × access_count) × (2 if verified)`
+- `half_life = baseHalfLifeDays × (1 + accessBonusFactor × access_count) × (1 + 0.5 × storage_strength) × (2 if verified)`
 - `t` = days since last access
 
 **Config** (`config/memory.json → decay`):
@@ -291,7 +291,7 @@ When new relation types are created during edge extraction, search keywords are 
 - Cost tracking: input/output tokens and estimated USD
 - Merged-ID tracking: prevents double-merging nodes within a single run (see Task 3)
 - FK constraint handling: foreign key violations during merges are caught and logged as warnings (see Task 3)
-- Lock file: prevents concurrent janitor runs (`data/.janitor.lock`, stale after 2 hours/7200s — auto-removed)
+- Lock file: prevents concurrent janitor runs (`data/.janitor.lock`, OS lock released automatically on process exit)
 
 ## Prompt Versioning
 
@@ -345,7 +345,7 @@ python3 core/lifecycle/janitor.py --task all --apply --full-scan
 
 ## Cost Tracking
 
-Every run writes `api_usage` to `data/janitor-stats.json`:
+Every run writes `api_usage` to `logs/janitor-stats.json`:
 ```json
 {
   "api_usage": {
@@ -361,7 +361,7 @@ Every run writes `api_usage` to `data/janitor-stats.json`:
 
 The janitor uses the same provider-agnostic model-tier architecture as the rest of Quaid. Rather than hardcoding a single provider, model references in `config/memory.json` are resolved through adapter/provider dispatch and gateway state.
 
-Model names are resolved via `models.deepReasoning` / `models.fastReasoning` and `models.providerModelClasses` in `config/memory.json`, with adapter/provider dispatch selecting the active provider.
+Model names are resolved via `models.deep_reasoning` / `models.fast_reasoning` and `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses` in `config/memory.json`, with adapter/provider dispatch selecting the active provider.
 
 The provider/adapter refactor separates LLM and embedding concerns into distinct interfaces, keeping janitor logic independent of provider-specific details.
 
@@ -407,13 +407,13 @@ Settings are driven by `config/memory.json`. Key sections used by the janitor:
 
 | Config Section | Used By | Settings |
 |----------------|---------|----------|
-| `models.deepReasoning` | review, workspace | High-tier reasoning model (explicit or `default`) |
-| `models.fastReasoning` | duplicates, contradictions | Haiku model ID |
+| `models.deep_reasoning` | review, workspace | High-tier reasoning model (explicit or `default`) |
+| `models.fast_reasoning` | duplicates, contradictions | Fast-tier reasoning model ID |
 | `database.path` | all tasks | Main DB path |
 | `rag.docsDir` | rag task | Docs directory to index |
 | `decay` | decay task | Decay rates, thresholds |
 | `dedup` | duplicates | Similarity threshold, batch size |
-| `models.providerModelClasses` | all LLM tasks | Provider→deep/fast model class mapping used when tier is `default` |
+| `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses` | all LLM tasks | Provider→tier model-class maps used when tier is `default` |
 
 Model names are resolved from `config/memory.json` by model tier, then routed through adapter/provider dispatch using active gateway provider/auth state.
 

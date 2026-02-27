@@ -1,6 +1,6 @@
 # Memory-Local Plugin Implementation — Total Recall (quaid)
 <!-- PURPOSE: Implementation details: schema, modules, config, shared lib, CLI, hooks, test suite, projects system -->
-<!-- SOURCES: datastore/memorydb/memory_graph.py, adaptors/openclaw/index.ts, datastore/docsdb/rag.py, config.py, datastore/docsdb/registry.py, datastore/docsdb/project_updater.py, config/memory.json -->
+<!-- SOURCES: datastore/memorydb/memory_graph.py, adaptors/openclaw/adapter.ts, datastore/docsdb/rag.py, config.py, datastore/docsdb/registry.py, datastore/docsdb/project_updater.py, config/memory.json -->
 
 **Status:** Production Ready (updated 2026-02-08)
 **Location:** `modules/quaid/`
@@ -141,7 +141,7 @@ Each result dict from `recall()` includes:
 **LLM/Embeddings provider architecture:**
 - Core Quaid code is provider-agnostic. Only the adapter/provider layer and config are provider-aware.
 - LLM calls route through the OpenClaw gateway adapter (`/modules/quaid/llm`) and are resolved by model tier (`deep_reasoning`/`fast_reasoning`), not by hardcoded provider branches in core logic.
-- Provider/model selection is fully config-driven via `models.llmProvider`, tier settings, and `models.providerModelClasses` in `config/memory.json`.
+- Provider/model selection is fully config-driven via `models.llmProvider`, tier settings, and `models.fastReasoningModelClasses` / `models.deepReasoningModelClasses` in `config/memory.json`.
 
 **Data sanitization:**
 - All personal names are scrubbed from code comments, prompts, and docstrings to support safe public release
@@ -190,7 +190,7 @@ Schema initialization and migrations are performed by `memory_graph.py` at start
 
 ---
 
-### 4. Plugin Entry Point (`adaptors/openclaw/index.ts`)
+### 4. Plugin Entry Point (`adaptors/openclaw/adapter.ts`)
 
 OpenClaw plugin (Total Recall / quaid) that:
 
@@ -204,7 +204,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 **Hooks:**
 - `before_agent_start` — optional auto-injection pipeline (gated by config/env)
 - `agent_end` — inactivity-timeout extraction (per-message classifier deprecated)
-- `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Now includes combined fact+edge extraction in a single LLM call.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (SOUL.md, USER.md, MEMORY.md, AGENTS.md). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
+- `before_compaction` — extracts all personal facts from full transcript via Opus before context is compacted. Records compaction timestamp and resets injection dedup list. **Now includes combined fact+edge extraction in a single LLM call.** Enforces 3-word minimum on extracted facts. Generates derived keywords per fact for FTS vocabulary bridging. Extracts causal edges (`caused_by`, `led_to`) when causal links are clearly stated. **Also extracts soul snippets** — observations destined for core markdown files (default targets: SOUL.md, USER.md, MEMORY.md; AGENTS.md optional via config). Snippets are written to `.snippets.md` staging files for janitor review (Task 1d).
 - `before_reset` — same extraction as compaction, triggered on `/new` or `/reset`
 
 **LLM timeouts:**
@@ -351,7 +351,7 @@ All shared library modules use `__all__` exports to define explicit public API b
 
 | Section | Controls |
 |---------|----------|
-| `models` | `llmProvider` (`default` or explicit provider), `embeddingsProvider`, `deepReasoning`, `fastReasoning`, `providerModelClasses` (provider→tier pair map) |
+| `models` | `llmProvider` (`default` or explicit provider), `embeddingsProvider`, `deep_reasoning`, `fast_reasoning`, `deepReasoningModelClasses`, `fastReasoningModelClasses` |
 | `database` | `path` (main DB), `archivePath` (archive DB) |
 | `ollama` | `url`, `embeddingModel`, `embeddingDim` |
 | `docs` | `autoUpdateOnCompact`, `maxDocsPerUpdate`, `stalenessCheckEnabled`, `sourceMapping`, `updateTimeoutSeconds` |
@@ -380,27 +380,23 @@ The embedding model was upgraded from nomic-embed-text (768-dim) → qwen3-embed
   "models": {
     "llmProvider": "default",
     "embeddingsProvider": "ollama",
-    "fastReasoning": "default",
-    "deepReasoning": "default",
-    "providerModelClasses": [
-      {
-        "provider": "openai",
-        "fastReasoning": "gpt-5.1-codex-mini",
-        "deepReasoning": "gpt-5.3-codex"
-      },
-      {
-        "provider": "anthropic",
-        "fastReasoning": "claude-haiku-4-5",
-        "deepReasoning": "claude-opus-4-6"
-      }
-    ]
+    "fast_reasoning": "default",
+    "deep_reasoning": "default",
+    "fastReasoningModelClasses": {
+      "openai": "gpt-5.1-codex-mini",
+      "anthropic": "claude-haiku-4-5"
+    },
+    "deepReasoningModelClasses": {
+      "openai": "gpt-5.3-codex",
+      "anthropic": "claude-opus-4-6"
+    }
   }
 }
 ```
 
 Resolution rules:
-- If `fastReasoning`/`deepReasoning` are explicit model IDs, those are used.
-- If either tier is `"default"`, Quaid resolves from `providerModelClasses` using the effective provider.
+- If `fast_reasoning`/`deep_reasoning` are explicit model IDs, those are used.
+- If either tier is `"default"`, Quaid resolves from `fastReasoningModelClasses` / `deepReasoningModelClasses` using the effective provider.
 - Effective provider comes from `models.llmProvider` unless it is `"default"`, in which case gateway default provider/auth state is used.
 - Unknown providers fail loudly (no silent Anthropic fallback), preserving abstraction and testability.
 
@@ -456,15 +452,13 @@ Resolution rules:
     "_note": "Recall notifications follow notifications.level / notifications.retrieval.verbosity",
     "dynamicK": {
       "enabled": true,
-      "formula": "11.5 * ln(N) - 61.7",
-      "min": 3,
-      "max": 50
+      "formula": "11.5 * ln(N) - 61.7"
     }
   }
 }
 ```
 
-The `dynamicK` section controls the automatic retrieval limit scaling. When `enabled`, the retrieval limit K is computed as `round(11.5 * ln(N) - 61.7)` where N is the total node count, clamped to `[min, max]`. The `default_limit` and `max_limit` fields serve as fallbacks when dynamic K is disabled. Research TODOs remain for further tuning the formula coefficients against real-world recall quality.
+The `dynamicK` section controls the automatic retrieval limit scaling. When `enabled`, retrieval uses `round(11.5 * ln(N) - 61.7)` where N is the active node count. Runtime currently clamps this to `[5, 40]` in adapter logic, and node count is cached for 5 minutes. The `default_limit` and `max_limit` fields remain fallbacks when dynamic K is disabled.
 
 **User identity config** includes `personNodeName`:
 ```json
@@ -497,7 +491,7 @@ The `dynamicK` section controls the automatic retrieval limit scaling. When `ena
   "logging": {
     "enabled": true,
     "level": "debug",
-    "retentionDays": 36500
+    "retention_days": 36500
   }
 }
 ```
@@ -506,9 +500,9 @@ The `dynamicK` section controls the automatic retrieval limit scaling. When `ena
 
 `default` model resolution is adapter/gateway-driven:
 
-- Tier requests (`deep_reasoning`/`fast_reasoning`) are resolved in `adaptors/openclaw/index.ts`.
+- Tier requests (`deep_reasoning`/`fast_reasoning`) are resolved in `adaptors/openclaw/adapter.ts`.
 - Provider resolution uses `models.llmProvider` + active gateway provider state.
-- Tier model resolution uses `models.deepReasoning` / `models.fastReasoning`; if either is `default`, Quaid looks up `models.providerModelClasses`.
+- Tier model resolution uses `models.deep_reasoning` / `models.fast_reasoning`; if either is `default`, Quaid looks up `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses`.
 - Missing provider mappings fail loudly (no implicit hardcoded provider fallback).
 
 See `projects/quaid/reference/adapter-provider-architecture.md` for the canonical provider/model flow.

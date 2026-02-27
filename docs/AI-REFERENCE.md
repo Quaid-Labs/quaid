@@ -53,9 +53,9 @@ Write request
 | `core/lifecycle/workspace_audit.py` | Workspace markdown audit implementation | `run_workspace_check()`, `check_bloat()` |
 | `datastore/notedb/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
 | `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search()`, `index_docs()`, `register_lifecycle_routines()` |
-| `core/docs/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
-| `core/docs/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
-| `core/docs/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
+| `datastore/docsdb/updater.py` | Doc staleness/cleanup maintenance routines | `check_staleness()`, `update_doc_from_diffs()`, `register_lifecycle_routines()` |
+| `datastore/docsdb/registry.py` | Project/doc registry and path resolution | `create_project()`, `auto_discover()`, `register()`, `find_project_for_path()` |
+| `datastore/docsdb/project_updater.py` | Background project event processor | `process_event()`, `refresh_project_md()` |
 | `core/runtime/events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
 | `core/runtime/notify.py` | User notifications via adapter/runtime context | `notify_user()`, retrieval/extraction/janitor/doc notifications |
 | `core/runtime/logger.py` | Structured JSONL logger with rotation | `Logger`, `rotate_logs()`, `memory_logger`, `janitor_logger` |
@@ -175,7 +175,7 @@ UNIQUE(source_id, target_id, relation)
 ### Index Tables
 
 - **nodes_fts** -- FTS5 virtual table: `name` (weight 2x), `keywords` (weight 1x), content='nodes', tokenize='porter unicode61'
-- **node_embeddings** -- sqlite-vec virtual table for ANN search
+- **vec_nodes** -- sqlite-vec virtual table for ANN search
 - **edge_keywords** -- FTS5 for edge relation search, maps edge types to trigger keywords
 
 ### Operational Tables
@@ -223,7 +223,7 @@ config/memory.json
     enabled, dryRun, taskTimeoutMinutes
     opusReview             -- batchSize (50), maxTokens (4000), model
     dedup                  -- similarityThreshold (0.85), highSimilarityThreshold (0.95),
-                              autoRejectThreshold (0.98), grayZoneLow (0.88), haikuVerifyEnabled
+                              autoRejectThreshold (0.98), grayZoneLow (0.88), llmVerifyEnabled
     contradiction          -- Conflict detection settings
   retrieval                -- Recall settings (limits, similarity, notify)
   notifications            -- fullText (no truncation), showProcessingStart
@@ -559,8 +559,8 @@ python3 core/lifecycle/janitor.py --task duplicates --apply       # Dedup pass
 python3 core/lifecycle/janitor.py --task cleanup                  # Prune old logs
 
 # Documentation
-python3 core/docs/updater.py check                      # Check doc staleness (free)
-python3 core/docs/updater.py update-stale --apply       # Fix stale docs (Opus calls)
+python3 datastore/docsdb/updater.py check                      # Check doc staleness (free)
+python3 datastore/docsdb/updater.py update-stale --apply       # Fix stale docs (Opus calls)
 python3 datastore/docsdb/rag.py search "query text"     # RAG search (free, local)
 
 # Projects
@@ -624,8 +624,8 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOM
 |------|---------------|
 | `test_store_recall.py` | Store and recall pipeline |
 | `test_search.py` | Search functionality |
-| `test_memory_graph.py` | Core graph operations |
-| `test_janitor.py` | Janitor pipeline |
+| `test_graph_traversal.py` | Core graph traversal and vec write failure handling |
+| `test_janitor_lifecycle.py` | Janitor lifecycle orchestration and task plumbing |
 | `test_edge_normalization.py` | Edge normalization (inverse, synonym, symmetric) |
 | `test_soul_snippets.py` | Snippet and journal systems |
 | `test_docs_registry.py` | Project/doc registry CRUD |
@@ -706,7 +706,7 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOM
 
 **Key insight:** Journal + Haiku (74.5%) nearly matches v1 Opus (75.0%) at roughly 46% of the cost. Journal helps most on temporal questions (+7.6pp) and single-hop questions (+6.8pp).
 
-**Benchmark code:** See `benchmark/locomo/` and [docs/BENCHMARKS.md](BENCHMARKS.md) for full methodology.
+**Benchmark code:** See `benchmark/agentlife/` and [docs/BENCHMARKS.md](BENCHMARKS.md) for full methodology.
 
 **LongMemEval** (ICLR 2025): 500 QA pairs, 7 types, 19,195 unique sessions. Pending full evaluation run.
 
@@ -795,14 +795,14 @@ python3 core/lifecycle/janitor.py --task all --apply
 
 | Topic | Primary Doc |
 |-------|-------------|
-| Memory architecture | `projects/quaid/memory-system-design.md` |
-| Plugin implementation | `projects/quaid/memory-local-implementation.md` |
-| Janitor pipeline | `projects/quaid/janitor-reference.md` |
-| Database schema | `projects/quaid/memory-schema.md` |
-| Deduplication | `projects/quaid/memory-deduplication-system.md` |
-| Model routing | `projects/infrastructure/model-strategy.md` |
-| Claude Code hooks | `projects/infrastructure/claude-code-integration.md` |
-| Project onboarding | `modules/quaid/prompts/project_onboarding.md` |
+| Memory architecture | `projects/quaid/reference/memory-system-design.md` |
+| Plugin implementation | `projects/quaid/reference/memory-local-implementation.md` |
+| Janitor pipeline | `projects/quaid/reference/janitor-reference.md` |
+| Database schema | `projects/quaid/reference/memory-schema.md` |
+| Deduplication | `projects/quaid/reference/memory-deduplication-system.md` |
+| Operations guide | `projects/quaid/reference/memory-operations-guide.md` |
+| Projects CLI | `projects/quaid/reference/projects-cli-reference.md` |
+| Project onboarding | `projects/quaid/operations/project_onboarding.md` |
 
 > **Note:** These documentation paths reference internal workspace files and are not included in the public release repo. They are available in development environments where the full workspace is present.
 
