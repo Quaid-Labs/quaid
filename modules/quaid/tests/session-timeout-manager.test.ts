@@ -133,6 +133,34 @@ describe('SessionTimeoutManager scheduling', () => {
     expect(calls[0].messages).toHaveLength(2)
   })
 
+  it('requeues extraction signal after failed extraction to preserve retry path', async () => {
+    const workspace = makeWorkspace('quaid-timeout-requeue-')
+    writeFailHardConfig(workspace, false)
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {
+        throw new Error('forced extraction failure')
+      },
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = false
+
+    manager.onAgentEnd([
+      { role: 'user', content: 'remember this', timestamp: Date.now() },
+      { role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
+    ], 'session-requeue')
+    manager.queueExtractionSignal('session-requeue', 'Reset')
+    await manager.processPendingExtractionSignals()
+
+    const signalPath = (manager as any).signalPath('session-requeue') as string
+    expect(fs.existsSync(signalPath)).toBe(true)
+    const buffered = (manager as any).readBuffer('session-requeue') as any[]
+    expect(Array.isArray(buffered)).toBe(true)
+    expect(buffered.length).toBeGreaterThan(0)
+  })
+
   it('filters internal/system traffic from extraction payloads', async () => {
     const workspace = makeWorkspace('quaid-timeout-filter-')
     const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
