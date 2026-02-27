@@ -59,3 +59,7 @@ Example:
 quaid config set notifications.janitor.verbosity full
 quaid config set notifications.retrieval.verbosity off
 ```
+
+Additional notification flags:
+- `notifications.fullText` (`full_text`) - include full notification text without truncation when supported.
+- `notifications.showProcessingStart` (`show_processing_start`) - emit start-of-processing notifications for long operations.

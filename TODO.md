@@ -4,11 +4,11 @@
 
 - [ ] Full prompt-system migration follow-ups:
   - migrate remaining hardcoded `system_prompt` callsites to `prompt_sets` keys for consistency:
-    - `modules/quaid/datastore/memorydb/memory_graph.py:2615`
-    - `modules/quaid/datastore/memorydb/memory_graph.py:2973`
-    - `modules/quaid/datastore/memorydb/memory_graph.py:4771`
-    - `modules/quaid/core/lifecycle/workspace_audit.py:276`
-    - `modules/quaid/datastore/memorydb/maintenance_ops.py:2613`
+    - `modules/quaid/datastore/memorydb/memory_graph.py:1752`
+    - `modules/quaid/datastore/memorydb/memory_graph.py:2696`
+    - `modules/quaid/datastore/memorydb/memory_graph.py:3054`
+    - `modules/quaid/core/lifecycle/workspace_audit.py:791`
+    - `modules/quaid/datastore/memorydb/maintenance_ops.py:2938`
   - tighten `prompt_sets` bootstrap lock path for free-threading safety (remove outer unchecked `_BOOTSTRAPPED` read / single-lock bootstrap path)
   - make `reload_config()` fully atomic across `_config` clear + plugin reset + prompt-set reset/load to remove the current race window
 
