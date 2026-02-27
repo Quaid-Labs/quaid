@@ -20,9 +20,16 @@ class PromptSetRecord:
 _REGISTRY_LOCK = RLock()
 _REGISTRY: Dict[str, PromptSetRecord] = {}
 _BOOTSTRAPPED = False
+_ACTIVE_PROMPT_SET = DEFAULT_PROMPT_SET_ID
 
 
-def register_prompt_set(set_id: str, prompts: Dict[str, str], *, source: str = "") -> None:
+def register_prompt_set(
+    set_id: str,
+    prompts: Dict[str, str],
+    *,
+    source: str = "",
+    allow_override: bool = False,
+) -> None:
     """Register or replace a prompt set.
 
     Prompt sets are keyed by ``set_id`` and contain stable prompt keys.
@@ -43,6 +50,8 @@ def register_prompt_set(set_id: str, prompts: Dict[str, str], *, source: str = "
 
     record = PromptSetRecord(set_id=sid, prompts=normalized, source=str(source or ""))
     with _REGISTRY_LOCK:
+        if sid in _REGISTRY and not allow_override:
+            raise RuntimeError(f"prompt set '{sid}' is already registered")
         _REGISTRY[sid] = record
 
 
@@ -77,7 +86,8 @@ def get_prompt(prompt_key: str, *, prompt_set: Optional[str] = None) -> str:
     if not key:
         raise ValueError("prompt key is required")
 
-    selected_set = str(prompt_set or _read_active_prompt_set()).strip() or DEFAULT_PROMPT_SET_ID
+    selected_set = str(prompt_set).strip() if prompt_set is not None else _get_active_prompt_set()
+    selected_set = selected_set or DEFAULT_PROMPT_SET_ID
     with _REGISTRY_LOCK:
         selected = _REGISTRY.get(selected_set)
         default = _REGISTRY.get(DEFAULT_PROMPT_SET_ID)
@@ -96,14 +106,26 @@ def get_prompt(prompt_key: str, *, prompt_set: Optional[str] = None) -> str:
     )
 
 
-def _read_active_prompt_set() -> str:
-    try:
-        from config import get_config
+def set_active_prompt_set(set_id: str) -> None:
+    _ensure_bootstrap()
+    sid = str(set_id or "").strip() or DEFAULT_PROMPT_SET_ID
+    validate_prompt_set_exists(sid)
+    global _ACTIVE_PROMPT_SET
+    with _REGISTRY_LOCK:
+        _ACTIVE_PROMPT_SET = sid
 
-        configured = str(get_config().prompt_set or "").strip()
-        return configured or DEFAULT_PROMPT_SET_ID
-    except Exception:
-        return DEFAULT_PROMPT_SET_ID
+
+def reset_registry() -> None:
+    global _BOOTSTRAPPED, _ACTIVE_PROMPT_SET
+    with _REGISTRY_LOCK:
+        _REGISTRY.clear()
+        _BOOTSTRAPPED = False
+        _ACTIVE_PROMPT_SET = DEFAULT_PROMPT_SET_ID
+
+
+def _get_active_prompt_set() -> str:
+    with _REGISTRY_LOCK:
+        return _ACTIVE_PROMPT_SET
 
 
 def _ensure_bootstrap() -> None:

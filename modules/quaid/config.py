@@ -1148,9 +1148,13 @@ def _load_config_inner() -> MemoryConfig:
         projects=systems_data.get('projects', True),
         workspace=systems_data.get('workspace', True),
     )
-    prompt_set = str(config_data.get("prompt_set", raw_config.get("promptSet", "default"))).strip() or "default"
+    raw_prompt_set = config_data.get("prompt_set", "default")
+    if raw_prompt_set is None:
+        prompt_set = "default"
+    else:
+        prompt_set = str(raw_prompt_set).strip() or "default"
 
-    _config = MemoryConfig(
+    candidate = MemoryConfig(
         adapter=adapter,
         plugins=plugins,
         core=core_cfg,
@@ -1174,9 +1178,10 @@ def _load_config_inner() -> MemoryConfig:
     )
 
     # Fail fast on unknown prompt sets to keep prompt-family swaps explicit and safe.
-    from prompt_sets import validate_prompt_set_exists
+    from prompt_sets import set_active_prompt_set
 
-    validate_prompt_set_exists(_config.prompt_set)
+    set_active_prompt_set(candidate.prompt_set)
+    _config = candidate
 
     if plugins.enabled:
         from core.runtime.plugins import initialize_plugin_runtime
@@ -1210,10 +1215,12 @@ def reload_config() -> MemoryConfig:
     """Force reload configuration from file."""
     global _config
     from core.runtime.plugins import reset_plugin_runtime
+    from prompt_sets import reset_registry
 
     with _config_lock:
         _config = None
     reset_plugin_runtime()
+    reset_registry()
     return load_config()
 
 
