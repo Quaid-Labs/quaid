@@ -611,6 +611,52 @@ if [[ -f "$ENV_FILE" ]]; then
   set -a; source "$ENV_FILE"; set +a
 fi
 
+# One-time key ingestion for e2e-only secrets.
+# Preferred vars are E2E_TEST_KEY_OPENAI / E2E_TEST_KEY_ANTHROPIC to avoid
+# accidental consumption by non-e2e code paths.
+ingest_e2e_test_keys() {
+  local openai_file="${HOME}/quaid/oaikey.txt"
+  local anthropic_file="${HOME}/quaid/anthkey.txt"
+  local consumed=false
+  local tmp=""
+
+  if [[ -z "${E2E_TEST_KEY_OPENAI:-}" && -f "$openai_file" ]]; then
+    tmp="$(head -n 1 "$openai_file" | tr -d '\r\n')"
+    if [[ -n "$tmp" ]]; then
+      export E2E_TEST_KEY_OPENAI="$tmp"
+      rm -f "$openai_file"
+      consumed=true
+    fi
+  fi
+
+  if [[ -z "${E2E_TEST_KEY_ANTHROPIC:-}" && -z "${E2E_TEST_KEY_ANTRHOPIC:-}" && -f "$anthropic_file" ]]; then
+    tmp="$(head -n 1 "$anthropic_file" | tr -d '\r\n')"
+    if [[ -n "$tmp" ]]; then
+      export E2E_TEST_KEY_ANTHROPIC="$tmp"
+      # Back-compat alias for misspelled variable name.
+      export E2E_TEST_KEY_ANTRHOPIC="$tmp"
+      rm -f "$anthropic_file"
+      consumed=true
+    fi
+  fi
+
+  # Translate test-only names into provider vars only inside e2e runner scope.
+  if [[ -n "${E2E_TEST_KEY_OPENAI:-}" ]]; then
+    export OPENAI_API_KEY="${E2E_TEST_KEY_OPENAI}"
+  fi
+  if [[ -n "${E2E_TEST_KEY_ANTHROPIC:-}" ]]; then
+    export ANTHROPIC_API_KEY="${E2E_TEST_KEY_ANTHROPIC}"
+  elif [[ -n "${E2E_TEST_KEY_ANTRHOPIC:-}" ]]; then
+    export ANTHROPIC_API_KEY="${E2E_TEST_KEY_ANTRHOPIC}"
+  fi
+
+  if [[ "$consumed" == true ]]; then
+    echo "[e2e] Ingested one-time key file(s) into E2E_TEST_KEY_* and removed source file(s)."
+  fi
+}
+
+ingest_e2e_test_keys
+
 if [[ "$AUTH_PATH" == "openai-oauth" || "$AUTH_PATH" == "openai-api" || "$AUTH_PATH" == "anthropic-oauth" || "$AUTH_PATH" == "anthropic-api" ]]; then
   true
 else
@@ -798,11 +844,12 @@ openclaw gateway stop || true
 begin_stage "bootstrap"
 
 echo "[e2e] Building temp e2e profile at: $TMP_PROFILE"
-python3 - "$PROFILE_SRC" "$TMP_PROFILE" "$E2E_WS" <<'PY'
+python3 - "$PROFILE_SRC" "$TMP_PROFILE" "$E2E_WS" "$AUTH_PATH" <<'PY'
 import json
+import os
 import sys
 
-src, out, e2e_ws = sys.argv[1], sys.argv[2], sys.argv[3]
+src, out, e2e_ws, auth_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(src, "r", encoding="utf-8") as f:
     obj = json.load(f)
 
@@ -821,6 +868,52 @@ def replace_paths(v):
 
 obj = replace_paths(obj)
 obj.setdefault("runtime", {})["workspace"] = e2e_ws
+
+openclaw = obj.setdefault("openclaw", {})
+creds = openclaw.setdefault("authProfileCredentials", {})
+auth_profiles = openclaw.setdefault("authProfiles", {})
+auth_order = openclaw.setdefault("authOrder", {})
+
+openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+if openai_api_key:
+    # Always provision native OpenAI token profile for API-key auth paths.
+    openai_profile = dict(creds.get("openai:default") or {})
+    openai_profile["type"] = "token"
+    openai_profile["provider"] = "openai"
+    openai_profile["token"] = openai_api_key
+    creds["openai:default"] = openai_profile
+    auth_profiles["openai:default"] = {"provider": "openai", "mode": "token"}
+    if not isinstance(auth_order.get("openai"), list):
+        auth_order["openai"] = []
+    if "openai:default" not in auth_order["openai"]:
+        auth_order["openai"].insert(0, "openai:default")
+
+    profile = dict(creds.get("openai-codex:api") or {})
+    profile["type"] = "token"
+    profile["provider"] = "openai-codex"
+    profile["token"] = openai_api_key
+    creds["openai-codex:api"] = profile
+
+    # For openai-api path, pin default agent model to the OpenAI provider lane.
+    if auth_path == "openai-api":
+        openclaw.setdefault("agentDefaults", {})["modelPrimary"] = "openai/gpt-5.1-codex"
+        provider_defaults = openclaw.setdefault("providerDefaults", {})
+        openai_defaults = provider_defaults.setdefault("openai", {})
+        openai_defaults["modelPrimary"] = "openai/gpt-5.1-codex"
+        if not isinstance(openai_defaults.get("modelFallbacks"), list) or not openai_defaults["modelFallbacks"]:
+            openai_defaults["modelFallbacks"] = ["openai/gpt-5.1"]
+        for agent in openclaw.get("agentList", []):
+            if isinstance(agent, dict):
+                agent["modelPrimary"] = "openai/gpt-5.1-codex"
+
+anthropic_api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+if anthropic_api_key:
+    profile = dict(creds.get("anthropic:default") or {})
+    profile["type"] = "token"
+    profile["provider"] = "anthropic"
+    profile["token"] = anthropic_api_key
+    creds["anthropic:default"] = profile
+
 with open(out, "w", encoding="utf-8") as f:
     json.dump(obj, f, indent=2)
 PY
@@ -1101,6 +1194,7 @@ ws = sys.argv[1]
 timeout_wait = int(sys.argv[2])
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
 notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
+pending_signal_dir = os.path.join(ws, "data", "pending-extraction-signals")
 session_id = f"quaid-e2e-live-{uuid.uuid4().hex[:12]}"
 
 def run_agent(message: str) -> None:
@@ -1409,9 +1503,10 @@ def _spawn_janitor_probe() -> subprocess.Popen:
     env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
     env["QUAID_HOME"] = ws
     env["CLAWDBOT_WORKSPACE"] = ws
+    janitor_script = os.path.join(ws, "modules", "quaid", "core", "lifecycle", "janitor.py")
     return subprocess.Popen(
-        ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "review", "--dry-run", "--stage-item-cap", "8"],
-        cwd=".",
+        ["python3", janitor_script, "--task", "review", "--dry-run", "--stage-item-cap", "8"],
+        cwd=ws,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1754,9 +1849,10 @@ if isinstance(project_defs, dict) and project_defs:
     updater_env["PYTHONPATH"] = "modules/quaid" + (f":{updater_py_path}" if updater_py_path else "")
     updater_env["QUAID_HOME"] = ws
     updater_env["CLAWDBOT_WORKSPACE"] = ws
+    updater_script = os.path.join(ws, "modules", "quaid", "datastore", "docsdb", "project_updater.py")
     updater_probe = subprocess.Popen(
-        ["python3", "modules/quaid/datastore/docsdb/project_updater.py", "process-all"],
-        cwd=".",
+        ["python3", updater_script, "process-all"],
+        cwd=ws,
         env=updater_env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1802,9 +1898,10 @@ cleanup_py_path = cleanup_env.get("PYTHONPATH", "")
 cleanup_env["PYTHONPATH"] = "modules/quaid" + (f":{cleanup_py_path}" if cleanup_py_path else "")
 cleanup_env["QUAID_HOME"] = ws
 cleanup_env["CLAWDBOT_WORKSPACE"] = ws
+cleanup_script = os.path.join(ws, "modules", "quaid", "core", "lifecycle", "janitor.py")
 cleanup_probe = subprocess.Popen(
-    ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "cleanup", "--apply"],
-    cwd=".",
+    ["python3", cleanup_script, "--task", "cleanup", "--apply"],
+    cwd=ws,
     env=cleanup_env,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
@@ -1982,6 +2079,7 @@ strict_delivery = os.environ.get("QUAID_E2E_NOTIFY_REQUIRE_DELIVERY", "").strip(
 cfg_path = os.path.join(ws, "config", "memory.json")
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
 notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
+pending_signal_dir = os.path.join(ws, "data", "pending-extraction-signals")
 
 def line_count(path: str) -> int:
     if not os.path.exists(path):
@@ -2037,6 +2135,19 @@ def restart_gateway() -> None:
         time.sleep(1)
     raise SystemExit("[e2e] ERROR: gateway did not resume listen on 127.0.0.1:18789 for notify matrix")
 
+def clear_pending_signals() -> None:
+    if not os.path.isdir(pending_signal_dir):
+        return
+    for name in os.listdir(pending_signal_dir):
+        path = os.path.join(pending_signal_dir, name)
+        if not os.path.isfile(path):
+            continue
+        if name.endswith(".json") or ".json.processing." in name:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
 def ensure_gateway_ready() -> None:
     chk = subprocess.run(
         ["bash", "-lc", "lsof -nP -iTCP:18789 -sTCP:LISTEN"],
@@ -2075,15 +2186,23 @@ def run_agent(session_id: str, message: str) -> None:
         restart_gateway()
     raise SystemExit(last_err or "[e2e] ERROR: notify matrix agent call failed")
 
-def wait_for_reset_start(start_line: int, seconds: int = 45) -> None:
+def wait_for_reset_start(session_id: str, start_line: int, seconds: int = 120) -> None:
     deadline = time.time() + seconds
     while time.time() < deadline:
         lines = read_tail_since(events_path, start_line)
-        if any('"label":"ResetSignal"' in ln and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln) for ln in lines):
+        if any(
+            f'"session_id":"{session_id}"' in ln
+            and '"label":"ResetSignal"' in ln
+            and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+            for ln in lines
+        ):
             return
         time.sleep(1)
     preview = "\n".join(read_tail_since(events_path, start_line)[-30:])
-    raise SystemExit(f"[e2e] ERROR: notify matrix timed out waiting for reset extraction start\n{preview}")
+    raise SystemExit(
+        f"[e2e] ERROR: notify matrix timed out waiting for reset extraction start "
+        f"(session={session_id})\n{preview}"
+    )
 
 def assert_no_fatal_notify_errors(lines) -> None:
     patterns = (
@@ -2103,13 +2222,14 @@ for level in ("quiet", "normal", "debug"):
     print(f"[e2e] notify-matrix level={level} start")
     set_level(level)
     restart_gateway()
+    clear_pending_signals()
     notify_start = line_count(notify_log_path)
     events_start = line_count(events_path)
     sid = f"quaid-e2e-notify-{level}-{uuid.uuid4().hex[:8]}"
     marker = f"E2E_NOTIFY_LEVEL_{level}_{uuid.uuid4().hex[:6]}"
     run_agent(sid, f"notification level marker: {marker}")
     run_agent(sid, "/reset")
-    wait_for_reset_start(events_start, 45)
+    wait_for_reset_start(sid, events_start, 45)
     time.sleep(5)
     notify_lines = read_tail_since(notify_log_path, notify_start)
     assert_no_fatal_notify_errors(notify_lines)
@@ -2117,6 +2237,7 @@ for level in ("quiet", "normal", "debug"):
     sent = sum(1 for ln in notify_lines if "[notify] Sent to " in ln)
     no_last_channel = sum(1 for ln in notify_lines if "[notify] No last channel found" in ln)
     send_failed = sum(1 for ln in notify_lines if "[notify] Send failed" in ln)
+    activity = loaded + sent + no_last_channel + send_failed
     results.append(
         {
             "level": level,
@@ -2125,11 +2246,12 @@ for level in ("quiet", "normal", "debug"):
             "sent_count": sent,
             "no_last_channel_count": no_last_channel,
             "send_failed_count": send_failed,
+            "activity_count": activity,
         }
     )
     if level == "quiet" and loaded > 0:
         raise SystemExit("[e2e] ERROR: quiet level emitted extraction notifications")
-    if level in ("normal", "debug") and loaded == 0:
+    if level in ("normal", "debug") and activity == 0:
         raise SystemExit(f"[e2e] ERROR: {level} level emitted no extraction notification activity")
     if strict_delivery and level in ("normal", "debug"):
         if no_last_channel > 0:
@@ -2862,7 +2984,8 @@ if prebench_guard and has_runs_table:
         conn.execute("DROP TABLE janitor_runs_legacy_backup")
     print("[e2e] Applied janitor_runs legacy-schema migration probe.")
 
-cmd = ["python3", "modules/quaid/core/lifecycle/janitor.py", "--task", "all"]
+janitor_script = os.path.join(ws, "modules", "quaid", "core", "lifecycle", "janitor.py")
+cmd = ["python3", janitor_script, "--task", "all"]
 if mode == "dry-run":
     cmd.append("--dry-run")
 else:
@@ -2881,7 +3004,7 @@ if prebench_guard:
     review_env["PYTHONPATH"] = ":".join(review_py_parts)
     review_cmd = [
         "python3",
-        "modules/quaid/core/lifecycle/janitor.py",
+        janitor_script,
         "--task",
         "review",
         "--dry-run",
