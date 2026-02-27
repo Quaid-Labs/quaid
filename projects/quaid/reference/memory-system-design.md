@@ -51,7 +51,7 @@ The system uses three tiers with distinct purposes:
 Agent calls memory_recall with crafted query
      │
      ▼
-Intent classification (WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY)
+Intent classification (WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY/PROJECT)
      │
      ▼
 Parallel search (ThreadPoolExecutor)
@@ -112,7 +112,7 @@ Privacy is classified per-fact during extraction (Opus at compaction/reset). Def
 ### Search Pipeline
 Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 
-1. **Intent classification** — categorizes query as WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY
+1. **Intent classification** — categorizes query as WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY/PROJECT
 2. **Parallel search** — BM25 (FTS5) + semantic (cosine) run concurrently
 3. **RRF fusion** — Reciprocal Rank Fusion combines results (k=60, weights dynamic per intent via `_get_fusion_weights()`)
 4. **Content hash pre-filter** — SHA256 exact-dedup removes identical results
@@ -178,7 +178,7 @@ Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 ### Phase 6: Search & Retrieval Overhaul (DONE)
 - [x] Batch 1: RRF fusion, BM25 via FTS5, composite scoring (60/20/15/5), MMR diversity
 - [x] Batch 2: Content hash dedup, embedding cache, fact versioning, KB health metrics
-- [x] Batch 3: Intent classification (WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY), temporal validity filtering
+- [x] Batch 3: Intent classification (WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY/PROJECT), temporal validity filtering
 - [x] Batch 4: Ebbinghaus exponential decay, multi-hop traversal (depth=2), access tracking, parallel search
 - [x] Combined fact+edge extraction at capture time (single LLM call)
 - [x] Token-based janitor batching (context window-aware)

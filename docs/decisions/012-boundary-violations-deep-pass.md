@@ -109,7 +109,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
 
 ## What Was Completed This Pass
 - Janitor Task 7 extracted into lifecycle registry:
-  - `modules/quaid/janitor_lifecycle.py`
+  - `modules/quaid/core/lifecycle/janitor_lifecycle.py`
   - `janitor.py` now executes `LifecycleRegistry.run("rag", RoutineContext(...))`
 - Added lifecycle contract tests:
   - `modules/quaid/tests/test_janitor_lifecycle.py`
@@ -144,7 +144,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `modules/quaid/adaptors/openclaw/adapter.ts` supplies journal/project store handlers
   - removed unused legacy deps (`path`, `fs`, `callDocsRag`) from orchestrator facade contract to tighten boundary surface
 - Janitor lifecycle ownership expanded:
-  - `modules/quaid/janitor_lifecycle.py` is now orchestration-only: it loads module-owned routine registrars
+  - `modules/quaid/core/lifecycle/janitor_lifecycle.py` is now orchestration-only: it loads module-owned routine registrars
   - datastore/workspace modules now own registration + maintenance logic:
     - `modules/quaid/core/lifecycle/workspace_audit.py` registers `workspace`
     - `modules/quaid/datastore/docsdb/updater.py` registers `docs_staleness` and `docs_cleanup`
@@ -154,8 +154,8 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `modules/quaid/core/lifecycle/janitor.py` now dispatches those tasks through lifecycle registry instead of inline task bodies
   - docs write policy checks are preserved via `allow_doc_apply` callback passed through routine context
   - added lifecycle tests for workspace/docs/snippets/journal in `modules/quaid/tests/test_janitor_lifecycle.py`
-  - janitor datastore imports now route through `modules/quaid/datastore_maintenance.py`
-    as a single datastore maintenance facade over `memory_graph` primitives
+  - janitor datastore imports now route through datastore-owned maintenance modules
+    (`modules/quaid/datastore/memorydb/maintenance_ops.py` and related datastore routines)
   - workspace audit datastore writes now route through the same facade (`store_memory`)
   - ingestor/clustering modules now route datastore graph access through the facade:
     - `modules/quaid/ingest/extract.py`
@@ -165,14 +165,14 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
     ingestor -> api coupling and the api <-> extract cycle
   - API search now routes through datastore interface function `memory_graph.search(...)`
     instead of `api.py` calling `get_graph().search_hybrid(...)`
-  - memory-store maintenance ownership consolidated into one datastore routine:
-    - added `modules/quaid/memory_graph_pipeline.py` with unified
-      `memory_graph_maintenance` routine
+  - memory-store maintenance ownership consolidated into datastore maintenance routines:
+    - lifecycle orchestration routes memory subtasks through datastore routines registered by
+      `modules/quaid/core/lifecycle/janitor_lifecycle.py`
     - `modules/quaid/core/lifecycle/janitor.py` memory tasks now dispatch to that single routine
       via `options.subtask` (review/temporal/dedup_review/duplicates/
       contradictions/contradictions_resolve/decay/decay_review)
-    - `modules/quaid/janitor_lifecycle.py` now registers only the unified
-      `memory_graph_pipeline` maintenance routine for memory-store tasks
+    - `modules/quaid/core/lifecycle/janitor_lifecycle.py` remains the canonical lifecycle registrar
+      for memory-store maintenance task wiring
 - Core project catalog no longer shells to python:
   - `modules/quaid/core/project-catalog.ts`
 - Docs/project update notifications now emit delayed event bus messages:
@@ -187,7 +187,7 @@ Deep audit of boundary ownership after the orchestrator split and janitor lifecy
   - `modules/quaid/tests/test_events.py` janitor completion event routing
   - `modules/quaid/tests/test_janitor_lifecycle.py` lifecycle parallel run surface
 - Added lifecycle dry-run parallelization path:
-  - `LifecycleRegistry.run_many(...)` in `modules/quaid/janitor_lifecycle.py`
+  - `LifecycleRegistry.run_many(...)` in `modules/quaid/core/lifecycle/janitor_lifecycle.py`
   - janitor uses parallel prepass for workspace/docs/snippets/journal during `--task all --dry-run`
   - `docs_rag` lifecycle routine now honors dry-run by skipping reindex mutation path
 

@@ -527,9 +527,11 @@ Each task is gated by a system toggle in config. This feature is experimental an
 
 ```python
 _TASK_SYSTEM_GATE = {
-    "review": "memory", "duplicates": "memory", "decay": "memory",
+    "embeddings": "memory", "review": "memory", "temporal": "memory",
+    "dedup_review": "memory", "duplicates": "memory", "contradictions": "memory",
+    "decay": "memory", "decay_review": "memory",
     "snippets": "journal", "journal": "journal",
-    "docs_staleness": "projects", "rag": "projects",
+    "docs_staleness": "projects", "docs_cleanup": "projects", "rag": "projects",
     "workspace": "workspace",
     # tests, cleanup: always run (infrastructure)
 }
