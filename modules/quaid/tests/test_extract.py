@@ -498,36 +498,55 @@ class TestExtractFromTranscript:
         assert kwargs["target_datastore"] == "memorydb"
 
     @patch("ingest.extract.call_deep_reasoning")
-    def test_missing_domains_raises(self, mock_llm):
+    @patch("ingest.extract._memory.store")
+    def test_missing_domains_skips_fact(self, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
             "facts": [{"text": "User likes jasmine tea in the morning", "category": "fact"}]
         }), 1.0)
+        mock_store.return_value = {"id": "n1", "status": "created"}
 
-        with pytest.raises(RuntimeError, match="missing required domains"):
-            extract_from_transcript(
-                transcript="User: test\n\nAssistant: ok",
-                owner_id="test",
-            )
+        result = extract_from_transcript(
+            transcript="User: test\n\nAssistant: ok",
+            owner_id="test",
+        )
+        assert result["facts_stored"] == 0
+        assert result["facts_skipped"] == 1
+        assert result["facts"][0]["status"] == "skipped"
+        assert "missing required domains" in result["facts"][0]["reason"]
+        mock_store.assert_not_called()
 
     @patch("ingest.extract.call_deep_reasoning")
-    def test_invalid_domain_raises(self, mock_llm):
+    @patch("ingest.extract._memory.store")
+    def test_invalid_domain_skips_fact_but_keeps_valid(self, mock_store, mock_llm):
         from ingest.extract import extract_from_transcript
 
         mock_llm.return_value = (json.dumps({
-            "facts": [{
-                "text": "User likes jasmine tea in the morning",
-                "category": "fact",
-                "domains": ["not_a_real_domain"],
-            }]
+            "facts": [
+                {
+                    "text": "User likes jasmine tea in the morning",
+                    "category": "fact",
+                    "domains": ["not_a_real_domain"],
+                },
+                {
+                    "text": "User prefers black coffee after lunch",
+                    "category": "preference",
+                    "domains": ["personal"],
+                },
+            ]
         }), 1.0)
+        mock_store.return_value = {"id": "n1", "status": "created"}
 
-        with pytest.raises(RuntimeError, match="unsupported domains"):
-            extract_from_transcript(
-                transcript="User: test\n\nAssistant: ok",
-                owner_id="test",
-            )
+        result = extract_from_transcript(
+            transcript="User: test\n\nAssistant: ok",
+            owner_id="test",
+        )
+        assert result["facts_stored"] == 1
+        assert result["facts_skipped"] == 1
+        assert any(f["status"] == "skipped" and "unsupported domains" in f.get("reason", "") for f in result["facts"])
+        assert any(f["status"] in ("stored", "updated") and "black coffee" in f.get("text", "") for f in result["facts"])
+        assert mock_store.call_count == 1
 
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
