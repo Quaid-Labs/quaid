@@ -1,4 +1,4 @@
-# Release Tagging Checklist (v0.2.0-alpha)
+# Release Tagging Checklist (v0.2.1-alpha)
 
 ## 1) Pre-tag checks
 - Run deterministic + integration + syntax gates.
@@ -16,18 +16,18 @@
   - multi-user not fully hardened
   - Windows lightly tested
   - OpenClaw-first maturity
-- Review release notes: `docs/releases/v0.2.0-alpha.md`.
+- Review release notes: `docs/releases/v0.2.1-alpha.md`.
 
 ## 3) Version + tag
 - Create annotated tag:
-  - `git tag -a v0.2.0-alpha -m "Quaid v0.2.0-alpha"`
+  - `git tag -a v0.2.1-alpha -m "Quaid v0.2.1-alpha"`
 - Push branch + tag:
-  - `git push origin dev`
-  - `git push origin v0.2.0-alpha`
+  - `git push origin main`
+  - `git push origin v0.2.1-alpha`
 
 ## 4) GitHub release
-- Create release from tag `v0.2.0-alpha`.
-- Paste notes from `docs/releases/v0.2.0-alpha.md`.
+- Create release from tag `v0.2.1-alpha`.
+- Paste notes from `docs/releases/v0.2.1-alpha.md`.
 - Mark as pre-release/alpha.
 
 ## 5) Post-release

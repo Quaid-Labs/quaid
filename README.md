@@ -8,7 +8,7 @@
 
 > **Early alpha** — launched February 2026, active daily development.
 
-Most agents still treat long-term context as replay: re-inject old chat and hope retrieval lands. Quaid is not another memory plugin; it is an **active knowledge layer**. It continuously captures, structures, and maintains knowledge, then serves only what matters at query time. Result: 89% of full-context accuracy using ~8x fewer tokens.
+Most agents still treat long-term context as replay: re-inject old chat and hope retrieval lands. Quaid is not another memory plugin; it is an **active knowledge layer**. It continuously captures, structures, and maintains knowledge, then serves only what matters at query time. Result: 88.3% of full-context Haiku accuracy with targeted memory injection.
 
 Every session starts ready to work. Project docs, architecture decisions, tool guidance, and codebase context are tracked and kept current automatically. Through dual snippet/journal learning, the layer evolves with use: it doesn't just retain facts, it builds durable understanding of users, workflows, and projects over time.
 
@@ -153,13 +153,13 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 
 Quaid is in early alpha. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
 
-Known limitations for **v0.2.0-alpha**:
+Known limitations for **v0.2.1-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows support exists but has less operational coverage than macOS/Linux *(experimental)*.
 - OpenClaw is currently the most mature host integration path; broader host coverage is still in progress *(experimental outside OpenClaw)*.
 
-The system is backed by over 1,100 unit tests (Python + TypeScript), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md) and [LongMemEval](https://github.com/xiaowu0162/LongMemEval).
+The system is backed by over 1,400 tests in the default gate (1,224 selected pytest + 222 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md). LongMemEval integration is implemented and smoke-tested; full benchmark runs are pending.
 
 GitHub Actions CI runs automated checks on pushes/PRs including runtime pair sync, docs/release consistency, linting, runtime build, isolated Python unit suites, and the full gate (`run-all-tests --full`) with the bootstrap E2E auth matrix enabled.
 
@@ -180,7 +180,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Maintainer Lifecycle](docs/MAINTAINER-LIFECYCLE.md) — Safe branch/release model for post-user operation
 - [Contributing](CONTRIBUTING.md) — PR expectations, validation, and AI-assisted contribution policy
 - [Good First Issues](docs/GOOD-FIRST-ISSUES.md) — Small scoped tasks for new contributors
-- [v0.2.0-alpha Notes](docs/releases/v0.2.0-alpha.md) — Release highlights and known limitations
+- [v0.2.1-alpha Notes](docs/releases/v0.2.1-alpha.md) — Release highlights and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 
 ---
