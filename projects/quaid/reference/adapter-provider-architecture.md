@@ -21,7 +21,7 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 1. Quaid code requests an LLM tier (`deep_reasoning` or `fast_reasoning`).
 2. `adaptors/openclaw/adapter.ts` resolves effective provider + model via config:
    - `models.llmProvider`
-   - `models.deep_reasoning` / `models.fast_reasoning`
+   - `models.deepReasoning` / `models.fastReasoning`
    - `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses`
 3. If tier model is `default`, provider model pair comes from the corresponding model-class map for the effective provider.
 4. Resolved call goes through OpenClaw plugin endpoint (`/modules/quaid/llm`) and gateway auth.
@@ -29,7 +29,7 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 
 ## Provider Resolution Rules
 
-- Explicit tier model (`models.deep_reasoning` / `models.fast_reasoning` not `default`) is used directly.
+- Explicit tier model (`models.deepReasoning` / `models.fastReasoning` not `default`) is used directly.
 - `default` tier model requires matching model-class map entry for the resolved provider.
 - Effective provider:
   - explicit `models.llmProvider` if not `default`
@@ -56,8 +56,8 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 `config/memory.json`:
 
 - `models.llmProvider`
-- `models.deep_reasoning`
-- `models.fast_reasoning`
+- `models.deepReasoning`
+- `models.fastReasoning`
 - `models.deepReasoningModelClasses`
 - `models.fastReasoningModelClasses`
 

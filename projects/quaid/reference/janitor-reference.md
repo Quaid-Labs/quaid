@@ -361,7 +361,7 @@ Every run writes `api_usage` to `logs/janitor-stats.json`:
 
 The janitor uses the same provider-agnostic model-tier architecture as the rest of Quaid. Rather than hardcoding a single provider, model references in `config/memory.json` are resolved through adapter/provider dispatch and gateway state.
 
-Model names are resolved via `models.deep_reasoning` / `models.fast_reasoning` and `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses` in `config/memory.json`, with adapter/provider dispatch selecting the active provider.
+Model names are resolved via `models.deepReasoning` / `models.fastReasoning` and `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses` in `config/memory.json`, with adapter/provider dispatch selecting the active provider.
 
 The provider/adapter refactor separates LLM and embedding concerns into distinct interfaces, keeping janitor logic independent of provider-specific details.
 
@@ -407,8 +407,8 @@ Settings are driven by `config/memory.json`. Key sections used by the janitor:
 
 | Config Section | Used By | Settings |
 |----------------|---------|----------|
-| `models.deep_reasoning` | review, workspace | High-tier reasoning model (explicit or `default`) |
-| `models.fast_reasoning` | duplicates, contradictions | Fast-tier reasoning model ID |
+| `models.deepReasoning` | review, workspace | High-tier reasoning model (explicit or `default`) |
+| `models.fastReasoning` | duplicates, contradictions | Fast-tier reasoning model ID |
 | `database.path` | all tasks | Main DB path |
 | `rag.docsDir` | rag task | Docs directory to index |
 | `decay` | decay task | Decay rates, thresholds |

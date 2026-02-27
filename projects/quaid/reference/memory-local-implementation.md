@@ -351,7 +351,7 @@ All shared library modules use `__all__` exports to define explicit public API b
 
 | Section | Controls |
 |---------|----------|
-| `models` | `llmProvider` (`default` or explicit provider), `embeddingsProvider`, `deep_reasoning`, `fast_reasoning`, `deepReasoningModelClasses`, `fastReasoningModelClasses` |
+| `models` | `llmProvider` (`default` or explicit provider), `embeddingsProvider`, `deepReasoning`, `fastReasoning`, `deepReasoningModelClasses`, `fastReasoningModelClasses` |
 | `database` | `path` (main DB), `archivePath` (archive DB) |
 | `ollama` | `url`, `embeddingModel`, `embeddingDim` |
 | `docs` | `autoUpdateOnCompact`, `maxDocsPerUpdate`, `stalenessCheckEnabled`, `sourceMapping`, `updateTimeoutSeconds` |
@@ -380,8 +380,8 @@ The embedding model was upgraded from nomic-embed-text (768-dim) → qwen3-embed
   "models": {
     "llmProvider": "default",
     "embeddingsProvider": "ollama",
-    "fast_reasoning": "default",
-    "deep_reasoning": "default",
+    "fastReasoning": "default",
+    "deepReasoning": "default",
     "fastReasoningModelClasses": {
       "openai": "gpt-5.1-codex-mini",
       "anthropic": "claude-haiku-4-5"
@@ -395,7 +395,7 @@ The embedding model was upgraded from nomic-embed-text (768-dim) → qwen3-embed
 ```
 
 Resolution rules:
-- If `fast_reasoning`/`deep_reasoning` are explicit model IDs, those are used.
+- If `fastReasoning`/`deepReasoning` are explicit model IDs, those are used.
 - If either tier is `"default"`, Quaid resolves from `fastReasoningModelClasses` / `deepReasoningModelClasses` using the effective provider.
 - Effective provider comes from `models.llmProvider` unless it is `"default"`, in which case gateway default provider/auth state is used.
 - Unknown providers fail loudly (no silent Anthropic fallback), preserving abstraction and testability.
@@ -427,7 +427,7 @@ Resolution rules:
 **BEAM search config:**
 ```json
 {
-  "search": {
+  "retrieval": {
     "beam": {
       "beamWidth": 5,
       "maxDepth": 2,
@@ -444,7 +444,7 @@ Resolution rules:
   "retrieval": {
     "default_limit": 5,
     "max_limit": 8,
-    "min_similarity": 0.80,
+    "min_similarity": 0.60,
     "notify_min_similarity": 0.85,
     "boost_recent": true,
     "boost_frequent": true,
@@ -502,7 +502,7 @@ The `dynamicK` section controls the automatic retrieval limit scaling. When `ena
 
 - Tier requests (`deep_reasoning`/`fast_reasoning`) are resolved in `adaptors/openclaw/adapter.ts`.
 - Provider resolution uses `models.llmProvider` + active gateway provider state.
-- Tier model resolution uses `models.deep_reasoning` / `models.fast_reasoning`; if either is `default`, Quaid looks up `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses`.
+- Tier model resolution uses `models.deepReasoning` / `models.fastReasoning`; if either is `default`, Quaid looks up `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses`.
 - Missing provider mappings fail loudly (no implicit hardcoded provider fallback).
 
 See `projects/quaid/reference/adapter-provider-architecture.md` for the canonical provider/model flow.
