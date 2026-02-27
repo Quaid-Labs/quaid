@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # --- Constants ---
-QUAID_VERSION="0.2.0-alpha"
+QUAID_VERSION="0.2.1-alpha"
 MIN_PYTHON_VERSION="3.10"
 MIN_SQLITE_VERSION="3.35"
 # Gateway PR #13287 — required hooks for knowledge extraction
@@ -1284,6 +1284,12 @@ except ValueError:
 found = reg.auto_discover('quaid')
 print(f'[+] Quaid project registered ({len(found)} docs)')
 " 2>&1
+        ) || true
+        (
+            cd "$PLUGIN_DIR"
+            export QUAID_HOME="${WORKSPACE_ROOT}"
+            export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
+            python3 scripts/sync-tools-domain-block.py --workspace "${WORKSPACE_ROOT}" 2>/dev/null || true
         ) || true
     fi
 

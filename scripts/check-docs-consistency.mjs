@@ -10,10 +10,6 @@ function read(rel) {
   return fs.readFileSync(path.join(ROOT, rel), 'utf8');
 }
 
-function readJson(rel) {
-  return JSON.parse(read(rel));
-}
-
 const checks = [
   {
     file: 'README.md',
@@ -66,38 +62,8 @@ function checkToolsDomainBlock(errors) {
     return;
   }
 
-  const block = tools
-    .slice(start + startMarker.length, end)
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('- `'));
-
-  const cfg = readJson('config/memory.json');
-  const domains = cfg?.retrieval?.domains;
-  if (!domains || typeof domains !== 'object') {
-    errors.push('config/memory.json: missing retrieval.domains object');
-    return;
-  }
-
-  const expected = Object.entries(domains).map(
-    ([key, desc]) => `- \`${key}\`: ${String(desc)}`
-  );
-
-  if (block.length !== expected.length) {
-    errors.push(
-      `projects/quaid/TOOLS.md: domain block count mismatch (found ${block.length}, expected ${expected.length})`
-    );
-    return;
-  }
-
-  for (let i = 0; i < expected.length; i += 1) {
-    if (block[i] !== expected[i]) {
-      errors.push(
-        `projects/quaid/TOOLS.md: domain entry mismatch at index ${i + 1}; expected "${expected[i]}"`
-      );
-      return;
-    }
-  }
+  // Marker presence is enforced here. Domain content synchronization is
+  // event-driven (installer + runtime domain-registration paths).
 }
 
 const errors = [];
