@@ -833,7 +833,12 @@ def update_doc_from_diffs(
                 f"Diff:\n{all_diffs[:2000]}\n\n"
                 f"Answer YES or NO with a one-sentence reason."
             )
-            gate_response, _ = call_fast_reasoning(gate_prompt, max_tokens=50, timeout=10)
+            gate_response, _ = call_fast_reasoning(
+                gate_prompt,
+                max_tokens=50,
+                timeout=10,
+                system_prompt="Answer with YES or NO first, then one short sentence. No JSON.",
+            )
             if gate_response and gate_response.strip().upper().startswith("NO"):
                 print(f"  Haiku gate: skip {doc_path} — {gate_response.strip()}")
                 return True

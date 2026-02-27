@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from threading import RLock
 from typing import Dict, List, Optional
 
@@ -21,6 +22,10 @@ _REGISTRY_LOCK = RLock()
 _REGISTRY: Dict[str, PromptSetRecord] = {}
 _BOOTSTRAPPED = False
 _ACTIVE_PROMPT_SET = DEFAULT_PROMPT_SET_ID
+_BOOTSTRAP_ERROR: Optional[Exception] = None
+_SET_ID_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,64}$")
+_PROMPT_KEY_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,128}$")
+_MAX_PROMPT_CHARS = 200_000
 
 
 def register_prompt_set(
@@ -37,6 +42,8 @@ def register_prompt_set(
     sid = str(set_id or "").strip()
     if not sid:
         raise ValueError("prompt set id is required")
+    if not _SET_ID_RE.match(sid):
+        raise ValueError("prompt set id must match ^[a-zA-Z0-9_.-]{1,64}$")
     if not isinstance(prompts, dict):
         raise ValueError("prompts must be a dict")
 
@@ -45,7 +52,15 @@ def register_prompt_set(
         key = str(raw_key or "").strip()
         if not key:
             raise ValueError("prompt keys must be non-empty strings")
-        text = str(raw_value or "")
+        if not _PROMPT_KEY_RE.match(key):
+            raise ValueError("prompt key must match ^[a-zA-Z0-9_.-]{1,128}$")
+        if not isinstance(raw_value, str):
+            raise ValueError("prompt values must be strings")
+        text = raw_value
+        if "\x00" in text:
+            raise ValueError("prompt values may not contain null bytes")
+        if len(text) > _MAX_PROMPT_CHARS:
+            raise ValueError(f"prompt value too large (>{_MAX_PROMPT_CHARS} chars)")
         normalized[key] = text
 
     record = PromptSetRecord(set_id=sid, prompts=normalized, source=str(source or ""))
@@ -109,18 +124,23 @@ def get_prompt(prompt_key: str, *, prompt_set: Optional[str] = None) -> str:
 def set_active_prompt_set(set_id: str) -> None:
     _ensure_bootstrap()
     sid = str(set_id or "").strip() or DEFAULT_PROMPT_SET_ID
-    validate_prompt_set_exists(sid)
     global _ACTIVE_PROMPT_SET
     with _REGISTRY_LOCK:
+        if sid not in _REGISTRY:
+            available = ", ".join(sorted(_REGISTRY.keys())) or "(none)"
+            raise RuntimeError(
+                f"Unknown prompt_set '{sid}'. Available prompt sets: {available}"
+            )
         _ACTIVE_PROMPT_SET = sid
 
 
 def reset_registry() -> None:
-    global _BOOTSTRAPPED, _ACTIVE_PROMPT_SET
+    global _BOOTSTRAPPED, _ACTIVE_PROMPT_SET, _BOOTSTRAP_ERROR
     with _REGISTRY_LOCK:
         _REGISTRY.clear()
         _BOOTSTRAPPED = False
         _ACTIVE_PROMPT_SET = DEFAULT_PROMPT_SET_ID
+        _BOOTSTRAP_ERROR = None
 
 
 def _get_active_prompt_set() -> str:
@@ -129,13 +149,19 @@ def _get_active_prompt_set() -> str:
 
 
 def _ensure_bootstrap() -> None:
-    global _BOOTSTRAPPED
+    global _BOOTSTRAPPED, _BOOTSTRAP_ERROR
     if _BOOTSTRAPPED:
         return
     with _REGISTRY_LOCK:
         if _BOOTSTRAPPED:
             return
+        if _BOOTSTRAP_ERROR is not None:
+            raise RuntimeError("prompt set bootstrap previously failed") from _BOOTSTRAP_ERROR
         from . import default_set
 
-        default_set.register()
-        _BOOTSTRAPPED = True
+        try:
+            default_set.register()
+            _BOOTSTRAPPED = True
+        except Exception as exc:
+            _BOOTSTRAP_ERROR = exc
+            raise RuntimeError("failed to bootstrap default prompt set") from exc
