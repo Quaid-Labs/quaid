@@ -502,33 +502,30 @@ Architectural constraints that must not be broken. Violating these causes data c
 The `quaid` CLI works standalone -- no gateway needed.
 
 ```bash
-# Extract & Store
-quaid extract <file>          # Extract memories from transcript (JSONL or text, or - for stdin)
-                              #   --dry-run, --no-snippets, --no-journal, --json, --owner, --label
-quaid store <text>            # Store a single memory (--category, --pinned)
+# Store
+quaid store <text>            # Store a single memory (--category, --owner, --domains, ...)
 
 # Search & Retrieve
 quaid search <query>          # Search memories (full recall pipeline)
-quaid find <query>            # Quick search, no reranking (--limit N)
-quaid get <id>                # Get a memory by ID
-quaid docs <query>            # Search project documentation (--limit N)
+quaid recall <query>          # Recall pipeline helper
+quaid get-node <id>           # Get a memory by ID
+quaid get-edges <id>          # Get edges for a memory node
+quaid docs search <query>     # Search project documentation
 
 # Manage
-quaid forget [query]          # Delete a memory (--id <id>, --yes)
-quaid edge <s> <r> <o>        # Create a relationship edge
+quaid forget [query]          # Delete a memory (--id <id>)
+quaid create-edge <s> <r> <o> # Create a relationship edge
+quaid registry <subcmd>       # Project/doc registry (list/read/register/create-project/...)
+quaid updater <subcmd>        # Project event processor
 
 # Admin
 quaid doctor                  # Health check (DB, embeddings, API key, gateway)
 quaid config                  # Show current configuration
 quaid stats                   # Database statistics
-quaid export                  # Export all facts as JSON
-quaid migrate                 # Import facts from existing markdown files
-quaid re-embed                # Re-embed all facts (after changing embedding model)
+quaid health                  # Detailed KB health metrics
 quaid janitor [opts]          # Run janitor pipeline (--dry-run, --task <name>)
 quaid event [subcmd]          # Event bus (emit/list/process/capabilities)
 quaid mcp-server              # Start MCP server (stdio transport)
-quaid upgrade                 # Show upgrade instructions
-quaid uninstall               # Clean removal (preserves DB, offers backup restore)
 ```
 
 ### Python Module CLIs (Advanced)
@@ -602,7 +599,6 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from `.env` file or macOS Keychain |
 | `OPENAI_API_KEY` | OpenAI API key (for benchmark judging) | Must be set explicitly |
-| `OPENROUTER_API_KEY` | OpenRouter API key (alternative LLM routing) | Must be set explicitly |
 | `QUAID_DEV` | Enable dev mode (unit tests in janitor, verbose output) | Not set |
 | `QUAID_QUIET` | Suppress informational config messages | Not set |
 | `MOCK_EMBEDDINGS` | Use deterministic fake embeddings (for testing) | Not set |
@@ -787,7 +783,7 @@ python3 core/lifecycle/janitor.py --task all --apply
 - `trash` is preferred over `rm` -- always recoverable
 - Wrap plugins in error handlers -- do not crash the gateway
 - Test changes before deploying
-- Backup before risky changes: `quaid export` to save your data
+- Backup before risky changes: run the workspace backup scripts (`scripts/backup-*.sh`) to save your data
 
 ---
 

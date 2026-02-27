@@ -31,7 +31,7 @@ Quaid exposes its knowledge layer through three interfaces: an **MCP server** (w
 
 ```
      MCP Client             CLI               OpenClaw Gateway
-    (Claude Desktop,    (quaid extract,          |
+    (Claude Desktop,    (quaid search,           |
      Cursor, etc.)      quaid search, ...)   Lifecycle hooks
           |                  |               (compaction, reset,
           v                  v                agent turn)
@@ -59,7 +59,7 @@ Quaid exposes its knowledge layer through three interfaces: an **MCP server** (w
 
 ### Three Main Loops
 
-**Extraction** -- Triggered by context compaction, session reset, direct CLI invocation (`quaid extract`), or MCP tool call (`memory_extract`). A deep-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
+**Extraction** -- Triggered by context compaction, session reset, direct CLI module invocation (`python3 ingest/extract.py`), or MCP tool call (`memory_extract`). A deep-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
 
 **Retrieval** -- Fires before each agent turn (OpenClaw), on `memory_recall` MCP tool call, or via `quaid search` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
 
@@ -122,7 +122,7 @@ Extraction can be triggered from any of Quaid's three interfaces:
 
 - **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/adapter.ts`): Compaction extraction uses gateway hook `before_compaction` (context being compacted). Reset/new extraction is routed via OpenClaw internal workspace hooks (`command:new`, `command:reset`) that queue `ResetSignal` for Quaid processing, due to upstream typed-hook boundary issues for `before_reset` (https://github.com/openclaw/openclaw/issues/23895). Programmatic compaction is available via gateway RPC `sessions.compact`.
 - **MCP server** (`modules/quaid/core/interface/mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
-- **CLI** (`modules/quaid/ingest/extract.py`): `quaid extract <file>` accepts JSONL session files or plain text transcripts.
+- **CLI module** (`modules/quaid/ingest/extract.py`): `python3 ingest/extract.py <file>` accepts JSONL session files or plain text transcripts.
 
 All three paths converge on the same extraction logic and produce identical results.
 
