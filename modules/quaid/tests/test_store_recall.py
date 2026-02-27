@@ -477,50 +477,6 @@ class TestRecallBasic:
             results = recall("Quaid", owner_id="quaid", use_routing=False, min_similarity=0.0, domain={"all": False})
             assert results == []
 
-    def test_recall_domain_filter_legacy_is_technical_true(self, tmp_path):
-        from datastore.memorydb.memory_graph import MemoryGraph, Node, recall
-        graph, _ = _make_graph(tmp_path)
-        legacy = Node(
-            id=str(uuid.uuid4()),
-            type="Fact",
-            name="Quaid migrated search API to async handlers",
-            attributes={"is_technical": True},
-            owner_id="quaid",
-            status="active",
-            confidence=0.9,
-        )
-        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
-             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
-             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
-            graph.add_node(legacy, embed=True)
-            results = recall("search api handlers", owner_id="quaid", use_routing=False, min_similarity=0.0, domain={"technical": True})
-            assert results
-            assert all("technical" in (r.get("domains") or []) for r in results)
-
-    def test_init_backfills_node_domains_from_legacy_is_technical(self, tmp_path):
-        from datastore.memorydb.memory_graph import MemoryGraph
-
-        graph, _ = _make_graph(tmp_path)
-        legacy_id = str(uuid.uuid4())
-        with graph._get_conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO nodes (id, type, name, attributes, owner_id, status, confidence, created_at, updated_at, accessed_at)
-                VALUES (?, 'Fact', ?, ?, 'quaid', 'active', 0.8, datetime('now'), datetime('now'), datetime('now'))
-                """,
-                (legacy_id, "Legacy technical fact for migration", json.dumps({"is_technical": True})),
-            )
-        # Re-open through init path to trigger legacy migration.
-        reopened = MemoryGraph(db_path=graph.db_path)
-        with reopened._get_conn() as conn:
-            attrs_row = conn.execute("SELECT attributes FROM nodes WHERE id = ?", (legacy_id,)).fetchone()
-            nd_row = conn.execute("SELECT domain FROM node_domains WHERE node_id = ?", (legacy_id,)).fetchall()
-        attrs = json.loads(attrs_row["attributes"])
-        domains = sorted([r["domain"] for r in nd_row])
-        assert "technical" in attrs.get("domains", [])
-        assert domains == ["technical"]
-
-
 # ---------------------------------------------------------------------------
 # store() dedup behavior
 # ---------------------------------------------------------------------------

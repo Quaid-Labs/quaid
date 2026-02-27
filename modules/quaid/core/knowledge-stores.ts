@@ -21,7 +21,7 @@ export type KnowledgeDatastoreSpec = {
 const STORE_REGISTRY: KnowledgeDatastoreSpec[] = [
   {
     key: "vector",
-    description: "Combined vector recall (basic + technical) with optional technical-scope override.",
+    description: "Combined vector recall across domain-tagged facts.",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
     options: [

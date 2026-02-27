@@ -1,21 +1,11 @@
 #!/usr/bin/env python3
-"""E2E domain contract check for memorydb domain filtering + legacy fallback.
-
-Validates:
-1) Legacy rows with attributes.is_technical are backfilled into attrs.domains.
-2) node_domains mirror rows are created for legacy rows.
-3) recall(domain={"technical": true}) returns legacy technical rows.
-4) recall(domain={"personal": true}) excludes legacy technical rows.
-"""
+"""E2E domain contract check for domain-tagged storage and recall filtering."""
 
 from __future__ import annotations
 
-import json
 import os
-import sqlite3
 import sys
 import tempfile
-import uuid
 from pathlib import Path
 
 
@@ -38,61 +28,55 @@ def main() -> int:
     mg._lib_get_embedding = lambda text: [0.1] * 128
 
     graph = mg.MemoryGraph(db_path=db_path)
-    legacy_id = str(uuid.uuid4())
-    legacy_text = "Legacy technical endpoint refactor for benchmark stability"
+    personal = mg.store(
+        text="Quaid prefers espresso drinks after lunch",
+        owner_id="quaid",
+        skip_dedup=True,
+        domains=["personal"],
+    )
+    technical = mg.store(
+        text="Quaid refactored endpoint retries for deployment stability",
+        owner_id="quaid",
+        skip_dedup=True,
+        domains=["technical"],
+    )
 
     with graph._get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO nodes (id, type, name, attributes, owner_id, status, confidence, created_at, updated_at, accessed_at)
-            VALUES (?, 'Fact', ?, ?, 'quaid', 'active', 0.9, datetime('now'), datetime('now'), datetime('now'))
-            """,
-            (legacy_id, legacy_text, json.dumps({"is_technical": True})),
-        )
-
-    # Re-open triggers init-time backfill.
-    graph2 = mg.MemoryGraph(db_path=db_path)
+        p_domains = [r["domain"] for r in conn.execute("SELECT domain FROM node_domains WHERE node_id = ?", (personal["id"],)).fetchall()]
+        t_domains = [r["domain"] for r in conn.execute("SELECT domain FROM node_domains WHERE node_id = ?", (technical["id"],)).fetchall()]
 
     technical_results = mg.recall(
-        "endpoint refactor benchmark",
+        "endpoint retries deployment",
         owner_id="quaid",
         use_routing=False,
         min_similarity=0.0,
         domain={"technical": True},
     )
     personal_results = mg.recall(
-        "endpoint refactor benchmark",
+        "espresso drinks",
         owner_id="quaid",
         use_routing=False,
         min_similarity=0.0,
         domain={"personal": True},
     )
 
-    with graph2._get_conn() as conn:
-        attrs_row = conn.execute("SELECT attributes FROM nodes WHERE id = ?", (legacy_id,)).fetchone()
-        nd_rows = conn.execute("SELECT domain FROM node_domains WHERE node_id = ?", (legacy_id,)).fetchall()
-
-    attrs = json.loads(attrs_row["attributes"] if attrs_row else "{}")
-    mirrored = sorted([r["domain"] for r in nd_rows])
     tech_ids = {r.get("id") for r in technical_results}
     personal_ids = {r.get("id") for r in personal_results}
 
-    assert "technical" in attrs.get("domains", []), "legacy row missing attrs.domains backfill"
-    assert mirrored == ["technical"], f"unexpected node_domains mirror rows: {mirrored}"
-    assert legacy_id in tech_ids, "technical recall failed to return legacy technical row"
-    assert legacy_id not in personal_ids, "personal recall should exclude legacy technical row"
+    assert p_domains == ["personal"], f"unexpected personal node_domains: {p_domains}"
+    assert t_domains == ["technical"], f"unexpected technical node_domains: {t_domains}"
+    assert technical["id"] in tech_ids, "technical recall failed to return technical fact"
+    assert personal["id"] not in tech_ids, "technical recall returned personal fact"
+    assert personal["id"] in personal_ids, "personal recall failed to return personal fact"
+    assert technical["id"] not in personal_ids, "personal recall returned technical fact"
 
     print(
-        json.dumps(
-            {
-                "status": "ok",
-                "legacy_id": legacy_id,
-                "db_path": str(db_path),
-                "technical_hits": len(technical_results),
-                "personal_hits": len(personal_results),
-            },
-            indent=2,
-        )
+        "{"
+        f"\"status\": \"ok\", "
+        f"\"db_path\": \"{db_path}\", "
+        f"\"technical_hits\": {len(technical_results)}, "
+        f"\"personal_hits\": {len(personal_results)}"
+        "}"
     )
     return 0
 
