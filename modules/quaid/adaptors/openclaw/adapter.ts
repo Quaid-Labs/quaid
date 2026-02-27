@@ -1386,7 +1386,7 @@ function spawnNotifyScript(scriptBody: string): boolean {
       // best-effort only
     }
   };
-  const preamble = `import sys, os\nsys.path.insert(0, ${JSON.stringify(path.join(WORKSPACE, "plugins/quaid"))})\n`;
+  const preamble = `import sys, os\nsys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})\n`;
   const cleanup = `\nos.unlink(${JSON.stringify(tmpFile)})\n`;
   let launched = false;
   let notifyLogFd: number | null = null;
