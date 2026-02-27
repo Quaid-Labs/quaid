@@ -1,7 +1,7 @@
 const STORE_REGISTRY = [
   {
     key: "vector",
-    description: "Combined vector recall (basic + technical) with optional technical-scope override.",
+    description: "Combined vector recall across domain-tagged facts.",
     defaultWhenExpandGraph: false,
     defaultWhenFlatRecall: false,
     options: [
