@@ -35,7 +35,7 @@ Parameter map:
 - `options.routing.enabled` (bool): enable routed/plan-first recall (`total_recall`).
 - `options.routing.reasoning` (`fast|deep`): router reasoning tier.
 - `options.routing.intent` (`general|agent_actions|relationship|technical`): intent bias.
-- `options.routing.failOpen` (bool): router failure behavior.
+- `options.routing.failOpen` (bool): router failure behavior (`true` = continue with non-routed fallback on router errors, `false` = raise).
 - `options.filters.project` (string): optional project filter.
 - `options.filters.docs` (string[]): optional docs filter when project store is involved.
 - `options.filters.dateFrom` / `options.filters.dateTo` (YYYY-MM-DD).
@@ -43,6 +43,7 @@ Parameter map:
   - default: `{"all": true}` (all tagged + untagged memories)
   - strict example: `{"technical": true}` (only technical-tagged memories)
   - rule: if any domain key is `true`, `all` is ignored and only true domains are included.
+- MCP `memory_recall` path (`core/interface/mcp_server.py`) also supports `domain_json` (stringified JSON object, for example `{"all": true}` or `{"technical": true}`).
 - `options.ranking.sourceTypeBoosts` (object): optional source-type weighting.
 - `options.datastoreOptions.<store>`: per-store options.
 
@@ -79,7 +80,7 @@ Use this for recent-session discovery and transcript retrieval.
 Parameter map:
 - `action` (`list|load`):
   - `list`: returns recent extracted sessions.
-  - `load`: loads one session transcript by `session_id` (or falls back to extracted facts when transcript file is unavailable).
+  - `load`: loads one session transcript by `session_id`. If transcript is unavailable, returns an error payload (no automatic extracted-facts fallback).
 - `session_id` (string): required for `load`. Pattern: `[a-zA-Z0-9_-]{1,128}`.
 - `limit` (number): list size for `action=list` (default 5, max 20).
 
@@ -107,13 +108,15 @@ Default behavior should favor automatic extraction.
 Parameter map:
 - `text` (string): exact memory note text to queue for extraction.
 - `category` (`preference|fact|decision|entity|other`, optional): lightweight hint.
-- `domains_json` (string, MCP path): optional JSON array of domain tags (for example `["technical","project"]`) used to attach domains at write time.
+- OpenClaw runtime path: accepts only `text` and optional `category`.
+- MCP path (`core/interface/mcp_server.py`) also accepts `domains_json` (stringified JSON array, for example `["technical","project"]`).
 
 ### `memory_forget`
 Use this for explicit deletion requests.
 
 Parameter map:
-- `memoryId` (string): delete one specific memory by id.
+- OpenClaw runtime path: `memoryId` (string) to delete one specific memory by id.
+- MCP path (`core/interface/mcp_server.py`): `node_id` (string) to delete one specific memory by id.
 - `query` (string): delete matching memories by query.
 
 ### Docs/Project Admin Tools
@@ -132,6 +135,7 @@ Parameter map:
 
 - `vector_basic`: personal/life facts, preferences, relationships
 - `vector_technical`: technical/project-state facts
+- `vector`: combined vector retrieval across personal + technical memories
 - `graph`: relationship traversal and connected entities
 - `journal`: distilled reflective context
 - `project`: project documentation index
@@ -170,6 +174,7 @@ cd modules/quaid
 # Recall and inspection
 python3 datastore/memorydb/memory_graph.py search "query" --owner quaid --limit 50 --min-similarity 0.6
 python3 datastore/memorydb/memory_graph.py search-graph "query" --owner quaid
+python3 datastore/memorydb/memory_graph.py search-graph-aware "query" --owner quaid
 python3 datastore/memorydb/memory_graph.py stats
 python3 datastore/memorydb/memory_graph.py health
 

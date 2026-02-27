@@ -122,7 +122,7 @@ Key search functions:
 
 **High-level API:**
 - `recall(query, limit, privacy, owner_id, current_session_id, compaction_time, date_from, date_to)` — returns results with `extraction_confidence`, `created_at`, `valid_from`, `valid_until`, `privacy`, `owner_id`, `domains`, `project`. Runs hybrid search + raw FTS on unrouted query to catch proper nouns. Results pass through `_sanitize_for_context()` which strips injection patterns from recalled text before it enters the agent's context window. Recalled facts are tagged with `[MEMORY]` prefix in output. **Date range filtering:** optional `date_from` and `date_to` parameters (YYYY-MM-DD) filter results by `created_at` date, applied before limit truncation (so limit returns N results within range). Results without dates are included by default. **Domain filtering:** results are filtered by the provided domain map when present.
-- `store(text, category, verified, privacy, source, owner_id, session_id, extraction_confidence, speaker, status, keywords, source_type)` — creates nodes with dedup (threshold 0.95, FTS bounded to LIMIT 500). Validates owner is present. **Enforces 3-word minimum** for facts to prevent storing meaningless fragments. Optional `keywords` parameter stores derived search terms for FTS vocabulary bridging. Optional `source_type` (user/assistant/tool/import) stored in attributes JSON; assistant-inferred facts get 0.9x confidence multiplier.
+- `store(text, category, verified, privacy, source, owner_id, session_id, extraction_confidence, speaker, status, keywords, source_type)` — creates nodes with dedup (auto-reject >=0.98, LLM-review gray zone 0.88-0.98, fallback threshold 0.95; FTS bounded to LIMIT 500). Validates owner is present. **Enforces 3-word minimum** for facts to prevent storing meaningless fragments. Optional `keywords` parameter stores derived search terms for FTS vocabulary bridging. Optional `source_type` (user/assistant/tool/import) stored in attributes JSON; assistant-inferred facts get 0.9x confidence multiplier.
 - `store_contradiction(node_a_id, node_b_id, explanation)` — persists janitor-detected contradictions
 - `forget(query, node_id)` — deletes by query or ID
 - `get_stats()` — node/edge counts, type breakdown
@@ -155,16 +155,16 @@ Each result dict from `recall()` includes:
 
 **CLI:**
 ```bash
-python memory_graph.py stats
-python memory_graph.py search "query" --owner <user> --limit 50 \
+python3 memory_graph.py stats
+python3 memory_graph.py search "query" --owner <user> --limit 50 \
   [--current-session-id ID] [--compaction-time ISO] \
   [--date-from YYYY-MM-DD] [--date-to YYYY-MM-DD]
-python memory_graph.py search-graph-aware "query" --owner <user> --limit 50 --json
-python memory_graph.py store "text" --owner <user> --category fact \
+python3 memory_graph.py search-graph-aware "query" --owner <user> --limit 50 --json
+python3 memory_graph.py store "text" --owner <user> --category fact \
   [--confidence 0.9] [--extraction-confidence 0.9] [--session-id ID] \
   [--privacy shared] [--speaker "User"] [--status pending] \
   [--keywords "space separated search terms"]
-python memory_graph.py forget --id <uuid>
+python3 memory_graph.py forget --id <uuid>
 ```
 
 **Search output format:** `[similarity] [category](date)[flags][C:confidence] text |ID:uuid|T:created_at|VF:valid_from|VU:valid_until|P:privacy|O:owner_id`
@@ -184,31 +184,9 @@ python memory_graph.py forget --id <uuid>
 
 ---
 
-### 3. Seeding Script (`seed.py`)
+### 3. Initialization and Migrations
 
-Parses workspace files to populate the graph:
-
-**Sources:**
-- `MEMORY.md` — extracts user facts, creates Person node + linked facts
-- `memory/family-photos.md` — pets, people appearances
-- `memory/villa-atmata.md` — place nodes, rooms, cameras
-- `memory/2026-*.md` — daily notes: decisions, TODOs, session topics
-- Generic preference extraction from any markdown
-
-**Node types created:**
-- Person
-- Place
-- Fact (linked to people)
-- Event (decisions, todos, sessions)
-- Concept (pets, cameras)
-- Preference (likes/dislikes extracted via regex)
-
-**Usage:**
-```bash
-python seed.py           # Seed from files
-python seed.py --reset   # Reset DB and re-seed
-python seed.py -q        # Quiet mode
-```
+Schema initialization and migrations are performed by `memory_graph.py` at startup (`init_database()` path), not by a separate `seed.py` script.
 
 ---
 
@@ -218,7 +196,7 @@ OpenClaw plugin (Total Recall / quaid) that:
 
 **On load:**
 - Creates `data/` dir if needed
-- Auto-runs `seed.py` if no database exists
+- Initializes database/tables and runtime state if no database exists
 - Loads user identity config from `config/memory.json`
 - Logs stats
 - **Gateway restart recovery:** Detects unextracted sessions from before the restart and auto-recovers missed memories. Checks for sessions with messages but no corresponding extraction event, then triggers extraction for each.
@@ -251,8 +229,8 @@ OpenClaw plugin (Total Recall / quaid) that:
 - `personNodeName` field maps user to their Person node in the graph
 
 **Tools registered:**
-- `memory_recall` — search memories with **dynamic retrieval limit K** (see below), uses graph-aware search. **Waits for in-flight extraction** (up to 60s timeout) before querying, ensuring freshly extracted facts from compaction/reset are immediately queryable. Uses a strict `query + options` contract (`options.graph`, `options.routing`, `options.filters`, `options.ranking`, `options.storeOptions`) including date filtering via `options.filters.dateFrom`/`options.filters.dateTo`. Results include dates showing when each fact was recorded, and `[superseded]` markers for facts with `validUntil` set.
-- `memory_store` — save new memory (stored as `status: approved`, `confidence: 0.8`)
+- `memory_recall` — search memories with **dynamic retrieval limit K** (see below), uses graph-aware search. **Waits for in-flight extraction** (up to 60s timeout) before querying, ensuring freshly extracted facts from compaction/reset are immediately queryable. Uses a strict `query + options` contract (`options.graph`, `options.routing`, `options.filters`, `options.ranking`, `options.datastoreOptions`) including date filtering via `options.filters.dateFrom`/`options.filters.dateTo`. Results include dates showing when each fact was recorded, and `[superseded]` markers for facts with `validUntil` set.
+- `memory_store` — queues a memory note for deferred extraction on compaction/reset (no immediate DB write)
 - `memory_forget` — delete by query or ID
 - `projects_search` — RAG search with optional `project` filter + staleness warnings
 - `docs_list` — list docs by project/type via registry
@@ -279,7 +257,7 @@ The `memory_recall` tool computes the retrieval limit dynamically based on the t
 K = round(11.5 * ln(N) - 61.7)
 ```
 
-where `N` is the total node count. The result is clamped to a configured range (`dynamicK.min` to `dynamicK.max`, default 3–50). This ensures the retrieval window scales logarithmically as the memory graph grows — small graphs don't over-fetch, and large graphs don't under-fetch. The dynamic K is used as the default when the agent doesn't specify an explicit limit. Node count is fetched from `memory_graph.py stats` at tool invocation time.
+where `N` is the total node count. The result is clamped to runtime bounds [5, 40]. This ensures the retrieval window scales logarithmically as the memory graph grows — small graphs don't over-fetch, and large graphs don't under-fetch. The dynamic K is used as the default when the agent doesn't specify an explicit limit. Node count is cached for 5 minutes and refreshed periodically.
 
 **TypeScript strictness:**
 - All `catch` clauses use explicit `err: unknown` typing (Wave 1 TS lint cleanup)
@@ -321,7 +299,7 @@ where `N` is the total node count. The result is clamped to a configured range (
 - `extraction_confidence` showing classifier reliability
 - Date of recording shown per result
 - `[superseded]` marker on facts that have been replaced
-- Low-quality warning when avg similarity < 60%
+- Low-quality warning when `avg_similarity < 45%` AND `max_similarity < 55%`
 - "No results" guidance to refine query
 
 **To enable/disable auto-injection:** Set `MEMORY_AUTO_INJECT=1` env var or `retrieval.autoInject: true/false` in config.
