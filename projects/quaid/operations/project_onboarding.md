@@ -19,7 +19,10 @@ NOT move anything — that's your job, with the user's approval.
 
 ```python
 # Read pending reviews (non-destructive — file persists until ack'd)
-from workspace_audit import get_pending_project_reviews, clear_pending_project_reviews
+from core.lifecycle.workspace_audit import (
+    get_pending_project_reviews,
+    clear_pending_project_reviews,
+)
 reviews = get_pending_project_reviews()
 # Returns: [{"section", "source_file", "project_hint", "content_preview", "reason", "timestamp"}, ...]
 
