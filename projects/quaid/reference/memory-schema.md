@@ -379,7 +379,7 @@ CREATE TABLE IF NOT EXISTS recall_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     query TEXT NOT NULL,
     owner_id TEXT,
-    intent TEXT,                          -- WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY
+    intent TEXT,                          -- WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY/PROJECT
     results_count INTEGER,
     avg_similarity REAL,
     top_similarity REAL,

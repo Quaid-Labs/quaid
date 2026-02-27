@@ -476,14 +476,7 @@ The `dynamicK` section controls the automatic retrieval limit scaling. When `ena
 }
 ```
 
-**Bootstrap file monitoring** — janitor monitors bootstrap files specified in gateway config:
-```json
-{
-  "janitor": {
-    "bootstrapFiles": ["SOUL.md", "USER.md", "MEMORY.md", "AGENTS.md"]
-  }
-}
-```
+**Bootstrap file monitoring** — workspace monitoring uses a built-in bootstrap file set (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `USER.md`, `MEMORY.md`, `IDENTITY.md`, `HEARTBEAT.md`, `TODO.md`, `PROJECT.md`) plus adapter-provided additions. There is no `janitor.bootstrapFiles` config key.
 
 **Logging config:**
 ```json
