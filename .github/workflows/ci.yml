@@ -126,9 +126,10 @@ jobs:
         run: python scripts/run_pytests.py --mode unit --workers 4 --timeout 120
 
   full-suite:
-    if: github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: needs.changes.outputs.needs_plugin == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -152,14 +153,20 @@ jobs:
         working-directory: modules/quaid
         run: npm ci
 
+      - name: Build runtime
+        working-directory: modules/quaid
+        run: npm run build:runtime
+
+      - name: Python unit tests (isolated parallel)
+        working-directory: modules/quaid
+        run: python scripts/run_pytests.py --mode unit --workers 4 --timeout 120
+
       - name: Boundary import check
         working-directory: modules/quaid
         run: npm run check:boundaries
 
-      - name: Full suite (without bootstrap e2e lane)
+      - name: Full suite (with bootstrap e2e lane)
         working-directory: modules/quaid
-        env:
-          QUAID_E2E_MATRIX_SCRIPT: /nonexistent
         run: bash scripts/run-all-tests.sh --full
 
       - name: Upload E2E telemetry artifacts
