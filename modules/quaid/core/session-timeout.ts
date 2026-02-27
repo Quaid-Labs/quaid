@@ -503,20 +503,24 @@ export class SessionTimeoutManager {
       const signalPath = this.signalPath(sessionId);
       if (fs.existsSync(signalPath)) {
         let existingLabel = "Signal";
+        let existingAttemptCount = 0;
         try {
           const existing = JSON.parse(fs.readFileSync(signalPath, "utf8")) as PendingExtractionSignal;
           existingLabel = String(existing?.label || "Signal");
-          signal.attemptCount = Math.max(0, Number(existing?.attemptCount || 0));
+          existingAttemptCount = Math.max(0, Number(existing?.attemptCount || 0));
         } catch (err: unknown) {
           safeLog(this.logger, `[quaid][timeout] failed to parse existing extraction signal ${signalPath}: ${String((err as Error)?.message || err)}`);
         }
         const incomingPriority = signalPriority(signal.label);
         const existingPriority = signalPriority(existingLabel);
         if (incomingPriority > existingPriority) {
+          // Promotion represents a new stronger trigger; restart retry budget.
+          signal.attemptCount = 0;
           fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 0o600 });
           this.writeQuaidLog("signal_queue_promoted", sessionId, {
             from: existingLabel,
             to: signal.label,
+            previous_attempt_count: existingAttemptCount,
           });
         } else {
           this.writeQuaidLog("signal_queue_coalesced", sessionId, {
