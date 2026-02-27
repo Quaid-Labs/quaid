@@ -14,11 +14,11 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
   - gateway integration
 - Provider layer owns:
   - transport for LLM/embedding calls
-  - model-tier execution (`high` / `low`)
+  - model-tier execution (`deep_reasoning` / `fast_reasoning`)
 
 ## Runtime Flow (OpenClaw)
 
-1. Quaid code requests an LLM tier (`high` or `low`).
+1. Quaid code requests an LLM tier (`deep_reasoning` or `fast_reasoning`).
 2. `adaptors/openclaw/index.ts` resolves effective provider + model via config:
    - `models.llmProvider`
    - `models.deepReasoning` / `models.fastReasoning`

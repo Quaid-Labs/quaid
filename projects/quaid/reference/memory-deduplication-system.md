@@ -87,9 +87,9 @@ Nightly janitor reviews recent dedup rejections via `recall_pass`:
 {
   "janitor": {
     "dedup": {
-      "autoRejectThreshold": 0.98,
-      "grayZoneLow": 0.88,
-      "haikuVerifyEnabled": true
+      "auto_reject_threshold": 0.98,
+      "gray_zone_low": 0.88,
+      "haiku_verify_enabled": true
     }
   }
 }
