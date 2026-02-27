@@ -77,7 +77,6 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"strict privacy:   {_get(data, 'privacy.enforceStrictFilters', _get(data, 'privacy.enforce_strict_filters', True))}")
     print(f"core parallel:    {_get(data, 'core.parallel.enabled', True)}")
     print(f"llm workers:      {_get(data, 'core.parallel.llmWorkers', _get(data, 'core.parallel.llm_workers', 4))}")
-    print(f"prepass workers:  {_get(data, 'core.parallel.lifecyclePrepassWorkers', _get(data, 'core.parallel.lifecycle_prepass_workers', 3))}")
     print(f"idle timeout:     {_get(data, 'capture.inactivity_timeout_minutes', _get(data, 'capture.inactivityTimeoutMinutes', 120))}m")
     print()
     print("systems:")
@@ -139,10 +138,9 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
         print("7. Fail hard (retrieval.fail_hard)")
         print("8. Core parallel enabled")
         print("9. Core LLM workers")
-        print("10. Core prepass workers")
-        print("11. Systems on/off")
-        print("12. Show summary")
-        print("13. Save and exit")
+        print("10. Systems on/off")
+        print("11. Show summary")
+        print("12. Save and exit")
         print("0. Exit without saving")
         choice = input("Select: ").strip()
 
@@ -179,13 +177,10 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = int(_get(staged, "core.parallel.llmWorkers", _get(staged, "core.parallel.llm_workers", 4)))
                 _set(staged, "core.parallel.llmWorkers", _prompt_int("core.parallel.llmWorkers", cur))
             elif choice == "10":
-                cur = int(_get(staged, "core.parallel.lifecyclePrepassWorkers", _get(staged, "core.parallel.lifecycle_prepass_workers", 3)))
-                _set(staged, "core.parallel.lifecyclePrepassWorkers", _prompt_int("core.parallel.lifecyclePrepassWorkers", cur))
-            elif choice == "11":
                 _edit_systems(staged)
-            elif choice == "12":
+            elif choice == "11":
                 _print_summary(path, staged)
-            elif choice == "13":
+            elif choice == "12":
                 _save_config(path, staged)
                 print(f"Saved: {path}")
                 return True
