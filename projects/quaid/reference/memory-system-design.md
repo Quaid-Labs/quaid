@@ -26,8 +26,8 @@ The system uses three tiers with distinct purposes:
 
 | Layer | Storage | Loaded When | Purpose | Examples |
 |-------|---------|-------------|---------|----------|
-| **Markdown** | SOUL.md, USER.md, TOOLS.md, HEARTBEAT.md | Every context (always injected) | Core instructions, identity, system pointers | "Alfie's personality", "Quaid's core facts", "System tool locations" |
-| **RAG** | `docs/<project>/` docs | Searched when topically relevant | Reference documentation, system architecture | "Knowledge layer design", "Janitor pipeline reference", "Spark agent planning" |
+| **Markdown** | SOUL.md, USER.md, MEMORY.md, AGENTS.md, TOOLS.md, CONSTITUTION.md, PROJECT.md | Every context (always injected) | Core instructions, identity, system pointers | "Alfie's personality", "Quaid's core facts", "System tool locations" |
+| **RAG** | `projects/<project>/` docs | Searched when topically relevant | Reference documentation, system architecture | "Knowledge layer design", "Janitor pipeline reference", "Spark agent planning" |
 | **Memory DB** | `data/memory.db` | Searched per-message via recall pipeline | Personal facts from conversations | "Quaid prefers dark mode", "Melina's birthday is Oct 12", "Quaid chose SQLite for simplicity" |
 
 **What belongs in Memory (the DB):**
@@ -38,10 +38,10 @@ The system uses three tiers with distinct purposes:
 - Relationships: family, friends, colleagues, pets
 
 **What does NOT belong in Memory:**
-- System architecture ("The knowledge layer uses SQLite with WAL mode") → RAG docs (`docs/<project>/`)
-- Infrastructure knowledge ("Ollama runs on port 11434") → RAG docs (`docs/<project>/`)
-- Operational rules for AI agents ("Alfie should check HANDOFF.md on wake") → SOUL.md/HEARTBEAT.md
-- Tool/config descriptions ("The janitor has a dedup threshold of 0.85") → RAG docs (`docs/<project>/`)
+- System architecture ("The knowledge layer uses SQLite with WAL mode") → RAG docs (`projects/<project>/`)
+- Infrastructure knowledge ("Ollama runs on port 11434") → RAG docs (`projects/<project>/`)
+- Operational rules for AI agents ("Alfie should check AGENTS.md on wake") → markdown core files
+- Tool/config descriptions ("The janitor has a dedup threshold of 0.85") → RAG docs (`projects/<project>/`)
 
 ---
 
@@ -91,7 +91,7 @@ Agent receives results with similarity %, extraction_confidence
                                        → journal_entries → journal/*.journal.md diary files
 ```
 
-> **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env). Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via Opus with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (SOUL.md, USER.md, MEMORY.md, AGENTS.md). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
+> **Note:** Recall is agent-driven via `memory_recall` tool (Feb 2026). Auto-injection is optional (gated by config/env). Auto-capture via per-message classifier is deprecated, but inactivity-timeout extraction still runs when capture is enabled. Memory extraction happens at compaction/reset via Opus with combined fact+edge+snippet+journal extraction. Soul snippets are observations written to `.snippets.md` staging files, reviewed by janitor Task 1d-snippets, and folded into core markdown files (default SOUL.md, USER.md, MEMORY.md; AGENTS.md optional via `docs.journal.targetFiles`). Journal entries are diary-style paragraphs written to `journal/*.journal.md`, distilled by janitor Task 1d-journal into core markdown themes, then archived to `journal/archive/`.
 
 ---
 
@@ -193,7 +193,7 @@ Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 
 1. **Token budget:** Dynamic K based on node count (clamped by config); optional LLM reranker for relevance
 2. **Capture quality:** Opus extraction at compaction/reset events with strict personal-facts-only criteria. Nightly janitor cleans any remaining noise.
-3. **Graph seeding:** Bootstrapped from workspace files via `seed.py`, continuously enriched by event-based extraction
+3. **Graph initialization:** Database schema is initialized by `memory_graph.py` startup/migration paths, then continuously enriched by event-based extraction
 4. **Contradiction handling:** Janitor Task 4 detects contradictions via token recall + Haiku, stores in `contradictions` table for resolution
 
 ---
@@ -227,8 +227,6 @@ Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 - `janitor-reference.md` — Nightly maintenance pipeline reference
 - `memory-deduplication-system.md` — Store-time and nightly dedup
 - `memory-schema.md` — Database schema reference
-- `memory-system-comparison.md` — Comparison with other memory systems
-- `spark-agents.md` — Agent registry (for future Spark integration)
 
 ---
 

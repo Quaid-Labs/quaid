@@ -476,7 +476,7 @@ The task numbering is historical -- tasks were added over time and the numbers r
 |------|---------|------|
 | rag | Reindex docs for RAG search + auto-discover new projects | No |
 | tests | Run pytest suite (dev/CI only, gated by `QUAID_DEV=1`) | No |
-| cleanup | Prune old logs, orphaned embeddings, stale lock files | No |
+| cleanup | Prune old logs and orphaned embeddings | No |
 | update_check | Check for Quaid updates (version comparison) | No |
 
 ### Fail-Fast Behavior

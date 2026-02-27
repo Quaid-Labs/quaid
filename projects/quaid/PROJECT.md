@@ -38,8 +38,12 @@ This file is the canonical entry point for all docs in `projects/quaid`.
 | `projects/quaid/operations/testing-infrastructure.md` | Unified test stack reference: deterministic/unit/integration/build layers, e2e scripts, and pass/fail rubric. |
 | `projects/quaid/operations/bootstrap-runtime-ops.md` | Bootstrap/runtime ownership model, key placement policy, and safe automation defaults. |
 | `projects/quaid/operations/release-readiness.md` | Alpha release positioning, current go/hold criteria, known issues, and contributor-focused priorities. |
+| `projects/quaid/operations/release-checklist.md` | Canonical go/no-go release checklist used for final readiness verification. |
 | `projects/quaid/operations/release-tagging-checklist.md` | Step-by-step release/tag/publish checklist for alpha cuts. |
 | `projects/quaid/operations/repo-cleanup.md` | Repo hygiene log: removed OpenClaw carryover artifacts and pending scrub tasks. |
+| `projects/quaid/operations/benchmark-remediation-checklist.md` | Benchmark remediation execution checklist and janitor/doc verification steps. |
+| `projects/quaid/operations/plugin-framework-checklist.md` | Plugin framework readiness checklist and rollout guardrails. |
+| `projects/quaid/operations/cli-audit.md` | CLI command/audit notes for operational correctness and UX consistency. |
 
 ## Source Code
 - `modules/quaid/`

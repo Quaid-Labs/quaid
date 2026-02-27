@@ -19,18 +19,18 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 ## Runtime Flow (OpenClaw)
 
 1. Quaid code requests an LLM tier (`deep_reasoning` or `fast_reasoning`).
-2. `adaptors/openclaw/index.ts` resolves effective provider + model via config:
+2. `adaptors/openclaw/adapter.ts` resolves effective provider + model via config:
    - `models.llmProvider`
-   - `models.deepReasoning` / `models.fastReasoning`
-   - `models.providerModelClasses`
-3. If tier model is `default`, provider model pair comes from `providerModelClasses` for the effective provider.
+   - `models.deep_reasoning` / `models.fast_reasoning`
+   - `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses`
+3. If tier model is `default`, provider model pair comes from the corresponding model-class map for the effective provider.
 4. Resolved call goes through OpenClaw plugin endpoint (`/modules/quaid/llm`) and gateway auth.
 5. Gateway provider (OAuth/API) executes the model call.
 
 ## Provider Resolution Rules
 
-- Explicit tier model (`models.deepReasoning` / `models.fastReasoning` not `default`) is used directly.
-- `default` tier model requires matching `providerModelClasses` entry.
+- Explicit tier model (`models.deep_reasoning` / `models.fast_reasoning` not `default`) is used directly.
+- `default` tier model requires matching model-class map entry for the resolved provider.
 - Effective provider:
   - explicit `models.llmProvider` if not `default`
   - otherwise inferred from active gateway provider/auth state
@@ -38,7 +38,7 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 
 ## Key Files
 
-- `modules/quaid/adaptors/openclaw/index.ts`
+- `modules/quaid/adaptors/openclaw/adapter.ts`
   - tier/provider resolution
   - extraction hooks (`agent_end`, `command`, `before_compaction`, `before_reset`)
   - gateway-bound LLM calls
@@ -56,8 +56,9 @@ Quaid core stays provider-agnostic. Provider and model selection are handled onl
 `config/memory.json`:
 
 - `models.llmProvider`
-- `models.deepReasoning`
-- `models.fastReasoning`
-- `models.providerModelClasses[]`
+- `models.deep_reasoning`
+- `models.fast_reasoning`
+- `models.deepReasoningModelClasses`
+- `models.fastReasoningModelClasses`
 
 Provider model constants should live in config, not scattered across core logic.
