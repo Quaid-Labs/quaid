@@ -456,12 +456,44 @@ def _run_llm_batches_parallel(
     """Run batch LLM calls with bounded parallelism; preserve output order."""
     if not batches:
         return []
-    configured_workers = min(_llm_parallel_workers(task_name), len(batches))
-    workers = _resolve_adaptive_workers(task_name, configured_workers)
+    configured_workers = _llm_parallel_workers(task_name)
+    adaptive_workers = _resolve_adaptive_workers(task_name, configured_workers)
+    workers = min(adaptive_workers, len(batches))
     if workers <= 1:
         out = []
+        timeout_events = 0
+        had_any_errors = False
+        had_any_success = False
         for idx, batch in enumerate(batches, 1):
-            out.append(runner(idx, batch))
+            try:
+                row = runner(idx, batch)
+                if isinstance(row, dict) and row.get("error"):
+                    had_any_errors = True
+                    if _timeout_like_error(row.get("error")):
+                        timeout_events += 1
+                else:
+                    had_any_success = True
+                out.append(row)
+            except Exception as exc:
+                had_any_errors = True
+                if _timeout_like_error(exc):
+                    timeout_events += 1
+                out.append(
+                    {
+                        "batch_num": idx,
+                        "error": str(exc),
+                        "error_type": exc.__class__.__name__,
+                        "response": None,
+                        "duration": 0.0,
+                    }
+                )
+        _record_adaptive_workers(
+            task_name,
+            configured_workers,
+            timeout_events=timeout_events,
+            had_any_errors=had_any_errors,
+            had_any_success=had_any_success,
+        )
         return out
     out: List[Optional[Dict[str, Any]]] = [None] * len(batches)
     calls = [

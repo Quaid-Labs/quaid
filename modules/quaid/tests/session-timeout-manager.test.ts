@@ -136,29 +136,67 @@ describe('SessionTimeoutManager scheduling', () => {
   it('requeues extraction signal after failed extraction to preserve retry path', async () => {
     const workspace = makeWorkspace('quaid-timeout-requeue-')
     writeFailHardConfig(workspace, false)
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {
-        throw new Error('forced extraction failure')
-      },
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = false
+    process.env.QUAID_SIGNAL_MAX_RETRIES = '3'
+    try {
+      const manager = new SessionTimeoutManager({
+        workspace,
+        timeoutMinutes: 10,
+        extract: async () => {
+          throw new Error('forced extraction failure')
+        },
+        isBootstrapOnly: () => false,
+        logger: () => {},
+      })
+      ;(manager as any).failHard = false
 
-    manager.onAgentEnd([
-      { role: 'user', content: 'remember this', timestamp: Date.now() },
-      { role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
-    ], 'session-requeue')
-    manager.queueExtractionSignal('session-requeue', 'Reset')
-    await manager.processPendingExtractionSignals()
+      manager.onAgentEnd([
+        { role: 'user', content: 'remember this', timestamp: Date.now() },
+        { role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
+      ], 'session-requeue')
+      manager.queueExtractionSignal('session-requeue', 'Reset')
+      await manager.processPendingExtractionSignals()
 
-    const signalPath = (manager as any).signalPath('session-requeue') as string
-    expect(fs.existsSync(signalPath)).toBe(true)
-    const buffered = (manager as any).readBuffer('session-requeue') as any[]
-    expect(Array.isArray(buffered)).toBe(true)
-    expect(buffered.length).toBeGreaterThan(0)
+      const signalPath = (manager as any).signalPath('session-requeue') as string
+      expect(fs.existsSync(signalPath)).toBe(true)
+      const buffered = (manager as any).readBuffer('session-requeue') as any[]
+      expect(Array.isArray(buffered)).toBe(true)
+      expect(buffered.length).toBeGreaterThan(0)
+    } finally {
+      delete process.env.QUAID_SIGNAL_MAX_RETRIES
+    }
+  })
+
+  it('drops extraction signal after retry budget is exhausted', async () => {
+    const workspace = makeWorkspace('quaid-timeout-requeue-cap-')
+    writeFailHardConfig(workspace, false)
+    process.env.QUAID_SIGNAL_MAX_RETRIES = '1'
+    try {
+      const manager = new SessionTimeoutManager({
+        workspace,
+        timeoutMinutes: 10,
+        extract: async () => {
+          throw new Error('forced extraction failure')
+        },
+        isBootstrapOnly: () => false,
+        logger: () => {},
+      })
+      ;(manager as any).failHard = false
+
+      manager.onAgentEnd([
+        { role: 'user', content: 'remember this', timestamp: Date.now() },
+        { role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
+      ], 'session-requeue-cap')
+      manager.queueExtractionSignal('session-requeue-cap', 'Reset')
+
+      await manager.processPendingExtractionSignals()
+      const signalPath = (manager as any).signalPath('session-requeue-cap') as string
+      expect(fs.existsSync(signalPath)).toBe(true)
+
+      await manager.processPendingExtractionSignals()
+      expect(fs.existsSync(signalPath)).toBe(false)
+    } finally {
+      delete process.env.QUAID_SIGNAL_MAX_RETRIES
+    }
   })
 
   it('filters internal/system traffic from extraction payloads', async () => {
