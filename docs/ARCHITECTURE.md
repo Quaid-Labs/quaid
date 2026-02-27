@@ -300,6 +300,8 @@ def _get_fusion_weights(intent):
         return (0.5, 0.5)    # Entity queries: boost FTS for exact name match
     elif intent == "WHEN":
         return (0.4, 0.6)    # Temporal: strong FTS boost (date strings)
+    elif intent == "PROJECT":
+        return (0.6, 0.4)    # Project lookup: moderate FTS boost for technical terms
     elif intent in ("PREFERENCE", "WHY"):
         return (0.8, 0.2)    # Semantic meaning matters more
     else:
@@ -541,7 +543,7 @@ Memories that haven't been accessed within `threshold_days` (default: 30) underg
 confidence *= 2^(-days_since_access / half_life)
 ```
 
-The half-life is extended by access frequency (`access_bonus_factor * access_count`). Verified and pinned facts are protected from decay. Memories that decay below `minimum_confidence` (0.1) are queued for review rather than silently deleted.
+The half-life is extended by access frequency (`access_bonus_factor * access_count`) and storage strength (`1 + 0.5 * storage_strength`). Pinned facts are excluded from decay; verified facts still decay but with doubled half-life. Memories that decay below `minimum_confidence` (0.1) are queued for review rather than silently deleted.
 
 ---
 
@@ -759,17 +761,23 @@ These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and 
 # load_config() -> get_db_path() -> _get_cfg() -> load_config()
 # The re-entrancy guard returns MemoryConfig() defaults to break the cycle.
 _config_loading: bool = False
+_config_lock = threading.RLock()
 
 def load_config() -> MemoryConfig:
-    if _config is not None:
-        return _config
-    if _config_loading:
-        return MemoryConfig()  # Break circular dependency
-    _config_loading = True
+    with _config_lock:
+        if _config is not None:
+            return _config
+        if _config_loading:
+            return MemoryConfig()  # Break circular dependency
+        _config_loading = True
     try:
-        return _load_config_inner()
+        loaded = _load_config_inner()
     finally:
-        _config_loading = False
+        with _config_lock:
+            _config_loading = False
+    with _config_lock:
+        _config = loaded
+        return _config
 ```
 
 Config file search order:
