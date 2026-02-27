@@ -34,7 +34,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
-from datastore.memorydb.memory_graph import store as store_memory, create_edge as create_memory_edge
+from datastore.memorydb.memory_graph import (
+    store as store_memory,
+    create_edge as create_memory_edge,
+    _registered_domains as registered_domains,
+)
 from datastore.notedb.soul_snippets import write_journal_entry, write_snippet_entry
 from lib.runtime_context import (
     parse_session_jsonl as runtime_parse_session_jsonl,
@@ -390,6 +394,11 @@ def extract_from_transcript(
             allowed_domains = {str(k).strip() for k in domain_defs.keys() if str(k).strip()}
     except Exception:
         allowed_domains = set()
+    if not allowed_domains:
+        try:
+            allowed_domains = {str(k).strip() for k in registered_domains().keys() if str(k).strip()}
+        except Exception:
+            allowed_domains = set()
 
     for fact in facts:
         if not isinstance(fact, dict):
@@ -419,16 +428,32 @@ def extract_from_transcript(
             domains = []
         domains = [str(d).strip() for d in domains if str(d).strip()]
         if not domains:
-            raise RuntimeError(
-                f"[extract] fact missing required domains array (fact={text[:120]!r})"
+            logger.warning(
+                "[extract] skipped fact with missing required domains array (fact=%r)",
+                text[:120],
             )
-        if allowed_domains:
-            invalid_domains = [d for d in domains if d not in allowed_domains]
-            if invalid_domains:
-                raise RuntimeError(
-                    "[extract] fact contains unsupported domains "
-                    f"{invalid_domains} (allowed={sorted(allowed_domains)}, fact={text[:120]!r})"
-                )
+            result["facts_skipped"] += 1
+            result["facts"].append({
+                "text": text,
+                "status": "skipped",
+                "reason": "missing required domains",
+            })
+            continue
+        invalid_domains = [d for d in domains if allowed_domains and d not in allowed_domains]
+        if invalid_domains:
+            logger.warning(
+                "[extract] skipped fact with unsupported domains %s (allowed=%s, fact=%r)",
+                invalid_domains,
+                sorted(allowed_domains),
+                text[:120],
+            )
+            result["facts_skipped"] += 1
+            result["facts"].append({
+                "text": text,
+                "status": "skipped",
+                "reason": f"unsupported domains: {invalid_domains}",
+            })
+            continue
         project = fact.get("project")
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = f"{label}-extraction"
