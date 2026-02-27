@@ -23,8 +23,7 @@ def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tm
             "7", "false",  # failHard -> false
             "8", "true",   # parallel enabled -> true
             "9", "6",      # llmWorkers -> 6
-            "10", "5",     # prepass workers -> 5
-            "13",          # save and exit
+            "12",          # save and exit
         ]
     )
 
@@ -43,7 +42,7 @@ def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tm
     assert saved["data"]["retrieval"]["failHard"] is False
     assert saved["data"]["core"]["parallel"]["enabled"] is True
     assert saved["data"]["core"]["parallel"]["llmWorkers"] == 6
-    assert saved["data"]["core"]["parallel"]["lifecyclePrepassWorkers"] == 5
+    assert saved["data"]["core"]["parallel"]["lifecyclePrepassWorkers"] == 3
 
 
 def test_set_builds_nested_paths():
@@ -65,7 +64,7 @@ def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeyp
         [
             "4", "qwen3-embedding:8b",
             "6", "60",
-            "13",
+            "12",
         ]
     )
 
