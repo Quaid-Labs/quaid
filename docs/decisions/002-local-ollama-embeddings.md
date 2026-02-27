@@ -10,7 +10,7 @@ Embedding generation is needed for semantic search in the memory system. Options
 
 ## Decision
 
-**Use Ollama with `nomic-embed-text` model for all embeddings.**
+**Use Ollama with `qwen3-embedding:8b` model for all embeddings.**
 
 ## Rationale
 
@@ -22,7 +22,7 @@ Embedding generation is needed for semantic search in the memory system. Options
 
 4. **Availability** — Works offline. No rate limits. No API key management.
 
-5. **Quality** — `nomic-embed-text` (137M params, 768-dim) is competitive with OpenAI ada-002 for our use case.
+5. **Quality** — `qwen3-embedding:8b` (4096-dim) gives strong semantic recall quality for local retrieval.
 
 ## Configuration
 
@@ -32,12 +32,12 @@ OLLAMA_FLASH_ATTENTION=1  # Faster inference
 OLLAMA_KV_CACHE_TYPE=q8_0  # Memory-efficient
 ```
 
-Current VRAM usage: ~5.4GB (qwen2.5:7b + nomic-embed-text)
+Current VRAM usage: varies by active local models; embedding configuration defaults to `qwen3-embedding:8b` (4096-dim).
 
 ## Trade-offs Accepted
 
-- Requires ~600MB VRAM for embedding model
-- Slightly lower quality than OpenAI text-embedding-3-large (acceptable)
+- Requires local Ollama runtime capacity for the embedding model
+- Local quality/runtime tradeoff is acceptable for fully local memory retrieval
 - Need to manage Ollama service (LaunchAgent handles this)
 
 ## Consequences

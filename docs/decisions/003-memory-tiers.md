@@ -43,10 +43,10 @@ Not all memories are equal. Some are core identity facts that should never disap
 if not accessed in 30+ days:
     if pinned:
         pass  # No decay
-    elif verified:
-        confidence *= 0.95  # 5% decay (half rate)
     else:
-        confidence *= 0.90  # 10% decay (normal rate)
+        # Default mode is exponential (Ebbinghaus), not linear decrement.
+        # Verified facts still decay with a longer half-life.
+        confidence *= 2 ** (-days_since_access / half_life_days)
 ```
 
 ## Trade-offs Accepted
