@@ -8,6 +8,7 @@ import datastore.memorydb.maintenance_ops as ops
 from datastore.memorydb.maintenance_ops import (
     JanitorMetrics,
     _llm_parallel_workers,
+    _reset_adaptive_llm_workers,
     _run_llm_batches_parallel,
 )
 
@@ -129,6 +130,35 @@ def test_run_llm_batches_parallel_honors_overall_timeout(monkeypatch):
     )
     timed_out = [row for row in out if row.get("error_type") == "TimeoutError"]
     assert timed_out
+
+
+def test_run_llm_batches_parallel_adaptive_timeout_backoff_and_recovery(monkeypatch):
+    monkeypatch.setattr(
+        ops,
+        "_cfg",
+        SimpleNamespace(
+            core=SimpleNamespace(
+                parallel=SimpleNamespace(enabled=True, llm_workers=4, task_workers={})
+            )
+        ),
+    )
+    _reset_adaptive_llm_workers()
+    batches = ["a", "b", "c", "d"]
+
+    def timeout_runner(batch_num, _batch):
+        if batch_num == 1:
+            raise TimeoutError("timed out")
+        return {"batch_num": batch_num, "ok": True}
+
+    _run_llm_batches_parallel(batches, "review_pending", timeout_runner)
+    assert ops._ADAPTIVE_LLM_WORKERS["REVIEW_PENDING"] == 3
+
+    def success_runner(batch_num, batch):
+        return {"batch_num": batch_num, "value": batch}
+
+    _run_llm_batches_parallel(batches, "review_pending", success_runner)
+    assert ops._ADAPTIVE_LLM_WORKERS["REVIEW_PENDING"] == 4
+    _reset_adaptive_llm_workers()
 
 
 def test_janitor_metrics_thread_safe_counters():
