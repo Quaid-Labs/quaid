@@ -1,4 +1,4 @@
-# 011: Four-Zone Boundary Audit (Adapter / Core-Orchestrator / Datastore / Ingestor)
+# 011: Four-Zone Boundary Audit (Adapter / Core-Orchestrator / Datastore / Ingest)
 
 Date: 2026-02-23
 Status: Accepted (phases 1-5 complete; follow-up hardening queued)
@@ -8,21 +8,21 @@ Quaid currently uses a 5+1 zone architecture:
 - `adapter`: host/runtime integration (OpenClaw hooks/tools/events)
 - `core/orchestrator`: routing/policies/coordination and datastore-agnostic interfaces
 - `datastore`: durable storage and retrieval engines
-- `ingestor`: extraction/normalization pipelines that write to datastores
+- `ingest`: extraction/normalization pipelines that write to datastores
 - `orchestrator`: strategy selection and cross-zone flow control (separate from adapter)
 - `lifecycle`: maintenance/quality flows (janitor, decay, contradiction sweeps, review jobs)
 
-During rapid refactors, `adaptors/openclaw/adapter.ts` accumulated logic that belonged to `ingestor` and `core`.
+During rapid refactors, `adaptors/openclaw/adapter.ts` accumulated logic that belonged to `ingest` and `core`.
 
 ## Findings
 
 ### Fixed in this pass
 1. **Adapter-owned extraction pipeline removed**
 - Problem: `adapter.ts` contained a full extraction prompt, chunking/merge logic, and direct write loop.
-- Fix: adapter now calls canonical ingestor `extract.py` through `callExtractPipeline(...)`.
+- Fix: adapter now calls canonical ingest entrypoint `ingest/extract.py` through `callExtractPipeline(...)`.
 - Ownership now:
-  - extraction logic: `extract.py` (ingestor)
-  - memory writes/edges: `memory_graph.py` via ingestor
+  - extraction logic: `ingest/extract.py` (ingest)
+  - memory writes/edges: `datastore/memorydb/memory_graph.py` via ingest
   - adapter: transcript assembly + trigger + notification dispatch
 
 2. **Router heuristic drift removed from adapter defaults**
@@ -46,13 +46,13 @@ During rapid refactors, `adaptors/openclaw/adapter.ts` accumulated logic that be
 
 6. **Janitor RAG/project maintenance routed through lifecycle contract**
 - Problem: janitor task 7 directly orchestrated project events, docs registry sync, and RAG reindex internals.
-- Fix: added `janitor_lifecycle.py` registry (`LifecycleRegistry` + `RoutineContext`) and moved datastore-specific maintenance into routine `rag`.
+- Fix: added `core/lifecycle/janitor_lifecycle.py` registry (`LifecycleRegistry` + `RoutineContext`) and moved datastore-specific maintenance into routine `rag`.
 - Result: janitor calls lifecycle routines by name and consumes returned metrics/logs/errors.
 
 ### Remaining boundary leaks (phase 4 queue)
 1. **Doc/project ingestion still partly lives in adapter**
 - File: `adaptors/openclaw/adapter.ts` (`updateDocsFromTranscript`, staleness/update flow)
-- Desired: move to ingestor service/module, adapter calls a single ingestor entrypoint.
+- Desired: move to ingest service/module, adapter calls a single ingest entrypoint.
 
 2. **Datastore bridge calls embedded in adapter tool handlers**
 - Direct bridge calls (`callPython("search"|"store"|"create-edge")`) are still adapter-local.
@@ -63,14 +63,14 @@ We will enforce these rules:
 1. Adapter must not own extraction prompts, chunking, or write loops.
 2. Adapter must not contain query-classification heuristics for datastore routing.
 3. Core defines recall/write contracts and datastore metadata.
-4. Ingestor owns transcript-to-fact transformation and normalization.
+4. Ingest owns transcript-to-fact transformation and normalization.
 5. Datastore owns persistence and retrieval behavior only.
 6. Lifecycle owns cross-cutting maintenance jobs (janitor) and calls other zones through stable interfaces.
 
 ## Implementation Notes (this pass)
-- Adapter extraction now delegates to `extract.py`.
-- `extract.py` now preserves per-fact `source` -> `source_type`, passes `privacy/keywords/session_id`, and creates edges for all successful writes with `fact_id`.
-- Janitor task 7 now executes via lifecycle routine registry (`janitor_lifecycle.py`) instead of direct inline datastore orchestration.
+- Adapter extraction now delegates to `ingest/extract.py`.
+- `ingest/extract.py` now preserves per-fact `source` -> `source_type`, passes `privacy/keywords/session_id`, and creates edges for all successful writes with `fact_id`.
+- Janitor task 7 now executes via lifecycle routine registry (`core/lifecycle/janitor_lifecycle.py`) instead of direct inline datastore orchestration.
 - Project metadata recommendation parsing now lives in `core/project-catalog.ts`.
 
 ## Next Refactor Queue

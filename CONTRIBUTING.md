@@ -37,7 +37,7 @@ Optional (recommended) local hook setup:
 
 ```bash
 python3 -m pip install pre-commit
-cd ..
+cd ../..
 pre-commit install
 ```
 
@@ -61,6 +61,7 @@ npm run test:all
 Before pushing release-facing updates:
 
 ```bash
+cd ../..
 bash scripts/release-check.sh
 ```
 

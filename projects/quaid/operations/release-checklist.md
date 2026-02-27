@@ -32,7 +32,7 @@ Use this as the go/no-go gate for prelaunch and release candidates.
 - Janitor dry-run E2E passes:
   - `bash scripts/run-quaid-e2e.sh --suite janitor --janitor-dry-run --quick-bootstrap --reuse-workspace --skip-llm-smoke --skip-live-events --skip-notify-matrix --janitor-timeout 300`
 - Janitor apply-mode E2E passes with non-interactive approval policy:
-  - run with `notifications.approvalPolicy.default=auto` (or equivalent) for the e2e workspace profile.
+  - run with `janitor.applyMode=auto` (and `janitor.approvalPolicies.*=auto` as needed) for the e2e workspace profile.
 - E2E summary integrity checks:
   - no stage remains `running` in a `success` summary.
 

@@ -19,8 +19,8 @@ Run modes:
   --apply    Apply recommended changes
 
 Usage:
-  python3 janitor_optimized.py --task duplicates
-  python3 janitor_optimized.py --task all --dry-run
+  python3 core/lifecycle/janitor.py --task duplicates
+  python3 core/lifecycle/janitor.py --task all --dry-run
 """
 
 import argparse
