@@ -240,6 +240,12 @@ config/memory.json
   ollama                   -- URL, embedding model (qwen3-embedding:8b), embedding dim (4096)
 ```
 
+Additional keys worth knowing:
+- `prompt_set` -- active prompt family selector (default `default`)
+- `capture.inactivityTimeoutMinutes` / `capture.chunkSize`
+- `janitor.applyMode` / `janitor.approvalPolicies`
+- `retrieval.mmrLambda` / `retrieval.coSessionDecay` / `retrieval.routerFailOpen` / `retrieval.autoInject` / `retrieval.domains`
+
 ### Config Loading
 
 - `get_config()` caches globally -- use `reload_config()` to force refresh
@@ -421,7 +427,7 @@ clawdbot gateway install
 Has a 30-second cache. To force a re-check, clear `_ollama_healthy._cache`.
 
 #### Review Batch Truncation (FIXED)
-`TokenBatchBuilder` now has an `output_tokens_per_item` param. The review task uses `models.max_output('high')` (16384) instead of `opusReview.maxTokens` (4000) to avoid output truncation.
+`TokenBatchBuilder` now has an `output_tokens_per_item` param. The review task uses `models.max_output('deep')` (16384) instead of `opusReview.maxTokens` (4000) to avoid output truncation.
 
 #### create-edge --create-missing
 Use `create-edge --create-missing` when you want missing entities auto-created before edge insertion.

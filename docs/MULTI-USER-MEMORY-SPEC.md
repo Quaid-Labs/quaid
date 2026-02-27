@@ -64,7 +64,7 @@ Core:
 Ingest:
 
 - Normalizes adapter payloads into canonical identity envelopes.
-- Computes deterministic `source_id` / `conversation_id` keys.
+- Computes deterministic `source_id` / `source_conversation_id` keys.
 - Passes normalized identity context to datastore and recall planner.
 
 Datastore:
@@ -153,7 +153,7 @@ Each inbound event should carry:
 - `speaker_entity_id` (resolved or unresolved candidate)
 - `participant_entity_ids`
 - `source_id`
-- `conversation_id`
+- `source_conversation_id`
 - `policy_mode`
 
 ### 6.3 Ingest -> Datastore write envelope
@@ -162,7 +162,7 @@ Each inbound event should carry:
 - `speaker_entity_id`
 - `subject_entity_id`
 - `source_id`
-- `conversation_id`
+- `source_conversation_id`
 - visibility defaults for source type
 
 ### 6.4 Recall API contract
@@ -170,7 +170,7 @@ Each inbound event should carry:
 Recall/search interfaces must accept:
 
 - `viewer_entity_id`
-- `source_id` and/or `source_channel` + `conversation_id`
+- `source_id` and/or `source_channel` + `source_conversation_id`
 - `participant_entity_ids`
 - `subject_entity_id` (optional target)
 - `include_unscoped` (policy-controlled)
