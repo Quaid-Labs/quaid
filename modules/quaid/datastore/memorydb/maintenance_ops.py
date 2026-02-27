@@ -71,6 +71,9 @@ from core.runtime.logger import janitor_logger
 
 logger = logging.getLogger(__name__)
 
+_ADAPTIVE_LLM_WORKERS_LOCK = threading.Lock()
+_ADAPTIVE_LLM_WORKERS: Dict[str, int] = {}
+
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
 
@@ -345,6 +348,73 @@ def _parallel_key(task_name: str) -> str:
     return clean.strip("_")
 
 
+def _timeout_like_error(err: Any) -> bool:
+    """Classify timeout-shaped errors used for adaptive parallel backoff."""
+    if isinstance(err, TimeoutError):
+        return True
+    msg = str(err or "").strip().lower()
+    if not msg:
+        return False
+    return (
+        "timed out" in msg
+        or "timeout" in msg
+        or "deadline exceeded" in msg
+        or "readtimeout" in msg
+        or "parallel call timed out" in msg
+    )
+
+
+def _resolve_adaptive_workers(task_name: str, configured_workers: int) -> int:
+    """Return effective worker count after adaptive congestion backoff."""
+    task_key = _parallel_key(task_name)
+    configured = max(1, int(configured_workers))
+    with _ADAPTIVE_LLM_WORKERS_LOCK:
+        current = int(_ADAPTIVE_LLM_WORKERS.get(task_key, configured) or configured)
+        if current < 1:
+            current = 1
+        if current > configured:
+            current = configured
+        _ADAPTIVE_LLM_WORKERS[task_key] = current
+        return current
+
+
+def _record_adaptive_workers(
+    task_name: str,
+    configured_workers: int,
+    timeout_events: int,
+    had_any_errors: bool,
+    had_any_success: bool,
+) -> None:
+    """Update adaptive worker target based on timeout/success signal."""
+    task_key = _parallel_key(task_name)
+    configured = max(1, int(configured_workers))
+    with _ADAPTIVE_LLM_WORKERS_LOCK:
+        current = int(_ADAPTIVE_LLM_WORKERS.get(task_key, configured) or configured)
+        current = max(1, min(current, configured))
+        next_workers = current
+        if timeout_events > 0:
+            next_workers = max(1, current - 1)
+            if next_workers < current:
+                print(
+                    f"    [parallel] timeout congestion detected task={task_name}; "
+                    f"workers {current} -> {next_workers}"
+                )
+        elif had_any_success and not had_any_errors and current < configured:
+            next_workers = min(configured, current + 1)
+            if next_workers > current:
+                print(
+                    f"    [parallel] timeout-free recovery task={task_name}; "
+                    f"workers {current} -> {next_workers}"
+                )
+        _ADAPTIVE_LLM_WORKERS[task_key] = next_workers
+
+
+def _reset_adaptive_llm_workers() -> None:
+    """Test helper to clear adaptive worker state between runs."""
+    with _ADAPTIVE_LLM_WORKERS_LOCK:
+        _ADAPTIVE_LLM_WORKERS.clear()
+
+
 def _llm_parallel_workers(task_name: str) -> int:
     """Resolve LLM batch parallelism for a task from config."""
     core_cfg = getattr(_cfg, "core", None)
@@ -386,7 +456,8 @@ def _run_llm_batches_parallel(
     """Run batch LLM calls with bounded parallelism; preserve output order."""
     if not batches:
         return []
-    workers = min(_llm_parallel_workers(task_name), len(batches))
+    configured_workers = min(_llm_parallel_workers(task_name), len(batches))
+    workers = _resolve_adaptive_workers(task_name, configured_workers)
     if workers <= 1:
         out = []
         for idx, batch in enumerate(batches, 1):
@@ -404,8 +475,14 @@ def _run_llm_batches_parallel(
         timeout_seconds=overall_timeout_seconds,
         return_exceptions=True,
     )
+    timeout_events = 0
+    had_any_errors = False
+    had_any_success = False
     for idx, item in enumerate(results, 1):
         if isinstance(item, Exception):
+            had_any_errors = True
+            if _timeout_like_error(item):
+                timeout_events += 1
             out[idx - 1] = {
                 "batch_num": idx,
                 "error": str(item),
@@ -414,7 +491,20 @@ def _run_llm_batches_parallel(
                 "duration": 0.0,
             }
         else:
+            if isinstance(item, dict) and item.get("error"):
+                had_any_errors = True
+                if _timeout_like_error(item.get("error")):
+                    timeout_events += 1
+            else:
+                had_any_success = True
             out[idx - 1] = item
+    _record_adaptive_workers(
+        task_name,
+        configured_workers,
+        timeout_events=timeout_events,
+        had_any_errors=had_any_errors,
+        had_any_success=had_any_success,
+    )
     return [item if item is not None else {"batch_num": i + 1, "error": "missing-result"} for i, item in enumerate(out)]
 
 

@@ -480,29 +480,32 @@ class SessionTimeoutManager {
         }
         continue;
       }
+      let restoredClaim = false;
       try {
         this.writeQuaidLog("signal_process_begin", sessionId, { label });
         await this.extractSessionFromLogDirect(sessionId, label);
         this.writeQuaidLog("signal_process_done", sessionId, { label });
       } catch (err) {
         this.writeQuaidLog("signal_process_error", sessionId, { label, error: String(err?.message || err) });
-        if (this.failHard) {
-          try {
-            const originalPath = filePath;
-            if (!fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
-              fs.renameSync(lockedPath, originalPath);
-            }
-          } catch (restoreErr) {
-            safeLog(this.logger, `[quaid][timeout] failed restoring signal claim ${lockedPath}: ${String(restoreErr?.message || restoreErr)}`);
-            if (restoreErr?.code !== "ENOENT") {
-              throw restoreErr;
-            }
+        try {
+          const originalPath = filePath;
+          if (!fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
+            fs.renameSync(lockedPath, originalPath);
+            restoredClaim = true;
+            this.writeQuaidLog("signal_process_requeued", sessionId, { label });
           }
+        } catch (restoreErr) {
+          safeLog(this.logger, `[quaid][timeout] failed restoring signal claim ${lockedPath}: ${String(restoreErr?.message || restoreErr)}`);
+          if (restoreErr?.code !== "ENOENT") {
+            throw restoreErr;
+          }
+        }
+        if (this.failHard) {
           throw err;
         }
       } finally {
         try {
-          if (fs.existsSync(lockedPath)) {
+          if (!restoredClaim && fs.existsSync(lockedPath)) {
             fs.unlinkSync(lockedPath);
           }
         } catch (unlinkErr) {
