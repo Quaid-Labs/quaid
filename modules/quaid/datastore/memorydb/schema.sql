@@ -152,6 +152,7 @@ CREATE TABLE IF NOT EXISTS node_domains (
 );
 
 CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id);
+CREATE INDEX IF NOT EXISTS idx_node_domains_node_domain ON node_domains(node_id, domain);
 
 -- Contradictions table - detected conflicting facts
 CREATE TABLE IF NOT EXISTS contradictions (
