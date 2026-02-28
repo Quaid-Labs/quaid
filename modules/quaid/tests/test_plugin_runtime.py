@@ -6,6 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from core.runtime.plugins import (
+    _PLUGIN_CONTRACT_DECLARED,
+    _PLUGIN_CONTRACT_EXECUTABLE,
+    _PLUGIN_CONTRACT_REQUIRED,
     PluginRegistry,
     collect_declared_exports,
     discover_plugin_manifests,
@@ -68,6 +71,12 @@ def test_validate_manifest_happy_path():
     assert manifest.plugin_type == "adapter"
     assert manifest.module == "adaptors.openclaw.adapter"
     assert manifest.display_name == "OpenClaw Adapter"
+
+
+def test_plugin_contract_key_partition_matches_required_set():
+    assert set(_PLUGIN_CONTRACT_REQUIRED) == (
+        set(_PLUGIN_CONTRACT_EXECUTABLE) | set(_PLUGIN_CONTRACT_DECLARED)
+    )
 
 
 def test_validate_manifest_rejects_invalid_type():

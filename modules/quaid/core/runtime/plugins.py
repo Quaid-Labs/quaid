@@ -49,6 +49,12 @@ _PLUGIN_CONTRACT_DECLARED = (
     "migrations",
     "notifications",
 )
+_PLUGIN_CONTRACT_REQUIRED_SET = set(_PLUGIN_CONTRACT_REQUIRED)
+_PLUGIN_CONTRACT_PARTITION_SET = set(_PLUGIN_CONTRACT_EXECUTABLE) | set(_PLUGIN_CONTRACT_DECLARED)
+if _PLUGIN_CONTRACT_REQUIRED_SET != _PLUGIN_CONTRACT_PARTITION_SET:
+    raise RuntimeError(
+        "Plugin contract key partition mismatch: required keys must equal executable+declared keys"
+    )
 _DATASTORE_REQUIRED_CAPABILITIES = (
     "supports_multi_user",
     "supports_policy_metadata",
