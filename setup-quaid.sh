@@ -1103,6 +1103,8 @@ step6_install() {
         mkdir -p "${PLUGIN_DIR}"
         if [[ -d "${SCRIPT_DIR}/modules/quaid" ]]; then
             cp -R "${SCRIPT_DIR}/modules/quaid/"* "${PLUGIN_DIR}/"
+            find "${PLUGIN_DIR}" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
+            find "${PLUGIN_DIR}" -type f -name "*.pyc" -delete 2>/dev/null || true
         else
             error "Plugin source not found. Expected at ${SCRIPT_DIR}/modules/quaid/"
             exit 1

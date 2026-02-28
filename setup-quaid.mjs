@@ -2004,6 +2004,8 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
 function copyDirSync(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (entry.name === "__pycache__") continue;
+    if (entry.name.endsWith(".pyc")) continue;
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
