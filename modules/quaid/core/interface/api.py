@@ -5,7 +5,7 @@ This module wraps the internal memory_graph functions with simplified
 signatures suitable for plugin integrators and external callers.
 
 Usage:
-    from core.interface.api import store, recall, search, create_edge, forget, get_memory
+    from core.interface.api import store, recall, search, create_edge, forget, get_memory, list_domains, register_domain
 
     result = store("User prefers dark mode", owner_id="quaid")
     memories = recall("UI preferences?", owner_id="quaid")
@@ -285,6 +285,16 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
 def stats() -> Dict[str, Any]:
     """Return graph-level statistics."""
     return _memory().stats()
+
+
+def list_domains(active_only: bool = True) -> List[Dict[str, Any]]:
+    """List known memory domains from datastore registry."""
+    return _memory().list_domains(active_only=active_only)
+
+
+def register_domain(domain: str, description: str = "", active: bool = True) -> Dict[str, Any]:
+    """Register or update a memory domain in datastore registry."""
+    return _memory().register_domain(domain=domain, description=description, active=active)
 
 
 def projects_search_docs(
