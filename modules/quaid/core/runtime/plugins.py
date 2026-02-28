@@ -479,7 +479,13 @@ def initialize_plugin_runtime(
     # Adapter remains the only singleton because it is the sole runtime
     # type with an exclusive active slot. Ingest/datastore slots are lists.
     if adapter_slot and adapter_rec and adapter_rec.manifest.plugin_type == "adapter":
-        registry.activate_singleton("adapter", adapter_slot)
+        try:
+            registry.activate_singleton("adapter", adapter_slot)
+        except Exception as exc:
+            msg = f"Adapter singleton activation failed for '{adapter_slot}': {exc}"
+            if strict:
+                raise ValueError(msg) from exc
+            errors.append(msg)
     for idx, plugin_id in enumerate(slot_data.get("ingest", []) or []):
         _validate_slot_selection(
             registry,
