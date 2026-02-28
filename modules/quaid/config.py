@@ -5,6 +5,7 @@ Loads memory-specific settings from <quaid_home>/config/memory.json
 Falls back to sensible defaults if config is missing.
 """
 
+import copy
 import json
 import logging
 import os
@@ -734,7 +735,7 @@ def _extract_raw_plugin_config(raw_config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_raw_user_identities(raw_config: Dict[str, Any]) -> Dict[str, Any]:
-    """Preserve user identity map keys as-is while normalizing nested identity payloads."""
+    """Preserve user identity map keys and nested payload keys as-is."""
     users = raw_config.get("users")
     if not isinstance(users, dict):
         return {}
@@ -745,7 +746,7 @@ def _extract_raw_user_identities(raw_config: Dict[str, Any]) -> Dict[str, Any]:
     for raw_user_id, raw_identity in identities.items():
         user_id = str(raw_user_id)
         if isinstance(raw_identity, dict):
-            out[user_id] = _load_nested(raw_identity)
+            out[user_id] = copy.deepcopy(raw_identity)
         else:
             out[user_id] = {}
     return out
@@ -1338,6 +1339,12 @@ def _load_config_inner() -> MemoryConfig:
         ),
         config=plugins_data.get('config', {}) if isinstance(plugins_data.get('config', {}), dict) else {},
     )
+    if retrieval.fail_hard != plugins.strict and not os.environ.get("QUAID_QUIET"):
+        print(
+            "[config] WARNING: retrieval.fail_hard and plugins.strict differ; "
+            "retrieval controls memory/LLM fallback, plugins.strict controls plugin contract enforcement.",
+            file=sys.stderr,
+        )
 
     systems_data = config_data.get('systems', {})
     systems = SystemsConfig(
@@ -1385,6 +1392,12 @@ def _load_config_inner() -> MemoryConfig:
         from core.runtime.plugins import initialize_plugin_runtime, run_plugin_contract_surface
         from core.runtime.events import validate_declared_event_contract
 
+        def _emit_plugin_messages() -> None:
+            for msg in plugin_errors:
+                print(f"[plugins][error] {msg}", file=sys.stderr)
+            for msg in plugin_warnings:
+                print(f"[plugins][warn] {msg}", file=sys.stderr)
+
         active_slots = {
             "adapter": plugins.slots.adapter,
             "ingest": list(plugins.slots.ingest),
@@ -1419,6 +1432,11 @@ def _load_config_inner() -> MemoryConfig:
             workspace_root=str(_workspace_root()),
             strict=plugins.strict,
         )
+        plugin_errors.extend(init_errors)
+        plugin_warnings.extend(init_warnings)
+        if plugins.strict and plugin_errors:
+            _emit_plugin_messages()
+            raise ValueError("Plugin contract init failures: " + "; ".join(plugin_errors))
         failed_init_plugin_ids: set[str] = set()
         for msg in list(init_errors) + list(init_warnings):
             m = re.search(r"Plugin '([^']+)' init hook failed", str(msg))
@@ -1434,6 +1452,11 @@ def _load_config_inner() -> MemoryConfig:
             strict=plugins.strict,
             skip_plugin_ids=sorted(failed_init_plugin_ids),
         )
+        plugin_errors.extend(cfg_errors)
+        plugin_warnings.extend(cfg_warnings)
+        if plugins.strict and plugin_errors:
+            _emit_plugin_messages()
+            raise ValueError("Plugin contract config failures: " + "; ".join(plugin_errors))
         tool_runtime_errors, tool_runtime_warnings = run_plugin_contract_surface(
             registry=registry,
             slots=active_slots,
@@ -1444,18 +1467,11 @@ def _load_config_inner() -> MemoryConfig:
             strict=plugins.strict,
             skip_plugin_ids=sorted(failed_init_plugin_ids),
         )
-        plugin_errors.extend(init_errors)
-        plugin_errors.extend(cfg_errors)
         plugin_errors.extend(tool_runtime_errors)
-        plugin_warnings.extend(init_warnings)
-        plugin_warnings.extend(cfg_warnings)
         plugin_warnings.extend(tool_runtime_warnings)
-        for msg in plugin_errors:
-            print(f"[plugins][error] {msg}", file=sys.stderr)
-        for msg in plugin_warnings:
-            print(f"[plugins][warn] {msg}", file=sys.stderr)
+        _emit_plugin_messages()
         if plugins.strict and plugin_errors:
-            raise ValueError("Plugin contract hook failures: " + "; ".join(plugin_errors))
+            raise ValueError("Plugin contract tool_runtime failures: " + "; ".join(plugin_errors))
 
     _config = candidate
     return _config
