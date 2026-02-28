@@ -632,12 +632,19 @@ def _config_value_for_path(config: "MemoryConfig", path: str) -> Any:
 
 
 def _run_config_callbacks(config: "MemoryConfig") -> None:
+    strict = bool(getattr(getattr(config, "plugins", None), "strict", True))
     with _config_callbacks_lock:
         registered = {path: list(callbacks) for path, callbacks in _config_callbacks.items()}
     for path, callbacks in registered.items():
         value = _config_value_for_path(config, path)
         for callback in callbacks:
-            callback(value, config)
+            try:
+                callback(value, config)
+            except Exception as exc:
+                msg = f"Config callback failed for '{path}': {exc}"
+                if strict:
+                    raise ValueError(msg) from exc
+                print(f"[plugins][warn] {msg}", file=sys.stderr)
 
 
 def _on_adapter_slot_config(path_value: Any, _: "MemoryConfig") -> None:
