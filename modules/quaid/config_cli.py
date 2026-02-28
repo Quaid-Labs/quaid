@@ -39,23 +39,10 @@ def _save_config(path: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _sync_tools_domains(path: Path, data: dict[str, Any]) -> None:
-    """Best-effort sync of projects/quaid/TOOLS.md domain block after config writes."""
-    try:
-        from lib.tools_domain_sync import sync_tools_domain_block
-    except Exception:
-        return
-    retrieval = data.get("retrieval", {}) if isinstance(data, dict) else {}
-    domains = retrieval.get("domains", {}) if isinstance(retrieval, dict) else {}
-    if not isinstance(domains, dict):
-        return
-    normalized = {str(k).strip(): str(v or "").strip() for k, v in domains.items() if str(k).strip()}
-    if not normalized:
-        return
-    try:
-        sync_tools_domain_block(domains=normalized, workspace=path.parent.parent)
-    except Exception:
-        pass
+def _run_config_callbacks_after_save() -> None:
+    """Apply config callbacks (domain sync/contract checks) after writing config."""
+    from config import reload_config
+    reload_config()
 
 
 def _get(data: dict[str, Any], dotted: str, default: Any = None) -> Any:
@@ -201,7 +188,7 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 _print_summary(path, staged)
             elif choice == "12":
                 _save_config(path, staged)
-                _sync_tools_domains(path, staged)
+                _run_config_callbacks_after_save()
                 print(f"Saved: {path}")
                 return True
             elif choice == "0":
@@ -264,7 +251,7 @@ def main() -> int:
     if cmd == "set":
         _set(data, args.key, parse_literal(args.value))
         _save_config(path, data)
-        _sync_tools_domains(path, data)
+        _run_config_callbacks_after_save()
         print(f"Set {args.key} in {path}")
         return 0
 
