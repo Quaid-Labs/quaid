@@ -955,6 +955,23 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_retrieval_use_hyde_respects_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "useHyde": False
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.retrieval.use_hyde is False
+        finally:
+            config._config = old_config
+
     def test_reload_config_resets_unknown_key_warning_cache(self, tmp_path, capsys):
         import config
         old_config = config._config
