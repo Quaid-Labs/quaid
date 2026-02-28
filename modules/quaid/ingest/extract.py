@@ -398,6 +398,8 @@ def extract_from_transcript(
             allowed_domains = {str(k).strip() for k in domain_defs.keys() if str(k).strip()}
     except Exception:
         allowed_domains = set()
+    if not allowed_domains:
+        logger.warning("[extract] no active domains registered; all extracted facts will be skipped")
     for fact in facts:
         if not isinstance(fact, dict):
             continue
@@ -437,7 +439,7 @@ def extract_from_transcript(
                 "reason": "missing required domains",
             })
             continue
-        invalid_domains = [d for d in domains if allowed_domains and d not in allowed_domains]
+        invalid_domains = [d for d in domains if d not in allowed_domains]
         if invalid_domains:
             logger.warning(
                 "[extract] skipped fact with unsupported domains %s (allowed=%s, fact=%r)",

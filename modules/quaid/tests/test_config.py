@@ -846,6 +846,82 @@ class TestConfigLoading:
         status = contract.on_status(ctx)
         assert status["active_domains"] == 0
 
+    def test_memorydb_contract_prefers_db_domains_and_publishes_to_runtime_config(self, tmp_path):
+        import config
+
+        old_config = config._config
+        config._config = None
+        try:
+            db_path = tmp_path / "data" / "memory.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE domain_registry (
+                        domain TEXT PRIMARY KEY,
+                        description TEXT DEFAULT '',
+                        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+                        created_at TEXT DEFAULT (datetime('now')),
+                        updated_at TEXT DEFAULT (datetime('now'))
+                    )
+                    """
+                )
+                conn.execute("INSERT INTO domain_registry(domain, description, active) VALUES ('customx', 'custom domain', 1)")
+
+            (tmp_path / "plugins" / "memorydb").mkdir(parents=True)
+            (tmp_path / "plugins" / "memorydb" / "plugin.json").write_text(json.dumps({
+                "plugin_api_version": 1,
+                "plugin_id": "memorydb.core",
+                "plugin_type": "datastore",
+                "module": "core.plugins.memorydb_contract",
+                "capabilities": {
+                    "display_name": "MemoryDB",
+                    "contract": {
+                        "init": {"mode": "hook", "handler": "on_init"},
+                        "config": {"mode": "hook", "handler": "on_config"},
+                        "status": {"mode": "hook", "handler": "on_status"},
+                        "dashboard": {"mode": "hook", "handler": "on_dashboard"},
+                        "maintenance": {"mode": "hook", "handler": "on_maintenance"},
+                        "tool_runtime": {"mode": "hook", "handler": "on_tool_runtime"},
+                        "health": {"mode": "hook", "handler": "on_health"},
+                        "tools": {"mode": "declared", "exports": []},
+                        "api": {"mode": "declared", "exports": []},
+                        "events": {"mode": "declared", "exports": []},
+                        "ingest_triggers": {"mode": "declared", "exports": []},
+                        "auth_requirements": {"mode": "declared", "exports": []},
+                        "migrations": {"mode": "declared", "exports": []},
+                        "notifications": {"mode": "declared", "exports": []},
+                    },
+                    "supports_multi_user": True,
+                    "supports_policy_metadata": True,
+                    "supports_redaction": True,
+                },
+            }))
+
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "plugins": {
+                    "enabled": True,
+                    "strict": True,
+                    "apiVersion": 1,
+                    "paths": ["plugins"],
+                    "allowList": ["memorydb.core"],
+                    "slots": {"dataStores": ["memorydb.core"]},
+                },
+                "retrieval": {
+                    "domains": {"technical": "from config only"},
+                },
+            }))
+
+            with patch.dict(os.environ, {"MEMORY_DB_PATH": str(db_path)}, clear=False), \
+                 patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.object(config, "_workspace_root", lambda: tmp_path):
+                cfg = load_config()
+
+            assert cfg.retrieval.domains == {"customx": "custom domain"}
+        finally:
+            config._config = old_config
+
     def test_invalid_adapter_slot_fails_contract_validation(self, tmp_path):
         import config
         old_config = config._config
