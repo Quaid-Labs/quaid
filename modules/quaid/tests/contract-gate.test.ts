@@ -26,6 +26,20 @@ describe("contract gate", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects empty registration names in strict mode", () => {
+    const warn = vi.fn();
+    expect(() =>
+      assertDeclaredRegistration("tools", "   ", new Set(["memory_recall"]), true, warn)
+    ).toThrow(/invalid tools registration: empty name/);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns on empty registration names in non-strict mode", () => {
+    const warn = vi.fn();
+    assertDeclaredRegistration("api", "", new Set(["openclaw_adapter_entry"]), false, warn);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/invalid api registration: empty name/));
+  });
+
   it("accepts extended declared surfaces", () => {
     const warn = vi.fn();
     assertDeclaredRegistration(
