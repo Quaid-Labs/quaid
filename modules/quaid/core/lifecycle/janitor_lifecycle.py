@@ -353,6 +353,16 @@ _DEFAULT_WRITE_RESOURCES: Dict[str, List[str]] = {
     "datastore_cleanup": ["db:memory"],
 }
 
+_ALLOWED_LIFECYCLE_MODULE_PREFIXES: tuple[str, ...] = (
+    "adaptors.",
+    "core.",
+    "datastore.",
+)
+
+
+def _lifecycle_module_allowed(module_name: str) -> bool:
+    return any(module_name.startswith(prefix) for prefix in _ALLOWED_LIFECYCLE_MODULE_PREFIXES)
+
 
 def _register_module_routines(
     registry: LifecycleRegistry,
@@ -417,6 +427,12 @@ def build_default_registry() -> LifecycleRegistry:
     extra_modules_raw = os.environ.get("QUAID_LIFECYCLE_MODULES", "").strip()
     if extra_modules_raw:
         for module_name in [m.strip() for m in extra_modules_raw.split(",") if m.strip()]:
+            if not _lifecycle_module_allowed(module_name):
+                logger.warning(
+                    "Ignoring lifecycle module outside allowed prefixes: %s",
+                    module_name,
+                )
+                continue
             module_specs.append((module_name, []))
 
     # Optional config hook:
@@ -429,6 +445,12 @@ def build_default_registry() -> LifecycleRegistry:
         for module_name in cfg_modules:
             name = str(module_name).strip()
             if not name:
+                continue
+            if not _lifecycle_module_allowed(name):
+                logger.warning(
+                    "Ignoring lifecycle.modules entry outside allowed prefixes: %s",
+                    name,
+                )
                 continue
             module_specs.append((name, []))
     except Exception:
