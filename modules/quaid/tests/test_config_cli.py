@@ -31,6 +31,7 @@ def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tm
     )
 
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+    monkeypatch.setattr(config_cli, "_run_config_callbacks_after_save", lambda: None)
     saved = {}
 
     def _capture_save(save_path, save_data):
@@ -88,6 +89,7 @@ def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeyp
     )
 
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+    monkeypatch.setattr(config_cli, "_run_config_callbacks_after_save", lambda: None)
     saved = {}
 
     def _capture_save(save_path, save_data):
