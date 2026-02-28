@@ -438,8 +438,7 @@ def call_fast_reasoning(prompt: str, max_tokens: int = 200,
 
 def call_deep_reasoning(prompt: str, system_prompt: Optional[str] = None,
                         max_tokens: int = 2000,
-                        timeout: float = DEEP_REASONING_TIMEOUT,
-                        model: Optional[str] = None) -> Tuple[Optional[str], float]:
+                        timeout: float = DEEP_REASONING_TIMEOUT) -> Tuple[Optional[str], float]:
     """Call the deep-reasoning model and return (response text, duration).
 
     Used for: memory review, workspace audit, contradiction resolution, edge extraction.
@@ -447,18 +446,11 @@ def call_deep_reasoning(prompt: str, system_prompt: Optional[str] = None,
     Returns (None, duration) only for transient LLM failures after retries.
     """
     _load_model_config()
-    # Benchmark/operator override: force all deep-tier janitor calls to a
-    # known-safe model when workspace/provider constraints require it.
-    forced_model = str(os.environ.get("QUAID_JANITOR_REVIEW_MODEL", "")).strip()
-    if forced_model:
-        target_model = forced_model
-    else:
-        target_model = model or _deep_reasoning_model
     effective_system_prompt = get_prompt("llm.json_only") if system_prompt is None else system_prompt
     return call_llm(
         system_prompt=effective_system_prompt,
         user_message=prompt,
-        model=target_model,
+        model=_deep_reasoning_model,
         model_tier="deep",
         max_tokens=max_tokens,
         timeout=timeout,
