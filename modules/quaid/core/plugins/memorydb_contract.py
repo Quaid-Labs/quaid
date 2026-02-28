@@ -125,7 +125,7 @@ class MemoryDbPluginContract(PluginContractBase):
         from datastore.memorydb.maintenance import run_memory_graph_maintenance
 
         payload = dict(ctx.payload or {})
-        stage = str(payload.get("subtask", payload.get("stage", "all")) or "all").strip().lower()
+        stage = str(payload.get("subtask", payload.get("stage", "review")) or "review").strip().lower()
         max_items = int(payload.get("max_items", 0) or 0)
         llm_timeout_raw = float(payload.get("llm_timeout_seconds", 0) or 0)
         llm_timeout_seconds = llm_timeout_raw if llm_timeout_raw > 0 else 0.0
