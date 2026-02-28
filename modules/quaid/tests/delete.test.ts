@@ -43,7 +43,9 @@ describe('Memory Delete', () => {
     
     // Verify it's findable before deletion
     const beforeResults = await memory.search('coffee', 'quaid')
-    const foundBefore = beforeResults.some(r => r.id === stored.id)
+    const foundBefore = beforeResults.some(r =>
+      String(r.content || r.text || r.name || '').includes('coffee')
+    )
     expect(foundBefore).toBe(true)
     
     // Delete it

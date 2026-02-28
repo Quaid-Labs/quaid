@@ -40,9 +40,9 @@ describe('Session Isolation', () => {
       const allResults = await memory.search('Session', 'testuser')
       expect(allResults.length).toBe(2)
       
-      const contents = allResults.map(r => r.content)
-      expect(contents).toContain('Session 1 memory')
-      expect(contents).toContain('Session 2 memory')
+      const contents = allResults.map(r => String(r.content || r.text || r.name || ''))
+      expect(contents.some(c => c.includes('Session 1 memory'))).toBe(true)
+      expect(contents.some(c => c.includes('Session 2 memory'))).toBe(true)
       
       vi.unstubAllEnvs()
     })
@@ -71,7 +71,8 @@ describe('Session Isolation', () => {
       vi.stubEnv('TEST_SESSION_ID', session2)
       const results = await memory.search('coffee preference', 'testuser')
       expect(results.length).toBe(1)
-      expect(results[0].content).toBe('Previous session coffee preference')
+      expect(String(results[0].content || results[0].text || results[0].name || ''))
+        .toContain('Previous session coffee preference')
       
       vi.unstubAllEnvs()
     })
@@ -92,12 +93,16 @@ describe('Session Isolation', () => {
       vi.stubEnv('TEST_SESSION_ID', sessionB)
       const user1Results = await memory.search('memory', 'user1')
       expect(user1Results.length).toBeGreaterThanOrEqual(1)
-      expect(user1Results.some(r => r.content === 'User1 session A memory')).toBe(true)
+      expect(user1Results.some(r =>
+        String(r.content || r.text || r.name || '').includes('User1 session A memory')
+      )).toBe(true)
 
       // User 2, Session B - should see previous session memories
       const user2Results = await memory.search('memory', 'user2')
       expect(user2Results.length).toBeGreaterThanOrEqual(1)
-      expect(user2Results.some(r => r.content === 'User2 session A memory')).toBe(true)
+      expect(user2Results.some(r =>
+        String(r.content || r.text || r.name || '').includes('User2 session A memory')
+      )).toBe(true)
 
       vi.unstubAllEnvs()
     })

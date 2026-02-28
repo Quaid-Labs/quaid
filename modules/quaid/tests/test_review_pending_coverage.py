@@ -51,7 +51,7 @@ def test_review_pending_memories_retries_missing_decisions(tmp_path):
         (json.dumps([{"id": n2.id, "action": "KEEP"}]), 0.1),  # Retry covers missing id.
     ]
 
-    with patch("datastore.memorydb.maintenance_ops.call_llm", side_effect=responses):
+    with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", side_effect=responses):
         result = review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
 
     assert result["total_reviewed"] == 2
@@ -77,7 +77,7 @@ def test_review_pending_memories_raises_on_incomplete_coverage_after_retry(tmp_p
         (json.dumps([]), 0.1),  # Retry still missing n2
     ]
 
-    with patch("datastore.memorydb.maintenance_ops.call_llm", side_effect=responses):
+    with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", side_effect=responses):
         with pytest.raises(RuntimeError, match="incomplete decision coverage after retry"):
             review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
 
@@ -99,7 +99,7 @@ def test_review_pending_memories_accepts_wrapped_decisions_payload(tmp_path):
         ]
     }
 
-    with patch("datastore.memorydb.maintenance_ops.call_llm", return_value=(json.dumps(wrapped), 0.1)):
+    with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", return_value=(json.dumps(wrapped), 0.1)):
         result = review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
 
     assert result["total_reviewed"] == 2
@@ -118,7 +118,7 @@ def test_review_pending_memories_aborts_on_connection_errors(tmp_path):
     _add_pending_fact(graph, "My favorite editor is vim")
     metrics = JanitorMetrics()
 
-    with patch("datastore.memorydb.maintenance_ops.call_llm", side_effect=ConnectionError("gateway unavailable")):
+    with patch("datastore.memorydb.maintenance_ops.call_deep_reasoning", side_effect=ConnectionError("gateway unavailable")):
         with pytest.raises(RuntimeError, match="gateway unavailable"):
             review_pending_memories(graph, dry_run=False, metrics=metrics, max_items=10)
     with graph._get_conn() as conn:

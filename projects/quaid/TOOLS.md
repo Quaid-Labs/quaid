@@ -94,6 +94,7 @@ Parameter map:
   - list form example: `["technical","project"]` (defaults to `1.3x` each)
   - map form example: `{"technical": 1.5, "research": 1.2}`
   - boost applies as multiplier to scored matches before final ranking.
+  - guidance: prefer `domainBoost` for broad recall; use strict `domain` filtering only when you are certain non-target domains should be excluded.
 - MCP `memory_recall` path (`core/interface/mcp_server.py`) also supports `domain_json` (stringified JSON object, for example `{"all": true}` or `{"technical": true}`).
 - MCP `memory_recall` also supports `domain_boost_json` (stringified JSON array/object, for example `["technical"]` or `{"technical": 1.4}`).
 - `options.ranking.sourceTypeBoosts` (object): optional source-type weighting.
@@ -101,17 +102,17 @@ Parameter map:
 
 <!-- AUTO-GENERATED:DOMAIN-LIST:START -->
 Available domains (from datastore `domain_registry` active rows):
-- `personal`: identity, preferences, relationships, life events
-- `technical`: code, infra, APIs, architecture
-- `project`: project status, tasks, files, milestones
-- `work`: job/team/process decisions not deeply technical
-- `health`: training, injuries, routines, wellness
 - `finance`: budgeting, purchases, salary, bills
-- `travel`: trips, moves, places, logistics
-- `schedule`: dates, appointments, deadlines
-- `research`: options considered, comparisons, tradeoff analysis
+- `health`: training, injuries, routines, wellness
 - `household`: home, chores, food planning, shared logistics
 - `legal`: contracts, policy, and regulatory constraints
+- `personal`: identity, preferences, relationships, life events
+- `project`: project status, tasks, files, milestones
+- `research`: options considered, comparisons, tradeoff analysis
+- `schedule`: dates, appointments, deadlines
+- `technical`: code, infra, APIs, architecture
+- `travel`: trips, moves, places, logistics
+- `work`: job/team/process decisions not deeply technical
 <!-- AUTO-GENERATED:DOMAIN-LIST:END -->
 
 Domain list maintenance:
