@@ -162,7 +162,7 @@ def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, t
         full_text = False
 
         def should_notify(self, feature, detail=None):
-            return feature == "janitor" and detail == "summary"
+            return feature == "janitor" and detail in {"summary", "full"}
 
     fake_cfg = types.SimpleNamespace(notifications=_Notifications())
     monkeypatch.setattr("config.get_config", lambda: fake_cfg)
@@ -187,6 +187,40 @@ def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, t
     kinds = [str(r.get("kind", "")) for r in requests]
     assert "janitor_summary" in kinds
     assert "janitor_daily_digest" in kinds
+
+
+def test_event_process_janitor_daily_digest_is_independently_gated(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+
+    class _Notifications:
+        full_text = False
+
+        def should_notify(self, feature, detail=None):
+            return feature == "janitor" and detail == "summary"
+
+    fake_cfg = types.SimpleNamespace(notifications=_Notifications())
+    monkeypatch.setattr("config.get_config", lambda: fake_cfg)
+
+    emit_event(
+        name="janitor.run_completed",
+        payload={
+            "metrics": {"total_duration_seconds": 10, "llm_calls": 0, "errors": 0},
+            "applied_changes": {"memories_reviewed": 1},
+            "today_memories": [{"text": "Test memory", "category": "fact"}],
+        },
+        source="pytest",
+    )
+
+    out = process_events(limit=5, names=["janitor.run_completed"])
+    assert out["processed"] >= 1
+    assert out["failed"] == 0
+
+    requests_path = tmp_path / ".quaid" / "runtime" / "notes" / "delayed-llm-requests.json"
+    payload = json.loads(requests_path.read_text(encoding="utf-8"))
+    requests = payload.get("requests") or []
+    kinds = [str(r.get("kind", "")) for r in requests]
+    assert "janitor_summary" in kinds
+    assert "janitor_daily_digest" not in kinds
 
 
 def test_emit_event_caps_queue_length(monkeypatch, tmp_path):
