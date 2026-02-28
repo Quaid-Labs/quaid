@@ -48,3 +48,19 @@ export function validateApiSurface(
   }
   warn(msg);
 }
+
+export function validateApiRegistrations(
+  declaredApi: Set<string>,
+  registeredApi: Set<string>,
+  strict: boolean,
+  warn: (message: string) => void,
+): void {
+  for (const declared of declaredApi) {
+    if (registeredApi.has(declared)) continue;
+    const msg = `[quaid][contract] api declared but not registered at runtime: ${declared}`;
+    if (strict) {
+      throw new Error(msg);
+    }
+    warn(msg);
+  }
+}
