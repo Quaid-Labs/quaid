@@ -63,6 +63,7 @@ Manifest-declared non-executable surfaces:
 Strict-mode behavior:
 - `plugins.strict=true` enforces fail-fast on undeclared tool/event registrations.
 - `plugins.strict=false` downgrades declaration mismatches to warnings.
+- `plugins.strict` is independent from `retrieval.fail_hard`: plugin contract validation vs memory/LLM fail policy.
 
 ## Core Tools and Param Maps
 
