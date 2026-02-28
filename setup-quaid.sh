@@ -1516,6 +1516,13 @@ _write_config() {
   "janitor": {
     "enabled": true,
     "dryRun": false,
+    "applyMode": "auto",
+    "approvalPolicies": {
+      "coreMarkdownWrites": "ask",
+      "projectDocsWrites": "ask",
+      "workspaceFileMovesDeletes": "ask",
+      "destructiveMemoryOps": "auto"
+    },
     "taskTimeoutMinutes": 60,
     "opusReview": {
       "enabled": true,
@@ -1527,7 +1534,7 @@ _write_config() {
       "highSimilarityThreshold": 0.95,
       "autoRejectThreshold": 0.98,
       "grayZoneLow": 0.88,
-      "haikuVerifyEnabled": true
+      "llmVerifyEnabled": true
     },
     "contradiction": {
       "enabled": true,
