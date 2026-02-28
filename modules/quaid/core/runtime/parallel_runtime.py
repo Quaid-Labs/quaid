@@ -122,6 +122,12 @@ class ResourceLockRegistry:
                             os.close(fd)
                             raise TimeoutError(f"file lock timeout for {resource}")
                         time.sleep(min(LOCK_POLL_INTERVAL_SECONDS, remaining))
+                    except Exception:
+                        try:
+                            os.close(fd)
+                        except Exception:
+                            pass
+                        raise
                 acquired_fds.append(fd)
 
             yield
