@@ -128,6 +128,15 @@ def _lifecycle_registry():
     return _LIFECYCLE_REGISTRY
 
 
+def _plugin_maintenance_slots() -> Dict[str, Any]:
+    slots = getattr(getattr(_cfg, "plugins", None), "slots", None)
+    return {
+        "adapter": str(getattr(slots, "adapter", "") or "").strip(),
+        "ingest": list(getattr(slots, "ingest", []) or []),
+        "datastores": list(getattr(slots, "datastores", []) or []),
+    }
+
+
 def _janitor_test_timeout_seconds(default_seconds: int = 600) -> int:
     raw = os.environ.get("QUAID_JANITOR_TEST_TIMEOUT_S", "")
     try:
@@ -927,11 +936,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 if registry is not None and getattr(_cfg, "plugins", None) and _cfg.plugins.enabled:
                     p_errors, p_warnings, p_results = run_plugin_contract_surface_collect(
                         registry=registry,
-                        slots={
-                            "adapter": "",
-                            "ingest": [],
-                            "datastores": list(getattr(_cfg.plugins.slots, "datastores", []) or []),
-                        },
+                        slots=_plugin_maintenance_slots(),
                         surface="maintenance",
                         config=_cfg,
                         plugin_config=dict(getattr(_cfg.plugins, "config", {}) or {}),

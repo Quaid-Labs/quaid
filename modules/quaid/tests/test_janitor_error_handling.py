@@ -18,6 +18,28 @@ def test_default_owner_fallback_when_fail_hard_disabled(monkeypatch):
     assert janitor._default_owner_id() == "default"
 
 
+def test_plugin_maintenance_slots_includes_all_plugin_surfaces(monkeypatch):
+    monkeypatch.setattr(
+        janitor,
+        "_cfg",
+        SimpleNamespace(
+            plugins=SimpleNamespace(
+                slots=SimpleNamespace(
+                    adapter="openclaw.adapter",
+                    ingest=["core.extract"],
+                    datastores=["memorydb.core"],
+                )
+            )
+        ),
+    )
+    slots = janitor._plugin_maintenance_slots()
+    assert slots == {
+        "adapter": "openclaw.adapter",
+        "ingest": ["core.extract"],
+        "datastores": ["memorydb.core"],
+    }
+
+
 def test_default_owner_raises_when_fail_hard_enabled(monkeypatch):
     monkeypatch.setattr(janitor, "_cfg", SimpleNamespace())
     monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
