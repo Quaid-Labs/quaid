@@ -9,16 +9,17 @@ function _resolveTimeoutMs(name: string, fallbackMs: number): number {
   return Math.floor(raw);
 }
 
-const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 120_000); // 2 minutes
+export const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 120_000); // 2 minutes
 
 type PythonBridgeConfig = {
   scriptPath: string;
   dbPath: string;
   workspace: string;
+  pluginRoot?: string;
 };
 
 export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
-  const pluginRoot = path.join(config.workspace, "plugins", "quaid");
+  const pluginRoot = String(config.pluginRoot || "").trim() || path.join(config.workspace, "plugins", "quaid");
   const sep = process.platform === "win32" ? ";" : ":";
   const existingPyPath = String(process.env.PYTHONPATH || "").trim();
   const pythonPath = existingPyPath ? `${pluginRoot}${sep}${existingPyPath}` : pluginRoot;

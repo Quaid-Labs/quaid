@@ -40,13 +40,13 @@
           "memory_recall",
           "memory_store",
           "memory_forget",
-          "session_recall",
-          "session_reset",
-          "session_compact",
-          "project_read",
+          "projects_search",
+          "docs_read",
+          "docs_list",
+          "docs_register",
           "project_create",
-          "project_update",
-          "project_delete"
+          "project_list",
+          "session_recall"
         ]
       },
       "api": {
