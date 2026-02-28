@@ -370,20 +370,6 @@ class MemoryGraph:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity ON entity_aliases(entity_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_aliases_lookup ON entity_aliases(platform, source_id, handle)")
 
-            # Seed/update domain registry from configured defaults.
-            for domain_id, description in _registered_domains().items():
-                conn.execute(
-                    """
-                    INSERT INTO domain_registry(domain, description, active)
-                    VALUES (?, ?, 1)
-                    ON CONFLICT(domain) DO UPDATE SET
-                      description = excluded.description,
-                      active = 1,
-                      updated_at = datetime('now')
-                    """,
-                    (domain_id, description),
-                )
-
             # Default/backfill attribution values for legacy rows.
             conn.execute(
                 """
@@ -582,14 +568,38 @@ class MemoryGraph:
         conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
         if not domains:
             return
-        registered = set(_registered_domains().keys())
+        registered = self._active_domain_set(conn)
+        descriptions = _registered_domains()
         for domain in domains:
             if domain not in registered:
                 continue
             conn.execute(
+                """
+                INSERT OR IGNORE INTO domain_registry(domain, description, active)
+                VALUES (?, ?, 1)
+                """,
+                (domain, descriptions.get(domain, "")),
+            )
+            conn.execute(
                 "INSERT OR IGNORE INTO node_domains(node_id, domain) VALUES (?, ?)",
                 (node_id, domain),
             )
+
+    def _active_domain_set(self, conn: sqlite3.Connection) -> set[str]:
+        try:
+            rows = conn.execute(
+                "SELECT domain FROM domain_registry WHERE active = 1"
+            ).fetchall()
+            active = {
+                d
+                for d in (_normalize_domain_tag(r[0]) for r in rows)
+                if d
+            }
+            if active:
+                return active
+        except Exception:
+            pass
+        return set(_registered_domains().keys())
 
     # ==========================================================================
     # Node Operations
@@ -3184,7 +3194,27 @@ def _domains_from_attrs(attrs: Any) -> List[str]:
     return _normalize_domains(attrs.get("domains"))
 
 
-def _normalize_domain_filter(value: Any) -> Tuple[bool, set[str]]:
+def _active_domains_for_filter(graph: Optional["MemoryGraph"] = None) -> set[str]:
+    """Resolve active domains from DB first, config fallback second."""
+    if graph is not None:
+        try:
+            with graph._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT domain FROM domain_registry WHERE active = 1"
+                ).fetchall()
+            active = {
+                d
+                for d in (_normalize_domain_tag(r[0]) for r in rows)
+                if d
+            }
+            if active:
+                return active
+        except Exception:
+            pass
+    return set(_registered_domains().keys())
+
+
+def _normalize_domain_filter(value: Any, allowed_domains: Optional[set[str]] = None) -> Tuple[bool, set[str]]:
     """Normalize recall domain filter map.
 
     Returns:
@@ -3197,7 +3227,7 @@ def _normalize_domain_filter(value: Any) -> Tuple[bool, set[str]]:
         for k, v in value.items()
         if bool(v) and _normalize_domain_tag(k) and _normalize_domain_tag(k) != "all"
     }
-    registered = set(_registered_domains().keys())
+    registered = set(allowed_domains or _registered_domains().keys())
     include = {d for d in requested if d in registered}
 
     # If caller asked for domain filtering but only supplied unknown keys
@@ -3300,7 +3330,10 @@ def recall(
     if privacy is None:
         privacy = ["private", "shared", "public"]
     graph = get_graph()
-    include_all_domains, included_domains = _normalize_domain_filter(domain)
+    include_all_domains, included_domains = _normalize_domain_filter(
+        domain,
+        _active_domains_for_filter(graph),
+    )
     requested_project = _normalize_project_tag(project)
 
     # Strip gateway metadata from query (e.g. "[Telegram User id:...] actual message")
