@@ -1954,7 +1954,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     janitor: {
       enabled: true,
       dryRun: false,
-      applyMode: "auto",
+      applyMode: models.janitorAskFirst ? "ask" : "auto",
       approvalPolicies: policies,
       taskTimeoutMinutes: 60,
       opusReview: { enabled: true, batchSize: 50, maxTokens: 4000 },
