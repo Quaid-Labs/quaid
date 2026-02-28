@@ -1243,7 +1243,7 @@ GITIGNORE
 import os, sys
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from memory_graph import store
+from datastore.memorydb.memory_graph import store
 try:
     store('${OWNER_DISPLAY}', owner_id='${OWNER_NAME}', category='person', source='installer')
     print('[+] Person node created for ${OWNER_DISPLAY}')
@@ -1298,7 +1298,7 @@ PROJEOF
 import os, sys
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from docs_registry import DocsRegistry
+from datastore.docsdb.registry import DocsRegistry
 reg = DocsRegistry()
 try:
     reg.create_project('quaid', label='Quaid Knowledge Layer', description='Knowledge layer reference docs and agent instructions.')
@@ -1689,7 +1689,7 @@ conn.close()
 import os, sys
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from memory_graph import store, recall
+from datastore.memorydb.memory_graph import store, recall
 
 # Store a test fact
 node_id = store('Quaid installer smoke test fact', owner_id='${OWNER_NAME}', category='fact', source='installer-test')
