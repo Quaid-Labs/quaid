@@ -9,6 +9,8 @@ from core.runtime.plugins import (
     PluginRegistry,
     collect_declared_exports,
     discover_plugin_manifests,
+    get_runtime_errors,
+    get_runtime_warnings,
     initialize_plugin_runtime,
     reset_plugin_runtime,
     run_plugin_contract_surface_collect,
@@ -359,6 +361,37 @@ def test_initialize_plugin_runtime_non_strict_collects_slot_errors(tmp_path: Pat
     assert registry.get("adapter.a") is not None
     assert any("expected type 'datastore'" in msg for msg in errors)
     assert any("unknown plugin_id 'missing.ingest'" in msg for msg in errors)
+
+
+def test_runtime_diagnostics_accessors_reflect_latest_initialize(tmp_path: Path):
+    reset_plugin_runtime()
+    plugins_dir = tmp_path / "plugins"
+    adapter_dir = plugins_dir / "adapter-a"
+    adapter_dir.mkdir(parents=True)
+    (adapter_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "adapter.a",
+                "plugin_type": "adapter",
+                "module": "adaptors.a",
+                "capabilities": _contract_caps("Adapter A"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    initialize_plugin_runtime(
+        api_version=1,
+        paths=[str(plugins_dir)],
+        strict=False,
+        slots={"datastores": ["adapter.a"]},
+        workspace_root=str(tmp_path),
+    )
+    assert any("expected type 'datastore'" in msg for msg in get_runtime_errors())
+    assert get_runtime_warnings() == []
+    reset_plugin_runtime()
+    assert get_runtime_errors() == []
+    assert get_runtime_warnings() == []
 
 
 def test_registry_register_is_thread_safe():
