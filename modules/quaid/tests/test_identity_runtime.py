@@ -61,14 +61,19 @@ def test_filter_recall_results_accepts_structured_policy_decisions(monkeypatch):
     )
     identity_runtime.register_privacy_policy(
         "memorydb",
-        lambda _viewer, row, _ctx: {"action": "allow_redacted"} if row["id"] == "1" else {"action": "deny"},
+        lambda _viewer, row, _ctx: (
+            {"action": "allow_redacted", "redact_fields": ["speaker"]}
+            if row["id"] == "1"
+            else {"action": "deny"}
+        ),
     )
     out = identity_runtime.filter_recall_results(
         viewer_entity_id="user:a",
-        results=[{"id": "1"}, {"id": "2"}],
+        results=[{"id": "1", "speaker": "alice"}, {"id": "2", "speaker": "bob"}],
         context={},
     )
     assert [r["id"] for r in out] == ["1"]
+    assert out[0]["speaker"] == "[REDACTED]"
 
 
 def test_filter_recall_results_denies_invalid_policy_decisions(monkeypatch):
