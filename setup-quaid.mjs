@@ -1271,7 +1271,16 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     fs.rmSync(quaidHookDst, { recursive: true, force: true });
     fs.cpSync(quaidHookSrc, quaidHookDst, { recursive: true });
     log.info("Installed internal hook: quaid-reset-signal");
-    spawnSync("openclaw", ["hooks", "enable", "quaid-reset-signal"], { stdio: "pipe" });
+    const hookCli = canRun("openclaw") ? "openclaw" : (canRun("clawdbot") ? "clawdbot" : "");
+    if (hookCli) {
+      const hookEnable = spawnSync(hookCli, ["hooks", "enable", "quaid-reset-signal"], { stdio: "pipe" });
+      if (hookEnable.status !== 0) {
+        const errOut = String(hookEnable.stderr || hookEnable.stdout || "").trim();
+        log.warn(`Could not auto-enable quaid-reset-signal hook via ${hookCli}: ${errOut || "unknown error"}`);
+      }
+    } else {
+      log.warn("Could not auto-enable quaid-reset-signal hook: no openclaw/clawdbot CLI found in PATH");
+    }
   } else {
     log.warn("quaid-reset-signal hook missing from plugin source");
   }
