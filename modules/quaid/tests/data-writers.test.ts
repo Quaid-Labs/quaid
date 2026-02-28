@@ -113,9 +113,10 @@ describe("data writers", () => {
   });
 
   it("rethrows writer failures when failHard is enabled", async () => {
+    const onError = vi.fn();
     const engine = createDataWriteEngine({
       failHard: true,
-      onError: vi.fn(),
+      onError,
       writers: [{
         spec: {
           datastore: "vector",
@@ -133,5 +134,6 @@ describe("data writers", () => {
       action: "store_fact",
       payload: { text: "Quaid likes espresso" },
     })).rejects.toThrow("hard failure");
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 });
