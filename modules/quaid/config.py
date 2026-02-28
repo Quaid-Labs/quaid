@@ -220,6 +220,7 @@ class RetrievalConfig:
     router_fail_open: bool = True  # If true, total_recall router failures use deterministic fallback recall instead of raising
     fail_hard: bool = True  # If true, embedding outages raise instead of silent degraded fallback
     auto_inject: bool = False  # Auto-inject memories into context (Mem0-style)
+    use_hyde: bool = True  # Enable HyDE query expansion by default
     domains: Dict[str, str] = field(default_factory=dict)  # Domain id -> brief description
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
 
@@ -1091,7 +1092,8 @@ def _load_config_inner() -> MemoryConfig:
         pre_injection_pass=retrieval_data.get('pre_injection_pass', retrieval_data.get('preInjectionPass', True)),
         router_fail_open=bool(retrieval_data.get('router_fail_open', retrieval_data.get('routerFailOpen', True))),
         fail_hard=retrieval_data.get('fail_hard', retrieval_data.get('failHard', True)),
-        auto_inject=retrieval_data.get('auto_inject', False),
+        auto_inject=retrieval_data.get('auto_inject', retrieval_data.get('autoInject', False)),
+        use_hyde=retrieval_data.get('use_hyde', retrieval_data.get('useHyde', True)),
         domains=parsed_domains,
         traversal=traversal,
     )
