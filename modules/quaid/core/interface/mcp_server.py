@@ -69,12 +69,65 @@ mcp = FastMCP("quaid", instructions=(
     "Memories persist across sessions."
 ))
 
+_DECLARED_MCP_TOOLS = {
+    "memory_extract",
+    "memory_store",
+    "memory_recall",
+    "memory_search",
+    "memory_get",
+    "memory_forget",
+    "memory_create_edge",
+    "memory_stats",
+    "projects_search",
+    "session_recall",
+    "memory_provider",
+    "memory_capabilities",
+    "memory_write",
+    "memory_event_emit",
+    "memory_event_list",
+    "memory_event_process",
+    "memory_event_capabilities",
+}
+_REGISTERED_MCP_TOOLS: set[str] = set()
+
+
+def _mcp_contract_strict() -> bool:
+    try:
+        return bool(get_config().plugins.strict)
+    except Exception:
+        return True
+
+
+def _mcp_contract_tool(name: str | None = None):
+    def _decorator(fn):
+        tool_name = name or fn.__name__
+        _REGISTERED_MCP_TOOLS.add(tool_name)
+        return mcp.tool(name=tool_name)(fn)
+
+    return _decorator
+
+
+def _validate_mcp_tool_contract() -> None:
+    missing = sorted(_DECLARED_MCP_TOOLS - _REGISTERED_MCP_TOOLS)
+    undeclared = sorted(_REGISTERED_MCP_TOOLS - _DECLARED_MCP_TOOLS)
+    if not missing and not undeclared:
+        return
+    details: list[str] = []
+    if missing:
+        details.append(f"missing={missing}")
+    if undeclared:
+        details.append(f"undeclared={undeclared}")
+    msg = "MCP tool contract mismatch: " + "; ".join(details)
+    if _mcp_contract_strict():
+        raise RuntimeError(msg)
+    logger.warning(msg)
+
 
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_extract(
     transcript: str,
     label: str = "mcp",
@@ -102,7 +155,7 @@ def memory_extract(
     )
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_store(
     text: str,
     category: str = "fact",
@@ -153,7 +206,7 @@ def memory_store(
     return store(**store_kwargs)
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_recall(
     query: str,
     limit: int = 5,
@@ -268,7 +321,7 @@ def memory_recall(
     )
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_write(
     datastore: str,
     action: str,
@@ -331,7 +384,7 @@ def memory_write(
     return {"error": f"unsupported datastore/action: {ds}/{act}"}
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_search(
     query: str,
     limit: int = 10,
@@ -388,7 +441,7 @@ def _normalize_node_id(node_id: str) -> str | None:
         return None
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_get(node_id: str) -> dict:
     """Get a single memory by its ID.
 
@@ -409,7 +462,7 @@ def memory_get(node_id: str) -> dict:
     return result
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_forget(node_id: str = "", query: str = "") -> dict:
     """Delete a memory by ID or by query match.
 
@@ -437,7 +490,7 @@ def memory_forget(node_id: str = "", query: str = "") -> dict:
     return {"deleted": deleted}
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_create_edge(subject_name: str, relation: str, object_name: str) -> dict:
     """Create a relationship edge between two entities.
 
@@ -460,7 +513,7 @@ def memory_create_edge(subject_name: str, relation: str, object_name: str) -> di
     )
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_stats() -> dict:
     """Get database statistics.
 
@@ -470,7 +523,7 @@ def memory_stats() -> dict:
     return stats()
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def projects_search(query: str, limit: int = 5, project: str = "") -> dict:
     """Search project documentation using semantic RAG search.
 
@@ -489,7 +542,7 @@ def projects_search(query: str, limit: int = 5, project: str = "") -> dict:
     return projects_search_docs(query=query, limit=limit, project=(project or None))
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -> dict:
     """List recent sessions or load a specific session's content.
 
@@ -565,7 +618,7 @@ def session_recall(action: str = "list", session_id: str = "", limit: int = 5) -
     return {"error": "Provide action='list' or action='load' with session_id."}
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_provider() -> str:
     """Show current LLM and embeddings provider status.
 
@@ -596,7 +649,7 @@ def memory_provider() -> str:
     }, indent=2)
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_capabilities() -> dict:
     """Return read/write/event capabilities for runtime orchestration."""
     from core.runtime.events import get_event_registry
@@ -633,7 +686,7 @@ def memory_capabilities() -> dict:
     }
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_event_emit(
     name: str,
     payload_json: str = "{}",
@@ -695,7 +748,7 @@ def memory_event_emit(
     }
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_event_list(status: str = "pending", limit: int = 20) -> dict:
     """List queued runtime events.
 
@@ -707,7 +760,7 @@ def memory_event_list(status: str = "pending", limit: int = 20) -> dict:
     return {"events": list_events(status=status, limit=max(1, min(limit, 200)))}
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_event_process(limit: int = 20, names_csv: str = "") -> dict:
     """Process pending events with registered handlers.
 
@@ -720,7 +773,7 @@ def memory_event_process(limit: int = 20, names_csv: str = "") -> dict:
     return process_events(limit=max(1, min(limit, 200)), names=names)
 
 
-@mcp.tool()
+@_mcp_contract_tool()
 def memory_event_capabilities() -> dict:
     """List event capabilities this runtime can emit/process/listen to.
 
@@ -728,6 +781,10 @@ def memory_event_capabilities() -> dict:
     """
     from core.runtime.events import get_event_registry
     return {"events": get_event_registry()}
+
+
+# Validate the declared MCP contract surface at import time.
+_validate_mcp_tool_contract()
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,7 @@ Strict-mode behavior:
 - `plugins.strict=true` enforces fail-fast on undeclared tool/event registrations.
 - `plugins.strict=false` downgrades declaration mismatches to warnings.
 - `plugins.strict` is independent from `retrieval.fail_hard`: plugin contract validation vs memory/LLM fail policy.
+- MCP tool contract is declaration-validated at server startup (`core/interface/mcp_server.py`); strict mode raises on drift, non-strict logs warnings.
 
 ## Core Tools and Param Maps
 
