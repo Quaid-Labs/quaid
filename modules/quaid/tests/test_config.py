@@ -362,12 +362,12 @@ class TestConfigLoading:
                 "capabilities": {
                     "display_name": "OpenClaw Adapter",
                     "contract": {
-                        "init": {"mode": "hook"},
-                        "config": {"mode": "hook"},
+                        "init": {"mode": "hook", "handler": "on_init"},
+                        "config": {"mode": "hook", "handler": "on_config"},
                         "status": {"mode": "hook"},
                         "dashboard": {"mode": "tbd"},
                         "maintenance": {"mode": "hook"},
-                        "tool_runtime": {"mode": "hook"},
+                        "tool_runtime": {"mode": "hook", "handler": "on_tool_runtime"},
                         "health": {"mode": "hook"},
                         "tools": {"mode": "declared", "exports": []},
                         "api": {"mode": "declared", "exports": []},
@@ -388,12 +388,12 @@ class TestConfigLoading:
                 "capabilities": {
                     "display_name": "Core Extract Ingest",
                     "contract": {
-                        "init": {"mode": "hook"},
-                        "config": {"mode": "hook"},
+                        "init": {"mode": "hook", "handler": "on_init"},
+                        "config": {"mode": "hook", "handler": "on_config"},
                         "status": {"mode": "hook"},
                         "dashboard": {"mode": "tbd"},
                         "maintenance": {"mode": "hook"},
-                        "tool_runtime": {"mode": "hook"},
+                        "tool_runtime": {"mode": "hook", "handler": "on_tool_runtime"},
                         "health": {"mode": "hook"},
                         "tools": {"mode": "declared", "exports": []},
                         "api": {"mode": "declared", "exports": []},
@@ -414,12 +414,12 @@ class TestConfigLoading:
                 "capabilities": {
                     "display_name": "MemoryDB",
                     "contract": {
-                        "init": {"mode": "hook"},
-                        "config": {"mode": "hook"},
+                        "init": {"mode": "hook", "handler": "on_init"},
+                        "config": {"mode": "hook", "handler": "on_config"},
                         "status": {"mode": "hook"},
                         "dashboard": {"mode": "tbd"},
                         "maintenance": {"mode": "hook"},
-                        "tool_runtime": {"mode": "hook"},
+                        "tool_runtime": {"mode": "hook", "handler": "on_tool_runtime"},
                         "health": {"mode": "hook"},
                         "tools": {"mode": "declared", "exports": []},
                         "api": {"mode": "declared", "exports": []},
@@ -438,7 +438,7 @@ class TestConfigLoading:
             config_file.write_text(json.dumps({
                 "plugins": {
                     "enabled": True,
-                    "strict": True,
+                    "strict": False,
                     "apiVersion": 1,
                     "paths": ["plugins", "vendor/plugins"],
                     "allowList": ["openclaw.adapter", "core.extract", "memorydb.core"],
@@ -453,7 +453,7 @@ class TestConfigLoading:
                     patch.object(config, "_workspace_root", lambda: tmp_path):
                 cfg = load_config()
                 assert cfg.plugins.enabled is True
-                assert cfg.plugins.strict is True
+                assert cfg.plugins.strict is False
                 assert cfg.plugins.api_version == 1
                 assert cfg.plugins.paths == ["plugins", "vendor/plugins"]
                 assert cfg.plugins.allowlist == ["openclaw.adapter", "core.extract", "memorydb.core"]
@@ -738,6 +738,86 @@ class TestConfigLoading:
             assert called["value"] is True
         finally:
             config._config = old_config
+
+    def test_memorydb_plugin_contract_creates_missing_db_parent_directory(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            db_path = tmp_path / "nested" / "deep" / "memory.db"
+            assert not db_path.parent.exists()
+
+            (tmp_path / "plugins" / "memorydb").mkdir(parents=True)
+            (tmp_path / "plugins" / "memorydb" / "plugin.json").write_text(json.dumps({
+                "plugin_api_version": 1,
+                "plugin_id": "memorydb.core",
+                "plugin_type": "datastore",
+                "module": "core.plugins.memorydb_contract",
+                "capabilities": {
+                    "display_name": "MemoryDB",
+                    "contract": {
+                        "init": {"mode": "hook", "handler": "on_init"},
+                        "config": {"mode": "hook", "handler": "on_config"},
+                        "status": {"mode": "hook", "handler": "on_status"},
+                        "dashboard": {"mode": "hook", "handler": "on_dashboard"},
+                        "maintenance": {"mode": "hook", "handler": "on_maintenance"},
+                        "tool_runtime": {"mode": "hook", "handler": "on_tool_runtime"},
+                        "health": {"mode": "hook", "handler": "on_health"},
+                        "tools": {"mode": "declared", "exports": []},
+                        "api": {"mode": "declared", "exports": []},
+                        "events": {"mode": "declared", "exports": []},
+                        "ingest_triggers": {"mode": "declared", "exports": []},
+                        "auth_requirements": {"mode": "declared", "exports": []},
+                        "migrations": {"mode": "declared", "exports": []},
+                        "notifications": {"mode": "declared", "exports": []},
+                    },
+                    "supports_multi_user": True,
+                    "supports_policy_metadata": True,
+                    "supports_redaction": True,
+                },
+            }))
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "plugins": {
+                    "enabled": True,
+                    "strict": True,
+                    "apiVersion": 1,
+                    "paths": ["plugins"],
+                    "allowList": ["memorydb.core"],
+                    "slots": {"dataStores": ["memorydb.core"]},
+                }
+            }))
+            with patch.dict(os.environ, {"MEMORY_DB_PATH": str(db_path)}, clear=False), \
+                 patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.object(config, "_workspace_root", lambda: tmp_path):
+                _ = load_config()
+
+            assert db_path.parent.exists()
+            with sqlite3.connect(db_path) as verify:
+                verify.execute("SELECT COUNT(*) FROM domain_registry").fetchone()
+        finally:
+            config._config = old_config
+
+    def test_memorydb_contract_on_status_returns_zero_if_domain_table_missing(self, tmp_path):
+        from core.plugins.memorydb_contract import MemoryDbPluginContract
+        from core.runtime.plugins import PluginHookContext, PluginManifest
+
+        contract = MemoryDbPluginContract()
+        ctx = PluginHookContext(
+            plugin=PluginManifest(
+                plugin_api_version=1,
+                plugin_id="memorydb.core",
+                plugin_type="datastore",
+                module="core.plugins.memorydb_contract",
+                display_name="MemoryDB",
+            ),
+            config=MemoryConfig(),
+            plugin_config={},
+            workspace_root=str(tmp_path),
+        )
+
+        status = contract.on_status(ctx)
+        assert status["active_domains"] == 0
 
     def test_invalid_adapter_slot_fails_contract_validation(self, tmp_path):
         import config

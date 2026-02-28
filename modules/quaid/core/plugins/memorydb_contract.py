@@ -7,6 +7,7 @@ are implemented here and invoked by core plugin contract execution.
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 from typing import Dict
 
@@ -56,6 +57,7 @@ def _resolve_domains(ctx: PluginHookContext) -> Dict[str, str]:
 def _sync_domains(ctx: PluginHookContext) -> None:
     domains = _resolve_domains(ctx)
     db_path = _resolve_db_path(ctx)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     with get_connection(db_path) as conn:
         conn.execute(
             """
@@ -110,9 +112,12 @@ class MemoryDbPluginContract(PluginContractBase):
 
     def on_status(self, ctx: PluginHookContext) -> dict:
         db_path = _resolve_db_path(ctx)
-        with get_connection(db_path) as conn:
-            row = conn.execute("SELECT COUNT(*) AS c FROM domain_registry WHERE active = 1").fetchone()
-        return {"active_domains": int(row[0] if row else 0)}
+        try:
+            with get_connection(db_path) as conn:
+                row = conn.execute("SELECT COUNT(*) AS c FROM domain_registry WHERE active = 1").fetchone()
+            return {"active_domains": int(row[0] if row else 0)}
+        except sqlite3.OperationalError:
+            return {"active_domains": 0}
 
     def on_dashboard(self, ctx: PluginHookContext) -> dict:
         _ = ctx
