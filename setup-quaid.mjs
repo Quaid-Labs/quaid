@@ -1400,8 +1400,21 @@ print('[+] MemoryDB domain init complete')
     }
     // Initial commit so git diff/log have a baseline
     spawnSync("git", ["add", "-A"], { cwd: WORKSPACE, stdio: "pipe" });
-    spawnSync("git", ["commit", "-m", "Initial Quaid workspace"], { cwd: WORKSPACE, stdio: "pipe" });
-    s.stop(C.green("Git repository initialized"));
+    const initCommit = spawnSync("git", ["commit", "-m", "Initial Quaid workspace"], { cwd: WORKSPACE, stdio: "pipe" });
+    if (initCommit.status !== 0) {
+      const fallbackCommit = spawnSync(
+        "git",
+        ["-c", "user.name=Quaid Installer", "-c", "user.email=installer@local", "commit", "-m", "Initial Quaid workspace"],
+        { cwd: WORKSPACE, stdio: "pipe" },
+      );
+      if (fallbackCommit.status !== 0) {
+        s.stop(C.yellow("Git initialized (baseline commit skipped: identity not configured)"));
+      } else {
+        s.stop(C.green("Git repository initialized"));
+      }
+    } else {
+      s.stop(C.green("Git repository initialized"));
+    }
   } else {
     log.info("Git repository already exists");
   }
