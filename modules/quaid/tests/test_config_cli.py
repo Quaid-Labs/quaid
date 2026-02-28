@@ -69,6 +69,13 @@ def test_set_supports_plugin_config_dotted_plugin_id_as_atomic_key():
     assert data["plugins"]["config"]["memorydb.core"]["domains"]["technical"] == "Technical"
 
 
+def test_set_raises_when_intermediate_path_is_not_object():
+    data = {"retrieval": {"domains": "invalid"}}
+    with pytest.raises(ValueError, match="intermediate path 'domains' is not an object"):
+        config_cli._set(data, "retrieval.domains.technical", True)
+    assert data["retrieval"]["domains"] == "invalid"
+
+
 def test_get_supports_explicit_segments_for_dotted_plugin_id():
     data = {"plugins": {"config": {"memorydb.core": {"enabled": True}}}}
     out = config_cli._get(data, ["plugins", "config", "memorydb.core"], {})

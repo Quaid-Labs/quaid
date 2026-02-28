@@ -1894,6 +1894,7 @@ async function tryBrewInstall(pkg, label) {
 }
 
 function writeConfig(owner, models, embeddings, systems, janitorPolicies = null) {
+  const resolvedAdapterType = models.adapterType || (IS_OPENCLAW ? "openclaw" : "standalone");
   const policies = janitorPolicies || {
     coreMarkdownWrites: "ask",
     projectDocsWrites: "ask",
@@ -1901,7 +1902,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     destructiveMemoryOps: "auto",
   };
   const config = {
-    adapter: { type: models.adapterType || (IS_OPENCLAW ? "openclaw" : "standalone") },
+    adapter: { type: resolvedAdapterType },
     plugins: {
       enabled: true,
       strict: true,
@@ -1909,7 +1910,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       paths: ["plugins"],
       allowList: ["memorydb.core", "core.extract", "openclaw.adapter"],
       slots: {
-        adapter: IS_OPENCLAW ? "openclaw.adapter" : "",
+        adapter: resolvedAdapterType === "openclaw" ? "openclaw.adapter" : "",
         ingest: ["core.extract"],
         dataStores: ["memorydb.core"],
       },
