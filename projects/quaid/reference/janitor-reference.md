@@ -418,7 +418,7 @@ Settings are driven by `config/memory.json`. Key sections used by the janitor:
 
 Model names are resolved from `config/memory.json` by model tier, then routed through adapter/provider dispatch using active gateway provider/auth state.
 
-**Owner name:** The `SystemsConfig.ownerName` value is injected into all LLM prompts that reference the memory owner. This replaces previously hardcoded name references, making the janitor portable across installations.
+**Owner identity:** The `users.default_owner` config value is injected into all LLM prompts that reference the memory owner. This replaces previously hardcoded owner references, making the janitor portable across installations.
 
 **Config availability:** The `cfg` object must be propagated to all tasks that need it. Infrastructure tasks like Task 8 (tests) also depend on config for path resolution and feature flags — ensure the config object is passed through correctly when adding new tasks.
 
