@@ -1111,6 +1111,16 @@ async function callConfiguredLLM(
   const resolved = resolveTierModel(modelTier);
   const provider = normalizeProvider(resolved.provider);
   const started = Date.now();
+  let sessionKey: string | undefined;
+  try {
+    sessionKey = _ensureGatewaySessionOverride(modelTier, resolved);
+  } catch (err: unknown) {
+    const msg = String((err as Error)?.message || err);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
+    console.warn(`[quaid][llm] gateway session override unavailable; continuing without session_id: ${msg}`);
+  }
 
   console.log(
     `[quaid][llm] request tier=${modelTier} provider=${provider} model=${resolved.model} max_tokens=${maxTokens} system_len=${systemPrompt.length} user_len=${userMessage.length}`
@@ -1177,6 +1187,7 @@ async function callConfiguredLLM(
           ],
           max_output_tokens: maxTokens,
           stream: false,
+          ...(sessionKey ? { session_id: sessionKey } : {}),
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });

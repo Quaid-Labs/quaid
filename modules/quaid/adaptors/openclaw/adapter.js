@@ -10,7 +10,12 @@ import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
-import { assertDeclaredRegistration, normalizeDeclaredExports, validateApiRegistrations, validateApiSurface } from "./contract-gate.js";
+import {
+  assertDeclaredRegistration,
+  normalizeDeclaredExports,
+  validateApiRegistrations,
+  validateApiSurface
+} from "./contract-gate.js";
 function _resolveWorkspace() {
   const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
   if (envWorkspace) {
@@ -963,6 +968,16 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
   const resolved = resolveTierModel(modelTier);
   const provider = normalizeProvider(resolved.provider);
   const started = Date.now();
+  let sessionKey;
+  try {
+    sessionKey = _ensureGatewaySessionOverride(modelTier, resolved);
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (isFailHardEnabled()) {
+      throw err;
+    }
+    console.warn(`[quaid][llm] gateway session override unavailable; continuing without session_id: ${msg}`);
+  }
   console.log(
     `[quaid][llm] request tier=${modelTier} provider=${provider} model=${resolved.model} max_tokens=${maxTokens} system_len=${systemPrompt.length} user_len=${userMessage.length}`
   );
@@ -1017,7 +1032,8 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
             { type: "message", role: "user", content: userMessage }
           ],
           max_output_tokens: maxTokens,
-          stream: false
+          stream: false,
+          ...sessionKey ? { session_id: sessionKey } : {}
         }),
         signal: AbortSignal.timeout(timeoutMs)
       });
