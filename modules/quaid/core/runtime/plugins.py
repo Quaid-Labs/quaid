@@ -401,6 +401,41 @@ def _validate_declared_export_conflicts(
             errors.append(msg)
 
 
+def _validate_plugin_dependencies(
+    registry: PluginRegistry,
+    *,
+    slots: Dict[str, Any],
+    strict: bool,
+    errors: List[str],
+) -> None:
+    active_ids = _iter_active_plugin_ids(slots, registry=registry)
+    active_set = set(active_ids)
+    for plugin_id in active_ids:
+        rec = registry.get(plugin_id)
+        if rec is None:
+            continue
+        for dep in rec.manifest.dependencies:
+            dep_id = str(dep or "").strip()
+            if not dep_id:
+                continue
+            dep_rec = registry.get(dep_id)
+            if dep_rec is None:
+                msg = (
+                    f"Plugin '{plugin_id}' depends on unknown plugin_id '{dep_id}'"
+                )
+                if strict:
+                    raise ValueError(msg)
+                errors.append(msg)
+                continue
+            if dep_id not in active_set:
+                msg = (
+                    f"Plugin '{plugin_id}' depends on inactive plugin_id '{dep_id}'"
+                )
+                if strict:
+                    raise ValueError(msg)
+                errors.append(msg)
+
+
 def initialize_plugin_runtime(
     *,
     api_version: int,
@@ -464,6 +499,12 @@ def initialize_plugin_runtime(
             errors=errors,
         )
     _validate_declared_export_conflicts(
+        registry,
+        slots=slot_data,
+        strict=strict,
+        errors=errors,
+    )
+    _validate_plugin_dependencies(
         registry,
         slots=slot_data,
         strict=strict,
