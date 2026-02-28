@@ -58,3 +58,61 @@ def test_scheduler_respects_requested_worker_cap():
         assert scheduler._caps[workload] <= 16
     finally:
         scheduler.shutdown(wait=False)
+
+
+def test_scheduler_retries_only_incomplete_items_after_timeout():
+    scheduler = GlobalLlmScheduler(max_workers=8)
+    workload = "test.retry_remaining_only"
+    calls = {}
+
+    def _fn(item: int) -> int:
+        calls[item] = calls.get(item, 0) + 1
+        if item == 0 and calls[item] == 1:
+            time.sleep(0.05)
+        return item
+
+    try:
+        out = scheduler.run_map(
+            workload_key=workload,
+            items=[0, 1, 2],
+            fn=_fn,
+            configured_workers=8,
+            requested_workers=2,
+            timeout_seconds=0.01,
+            timeout_retries=1,
+        )
+        assert out == [0, 1, 2]
+        # Fast items should not re-run on retry; timed-out item can run again.
+        assert calls[1] == 1
+        assert calls[2] == 1
+        assert calls[0] == 2
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+def test_scheduler_cancels_pending_on_worker_error():
+    scheduler = GlobalLlmScheduler(max_workers=8)
+    workload = "test.cancel_on_error"
+    started = []
+
+    def _fn(item: int) -> int:
+        started.append(item)
+        if item == 0:
+            raise RuntimeError("boom")
+        time.sleep(0.05)
+        return item
+
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            scheduler.run_map(
+                workload_key=workload,
+                items=[0, 1, 2],
+                fn=_fn,
+                configured_workers=8,
+                requested_workers=1,
+                timeout_seconds=1.0,
+                timeout_retries=0,
+            )
+        assert started == [0]
+    finally:
+        scheduler.shutdown(wait=False)
