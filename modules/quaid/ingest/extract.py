@@ -41,6 +41,7 @@ from lib.runtime_context import (
 )
 from lib.fail_policy import is_fail_hard_enabled
 from prompt_sets import get_prompt
+from lib.domain_text import normalize_domain_id
 
 logger = logging.getLogger(__name__)
 _memory = get_memory_service()
@@ -432,7 +433,8 @@ def extract_from_transcript(
             domains = [domains]
         if not isinstance(domains, list):
             domains = []
-        domains = [str(d).strip() for d in domains if str(d).strip()]
+        domains = [normalize_domain_id(d) for d in domains if str(d).strip()]
+        domains = [d for d in domains if d]
         if not domains:
             logger.warning(
                 "[extract] skipped fact with missing required domains array (fact=%r)",

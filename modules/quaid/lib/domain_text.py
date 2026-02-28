@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Optional
 
 _DOMAIN_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
@@ -11,10 +12,6 @@ _BLOCKED_DESC_PATTERNS = [
     re.compile(r"system\s+prompt", re.IGNORECASE),
     re.compile(r"you\s+are\s+now", re.IGNORECASE),
 ]
-_MARKER_TOKENS = (
-    "<!-- AUTO-GENERATED:DOMAIN-LIST:START -->",
-    "<!-- AUTO-GENERATED:DOMAIN-LIST:END -->",
-)
 MAX_DOMAIN_DESCRIPTION_CHARS = 200
 
 
@@ -30,13 +27,11 @@ def normalize_domain_id(value: object) -> Optional[str]:
 
 
 def sanitize_domain_description(value: object, *, max_chars: int = MAX_DOMAIN_DESCRIPTION_CHARS) -> str:
-    text = str(value or "").strip()
+    text = unicodedata.normalize("NFKC", str(value or "")).strip()
     text = text.replace("`", "'")
     text = re.sub(r"[\r\n\t]+", " ", text)
     text = text.replace("<!--", "").replace("-->", "")
     text = re.sub(r"\s+", " ", text).strip()
-    for marker in _MARKER_TOKENS:
-        text = text.replace(marker, "")
     for pattern in _BLOCKED_DESC_PATTERNS:
         if pattern.search(text):
             raise ValueError("Domain description contains unsafe instruction-like content")

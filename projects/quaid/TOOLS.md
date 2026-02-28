@@ -90,7 +90,12 @@ Parameter map:
   - default: `{"all": true}` (all tagged + untagged memories)
   - strict example: `{"technical": true}` (only technical-tagged memories)
   - rule: if any domain key is `true`, `all` is ignored and only true domains are included.
+- `options.filters.domainBoost` (array|string->number map, optional): preferential scoring boost by domain.
+  - list form example: `["technical","project"]` (defaults to `1.3x` each)
+  - map form example: `{"technical": 1.5, "research": 1.2}`
+  - boost applies as multiplier to scored matches before final ranking.
 - MCP `memory_recall` path (`core/interface/mcp_server.py`) also supports `domain_json` (stringified JSON object, for example `{"all": true}` or `{"technical": true}`).
+- MCP `memory_recall` also supports `domain_boost_json` (stringified JSON array/object, for example `["technical"]` or `{"technical": 1.4}`).
 - `options.ranking.sourceTypeBoosts` (object): optional source-type weighting.
 - `options.datastoreOptions.<store>`: per-store options.
 
