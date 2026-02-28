@@ -593,7 +593,7 @@ class TestArchiveNode:
         from lib.archive import archive_node
 
         # Invalid path that can't be created
-        with patch("lib.archive.is_fail_hard_enabled", return_value=False):
+        with patch("datastore.memorydb.archive_store.is_fail_hard_enabled", return_value=False):
             result = archive_node({"id": "x"}, "test", db_path=Path("/nonexistent/deeply/nested/dir/archive.db"))
         assert result is False
 

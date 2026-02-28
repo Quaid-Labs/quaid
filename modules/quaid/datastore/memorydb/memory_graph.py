@@ -5545,7 +5545,7 @@ if __name__ == "__main__":
             query = " ".join(args.query)
 
             if args.archive:
-                from lib.archive import search_archive as _search_archive
+                from datastore.memorydb.archive_store import search_archive as _search_archive
                 archive_results = _search_archive(query, limit=args.limit)
                 if args.json:
                     out = []
