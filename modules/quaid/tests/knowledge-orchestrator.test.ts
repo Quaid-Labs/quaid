@@ -330,7 +330,7 @@ describe("knowledge orchestrator", () => {
       },
     });
 
-    expect(recallVector).toHaveBeenCalledWith("api limits", 3, { technical: true }, undefined, undefined, undefined);
+    expect(recallVector).toHaveBeenCalledWith("api limits", 3, { technical: true }, undefined, undefined, undefined, undefined);
   });
 
   it("handles total_recall planning within latency budget for mocked dependencies", async () => {

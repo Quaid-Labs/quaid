@@ -2059,6 +2059,7 @@ async function recall(
   expandGraph: boolean = true,
   graphDepth: number = 1,
   domain: DomainFilter = { all: true },
+  domainBoost?: Record<string, number> | string[],
   project?: string,
   dateFrom?: string,
   dateTo?: string
@@ -2066,6 +2067,9 @@ async function recall(
   try {
     const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
     args.push("--domain-filter", JSON.stringify(domain || { all: true }));
+    if (domainBoost && ((Array.isArray(domainBoost) && domainBoost.length > 0) || (!Array.isArray(domainBoost) && Object.keys(domainBoost).length > 0))) {
+      args.push("--domain-boost", JSON.stringify(domainBoost));
+    }
     if (project && String(project).trim()) {
       args.push("--project", String(project).trim());
     }
@@ -2250,7 +2254,7 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
     const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
     return String(llm?.text || "");
   },
-  recallVector: async (query, limit, scope, project, dateFrom, dateTo) => {
+  recallVector: async (query, limit, scope, domainBoost, project, dateFrom, dateTo) => {
     const memoryResults = await recall(
       query,
       limit,
@@ -2259,13 +2263,14 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
       false,
       1,
       scope,
+      domainBoost,
       project,
       dateFrom,
       dateTo
     );
     return memoryResults.map((r) => ({ ...r, via: "vector" as const }));
   },
-  recallGraph: async (query, limit, depth, scope, project, dateFrom, dateTo) => {
+  recallGraph: async (query, limit, depth, scope, domainBoost, project, dateFrom, dateTo) => {
     const graphResults = await recall(
       query,
       limit,
@@ -2274,6 +2279,7 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
       true,
       depth,
       scope,
+      domainBoost,
       project,
       dateFrom,
       dateTo
@@ -2435,6 +2441,7 @@ async function totalRecall(
     intent?: "general" | "agent_actions" | "relationship" | "technical";
     ranking?: { sourceTypeBoosts?: Record<string, number> };
     domain: DomainFilter;
+    domainBoost?: Record<string, number> | string[];
     project?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -2456,6 +2463,7 @@ async function total_recall(
     intent?: "general" | "agent_actions" | "relationship" | "technical";
     ranking?: { sourceTypeBoosts?: Record<string, number> };
     domain: DomainFilter;
+    domainBoost?: Record<string, number> | string[];
     project?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -2473,6 +2481,7 @@ interface RecallOptions {
   expandGraph?: boolean;
   graphDepth?: number;
   domain?: DomainFilter;
+  domainBoost?: Record<string, number> | string[];
   project?: string;
   datastores?: KnowledgeDatastore[];
   routeStores?: boolean;
@@ -3028,6 +3037,10 @@ ${recallStoreGuidance}`,
             })),
             filters: Type.Optional(Type.Object({
               domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean(), description: "Domain filter map. Example: {\"all\":true} or {\"technical\":true}." })),
+              domainBoost: Type.Optional(Type.Union([
+                Type.Array(Type.String({ description: "Domain IDs to boost at default x1.3." })),
+                Type.Object({}, { additionalProperties: Type.Number({ description: "Domain boost multiplier by domain id (e.g. {\"technical\":1.5})." }) }),
+              ])),
               dateFrom: Type.Optional(
                 Type.String({ description: "Only return memories from this date onward (YYYY-MM-DD)." })
               ),
@@ -3096,6 +3109,9 @@ ${recallStoreGuidance}`,
             const domain = (options.filters?.domain && typeof options.filters.domain === "object")
               ? options.filters.domain
               : { all: true };
+            const domainBoost = (Array.isArray(options.filters?.domainBoost) || (options.filters?.domainBoost && typeof options.filters.domainBoost === "object"))
+              ? options.filters?.domainBoost as Record<string, number> | string[]
+              : undefined;
             const dateFrom = options.filters?.dateFrom;
             const dateTo = options.filters?.dateTo;
             const project = options.filters?.project;
@@ -3119,9 +3135,9 @@ ${recallStoreGuidance}`,
             const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
             const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
 
-            console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
+            console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
             const results = await recallMemories({
-              query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, domain,
+              query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, domain, domainBoost,
               project, datastoreOptions,
               failOpen: routerFailOpen,
               dateFrom, dateTo, docs, waitForExtraction: true, sourceTag: "tool"
@@ -3790,12 +3806,12 @@ notify_docs_search(data['query'], data['results'])
     async function recallMemories(opts: RecallOptions): Promise<MemoryResult[]> {
       const {
         query, limit = 10, expandGraph = false,
-        graphDepth = 1, datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, domain = { all: true }, project, dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown"
+        graphDepth = 1, datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, domain = { all: true }, domainBoost, project, dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown"
       } = opts;
       const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
 
       console.log(
-        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} domain=${JSON.stringify(domain)} project=${project || "any"} waitForExtraction=${waitForExtraction}`
+        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} domain=${JSON.stringify(domain)} domainBoost=${JSON.stringify(domainBoost || {})} project=${project || "any"} waitForExtraction=${waitForExtraction}`
       );
 
       // Wait for in-flight extraction if requested
@@ -3828,6 +3844,7 @@ notify_docs_search(data['query'], data['results'])
             intent,
             ranking,
             domain,
+            domainBoost,
             project,
             dateFrom,
             dateTo,
@@ -3842,6 +3859,7 @@ notify_docs_search(data['query'], data['results'])
           intent,
           ranking,
           domain,
+          domainBoost,
           project,
           dateFrom,
           dateTo,

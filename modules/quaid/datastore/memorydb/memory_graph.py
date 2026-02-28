@@ -61,6 +61,7 @@ from datastore.memorydb.domain_registry import (
     normalize_domain_id as _normalize_domain_id,
     sanitize_domain_description as _sanitize_domain_description,
 )
+from lib.domain_runtime import publish_domains_to_runtime_config
 from lib.embeddings import (
     get_embedding as _lib_get_embedding,
     pack_embedding as _lib_pack_embedding,
@@ -2299,6 +2300,7 @@ def graph_aware_recall(
     min_similarity: float = 0.60,
     graph_depth: int = 1,
     domain: Optional[Dict[str, bool]] = None,
+    domain_boost: Optional[List[str]] = None,
     project: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Combined search: vector search + pronoun resolution + bidirectional graph expansion.
@@ -2367,6 +2369,7 @@ def graph_aware_recall(
         owner_id=owner_id,
         min_similarity=min_similarity,
         domain=domain,
+        domain_boost=domain_boost,
         project=project,
     )
     direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
@@ -2469,7 +2472,6 @@ def graph_aware_recall(
 
 _graph: Optional[MemoryGraph] = None
 _graph_lock = threading.Lock()
-_domain_publish_lock = threading.RLock()
 
 def get_graph() -> MemoryGraph:
     """Get singleton graph instance."""
@@ -2513,9 +2515,13 @@ def list_domains(active_only: bool = True) -> List[Dict[str, Any]]:
         did = _normalize_domain_tag(row[0])
         if not did:
             continue
+        try:
+            desc = _sanitize_domain_description(row[1])
+        except Exception:
+            desc = ""
         out.append({
             "domain": did,
-            "description": str(row[1] or "").strip(),
+            "description": desc,
             "active": bool(int(row[2] or 0)),
         })
     return out
@@ -2540,16 +2546,11 @@ def register_domain(domain: str, description: str = "", active: bool = True) -> 
             """,
             (did, desc, 1 if active else 0),
         )
-        if not active:
-            conn.execute("DELETE FROM node_domains WHERE domain = ?", (did,))
         active_domains = _active_domain_map(conn)
     if _HAS_CONFIG:
         try:
             cfg = _get_memory_config()
-            retrieval = getattr(cfg, "retrieval", None)
-            if retrieval is not None:
-                with _domain_publish_lock:
-                    setattr(retrieval, "domains", dict(active_domains))
+            publish_domains_to_runtime_config(cfg, active_domains)
         except Exception as exc:
             logger.warning("register_domain: failed publishing active domains to runtime config: %s", exc)
     try:
@@ -3274,6 +3275,51 @@ def _normalize_domain_filter(value: Any, allowed_domains: Optional[set[str]] = N
     return include_all, set()
 
 
+def _normalize_domain_boost(
+    value: Any,
+    allowed_domains: Optional[set[str]] = None,
+    default_factor: float = 1.3,
+) -> Dict[str, float]:
+    """Normalize optional domain boost input to {domain_id: multiplier}.
+
+    Accepted forms:
+      - list[str]: ["technical", "project"] -> each gets default_factor
+      - dict[str, number|bool|None]: {"technical": 1.5, "project": true}
+        bool/None values use default_factor
+    """
+    out: Dict[str, float] = {}
+    if value is None:
+        return out
+
+    if isinstance(value, dict):
+        items = value.items()
+    else:
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return out
+        items = [(raw, None) for raw in value]
+
+    for raw_key, raw_factor in items:
+        domain_id = _normalize_domain_tag(raw_key)
+        if not domain_id:
+            continue
+        factor = default_factor
+        if raw_factor not in (None, True, False):
+            try:
+                parsed = float(raw_factor)
+                if parsed > 0:
+                    factor = parsed
+            except (TypeError, ValueError):
+                pass
+        factor = max(1.0, min(factor, 2.0))
+        out[domain_id] = factor
+
+    if allowed_domains is not None and allowed_domains:
+        out = {k: v for k, v in out.items() if k in allowed_domains}
+    return out
+
+
 def _normalize_project_tag(value: Optional[str]) -> Optional[str]:
     """Normalize project label."""
     if value is None:
@@ -3311,6 +3357,7 @@ def recall(
     include_unscoped: bool = True,
     debug: bool = False,
     domain: Optional[Dict[str, bool]] = None,
+    domain_boost: Optional[Any] = None,
     project: Optional[str] = None,
     low_signal_retry: bool = True,
 ) -> List[Dict[str, Any]]:
@@ -3362,10 +3409,12 @@ def recall(
     if privacy is None:
         privacy = ["private", "shared", "public"]
     graph = get_graph()
+    active_domains = _active_domains_for_filter(graph)
     include_all_domains, included_domains = _normalize_domain_filter(
         domain,
-        _active_domains_for_filter(graph),
+        active_domains,
     )
+    boosted_domains = _normalize_domain_boost(domain_boost, active_domains, default_factor=1.3)
     requested_project = _normalize_project_tag(project)
 
     # Strip gateway metadata from query (e.g. "[Telegram User id:...] actual message")
@@ -3461,6 +3510,11 @@ def recall(
         if type_boosts and node.type in type_boosts:
             type_boost_applied = type_boosts[node.type]
             composite = min(composite * type_boost_applied, 1.0)
+        if boosted_domains:
+            node_domains = set(_domains_from_attrs(node.attributes if isinstance(node.attributes, dict) else {}))
+            matched_factors = [boosted_domains[d] for d in node_domains if d in boosted_domains]
+            if matched_factors:
+                composite = min(composite * max(matched_factors), 1.0)
         scored_results.append((node, composite))
 
         if debug:
@@ -3546,6 +3600,11 @@ def recall(
                             )
                             if type_boosts and node.type in type_boosts:
                                 composite = min(composite * type_boosts[node.type], 1.0)
+                            if boosted_domains:
+                                node_domains = set(_domains_from_attrs(node.attributes if isinstance(node.attributes, dict) else {}))
+                                matched_factors = [boosted_domains[d] for d in node_domains if d in boosted_domains]
+                                if matched_factors:
+                                    composite = min(composite * max(matched_factors), 1.0)
                             if composite >= min_similarity:
                                 scored_results.append((node, composite))
                                 existing_ids.add(node.id)
@@ -3948,6 +4007,7 @@ def recall(
                         date_to=date_to,
                         debug=False,
                         domain=domain,
+                        domain_boost=domain_boost,
                         low_signal_retry=False,
                     )
                     if len(retry_output) > len(final_output):
@@ -4546,7 +4606,10 @@ def store(
         node.status = status
     node.embedding = embedding  # Reuse the embedding we already computed
     node.content_hash = text_hash  # Reuse the hash we already computed
-    node_id = graph.add_node(node, embed=False)  # Don't re-embed
+    try:
+        node_id = graph.add_node(node, embed=False)  # Don't re-embed
+    except (ValueError, RuntimeError) as exc:
+        raise ValueError(f"Failed to store memory due to domain validation: {exc}") from exc
 
     result = {"id": node_id, "status": "created"}
     if node.status == "flagged":
@@ -5377,6 +5440,7 @@ if __name__ == "__main__":
         search_p.add_argument("--date-from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
         search_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
         search_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
+        search_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
         search_p.add_argument("--project", default=None, help="Filter by project/domain label")
         search_p.add_argument("--session-id", default=None, help="Filter results to a specific session ID")
         search_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
@@ -5403,6 +5467,7 @@ if __name__ == "__main__":
         search_ga_p.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
         search_ga_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
         search_ga_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
+        search_ga_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
         search_ga_p.add_argument("--project", default=None, help="Filter by project/domain label")
         search_ga_p.add_argument("--json", action="store_true", help="JSON output")
 
@@ -5475,6 +5540,7 @@ if __name__ == "__main__":
         recall_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
         recall_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
         recall_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
+        recall_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
         recall_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
 
@@ -5655,7 +5721,8 @@ if __name__ == "__main__":
                         print("No facts found for this session")
             else:
                 domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
-                results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, current_session_id=args.current_session_id, compaction_time=args.compaction_time, date_from=getattr(args, 'date_from', None), date_to=getattr(args, 'date_to', None), debug=getattr(args, 'debug', False), domain=domain_filter, project=getattr(args, 'project', None))
+                domain_boost = json.loads(getattr(args, "domain_boost", "[]") or "[]")
+                results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, current_session_id=args.current_session_id, compaction_time=args.compaction_time, date_from=getattr(args, 'date_from', None), date_to=getattr(args, 'date_to', None), debug=getattr(args, 'debug', False), domain=domain_filter, domain_boost=domain_boost, project=getattr(args, 'project', None))
                 if args.json:
                     print(json.dumps(results))
                 else:
@@ -5735,7 +5802,7 @@ if __name__ == "__main__":
                     print(f"Duplicate (similarity: {result['similarity']}) [{result['id']}]: {result['existing_text'][:80]}")
                 elif result["status"] == "updated":
                     print(f"Updated existing: {result['id']}")
-            except ValueError as e:
+            except (ValueError, RuntimeError) as e:
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)
 
@@ -5830,6 +5897,7 @@ if __name__ == "__main__":
                 limit=args.limit,
                 graph_depth=args.depth,
                 domain=json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}'),
+                domain_boost=json.loads(getattr(args, "domain_boost", "[]") or "[]"),
                 project=getattr(args, 'project', None),
             )
 
@@ -5949,7 +6017,8 @@ if __name__ == "__main__":
         elif args.command == "recall":
             query = " ".join(args.query)
             domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
-            results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, debug=getattr(args, 'debug', False), domain=domain_filter, project=getattr(args, 'project', None))
+            domain_boost = json.loads(getattr(args, "domain_boost", "[]") or "[]")
+            results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, debug=getattr(args, 'debug', False), domain=domain_filter, domain_boost=domain_boost, project=getattr(args, 'project', None))
 
             for r in results:
                 flags = []

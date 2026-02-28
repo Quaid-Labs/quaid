@@ -14,7 +14,7 @@ Usage:
 
 import logging
 import threading
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 from core.lifecycle.datastore_runtime import DocsRAG
 from core.services.memory_service import get_memory_service
@@ -95,6 +95,7 @@ def recall(
     min_similarity: Optional[float] = None,
     debug: bool = False,
     domain: Optional[Dict[str, bool]] = None,
+    domain_boost: Optional[Union[List[str], Dict[str, float]]] = None,
     use_routing: bool = True,
     use_aliases: bool = True,
     use_intent: bool = True,
@@ -147,6 +148,7 @@ def recall(
         min_similarity=min_similarity,
         debug=debug,
         domain=domain,
+        domain_boost=domain_boost,
         use_routing=use_routing,
         use_aliases=use_aliases,
         use_intent=use_intent,

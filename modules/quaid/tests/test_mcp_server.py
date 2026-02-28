@@ -283,8 +283,15 @@ class TestMemoryRecall:
             owner_id="test-owner",
             limit=5,
             domain={"all": True},
+            domain_boost={},
         )
         assert len(result) == 1
+
+    def test_recall_domain_boost_json_passes_through(self, server):
+        mod, mock_api, *_ = server
+        mod.memory_recall("test", domain_boost_json='{"technical": 1.5}')
+        kwargs = mock_api.recall.call_args.kwargs
+        assert kwargs["domain_boost"] == {"technical": 1.5}
 
     def test_recall_limit_capped_at_20(self, server):
         mod, mock_api, *_ = server
@@ -587,9 +594,8 @@ class TestProvider:
 # ---------------------------------------------------------------------------
 
 class TestErrorHandling:
-    def test_store_valueerror_propagates(self, server):
-        """FastMCP catches exceptions and returns error responses."""
+    def test_store_valueerror_returns_error_dict(self, server):
         mod, mock_api, *_ = server
         mock_api.store.side_effect = ValueError("Text too short")
-        with pytest.raises(ValueError, match="Text too short"):
-            mod.memory_store("hi")
+        result = mod.memory_store("hi")
+        assert result["error"] == "Text too short"
