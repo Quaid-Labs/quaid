@@ -225,7 +225,7 @@ class LifecycleRegistry:
         if worker_count <= 1:
             return [fn(item) for item in seq]
 
-        executor = self._ensure_llm_executor(self._llm_workers(ctx))
+        executor = self._ensure_llm_executor(worker_count)
         sem = threading.Semaphore(worker_count)
         results: List[Any] = [None] * len(seq)
         timeout_seconds = self._parallel_map_timeout_seconds(ctx)
