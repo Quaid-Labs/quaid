@@ -197,6 +197,70 @@ def test_discover_plugin_manifests_with_allowlist(tmp_path: Path):
     assert [m.plugin_id for m in manifests] == ["adapter.b"]
 
 
+def test_discover_plugin_manifests_non_strict_collects_all_errors(tmp_path: Path):
+    plugins_dir = tmp_path / "plugins"
+    good_dir = plugins_dir / "good"
+    bad_json_dir = plugins_dir / "bad-json"
+    bad_manifest_dir = plugins_dir / "bad-manifest"
+    good_dir.mkdir(parents=True)
+    bad_json_dir.mkdir(parents=True)
+    bad_manifest_dir.mkdir(parents=True)
+    (good_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "adapter.good",
+                "plugin_type": "adapter",
+                "module": "adaptors.good",
+                "capabilities": _contract_caps("Good Adapter"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bad_json_dir / "plugin.json").write_text("{broken", encoding="utf-8")
+    (bad_manifest_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "bad.type",
+                "plugin_type": "nope",
+                "module": "adaptors.bad",
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifests, errors = discover_plugin_manifests(
+        paths=[str(plugins_dir)],
+        strict=False,
+    )
+    assert [m.plugin_id for m in manifests] == ["adapter.good"]
+    assert len(errors) == 2
+    assert any("bad-json" in err for err in errors)
+    assert any("bad-manifest" in err for err in errors)
+
+
+def test_discover_plugin_manifests_strict_aggregates_errors(tmp_path: Path):
+    plugins_dir = tmp_path / "plugins"
+    bad_json_dir = plugins_dir / "bad-json"
+    bad_manifest_dir = plugins_dir / "bad-manifest"
+    bad_json_dir.mkdir(parents=True)
+    bad_manifest_dir.mkdir(parents=True)
+    (bad_json_dir / "plugin.json").write_text("{broken", encoding="utf-8")
+    (bad_manifest_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "bad.type",
+                "plugin_type": "nope",
+                "module": "adaptors.bad",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Plugin manifest discovery failed"):
+        discover_plugin_manifests(paths=[str(plugins_dir)], strict=True)
+
+
 def test_validate_manifest_requires_datastore_capabilities():
     with pytest.raises(ValueError, match="missing required capabilities"):
         validate_manifest_dict(
