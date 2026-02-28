@@ -201,8 +201,7 @@ describe('RAG Documentation System', () => {
   async function createTestFixtures() {
     const { mkdir, writeFile } = await import('fs/promises')
     
-    try {
-      await mkdir(TEST_FIXTURES_DIR, { recursive: true })
+    await mkdir(TEST_FIXTURES_DIR, { recursive: true })
       
       // Create test fixture files
       await writeFile(`${TEST_FIXTURES_DIR}/simple-doc.md`, `# Simple Documentation
@@ -285,10 +284,7 @@ The system handles various emojis:
 The first paragraph discusses the importance of proper text processing even when formal document structure is not present. Systems should be robust enough to handle various document formats and styles.
 
 A second paragraph continues the discussion about document processing. It emphasizes that content value is not dependent on formal structure, and many valuable documents exist in plain text format.`)
-      
-    } catch (error) {
-      console.warn('Failed to create test fixtures:', error)
-    }
+
   }
 
   async function cleanupTestFixtures() {
