@@ -18,6 +18,18 @@ def test_resource_lock_registry_prunes_thread_lock_cache(tmp_path: Path):
     assert len(reg._thread_locks) <= MAX_THREAD_LOCK_CACHE
 
 
+def test_prune_does_not_evict_lock_owned_by_current_thread(tmp_path: Path):
+    reg = ResourceLockRegistry(tmp_path / "locks")
+    held = reg._thread_lock("held-resource")
+    held.acquire()
+    try:
+        for i in range(MAX_THREAD_LOCK_CACHE + 80):
+            reg._thread_lock(f"resource-{i}")
+        assert "held-resource" in reg._thread_locks
+    finally:
+        held.release()
+
+
 def test_acquire_many_logs_unlock_failures(tmp_path: Path):
     reg = ResourceLockRegistry(tmp_path / "locks")
     real_flock = fcntl.flock

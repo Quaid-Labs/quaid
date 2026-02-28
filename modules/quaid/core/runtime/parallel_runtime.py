@@ -68,6 +68,11 @@ class ResourceLockRegistry:
             if lock is None:
                 self._thread_lock_touched.pop(resource, None)
                 continue
+            # Never evict a lock currently owned by this thread.
+            # RLock.acquire(blocking=False) is re-entrant and would otherwise
+            # succeed, causing active locks to be dropped from the registry.
+            if getattr(lock, "_is_owned", lambda: False)():
+                continue
             if not lock.acquire(blocking=False):
                 continue
             try:
