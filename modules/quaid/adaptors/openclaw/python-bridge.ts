@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 function _resolveTimeoutMs(name: string, fallbackMs: number): number {
@@ -19,7 +20,10 @@ type PythonBridgeConfig = {
 };
 
 export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
-  const pluginRoot = String(config.pluginRoot || "").trim() || path.join(config.workspace, "plugins", "quaid");
+  const explicitRoot = String(config.pluginRoot || "").trim();
+  const modernRoot = path.join(config.workspace, "modules", "quaid");
+  const legacyRoot = path.join(config.workspace, "plugins", "quaid");
+  const pluginRoot = explicitRoot || (fs.existsSync(modernRoot) ? modernRoot : legacyRoot);
   const sep = process.platform === "win32" ? ";" : ":";
   const existingPyPath = String(process.env.PYTHONPATH || "").trim();
   const pythonPath = existingPyPath ? `${pluginRoot}${sep}${existingPyPath}` : pluginRoot;
