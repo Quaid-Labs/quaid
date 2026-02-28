@@ -8,7 +8,12 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from core.lifecycle.janitor_lifecycle import RoutineContext, build_default_registry
+from core.lifecycle.janitor_lifecycle import (
+    LifecycleRegistry,
+    RoutineContext,
+    _register_module_routines,
+    build_default_registry,
+)
 
 
 class _FakeRag:
@@ -434,6 +439,39 @@ def test_lifecycle_registry_rejects_conflicting_reregister():
     registry.register("writer", lambda _ctx: SimpleNamespace(metrics={}, logs=[], errors=[], data={}), owner="memorydb")
     with pytest.raises(ValueError, match="already registered"):
         registry.register("writer", lambda _ctx: SimpleNamespace(metrics={}, logs=[], errors=[], data={}), owner="other")
+
+
+def test_register_module_routines_replaces_prior_failure_stub(monkeypatch, tmp_path):
+    module_name = "adaptors.fake.lifecycle"
+    registry = LifecycleRegistry()
+
+    calls = {"count": 0}
+
+    def _import_module(_name: str):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ImportError("simulated import failure")
+        mod = ModuleType("fake_lifecycle")
+
+        def _registrar(scoped, _result_type):
+            scoped.register(
+                "workspace",
+                lambda _ctx: SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={}),
+            )
+
+        mod.register_lifecycle_routines = _registrar
+        return mod
+
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.importlib.import_module", _import_module)
+
+    _register_module_routines(registry, module_name, ["workspace"])
+    first = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
+    assert first.errors and "Lifecycle module load failed" in first.errors[0]
+
+    _register_module_routines(registry, module_name, ["workspace"])
+    second = registry.run("workspace", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path))
+    assert second.errors == []
+    assert second.metrics["ok"] == 1
 
 
 def test_lifecycle_registry_register_and_has_use_registry_guard():

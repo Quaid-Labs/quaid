@@ -392,7 +392,22 @@ def _register_module_routines(
         def _missing(_ctx: RoutineContext) -> RoutineResult:
             return RoutineResult(errors=[message])
 
-        registry.register(routine_name, _missing)
+        registry.register(routine_name, _missing, owner=module_name)
+
+    def _remove_module_failure_stubs() -> None:
+        with registry._registry_guard:
+            for routine_name in expected_routines:
+                existing = registry._routines.get(routine_name)
+                if existing is None:
+                    continue
+                owner = registry._owners.get(routine_name, "unknown")
+                if owner != module_name:
+                    continue
+                if getattr(existing, "__name__", "") != "_missing":
+                    continue
+                registry._routines.pop(routine_name, None)
+                registry._owners.pop(routine_name, None)
+                registry._write_resources.pop(routine_name, None)
 
     try:
         module = importlib.import_module(module_name)
@@ -410,6 +425,7 @@ def _register_module_routines(
         return
 
     try:
+        _remove_module_failure_stubs()
         class _ScopedRegistry:
             def __init__(self, base: LifecycleRegistry, owner: str) -> None:
                 self._base = base
