@@ -142,6 +142,21 @@ def test_plugin_schema_edit_keeps_prior_values_on_invalid_field(monkeypatch, tmp
     assert "bad" not in staged["plugins"]["config"]["memorydb.core"]
 
 
+def test_plugin_schema_edit_enforces_enum_values(monkeypatch, tmp_path):
+    staged = {"plugins": {"config": {"memorydb.core": {"mode": "safe"}}}}
+    schema = {
+        "fields": [
+            {"key": "mode", "type": "string", "enum": ["safe", "fast"]},
+        ]
+    }
+    answers = iter(["unsafe"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    config_cli._edit_plugin_config_schema(staged, tmp_path / "memory.json", "memorydb.core", schema)
+
+    assert staged["plugins"]["config"]["memorydb.core"]["mode"] == "safe"
+
+
 def test_main_set_returns_nonzero_when_callback_reload_fails(monkeypatch, tmp_path):
     path = tmp_path / "config" / "memory.json"
     path.parent.mkdir(parents=True, exist_ok=True)
