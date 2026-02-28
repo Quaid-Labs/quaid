@@ -30,12 +30,17 @@ ALLOWLIST = {
     ("core/lifecycle/datastore_runtime.py", "datastore"),
     ("core/services/memory_service.py", "datastore"),
     ("core/docs/registry.py", "datastore"),
+    ("core/docs/updater.py", "datastore"),
     ("core/plugins/memorydb_contract.py", "datastore"),
+    ("core/lifecycle/soul_snippets.py", "datastore"),
     # Adapter selection composition point.
     ("lib/adapter.py", "adaptors"),
 }
 
 PY_IMPORT_RE = re.compile(r"^\s*from\s+([a-zA-Z_][\w\.]*)\s+import\s+|^\s*import\s+([a-zA-Z_][\w\.]*)")
+PY_DYNAMIC_IMPORT_RE = re.compile(
+    r"""__import__\(\s*['"]([a-zA-Z_][\w\.]*)['"]|importlib\.import_module\(\s*['"]([a-zA-Z_][\w\.]*)['"]"""
+)
 TS_IMPORT_RE = re.compile(r"^\s*import(?:.+from\s+)?[\"']([^\"']+)[\"']")
 
 
@@ -68,6 +73,11 @@ def extract_targets(path: Path) -> list[str]:
             m = PY_IMPORT_RE.match(line)
             if not m:
                 continue
+            mod = m.group(1) or m.group(2) or ""
+            head = mod.split(".", 1)[0]
+            if head in SUBSYSTEMS:
+                targets.append(head)
+        for m in PY_DYNAMIC_IMPORT_RE.finditer(text):
             mod = m.group(1) or m.group(2) or ""
             head = mod.split(".", 1)[0]
             if head in SUBSYSTEMS:

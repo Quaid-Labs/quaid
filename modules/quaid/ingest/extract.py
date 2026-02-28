@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.llm_clients import call_deep_reasoning, parse_json_response
 from config import get_config
 from core.services.memory_service import get_memory_service
+from core.lifecycle import soul_snippets as soul_snippets_runtime
 from lib.runtime_context import (
     parse_session_jsonl as runtime_parse_session_jsonl,
     build_transcript as runtime_build_transcript,
@@ -52,10 +53,7 @@ def _load_soul_snippets_module():
     global _SOUL_SNIPPETS_MODULE
     if _SOUL_SNIPPETS_MODULE is not None:
         return _SOUL_SNIPPETS_MODULE
-    _SOUL_SNIPPETS_MODULE = __import__(
-        "datastore.notedb.soul_snippets",
-        fromlist=["write_journal_entry", "write_snippet_entry"],
-    )
+    _SOUL_SNIPPETS_MODULE = soul_snippets_runtime
     return _SOUL_SNIPPETS_MODULE
 
 
