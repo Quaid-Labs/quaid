@@ -442,7 +442,11 @@ def reset_plugin_runtime() -> None:
         _CONTRACT_VALIDATION_CACHE.clear()
 
 
-def _iter_active_plugin_ids(slots: Optional[Dict[str, Any]]) -> List[str]:
+def _iter_active_plugin_ids(
+    slots: Optional[Dict[str, Any]],
+    *,
+    registry: Optional[PluginRegistry] = None,
+) -> List[str]:
     data = slots or {}
     ids: List[str] = []
     adapter_id = str(data.get("adapter", "")).strip()
@@ -464,6 +468,16 @@ def _iter_active_plugin_ids(slots: Optional[Dict[str, Any]]) -> List[str]:
             continue
         seen.add(pid)
         out.append(pid)
+    if not registry:
+        return out
+
+    def _sort_key(plugin_id: str) -> Tuple[int, str]:
+        record = registry.get(plugin_id)
+        if not record:
+            return (10**9, plugin_id)
+        return (int(record.manifest.priority), record.manifest.plugin_id)
+
+    out.sort(key=_sort_key)
     return out
 
 
@@ -568,7 +582,7 @@ def run_plugin_contract_surface_collect(
     root = str(workspace_root or _workspace_root())
     raw_payload = payload if isinstance(payload, dict) else {}
 
-    for plugin_id in _iter_active_plugin_ids(slots):
+    for plugin_id in _iter_active_plugin_ids(slots, registry=registry):
         record = registry.get(plugin_id)
         if not record:
             continue
@@ -638,7 +652,7 @@ def collect_declared_exports(
     if key not in _PLUGIN_CONTRACT_DECLARED:
         raise ValueError(f"Unsupported declaration surface: {surface}")
     out: Dict[str, List[str]] = {}
-    for plugin_id in _iter_active_plugin_ids(slots):
+    for plugin_id in _iter_active_plugin_ids(slots, registry=registry):
         record = registry.get(plugin_id)
         if not record:
             continue
