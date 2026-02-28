@@ -1812,8 +1812,10 @@ conn.close()
     # Smoke test: store and recall a fact
     echo ""
     info "Running smoke test (store + recall)..."
-    local smoke_ok=false
-    (
+    local smoke_status="SMOKE_FAILED"
+    local smoke_output
+    smoke_output="$(
+      (
         cd "$PLUGIN_DIR"
         export QUAID_HOME="${WORKSPACE_ROOT}"
         export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
@@ -1838,12 +1840,24 @@ else:
     print('[!] Recall returned no results (embeddings may not be ready yet)')
     print('SMOKE_PARTIAL')
 " 2>&1
-    ) | while IFS= read -r line; do
+      )
+    )"
+    while IFS= read -r line; do
         echo "  $line"
         if [[ "$line" == *"SMOKE_OK"* ]]; then
-            smoke_ok=true
+            smoke_status="SMOKE_OK"
+        elif [[ "$line" == *"SMOKE_PARTIAL"* ]] && [[ "$smoke_status" != "SMOKE_OK" ]]; then
+            smoke_status="SMOKE_PARTIAL"
         fi
-    done
+    done <<< "$smoke_output"
+
+    if [[ "$smoke_status" == "SMOKE_OK" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Smoke test   — store + recall succeeded"
+    elif [[ "$smoke_status" == "SMOKE_PARTIAL" ]]; then
+        echo -e "  ${YELLOW}~${RESET} Smoke test   — store succeeded; recall returned no results"
+    else
+        echo -e "  ${RED}✗${RESET} Smoke test   — failed (see output above)"
+    fi
 
     echo ""
     if $all_ok; then
