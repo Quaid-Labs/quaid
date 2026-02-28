@@ -23,15 +23,12 @@ describe('Memory Store', () => {
 
   it('generates embedding of correct dimension', async () => {
     const result = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
-    
-    // The embedding might be stored as binary or array depending on implementation
-    if (result.embedding) {
-      if (Array.isArray(result.embedding)) {
-        expect(result.embedding).toHaveLength(128)  // mock embedding dimension
-      } else {
-        // If it's binary, we can't easily check length, but it should exist
-        expect(result.embedding).toBeDefined()
-      }
+
+    expect(result.embedding).toBeDefined()
+    if (Array.isArray(result.embedding)) {
+      expect(result.embedding).toHaveLength(128) // mock embedding dimension
+    } else {
+      expect(String(result.embedding).length).toBeGreaterThan(0)
     }
   })
 
