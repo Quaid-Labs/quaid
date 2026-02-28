@@ -22,16 +22,50 @@ def _resolve_db_path(ctx: PluginHookContext) -> Path:
     return get_db_path()
 
 
+def _normalize_domain_map(raw: Dict[str, str]) -> Dict[str, str]:
+    return {
+        str(k).strip(): str(v or "").strip()
+        for k, v in (raw or {}).items()
+        if str(k).strip()
+    }
+
+
+def _domains_from_db(db_path: Path) -> Dict[str, str]:
+    try:
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT domain, description FROM domain_registry WHERE active = 1 ORDER BY domain"
+            ).fetchall()
+        out = {str(r[0]).strip(): str(r[1] or "").strip() for r in rows if str(r[0]).strip()}
+        return _normalize_domain_map(out)
+    except Exception:
+        return {}
+
+
 def _resolve_domains(ctx: PluginHookContext) -> Dict[str, str]:
     plugin_domains = ctx.plugin_config.get("domains")
     if isinstance(plugin_domains, dict) and plugin_domains:
-        out = {str(k).strip(): str(v or "").strip() for k, v in plugin_domains.items() if str(k).strip()}
+        out = _normalize_domain_map(plugin_domains)
         if out:
             return out
+    # Datastore-owned registry takes precedence over config defaults.
+    db_domains = _domains_from_db(_resolve_db_path(ctx))
+    if db_domains:
+        return db_domains
     retrieval_domains = getattr(getattr(ctx.config, "retrieval", None), "domains", {}) or {}
     if isinstance(retrieval_domains, dict) and retrieval_domains:
-        return {str(k).strip(): str(v or "").strip() for k, v in retrieval_domains.items() if str(k).strip()}
+        return _normalize_domain_map(retrieval_domains)
     return default_domain_descriptions()
+
+
+def _publish_domains_to_runtime_config(ctx: PluginHookContext, domains: Dict[str, str]) -> None:
+    retrieval = getattr(ctx.config, "retrieval", None)
+    if retrieval is None:
+        return
+    try:
+        setattr(retrieval, "domains", dict(domains))
+    except Exception:
+        pass
 
 
 def _sync_domains(ctx: PluginHookContext) -> None:
@@ -80,6 +114,7 @@ def _sync_domains(ctx: PluginHookContext) -> None:
                 f"UPDATE domain_registry SET active = 0, updated_at = datetime('now') WHERE domain NOT IN ({placeholders})",
                 tuple(domains.keys()),
             )
+    _publish_domains_to_runtime_config(ctx, domains)
     sync_tools_domain_block(domains=domains, workspace=Path(ctx.workspace_root))
 
 

@@ -99,7 +99,6 @@ try:
 except ImportError:
     _HAS_CONFIG = False
 
-from datastore.memorydb.domain_defaults import default_domain_descriptions
 
 # Configuration — resolved from config system
 DB_PATH = get_db_path()
@@ -557,17 +556,9 @@ class MemoryGraph:
         if not domains:
             return
         registered = self._active_domain_set(conn)
-        descriptions = _registered_domains()
         for domain in domains:
             if domain not in registered:
                 continue
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO domain_registry(domain, description, active)
-                VALUES (?, ?, 1)
-                """,
-                (domain, descriptions.get(domain, "")),
-            )
             conn.execute(
                 "INSERT OR IGNORE INTO node_domains(node_id, domain) VALUES (?, ?)",
                 (node_id, domain),
@@ -587,7 +578,7 @@ class MemoryGraph:
                 return active
         except Exception:
             pass
-        return set(_registered_domains().keys())
+        return set()
 
     # ==========================================================================
     # Node Operations
@@ -3136,8 +3127,8 @@ def _normalize_domain_tag(value: Optional[str]) -> Optional[str]:
 
 
 def _registered_domains() -> Dict[str, str]:
-    """Datastore-owned fallback domain registry (used only when DB is unavailable)."""
-    return default_domain_descriptions()
+    """Deprecated fallback map; runtime domain allowlist is DB-owned."""
+    return {}
 
 
 def _normalize_domains(values: Any) -> List[str]:
@@ -3167,7 +3158,7 @@ def _domains_from_attrs(attrs: Any) -> List[str]:
 
 
 def _active_domains_for_filter(graph: Optional["MemoryGraph"] = None) -> set[str]:
-    """Resolve active domains from DB first, config fallback second."""
+    """Resolve active domains from DB only."""
     if graph is not None:
         try:
             with graph._get_conn() as conn:
@@ -3183,7 +3174,7 @@ def _active_domains_for_filter(graph: Optional["MemoryGraph"] = None) -> set[str
                 return active
         except Exception:
             pass
-    return set(_registered_domains().keys())
+    return set()
 
 
 def _normalize_domain_filter(value: Any, allowed_domains: Optional[set[str]] = None) -> Tuple[bool, set[str]]:
@@ -3199,8 +3190,13 @@ def _normalize_domain_filter(value: Any, allowed_domains: Optional[set[str]] = N
         for k, v in value.items()
         if bool(v) and _normalize_domain_tag(k) and _normalize_domain_tag(k) != "all"
     }
-    registered = set(allowed_domains or _registered_domains().keys())
-    include = {d for d in requested if d in registered}
+    registered = set(allowed_domains) if allowed_domains is not None else set(_registered_domains().keys())
+    if registered:
+        include = {d for d in requested if d in registered}
+    else:
+        # If no registry is available yet, honor explicit requested filters so
+        # attribute-based filtering can still narrow results.
+        include = set(requested)
 
     # If caller asked for domain filtering but only supplied unknown keys
     # (e.g. {"workstream": true}), fail open to "all" instead of returning

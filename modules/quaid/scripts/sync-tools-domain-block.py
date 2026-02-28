@@ -29,9 +29,22 @@ def main() -> int:
     sys.path.insert(0, str(root))
 
     from config import get_config  # noqa: E402
+    from lib.config import get_db_path  # noqa: E402
+    from lib.database import get_connection  # noqa: E402
     from lib.tools_domain_sync import sync_tools_domain_block  # noqa: E402
 
-    domains = dict(getattr(get_config().retrieval, "domains", {}) or {})
+    domains = {}
+    try:
+        db_path = get_db_path()
+        with get_connection(db_path) as conn:
+            rows = conn.execute(
+                "SELECT domain, description FROM domain_registry WHERE active = 1 ORDER BY domain"
+            ).fetchall()
+        domains = {str(r[0]).strip(): str(r[1] or "").strip() for r in rows if str(r[0]).strip()}
+    except Exception:
+        domains = {}
+    if not domains:
+        domains = dict(getattr(get_config().retrieval, "domains", {}) or {})
     workspace_path = Path(workspace).expanduser().resolve()
     tools_path = workspace_path / "projects" / "quaid" / "TOOLS.md"
     if not tools_path.exists():
