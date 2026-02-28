@@ -10,6 +10,7 @@ import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 import { createPythonBridgeExecutor } from "./python-bridge.js";
+import { assertDeclaredRegistration, normalizeDeclaredExports, validateApiSurface } from "./contract-gate.js";
 function _resolveWorkspace() {
   const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
   if (envWorkspace) {
@@ -54,6 +55,7 @@ const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-ins
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
 const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
+const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
     fs.mkdirSync(p, { recursive: true });
@@ -186,6 +188,28 @@ function isSystemEnabled(system) {
   const config = getMemoryConfig();
   const systems = config.systems || {};
   return systems[system] !== false;
+}
+function isPluginStrictMode() {
+  const plugins = getMemoryConfig().plugins || {};
+  return plugins.strict !== false;
+}
+function loadAdapterContractDeclarations() {
+  try {
+    const payload = JSON.parse(fs.readFileSync(ADAPTER_PLUGIN_MANIFEST_PATH, "utf8"));
+    const contract = payload?.capabilities?.contract || {};
+    return {
+      tools: normalizeDeclaredExports(contract?.tools?.exports),
+      events: normalizeDeclaredExports(contract?.events?.exports),
+      api: normalizeDeclaredExports(contract?.api?.exports)
+    };
+  } catch (err) {
+    const msg = `[quaid][contract] failed reading adapter manifest ${ADAPTER_PLUGIN_MANIFEST_PATH}: ${String(err?.message || err)}`;
+    if (isPluginStrictMode()) {
+      throw new Error(msg);
+    }
+    console.warn(msg);
+    return { tools: /* @__PURE__ */ new Set(), events: /* @__PURE__ */ new Set(), api: /* @__PURE__ */ new Set() };
+  }
 }
 function isPreInjectionPassEnabled() {
   const retrieval = getMemoryConfig().retrieval || {};
@@ -2185,6 +2209,19 @@ const quaidPlugin = {
   register(api) {
     console.log("[quaid] Registering local graph memory plugin");
     runStartupSelfCheck();
+    const contractDecl = loadAdapterContractDeclarations();
+    const strictContracts = isPluginStrictMode();
+    validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
+    const onChecked = (eventName, handler, options) => {
+      assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
+      return api.on(eventName, handler, options);
+    };
+    const registerToolChecked = (factory) => api.registerTool(() => {
+      const spec = factory();
+      const toolName = String(spec?.name || "").trim();
+      assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
+      return spec;
+    });
     const dataDir = path.dirname(DB_PATH);
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -2411,7 +2448,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
     };
     console.log("[quaid] Registering before_agent_start hook for memory injection");
-    api.on("before_agent_start", beforeAgentStartHandler, {
+    onChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection",
       priority: 10
     });
@@ -2446,12 +2483,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
     };
     console.log("[quaid] Registering agent_end hook for auto-capture");
-    api.on("agent_end", agentEndHandler, {
+    onChecked("agent_end", agentEndHandler, {
       name: "auto-capture",
       priority: 10
     });
     if (isSystemEnabled("memory")) {
-      api.registerTool(
+      registerToolChecked(
         () => ({
           name: "memory_recall",
           description: `Search your memory for personal facts, preferences, relationships, project details, and past conversations. Always use this tool when you're unsure about something or need to verify a detail \u2014 if you might know it, search for it.
@@ -2747,7 +2784,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           }
         })
       );
-      api.registerTool(
+      registerToolChecked(
         () => ({
           name: "memory_store",
           description: `Queue a fact for memory extraction at next compaction. The fact will go through full quality review (Opus extraction with edges and janitor review) rather than being stored directly.
@@ -2784,7 +2821,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
           }
         })
       );
-      api.registerTool(
+      registerToolChecked(
         () => ({
           name: "memory_forget",
           description: "Delete specific memories",
@@ -2830,7 +2867,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
         })
       );
     }
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "projects_search",
         description: "Search project documentation (architecture, implementation, reference guides). Use TOOLS.md to discover systems, then use this tool to find detailed docs. Returns relevant sections with file paths. Use when memory_recall is insufficient for project-level/file-backed answers. When answering from this tool, cite at least one concrete file/section hit.",
@@ -2954,7 +2991,7 @@ notify_docs_search(data['query'], data['results'])
         }
       })
     );
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "docs_read",
         description: "Read the full content of a registered document by file path or title.",
@@ -2978,7 +3015,7 @@ notify_docs_search(data['query'], data['results'])
         }
       })
     );
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "docs_list",
         description: "List registered documents, optionally filtered by project or type.",
@@ -3009,7 +3046,7 @@ notify_docs_search(data['query'], data['results'])
         }
       })
     );
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "docs_register",
         description: "Register a document for indexing and tracking. Use for external files or docs with source file tracking.",
@@ -3054,7 +3091,7 @@ notify_docs_search(data['query'], data['results'])
         }
       })
     );
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "project_create",
         description: "Create a new project with a PROJECT.md template. Sets up the directory structure and scaffolding.",
@@ -3090,7 +3127,7 @@ notify_docs_search(data['query'], data['results'])
         }
       })
     );
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "project_list",
         description: `List all defined projects with their doc counts and metadata. Available projects: ${getProjectNames().join(", ") || "none"}`,
@@ -3111,7 +3148,7 @@ notify_docs_search(data['query'], data['results'])
         }
       })
     );
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "session_recall",
         description: `List or load recent conversation sessions. Use when the user wants to continue previous work, references a past conversation, or you need context about what was discussed recently.`,
@@ -3627,7 +3664,7 @@ notify_memory_extraction(
       console.log(`[quaid] Recovery scan complete: ${recovered} sessions recovered`);
       fs.writeFileSync(flagPath, (/* @__PURE__ */ new Date()).toISOString());
     }
-    api.on("before_compaction", async (event, ctx) => {
+    onChecked("before_compaction", async (event, ctx) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
@@ -3706,7 +3743,7 @@ notify_memory_extraction(
       name: "compaction-memory-extraction",
       priority: 10
     });
-    api.on("before_reset", async (event, ctx) => {
+    onChecked("before_reset", async (event, ctx) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;

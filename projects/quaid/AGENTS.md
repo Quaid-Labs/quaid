@@ -59,6 +59,13 @@
 - Treat `~/quaid/benchmark-checkpoint` as a cut artifact, not a dev workspace.
 - Keep benchmark/checkpoint operations in their own runbooks under `operations/`.
 
+### Plugin Contract Discipline
+- Plugin runtime surfaces are contract-owned and manifest-declared.
+- Executable contract hooks: `init`, `config`, `status`, `dashboard`, `maintenance`, `tool_runtime`, `health`.
+- Declared contract surfaces: `tools`, `api`, `events`, `ingest_triggers`, `auth_requirements`, `migrations`, `notifications`.
+- In strict mode (`config/memory.json -> plugins.strict=true`), undeclared tool/event registrations must fail fast.
+- Datastore-specific behavior (for example domains/schema sync) belongs in datastore plugin contracts, not core one-offs.
+
 ## Memory Lifecycle
 
 ```

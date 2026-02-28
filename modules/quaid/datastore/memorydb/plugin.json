@@ -1,0 +1,104 @@
+{
+  "plugin_api_version": 1,
+  "plugin_id": "memorydb.core",
+  "plugin_type": "datastore",
+  "module": "core.plugins.memorydb_contract",
+  "capabilities": {
+    "display_name": "MemoryDB",
+    "contract": {
+      "init": {
+        "mode": "hook",
+        "handler": "on_init"
+      },
+      "config": {
+        "mode": "hook",
+        "handler": "on_config",
+        "schema": {
+          "fields": [
+            {
+              "key": "domains",
+              "label": "Domains Map",
+              "type": "object",
+              "description": "Optional domain map override (domain id -> description)."
+            }
+          ]
+        }
+      },
+      "status": {
+        "mode": "hook",
+        "handler": "on_status"
+      },
+      "dashboard": {
+        "mode": "hook",
+        "handler": "on_dashboard"
+      },
+      "maintenance": {
+        "mode": "hook",
+        "handler": "on_maintenance"
+      },
+      "tool_runtime": {
+        "mode": "hook",
+        "handler": "on_tool_runtime"
+      },
+      "health": {
+        "mode": "hook",
+        "handler": "on_health"
+      },
+      "tools": {
+        "mode": "declared",
+        "exports": [
+          "memory_recall",
+          "memory_store",
+          "memory_forget",
+          "memory_write"
+        ]
+      },
+      "api": {
+        "mode": "declared",
+        "exports": [
+          "store",
+          "recall",
+          "forget",
+          "write"
+        ]
+      },
+      "events": {
+        "mode": "declared",
+        "exports": [
+          "janitor.run_completed"
+        ]
+      },
+      "ingest_triggers": {
+        "mode": "declared",
+        "exports": [
+          "manual",
+          "compaction",
+          "reset",
+          "timeout"
+        ]
+      },
+      "auth_requirements": {
+        "mode": "declared",
+        "exports": []
+      },
+      "migrations": {
+        "mode": "declared",
+        "exports": [
+          "schema_v6_domains"
+        ]
+      },
+      "notifications": {
+        "mode": "declared",
+        "exports": [
+          "memory_recall",
+          "memory_extraction"
+        ]
+      }
+    },
+    "supports_multi_user": true,
+    "supports_policy_metadata": true,
+    "supports_redaction": true
+  },
+  "priority": 100,
+  "enabled": true
+}

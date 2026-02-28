@@ -1298,6 +1298,33 @@ conn.close()
   writeConfig(owner, models, embeddings, systems, janitorPolicies);
   s.stop(C.green("Config written"));
 
+  // Installer-owned memorydb bootstrap: ensure domain registry/tables + TOOLS domain block.
+  const domainInitScript = `
+import os, sys
+from types import SimpleNamespace
+${PY_ENV_SETUP}
+os.environ['QUAID_QUIET'] = '1'
+sys.path.insert(0, '.')
+from config import get_config
+from core.plugins.memorydb_contract import on_init
+ctx = SimpleNamespace(
+    plugin=SimpleNamespace(plugin_id='memorydb.core'),
+    config=get_config(),
+    plugin_config={},
+    workspace_root='${WORKSPACE}',
+)
+on_init(ctx)
+print('[+] MemoryDB domain init complete')
+`;
+  const domainInitResult = spawnSync("python3", ["-c", domainInitScript], {
+    cwd: PLUGIN_DIR,
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (domainInitResult.status !== 0) {
+    log.warn("MemoryDB domain init hook failed during install; continuing.");
+  }
+
   // Create workspace files
   for (const f of ["SOUL.md", "USER.md", "MEMORY.md"]) {
     const fp = path.join(WORKSPACE, f);
@@ -1804,6 +1831,22 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
   };
   const config = {
     adapter: { type: IS_OPENCLAW ? "openclaw" : "standalone" },
+    plugins: {
+      enabled: true,
+      strict: true,
+      apiVersion: 1,
+      paths: ["plugins"],
+      allowList: ["memorydb.core", "core.extract", "openclaw.adapter"],
+      slots: {
+        adapter: IS_OPENCLAW ? "openclaw.adapter" : "",
+        ingest: ["core.extract"],
+        dataStores: ["memorydb.core"],
+      },
+      config: {
+        "memorydb.core": {},
+        "core.extract": {},
+      },
+    },
     systems,
     models: {
       provider: models.apiFormat,

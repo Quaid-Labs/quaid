@@ -40,6 +40,30 @@ MCP server tool surface (`core/interface/mcp_server.py`):
 - `memory_event_process`
 - `memory_event_capabilities`
 
+## Plugin Contract Surfaces
+
+Runtime-enforced executable surfaces:
+- `init`
+- `config`
+- `status`
+- `dashboard`
+- `maintenance`
+- `tool_runtime`
+- `health`
+
+Manifest-declared non-executable surfaces:
+- `tools`
+- `api`
+- `events`
+- `ingest_triggers`
+- `auth_requirements`
+- `migrations`
+- `notifications`
+
+Strict-mode behavior:
+- `plugins.strict=true` enforces fail-fast on undeclared tool/event registrations.
+- `plugins.strict=false` downgrades declaration mismatches to warnings.
+
 ## Core Tools and Param Maps
 
 ### `memory_recall`
@@ -200,6 +224,7 @@ python3 datastore/memorydb/memory_graph.py search-graph "query" --owner quaid
 python3 datastore/memorydb/memory_graph.py search-graph-aware "query" --owner quaid
 python3 datastore/memorydb/memory_graph.py stats
 python3 datastore/memorydb/memory_graph.py health
+python3 core/runtime/plugin_health.py
 
 # Manual memory operations
 python3 datastore/memorydb/memory_graph.py store "text" --owner quaid --category fact

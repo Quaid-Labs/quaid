@@ -18,6 +18,7 @@ import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 import { createPythonBridgeExecutor } from "./python-bridge.js";
+import { assertDeclaredRegistration, normalizeDeclaredExports, validateApiSurface } from "./contract-gate.js";
 
 
 // Configuration
@@ -68,6 +69,7 @@ const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-ins
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
 const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
+const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
@@ -218,6 +220,36 @@ function isSystemEnabled(system: "memory" | "journal" | "projects" | "workspace"
   const systems = config.systems || {};
   // Default to true if not specified
   return systems[system] !== false;
+}
+
+function isPluginStrictMode(): boolean {
+  const plugins = getMemoryConfig().plugins || {};
+  return plugins.strict !== false;
+}
+
+type AdapterContractDeclarations = {
+  tools: Set<string>;
+  events: Set<string>;
+  api: Set<string>;
+};
+
+function loadAdapterContractDeclarations(): AdapterContractDeclarations {
+  try {
+    const payload = JSON.parse(fs.readFileSync(ADAPTER_PLUGIN_MANIFEST_PATH, "utf8"));
+    const contract = payload?.capabilities?.contract || {};
+    return {
+      tools: normalizeDeclaredExports(contract?.tools?.exports),
+      events: normalizeDeclaredExports(contract?.events?.exports),
+      api: normalizeDeclaredExports(contract?.api?.exports),
+    };
+  } catch (err: unknown) {
+    const msg = `[quaid][contract] failed reading adapter manifest ${ADAPTER_PLUGIN_MANIFEST_PATH}: ${String((err as Error)?.message || err)}`;
+    if (isPluginStrictMode()) {
+      throw new Error(msg);
+    }
+    console.warn(msg);
+    return { tools: new Set<string>(), events: new Set<string>(), api: new Set<string>() };
+  }
 }
 
 function isPreInjectionPassEnabled(): boolean {
@@ -2506,6 +2538,20 @@ const quaidPlugin = {
 
     // Fail fast on model/provider/config mismatches so runtime doesn't degrade silently.
     runStartupSelfCheck();
+    const contractDecl = loadAdapterContractDeclarations();
+    const strictContracts = isPluginStrictMode();
+    validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
+    const onChecked = (eventName: string, handler: any, options?: any) => {
+      assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
+      return api.on(eventName as any, handler, options);
+    };
+    const registerToolChecked = (factory: () => any) =>
+      api.registerTool(() => {
+        const spec = factory();
+        const toolName = String(spec?.name || "").trim();
+        assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
+        return spec;
+      });
 
     // Ensure database exists
     const dataDir = path.dirname(DB_PATH);
@@ -2787,9 +2833,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
     };
 
-    // Register hooks using api.on() for typed hooks (NOT api.registerHook!)
+    // Register hooks using onChecked() for typed hooks (NOT api.registerHook!)
     console.log("[quaid] Registering before_agent_start hook for memory injection");
-    api.on("before_agent_start", beforeAgentStartHandler, {
+    onChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection",
       priority: 10
     });
@@ -2828,16 +2874,16 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
     };
 
-    // Register agent_end hook using api.on() for typed hooks
+    // Register agent_end hook using onChecked() for typed hooks
     console.log("[quaid] Registering agent_end hook for auto-capture");
-    api.on("agent_end", agentEndHandler, {
+    onChecked("agent_end", agentEndHandler, {
       name: "auto-capture",
       priority: 10
     });
 
     // Register memory tools (gated by memory system)
     if (isSystemEnabled("memory")) {
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "memory_recall",
         description: `Search your memory for personal facts, preferences, relationships, project details, and past conversations. Always use this tool when you're unsure about something or need to verify a detail — if you might know it, search for it.
@@ -3142,7 +3188,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }),
     );
 
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "memory_store",
         description: `Queue a fact for memory extraction at next compaction. The fact will go through full quality review (Opus extraction with edges and janitor review) rather than being stored directly.
@@ -3181,7 +3227,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
       })
     );
 
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "memory_forget",
         description: "Delete specific memories",
@@ -3229,7 +3275,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
     } // end memory system gate
 
     // Register projects_search tool — semantic search over project documentation
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "projects_search",
         description: "Search project documentation (architecture, implementation, reference guides). Use TOOLS.md to discover systems, then use this tool to find detailed docs. Returns relevant sections with file paths. Use when memory_recall is insufficient for project-level/file-backed answers. When answering from this tool, cite at least one concrete file/section hit.",
@@ -3359,7 +3405,7 @@ notify_docs_search(data['query'], data['results'])
     );
 
     // Register docs_read tool — read a document by path or title
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "docs_read",
         description: "Read the full content of a registered document by file path or title.",
@@ -3385,7 +3431,7 @@ notify_docs_search(data['query'], data['results'])
     );
 
     // Register docs_list tool — list registered docs
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "docs_list",
         description: "List registered documents, optionally filtered by project or type.",
@@ -3414,7 +3460,7 @@ notify_docs_search(data['query'], data['results'])
     );
 
     // Register docs_register tool — register a new document
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "docs_register",
         description: "Register a document for indexing and tracking. Use for external files or docs with source file tracking.",
@@ -3451,7 +3497,7 @@ notify_docs_search(data['query'], data['results'])
     );
 
     // Register project_create tool — scaffold a new project
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "project_create",
         description: "Create a new project with a PROJECT.md template. Sets up the directory structure and scaffolding.",
@@ -3483,7 +3529,7 @@ notify_docs_search(data['query'], data['results'])
     );
 
     // Register project_list tool — enumerate projects
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "project_list",
         description: `List all defined projects with their doc counts and metadata. Available projects: ${getProjectNames().join(", ") || "none"}`,
@@ -3506,7 +3552,7 @@ notify_docs_search(data['query'], data['results'])
     );
 
     // Register session_recall tool — list/load recent conversation sessions
-    api.registerTool(
+    registerToolChecked(
       () => ({
         name: "session_recall",
         description: `List or load recent conversation sessions. Use when the user wants to continue previous work, references a past conversation, or you need context about what was discussed recently.`,
@@ -4075,7 +4121,7 @@ notify_memory_extraction(
 
     // Register compaction hook — extract memories in parallel with compaction LLM.
     // Uses sessionFile (JSONL on disk) when available, else event.messages.
-    api.on("before_compaction", async (event: any, ctx: any) => {
+    onChecked("before_compaction", async (event: any, ctx: any) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
@@ -4176,7 +4222,7 @@ notify_memory_extraction(
 
     // Register reset hook — extract memories before session is cleared by /new or /reset
     // Uses sessionFile when available, falls back to in-memory messages.
-    api.on("before_reset", async (event: any, ctx: any) => {
+    onChecked("before_reset", async (event: any, ctx: any) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;

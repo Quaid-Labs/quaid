@@ -1,0 +1,100 @@
+{
+  "plugin_api_version": 1,
+  "plugin_id": "core.extract",
+  "plugin_type": "ingest",
+  "module": "ingest.plugin_contract",
+  "capabilities": {
+    "display_name": "Core Extract Ingest",
+    "contract": {
+      "init": {
+        "mode": "hook",
+        "handler": "on_init"
+      },
+      "config": {
+        "mode": "hook",
+        "handler": "on_config",
+        "schema": {
+          "fields": [
+            {
+              "key": "enabled",
+              "label": "Enabled",
+              "type": "boolean",
+              "description": "Enable ingest plugin runtime hooks.",
+              "default": true
+            }
+          ]
+        }
+      },
+      "status": {
+        "mode": "hook",
+        "handler": "on_status"
+      },
+      "dashboard": {
+        "mode": "hook",
+        "handler": "on_dashboard"
+      },
+      "maintenance": {
+        "mode": "hook",
+        "handler": "on_maintenance"
+      },
+      "tool_runtime": {
+        "mode": "hook",
+        "handler": "on_tool_runtime"
+      },
+      "health": {
+        "mode": "hook",
+        "handler": "on_health"
+      },
+      "tools": {
+        "mode": "declared",
+        "exports": [
+          "session_reset",
+          "session_compact"
+        ]
+      },
+      "api": {
+        "mode": "declared",
+        "exports": [
+          "extract_and_store",
+          "process_pending_extraction_signals"
+        ]
+      },
+      "events": {
+        "mode": "declared",
+        "exports": [
+          "docs.ingest_transcript",
+          "session.ingest_log"
+        ]
+      },
+      "ingest_triggers": {
+        "mode": "declared",
+        "exports": [
+          "timeout",
+          "compaction",
+          "reset",
+          "manual"
+        ]
+      },
+      "auth_requirements": {
+        "mode": "declared",
+        "exports": [
+          "OPENROUTER_API_KEY",
+          "ANTHROPIC_API_KEY",
+          "OPENAI_API_KEY"
+        ]
+      },
+      "migrations": {
+        "mode": "declared",
+        "exports": []
+      },
+      "notifications": {
+        "mode": "declared",
+        "exports": [
+          "memory_extraction"
+        ]
+      }
+    }
+  },
+  "priority": 100,
+  "enabled": true
+}
