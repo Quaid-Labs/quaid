@@ -66,11 +66,15 @@ function makeWorkspace(caseName: string, strictContracts: unknown): string {
 }
 
 function makeFakeApi() {
+  const toolFactories: Array<() => any> = [];
   return {
     on: vi.fn(() => {}),
     registerHook: vi.fn(() => {}),
     registerHttpRoute: vi.fn(() => {}),
-    registerTool: vi.fn((factory: () => any) => factory()),
+    registerTool: vi.fn((factory: () => any) => {
+      toolFactories.push(factory);
+    }),
+    _toolFactories: toolFactories,
   };
 }
 
