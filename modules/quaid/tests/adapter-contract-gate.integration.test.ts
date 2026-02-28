@@ -76,17 +76,15 @@ function makeFakeApi() {
 }
 
 async function loadAdapterWithWorkspace(workspace: string): Promise<AdapterPlugin> {
-  process.env.CLAWDBOT_WORKSPACE = workspace;
-  process.env.QUAID_HOME = workspace;
+  vi.stubEnv("CLAWDBOT_WORKSPACE", workspace);
+  vi.stubEnv("QUAID_HOME", workspace);
   vi.resetModules();
   const module = await import("../adaptors/openclaw/adapter.js");
   return module.default as AdapterPlugin;
 }
 
 afterEach(() => {
-  delete process.env.CLAWDBOT_WORKSPACE;
-  delete process.env.QUAID_HOME;
-  delete process.env.HOME;
+  vi.unstubAllEnvs();
 });
 
 describe("adapter contract gate integration", () => {
@@ -124,7 +122,7 @@ describe("adapter contract gate integration", () => {
         fastReasoning: "gpt-5.1-codex",
       },
     });
-    process.env.HOME = fakeHome;
+    vi.stubEnv("HOME", fakeHome);
 
     const plugin = await loadAdapterWithWorkspace(workspace);
     const api = makeFakeApi();
