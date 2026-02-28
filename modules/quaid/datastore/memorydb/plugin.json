@@ -29,7 +29,7 @@
         "handler": "on_status"
       },
       "dashboard": {
-        "mode": "hook",
+        "mode": "tbd",
         "handler": "on_dashboard"
       },
       "maintenance": {
