@@ -13,14 +13,24 @@ Usage:
 """
 
 import logging
+import threading
 from typing import Optional, List, Dict, Any
 
 from core.lifecycle.datastore_runtime import DocsRAG
 from core.services.memory_service import get_memory_service
 from lib.runtime_context import get_workspace_dir
 
-_memory = get_memory_service()
 logger = logging.getLogger(__name__)
+_memory_lock = threading.RLock()
+_memory_cache = None
+
+
+def _memory() -> Any:
+    global _memory_cache
+    with _memory_lock:
+        if _memory_cache is None:
+            _memory_cache = get_memory_service()
+        return _memory_cache
 
 
 def store(
@@ -64,7 +74,7 @@ def store(
         >>> print(result["status"])  # "created"
         >>> print(result["id"])      # "a1b2c3..."
     """
-    return _memory.store(
+    return _memory().store(
         text=text,
         category=category,
         owner_id=owner_id,
@@ -130,7 +140,7 @@ def recall(
         >>> for m in memories:
         ...     print(f"{m['similarity']:.2f} {m['text']}")
     """
-    return _memory.recall(
+    return _memory().recall(
         query=query,
         owner_id=owner_id,
         limit=limit,
@@ -182,7 +192,7 @@ def search(
     Example:
         >>> results = search("Mars colony", owner_id="quaid")
     """
-    return _memory.search(
+    return _memory().search(
         query=query,
         owner_id=owner_id,
         limit=limit,
@@ -221,7 +231,7 @@ def create_edge(
     Example:
         >>> create_edge("Melina", "spouse_of", "Quaid", owner_id="quaid")
     """
-    return _memory.create_edge(
+    return _memory().create_edge(
         subject_name=subject_name,
         relation=relation,
         object_name=object_name,
@@ -252,7 +262,7 @@ def forget(
         >>> forget(query="Mars colony preferences")
         True
     """
-    return _memory.forget(query=query, node_id=node_id)
+    return _memory().forget(query=query, node_id=node_id)
 
 
 def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
@@ -269,12 +279,12 @@ def get_memory(node_id: str) -> Optional[Dict[str, Any]]:
         >>> mem = get_memory("a1b2c3-...")
         >>> print(mem["name"])
     """
-    return _memory.get_memory(node_id)
+    return _memory().get_memory(node_id)
 
 
 def stats() -> Dict[str, Any]:
     """Return graph-level statistics."""
-    return _memory.stats()
+    return _memory().stats()
 
 
 def projects_search_docs(
