@@ -65,6 +65,7 @@ def test_validate_manifest_happy_path():
     assert manifest.plugin_id == "openclaw.adapter"
     assert manifest.plugin_type == "adapter"
     assert manifest.module == "adaptors.openclaw.adapter"
+    assert manifest.display_name == "OpenClaw Adapter"
 
 
 def test_validate_manifest_rejects_invalid_type():
