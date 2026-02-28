@@ -139,7 +139,7 @@ Each result dict from `recall()` includes:
 
 **LLM/Embeddings provider architecture:**
 - Core Quaid code is provider-agnostic. Only the adapter/provider layer and config are provider-aware.
-- LLM calls route through the OpenClaw gateway adapter (`/modules/quaid/llm`) and are resolved by model tier (`deep_reasoning`/`fast_reasoning`), not by hardcoded provider branches in core logic.
+- LLM calls route through the OpenClaw gateway adapter (`/plugins/quaid/llm`) and are resolved by model tier (`deep_reasoning`/`fast_reasoning`), not by hardcoded provider branches in core logic.
 - Provider/model selection is fully config-driven via `models.llmProvider`, tier settings, and `models.fastReasoningModelClasses` / `models.deepReasoningModelClasses` in `config/memory.json`.
 
 **Data sanitization:**
