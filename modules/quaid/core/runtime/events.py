@@ -523,25 +523,29 @@ def process_events(limit: int = 20, names: Optional[List[str]] = None) -> Dict[s
                 processed += 1
                 details.append({"id": event.get("id"), "name": event.get("name"), "status": "ignored"})
                 continue
+            handler_reported_failed = False
             try:
                 result = handler(event)
                 result_status = str(result.get("status") or "ok").lower()
                 event["processed_at"] = _now()
                 event["result"] = result
                 if result_status == "failed":
+                    handler_reported_failed = True
                     event["status"] = "failed"
                     failed += 1
                     details.append({"id": event.get("id"), "name": event.get("name"), "status": "failed", "result": result})
                     if _is_fail_hard_enabled():
                         err_msg = str(result.get("error") or f"handler {event.get('name')} returned failed status")
-                        raise RuntimeError(
-                            f"Event handler failed while fail-hard mode is enabled: {err_msg}"
-                        )
+                        raise RuntimeError(f"Event handler failed while fail-hard mode is enabled: {err_msg}")
                 else:
                     event["status"] = "processed"
                     processed += 1
                     details.append({"id": event.get("id"), "name": event.get("name"), "status": event["status"], "result": result})
+                continue
             except Exception as e:  # pragma: no cover
+                if handler_reported_failed and event.get("status") == "failed":
+                    # Handler explicitly reported failed; avoid double-counting in fail-hard raise path.
+                    raise
                 event["status"] = "failed"
                 event["processed_at"] = _now()
                 event["result"] = {"status": "failed", "error": str(e)}
