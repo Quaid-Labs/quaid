@@ -279,6 +279,39 @@ def test_lifecycle_registry_run_many_times_out_pending_tasks(tmp_path):
     assert "timed out" in out["slow"].errors[0]
 
 
+def test_lifecycle_registry_run_many_preserves_done_futures_after_as_completed_timeout(monkeypatch, tmp_path):
+    from core.lifecycle import janitor_lifecycle as jl
+
+    registry = build_default_registry()
+
+    def _fast(_ctx):
+        return SimpleNamespace(metrics={"fast": 1}, logs=[], errors=[], data={})
+
+    def _slow(_ctx):
+        time.sleep(0.15)
+        return SimpleNamespace(metrics={"slow": 1}, logs=[], errors=[], data={})
+
+    registry.register("fast", _fast)
+    registry.register("slow", _slow)
+
+    def _always_timeout(_pending, timeout=None):
+        raise TimeoutError()
+
+    monkeypatch.setattr(jl, "as_completed", _always_timeout)
+
+    out = registry.run_many(
+        [
+            ("fast", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path)),
+            ("slow", RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path)),
+        ],
+        max_workers=2,
+        overall_timeout_seconds=0.05,
+    )
+    assert out["fast"].metrics.get("fast") == 1
+    assert out["slow"].errors
+    assert "timed out" in out["slow"].errors[0]
+
+
 def test_lifecycle_registry_parallel_map_times_out(tmp_path):
     from core.lifecycle.janitor_lifecycle import LifecycleRegistry
 

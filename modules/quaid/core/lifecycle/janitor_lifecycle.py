@@ -150,6 +150,18 @@ class LifecycleRegistry:
                 try:
                     done = next(as_completed(pending, timeout=remaining))
                 except TimeoutError:
+                    # Futures can complete right as as_completed() times out.
+                    # Drain those completed futures before deadline cancellation.
+                    done_now = [fut for fut in list(pending) if fut.done()]
+                    for completed in done_now:
+                        name = fut_to_name[completed]
+                        pending.discard(completed)
+                        try:
+                            results[name] = completed.result()
+                        except Exception as exc:  # pragma: no cover
+                            results[name] = RoutineResult(
+                                errors=[f"Parallel lifecycle run failed for {name}: {exc}"]
+                            )
                     continue
                 name = fut_to_name[done]
                 pending.discard(done)
