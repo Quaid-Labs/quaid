@@ -1202,6 +1202,16 @@ step6_install() {
         fi
     fi
 
+    # Install Python dependency: sqlite-vec (vector search extension)
+    info "Installing sqlite-vec..."
+    if pip3 install sqlite-vec >/dev/null 2>&1; then
+        info "sqlite-vec installed"
+    elif pip install sqlite-vec >/dev/null 2>&1; then
+        info "sqlite-vec installed (pip fallback)"
+    else
+        warn "sqlite-vec install skipped — install manually: pip3 install sqlite-vec"
+    fi
+
     # Install internal reset/new command hook (OpenClaw workaround for before_reset).
     local quaid_hook_src="${PLUGIN_DIR}/adaptors/openclaw/hooks/quaid-reset-signal"
     local quaid_hook_dst="${WORKSPACE_ROOT}/hooks/quaid-reset-signal"
