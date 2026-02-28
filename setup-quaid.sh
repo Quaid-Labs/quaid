@@ -162,7 +162,8 @@ _find_gateway() {
         "$(npm root -g 2>/dev/null)/clawdbot" \
         "/opt/homebrew/lib/node_modules/openclaw" \
         "/opt/homebrew/lib/node_modules/clawdbot" \
-        "/usr/local/lib/node_modules/openclaw"
+        "/usr/local/lib/node_modules/openclaw" \
+        "/usr/local/lib/node_modules/clawdbot"
     do
         if [[ -d "$candidate" ]] && [[ -f "${candidate}/package.json" ]]; then
             echo "$candidate"
