@@ -588,16 +588,27 @@ def _resolve_hook_callable(manifest: PluginManifest, handler_ref: str) -> Callab
     return fn
 
 
-def _validate_contract_instance(manifest: PluginManifest) -> None:
-    cache_key = (manifest.plugin_id, manifest.module)
+def _contract_module_for_handler(manifest: PluginManifest, handler_ref: str) -> str:
+    token = str(handler_ref or "").strip()
+    if ":" in token:
+        module_ref, _ = token.split(":", 1)
+        module_ref = module_ref.strip()
+        if module_ref:
+            return module_ref
+    return manifest.module
+
+
+def _validate_contract_instance(manifest: PluginManifest, handler_ref: str = "") -> None:
+    contract_module = _contract_module_for_handler(manifest, handler_ref)
+    cache_key = (manifest.plugin_id, contract_module)
     with _CONTRACT_VALIDATION_LOCK:
         if cache_key in _CONTRACT_VALIDATION_CACHE:
             return
-    mod = importlib.import_module(manifest.module)
+    mod = importlib.import_module(contract_module)
     contract_obj = getattr(mod, "_CONTRACT", None)
     if contract_obj is None:
         raise ValueError(
-            f"plugin '{manifest.plugin_id}' must export _CONTRACT implementing PluginContractBase"
+            f"plugin '{manifest.plugin_id}' module '{contract_module}' must export _CONTRACT implementing PluginContractBase"
         )
     try:
         from core.contracts.plugin_contract import PluginContractBase
@@ -692,7 +703,7 @@ def run_plugin_contract_surface_collect(
                 warnings.append(msg)
             continue
         try:
-            _validate_contract_instance(record.manifest)
+            _validate_contract_instance(record.manifest, handler_ref)
             fn = _resolve_hook_callable(record.manifest, handler_ref)
             ctx = PluginHookContext(
                 plugin=record.manifest,
