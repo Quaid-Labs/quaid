@@ -1381,26 +1381,36 @@ def _load_config_inner() -> MemoryConfig:
 
     if plugins.enabled:
         from core.runtime.plugins import initialize_plugin_runtime, run_plugin_contract_surface
+        from core.runtime.events import validate_declared_event_contract
 
+        active_slots = {
+            "adapter": plugins.slots.adapter,
+            "ingest": list(plugins.slots.ingest),
+            "datastores": list(plugins.slots.datastores),
+        }
         registry, plugin_errors, plugin_warnings = initialize_plugin_runtime(
             api_version=plugins.api_version,
             paths=plugins.paths,
             allowlist=plugins.allowlist,
             strict=plugins.strict,
-            slots={
-                "adapter": plugins.slots.adapter,
-                "ingest": list(plugins.slots.ingest),
-                "datastores": list(plugins.slots.datastores),
-            },
+            slots=active_slots,
             workspace_root=str(_workspace_root()),
         )
+        try:
+            event_errors = validate_declared_event_contract(
+                registry=registry,
+                slots=active_slots,
+                strict=plugins.strict,
+            )
+            plugin_warnings.extend(event_errors)
+        except Exception as exc:
+            msg = f"Event contract validation failed: {exc}"
+            if plugins.strict:
+                raise
+            plugin_warnings.append(msg)
         init_errors, init_warnings = run_plugin_contract_surface(
             registry=registry,
-            slots={
-                "adapter": plugins.slots.adapter,
-                "ingest": list(plugins.slots.ingest),
-                "datastores": list(plugins.slots.datastores),
-            },
+            slots=active_slots,
             surface="init",
             config=candidate,
             plugin_config=plugins.config,
@@ -1414,11 +1424,7 @@ def _load_config_inner() -> MemoryConfig:
                 failed_init_plugin_ids.add(m.group(1).strip())
         cfg_errors, cfg_warnings = run_plugin_contract_surface(
             registry=registry,
-            slots={
-                "adapter": plugins.slots.adapter,
-                "ingest": list(plugins.slots.ingest),
-                "datastores": list(plugins.slots.datastores),
-            },
+            slots=active_slots,
             surface="config",
             config=candidate,
             plugin_config=plugins.config,
@@ -1428,11 +1434,7 @@ def _load_config_inner() -> MemoryConfig:
         )
         tool_runtime_errors, tool_runtime_warnings = run_plugin_contract_surface(
             registry=registry,
-            slots={
-                "adapter": plugins.slots.adapter,
-                "ingest": list(plugins.slots.ingest),
-                "datastores": list(plugins.slots.datastores),
-            },
+            slots=active_slots,
             surface="tool_runtime",
             config=candidate,
             plugin_config=plugins.config,
