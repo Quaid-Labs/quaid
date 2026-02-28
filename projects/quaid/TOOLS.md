@@ -244,6 +244,9 @@ python3 datastore/docsdb/registry.py list --project quaid
 # Janitor maintenance
 python3 core/lifecycle/janitor.py --task all --dry-run
 python3 core/lifecycle/janitor.py --task all --apply
+python3 core/lifecycle/janitor.py --task review --apply --approve
+python3 core/lifecycle/janitor.py --task journal --apply --force-distill
+python3 core/lifecycle/janitor.py --task all --apply --time-budget 1800 --token-budget 12000
 ```
 
 ## Related Docs
