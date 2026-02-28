@@ -578,15 +578,25 @@ def _resolve_hook_callable(manifest: PluginManifest, handler_ref: str) -> Callab
     token = str(handler_ref or "").strip()
     if not token:
         raise ValueError("hook handler reference is empty")
-    mod = importlib.import_module(manifest.module)
+    manifest_module = str(manifest.module or "").strip()
     if ":" in token:
         module_ref, func_name = token.split(":", 1)
         module_ref = module_ref.strip()
         func_name = func_name.strip()
+        if not _PLUGIN_MODULE_RE.match(module_ref):
+            raise ValueError(
+                f"hook handler '{token}' for plugin '{manifest.plugin_id}' has invalid module '{module_ref}'"
+            )
+        if not _module_in_manifest_namespace(manifest, module_ref):
+            manifest_pkg = manifest_module.rsplit(".", 1)[0] if "." in manifest_module else manifest_module
+            raise ValueError(
+                f"hook handler '{token}' for plugin '{manifest.plugin_id}' must resolve inside '{manifest_pkg}'"
+            )
         target_mod = importlib.import_module(module_ref)
         fn = getattr(target_mod, func_name, None)
     else:
-        fn = getattr(mod, token, None)
+        target_mod = importlib.import_module(manifest_module)
+        fn = getattr(target_mod, token, None)
     if not callable(fn):
         raise ValueError(
             f"hook handler '{token}' for plugin '{manifest.plugin_id}' is not callable"
@@ -604,8 +614,29 @@ def _contract_module_for_handler(manifest: PluginManifest, handler_ref: str) -> 
     return manifest.module
 
 
+def _module_in_manifest_namespace(manifest: PluginManifest, module_ref: str) -> bool:
+    manifest_module = str(manifest.module or "").strip()
+    module_token = str(module_ref or "").strip()
+    if not manifest_module or not module_token:
+        return False
+    manifest_pkg = manifest_module.rsplit(".", 1)[0] if "." in manifest_module else manifest_module
+    return (
+        module_token == manifest_module
+        or module_token == manifest_pkg
+        or module_token.startswith(f"{manifest_pkg}.")
+    )
+
+
 def _validate_contract_instance(manifest: PluginManifest, handler_ref: str = "") -> None:
     contract_module = _contract_module_for_handler(manifest, handler_ref)
+    if not _PLUGIN_MODULE_RE.match(contract_module):
+        raise ValueError(
+            f"plugin '{manifest.plugin_id}' handler module '{contract_module}' is invalid"
+        )
+    if not _module_in_manifest_namespace(manifest, contract_module):
+        raise ValueError(
+            f"plugin '{manifest.plugin_id}' handler module '{contract_module}' is outside '{manifest.module}' namespace"
+        )
     cache_key = (manifest.plugin_id, contract_module)
     with _CONTRACT_VALIDATION_LOCK:
         if cache_key in _CONTRACT_VALIDATION_CACHE:

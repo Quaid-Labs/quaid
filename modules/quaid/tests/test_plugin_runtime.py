@@ -1583,3 +1583,96 @@ def test_collect_declared_exports_for_active_plugins():
     )
     assert tools == {"adapter.exports": ["memory_recall", "memory_store"]}
     assert apis == {"adapter.exports": ["openclaw_adapter_entry"]}
+
+
+def test_colon_handler_does_not_import_manifest_module(tmp_path: Path, monkeypatch):
+    pkg = tmp_path / "plugpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "main_contract.py").write_text(
+        "raise RuntimeError('manifest module should not be imported for colon handler')\n",
+        encoding="utf-8",
+    )
+    (pkg / "handlers.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "class C(PluginContractBase):\n"
+        "    def on_init(self, ctx): return {'ok': True}\n"
+        "    def on_config(self, ctx): return None\n"
+        "    def on_status(self, ctx): return {}\n"
+        "    def on_dashboard(self, ctx): return {}\n"
+        "    def on_maintenance(self, ctx): return {}\n"
+        "    def on_tool_runtime(self, ctx): return {}\n"
+        "    def on_health(self, ctx): return {}\n"
+        "_CONTRACT=C()\n"
+        "def on_init(ctx): return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    caps = _contract_caps("PlugPkg")
+    caps["contract"]["init"] = {"mode": "hook", "handler": "plugpkg.handlers:on_init"}
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "plugpkg.adapter",
+            "plugin_type": "adapter",
+            "module": "plugpkg.main_contract",
+            "capabilities": caps,
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    errors, warnings, results = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots={"adapter": "plugpkg.adapter", "ingest": [], "datastores": []},
+        surface="init",
+        config=SimpleNamespace(),
+        strict=True,
+    )
+    assert errors == []
+    assert warnings == []
+    assert results == [("plugpkg.adapter", {"ok": True})]
+
+
+def test_colon_handler_rejects_modules_outside_manifest_namespace(tmp_path: Path, monkeypatch):
+    pkg = tmp_path / "plugpkg2"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "main_contract.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "class C(PluginContractBase):\n"
+        "    def on_init(self, ctx): return None\n"
+        "    def on_config(self, ctx): return None\n"
+        "    def on_status(self, ctx): return {}\n"
+        "    def on_dashboard(self, ctx): return {}\n"
+        "    def on_maintenance(self, ctx): return {}\n"
+        "    def on_tool_runtime(self, ctx): return {}\n"
+        "    def on_health(self, ctx): return {}\n"
+        "_CONTRACT=C()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    caps = _contract_caps("PlugPkg2")
+    caps["contract"]["init"] = {"mode": "hook", "handler": "core.runtime.events:emit_event"}
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "plugpkg2.adapter",
+            "plugin_type": "adapter",
+            "module": "plugpkg2.main_contract",
+            "capabilities": caps,
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    errors, warnings, _ = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots={"adapter": "plugpkg2.adapter", "ingest": [], "datastores": []},
+        surface="init",
+        config=SimpleNamespace(),
+        strict=True,
+    )
+    assert warnings == []
+    assert len(errors) == 1
+    assert "outside" in errors[0]
