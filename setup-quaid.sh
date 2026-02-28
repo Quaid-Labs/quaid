@@ -1146,20 +1146,24 @@ step6_install() {
     if [[ -f "${DATA_DIR}/memory.db" ]]; then
         warn "Database already exists at ${DATA_DIR}/memory.db"
         if confirm "Reinitialize? (existing data will be preserved, only missing tables added)"; then
+            export QUAID_DB_PATH="${DATA_DIR}/memory.db"
+            export QUAID_SCHEMA_PATH="${PLUGIN_DIR}/datastore/memorydb/schema.sql"
             python3 -c "
-import sqlite3
-conn = sqlite3.connect('${DATA_DIR}/memory.db')
-with open('${PLUGIN_DIR}/datastore/memorydb/schema.sql') as f:
+import os, sqlite3
+conn = sqlite3.connect(os.environ['QUAID_DB_PATH'])
+with open(os.environ['QUAID_SCHEMA_PATH']) as f:
     conn.executescript(f.read())
 conn.close()
 print('[+] Database updated')
 "
         fi
     else
+        export QUAID_DB_PATH="${DATA_DIR}/memory.db"
+        export QUAID_SCHEMA_PATH="${PLUGIN_DIR}/datastore/memorydb/schema.sql"
         python3 -c "
-import sqlite3
-conn = sqlite3.connect('${DATA_DIR}/memory.db')
-with open('${PLUGIN_DIR}/datastore/memorydb/schema.sql') as f:
+import os, sqlite3
+conn = sqlite3.connect(os.environ['QUAID_DB_PATH'])
+with open(os.environ['QUAID_SCHEMA_PATH']) as f:
     conn.executescript(f.read())
 conn.close()
 print('[+] Database initialized')
@@ -1593,6 +1597,7 @@ _check_migration() {
             cd "$PLUGIN_DIR"
             export QUAID_HOME="${WORKSPACE_ROOT}"
             export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
+            export QUAID_WORKSPACE_ROOT="${WORKSPACE_ROOT}"
             python3 -c "
 import os, sys
 os.environ['QUAID_QUIET'] = '1'
@@ -1601,12 +1606,13 @@ sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store
 from core.llm.clients import call_deep_reasoning, parse_json_response
 
+workspace_root = os.environ.get('QUAID_WORKSPACE_ROOT', '.')
 files = [f for f in ['SOUL.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'AGENTS.md']
-         if os.path.exists(os.path.join('${WORKSPACE_ROOT}', f))]
+         if os.path.exists(os.path.join(workspace_root, f))]
 
 total_facts = 0
 for fname in files:
-    fpath = os.path.join('${WORKSPACE_ROOT}', fname)
+    fpath = os.path.join(workspace_root, fname)
     with open(fpath) as f:
         content = f.read().strip()
     if len(content) < 50:
