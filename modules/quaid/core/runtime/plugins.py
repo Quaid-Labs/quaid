@@ -66,6 +66,7 @@ class PluginManifest:
     plugin_id: str
     plugin_type: str
     module: str
+    display_name: str
     entrypoint: str = "register"
     capabilities: Dict[str, Any] = field(default_factory=dict)
     dependencies: List[str] = field(default_factory=list)
@@ -184,6 +185,9 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
     display_name = capabilities.get("display_name", capabilities.get("displayName", ""))
     if not isinstance(display_name, str) or not display_name.strip():
         raise ValueError("Manifest capabilities.display_name is required")
+    display_name = display_name.strip()
+    capabilities = dict(capabilities)
+    capabilities["display_name"] = display_name
     for key in _PLUGIN_CONTRACT_REQUIRED:
         if key not in contract:
             raise ValueError(f"Manifest capabilities.contract missing required key: {key}")
@@ -237,6 +241,7 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
         plugin_id=plugin_id,
         plugin_type=plugin_type,
         module=module,
+        display_name=display_name,
         entrypoint=entrypoint,
         capabilities=capabilities,
         dependencies=deps,
