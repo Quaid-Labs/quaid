@@ -1,6 +1,7 @@
 import sys
 import sqlite3
 import time
+import importlib
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -436,3 +437,20 @@ def test_lifecycle_registry_caps_workspace_lock_registry_cache(tmp_path):
     keys = set(registry._lock_registries.keys())
     assert str((tmp_path / "b" / ".quaid" / "runtime" / "locks" / "janitor").resolve()) in keys
     assert str((tmp_path / "c" / ".quaid" / "runtime" / "locks" / "janitor").resolve()) in keys
+
+
+def test_lifecycle_env_modules_reject_unapproved_prefix(monkeypatch):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    seen: list[str] = []
+    real_import_module = importlib.import_module
+
+    def _spy_import(module_name: str, *args, **kwargs):
+        seen.append(module_name)
+        return real_import_module(module_name, *args, **kwargs)
+
+    monkeypatch.setattr(lifecycle_mod.importlib, "import_module", _spy_import)
+    monkeypatch.setenv("QUAID_LIFECYCLE_MODULES", "evil.module")
+    build_default_registry()
+
+    assert "evil.module" not in seen
