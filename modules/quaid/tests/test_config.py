@@ -177,6 +177,30 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_reload_config_resets_loading_guard_before_rebuild(self):
+        import config
+
+        old_config = config._config
+        old_loading = config._config_loading
+        config._config = None
+        config._config_loading = True
+        try:
+            calls = {"n": 0}
+
+            def _fake_inner():
+                calls["n"] += 1
+                cfg = MemoryConfig()
+                config._config = cfg
+                return cfg
+
+            with patch.object(config, "_load_config_inner", side_effect=_fake_inner):
+                cfg = reload_config()
+            assert isinstance(cfg, MemoryConfig)
+            assert calls["n"] == 1
+        finally:
+            config._config = old_config
+            config._config_loading = old_loading
+
     def test_load_config_thread_safe_singleton(self):
         import config
 

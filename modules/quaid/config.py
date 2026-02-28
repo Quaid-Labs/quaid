@@ -1442,12 +1442,15 @@ def get_config() -> MemoryConfig:
 
 def reload_config() -> MemoryConfig:
     """Force reload configuration from file."""
-    global _config
+    global _config, _config_loading
     from core.runtime.plugins import reset_plugin_runtime
     from prompt_sets import reset_registry
 
     with _config_lock:
         _config = None
+        # Allow nested reloads (for example from config callbacks) to rebuild
+        # config instead of short-circuiting to a bare MemoryConfig().
+        _config_loading = False
         _warned_unknown_config_keys.clear()
         reset_plugin_runtime()
         reset_registry()
