@@ -528,8 +528,8 @@ function runStartupSelfCheck(): void {
   }
 
   const requiredFiles = [
-    path.join(WORKSPACE, "plugins", "quaid", "core", "lifecycle", "janitor.py"),
-    path.join(WORKSPACE, "plugins", "quaid", "datastore", "memorydb", "memory_graph.py"),
+    path.join(PYTHON_PLUGIN_ROOT, "core", "lifecycle", "janitor.py"),
+    path.join(PYTHON_PLUGIN_ROOT, "datastore", "memorydb", "memory_graph.py"),
   ];
   for (const file of requiredFiles) {
     if (!fs.existsSync(file)) {
