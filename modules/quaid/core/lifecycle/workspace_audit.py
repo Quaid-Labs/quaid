@@ -30,6 +30,7 @@ def _workspace_dir() -> Path:
     return get_workspace_dir()
 
 logger = logging.getLogger(__name__)
+_MOVE_TO_DOCS_TARGET_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
 def _workspace_review_timeout_seconds(cfg: Any, default_seconds: int = 120) -> float:
@@ -159,6 +160,25 @@ def _default_owner_id() -> str:
             raise RuntimeError("Unable to resolve workspace audit default owner from config") from exc
         logger.warning("Workspace audit default owner fallback to 'default': %s", exc)
         return "default"
+
+
+def _sanitize_move_to_docs_target(raw_target: Any) -> Optional[str]:
+    """Validate LLM-suggested docs target path before writing files."""
+    target = str(raw_target or "").strip()
+    if not target:
+        return None
+    if len(target) > 512 or "\x00" in target or "\\" in target:
+        return None
+    if target.startswith("/") or target.startswith("~") or re.match(r"^[A-Za-z]:", target):
+        return None
+    if not target.startswith("docs/"):
+        return None
+    if not _MOVE_TO_DOCS_TARGET_RE.fullmatch(target):
+        return None
+    parts = target.split("/")
+    if any((not part) or part in {".", ".."} or len(part) > 128 for part in parts):
+        return None
+    return target
 
 
 # Default maxLines for bootstrap files (project-level TOOLS.md, AGENTS.md, etc.)
@@ -602,7 +622,15 @@ def apply_review_decisions(dry_run: bool = True,
 
                     elif action == "MOVE_TO_DOCS":
                         # Prefer MOVE_TO_PROJECT for project content
-                        target = decision.get("target", f"docs/{section.lower().replace(' ', '-')}.md")
+                        default_target = f"docs/{section.lower().replace(' ', '-')}.md"
+                        target = _sanitize_move_to_docs_target(decision.get("target", default_target))
+                        if target is None:
+                            logger.error(
+                                "Invalid MOVE_TO_DOCS target blocked: %r",
+                                decision.get("target", default_target),
+                            )
+                            stats["errors"] = stats.get("errors", 0) + 1
+                            continue
                         target_path = (_workspace_dir() / target).resolve()
                         # Prevent path traversal from LLM-controlled target
                         if not str(target_path).startswith(str(_workspace_dir().resolve())):

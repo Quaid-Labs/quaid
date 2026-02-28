@@ -688,3 +688,19 @@ def test_run_workspace_check_passes_configurable_llm_timeout(monkeypatch):
 
     wa.run_workspace_check(dry_run=True)
     assert captured["timeout"] == 33.0
+
+
+class TestMoveToDocsTargetSanitization:
+    def test_accepts_valid_docs_target(self):
+        from core.lifecycle.workspace_audit import _sanitize_move_to_docs_target
+
+        assert _sanitize_move_to_docs_target("docs/architecture/overview.md") == "docs/architecture/overview.md"
+
+    def test_rejects_unsafe_docs_target(self):
+        from core.lifecycle.workspace_audit import _sanitize_move_to_docs_target
+
+        assert _sanitize_move_to_docs_target("../outside.md") is None
+        assert _sanitize_move_to_docs_target("docs/../../outside.md") is None
+        assert _sanitize_move_to_docs_target("docs/evil?.md") is None
+        assert _sanitize_move_to_docs_target("C:/tmp/pwn.md") is None
+        assert _sanitize_move_to_docs_target("notes/other.md") is None
