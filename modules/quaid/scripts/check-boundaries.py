@@ -35,6 +35,8 @@ ALLOWLIST = {
     ("core/lifecycle/soul_snippets.py", "datastore"),
     # Adapter selection composition point.
     ("lib/adapter.py", "adaptors"),
+    # Archive compatibility shim forwards to datastore-owned implementation.
+    ("lib/archive.py", "datastore"),
 }
 
 PY_IMPORT_RE = re.compile(r"^\s*from\s+([a-zA-Z_][\w\.]*)\s+import\s+|^\s*import\s+([a-zA-Z_][\w\.]*)")
