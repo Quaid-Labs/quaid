@@ -7,13 +7,7 @@ import * as path from 'node:path'
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
-const RAG_SCRIPT = (() => {
-  const modernPath = path.join(WORKSPACE, "modules/quaid/datastore/docsdb/rag.py")
-  if (existsSync(modernPath)) return modernPath
-  const transitionalPath = path.join(WORKSPACE, "modules/quaid/core/docs/rag.py")
-  if (existsSync(transitionalPath)) return transitionalPath
-  return path.join(WORKSPACE, "plugins/quaid/core/docs/rag.py")
-})()
+const RAG_SCRIPT = path.join(WORKSPACE, "modules/quaid/datastore/docsdb/rag.py")
 const PYTHON_MODULE_ROOT = path.resolve(path.dirname(RAG_SCRIPT), "../..")
 const TEST_FIXTURES_DIR = '/tmp/rag-test-fixtures'
 
