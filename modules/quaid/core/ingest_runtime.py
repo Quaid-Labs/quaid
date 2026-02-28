@@ -44,3 +44,20 @@ def run_session_logs_ingest(
         message_count=message_count,
         topic_hint=topic_hint,
     )
+
+
+def run_extract_from_transcript(
+    *,
+    transcript: str,
+    owner_id: str,
+    label: str = "mcp",
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    from ingest.extract import extract_from_transcript
+
+    return extract_from_transcript(
+        transcript=transcript,
+        owner_id=owner_id,
+        label=label,
+        dry_run=dry_run,
+    )
