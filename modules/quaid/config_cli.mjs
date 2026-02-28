@@ -636,16 +636,18 @@ async function runEdit() {
       }));
       setPath(cfg, "notifications.retrieval.verbosity", next);
     } else if (menu === "pre_injection_pass") {
-      const current = !!getPath(cfg, "retrieval.preInjectionPass", true);
+      const current = !!getPath(cfg, "retrieval.pre_injection_pass", getPath(cfg, "retrieval.preInjectionPass", true));
       const next = handleCancel(await select({
-        message: "retrieval.preInjectionPass",
+        message: "retrieval.pre_injection_pass",
         initialValue: current ? "on" : "off",
         options: [
           { value: "on", label: "on", hint: "auto-inject uses total_recall (fast planner + routed stores)" },
           { value: "off", label: "off", hint: "auto-inject uses plain recall on vector_basic + graph" },
         ],
       }));
-      setPath(cfg, "retrieval.preInjectionPass", next === "on");
+      const val = next === "on";
+      setPath(cfg, "retrieval.pre_injection_pass", val);
+      setPath(cfg, "retrieval.preInjectionPass", val);
     } else if (menu === "router_fail_open") {
       const current = !!getPath(cfg, "retrieval.router_fail_open", getPath(cfg, "retrieval.routerFailOpen", true));
       const next = handleCancel(await select({
