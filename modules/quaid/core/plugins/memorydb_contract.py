@@ -12,24 +12,10 @@ from typing import Dict
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
+from datastore.memorydb.domain_defaults import default_domain_descriptions
 from lib.config import get_db_path
 from lib.database import get_connection
 from lib.tools_domain_sync import sync_tools_domain_block
-
-_DEFAULT_DOMAIN_DESCRIPTIONS = {
-    "personal": "identity, preferences, relationships, life events",
-    "technical": "code, infra, APIs, architecture",
-    "project": "project status, tasks, files, milestones",
-    "work": "job/team/process decisions not deeply technical",
-    "health": "training, injuries, routines, wellness",
-    "finance": "budgeting, purchases, salary, bills",
-    "travel": "trips, moves, places, logistics",
-    "schedule": "dates, appointments, deadlines",
-    "research": "options considered, comparisons, tradeoff analysis",
-    "household": "home, chores, food planning, shared logistics",
-    "legal": "contracts, policy, and regulatory constraints",
-}
-
 
 def _resolve_db_path(ctx: PluginHookContext) -> Path:
     _ = ctx
@@ -45,7 +31,7 @@ def _resolve_domains(ctx: PluginHookContext) -> Dict[str, str]:
     retrieval_domains = getattr(getattr(ctx.config, "retrieval", None), "domains", {}) or {}
     if isinstance(retrieval_domains, dict) and retrieval_domains:
         return {str(k).strip(): str(v or "").strip() for k, v in retrieval_domains.items() if str(k).strip()}
-    return dict(_DEFAULT_DOMAIN_DESCRIPTIONS)
+    return default_domain_descriptions()
 
 
 def _sync_domains(ctx: PluginHookContext) -> None:
