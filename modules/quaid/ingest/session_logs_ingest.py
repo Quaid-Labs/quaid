@@ -51,7 +51,7 @@ def _build_transcript_from_session_file(path: Path) -> str:
     return get_adapter_instance().parse_session_jsonl(path)
 
 
-_SESSION_LOGS_SCRIPT = Path(__file__).resolve().parents[1] / "datastore" / "memorydb" / "session_logs.py"
+_SESSION_LOGS_MODULE = "datastore.memorydb.session_logs"
 
 
 def _call_session_logs_cli(command: str, args: list[str]) -> Dict[str, Any]:
@@ -60,7 +60,7 @@ def _call_session_logs_cli(command: str, args: list[str]) -> Dict[str, Any]:
     current_pp = str(env.get("PYTHONPATH", "")).strip()
     env["PYTHONPATH"] = plugin_root if not current_pp else f"{plugin_root}:{current_pp}"
     proc = subprocess.run(
-        ["python3", str(_SESSION_LOGS_SCRIPT), command, *args],
+        ["python3", "-m", _SESSION_LOGS_MODULE, command, *args],
         cwd=plugin_root,
         env=env,
         capture_output=True,

@@ -73,6 +73,22 @@ def test_call_session_logs_cli_includes_exit_code_and_streams(monkeypatch, tmp_p
         raise AssertionError("expected RuntimeError")
 
 
+def test_call_session_logs_cli_uses_module_entrypoint(monkeypatch, tmp_path):
+    set_adapter(StandaloneAdapter(home=tmp_path))
+    captured = {}
+
+    def _fake_run(cmd, **_kwargs):
+        captured["cmd"] = list(cmd)
+        return SimpleNamespace(returncode=0, stderr="", stdout='{"ok": true}')
+
+    monkeypatch.setattr("ingest.session_logs_ingest.subprocess.run", _fake_run)
+    out = session_logs_ingest._call_session_logs_cli("list", ["--limit", "5"])
+
+    assert out["ok"] is True
+    assert captured["cmd"][:3] == ["python3", "-m", "datastore.memorydb.session_logs"]
+    assert captured["cmd"][3:] == ["list", "--limit", "5"]
+
+
 def test_normalize_participant_aliases_accepts_json_object_string():
     out = session_logs_ingest._normalize_participant_aliases('{" ownerAlias ":" user:owner ","":"x"}')
     assert out == {"ownerAlias": "user:owner"}
