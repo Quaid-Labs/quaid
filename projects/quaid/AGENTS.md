@@ -33,6 +33,7 @@
 - `datastore/memorydb/`: memory graph, schema, janitor maintenance.
 - `datastore/docsdb/`: docs registry/search/update pipelines.
 - `core/lifecycle/`: janitor/workspace lifecycle orchestration.
+- `core/llm/scheduler.py`: global adaptive LLM scheduler (timeout backoff + slow release).
 
 ## Best Practices
 
@@ -66,6 +67,8 @@
 - Declared contract surfaces: `tools`, `api`, `events`, `ingest_triggers`, `auth_requirements`, `migrations`, `notifications`.
 - In strict mode (`config/memory.json -> plugins.strict=true`), undeclared tool/event registrations must fail fast.
 - Datastore-specific behavior (for example domains/schema sync) belongs in datastore plugin contracts, not core one-offs.
+- Core prepass timeout tuning lives under `core.parallel.lifecyclePrepassTimeoutSeconds` /
+  `core.parallel.lifecyclePrepassTimeoutRetries` (snake_case aliases also supported).
 
 ## Memory Lifecycle
 
