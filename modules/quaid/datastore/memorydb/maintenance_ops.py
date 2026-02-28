@@ -49,7 +49,6 @@ from config import get_config
 from lib.llm_clients import (
     call_fast_reasoning,
     call_deep_reasoning,
-    call_llm,
     parse_json_response,
     reset_token_usage,
     get_token_usage,
@@ -376,14 +375,6 @@ def _lr_batch_timeout() -> int:
     if env_val.isdigit():
         return int(env_val)
     return 300 if _is_benchmark_mode() else 120
-
-
-def _janitor_review_model() -> str:
-    """Review model override for janitor LLM maintenance tasks."""
-    env_model = str(os.environ.get("QUAID_JANITOR_REVIEW_MODEL", "")).strip()
-    if env_model:
-        return env_model
-    return _cfg.janitor.opus_review.model
 
 
 def _parallel_key(task_name: str) -> str:
@@ -1569,8 +1560,7 @@ def resolve_contradictions_with_opus(
         metrics.end_task("contradiction_resolution")
         return results
 
-    review_model = _janitor_review_model()
-    print(f"  Resolving {len(pending)} pending contradictions via Opus ({review_model})...")
+    print(f"  Resolving {len(pending)} pending contradictions via deep-reasoning model...")
 
     builder = TokenBatchBuilder(
         model_tier='deep',
@@ -1628,7 +1618,6 @@ JSON array only:"""
                 prompt,
                 max_tokens=300 * len(batch),
                 timeout=_effective_llm_timeout(llm_timeout_seconds, DEEP_REASONING_TIMEOUT),
-                model=review_model,
             ),
         }
 
@@ -2736,7 +2725,6 @@ def review_pending_memories(
     Review all pending memories via the deep-reasoning LLM.
     Sends batches of memories for KEEP/DELETE/FIX/MERGE decisions and applies them immediately.
     """
-    model = _janitor_review_model()
     max_tokens = _cfg.models.max_output('deep')
 
     # Get all pending memories (with optional per-run cap for backlog control)
@@ -2934,10 +2922,9 @@ Respond with a JSON array only, no markdown fencing:
 
     def _invoke_review_batch(batch_num: int, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            response_text, duration = call_llm(
+            response_text, duration = call_deep_reasoning(
+                payload["user_message"],
                 system_prompt=system_prompt,
-                user_message=payload["user_message"],
-                model=model,
                 max_tokens=payload["batch_max_tokens"],
             )
             error: Optional[Exception] = None
@@ -3041,10 +3028,9 @@ Respond with a JSON array only, no markdown fencing:
                     "Respond with JSON array only:\n"
                     "[{\"id\":\"...\",\"action\":\"KEEP\"}]"
                 )
-                retry_text, retry_duration = call_llm(
+                retry_text, retry_duration = call_deep_reasoning(
+                    retry_prompt,
                     system_prompt=system_prompt,
-                    user_message=retry_prompt,
-                    model=model,
                     max_tokens=max(200 * len(missing_payload), 300),
                 )
                 if metrics:
