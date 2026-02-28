@@ -382,6 +382,7 @@ def _handle_janitor_run_completed(event: Event) -> Dict[str, Any]:
             ):
                 queued += 1
 
+        if cfg.notifications.should_notify("janitor", detail="full"):
             digest = format_daily_memories_message(today_memories)
             if digest and _queue_delayed_llm_request(
                 message=digest,
