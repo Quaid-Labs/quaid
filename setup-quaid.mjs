@@ -310,7 +310,16 @@ async function step1_preflight() {
 
   // Snapshot existing files BEFORE any clawdbot commands — those commands load
   // the quaid plugin which creates data/memory.db, giving a false "dirty" signal.
-  const _existingFiles = ["SOUL.md", "USER.md", "MEMORY.md", "TOOLS.md", "AGENTS.md"]
+  const _existingFiles = [
+    "SOUL.md",
+    "USER.md",
+    "MEMORY.md",
+    "TOOLS.md",
+    "AGENTS.md",
+    "IDENTITY.md",
+    "HEARTBEAT.md",
+    "TODO.md",
+  ]
     .filter(f => fs.existsSync(path.join(WORKSPACE, f)));
   const _hasConfig = fs.existsSync(path.join(CONFIG_DIR, "memory.json"));
   const _hasDb = fs.existsSync(path.join(DATA_DIR, "memory.db"));
