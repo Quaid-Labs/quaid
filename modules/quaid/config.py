@@ -1309,7 +1309,6 @@ def _load_config_inner() -> MemoryConfig:
     from prompt_sets import set_active_prompt_set
 
     set_active_prompt_set(candidate.prompt_set)
-    _config = candidate
 
     if plugins.enabled:
         from core.runtime.plugins import initialize_plugin_runtime, run_plugin_contract_surface
@@ -1378,6 +1377,7 @@ def _load_config_inner() -> MemoryConfig:
         if plugins.strict and plugin_errors:
             raise ValueError("Plugin contract hook failures: " + "; ".join(plugin_errors))
 
+    _config = candidate
     return _config
 
 
@@ -1394,9 +1394,9 @@ def reload_config() -> MemoryConfig:
 
     with _config_lock:
         _config = None
-    reset_plugin_runtime()
-    reset_registry()
-    return load_config()
+        reset_plugin_runtime()
+        reset_registry()
+        return load_config()
 
 
 if __name__ == "__main__":

@@ -635,7 +635,7 @@ step3_models() {
     _api_format_for() {
         case "$1" in
             anthropic) echo "anthropic" ;;
-            *)         echo "openai" ;;
+            *)         echo "openai-compatible" ;;
         esac
     }
 
@@ -1360,7 +1360,7 @@ _write_config() {
     "workspace": ${SYS_WORKSPACE}
   },
   "models": {
-    "provider": "${PROVIDER}",
+    "llmProvider": "${PROVIDER}",
     "apiKeyEnv": "${API_KEY_ENV}",
     "baseUrl": ${base_url_json},
     "fastReasoning": "${LOW_MODEL}",

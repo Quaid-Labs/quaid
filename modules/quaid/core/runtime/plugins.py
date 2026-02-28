@@ -374,7 +374,8 @@ def initialize_plugin_runtime(
         strict=strict,
         errors=errors,
     )
-    if adapter_slot and registry.get(adapter_slot):
+    adapter_rec = registry.get(adapter_slot) if adapter_slot else None
+    if adapter_slot and adapter_rec and adapter_rec.manifest.plugin_type == "adapter":
         registry.activate_singleton("adapter", adapter_slot)
     for idx, plugin_id in enumerate(slot_data.get("ingest", []) or []):
         _validate_slot_selection(
