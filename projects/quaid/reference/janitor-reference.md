@@ -439,4 +439,4 @@ The janitor wraps each task execution in structured error handling:
 - **LLM response validation:** API responses are validated before processing; malformed JSON from LLM calls is logged and skipped rather than crashing.
 - **Database safety:** Write operations use transactions; failed writes are rolled back cleanly.
 - **Graceful degradation:** If LLM API keys are missing or invalid, LLM tasks are skipped with clear error messages while non-LLM tasks still execute.
-- **Dedup merge isolation:** Individual merge operations in Task
+- **Dedup merge isolation:** Individual merge operations in Task 3 are wrapped in try/catch so a single failed merge does not abort the entire dedup pass.
