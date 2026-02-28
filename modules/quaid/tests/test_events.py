@@ -388,8 +388,9 @@ def test_register_event_handler_overwrites_with_force(caplog):
 
 
 def test_validate_declared_event_contract_accepts_openclaw_aliases(monkeypatch):
-    def _fake_collect_declared_exports(*, registry, slots, surface):
+    def _fake_collect_declared_exports(*, registry, slots, surface, strict=False):
         assert surface == "events"
+        assert strict is True
         return {"openclaw.adapter": ["before_reset", "agent_end", "before_compaction"]}
 
     monkeypatch.setattr(
@@ -406,7 +407,7 @@ def test_validate_declared_event_contract_accepts_openclaw_aliases(monkeypatch):
 
 
 def test_validate_declared_event_contract_rejects_unknown_declared_events(monkeypatch):
-    def _fake_collect_declared_exports(*, registry, slots, surface):
+    def _fake_collect_declared_exports(*, registry, slots, surface, strict=False):
         assert surface == "events"
         return {"bad.plugin": ["totally.unknown.event"]}
 
