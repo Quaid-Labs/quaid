@@ -134,13 +134,22 @@ def main() -> int:
         and "node_modules" not in p.parts
     ]
     violations: list[str] = []
+    skipped_outside_subsystems: list[str] = []
     for path in files:
+        if subsystem_for(path) is None:
+            skipped_outside_subsystems.append(path.relative_to(ROOT).as_posix())
+            continue
         violations.extend(check_file(path))
     if violations:
         print("[boundary-check] FAIL")
         for v in sorted(set(violations)):
             print(f" - {v}")
         return 1
+    if skipped_outside_subsystems:
+        print(
+            f"[boundary-check] WARN skipped {len(skipped_outside_subsystems)} files outside subsystem map "
+            f"(examples: {', '.join(sorted(skipped_outside_subsystems)[:5])})"
+        )
     print("[boundary-check] PASS")
     return 0
 
