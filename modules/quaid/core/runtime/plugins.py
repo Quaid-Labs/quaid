@@ -726,6 +726,11 @@ def run_plugin_contract_surface_collect(
             continue
         record = registry.get(plugin_id)
         if not record:
+            msg = f"Plugin '{plugin_id}' is active in slots but missing from runtime registry"
+            if strict:
+                errors.append(msg)
+                break
+            warnings.append(msg)
             continue
         contract = (record.manifest.capabilities or {}).get("contract", {})
         if not isinstance(contract, dict):
