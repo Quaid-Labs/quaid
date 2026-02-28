@@ -1425,6 +1425,7 @@ except Exception as e:
   s.stop(C.green(`Owner node: ${owner.display}`));
 
   // Migration
+  let migrationCompleted = false;
   const mdFiles = ["SOUL.md", "USER.md", "TOOLS.md", "MEMORY.md", "AGENTS.md"]
     .filter(f => {
       const fp = path.join(WORKSPACE, f);
@@ -1492,8 +1493,17 @@ print(total)
 `;
       const result = spawnSync("python3", ["-c", migrateScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
       const factCount = (result.stdout || "").trim();
-      s.stop(C.green(`Migration complete: ${factCount} facts extracted`));
-      log.info(C.bold("These facts will be reviewed and deduplicated by the nightly janitor."));
+      if (result.status === 0) {
+        migrationCompleted = true;
+        s.stop(C.green(`Migration complete: ${factCount} facts extracted`));
+        log.info(C.bold("These facts will be reviewed and deduplicated by the nightly janitor."));
+      } else {
+        s.stop(C.yellow("Migration failed; prompting again after install"));
+        const detail = (result.stderr || result.stdout || "").trim();
+        if (detail) {
+          log.warn(detail);
+        }
+      }
       log.message("");
       await waitForKey();
     }
@@ -1624,16 +1634,21 @@ print(len(found))
   log.message("");
   try {
     const markerDir = path.join(LOGS_DIR, "janitor");
+    const markerPath = path.join(markerDir, "pending-install-migration.json");
     fs.mkdirSync(markerDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(markerDir, "pending-install-migration.json"),
-      JSON.stringify({
-        createdAt: new Date().toISOString(),
-        status: "pending",
-        prompt: "Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?"
-      }, null, 2) + "\n",
-      "utf8"
-    );
+    if (migrationCompleted || mdFiles.length === 0) {
+      try { fs.rmSync(markerPath, { force: true }); } catch {}
+    } else {
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          createdAt: new Date().toISOString(),
+          status: "pending",
+          prompt: "Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?"
+        }, null, 2) + "\n",
+        "utf8"
+      );
+    }
   } catch {}
   await waitForKey("Press any key to run validation...");
 }
