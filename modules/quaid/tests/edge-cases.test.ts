@@ -196,16 +196,16 @@ describe('Edge Cases', () => {
     })
 
     it('handles deletion of non-existent memory', async () => {
-      // Current implementation may not throw error for non-existent ID
-      // This tests graceful handling rather than error throwing
+      const stored = await memory.store('Existing memory should survive', 'testuser')
       try {
         await memory.delete('non-existent-id')
-        // If no error thrown, that's also acceptable behavior
-        expect(true).toBe(true)
       } catch (error) {
-        // If error is thrown, that's also acceptable behavior
+        // Either behavior is acceptable, but it must not affect existing records.
         expect(error).toBeDefined()
       }
+      const surviving = await memory.getRaw(stored.id)
+      expect(surviving.id).toBe(stored.id)
+      expect(surviving.owner_id).toBe('testuser')
     })
 
     it('handles very long owner names', async () => {
