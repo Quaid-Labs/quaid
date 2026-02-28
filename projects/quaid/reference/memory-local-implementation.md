@@ -338,7 +338,7 @@ Centralized modules extracted from duplicated code across `datastore/memorydb/me
 | `lib/embeddings.py` | `get_embedding(text)`, `pack_embedding()`, `unpack_embedding()` — embedding calls routed through configured provider (Ollama by default) |
 | `lib/similarity.py` | `cosine_similarity(a, b)` — vector comparison |
 | `lib/tokens.py` | `extract_key_tokens(text)` — noun/name extraction for dedup recall |
-| `lib/archive.py` | `archive_node(node, reason)` — writes to `data/memory_archive.db` |
+| `datastore/memorydb/archive_store.py` | `archive_node(node, reason)` / `search_archive(query)` — datastore-owned archive writes/reads for `data/memory_archive.db` (`lib/archive.py` remains a compatibility shim). |
 
 All shared library modules use `__all__` exports to define explicit public API boundaries, ensuring clean module interfaces and preventing accidental coupling to internal helpers.
 
