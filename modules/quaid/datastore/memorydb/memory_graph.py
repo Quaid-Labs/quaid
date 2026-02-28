@@ -3136,24 +3136,8 @@ def _normalize_domain_tag(value: Optional[str]) -> Optional[str]:
 
 
 def _registered_domains() -> Dict[str, str]:
-    """Read registered domains from config, with sane defaults."""
-    domains = default_domain_descriptions()
-    if not _HAS_CONFIG:
-        return domains
-    try:
-        cfg_domains = getattr(_get_memory_config().retrieval, "domains", {}) or {}
-        if isinstance(cfg_domains, dict):
-            normalized = {}
-            for raw_key, raw_desc in cfg_domains.items():
-                key = _normalize_domain_tag(raw_key)
-                if not key:
-                    continue
-                normalized[key] = str(raw_desc or "").strip() or domains.get(key, "")
-            if normalized:
-                domains = normalized
-    except Exception:
-        pass
-    return domains
+    """Datastore-owned fallback domain registry (used only when DB is unavailable)."""
+    return default_domain_descriptions()
 
 
 def _normalize_domains(values: Any) -> List[str]:
