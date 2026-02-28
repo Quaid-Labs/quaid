@@ -1676,3 +1676,33 @@ def test_colon_handler_rejects_modules_outside_manifest_namespace(tmp_path: Path
     assert warnings == []
     assert len(errors) == 1
     assert "outside" in errors[0]
+
+
+def test_run_plugin_contract_surface_reports_missing_active_plugin_non_strict():
+    registry = PluginRegistry(api_version=1)
+    errors, warnings, results = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots={"adapter": "missing.plugin", "ingest": [], "datastores": []},
+        surface="init",
+        config=SimpleNamespace(),
+        strict=False,
+    )
+    assert errors == []
+    assert len(warnings) == 1
+    assert "missing.plugin" in warnings[0]
+    assert results == []
+
+
+def test_run_plugin_contract_surface_reports_missing_active_plugin_strict():
+    registry = PluginRegistry(api_version=1)
+    errors, warnings, results = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots={"adapter": "missing.plugin", "ingest": [], "datastores": []},
+        surface="init",
+        config=SimpleNamespace(),
+        strict=True,
+    )
+    assert warnings == []
+    assert len(errors) == 1
+    assert "missing.plugin" in errors[0]
+    assert results == []
