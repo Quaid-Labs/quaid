@@ -6,13 +6,13 @@ are implemented here and invoked by core plugin contract execution.
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 from typing import Dict
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
+from lib.config import get_db_path
 from lib.database import get_connection
 from lib.tools_domain_sync import sync_tools_domain_block
 
@@ -32,14 +32,8 @@ _DEFAULT_DOMAIN_DESCRIPTIONS = {
 
 
 def _resolve_db_path(ctx: PluginHookContext) -> Path:
-    env_db_path = str(os.environ.get("MEMORY_DB_PATH", "")).strip()
-    if env_db_path:
-        return Path(env_db_path)
-    db_path = str(getattr(getattr(ctx.config, "database", None), "path", "data/memory.db") or "data/memory.db")
-    p = Path(db_path)
-    if p.is_absolute():
-        return p
-    return Path(ctx.workspace_root) / p
+    _ = ctx
+    return get_db_path()
 
 
 def _resolve_domains(ctx: PluginHookContext) -> Dict[str, str]:
