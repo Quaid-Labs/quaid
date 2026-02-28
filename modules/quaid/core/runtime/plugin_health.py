@@ -50,12 +50,27 @@ def collect_plugin_health() -> Dict[str, Any]:
         workspace_root=workspace_root,
         strict=bool(getattr(plugins, "strict", True)),
     )
+    dash_errors, dash_warnings, dash_results = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots={
+            "adapter": str(getattr(plugins.slots, "adapter", "") or ""),
+            "ingest": list(getattr(plugins.slots, "ingest", []) or []),
+            "datastores": list(getattr(plugins.slots, "datastores", []) or []),
+        },
+        surface="dashboard",
+        config=cfg,
+        plugin_config=dict(getattr(plugins, "config", {}) or {}),
+        workspace_root=workspace_root,
+        strict=bool(getattr(plugins, "strict", True)),
+    )
     health = {plugin_id: payload for plugin_id, payload in results}
+    dashboard = {plugin_id: payload for plugin_id, payload in dash_results}
     return {
         "enabled": True,
-        "errors": list(init_errors) + list(errors),
-        "warnings": list(init_warnings) + list(warnings),
+        "errors": list(init_errors) + list(errors) + list(dash_errors),
+        "warnings": list(init_warnings) + list(warnings) + list(dash_warnings),
         "plugins": health,
+        "dashboard": dashboard,
     }
 
 

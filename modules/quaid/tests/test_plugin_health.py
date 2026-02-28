@@ -29,15 +29,24 @@ def test_collect_plugin_health_enabled_smoke(monkeypatch):
     fake_cfg = SimpleNamespace(plugins=_plugins_cfg(enabled=True))
     monkeypatch.setattr("config.get_config", lambda: fake_cfg)
     monkeypatch.setattr("core.runtime.plugins.get_runtime_registry", lambda: object())
+
+    def _collect(**kwargs):
+        if kwargs.get("surface") == "health":
+            return ([], ["warn"], [("quaid.memorydb", {"ok": True})])
+        if kwargs.get("surface") == "dashboard":
+            return ([], [], [("quaid.memorydb", {"widgets": 1})])
+        raise AssertionError(f"unexpected surface: {kwargs.get('surface')}")
+
     monkeypatch.setattr(
         "core.runtime.plugins.run_plugin_contract_surface_collect",
-        lambda **kwargs: ([], ["warn"], [("quaid.memorydb", {"ok": True})]),
+        _collect,
     )
 
     payload = plugin_health.collect_plugin_health()
     assert payload["enabled"] is True
     assert payload["warnings"] == ["warn"]
     assert payload["plugins"] == {"quaid.memorydb": {"ok": True}}
+    assert payload["dashboard"] == {"quaid.memorydb": {"widgets": 1}}
 
 
 def test_collect_plugin_health_includes_initialize_diagnostics(monkeypatch, tmp_path):
@@ -51,12 +60,16 @@ def test_collect_plugin_health_includes_initialize_diagnostics(monkeypatch, tmp_
     )
     monkeypatch.setattr(
         "core.runtime.plugins.run_plugin_contract_surface_collect",
-        lambda **kwargs: (["health-error"], ["health-warn"], []),
+        lambda **kwargs: (
+            (["health-error"], ["health-warn"], [])
+            if kwargs.get("surface") == "health"
+            else (["dash-error"], ["dash-warn"], [])
+        ),
     )
 
     payload = plugin_health.collect_plugin_health()
-    assert payload["errors"] == ["init-error", "health-error"]
-    assert payload["warnings"] == ["init-warn", "health-warn"]
+    assert payload["errors"] == ["init-error", "health-error", "dash-error"]
+    assert payload["warnings"] == ["init-warn", "health-warn", "dash-warn"]
 
 
 def test_plugin_health_main_outputs_json(monkeypatch, capsys):
