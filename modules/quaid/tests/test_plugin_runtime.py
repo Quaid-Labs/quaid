@@ -79,6 +79,19 @@ def test_validate_manifest_rejects_invalid_type():
         )
 
 
+def test_validate_manifest_rejects_invalid_executable_mode():
+    payload = {
+        "plugin_api_version": 1,
+        "plugin_id": "openclaw.adapter",
+        "plugin_type": "adapter",
+        "module": "adaptors.openclaw.adapter",
+        "capabilities": _contract_caps("OpenClaw Adapter"),
+    }
+    payload["capabilities"]["contract"]["init"]["mode"] = "potato"
+    with pytest.raises(ValueError, match="contract.init.mode"):
+        validate_manifest_dict(payload)
+
+
 def test_validate_manifest_rejects_unapproved_module_namespace():
     with pytest.raises(ValueError, match="Invalid manifest module"):
         validate_manifest_dict(
