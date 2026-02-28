@@ -349,7 +349,21 @@ step1_preflight() {
 
         # Check that OpenClaw onboarding has been completed (at least one agent configured)
         local has_agent=false
-        if clawdbot config get agents 2>/dev/null </dev/null | strings | grep -q '"id"'; then
+        if clawdbot config get agents 2>/dev/null </dev/null | python3 -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if isinstance(payload, list):
+    ok = any(isinstance(item, dict) and item.get("id") for item in payload)
+elif isinstance(payload, dict):
+    items = payload.get("list", [])
+    ok = isinstance(items, list) and any(isinstance(item, dict) and item.get("id") for item in items)
+else:
+    ok = False
+sys.exit(0 if ok else 1)
+'; then
             has_agent=true
         fi
 
@@ -1227,7 +1241,11 @@ GITIGNORE
         fi
         # Initial commit so git diff/log have a baseline
         git -C "$WORKSPACE_ROOT" add -A
-        git -C "$WORKSPACE_ROOT" commit --quiet -m "Initial Quaid workspace"
+        if ! git -C "$WORKSPACE_ROOT" commit --quiet -m "Initial Quaid workspace"; then
+            warn "Git identity is not configured; retrying local init commit with installer identity."
+            git -C "$WORKSPACE_ROOT" -c user.name="Quaid Installer" -c user.email="installer@local" \
+                commit --quiet -m "Initial Quaid workspace" || true
+        fi
         info "Git repository initialized"
     else
         info "Git repository already exists"
