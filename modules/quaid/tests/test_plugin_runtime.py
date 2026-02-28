@@ -80,6 +80,20 @@ def test_validate_manifest_rejects_invalid_type():
         )
 
 
+def test_validate_manifest_preserves_zero_priority():
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.zero-priority",
+            "plugin_type": "adapter",
+            "module": "adaptors.zero",
+            "priority": 0,
+            "capabilities": _contract_caps("Zero Priority Adapter"),
+        }
+    )
+    assert manifest.priority == 0
+
+
 def test_validate_manifest_rejects_invalid_executable_mode():
     payload = {
         "plugin_api_version": 1,
