@@ -86,7 +86,7 @@ def _data_dir() -> Path:
 def _logs_dir() -> Path:
     return get_logs_dir()
 
-_LIFECYCLE_REGISTRY = build_default_registry()
+_LIFECYCLE_REGISTRY = None
 
 # Thresholds - now loaded from config/memory.json
 _cfg = get_config()
@@ -119,6 +119,13 @@ def _refresh_runtime_state() -> None:
     CONFIDENCE_DECAY_DAYS = _cfg.decay.threshold_days
     CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0
     MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 120) * 60
+
+
+def _lifecycle_registry():
+    global _LIFECYCLE_REGISTRY
+    if _LIFECYCLE_REGISTRY is None:
+        _LIFECYCLE_REGISTRY = build_default_registry()
+    return _LIFECYCLE_REGISTRY
 
 
 def _janitor_test_timeout_seconds(default_seconds: int = 600) -> int:
@@ -962,7 +969,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     janitor_logger.error("plugin_maintenance_dispatch_failed", error=str(exc), stage=stage)
                     raise
                 janitor_logger.warn("plugin_maintenance_dispatch_failed", error=str(exc), stage=stage)
-            return _LIFECYCLE_REGISTRY.run(
+            return _lifecycle_registry().run(
                 "memory_graph_maintenance",
                 RoutineContext(
                     cfg=_cfg,
@@ -1225,7 +1232,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     raise RuntimeError("Missing required config: core.parallel")
                 prepass_workers = int(getattr(parallel_cfg, "lifecycle_prepass_workers", 3) or 3)
                 prepass_workers = max(1, prepass_workers)
-                parallel_lifecycle_results = _LIFECYCLE_REGISTRY.run_many(
+                parallel_lifecycle_results = _lifecycle_registry().run_many(
                     [
                         ("workspace", RoutineContext(cfg=_cfg, dry_run=True, workspace=_workspace())),
                         ("docs_staleness", RoutineContext(
@@ -1265,7 +1272,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             )
             workspace_dry_run = dry_run or (not workspace_apply_allowed)
 
-            lifecycle_result = parallel_lifecycle_results.get("workspace") or _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("workspace") or _lifecycle_registry().run(
                 "workspace",
                 RoutineContext(cfg=_cfg, dry_run=workspace_dry_run, workspace=_workspace()),
             )
@@ -1293,7 +1300,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("docs_staleness", "all") and _system_enabled_or_skip("docs_staleness", "Task 1b: Doc Staleness") and not _skip_if_over_budget("Task 1b: Doc Staleness", 60):
             print("[Task 1b: Documentation Staleness Check]")
             metrics.start_task("docs_staleness")
-            lifecycle_result = parallel_lifecycle_results.get("docs_staleness") or _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("docs_staleness") or _lifecycle_registry().run(
                 "docs_staleness",
                 RoutineContext(
                     cfg=_cfg,
@@ -1315,7 +1322,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("docs_cleanup", "all") and _system_enabled_or_skip("docs_cleanup", "Task 1c: Doc Cleanup") and not _skip_if_over_budget("Task 1c: Doc Cleanup", 60):
             print("[Task 1c: Documentation Cleanup]")
             metrics.start_task("docs_cleanup")
-            lifecycle_result = parallel_lifecycle_results.get("docs_cleanup") or _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("docs_cleanup") or _lifecycle_registry().run(
                 "docs_cleanup",
                 RoutineContext(
                     cfg=_cfg,
@@ -1342,7 +1349,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 "snippets fold into root core markdown"
             )
             snippets_dry_run = dry_run or (not snippets_apply_allowed)
-            lifecycle_result = parallel_lifecycle_results.get("snippets") or _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("snippets") or _lifecycle_registry().run(
                 "snippets",
                 RoutineContext(cfg=_cfg, dry_run=snippets_dry_run, workspace=_workspace()),
             )
@@ -1364,7 +1371,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 "journal distillation updates root core markdown"
             )
             journal_dry_run = dry_run or (not journal_apply_allowed)
-            lifecycle_result = parallel_lifecycle_results.get("journal") or _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = parallel_lifecycle_results.get("journal") or _lifecycle_registry().run(
                 "journal",
                 RoutineContext(
                     cfg=_cfg,
@@ -1386,7 +1393,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("rag", "all") and _system_enabled_or_skip("rag", "Task 7: RAG Reindex") and not _skip_if_over_budget("Task 7: RAG Reindex", 15):
             print("[Task 7: RAG Reindex + Project Discovery]")
             metrics.start_task("rag_reindex")
-            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = _lifecycle_registry().run(
                 "rag",
                 RoutineContext(cfg=_cfg, dry_run=dry_run, workspace=_workspace()),
             )
@@ -1429,7 +1436,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         if task in ("cleanup", "all") and not _skip_if_over_budget("Task 9: Cleanup", 5):
             print("[Task 9: Audit Table Cleanup]")
             metrics.start_task("cleanup")
-            lifecycle_result = _LIFECYCLE_REGISTRY.run(
+            lifecycle_result = _lifecycle_registry().run(
                 "datastore_cleanup",
                 RoutineContext(cfg=_cfg, dry_run=dry_run, workspace=_workspace(), graph=graph),
             )
