@@ -3951,12 +3951,16 @@ notify_memory_extraction(
             injectedMemoriesDetail: logData.injectedMemoriesDetail || [],
             newlyInjected: logData.newlyInjected || []
           };
-          res.writeHead(200, {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET",
-            "Access-Control-Allow-Headers": "Content-Type"
-          });
+          const headers = {
+            "Content-Type": "application/json"
+          };
+          const allowedOrigin = String(process.env.QUAID_DASHBOARD_ALLOWED_ORIGIN || "").trim();
+          if (allowedOrigin) {
+            headers["Access-Control-Allow-Origin"] = allowedOrigin;
+            headers["Access-Control-Allow-Methods"] = "GET";
+            headers["Access-Control-Allow-Headers"] = "Content-Type";
+          }
+          res.writeHead(200, headers);
           res.end(JSON.stringify(responseData, null, 2));
         } catch (err) {
           console.error(`[quaid] HTTP endpoint error: ${String(err)}`);
