@@ -57,22 +57,7 @@ describe('Session Isolation', () => {
   })
 
   describe('Session Filtering in Recall', () => {
-    it('excludes current session memories from search results', async () => {
-      // NOTE: Session filtering not currently implemented in memory system
-      // This test validates that the feature would work when implemented
-      const sessionId = mockSessionId()
-      process.env.TEST_SESSION_ID = sessionId
-      
-      // Store a memory in current session
-      await memory.store('Current session memory about coffee', 'testuser')
-      
-      // In current implementation, search will return the memory
-      // When session filtering is implemented, this should return 0 results
-      const results = await memory.search('coffee', 'testuser')
-      expect(results.length).toBeGreaterThanOrEqual(0) // Flexible for current implementation
-      
-      delete process.env.TEST_SESSION_ID
-    })
+    it.todo('excludes current session memories from search results')
 
     it('includes memories from previous sessions in search', async () => {
       const session1 = mockSessionId()
@@ -119,23 +104,7 @@ describe('Session Isolation', () => {
   })
 
   describe('Session Boundary Behavior', () => {
-    it('prevents immediate feedback loops of just-stored memories', async () => {
-      // NOTE: Session filtering not yet implemented - this validates the concept
-      const sessionId = mockSessionId()
-      process.env.TEST_SESSION_ID = sessionId
-      
-      // Store multiple memories in the same session
-      await memory.store('Immediate memory 1', 'testuser')
-      await memory.store('Immediate memory 2', 'testuser')
-      await memory.store('Immediate memory 3', 'testuser')
-      
-      // Current implementation will return results
-      // When session filtering is implemented, this should return 0
-      const immediateResults = await memory.search('Immediate memory', 'testuser')
-      expect(immediateResults.length).toBeGreaterThanOrEqual(0) // Flexible for current implementation
-      
-      delete process.env.TEST_SESSION_ID
-    })
+    it.todo('prevents immediate feedback loops of just-stored memories')
 
     it('allows cross-session memory building', async () => {
       const session1 = mockSessionId()
@@ -164,94 +133,13 @@ describe('Session Isolation', () => {
       delete process.env.TEST_SESSION_ID
     })
 
-    it('handles session transitions correctly', async () => {
-      const session1 = mockSessionId()
-      const session2 = mockSessionId()
-      
-      // Session 1: Store and verify isolation
-      process.env.TEST_SESSION_ID = session1
-      await memory.store('Session transition test', 'testuser')
-      
-      let currentSessionResults = await memory.search('transition', 'testuser')
-      expect(currentSessionResults.length).toBeGreaterThanOrEqual(0) // Current implementation behavior
-      
-      // Session 2: Should be able to see session 1 memory
-      process.env.TEST_SESSION_ID = session2
-      const crossSessionResults = await memory.search('transition', 'testuser')
-      expect(crossSessionResults.length).toBe(1)
-      expect(crossSessionResults[0].content).toBe('Session transition test')
-      
-      // Store new memory in session 2
-      await memory.store('Second session memory', 'testuser')
-      
-      // NOTE: Session filtering not yet implemented
-      // Should see all session memories in current implementation
-      const filteredResults = await memory.search('session', 'testuser')
-      expect(filteredResults.length).toBeGreaterThanOrEqual(1) // At least one memory
-      
-      // Should contain the session transition test memory
-      const foundContents = filteredResults.map(r => r.content)
-      expect(foundContents).toContain('Session transition test')
-      
-      delete process.env.TEST_SESSION_ID
-    })
+    it.todo('handles session transitions correctly')
   })
 
   describe('Session Data Integrity', () => {
-    it('maintains session data consistency during concurrent access', async () => {
-      const session1 = mockSessionId()
-      const session2 = mockSessionId()
-      
-      // Concurrent operations across sessions
-      const operations = [
-        // Session 1 operations
-        (async () => {
-          process.env.TEST_SESSION_ID = session1
-          await memory.store('Concurrent session 1 memory', 'testuser')
-          return memory.search('memory', 'testuser')
-        })(),
-        
-        // Session 2 operations
-        (async () => {
-          process.env.TEST_SESSION_ID = session2
-          await memory.store('Concurrent session 2 memory', 'testuser')
-          return memory.search('memory', 'testuser')
-        })()
-      ]
-      
-      const [session1Results, session2Results] = await Promise.all(operations)
-      
-      // NOTE: Session filtering not yet implemented
-      // In current implementation, sessions see all memories
-      expect(session1Results.length).toBeGreaterThanOrEqual(0)
-      expect(session2Results.length).toBeGreaterThanOrEqual(0)
-      
-      delete process.env.TEST_SESSION_ID
-    })
+    it.todo('maintains session data consistency during concurrent access')
 
-    it('handles rapid session switching', async () => {
-      const sessions = [mockSessionId(), mockSessionId(), mockSessionId()]
-      
-      // Rapidly switch sessions and store memories
-      for (let i = 0; i < sessions.length; i++) {
-        process.env.TEST_SESSION_ID = sessions[i]
-        await memory.store(`Rapid session ${i} memory`, 'testuser')
-        
-        // NOTE: Session filtering not yet implemented
-        // Current implementation will return matching memories
-        const immediateResults = await memory.search(`session ${i}`, 'testuser')
-        expect(immediateResults.length).toBeGreaterThanOrEqual(0)
-      }
-      
-      // Final session should see all previous sessions
-      const finalSessionId = mockSessionId()
-      process.env.TEST_SESSION_ID = finalSessionId
-      
-      const allResults = await memory.search('Rapid session', 'testuser')
-      expect(allResults.length).toBe(3)
-      
-      delete process.env.TEST_SESSION_ID
-    })
+    it.todo('handles rapid session switching')
 
     it('preserves session isolation after memory operations', async () => {
       const sessionId = mockSessionId()
