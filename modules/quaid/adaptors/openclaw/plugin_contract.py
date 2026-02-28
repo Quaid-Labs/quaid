@@ -2,14 +2,31 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
+
+_INIT_READY = False
+_INIT_ERROR: Optional[str] = None
 
 
 class OpenClawAdapterPluginContract(PluginContractBase):
     def on_init(self, ctx: PluginHookContext) -> None:
-        # Adapter init is intentionally light-weight; adapter runtime is lazy-loaded.
+        global _INIT_READY, _INIT_ERROR
+        # Exercise datastore bootstrap from the contract surface so init is
+        # not a no-op and failures surface early during config load.
         _ = ctx
+        from core.services.memory_service import get_memory_service
+
+        try:
+            get_memory_service().stats()
+            _INIT_READY = True
+            _INIT_ERROR = None
+        except Exception as exc:
+            _INIT_READY = False
+            _INIT_ERROR = str(exc)
+            raise
 
     def on_config(self, ctx: PluginHookContext) -> None:
         # Keep this strict and explicit: openclaw adapter slot should pair with adapter.type=openclaw.
@@ -21,7 +38,10 @@ class OpenClawAdapterPluginContract(PluginContractBase):
 
     def on_status(self, ctx: PluginHookContext) -> dict:
         _ = ctx
-        return {"adapter": "openclaw", "ready": True}
+        out = {"adapter": "openclaw", "ready": bool(_INIT_READY)}
+        if _INIT_ERROR:
+            out["init_error"] = _INIT_ERROR
+        return out
 
     def on_dashboard(self, ctx: PluginHookContext) -> dict:
         _ = ctx
