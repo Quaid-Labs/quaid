@@ -566,7 +566,11 @@ def run_plugin_contract_surface_collect(
             continue
         handler_ref = str(surface_spec.get("handler", "")).strip()
         if not handler_ref:
-            # Hook mode without handler is permitted as a declared TODO surface.
+            msg = f"Plugin '{plugin_id}' {key} hook missing handler declaration"
+            if strict:
+                errors.append(msg)
+            else:
+                warnings.append(msg)
             continue
         try:
             _validate_contract_instance(record.manifest)
