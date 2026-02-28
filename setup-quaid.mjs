@@ -1280,17 +1280,38 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   s.start("Initializing database...");
   const dbPath = path.join(DATA_DIR, "memory.db");
   const schemaPath = path.join(PLUGIN_DIR, "datastore/memorydb/schema.sql");
-  if (fs.existsSync(schemaPath)) {
-    const initScript = `
+  if (!fs.existsSync(schemaPath)) {
+    s.stop(C.red("Database initialization failed"));
+    throw new Error(`schema.sql not found: ${schemaPath}`);
+  }
+  const initScript = `
 import sqlite3
 conn = sqlite3.connect('${dbPath}')
 with open('${schemaPath}') as f:
     conn.executescript(f.read())
 conn.close()
 `;
-    spawnSync("python3", ["-c", initScript], { stdio: "pipe" });
-    try { fs.chmodSync(dbPath, 0o600); } catch {}
+  const initResult = spawnSync("python3", ["-c", initScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  if (initResult.status !== 0) {
+    s.stop(C.red("Database initialization failed"));
+    const detail = (initResult.stderr || initResult.stdout || "").trim();
+    throw new Error(detail || "python schema initialization failed");
   }
+  const verifyScript = `
+import sqlite3
+conn = sqlite3.connect('${dbPath}')
+row = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='nodes'").fetchone()
+conn.close()
+print(int(row[0] if row else 0))
+`;
+  const verifyResult = spawnSync("python3", ["-c", verifyScript], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  const nodesTableCount = Number((verifyResult.stdout || "").trim());
+  if (verifyResult.status !== 0 || !Number.isFinite(nodesTableCount) || nodesTableCount < 1) {
+    s.stop(C.red("Database initialization failed"));
+    const detail = (verifyResult.stderr || verifyResult.stdout || "").trim();
+    throw new Error(detail || "nodes table missing after schema initialization");
+  }
+  try { fs.chmodSync(dbPath, 0o600); } catch {}
   s.stop(C.green("Database initialized"));
 
   // Write config
@@ -1683,7 +1704,13 @@ else:
 `;
   const smoke = spawnSync("python3", ["-c", smokeScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
   const smokeResult = (smoke.stdout || "").trim();
-  if (smokeResult === "OK") {
+  if (smoke.status !== 0) {
+    s.stop(C.red("Smoke test failed — Python execution error"));
+    const detail = (smoke.stderr || smoke.stdout || "").trim();
+    if (detail) {
+      log.warn(detail);
+    }
+  } else if (smokeResult === "OK") {
     s.stop(C.green("Smoke test passed — store and recall working"));
   } else {
     s.stop(C.yellow("Smoke test partial — store OK, recall needs embeddings"));
