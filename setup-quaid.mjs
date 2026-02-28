@@ -37,6 +37,11 @@ const DATA_DIR = path.join(WORKSPACE, "data");
 const JOURNAL_DIR = path.join(WORKSPACE, "journal");
 const LOGS_DIR = path.join(WORKSPACE, "logs");
 const PROJECTS_DIR = path.join(WORKSPACE, "projects");
+const OLLAMA_BASE_URL = (process.env.OLLAMA_URL || "http://localhost:11434")
+  .replace(/\/v1\/?$/, "")
+  .replace(/\/+$/, "");
+const OLLAMA_TAGS_URL = `${OLLAMA_BASE_URL}/api/tags`;
+const OLLAMA_PS_URL = `${OLLAMA_BASE_URL}/api/ps`;
 
 // Python env setup — always set canonical Quaid root, plus workspace hint.
 const PY_ENV_SETUP =
@@ -250,7 +255,7 @@ function clearScreen() {
 function getOllamaModels() {
   // Returns all pulled (installed) models
   try {
-    const raw = execSync("curl -sf http://localhost:11434/api/tags", { encoding: "utf8", cwd: os.homedir() });
+    const raw = execSync(`curl -sf ${JSON.stringify(OLLAMA_TAGS_URL)}`, { encoding: "utf8", cwd: os.homedir() });
     const data = JSON.parse(raw);
     return (data.models || []).map(m => m.name || "");
   } catch { return []; }
@@ -259,7 +264,7 @@ function getOllamaModels() {
 function getLoadedOllamaModels() {
   // Returns models currently loaded in VRAM (/api/ps)
   try {
-    const raw = execSync("curl -sf http://localhost:11434/api/ps", { encoding: "utf8", cwd: os.homedir() });
+    const raw = execSync(`curl -sf ${JSON.stringify(OLLAMA_PS_URL)}`, { encoding: "utf8", cwd: os.homedir() });
     const data = JSON.parse(raw);
     return (data.models || []).map(m => ({
       name: m.name || "",
@@ -734,7 +739,7 @@ async function step4_embeddings() {
     // Test mode: simulate Ollama not installed/running
     ollamaRunning = false;
   } else {
-    try { execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" }); ollamaRunning = true; } catch {}
+    try { execSync(`curl -sf ${JSON.stringify(OLLAMA_TAGS_URL)}`, { stdio: "pipe" }); ollamaRunning = true; } catch {}
   }
 
   if (!ollamaRunning && !process.env.QUAID_TEST_NO_OLLAMA && canRun("ollama")) {
@@ -746,7 +751,7 @@ async function step4_embeddings() {
       try {
         execSync("brew services start ollama 2>/dev/null || (ollama serve >/dev/null 2>&1 &)", { stdio: "pipe" });
         await sleep(3000);
-        execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" });
+        execSync(`curl -sf ${JSON.stringify(OLLAMA_TAGS_URL)}`, { stdio: "pipe" });
         ollamaRunning = true;
         s.stop(C.green("Ollama started"));
       } catch (err) {
@@ -777,7 +782,7 @@ async function step4_embeddings() {
           execSync("ollama serve >/dev/null 2>&1 &", { stdio: "pipe" });
         }
         await sleep(3000);
-        execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" });
+        execSync(`curl -sf ${JSON.stringify(OLLAMA_TAGS_URL)}`, { stdio: "pipe" });
         ollamaRunning = true;
         s.stop(C.green("Ollama installed and running"));
       } catch (err) {
@@ -1703,7 +1708,7 @@ c.close()
 
   // Embeddings
   let ollamaOk = false;
-  try { execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" }); ollamaOk = true; } catch {}
+  try { execSync(`curl -sf ${JSON.stringify(OLLAMA_TAGS_URL)}`, { stdio: "pipe" }); ollamaOk = true; } catch {}
   if (ollamaOk) {
     checks.push(`${C.green("■")} Embeddings   ${C.dim("—")} ${embeddings.embedModel} (${embeddings.embedDim} dim)`);
   } else if (embeddings.embedModel === "text-embedding-3-small") {
