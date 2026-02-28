@@ -180,6 +180,16 @@ def filter_recall_results(
     for row in results:
         decision = _normalize_policy_decision(policy.fn(viewer, row, context))
         action = decision.get("action")
-        if action in {"allow", "allow_redacted"}:
+        if action == "allow":
             filtered.append(row)
+            continue
+        if action == "allow_redacted":
+            redacted = dict(row)
+            redact_fields = decision.get("redact_fields")
+            if isinstance(redact_fields, list):
+                for field in redact_fields:
+                    field_name = str(field or "").strip()
+                    if field_name and field_name in redacted:
+                        redacted[field_name] = "[REDACTED]"
+            filtered.append(redacted)
     return filtered
