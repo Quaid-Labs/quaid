@@ -1441,6 +1441,7 @@ def reload_config() -> MemoryConfig:
 
     with _config_lock:
         _config = None
+        _warned_unknown_config_keys.clear()
         reset_plugin_runtime()
         reset_registry()
         return load_config()
