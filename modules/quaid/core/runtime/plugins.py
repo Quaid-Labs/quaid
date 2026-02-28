@@ -69,7 +69,6 @@ class PluginManifest:
     plugin_type: str
     module: str
     display_name: str
-    entrypoint: str = "register"
     capabilities: Dict[str, Any] = field(default_factory=dict)
     dependencies: List[str] = field(default_factory=list)
     priority: int = 100
@@ -161,7 +160,6 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
     plugin_id = str(payload.get("plugin_id", payload.get("id", "")) or "").strip()
     plugin_type = str(payload.get("plugin_type", payload.get("type", "")) or "").strip().lower()
     module = str(payload.get("module", "") or "").strip()
-    entrypoint = str(payload.get("entrypoint", "register") or "register").strip()
     capabilities = payload.get("capabilities", {})
     dependencies = payload.get("dependencies", [])
     raw_priority = payload.get("priority", 100)
@@ -250,7 +248,6 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
         plugin_type=plugin_type,
         module=module,
         display_name=display_name,
-        entrypoint=entrypoint,
         capabilities=capabilities,
         dependencies=deps,
         priority=priority,
