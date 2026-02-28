@@ -11,6 +11,8 @@ def test_parse_literal_handles_bool_number_json_and_string():
     assert config_cli.parse_literal("3.5") == 3.5
     assert config_cli.parse_literal('{"k":1}') == {"k": 1}
     assert config_cli.parse_literal("keep-as-string") == "keep-as-string"
+    assert config_cli.parse_literal("null") is None
+    assert config_cli.parse_literal("gpt-5.1") == "gpt-5.1"
 
 
 def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tmp_path):
