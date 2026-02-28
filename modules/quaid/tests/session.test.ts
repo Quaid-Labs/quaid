@@ -9,6 +9,7 @@ describe('Session Isolation', () => {
   })
 
   afterEach(async () => {
+    delete process.env.TEST_SESSION_ID
     await cleanupTestMemory(memory)
   })
 
