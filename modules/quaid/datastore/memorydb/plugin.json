@@ -49,8 +49,7 @@
         "exports": [
           "memory_recall",
           "memory_store",
-          "memory_forget",
-          "memory_write"
+          "memory_forget"
         ]
       },
       "api": {
@@ -58,8 +57,7 @@
         "exports": [
           "store",
           "recall",
-          "forget",
-          "write"
+          "forget"
         ]
       },
       "events": {
@@ -83,9 +81,7 @@
       },
       "migrations": {
         "mode": "declared",
-        "exports": [
-          "schema_v6_domains"
-        ]
+        "exports": []
       },
       "notifications": {
         "mode": "declared",

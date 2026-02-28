@@ -36,17 +36,11 @@
       },
       "tools": {
         "mode": "declared",
-        "exports": [
-          "journal_read",
-          "journal_write"
-        ]
+        "exports": []
       },
       "api": {
         "mode": "declared",
-        "exports": [
-          "extract_snippets",
-          "distill_journal"
-        ]
+        "exports": []
       },
       "events": {
         "mode": "declared",
