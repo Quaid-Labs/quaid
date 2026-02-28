@@ -215,7 +215,14 @@ function isSystemEnabled(system) {
 }
 function isPluginStrictMode() {
   const plugins = getMemoryConfig().plugins || {};
-  return plugins.strict !== false;
+  const raw = plugins.strict;
+  if (raw === void 0) return true;
+  if (raw === null) return false;
+  if (typeof raw === "number") return raw !== 0;
+  if (typeof raw === "string") return raw.length > 0;
+  if (Array.isArray(raw)) return raw.length > 0;
+  if (typeof raw === "object") return Object.keys(raw).length > 0;
+  return !!raw;
 }
 function loadAdapterContractDeclarations() {
   try {

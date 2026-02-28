@@ -16,7 +16,7 @@ function writeJson(path: string, value: unknown): void {
   writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function makeWorkspace(caseName: string, strictContracts: boolean): string {
+function makeWorkspace(caseName: string, strictContracts: unknown): string {
   const workspace = join(tmpdir(), `quaid-contract-gate-${caseName}-${Date.now()}`);
   const memoryConfig = {
     models: {
@@ -143,6 +143,26 @@ describe("adapter contract gate integration", () => {
     expect(warnings.some((msg) => msg.includes("failed reading adapter manifest"))).toBe(true);
     expect(warnings.some((msg) => msg.includes("undeclared tools registration"))).toBe(false);
     expect(warnings.some((msg) => msg.includes("undeclared events registration"))).toBe(false);
+    warn.mockRestore();
+  });
+
+  it("treats numeric zero strict flag as non-strict", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workspace = makeWorkspace("strict-zero", 0);
+    const plugin = await loadAdapterWithWorkspace(workspace);
+    const api = makeFakeApi();
+    expect(() => plugin.register(api as any)).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/undeclared (events|tools) registration/));
+    warn.mockRestore();
+  });
+
+  it("treats null strict flag as non-strict", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workspace = makeWorkspace("strict-null", null);
+    const plugin = await loadAdapterWithWorkspace(workspace);
+    const api = makeFakeApi();
+    expect(() => plugin.register(api as any)).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/undeclared (events|tools) registration/));
     warn.mockRestore();
   });
 });
