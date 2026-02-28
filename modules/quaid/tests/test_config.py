@@ -847,3 +847,27 @@ class TestConfigLoading:
                 assert cfg.retrieval.router_fail_open is False
         finally:
             config._config = old_config
+
+    def test_reload_config_resets_unknown_key_warning_cache(self, tmp_path, capsys):
+        import config
+        old_config = config._config
+        old_warned = set(config._warned_unknown_config_keys)
+        config._config = None
+        config._warned_unknown_config_keys.clear()
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "totallyUnknownSection": {"enabled": True},
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.dict(os.environ, {"QUAID_QUIET": ""}, clear=False):
+                _ = load_config()
+                first_err = capsys.readouterr().err
+                _ = reload_config()
+                second_err = capsys.readouterr().err
+            assert "Unknown config key ignored: totally_unknown_section" in first_err
+            assert "Unknown config key ignored: totally_unknown_section" in second_err
+        finally:
+            config._config = old_config
+            config._warned_unknown_config_keys.clear()
+            config._warned_unknown_config_keys.update(old_warned)
