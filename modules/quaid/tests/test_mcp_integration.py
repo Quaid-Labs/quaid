@@ -291,19 +291,23 @@ class TestMcpDocsSearch:
 class TestMcpInputValidation:
     """Verify input validation through the full stack."""
 
-    def test_store_empty_text_raises(self, tmp_path):
+    def test_store_empty_text_returns_error(self, tmp_path):
         graph, _ = _make_graph(tmp_path)
         mod = _get_mcp_module()
         with _integration_patches(graph):
-            with pytest.raises(ValueError, match="empty"):
-                mod.memory_store("")
+            out = mod.memory_store("")
+            assert isinstance(out, dict)
+            assert "error" in out
+            assert "empty" in out["error"].lower()
 
-    def test_store_too_short_raises(self, tmp_path):
+    def test_store_too_short_returns_error(self, tmp_path):
         graph, _ = _make_graph(tmp_path)
         mod = _get_mcp_module()
         with _integration_patches(graph):
-            with pytest.raises(ValueError, match="at least 3 words"):
-                mod.memory_store("two words")
+            out = mod.memory_store("two words")
+            assert isinstance(out, dict)
+            assert "error" in out
+            assert "at least 3 words" in out["error"].lower()
 
     def test_store_unicode_works(self, tmp_path):
         graph, _ = _make_graph(tmp_path)
@@ -451,7 +455,7 @@ class TestMcpProtocol:
             proc.stdin.close()
             proc.wait(timeout=5)
 
-    def test_tools_list_returns_17_tools(self, tmp_path):
+    def test_tools_list_returns_expected_tools(self, tmp_path):
         db_file = tmp_path / "proto.db"
         proc = self._start_server(db_file)
         try:
@@ -467,7 +471,7 @@ class TestMcpProtocol:
 
             tools = response["result"]["tools"]
             tool_names = {t["name"] for t in tools}
-            assert len(tool_names) == 17
+            assert len(tool_names) == 19
             assert "memory_extract" in tool_names
             assert "memory_store" in tool_names
             assert "memory_recall" in tool_names
@@ -483,6 +487,8 @@ class TestMcpProtocol:
             assert "memory_event_list" in tool_names
             assert "memory_event_process" in tool_names
             assert "memory_event_capabilities" in tool_names
+            assert "memory_domain_list" in tool_names
+            assert "memory_domain_register" in tool_names
             assert "projects_search" in tool_names
             assert "session_recall" in tool_names
         finally:

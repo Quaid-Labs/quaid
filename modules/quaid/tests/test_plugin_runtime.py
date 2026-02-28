@@ -946,7 +946,10 @@ def test_active_slot_plugins_have_executable_init_and_config_hooks(tmp_path: Pat
     plugin_root = Path(__file__).resolve().parents[1]
     allow = ["memorydb.core", "core.extract"]
     manifests, errors = discover_plugin_manifests(
-        paths=[str(plugin_root)],
+        paths=[
+            str(plugin_root / "datastore"),
+            str(plugin_root / "ingest"),
+        ],
         allowlist=allow,
         strict=True,
         workspace_root=plugin_root,

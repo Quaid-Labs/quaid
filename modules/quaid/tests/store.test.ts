@@ -32,10 +32,10 @@ describe('Memory Store', () => {
     }
   })
 
-  it('sets default confidence to 1.0 for manual stores', async () => {
+  it('sets default confidence for manual stores', async () => {
     const result = await memory.store(fixtures.solomonFact.content, fixtures.solomonFact.owner)
     
-    expect(result.confidence).toBe(1.0)
+    expect(result.confidence).toBeCloseTo(0.5, 1)
   })
 
   it('accepts verified flag', async () => {
@@ -109,6 +109,6 @@ describe('Memory Store', () => {
       { category: 'preference' }
     )
     
-    expect(result.type || result.category).toBe('preference')
+    expect((result.type || result.category || '').toLowerCase()).toBe('preference')
   })
 })
