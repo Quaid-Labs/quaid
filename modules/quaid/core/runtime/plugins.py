@@ -12,6 +12,7 @@ from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+_PLUGIN_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 _PLUGIN_TYPES = {"adapter", "ingest", "datastore"}
 _PLUGIN_API_VERSION = 1
 _PLUGIN_CONTRACT_REQUIRED = (
@@ -173,6 +174,8 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
         )
     if not module:
         raise ValueError("Manifest missing module")
+    if not _PLUGIN_MODULE_RE.match(module):
+        raise ValueError(f"Invalid manifest module '{module}'")
     if not isinstance(capabilities, dict):
         raise ValueError("Manifest capabilities must be an object")
     contract = capabilities.get("contract", {})
