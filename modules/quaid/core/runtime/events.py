@@ -18,6 +18,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
 
 from core.ingest_runtime import run_docs_ingest, run_session_logs_ingest
@@ -408,10 +409,24 @@ EVENT_HANDLERS: Dict[str, EventHandler] = {
     "session.agent_start": _handle_session_lifecycle,
     "session.agent_end": _handle_session_lifecycle,
 }
+_EVENT_HANDLERS_LOCK = Lock()
 
 
-def register_event_handler(name: str, handler: EventHandler) -> None:
-    EVENT_HANDLERS[str(name)] = handler
+def register_event_handler(name: str, handler: EventHandler, *, force: bool = False) -> None:
+    event_name = str(name or "").strip()
+    if not event_name:
+        raise ValueError("event handler name is required")
+    with _EVENT_HANDLERS_LOCK:
+        existing = EVENT_HANDLERS.get(event_name)
+        if existing is not None and existing is not handler and not force:
+            logger.warning(
+                "register_event_handler skipped overwrite for '%s' (pass force=True to replace)",
+                event_name,
+            )
+            return
+        if existing is not None and existing is not handler and force:
+            logger.warning("register_event_handler overwriting existing handler for '%s'", event_name)
+        EVENT_HANDLERS[event_name] = handler
 
 
 def get_event_registry() -> List[Dict[str, Any]]:
