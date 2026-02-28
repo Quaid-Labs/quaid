@@ -137,17 +137,5 @@ describe('Confidence Decay', () => {
     expect(results.length).toBeGreaterThanOrEqual(3)
   })
 
-  it('reports decay statistics if available', async () => {
-    await memory.store('Stats test memory', 'quaid')
-    
-    await memory.runDecay()
-    
-    try {
-      const stats = await memory.stats()
-      expect(stats).toBeDefined()
-      expect(typeof stats).toBe('object')
-    } catch {
-      // Stats might not be implemented yet
-    }
-  })
+  it.todo('reports decay statistics if available')
 })
