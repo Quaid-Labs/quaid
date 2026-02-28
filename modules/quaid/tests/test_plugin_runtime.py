@@ -79,6 +79,19 @@ def test_validate_manifest_rejects_invalid_type():
         )
 
 
+def test_validate_manifest_rejects_unapproved_module_namespace():
+    with pytest.raises(ValueError, match="Invalid manifest module"):
+        validate_manifest_dict(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "bad.module",
+                "plugin_type": "adapter",
+                "module": "os",
+                "capabilities": _contract_caps("Bad Module"),
+            }
+        )
+
+
 def test_registry_rejects_plugin_id_conflict():
     registry = PluginRegistry(api_version=1)
     first = validate_manifest_dict(
