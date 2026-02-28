@@ -1286,8 +1286,8 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   }
   const initScript = `
 import sqlite3
-conn = sqlite3.connect('${dbPath}')
-with open('${schemaPath}') as f:
+conn = sqlite3.connect(${JSON.stringify(dbPath)})
+with open(${JSON.stringify(schemaPath)}) as f:
     conn.executescript(f.read())
 conn.close()
 `;
@@ -1299,7 +1299,7 @@ conn.close()
   }
   const verifyScript = `
 import sqlite3
-conn = sqlite3.connect('${dbPath}')
+conn = sqlite3.connect(${JSON.stringify(dbPath)})
 row = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='nodes'").fetchone()
 conn.close()
 print(int(row[0] if row else 0))
@@ -1332,7 +1332,7 @@ ctx = SimpleNamespace(
     plugin=SimpleNamespace(plugin_id='memorydb.core'),
     config=get_config(),
     plugin_config={},
-    workspace_root='${WORKSPACE}',
+    workspace_root=${JSON.stringify(WORKSPACE)},
 )
 on_init(ctx)
 print('[+] MemoryDB domain init complete')
@@ -1452,7 +1452,7 @@ from datastore.memorydb.memory_graph import store
 files = ${JSON.stringify(mdFiles)}
 total = 0
 for fname in files:
-    fpath = os.path.join('${WORKSPACE}', fname)
+    fpath = os.path.join(${JSON.stringify(WORKSPACE)}, fname)
     with open(fpath) as f:
         lines = f.read().strip().split('\\n')
     for line in lines:
@@ -1472,7 +1472,7 @@ from core.llm.clients import call_deep_reasoning, parse_json_response
 files = ${JSON.stringify(mdFiles)}
 total = 0
 for fname in files:
-    fpath = os.path.join('${WORKSPACE}', fname)
+    fpath = os.path.join(${JSON.stringify(WORKSPACE)}, fname)
     with open(fpath) as f:
         content = f.read().strip()
     if len(content) < 50:
@@ -1536,7 +1536,7 @@ reg = DocsRegistry()
 names = ${projNames}
 total_docs = 0
 for name in names:
-    proj_dir = os.path.join('${PROJECTS_DIR}', name)
+    proj_dir = os.path.join(${JSON.stringify(PROJECTS_DIR)}, name)
     project_md = os.path.join(proj_dir, 'PROJECT.md')
     try:
         if not os.path.exists(project_md):
@@ -1667,7 +1667,14 @@ async function step8_validate(owner, models, embeddings, systems) {
   // Database
   const dbPath = path.join(DATA_DIR, "memory.db");
   if (fs.existsSync(dbPath)) {
-    const tables = shell(`python3 -c "import sqlite3; c=sqlite3.connect('${dbPath}'); print(c.execute(\\"SELECT COUNT(*) FROM sqlite_master WHERE type='table'\\").fetchone()[0]); c.close()"`);
+    const tableProbe = `
+import sqlite3
+c = sqlite3.connect(${JSON.stringify(dbPath)})
+print(c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0])
+c.close()
+`;
+    const tableResult = spawnSync("python3", ["-c", tableProbe], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    const tables = tableResult.status === 0 ? (tableResult.stdout || "").trim() : "unknown";
     checks.push(`${C.green("■")} Database     ${C.dim("—")} ${tables} tables`);
   } else {
     checks.push(`${C.red("■")} Database     ${C.dim("—")} MISSING`);
