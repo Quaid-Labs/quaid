@@ -80,6 +80,20 @@ def test_validate_manifest_rejects_invalid_type():
         )
 
 
+def test_validate_manifest_rejects_non_boolean_enabled():
+    with pytest.raises(ValueError, match="enabled must be a boolean"):
+        validate_manifest_dict(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "adapter.bad-enabled",
+                "plugin_type": "adapter",
+                "module": "adaptors.bad_enabled",
+                "enabled": None,
+                "capabilities": _contract_caps("Bad Enabled"),
+            }
+        )
+
+
 def test_validate_manifest_preserves_zero_priority():
     manifest = validate_manifest_dict(
         {

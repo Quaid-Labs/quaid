@@ -166,7 +166,10 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
     dependencies = payload.get("dependencies", [])
     raw_priority = payload.get("priority", 100)
     priority = int(100 if raw_priority is None else raw_priority)
-    enabled = bool(payload.get("enabled", True))
+    enabled_raw = payload.get("enabled", True)
+    if not isinstance(enabled_raw, bool):
+        raise ValueError("Manifest enabled must be a boolean")
+    enabled = enabled_raw
 
     if plugin_api_version <= 0:
         raise ValueError("Manifest missing plugin_api_version")
