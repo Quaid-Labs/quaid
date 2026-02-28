@@ -58,6 +58,8 @@ _RUNTIME_LOCK = Lock()
 _RUNTIME_REGISTRY: Optional["PluginRegistry"] = None
 _RUNTIME_ERRORS: List[str] = []
 _RUNTIME_WARNINGS: List[str] = []
+_CONTRACT_VALIDATION_LOCK = Lock()
+_CONTRACT_VALIDATION_CACHE: set[Tuple[str, str]] = set()
 
 
 @dataclass(frozen=True)
@@ -429,6 +431,8 @@ def reset_plugin_runtime() -> None:
         _RUNTIME_REGISTRY = None
         _RUNTIME_ERRORS = []
         _RUNTIME_WARNINGS = []
+    with _CONTRACT_VALIDATION_LOCK:
+        _CONTRACT_VALIDATION_CACHE.clear()
 
 
 def _iter_active_plugin_ids(slots: Optional[Dict[str, Any]]) -> List[str]:
@@ -477,6 +481,10 @@ def _resolve_hook_callable(manifest: PluginManifest, handler_ref: str) -> Callab
 
 
 def _validate_contract_instance(manifest: PluginManifest) -> None:
+    cache_key = (manifest.plugin_id, manifest.module)
+    with _CONTRACT_VALIDATION_LOCK:
+        if cache_key in _CONTRACT_VALIDATION_CACHE:
+            return
     mod = importlib.import_module(manifest.module)
     contract_obj = getattr(mod, "_CONTRACT", None)
     if contract_obj is None:
@@ -506,6 +514,8 @@ def _validate_contract_instance(manifest: PluginManifest) -> None:
             raise ValueError(
                 f"plugin '{manifest.plugin_id}' _CONTRACT missing callable {method_name}()"
             )
+    with _CONTRACT_VALIDATION_LOCK:
+        _CONTRACT_VALIDATION_CACHE.add(cache_key)
 
 
 def run_plugin_contract_surface(
