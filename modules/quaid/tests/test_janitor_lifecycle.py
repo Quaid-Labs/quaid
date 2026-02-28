@@ -454,3 +454,30 @@ def test_lifecycle_env_modules_reject_unapproved_prefix(monkeypatch):
     build_default_registry()
 
     assert "evil.module" not in seen
+
+
+def test_lifecycle_env_module_can_register_write_resources(monkeypatch, tmp_path):
+    module_name = "core.testext"
+    mod = ModuleType(module_name)
+
+    def _register(registry, result_factory):
+        def _routine(_ctx):
+            return result_factory(metrics={"ok": 1})
+
+        registry.register(
+            "testext",
+            _routine,
+            write_resources=["db:memory", "files:global"],
+        )
+
+    mod.register_lifecycle_routines = _register
+    monkeypatch.setitem(sys.modules, module_name, mod)
+    monkeypatch.setenv("QUAID_LIFECYCLE_MODULES", module_name)
+
+    registry = build_default_registry()
+    assert registry.has("testext")
+    assert registry._write_resources.get("testext") == ["db:memory", "files:global"]
+
+    result = registry.run("testext", RoutineContext(cfg=_make_cfg(), dry_run=True, workspace=tmp_path))
+    assert result.errors == []
+    assert result.metrics.get("ok") == 1
