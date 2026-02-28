@@ -121,8 +121,16 @@ def _coerce_prompt_value(raw: str, field_type: str) -> Any:
     return value
 
 
+def _plugin_config_get(staged: dict[str, Any], plugin_id: str, default: Any = None) -> Any:
+    return _get(staged, ["plugins", "config", plugin_id], default)
+
+
+def _plugin_config_set(staged: dict[str, Any], plugin_id: str, value: Any) -> None:
+    _set(staged, ["plugins", "config", plugin_id], value)
+
+
 def _edit_plugin_config_schema(staged: dict[str, Any], path: Path, plugin_id: str, schema: dict[str, Any]) -> None:
-    current = _get(staged, f"plugins.config.{plugin_id}", {})
+    current = _plugin_config_get(staged, plugin_id, {})
     if not isinstance(current, dict):
         current = {}
     fields = schema.get("fields", [])
@@ -155,11 +163,11 @@ def _edit_plugin_config_schema(staged: dict[str, Any], path: Path, plugin_id: st
         if not raw:
             continue
         updated[key] = _coerce_prompt_value(raw, field_type)
-    _set(staged, f"plugins.config.{plugin_id}", updated)
+    _plugin_config_set(staged, plugin_id, updated)
 
 
 def _edit_plugin_config_json(staged: dict[str, Any], plugin_id: str) -> None:
-    current = _get(staged, f"plugins.config.{plugin_id}", {})
+    current = _plugin_config_get(staged, plugin_id, {})
     print("Current plugin config:")
     print(json.dumps(current, indent=2))
     raw = input("New JSON object (blank to cancel): ").strip()
@@ -169,20 +177,26 @@ def _edit_plugin_config_json(staged: dict[str, Any], plugin_id: str) -> None:
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         raise ValueError("Plugin config must be a JSON object")
-    _set(staged, f"plugins.config.{plugin_id}", parsed)
+    _plugin_config_set(staged, plugin_id, parsed)
 
 
-def _get(data: dict[str, Any], dotted: str, default: Any = None) -> Any:
+def _segments(path: str | list[str]) -> list[str]:
+    if isinstance(path, list):
+        return [str(v) for v in path]
+    return str(path).split(".")
+
+
+def _get(data: dict[str, Any], dotted: str | list[str], default: Any = None) -> Any:
     cur: Any = data
-    for seg in dotted.split("."):
+    for seg in _segments(dotted):
         if not isinstance(cur, dict) or seg not in cur:
             return default
         cur = cur[seg]
     return cur
 
 
-def _set(data: dict[str, Any], dotted: str, value: Any) -> None:
-    parts = dotted.split(".")
+def _set(data: dict[str, Any], dotted: str | list[str], value: Any) -> None:
+    parts = _segments(dotted)
     cur: Any = data
     for seg in parts[:-1]:
         if not isinstance(cur, dict):

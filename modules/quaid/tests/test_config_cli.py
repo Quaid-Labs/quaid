@@ -54,6 +54,16 @@ def test_set_builds_nested_paths():
     assert data["retrieval"]["failHard"] is False
 
 
+def test_set_supports_plugin_config_dotted_plugin_id_as_atomic_key():
+    data = {"plugins": {"config": {"memorydb.core": {"domains": {"personal": "Personal"}}}}}
+
+    config_cli._set(data, ["plugins", "config", "memorydb.core"], {"domains": {"technical": "Technical"}})
+
+    assert "memorydb.core" in data["plugins"]["config"]
+    assert "memorydb" not in data["plugins"]["config"]
+    assert data["plugins"]["config"]["memorydb.core"]["domains"]["technical"] == "Technical"
+
+
 def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeypatch, tmp_path):
     path = tmp_path / "config" / "memory.json"
     data = {

@@ -698,7 +698,7 @@ async function step3_models() {
     provider,
     highModel,
     lowModel,
-    apiFormat: provider === "anthropic" ? "anthropic" : "openai",
+    apiFormat: provider === "anthropic" ? "anthropic" : "openai-compatible",
     apiKeyEnv: keyEnv,
     baseUrl: baseUrlFor(provider),
     notifLevel,
@@ -1830,7 +1830,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     destructiveMemoryOps: "auto",
   };
   const config = {
-    adapter: { type: IS_OPENCLAW ? "openclaw" : "standalone" },
+    adapter: { type: models.adapterType || (IS_OPENCLAW ? "openclaw" : "standalone") },
     plugins: {
       enabled: true,
       strict: true,
@@ -1849,7 +1849,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     },
     systems,
     models: {
-      provider: models.apiFormat,
+      llmProvider: models.apiFormat,
       apiKeyEnv: models.apiKeyEnv,
       baseUrl: models.baseUrl,
       fastReasoning: models.lowModel,

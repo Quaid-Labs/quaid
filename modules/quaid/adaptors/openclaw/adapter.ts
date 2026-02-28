@@ -17,7 +17,7 @@ import { queueDelayedRequest } from "./delayed-requests.js";
 import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
-import { createPythonBridgeExecutor } from "./python-bridge.js";
+import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import { assertDeclaredRegistration, normalizeDeclaredExports, validateApiSurface } from "./contract-gate.js";
 
 
@@ -206,10 +206,12 @@ function getMemoryConfig(): any {
       _memoryConfigErrorLogged = true;
       console.error("[quaid] failed to load config/memory.json:", (err as Error)?.message || String(err));
     }
+    // Prevent isFailHardEnabled() -> getMemoryConfig() mutual recursion on missing/invalid config.
+    _memoryConfig = {};
+    _memoryConfigMtimeMs = mtimeMs;
     if (isFailHardEnabled()) {
       throw err;
     }
-    _memoryConfig = {};
   }
   return _memoryConfig;
 }
@@ -598,6 +600,7 @@ const datastoreBridge = createDatastoreBridge(
     scriptPath: PYTHON_SCRIPT,
     dbPath: DB_PATH,
     workspace: WORKSPACE,
+    pluginRoot: PYTHON_PLUGIN_ROOT,
   })
 );
 
@@ -2545,13 +2548,12 @@ const quaidPlugin = {
       assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
       return api.on(eventName as any, handler, options);
     };
-    const registerToolChecked = (factory: () => any) =>
-      api.registerTool(() => {
-        const spec = factory();
-        const toolName = String(spec?.name || "").trim();
-        assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
-        return spec;
-      });
+    const registerToolChecked = (factory: () => any) => {
+      const spec = factory();
+      const toolName = String(spec?.name || "").trim();
+      assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
+      return api.registerTool(() => spec);
+    };
 
     // Ensure database exists
     const dataDir = path.dirname(DB_PATH);
