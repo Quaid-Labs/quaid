@@ -186,7 +186,7 @@ export class TestMemoryInterface {
         owner: owner,
         owner_id: owner,
         created_at: new Date().toISOString(),
-        confidence: options.confidence || 1.0,
+        confidence: options.confidence !== undefined ? options.confidence : 1.0,
         verified: options.verified || false,
         pinned: options.pinned || false,
         category: options.category,
@@ -205,7 +205,7 @@ export class TestMemoryInterface {
         owner: owner,
         owner_id: owner,
         created_at: new Date().toISOString(),
-        confidence: options.confidence || 1.0,
+        confidence: options.confidence !== undefined ? options.confidence : 1.0,
         verified: options.verified || false,
         pinned: options.pinned || false,
         category: options.category,
@@ -229,10 +229,11 @@ export class TestMemoryInterface {
 
     return lines.map((line, index) => {
       // Match pattern with optional date, flags, confidence, and metadata suffix
-      const match = line.match(/^\[([0-9.]+)\]\s+\[([^\]]+)\](?:\([^)]*\))?((?:\[[^\]]*\])*)\s+(.+?)\s*\|ID:([^|]+)(?:\|T:[^|]*)?(?:\|VF:[^|]*)?(?:\|VU:[^|]*)?(?:\|P:[^|]*)?(?:\|O:.*)?$/)
+      const match = line.match(/^\[([0-9.]+)\]\s+\[([^\]]+)\](?:\([^)]*\))?((?:\[[^\]]*\])*)\s+(.+?)\s*\|ID:([^|]+)(?:\|T:[^|]*)?(?:\|VF:[^|]*)?(?:\|VU:[^|]*)?(?:\|P:[^|]*)?(?:\|O:([^|]*))?$/)
       if (match) {
-        const [, similarity, type, flags, content, actualId] = match
+        const [, similarity, type, flags, content, actualId, actualOwner] = match
         const flagStr = flags || ''
+        const parsedOwner = (actualOwner || '').trim() || owner
         
         return {
           id: actualId,
@@ -241,8 +242,8 @@ export class TestMemoryInterface {
           content,
           text: content, 
           name: content,
-          owner,
-          owner_id: owner,
+          owner: parsedOwner,
+          owner_id: parsedOwner,
           verified: flagStr.includes('[V]'),
           pinned: flagStr.includes('[P]')
         }
