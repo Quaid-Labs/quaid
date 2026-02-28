@@ -168,9 +168,28 @@ function providerDisplayName(provider) {
 function resolveEffectiveEmbeddingsProvider(cfg) {
   const configured = normalizeProvider(getPath(cfg, "models.embeddingsProvider", "ollama"));
   if (configured && configured !== "default") return configured;
-  const adapterType = String(getPath(cfg, "adapter.type", "openclaw")).trim().toLowerCase();
+  const adapterType = String(getPath(cfg, "adapter.type", "standalone")).trim().toLowerCase();
   if (adapterType === "openclaw") return "ollama";
   return "ollama";
+}
+
+function captureTimeoutMinutes(cfg) {
+  const raw = getPath(cfg, "capture.inactivity_timeout_minutes", getPath(cfg, "capture.inactivityTimeoutMinutes", 120));
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 120;
+}
+
+function setCaptureTimeoutMinutes(cfg, minutes) {
+  const capture = getPath(cfg, "capture", {});
+  if (capture && typeof capture === "object" && "inactivity_timeout_minutes" in capture) {
+    setPath(cfg, "capture.inactivity_timeout_minutes", minutes);
+    return;
+  }
+  if (capture && typeof capture === "object" && "inactivityTimeoutMinutes" in capture) {
+    setPath(cfg, "capture.inactivityTimeoutMinutes", minutes);
+    return;
+  }
+  setPath(cfg, "capture.inactivity_timeout_minutes", minutes);
 }
 
 function effectiveEmbeddingModel(cfg, provider) {
@@ -235,7 +254,7 @@ function compactSummary(cfgPath, cfg) {
   const projectPolicy = String(getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask"));
   const workspacePolicy = String(getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask"));
   const destructivePolicy = String(getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto"));
-  const routerFailOpen = !!getPath(cfg, "retrieval.routerFailOpen", true);
+  const routerFailOpen = !!getPath(cfg, "retrieval.router_fail_open", getPath(cfg, "retrieval.routerFailOpen", true));
   const failHard = retrievalFailHard(cfg);
   const autoCompactionOnTimeout = !!getPath(cfg, "capture.autoCompactionOnTimeout", true);
   const identityMode = String(getPath(cfg, "identity.mode", "single_user"));
@@ -246,7 +265,7 @@ function compactSummary(cfgPath, cfg) {
 
   const lines = [
     `${C.bold("Config")}: ${cfgPath}`,
-    `${C.bold("Agent System")}: ${getPath(cfg, "adapter.type", "openclaw")} ${C.dim("(host integration layer)")}`,
+    `${C.bold("Agent System")}: ${getPath(cfg, "adapter.type", "standalone")} ${C.dim("(host integration layer)")}`,
     `${C.bold("Provider")}: ${configuredProvider} ${C.dim(`(default -> ${providerDisplayName(p)})`)}`,
     `${C.bold("Deep Provider")}: ${getPath(cfg, "models.deepReasoningProvider", "default")} ${C.dim(`(effective -> ${providerDisplayName(deepProvider)})`)}`,
     `${C.bold("Fast Provider")}: ${getPath(cfg, "models.fastReasoningProvider", "default")} ${C.dim(`(effective -> ${providerDisplayName(fastProvider)})`)}`,
@@ -256,7 +275,7 @@ function compactSummary(cfgPath, cfg) {
     `${C.bold("Notifications")}: ${notifyLevel} ${C.dim(`(janitor:${janitorVerb} extraction:${extractionVerb} retrieval:${retrievalVerb})`)}`,
     `${C.bold("Janitor Apply")}: ${janitorApplyMode} ${C.dim("(master policy)")}`,
     `${C.bold("Janitor Policies")}: core=${corePolicy} project=${projectPolicy} workspace=${workspacePolicy} destructive=${destructivePolicy}`,
-    `${C.bold("Timeout")}: ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`,
+    `${C.bold("Timeout")}: ${captureTimeoutMinutes(cfg)}m`,
     `${C.bold("Auto-compact Timeout")}: ${autoCompactionOnTimeout ? "on" : "off"} ${C.dim("(trigger compaction after timeout extraction)")}`,
     `${C.bold("Identity Mode")}: ${identityMode}`,
     `${C.bold("Strict Privacy")}: ${strictPrivacy ? "on" : "off"}`,
@@ -509,7 +528,7 @@ async function runEdit() {
     if (menu === "agent") {
       const next = handleCancel(await select({
         message: "adapter.type",
-        initialValue: getPath(cfg, "adapter.type", "openclaw"),
+        initialValue: getPath(cfg, "adapter.type", "standalone"),
         options: [
           { value: "openclaw", label: "openclaw", hint: "recommended; gateway-integrated runtime" },
           { value: "standalone", label: "standalone", hint: "local-only mode (advanced)" },
@@ -605,16 +624,21 @@ async function runEdit() {
       }));
       setPath(cfg, "retrieval.preInjectionPass", next === "on");
     } else if (menu === "router_fail_open") {
-      const current = !!getPath(cfg, "retrieval.routerFailOpen", true);
+      const current = !!getPath(cfg, "retrieval.router_fail_open", getPath(cfg, "retrieval.routerFailOpen", true));
       const next = handleCancel(await select({
-        message: "retrieval.routerFailOpen",
+        message: "retrieval.router_fail_open",
         initialValue: current ? "on" : "off",
         options: [
           { value: "on", label: "on", hint: "fail-open: log error and continue with deterministic default recall plan (recommended)" },
           { value: "off", label: "off", hint: "strict mode: router failure raises error" },
         ],
       }));
-      setPath(cfg, "retrieval.routerFailOpen", next === "on");
+      const retrieval = getPath(cfg, "retrieval", {});
+      if (retrieval && typeof retrieval === "object" && "routerFailOpen" in retrieval) {
+        setPath(cfg, "retrieval.routerFailOpen", next === "on");
+      } else {
+        setPath(cfg, "retrieval.router_fail_open", next === "on");
+      }
     } else if (menu === "fail_hard") {
       const current = retrievalFailHard(cfg);
       const next = handleCancel(await select({
@@ -701,10 +725,10 @@ async function runEdit() {
     } else if (menu === "timeout") {
       const next = handleCancel(await text({
         message: "capture.inactivityTimeoutMinutes",
-        placeholder: String(getPath(cfg, "capture.inactivityTimeoutMinutes", 10)),
+        placeholder: String(captureTimeoutMinutes(cfg)),
         validate: (v) => /^\d+$/.test(String(v || "").trim()) ? undefined : "Enter a whole number",
       }));
-      setPath(cfg, "capture.inactivityTimeoutMinutes", parseInt(String(next).trim(), 10));
+      setCaptureTimeoutMinutes(cfg, parseInt(String(next).trim(), 10));
     } else if (menu === "timeout_auto_compact") {
       const next = handleCancel(await confirm({
         message: "capture.autoCompactionOnTimeout",
@@ -740,7 +764,7 @@ function showConfig() {
   console.log("Quaid Configuration");
   console.log(cfgPath);
   console.log("");
-  console.log(`agent system:     ${getPath(cfg, "adapter.type", "openclaw")}`);
+  console.log(`agent system:     ${getPath(cfg, "adapter.type", "standalone")}`);
   console.log(`provider:         ${getPath(cfg, "models.llmProvider", "default")} (default -> ${providerDisplayName(effective)})`);
   console.log(`deep provider:    ${getPath(cfg, "models.deepReasoningProvider", "default")} (effective -> ${providerDisplayName(effectiveDeepProvider)})`);
   console.log(`deep reasoning:   ${deep}`);
@@ -753,7 +777,7 @@ function showConfig() {
   console.log(`fail hard:        ${retrievalFailHard(cfg) ? "on" : "off"} (retrieval.fail_hard)`);
   console.log(`core parallel:    ${coreParallelEnabled(cfg) ? "on" : "off"} (llmWorkers=${coreLlmWorkers(cfg)} prepassWorkers=${coreLifecyclePrepassWorkers(cfg)})`);
   console.log(`janitor policies: core=${getPath(cfg, "janitor.approvalPolicies.coreMarkdownWrites", "ask")} project=${getPath(cfg, "janitor.approvalPolicies.projectDocsWrites", "ask")} workspace=${getPath(cfg, "janitor.approvalPolicies.workspaceFileMovesDeletes", "ask")} destructive=${getPath(cfg, "janitor.approvalPolicies.destructiveMemoryOps", "auto")}`);
-  console.log(`idle timeout:     ${getPath(cfg, "capture.inactivityTimeoutMinutes", 10)}m`);
+  console.log(`idle timeout:     ${captureTimeoutMinutes(cfg)}m`);
   console.log(`timeout compact:  ${getPath(cfg, "capture.autoCompactionOnTimeout", true) ? "on" : "off"}`);
   console.log("\nsystems:");
   for (const row of systemRows(cfg)) {
