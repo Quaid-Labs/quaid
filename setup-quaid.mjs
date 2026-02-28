@@ -1270,7 +1270,13 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Install Python dependency: sqlite-vec (vector search extension)
   s.start("Installing sqlite-vec...");
   try {
-    execSync("pip3 install sqlite-vec 2>/dev/null || pip install sqlite-vec 2>/dev/null || true", { stdio: "pipe" });
+    const pip3Result = spawnSync("pip3", ["install", "sqlite-vec"], { stdio: "pipe" });
+    if (pip3Result.status !== 0) {
+      const pipResult = spawnSync("pip", ["install", "sqlite-vec"], { stdio: "pipe" });
+      if (pipResult.status !== 0) {
+        throw new Error("pip install sqlite-vec failed");
+      }
+    }
     s.stop(C.green("sqlite-vec installed"));
   } catch {
     s.stop(C.yellow("sqlite-vec install skipped — install manually: pip3 install sqlite-vec"));
