@@ -652,6 +652,7 @@ def run_plugin_contract_surface(
     plugin_config: Optional[Dict[str, Any]] = None,
     workspace_root: Optional[str] = None,
     strict: bool = True,
+    skip_plugin_ids: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str]]:
     errors, warnings, _ = run_plugin_contract_surface_collect(
         registry=registry,
@@ -661,6 +662,7 @@ def run_plugin_contract_surface(
         plugin_config=plugin_config,
         workspace_root=workspace_root,
         strict=strict,
+        skip_plugin_ids=skip_plugin_ids,
     )
     return errors, warnings
 
@@ -675,6 +677,7 @@ def run_plugin_contract_surface_collect(
     workspace_root: Optional[str] = None,
     strict: bool = True,
     payload: Optional[Dict[str, Any]] = None,
+    skip_plugin_ids: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str], List[Tuple[str, Any]]]:
     key = str(surface or "").strip()
     if key not in _PLUGIN_CONTRACT_EXECUTABLE:
@@ -685,8 +688,11 @@ def run_plugin_contract_surface_collect(
     cfg_map = plugin_config if isinstance(plugin_config, dict) else {}
     root = str(workspace_root or _workspace_root())
     raw_payload = payload if isinstance(payload, dict) else {}
+    skip_ids = {str(pid).strip() for pid in (skip_plugin_ids or []) if str(pid).strip()}
 
     for plugin_id in _iter_active_plugin_ids(slots, registry=registry):
+        if plugin_id in skip_ids:
+            continue
         record = registry.get(plugin_id)
         if not record:
             continue
