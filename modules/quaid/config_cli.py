@@ -215,8 +215,10 @@ def _set(data: dict[str, Any], dotted: str | list[str], value: Any) -> None:
     for seg in parts[:-1]:
         if not isinstance(cur, dict):
             raise ValueError(f"Cannot set {dotted}: parent is not an object")
-        if seg not in cur or not isinstance(cur[seg], dict):
+        if seg not in cur:
             cur[seg] = {}
+        elif not isinstance(cur[seg], dict):
+            raise ValueError(f"Cannot set {dotted}: intermediate path '{seg}' is not an object")
         cur = cur[seg]
     if not isinstance(cur, dict):
         raise ValueError(f"Cannot set {dotted}: parent is not an object")
