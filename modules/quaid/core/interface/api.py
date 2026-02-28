@@ -332,6 +332,8 @@ __all__ = [
     "create_edge",
     "forget",
     "get_memory",
+    "list_domains",
+    "register_domain",
     "stats",
     "projects_search_docs",
 ]

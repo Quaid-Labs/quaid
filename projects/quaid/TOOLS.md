@@ -189,6 +189,11 @@ Parameter map:
 - `domain` (string, required): domain id (normalized to lowercase snake-like token).
 - `description` (string, optional): brief guidance shown in extraction/tool context.
 - `active` (boolean, optional, default `true`): enable/disable the domain.
+- `admin_token` (string, optional): required only when `QUAID_DOMAIN_ADMIN_TOKEN` is configured.
+
+Policy:
+- disabled only when `QUAID_ENABLE_DOMAIN_REGISTER=0|false|no|off`.
+- if `QUAID_DOMAIN_ADMIN_TOKEN` is set, calls must provide matching `admin_token`.
 
 ### `memory_forget`
 Use this for explicit deletion requests.
