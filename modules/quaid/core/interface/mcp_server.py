@@ -111,6 +111,16 @@ def _mcp_contract_tool(name: str | None = None):
     return _decorator
 
 
+def _domain_admin_allowed(admin_token: str = "") -> tuple[bool, str]:
+    enabled = os.environ.get("QUAID_ENABLE_DOMAIN_REGISTER", "").strip().lower()
+    if enabled in {"0", "false", "no", "off"}:
+        return False, "domain registration disabled (set QUAID_ENABLE_DOMAIN_REGISTER=1)"
+    expected = os.environ.get("QUAID_DOMAIN_ADMIN_TOKEN", "").strip()
+    if expected and admin_token.strip() != expected:
+        return False, "domain registration denied (invalid admin token)"
+    return True, ""
+
+
 def _validate_mcp_tool_contract() -> None:
     missing = sorted(_DECLARED_MCP_TOOLS - _REGISTERED_MCP_TOOLS)
     undeclared = sorted(_REGISTERED_MCP_TOOLS - _DECLARED_MCP_TOOLS)
@@ -217,12 +227,23 @@ def memory_domain_list(active_only: bool = True) -> dict:
 
 
 @_mcp_contract_tool()
-def memory_domain_register(domain: str, description: str = "", active: bool = True) -> dict:
+def memory_domain_register(
+    domain: str,
+    description: str = "",
+    active: bool = True,
+    admin_token: str = "",
+) -> dict:
     """Register or update a memory domain in the datastore registry.
 
     Automatically refreshes the TOOLS.md domain block from active registry values.
     """
-    return register_domain(domain=domain, description=description, active=bool(active))
+    allowed, reason = _domain_admin_allowed(admin_token=admin_token)
+    if not allowed:
+        return {"error": reason}
+    try:
+        return register_domain(domain=domain, description=description, active=bool(active))
+    except ValueError as exc:
+        return {"error": str(exc)}
 
 
 @_mcp_contract_tool()
@@ -672,15 +693,18 @@ def memory_provider() -> str:
 def memory_capabilities() -> dict:
     """Return read/write/event capabilities for runtime orchestration."""
     from core.runtime.events import get_event_registry
+    domains_error = None
     try:
         available_domains = [d.get("domain") for d in list_domains(active_only=True) if d.get("domain")]
-    except Exception:
+    except Exception as exc:
         available_domains = []
+        domains_error = str(exc)
     return {
         "owner_id": OWNER_ID,
         "recall": {
             "domain_filter_default": {"all": True},
             "available_domains": available_domains,
+            "domains_error": domains_error,
             "supports": [
                 "min_similarity", "debug", "use_routing", "use_aliases",
                 "use_intent", "use_multi_pass", "use_reranker", "date_from", "date_to",

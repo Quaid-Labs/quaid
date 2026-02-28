@@ -7,110 +7,57 @@ are implemented here and invoked by core plugin contract execution.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Dict
 
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
-from datastore.memorydb.domain_defaults import default_domain_descriptions
+from datastore.memorydb.domain_registry import (
+    apply_domain_set,
+    load_active_domains,
+    normalize_domain_map,
+)
 from lib.config import get_db_path
-from lib.database import get_connection
 from lib.tools_domain_sync import sync_tools_domain_block
+
+_PUBLISH_LOCK = threading.RLock()
 
 def _resolve_db_path(ctx: PluginHookContext) -> Path:
     _ = ctx
     return get_db_path()
 
 
-def _normalize_domain_map(raw: Dict[str, str]) -> Dict[str, str]:
-    return {
-        str(k).strip(): str(v or "").strip()
-        for k, v in (raw or {}).items()
-        if str(k).strip()
-    }
-
-
-def _domains_from_db(db_path: Path) -> Dict[str, str]:
-    try:
-        with get_connection(db_path) as conn:
-            rows = conn.execute(
-                "SELECT domain, description FROM domain_registry WHERE active = 1 ORDER BY domain"
-            ).fetchall()
-        out = {str(r[0]).strip(): str(r[1] or "").strip() for r in rows if str(r[0]).strip()}
-        return _normalize_domain_map(out)
-    except Exception:
-        return {}
-
-
 def _resolve_domains(ctx: PluginHookContext) -> Dict[str, str]:
     plugin_domains = ctx.plugin_config.get("domains")
     if isinstance(plugin_domains, dict) and plugin_domains:
-        out = _normalize_domain_map(plugin_domains)
+        out = normalize_domain_map(plugin_domains)
         if out:
             return out
-    # Datastore-owned registry takes precedence over config defaults.
-    db_domains = _domains_from_db(_resolve_db_path(ctx))
-    if db_domains:
-        return db_domains
-    return default_domain_descriptions()
+    return {}
 
 
 def _publish_domains_to_runtime_config(ctx: PluginHookContext, domains: Dict[str, str]) -> None:
     retrieval = getattr(ctx.config, "retrieval", None)
     if retrieval is None:
         return
-    try:
+    with _PUBLISH_LOCK:
         setattr(retrieval, "domains", dict(domains))
-    except Exception:
-        pass
 
 
 def _sync_domains(ctx: PluginHookContext) -> None:
-    domains = _resolve_domains(ctx)
+    explicit_domains = _resolve_domains(ctx)
     db_path = _resolve_db_path(ctx)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with get_connection(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS domain_registry (
-                domain TEXT PRIMARY KEY,
-                description TEXT DEFAULT '',
-                active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS node_domains (
-                node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-                domain TEXT NOT NULL REFERENCES domain_registry(domain) ON DELETE RESTRICT,
-                created_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (node_id, domain)
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_node_domain ON node_domains(node_id, domain)")
-        for domain_id, description in domains.items():
-            conn.execute(
-                """
-                INSERT INTO domain_registry(domain, description, active)
-                VALUES (?, ?, 1)
-                ON CONFLICT(domain) DO UPDATE SET
-                  description = excluded.description,
-                  active = 1,
-                  updated_at = datetime('now')
-                """,
-                (domain_id, description),
-            )
-        if domains:
-            placeholders = ",".join("?" for _ in domains)
-            conn.execute(
-                f"UPDATE domain_registry SET active = 0, updated_at = datetime('now') WHERE domain NOT IN ({placeholders})",
-                tuple(domains.keys()),
-            )
+    if explicit_domains:
+        from lib.database import get_connection
+
+        with get_connection(db_path) as conn:
+            domains = apply_domain_set(conn, explicit_domains, deactivate_others=True)
+    else:
+        domains = load_active_domains(db_path, bootstrap_if_empty=True)
+    if not domains:
+        raise RuntimeError("memorydb domain registry is empty and could not be initialized")
     _publish_domains_to_runtime_config(ctx, domains)
     sync_tools_domain_block(domains=domains, workspace=Path(ctx.workspace_root))
 
@@ -125,9 +72,8 @@ class MemoryDbPluginContract(PluginContractBase):
     def on_status(self, ctx: PluginHookContext) -> dict:
         db_path = _resolve_db_path(ctx)
         try:
-            with get_connection(db_path) as conn:
-                row = conn.execute("SELECT COUNT(*) AS c FROM domain_registry WHERE active = 1").fetchone()
-            return {"active_domains": int(row[0] if row else 0)}
+            domains = load_active_domains(db_path, bootstrap_if_empty=False)
+            return {"active_domains": len(domains)}
         except sqlite3.OperationalError:
             return {"active_domains": 0}
 
