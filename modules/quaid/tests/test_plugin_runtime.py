@@ -626,6 +626,83 @@ def test_run_plugin_contract_surface_collect_health_returns_results(tmp_path: Pa
             sys.path.remove(str(tmp_path))
 
 
+def test_run_plugin_contract_surface_collect_non_strict_emits_warnings(tmp_path: Path):
+    pkg = tmp_path / "hookwarn"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_config(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_status(self, ctx: PluginHookContext) -> dict:\n"
+        "        raise RuntimeError('status boom')\n"
+        "    def on_dashboard(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"ready\": True}\n"
+        "    def on_health(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"healthy\": True}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_status(ctx):\n"
+        "    return _CONTRACT.on_status(ctx)\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.warn",
+            "plugin_type": "adapter",
+            "module": "hookwarn.impl",
+            "capabilities": {
+                "display_name": "Warn Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook", "handler": "on_status"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns, results = run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"adapter": "adapter.warn"},
+            surface="status",
+            config={},
+            strict=False,
+        )
+        assert results == []
+        assert len(errs) == 1
+        assert len(warns) == 1
+        assert "status hook failed" in errs[0]
+        assert errs[0] == warns[0]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 def test_validate_manifest_rejects_invalid_declared_exports():
     with pytest.raises(ValueError, match="tools.exports must contain non-empty strings"):
         validate_manifest_dict(
