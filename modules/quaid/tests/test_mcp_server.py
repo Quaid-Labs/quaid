@@ -68,7 +68,7 @@ def _import_mcp_server():
     # Patch at the api/docs_rag module level, then force reimport of mcp_server
     # so its `from core.interface.api import store, ...` binds to the mocked functions.
     with patch("core.interface.api.store", mock_api.store), \
-         patch("ingest.extract.extract_from_transcript", mock_api.extract_transcript), \
+         patch("core.ingest_runtime.run_extract_from_transcript", mock_api.extract_transcript), \
          patch("core.interface.api.recall", mock_api.recall), \
          patch("core.interface.api.search", mock_api.search), \
          patch("core.interface.api.get_memory", mock_api.get_memory), \
