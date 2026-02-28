@@ -549,6 +549,36 @@ class TestExtractFromTranscript:
         assert mock_store.call_count == 1
 
     @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract.get_config")
+    def test_raises_when_no_active_domains_registered(self, mock_get_config, mock_llm):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = (json.dumps({
+            "facts": [{"text": "User likes jasmine tea in the morning", "category": "fact", "domains": ["personal"]}]
+        }), 1.0)
+        cfg = SimpleNamespace(
+            capture=SimpleNamespace(enabled=True, skip_patterns=[], chunk_size=30000),
+            retrieval=SimpleNamespace(domains={}),
+            users=SimpleNamespace(default_owner="test-user"),
+            docs=SimpleNamespace(
+                journal=SimpleNamespace(
+                    enabled=True,
+                    snippets_enabled=True,
+                    target_files=["SOUL.md", "USER.md", "MEMORY.md"],
+                    journal_dir="journal",
+                    max_entries_per_file=50,
+                )
+            ),
+        )
+        mock_get_config.return_value = cfg
+
+        with pytest.raises(RuntimeError, match="No active domains are registered"):
+            extract_from_transcript(
+                transcript="User: test\n\nAssistant: ok",
+                owner_id="test",
+            )
+
+    @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     def test_snippets_written(self, mock_store, mock_llm, mock_opus_response, workspace_dir):
         from ingest.extract import extract_from_transcript
