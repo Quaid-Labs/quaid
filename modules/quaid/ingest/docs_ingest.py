@@ -7,24 +7,12 @@ Moves transcript->docs orchestration out of the adapter layer.
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 from pathlib import Path
 from typing import Any, Dict
 
 from config import get_config
-
-
-def _docs_updater_module():
-    return importlib.import_module("datastore.docsdb.updater")
-
-
-def check_staleness():
-    return _docs_updater_module().check_staleness()
-
-
-def cmd_update_from_transcript(transcript_path: str, dry_run: bool = False, max_docs: int = 3):
-    return _docs_updater_module().cmd_update_from_transcript(transcript_path, dry_run=dry_run, max_docs=max_docs)
+from core.docs.updater import check_staleness, cmd_update_from_transcript
 
 
 def _run(transcript_path: Path, label: str, session_id: str | None = None) -> Dict[str, Any]:
