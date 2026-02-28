@@ -13,7 +13,7 @@ def run_memory_graph_maintenance(ctx, result_factory):
     result = result_factory()
     try:
         graph = ctx.graph
-        subtask = str((ctx.options or {}).get("subtask") or "all").strip().lower()
+        subtask = str((ctx.options or {}).get("subtask") or "review").strip().lower()
         max_items = int((ctx.options or {}).get("max_items") or 0)
         llm_timeout_raw = float((ctx.options or {}).get("llm_timeout_seconds") or 0)
         llm_timeout_seconds = llm_timeout_raw if llm_timeout_raw > 0 else None
