@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 function _resolveTimeoutMs(name, fallbackMs) {
   const raw = Number(process.env[name] || "");
@@ -9,7 +10,10 @@ function _resolveTimeoutMs(name, fallbackMs) {
 }
 const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 12e4);
 export function createPythonBridgeExecutor(config) {
-  const pluginRoot = path.join(config.workspace, "plugins", "quaid");
+  const explicitRoot = String(config.pluginRoot || "").trim();
+  const modernRoot = path.join(config.workspace, "modules", "quaid");
+  const legacyRoot = path.join(config.workspace, "plugins", "quaid");
+  const pluginRoot = explicitRoot || (fs.existsSync(modernRoot) ? modernRoot : legacyRoot);
   const sep = process.platform === "win32" ? ";" : ":";
   const existingPyPath = String(process.env.PYTHONPATH || "").trim();
   const pythonPath = existingPyPath ? `${pluginRoot}${sep}${existingPyPath}` : pluginRoot;
