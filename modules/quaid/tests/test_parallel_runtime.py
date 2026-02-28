@@ -78,3 +78,29 @@ def test_acquire_many_uses_short_lock_poll_interval(tmp_path: Path):
 
     assert sleep_calls
     assert max(sleep_calls) <= 0.01
+
+
+def test_acquire_many_closes_fd_on_nonblocking_flock_error(tmp_path: Path):
+    reg = ResourceLockRegistry(tmp_path / "locks")
+    close_calls = {"count": 0}
+    real_close = os.close
+
+    def _flock_raises_oserror(_fd, op):
+        if op == (fcntl.LOCK_EX | fcntl.LOCK_NB):
+            raise OSError("flock boom")
+        return None
+
+    def _count_close(fd):
+        close_calls["count"] += 1
+        return real_close(fd)
+
+    with patch("core.runtime.parallel_runtime.fcntl.flock", side_effect=_flock_raises_oserror), \
+         patch("core.runtime.parallel_runtime.os.close", side_effect=_count_close):
+        try:
+            with reg.acquire_many(["resource-d"], timeout_seconds=1):
+                pass
+            assert False, "Expected OSError from flock"
+        except OSError as exc:
+            assert "flock boom" in str(exc)
+
+    assert close_calls["count"] >= 1
