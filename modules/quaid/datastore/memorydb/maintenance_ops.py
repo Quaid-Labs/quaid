@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import urllib.error
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
@@ -303,7 +304,7 @@ def _merge_nodes_into(
                         END
                     """,
                     (
-                        row["id"],
+                        str(uuid.uuid4()),
                         source_id,
                         target_id,
                         row["relation"],
