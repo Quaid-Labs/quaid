@@ -137,6 +137,22 @@ class TestToolRegistration:
         mod, *_ = server
         registered = set(mod.mcp._tool_manager._tools.keys())
         assert registered == EXPECTED_TOOLS
+        assert set(mod._DECLARED_MCP_TOOLS) == EXPECTED_TOOLS
+
+    def test_validate_mcp_tool_contract_raises_in_strict_mode(self, server):
+        mod, *_ = server
+        with patch.object(mod, "_REGISTERED_MCP_TOOLS", set()), \
+             patch.object(mod, "_mcp_contract_strict", return_value=True):
+            with pytest.raises(RuntimeError, match="MCP tool contract mismatch"):
+                mod._validate_mcp_tool_contract()
+
+    def test_validate_mcp_tool_contract_warns_in_non_strict_mode(self, server):
+        mod, *_ = server
+        with patch.object(mod, "_REGISTERED_MCP_TOOLS", set()), \
+             patch.object(mod, "_mcp_contract_strict", return_value=False), \
+             patch.object(mod.logger, "warning") as warn:
+            mod._validate_mcp_tool_contract()
+        warn.assert_called_once()
 
     def test_stdout_redirected_to_stderr(self, server):
         """The most critical safety feature: stdout redirected during import."""
