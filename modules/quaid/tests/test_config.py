@@ -805,3 +805,45 @@ class TestConfigLoading:
                 assert cfg.models.base_url == "https://openrouter.ai/api/v1"
         finally:
             config._config = old_config
+
+    def test_users_identity_keys_preserve_user_id_casing(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "users": {
+                    "defaultOwner": "owner",
+                    "identities": {
+                        "owner": {
+                            "channels": {"cli": ["*"]},
+                            "speakers": ["Solomon"],
+                            "personNodeName": "Solomon",
+                        }
+                    },
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert "owner" in cfg.users.identities
+                assert "solomon_steadman" not in cfg.users.identities
+        finally:
+            config._config = old_config
+
+    def test_retrieval_router_fail_open_respects_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "routerFailOpen": False
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.retrieval.router_fail_open is False
+        finally:
+            config._config = old_config
