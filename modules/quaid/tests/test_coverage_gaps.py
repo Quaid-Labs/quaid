@@ -508,8 +508,8 @@ class TestDecayMemoriesCli:
 
         assert result["decayed_count"] == 0
 
-    def test_wont_decay_below_floor(self, tmp_path):
-        """Confidence won't drop below 0.1 (the WHERE clause prevents it)."""
+    def test_decay_allows_values_below_point_one_when_starting_above_threshold(self, tmp_path):
+        """Decay threshold gates eligibility, not a hard post-decay confidence floor."""
         from datastore.memorydb.memory_graph import decay_memories
         graph, _ = _make_graph(tmp_path)
         node = _make_node(graph, "Low confidence memory", confidence=0.12, status="active")
