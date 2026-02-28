@@ -618,6 +618,16 @@ def get_runtime_registry() -> Optional[PluginRegistry]:
         return _RUNTIME_REGISTRY
 
 
+def get_runtime_errors() -> List[str]:
+    with _RUNTIME_LOCK:
+        return list(_RUNTIME_ERRORS)
+
+
+def get_runtime_warnings() -> List[str]:
+    with _RUNTIME_LOCK:
+        return list(_RUNTIME_WARNINGS)
+
+
 def collect_declared_exports(
     *,
     registry: PluginRegistry,
