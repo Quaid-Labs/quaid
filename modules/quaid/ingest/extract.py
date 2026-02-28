@@ -399,7 +399,10 @@ def extract_from_transcript(
     except Exception:
         allowed_domains = set()
     if not allowed_domains:
-        logger.warning("[extract] no active domains registered; all extracted facts will be skipped")
+        raise RuntimeError(
+            "No active domains are registered for extraction. "
+            "Configure domains through the memorydb contract before running extraction."
+        )
     for fact in facts:
         if not isinstance(fact, dict):
             continue
