@@ -1,4 +1,11 @@
-export type ContractSurface = "tools" | "events" | "api";
+export type ContractSurface =
+  | "tools"
+  | "events"
+  | "api"
+  | "ingest_triggers"
+  | "auth_requirements"
+  | "migrations"
+  | "notifications";
 
 export function normalizeDeclaredExports(raw: unknown): Set<string> {
   if (!Array.isArray(raw)) return new Set<string>();
