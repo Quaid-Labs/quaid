@@ -3192,11 +3192,20 @@ def _normalize_domain_filter(value: Any) -> Tuple[bool, set[str]]:
     """
     if not isinstance(value, dict):
         return True, set()
-    include = {
+    requested = {
         _normalize_domain_tag(k)
         for k, v in value.items()
         if bool(v) and _normalize_domain_tag(k) and _normalize_domain_tag(k) != "all"
     }
+    registered = set(_registered_domains().keys())
+    include = {d for d in requested if d in registered}
+
+    # If caller asked for domain filtering but only supplied unknown keys
+    # (e.g. {"workstream": true}), fail open to "all" instead of returning
+    # an empty slice due to a non-matching filter.
+    if requested and not include:
+        return True, set()
+
     if include:
         return False, include
     include_all = bool(value.get("all", True))
