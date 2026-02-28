@@ -164,10 +164,17 @@ def _edit_plugin_config_schema(staged: dict[str, Any], path: Path, plugin_id: st
         if not raw:
             continue
         try:
-            updated[key] = _coerce_prompt_value(raw, field_type)
+            coerced = _coerce_prompt_value(raw, field_type)
         except ValueError as err:
             print(f"Invalid value for {plugin_id}.{key}: {err} (keeping previous value)")
             continue
+        if isinstance(enum_vals, list) and enum_vals and coerced not in enum_vals:
+            print(
+                f"Invalid value for {plugin_id}.{key}: must be one of {enum_vals} "
+                "(keeping previous value)"
+            )
+            continue
+        updated[key] = coerced
     _plugin_config_set(staged, plugin_id, updated)
 
 
