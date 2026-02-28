@@ -1077,50 +1077,7 @@ else
   echo "[e2e] Skipping LLM smoke (--skip-llm-smoke)."
 fi
 
-HOOK_SRC="${E2E_WS}/modules/quaid/adaptors/openclaw/hooks/quaid-reset-signal"
-HOOK_DST="${E2E_WS}/hooks/quaid-reset-signal"
-if [[ -d "$HOOK_SRC" ]]; then
-  echo "[e2e] Installing workspace hook: quaid-reset-signal"
-  mkdir -p "${E2E_WS}/hooks"
-  rm -rf "$HOOK_DST"
-  cp -R "$HOOK_SRC" "$HOOK_DST"
-  openclaw hooks enable quaid-reset-signal >/dev/null 2>&1 || true
-  openclaw hooks install "$HOOK_DST" >/dev/null 2>&1 || true
-  openclaw hooks enable quaid-reset-signal >/dev/null 2>&1 || true
-else
-  echo "[e2e] Missing hook source: $HOOK_SRC" >&2
-  exit 1
-fi
-
-if ! openclaw hooks list --json | python3 - <<'PY'
-import json, sys
-raw = sys.stdin.read().strip()
-if not raw:
-    raise SystemExit(1)
-decoder = json.JSONDecoder()
-obj = None
-for idx, ch in enumerate(raw):
-    if ch != "{":
-        continue
-    try:
-        candidate, end = decoder.raw_decode(raw[idx:])
-    except Exception:
-        continue
-    if isinstance(candidate, dict) and "hooks" in candidate:
-        obj = candidate
-if not isinstance(obj, dict):
-    raise SystemExit(1)
-hooks = obj.get("hooks") or []
-match = next((h for h in hooks if (h.get("name") == "quaid-reset-signal")), None)
-if not match:
-    raise SystemExit(1)
-if match.get("disabled"):
-    raise SystemExit(1)
-print("[e2e] Hook ready: quaid-reset-signal")
-PY
-then
-  echo "[e2e] WARN: quaid-reset-signal precheck did not pass; live event checks will validate behavior directly." >&2
-fi
+echo "[e2e] Skipping legacy quaid-reset-signal hook setup (contract-owned lifecycle handlers active)."
 
 # Keep timeout test practical in CI/dev by forcing a short inactivity timeout.
 MEMORY_CFG="${E2E_WS}/config/memory.json"
