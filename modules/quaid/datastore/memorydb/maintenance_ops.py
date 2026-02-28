@@ -252,29 +252,78 @@ def _merge_nodes_into(
 
     # Migrate edges: repoint to merged node instead of deleting
     with graph._get_conn() as conn:
-        for oid in original_ids:
-            # Repoint source_fact_id edges
+        source_fact_ids = [oid for oid in original_ids if oid]
+        if source_fact_ids:
+            placeholders = ",".join("?" for _ in source_fact_ids)
+            migration_rows = conn.execute(
+                f"""
+                SELECT id, source_id, target_id, relation, attributes, weight,
+                       source_fact_id, valid_from, valid_until, created_at
+                FROM edges
+                WHERE source_id IN ({placeholders})
+                   OR target_id IN ({placeholders})
+                   OR source_fact_id IN ({placeholders})
+                """,
+                source_fact_ids + source_fact_ids + source_fact_ids,
+            ).fetchall()
+            original_set = set(source_fact_ids)
+            for row in migration_rows:
+                source_id = merged_id if row["source_id"] in original_set else row["source_id"]
+                target_id = merged_id if row["target_id"] in original_set else row["target_id"]
+                source_fact_id = (
+                    merged_id if row["source_fact_id"] in original_set else row["source_fact_id"]
+                )
+                if source_id == merged_id and target_id == merged_id:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO edges (
+                        id, source_id, target_id, relation, attributes, weight,
+                        source_fact_id, valid_from, valid_until, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_id, target_id, relation) DO UPDATE SET
+                        attributes = CASE
+                            WHEN COALESCE(edges.attributes, '{}') = '{}' THEN excluded.attributes
+                            ELSE edges.attributes
+                        END,
+                        weight = CASE
+                            WHEN COALESCE(excluded.weight, 0) > COALESCE(edges.weight, 0)
+                                THEN excluded.weight
+                            ELSE edges.weight
+                        END,
+                        source_fact_id = COALESCE(excluded.source_fact_id, edges.source_fact_id),
+                        valid_from = COALESCE(edges.valid_from, excluded.valid_from),
+                        valid_until = COALESCE(excluded.valid_until, edges.valid_until),
+                        created_at = CASE
+                            WHEN edges.created_at IS NULL THEN excluded.created_at
+                            WHEN excluded.created_at IS NULL THEN edges.created_at
+                            WHEN excluded.created_at < edges.created_at THEN excluded.created_at
+                            ELSE edges.created_at
+                        END
+                    """,
+                    (
+                        row["id"],
+                        source_id,
+                        target_id,
+                        row["relation"],
+                        row["attributes"],
+                        row["weight"],
+                        source_fact_id,
+                        row["valid_from"],
+                        row["valid_until"],
+                        row["created_at"],
+                    ),
+                )
             conn.execute(
-                "UPDATE OR IGNORE edges SET source_fact_id = ? WHERE source_fact_id = ?",
-                (merged_id, oid)
+                f"""
+                DELETE FROM edges
+                WHERE source_id IN ({placeholders})
+                   OR target_id IN ({placeholders})
+                   OR source_fact_id IN ({placeholders})
+                """,
+                source_fact_ids + source_fact_ids + source_fact_ids,
             )
-            # Repoint source_id edges
-            conn.execute(
-                "UPDATE OR IGNORE edges SET source_id = ? WHERE source_id = ?",
-                (merged_id, oid)
-            )
-            # Repoint target_id edges
-            conn.execute(
-                "UPDATE OR IGNORE edges SET target_id = ? WHERE target_id = ?",
-                (merged_id, oid)
-            )
-
-        # Clean up any edges that now violate UNIQUE(source_id, target_id, relation)
-        # The OR IGNORE above silently skips duplicates, leaving stale rows
-        # Delete any remaining edges pointing to original nodes
-        for oid in original_ids:
-            conn.execute("DELETE FROM edges WHERE source_fact_id = ?", (oid,))
-            conn.execute("DELETE FROM edges WHERE source_id = ? OR target_id = ?", (oid, oid))
 
         # Clean up self-referencing edges created when merging nodes that
         # had edges between each other (A→B becomes merged→merged)
