@@ -15,12 +15,16 @@ const RAG_SCRIPT = (() => {
   return path.join(WORKSPACE, "plugins/quaid/core/docs/rag.py")
 })()
 const PYTHON_MODULE_ROOT = path.resolve(path.dirname(RAG_SCRIPT), "../..")
-const TEST_DB = `/tmp/test-rag-${process.pid}.db`
 const TEST_FIXTURES_DIR = '/tmp/rag-test-fixtures'
+
+function createUniqueTestDbPath(): string {
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  return `/tmp/test-rag-${process.pid}-${nonce}.db`
+}
 
 // Test RAG interface
 class TestRAGInterface {
-  constructor(public dbPath: string = TEST_DB) {}
+  constructor(public dbPath: string = createUniqueTestDbPath()) {}
 
   async callPython(command: string, args: string[] = []): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -168,14 +172,14 @@ class TestRAGInterface {
 }
 
 async function createTestRAG(): Promise<TestRAGInterface> {
-  return new TestRAGInterface(TEST_DB)
+  return new TestRAGInterface()
 }
 
 async function cleanupTestRAG(rag: TestRAGInterface): Promise<void> {
   try {
-    await unlink(TEST_DB)
-    await unlink(`${TEST_DB}-wal`)
-    await unlink(`${TEST_DB}-shm`)
+    await unlink(rag.dbPath)
+    await unlink(`${rag.dbPath}-wal`)
+    await unlink(`${rag.dbPath}-shm`)
   } catch {
     // Files may not exist
   }
