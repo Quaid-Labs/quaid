@@ -415,6 +415,62 @@ def test_initialize_plugin_runtime_non_strict_collects_duplicate_declared_export
     assert any("Duplicate declared tools export 'shared_tool'" in msg for msg in errors)
 
 
+def test_initialize_plugin_runtime_strict_rejects_unknown_dependency(tmp_path: Path):
+    plugins_dir = tmp_path / "plugins"
+    ingest_dir = plugins_dir / "ingest"
+    ingest_dir.mkdir(parents=True)
+    payload = {
+        "plugin_api_version": 1,
+        "plugin_id": "ingest.dep",
+        "plugin_type": "ingest",
+        "module": "ingest.dep_mod",
+        "dependencies": ["datastore.missing"],
+        "capabilities": _contract_caps("Ingest Dep"),
+    }
+    (ingest_dir / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="depends on unknown plugin_id 'datastore.missing'"):
+        initialize_plugin_runtime(
+            api_version=1,
+            paths=[str(plugins_dir)],
+            strict=True,
+            slots={"ingest": ["ingest.dep"]},
+            workspace_root=str(tmp_path),
+        )
+
+
+def test_initialize_plugin_runtime_non_strict_collects_inactive_dependency(tmp_path: Path):
+    plugins_dir = tmp_path / "plugins"
+    ingest_dir = plugins_dir / "ingest"
+    ds_dir = plugins_dir / "datastore"
+    ingest_dir.mkdir(parents=True)
+    ds_dir.mkdir(parents=True)
+    ingest_payload = {
+        "plugin_api_version": 1,
+        "plugin_id": "ingest.dep",
+        "plugin_type": "ingest",
+        "module": "ingest.dep_mod",
+        "dependencies": ["datastore.core"],
+        "capabilities": _contract_caps("Ingest Dep"),
+    }
+    ds_payload = {
+        "plugin_api_version": 1,
+        "plugin_id": "datastore.core",
+        "plugin_type": "datastore",
+        "module": "datastore.core_mod",
+        "capabilities": _datastore_caps("Datastore Core"),
+    }
+    (ingest_dir / "plugin.json").write_text(json.dumps(ingest_payload), encoding="utf-8")
+    (ds_dir / "plugin.json").write_text(json.dumps(ds_payload), encoding="utf-8")
+    _registry, errors, _warnings = initialize_plugin_runtime(
+        api_version=1,
+        paths=[str(plugins_dir)],
+        strict=False,
+        slots={"ingest": ["ingest.dep"]},
+        workspace_root=str(tmp_path),
+    )
+    assert any("depends on inactive plugin_id 'datastore.core'" in msg for msg in errors)
+
+
 def test_runtime_diagnostics_accessors_reflect_latest_initialize(tmp_path: Path):
     reset_plugin_runtime()
     plugins_dir = tmp_path / "plugins"
