@@ -287,7 +287,7 @@ function loadAdapterContractDeclarations(): AdapterContractDeclarations {
   } catch (err: unknown) {
     const msg = `[quaid][contract] failed reading adapter manifest ${ADAPTER_PLUGIN_MANIFEST_PATH}: ${String((err as Error)?.message || err)}`;
     if (isPluginStrictMode()) {
-      throw new Error(msg);
+      throw new Error(msg, { cause: err as Error });
     }
     console.warn(msg);
     return { enabled: false, tools: new Set<string>(), events: new Set<string>(), api: new Set<string>() };
