@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 
 import config_cli
+import pytest
 
 
 def test_parse_literal_handles_bool_number_json_and_string():
@@ -169,3 +170,31 @@ def test_main_set_returns_nonzero_when_callback_reload_fails(monkeypatch, tmp_pa
     monkeypatch.setattr("sys.argv", ["config_cli.py", "set", "models.llm_provider", "anthropic"])
 
     assert config_cli.main() == 1
+
+
+def test_discover_plugin_manifests_suppresses_errors_in_non_strict_mode(monkeypatch, tmp_path):
+    path = tmp_path / "config" / "memory.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"plugins": {"paths": ["plugins"], "strict": False}}
+
+    def _boom(**_kwargs):
+        raise RuntimeError("manifest parse failure")
+
+    import core.runtime.plugins as plugin_runtime
+    monkeypatch.setattr(plugin_runtime, "discover_plugin_manifests", _boom)
+    out = config_cli._discover_plugin_manifests(path, data)
+    assert out == {}
+
+
+def test_discover_plugin_manifests_raises_errors_in_strict_mode(monkeypatch, tmp_path):
+    path = tmp_path / "config" / "memory.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"plugins": {"paths": ["plugins"], "strict": True}}
+
+    def _boom(**_kwargs):
+        raise RuntimeError("manifest parse failure")
+
+    import core.runtime.plugins as plugin_runtime
+    monkeypatch.setattr(plugin_runtime, "discover_plugin_manifests", _boom)
+    with pytest.raises(RuntimeError, match="manifest parse failure"):
+        config_cli._discover_plugin_manifests(path, data)
