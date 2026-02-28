@@ -78,3 +78,24 @@ def test_maintenance_passes_llm_timeout_to_dedup_review():
 
     assert not result.errors
     assert review_mock.call_args.kwargs["llm_timeout_seconds"] == 42.0
+
+
+def test_maintenance_defaults_missing_subtask_to_review():
+    registry = _Registry()
+    register_lifecycle_routines(registry, _Result)
+    handler = registry.handlers["memory_graph_maintenance"]
+
+    ctx = SimpleNamespace(
+        graph=object(),
+        options={},
+        dry_run=True,
+    )
+
+    with patch(
+        "datastore.memorydb.maintenance.ops.review_pending_memories",
+        return_value={"total_reviewed": 0, "deleted": 0, "fixed": 0, "carryover": 0, "review_coverage_ratio": 1.0},
+    ) as review_mock:
+        result = handler(ctx)
+
+    assert not result.errors
+    assert review_mock.call_count == 1
