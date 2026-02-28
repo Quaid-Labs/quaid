@@ -19,6 +19,22 @@ def test_docs_ingest_disabled_when_workspace_off(monkeypatch, tmp_path):
     assert result["status"] == "disabled"
 
 
+def test_docs_ingest_disabled_when_auto_update_off(monkeypatch, tmp_path):
+    t = tmp_path / "t.txt"
+    t.write_text("hello")
+    monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg(auto_update=False))
+    result = docs_ingest._run(t, "Compaction", "s1")
+    assert result["status"] == "disabled"
+
+
+def test_docs_ingest_missing_transcript_returns_error(monkeypatch, tmp_path):
+    missing = tmp_path / "missing.txt"
+    monkeypatch.setattr(docs_ingest, "get_config", lambda: _cfg())
+    result = docs_ingest._run(missing, "Compaction", "s1")
+    assert result["status"] == "error"
+    assert "not found" in result["message"]
+
+
 def test_docs_ingest_up_to_date(monkeypatch, tmp_path):
     t = tmp_path / "t.txt"
     t.write_text("hello")
@@ -51,4 +67,3 @@ def test_docs_ingest_updates_docs(monkeypatch, tmp_path):
     assert calls["path"] == str(t)
     assert calls["dry_run"] is False
     assert calls["max_docs"] == 5
-
