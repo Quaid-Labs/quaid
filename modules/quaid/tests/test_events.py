@@ -3,7 +3,15 @@ import types
 
 import pytest
 
-from core.runtime.events import emit_event, get_event_registry, get_event_capability, list_events, process_events
+from core.runtime.events import (
+    EVENT_HANDLERS,
+    emit_event,
+    get_event_capability,
+    get_event_registry,
+    list_events,
+    process_events,
+    register_event_handler,
+)
 from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
 
 
@@ -315,3 +323,30 @@ def test_emit_event_raises_on_chmod_failure_when_fail_hard(monkeypatch, tmp_path
 
     with pytest.raises(RuntimeError, match="fail-hard mode"):
         emit_event(name="session.reset", payload={"reason": "chmod-fail"}, source="pytest")
+
+
+def test_register_event_handler_does_not_overwrite_without_force(caplog):
+    original = EVENT_HANDLERS["session.reset"]
+
+    def _replacement(_event):
+        return {"status": "processed", "note": "replacement"}
+
+    with caplog.at_level("WARNING"):
+        register_event_handler("session.reset", _replacement)
+    assert EVENT_HANDLERS["session.reset"] is original
+    assert "skipped overwrite" in caplog.text
+
+
+def test_register_event_handler_overwrites_with_force(caplog):
+    original = EVENT_HANDLERS["session.reset"]
+
+    def _replacement(_event):
+        return {"status": "processed", "note": "replacement"}
+
+    try:
+        with caplog.at_level("WARNING"):
+            register_event_handler("session.reset", _replacement, force=True)
+        assert EVENT_HANDLERS["session.reset"] is _replacement
+        assert "overwriting existing handler" in caplog.text
+    finally:
+        register_event_handler("session.reset", original, force=True)
