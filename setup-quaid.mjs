@@ -1333,22 +1333,15 @@ print(int(row[0] if row else 0))
   writeConfig(owner, models, embeddings, systems, janitorPolicies);
   s.stop(C.green("Config written"));
 
-  // Installer-owned memorydb bootstrap: ensure domain registry/tables + TOOLS domain block.
+  // Installer-owned memorydb bootstrap: load config once so plugin init/config
+  // hooks run exactly once (including MemoryDB domain sync + TOOLS sync).
   const domainInitScript = `
 import os, sys
-from types import SimpleNamespace
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from config import get_config
-from core.plugins.memorydb_contract import on_init
-ctx = SimpleNamespace(
-    plugin=SimpleNamespace(plugin_id='memorydb.core'),
-    config=get_config(),
-    plugin_config={},
-    workspace_root=${JSON.stringify(WORKSPACE)},
-)
-on_init(ctx)
+_cfg = get_config()
 print('[+] MemoryDB domain init complete')
 `;
   const domainInitResult = spawnSync("python3", ["-c", domainInitScript], {
@@ -1357,7 +1350,8 @@ print('[+] MemoryDB domain init complete')
     stdio: ["pipe", "pipe", "pipe"],
   });
   if (domainInitResult.status !== 0) {
-    log.warn("MemoryDB domain init hook failed during install; continuing.");
+    const detail = String(domainInitResult.stderr || domainInitResult.stdout || "").trim();
+    log.warn(`MemoryDB domain bootstrap failed during install; continuing. ${detail || ""}`.trim());
   }
 
   // Create workspace files
