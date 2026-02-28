@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -387,16 +388,20 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
 
 def parse_literal(raw: str) -> Any:
     value = raw.strip()
+    if value.lower() == "null":
+        return None
     if value.lower() in {"true", "false"}:
         return value.lower() == "true"
     try:
         if value.startswith("{") or value.startswith("["):
             return json.loads(value)
-        if "." in value:
+        if re.fullmatch(r"[-+]?(?:\d+\.\d*|\d*\.\d+)", value):
             return float(value)
-        return int(value)
+        if re.fullmatch(r"[-+]?\d+", value):
+            return int(value)
     except ValueError:
-        return value
+        pass
+    return value
 
 
 def main() -> int:

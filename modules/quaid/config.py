@@ -717,6 +717,24 @@ def _extract_raw_plugin_config(raw_config: Dict[str, Any]) -> Dict[str, Any]:
     return dict(cfg)
 
 
+def _extract_raw_user_identities(raw_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Preserve user identity map keys as-is while normalizing nested identity payloads."""
+    users = raw_config.get("users")
+    if not isinstance(users, dict):
+        return {}
+    identities = users.get("identities")
+    if not isinstance(identities, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for raw_user_id, raw_identity in identities.items():
+        user_id = str(raw_user_id)
+        if isinstance(raw_identity, dict):
+            out[user_id] = _load_nested(raw_identity)
+        else:
+            out[user_id] = {}
+    return out
+
+
 def _decode_json_list(raw_value: Any, *, field_name: str, default: Optional[List[Any]] = None) -> List[Any]:
     """Decode list-typed JSON fields defensively."""
     fallback = list(default or [])
@@ -797,12 +815,17 @@ def _load_config_inner() -> MemoryConfig:
             print("[config] Using defaults (no config file found)", file=sys.stderr)
     
     raw_plugin_config = _extract_raw_plugin_config(raw_config)
+    raw_user_identities = _extract_raw_user_identities(raw_config)
     # Convert camelCase to snake_case
     config_data = _load_nested(raw_config)
     if raw_plugin_config:
         plugins_section = config_data.setdefault("plugins", {})
         if isinstance(plugins_section, dict):
             plugins_section["config"] = raw_plugin_config
+    if raw_user_identities:
+        users_section = config_data.setdefault("users", {})
+        if isinstance(users_section, dict):
+            users_section["identities"] = raw_user_identities
     _warn_unknown_keys("", config_data, _KNOWN_TOP_LEVEL_CONFIG_KEYS)
     _warn_unknown_keys("models", config_data.get("models", {}), _KNOWN_MODELS_KEYS)
     _warn_unknown_keys("capture", config_data.get("capture", {}), _KNOWN_CAPTURE_KEYS)
@@ -1044,6 +1067,7 @@ def _load_config_inner() -> MemoryConfig:
         co_session_decay=retrieval_data.get('co_session_decay', 0.6),
         recency_decay_days=retrieval_data.get('recency_decay_days', 90),
         pre_injection_pass=retrieval_data.get('pre_injection_pass', retrieval_data.get('preInjectionPass', True)),
+        router_fail_open=bool(retrieval_data.get('router_fail_open', retrieval_data.get('routerFailOpen', True))),
         fail_hard=retrieval_data.get('fail_hard', retrieval_data.get('failHard', True)),
         auto_inject=retrieval_data.get('auto_inject', False),
         domains=parsed_domains,

@@ -3039,7 +3039,9 @@ ${recallStoreGuidance}`,
             let maxLimit = 50;
             try {
               const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-              maxLimit = configData?.retrieval?.maxLimit ?? 50;
+              const rawMaxLimit = configData?.retrieval?.maxLimit ?? configData?.retrieval?.max_limit ?? 50;
+              const parsedMaxLimit = Number(rawMaxLimit);
+              maxLimit = Number.isFinite(parsedMaxLimit) && parsedMaxLimit > 0 ? parsedMaxLimit : 50;
             } catch (err: unknown) {
               console.warn(`[quaid] memory_recall maxLimit config read failed: ${String((err as Error)?.message || err)}`);
             }
