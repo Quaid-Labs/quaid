@@ -1407,6 +1407,11 @@ def _load_config_inner() -> MemoryConfig:
             workspace_root=str(_workspace_root()),
             strict=plugins.strict,
         )
+        failed_init_plugin_ids: set[str] = set()
+        for msg in list(init_errors) + list(init_warnings):
+            m = re.search(r"Plugin '([^']+)' init hook failed", str(msg))
+            if m:
+                failed_init_plugin_ids.add(m.group(1).strip())
         cfg_errors, cfg_warnings = run_plugin_contract_surface(
             registry=registry,
             slots={
@@ -1419,6 +1424,7 @@ def _load_config_inner() -> MemoryConfig:
             plugin_config=plugins.config,
             workspace_root=str(_workspace_root()),
             strict=plugins.strict,
+            skip_plugin_ids=sorted(failed_init_plugin_ids),
         )
         tool_runtime_errors, tool_runtime_warnings = run_plugin_contract_surface(
             registry=registry,
@@ -1432,6 +1438,7 @@ def _load_config_inner() -> MemoryConfig:
             plugin_config=plugins.config,
             workspace_root=str(_workspace_root()),
             strict=plugins.strict,
+            skip_plugin_ids=sorted(failed_init_plugin_ids),
         )
         plugin_errors.extend(init_errors)
         plugin_errors.extend(cfg_errors)

@@ -1021,3 +1021,45 @@ class TestConfigLoading:
                 callbacks = config._config_callbacks.get("plugins.slots.adapter", [])
                 if _boom in callbacks:
                     callbacks.remove(_boom)
+
+    def test_plugin_init_failure_skips_config_and_tool_runtime_for_failed_plugin(self, tmp_path):
+        import config
+
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "plugins": {
+                    "enabled": True,
+                    "strict": False,
+                    "apiVersion": 1,
+                    "paths": [],
+                    "slots": {"adapter": "broken.plugin"},
+                }
+            }))
+            calls = []
+
+            def _fake_initialize_plugin_runtime(**_kwargs):
+                return object(), [], []
+
+            def _fake_run_plugin_contract_surface(**kwargs):
+                surface = kwargs.get("surface")
+                calls.append((surface, tuple(sorted(kwargs.get("skip_plugin_ids") or []))))
+                if surface == "init":
+                    return [], ["Plugin 'broken.plugin' init hook failed (on_init): boom"]
+                return [], []
+
+            with patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch("core.runtime.plugins.initialize_plugin_runtime", side_effect=_fake_initialize_plugin_runtime), \
+                 patch("core.runtime.plugins.run_plugin_contract_surface", side_effect=_fake_run_plugin_contract_surface):
+                cfg = load_config()
+                assert cfg.plugins.enabled is True
+
+            assert calls == [
+                ("init", ()),
+                ("config", ("broken.plugin",)),
+                ("tool_runtime", ("broken.plugin",)),
+            ]
+        finally:
+            config._config = old_config
