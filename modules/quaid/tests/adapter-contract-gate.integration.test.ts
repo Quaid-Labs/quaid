@@ -37,7 +37,7 @@ function makeWorkspace(caseName: string, strictContracts: unknown): string {
   const adapterManifest = {
     capabilities: {
       contract: {
-        api: { exports: ["openclaw_adapter_entry"] },
+        api: { exports: ["openclaw_adapter_entry", "/plugins/quaid/llm", "/memory/injected"] },
         // Deliberately incomplete so contract checks are exercised.
         events: { exports: ["agent_end"] },
         tools: { exports: ["memory_recall"] },
