@@ -717,6 +717,92 @@ def test_run_plugin_contract_surface_collect_non_strict_emits_warnings(tmp_path:
             sys.path.remove(str(tmp_path))
 
 
+def test_run_plugin_contract_surface_collect_missing_handler_strict_errors():
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.missing_handler",
+            "plugin_type": "adapter",
+            "module": "adaptors.missing",
+            "capabilities": {
+                "display_name": "Missing Handler Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    errs, warns, results = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots={"adapter": "adapter.missing_handler"},
+        surface="status",
+        config={},
+        strict=True,
+    )
+    assert results == []
+    assert len(errs) == 1
+    assert "hook missing handler declaration" in errs[0]
+    assert warns == []
+
+
+def test_run_plugin_contract_surface_collect_missing_handler_non_strict_warns():
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.missing_handler",
+            "plugin_type": "adapter",
+            "module": "adaptors.missing",
+            "capabilities": {
+                "display_name": "Missing Handler Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    errs, warns, results = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots={"adapter": "adapter.missing_handler"},
+        surface="status",
+        config={},
+        strict=False,
+    )
+    assert results == []
+    assert errs == []
+    assert len(warns) == 1
+    assert "hook missing handler declaration" in warns[0]
+
+
 def test_validate_manifest_rejects_invalid_declared_exports():
     with pytest.raises(ValueError, match="tools.exports must contain non-empty strings"):
         validate_manifest_dict(
