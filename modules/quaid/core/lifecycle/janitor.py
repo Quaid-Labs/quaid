@@ -937,6 +937,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         result.data.update(dict(output.get("data", {}) or {}))
                         return result
             except Exception as exc:
+                strict_plugins = bool(getattr(_cfg.plugins, "strict", True))
+                if strict_plugins:
+                    janitor_logger.error("plugin_maintenance_dispatch_failed", error=str(exc), stage=stage)
+                    raise
                 janitor_logger.warn("plugin_maintenance_dispatch_failed", error=str(exc), stage=stage)
             return _LIFECYCLE_REGISTRY.run(
                 "memory_graph_maintenance",

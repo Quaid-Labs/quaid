@@ -70,6 +70,7 @@ let _cachedDatastoreStats = null;
 let _datastoreStatsTimestamp = 0;
 let _memoryConfigErrorLogged = false;
 let _memoryConfigMtimeMs = -1;
+let _memoryConfigPath = "";
 function _envTimeoutMs(name, fallbackMs) {
   const raw = Number(process.env[name] || "");
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -152,8 +153,30 @@ function computeDynamicK() {
   return Math.max(5, Math.min(k, 40));
 }
 let _memoryConfig = null;
+function _memoryConfigCandidates() {
+  return [
+    path.join(WORKSPACE, "config", "memory.json"),
+    path.join(os.homedir(), ".quaid", "memory-config.json"),
+    path.join(process.cwd(), "memory-config.json")
+  ];
+}
+function _resolveMemoryConfigPath() {
+  for (const candidate of _memoryConfigCandidates()) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+    }
+  }
+  return _memoryConfigCandidates()[0];
+}
 function getMemoryConfig() {
-  const configPath = path.join(WORKSPACE, "config/memory.json");
+  const configPath = _resolveMemoryConfigPath();
+  if (configPath !== _memoryConfigPath) {
+    _memoryConfigMtimeMs = -1;
+    _memoryConfigPath = configPath;
+  }
   let mtimeMs = -1;
   try {
     mtimeMs = fs.statSync(configPath).mtimeMs;
@@ -199,6 +222,7 @@ function loadAdapterContractDeclarations() {
     const payload = JSON.parse(fs.readFileSync(ADAPTER_PLUGIN_MANIFEST_PATH, "utf8"));
     const contract = payload?.capabilities?.contract || {};
     return {
+      enabled: true,
       tools: normalizeDeclaredExports(contract?.tools?.exports),
       events: normalizeDeclaredExports(contract?.events?.exports),
       api: normalizeDeclaredExports(contract?.api?.exports)
@@ -209,7 +233,7 @@ function loadAdapterContractDeclarations() {
       throw new Error(msg);
     }
     console.warn(msg);
-    return { tools: /* @__PURE__ */ new Set(), events: /* @__PURE__ */ new Set(), api: /* @__PURE__ */ new Set() };
+    return { enabled: false, tools: /* @__PURE__ */ new Set(), events: /* @__PURE__ */ new Set(), api: /* @__PURE__ */ new Set() };
   }
 }
 function isPreInjectionPassEnabled() {
@@ -2213,15 +2237,21 @@ const quaidPlugin = {
     runStartupSelfCheck();
     const contractDecl = loadAdapterContractDeclarations();
     const strictContracts = isPluginStrictMode();
-    validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
+    if (contractDecl.enabled) {
+      validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
+    }
     const onChecked = (eventName, handler, options) => {
-      assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
+      if (contractDecl.enabled) {
+        assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
+      }
       return api.on(eventName, handler, options);
     };
     const registerToolChecked = (factory) => {
       const spec = factory();
       const toolName = String(spec?.name || "").trim();
-      assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
+      if (contractDecl.enabled) {
+        assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
+      }
       return api.registerTool(() => spec);
     };
     const dataDir = path.dirname(DB_PATH);

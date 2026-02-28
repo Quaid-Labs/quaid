@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -86,6 +86,7 @@ async function loadAdapterWithWorkspace(workspace: string): Promise<AdapterPlugi
 afterEach(() => {
   delete process.env.CLAWDBOT_WORKSPACE;
   delete process.env.QUAID_HOME;
+  delete process.env.HOME;
 });
 
 describe("adapter contract gate integration", () => {
@@ -103,6 +104,47 @@ describe("adapter contract gate integration", () => {
     const api = makeFakeApi();
     expect(() => plugin.register(api as any)).not.toThrow();
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/undeclared (events|tools) registration/));
+    warn.mockRestore();
+  });
+
+  it("uses fallback ~/.quaid/memory-config.json for plugins.strict", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workspace = makeWorkspace("fallback-strict", true);
+    rmSync(join(workspace, "config", "memory.json"));
+
+    const fakeHome = join(workspace, "fake-home");
+    writeJson(join(fakeHome, ".quaid", "memory-config.json"), {
+      retrieval: { failHard: false, maxLimit: 20 },
+      plugins: { strict: false },
+      models: {
+        llmProvider: "openai",
+        deepReasoningProvider: "openai",
+        fastReasoningProvider: "openai",
+        deepReasoning: "gpt-5.1-codex",
+        fastReasoning: "gpt-5.1-codex",
+      },
+    });
+    process.env.HOME = fakeHome;
+
+    const plugin = await loadAdapterWithWorkspace(workspace);
+    const api = makeFakeApi();
+    expect(() => plugin.register(api as any)).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/undeclared (events|tools) registration/));
+    warn.mockRestore();
+  });
+
+  it("disables declaration checks when manifest is missing in non-strict mode", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const workspace = makeWorkspace("missing-manifest", false);
+    rmSync(join(workspace, "modules", "quaid", "adaptors", "openclaw", "plugin.json"));
+
+    const plugin = await loadAdapterWithWorkspace(workspace);
+    const api = makeFakeApi();
+    expect(() => plugin.register(api as any)).not.toThrow();
+    const warnings = warn.mock.calls.map(([msg]) => String(msg));
+    expect(warnings.some((msg) => msg.includes("failed reading adapter manifest"))).toBe(true);
+    expect(warnings.some((msg) => msg.includes("undeclared tools registration"))).toBe(false);
+    expect(warnings.some((msg) => msg.includes("undeclared events registration"))).toBe(false);
     warn.mockRestore();
   });
 });
