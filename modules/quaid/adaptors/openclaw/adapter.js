@@ -2702,7 +2702,8 @@ ${recallStoreGuidance}`,
               const reasoning = options.routing?.reasoning ?? "fast";
               const intent = options.routing?.intent ?? "general";
               const domain = options.filters?.domain && typeof options.filters.domain === "object" ? options.filters.domain : { all: true };
-              const domainBoost = Array.isArray(options.filters?.domainBoost) || options.filters?.domainBoost && typeof options.filters.domainBoost === "object" ? options.filters?.domainBoost : void 0;
+              const rawDomainBoost = options.filters?.domainBoost;
+              const domainBoost = Array.isArray(rawDomainBoost) || rawDomainBoost && typeof rawDomainBoost === "object" ? rawDomainBoost : void 0;
               const dateFrom = options.filters?.dateFrom;
               const dateTo = options.filters?.dateTo;
               const project = options.filters?.project;
