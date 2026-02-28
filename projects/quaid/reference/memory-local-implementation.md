@@ -448,16 +448,12 @@ Resolution rules:
     "boost_recent": true,
     "boost_frequent": true,
     "max_tokens": 2000,
-    "_note": "Recall notifications follow notifications.level / notifications.retrieval.verbosity",
-    "dynamicK": {
-      "enabled": true,
-      "formula": "11.5 * ln(N) - 61.7"
-    }
+    "_note": "Recall notifications follow notifications.level / notifications.retrieval.verbosity"
   }
 }
 ```
 
-The `dynamicK` section controls the automatic retrieval limit scaling. When `enabled`, retrieval uses `round(11.5 * ln(N) - 61.7)` where N is the active node count. Runtime currently clamps this to `[5, 40]` in adapter logic, and node count is cached for 5 minutes. The `default_limit` and `max_limit` fields remain fallbacks when dynamic K is disabled.
+Dynamic K scaling is runtime logic in the adapter (not a config block): retrieval uses `round(11.5 * ln(N) - 61.7)` where `N` is active node count, clamped to `[5, 40]` with a 5-minute node-count cache. `default_limit`/`max_limit` still apply to request bounds.
 
 **User identity config** includes `personNodeName`:
 ```json
