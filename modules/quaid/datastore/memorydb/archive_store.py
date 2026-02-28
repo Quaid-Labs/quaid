@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List
 
+from lib.database import get_connection
 from lib.fail_policy import is_fail_hard_enabled
 
 
@@ -50,21 +50,12 @@ def _get_archive_conn(db_path: Path | None = None):
     if db_path is None:
         db_path = _default_archive_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    for statement in _SCHEMA.split(";"):
-        stmt = statement.strip()
-        if stmt:
-            conn.execute(stmt)
-    try:
+    with get_connection(db_path) as conn:
+        for statement in _SCHEMA.split(";"):
+            stmt = statement.strip()
+            if stmt:
+                conn.execute(stmt)
         yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
 
 
 def archive_node(node_dict: Dict[str, Any], reason: str, db_path: Path | None = None) -> bool:
