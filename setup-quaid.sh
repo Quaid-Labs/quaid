@@ -1257,14 +1257,18 @@ GITIGNORE
         cd "$PLUGIN_DIR"
         export QUAID_HOME="${WORKSPACE_ROOT}"
         export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
+        export QUAID_OWNER_ID="${OWNER_NAME}"
+        export QUAID_OWNER_DISPLAY="${OWNER_DISPLAY}"
         python3 -c "
 import os, sys
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store
 try:
-    store('${OWNER_DISPLAY}', owner_id='${OWNER_NAME}', category='person', source='installer')
-    print('[+] Person node created for ${OWNER_DISPLAY}')
+    owner_display = os.environ.get('QUAID_OWNER_DISPLAY', 'User')
+    owner_id = os.environ.get('QUAID_OWNER_ID', 'user')
+    store(owner_display, owner_id=owner_id, category='person', source='installer')
+    print(f'[+] Person node created for {owner_display}')
 except Exception as e:
     print(f'[!] Could not create Person node: {e}', file=sys.stderr)
 " 2>&1
@@ -1312,6 +1316,7 @@ PROJEOF
             cd "$PLUGIN_DIR"
             export QUAID_HOME="${WORKSPACE_ROOT}"
             export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
+            export QUAID_OWNER_ID="${OWNER_NAME}"
             python3 -c "
 import os, sys
 os.environ['QUAID_QUIET'] = '1'
@@ -1621,7 +1626,7 @@ Document ({fname}):
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict) and 'fact' in item:
-                    store(item['fact'], owner_id='${OWNER_NAME}',
+                    store(item['fact'], owner_id=os.environ.get('QUAID_OWNER_ID', 'user'),
                           category=item.get('category', 'fact'),
                           source='migration')
                     total_facts += 1
@@ -1706,18 +1711,20 @@ conn.close()
         cd "$PLUGIN_DIR"
         export QUAID_HOME="${WORKSPACE_ROOT}"
         export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
+        export QUAID_OWNER_ID="${OWNER_NAME}"
         python3 -c "
 import os, sys
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store, recall
+owner_id = os.environ.get('QUAID_OWNER_ID', 'user')
 
 # Store a test fact
-node_id = store('Quaid installer smoke test fact', owner_id='${OWNER_NAME}', category='fact', source='installer-test')
+node_id = store('Quaid installer smoke test fact', owner_id=owner_id, category='fact', source='installer-test')
 print(f'[+] Stored test fact (node {node_id})')
 
 # Try to recall it (FTS only, no embedding needed)
-results = recall('installer smoke test', owner_id='${OWNER_NAME}', limit=1)
+results = recall('installer smoke test', owner_id=owner_id, limit=1)
 if results:
     print(f'[+] Recalled: {results[0][\"name\"][:60]}...')
     print('SMOKE_OK')
