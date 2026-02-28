@@ -11,13 +11,13 @@ import importlib
 import logging
 import os
 import threading
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
+from core.llm.scheduler import get_global_llm_scheduler
 from core.runtime.parallel_runtime import ResourceLockRegistry, get_parallel_config
 logger = logging.getLogger(__name__)
 
@@ -56,9 +56,6 @@ class LifecycleRegistry:
         self._lock_registries: Dict[str, ResourceLockRegistry] = {}
         self._lock_registries_guard = threading.Lock()
         self._max_lock_registries = max(1, int(os.environ.get("QUAID_MAX_LOCK_REGISTRIES", "64") or 64))
-        self._llm_executor: Optional[ThreadPoolExecutor] = None
-        self._llm_executor_workers: int = 0
-        self._llm_executor_guard = threading.Lock()
 
     def register(
         self,
@@ -195,20 +192,6 @@ class LifecycleRegistry:
         workers = int(getattr(parallel, "llm_workers", 4) or 4)
         return max(1, workers)
 
-    def _ensure_llm_executor(self, workers: int) -> ThreadPoolExecutor:
-        worker_count = max(1, int(workers))
-        with self._llm_executor_guard:
-            if self._llm_executor is None:
-                self._llm_executor = ThreadPoolExecutor(max_workers=worker_count)
-                self._llm_executor_workers = worker_count
-            elif worker_count != self._llm_executor_workers:
-                print(
-                    f"[janitor_lifecycle] Requested executor resize {self._llm_executor_workers} -> {worker_count} "
-                    "ignored for safety; restart process to apply.",
-                    file=sys.stderr,
-                )
-            return self._llm_executor
-
     def _core_parallel_map(
         self,
         ctx: RoutineContext,
@@ -220,60 +203,22 @@ class LifecycleRegistry:
         seq = list(items or [])
         if not seq:
             return []
-        requested = max_workers if max_workers is not None else self._llm_workers(ctx)
-        worker_count = max(1, min(int(requested), len(seq)))
-        if worker_count <= 1:
-            return [fn(item) for item in seq]
-
-        executor = self._ensure_llm_executor(worker_count)
-        sem = threading.Semaphore(worker_count)
-        results: List[Any] = [None] * len(seq)
-        timeout_seconds = self._parallel_map_timeout_seconds(ctx)
-        deadline = time.monotonic() + timeout_seconds
-
-        def _run(idx_item: tuple[int, Any]) -> tuple[int, Any]:
-            idx, item = idx_item
-            with sem:
-                return idx, fn(item)
-
-        futs = [executor.submit(_run, (idx, item)) for idx, item in enumerate(seq)]
-        pending = set(futs)
-        while pending:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                for fut in list(pending):
-                    fut.cancel()
-                raise TimeoutError(
-                    f"Parallel map timed out after {timeout_seconds:.2f}s "
-                    f"(items={len(seq)}, workers={worker_count})"
-                )
-            try:
-                done = next(as_completed(pending, timeout=remaining))
-            except TimeoutError:
-                for fut in list(pending):
-                    fut.cancel()
-                raise TimeoutError(
-                    f"Parallel map timed out after {timeout_seconds:.2f}s "
-                    f"(items={len(seq)}, workers={worker_count})"
-                )
-            pending.discard(done)
-            try:
-                idx, value = done.result()
-            except Exception:
-                for fut in list(pending):
-                    fut.cancel()
-                raise
-            results[idx] = value
-        return results
+        configured_workers = self._llm_workers(ctx)
+        requested_workers = max_workers if max_workers is not None else configured_workers
+        scheduler = get_global_llm_scheduler()
+        return scheduler.run_map(
+            workload_key="lifecycle_prepass",
+            items=seq,
+            fn=fn,
+            configured_workers=configured_workers,
+            requested_workers=requested_workers,
+            timeout_seconds=self._parallel_map_timeout_seconds(ctx),
+            timeout_retries=self._parallel_map_timeout_retries(ctx),
+        )
 
     def shutdown(self, wait: bool = False) -> None:
-        """Release lifecycle-owned executors."""
-        with self._llm_executor_guard:
-            ex = self._llm_executor
-            self._llm_executor = None
-            self._llm_executor_workers = 0
-        if ex is not None:
-            ex.shutdown(wait=wait, cancel_futures=True)
+        """Lifecycle no longer owns LLM executors; global scheduler is process-managed."""
+        _ = wait
 
     def _bind_core_runtime(self, ctx: RoutineContext) -> RoutineContext:
         llm_workers = self._llm_workers(ctx)
@@ -326,6 +271,30 @@ class LifecycleRegistry:
         except Exception:
             pass
         return float(default_seconds)
+
+    def _parallel_map_timeout_retries(self, ctx: RoutineContext, default_retries: int = 1) -> int:
+        raw_env = os.environ.get("QUAID_CORE_PARALLEL_MAP_TIMEOUT_RETRIES", "")
+        if str(raw_env).strip():
+            try:
+                parsed_env = int(raw_env)
+                if parsed_env >= 0:
+                    return parsed_env
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid QUAID_CORE_PARALLEL_MAP_TIMEOUT_RETRIES=%r; using config/default",
+                    raw_env,
+                )
+        try:
+            parallel_cfg = get_parallel_config(ctx.cfg)
+            parsed_cfg = int(
+                getattr(parallel_cfg, "lifecycle_prepass_timeout_retries", default_retries)
+                or default_retries
+            )
+            if parsed_cfg >= 0:
+                return parsed_cfg
+        except Exception:
+            pass
+        return int(default_retries)
 
     def _resolved_write_resources(self, name: str, ctx: RoutineContext) -> List[str]:
         with self._registry_guard:
