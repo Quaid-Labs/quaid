@@ -456,6 +456,28 @@ def test_lifecycle_env_modules_reject_unapproved_prefix(monkeypatch):
     assert "evil.module" not in seen
 
 
+def test_resolve_adapter_maintenance_module_from_active_manifest(monkeypatch):
+    import core.lifecycle.janitor_lifecycle as lifecycle_mod
+
+    fake_cfg = SimpleNamespace(
+        plugins=SimpleNamespace(
+            slots=SimpleNamespace(adapter="custom.adapter"),
+            paths=["plugins"],
+            allowlist=[],
+        )
+    )
+    fake_manifest = SimpleNamespace(plugin_id="custom.adapter", module="adaptors.custom.adapter")
+
+    monkeypatch.setattr("config.get_config", lambda: fake_cfg)
+    monkeypatch.setattr(
+        "core.runtime.plugins.discover_plugin_manifests",
+        lambda **_kwargs: ([fake_manifest], []),
+    )
+
+    resolved = lifecycle_mod._resolve_adapter_maintenance_module()
+    assert resolved == "adaptors.custom.maintenance"
+
+
 def test_lifecycle_env_module_can_register_write_resources(monkeypatch, tmp_path):
     module_name = "core.testext"
     mod = ModuleType(module_name)
