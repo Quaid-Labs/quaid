@@ -335,6 +335,24 @@ def test_lifecycle_registry_parallel_map_times_out(tmp_path):
         )
 
 
+def test_lifecycle_registry_parallel_map_cancels_pending_on_worker_error(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    ctx = RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path)
+    started: list[int] = []
+
+    def _worker(item: int):
+        started.append(item)
+        if item == 0:
+            raise RuntimeError("boom")
+        return item
+
+    with pytest.raises(RuntimeError, match="boom"):
+        registry._core_parallel_map(ctx, [0, 1, 2], _worker, max_workers=1)
+    assert started == [0]
+
+
 def test_lifecycle_registry_requires_write_registration_when_enabled(tmp_path):
     from core.lifecycle.janitor_lifecycle import LifecycleRegistry
 

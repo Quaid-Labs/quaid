@@ -257,7 +257,12 @@ class LifecycleRegistry:
                     f"(items={len(seq)}, workers={worker_count})"
                 )
             pending.discard(done)
-            idx, value = done.result()
+            try:
+                idx, value = done.result()
+            except Exception:
+                for fut in list(pending):
+                    fut.cancel()
+                raise
             results[idx] = value
         return results
 
