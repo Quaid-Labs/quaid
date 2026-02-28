@@ -6,6 +6,7 @@ import struct
 import sqlite3
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 # Ensure plugin root is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -198,6 +199,49 @@ class TestGetConnection:
         with pytest.raises(sqlite3.IntegrityError):
             with get_connection(db_path) as conn:
                 conn.execute("INSERT INTO child VALUES (1, 999)")
+
+
+# ---------------------------------------------------------------------------
+# lib/config.py — path helpers
+# ---------------------------------------------------------------------------
+
+class TestLibConfigPaths:
+    """Tests for lib.config path normalization/expansion."""
+
+    def test_env_db_paths_expand_user(self, tmp_path):
+        from lib.config import get_db_path, get_archive_db_path
+
+        fake_home = tmp_path / "home"
+        fake_home.mkdir(parents=True, exist_ok=True)
+        with patch.dict(
+            os.environ,
+            {
+                "HOME": str(fake_home),
+                "MEMORY_DB_PATH": "~/db/main.db",
+                "MEMORY_ARCHIVE_DB_PATH": "~/db/archive.db",
+            },
+            clear=False,
+        ):
+            assert get_db_path() == fake_home / "db" / "main.db"
+            assert get_archive_db_path() == fake_home / "db" / "archive.db"
+
+    def test_config_db_paths_expand_user(self, tmp_path):
+        from lib.config import get_db_path, get_archive_db_path
+
+        fake_home = tmp_path / "home"
+        fake_home.mkdir(parents=True, exist_ok=True)
+        cfg = SimpleNamespace(
+            database=SimpleNamespace(
+                path="~/quaid/memory.db",
+                archive_path="~/quaid/memory_archive.db",
+            )
+        )
+        with patch.dict(os.environ, {"HOME": str(fake_home)}, clear=False), \
+             patch.dict(os.environ, {"MEMORY_DB_PATH": "", "MEMORY_ARCHIVE_DB_PATH": ""}, clear=False), \
+             patch("lib.config._get_cfg", return_value=cfg), \
+             patch("lib.config._workspace_root", return_value=tmp_path / "workspace"):
+            assert get_db_path() == fake_home / "quaid" / "memory.db"
+            assert get_archive_db_path() == fake_home / "quaid" / "memory_archive.db"
 
 
 # ---------------------------------------------------------------------------
