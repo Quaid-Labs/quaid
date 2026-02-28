@@ -358,6 +358,49 @@ def _validate_slot_selection(
         errors.append(msg)
 
 
+def _validate_declared_export_conflicts(
+    registry: PluginRegistry,
+    *,
+    slots: Dict[str, Any],
+    strict: bool,
+    errors: List[str],
+) -> None:
+    active_ids = _iter_active_plugin_ids(slots, registry=registry)
+    for surface in _PLUGIN_CONTRACT_DECLARED:
+        owners_by_export: Dict[str, List[str]] = {}
+        for plugin_id in active_ids:
+            rec = registry.get(plugin_id)
+            if rec is None:
+                continue
+            contract = (rec.manifest.capabilities or {}).get("contract", {})
+            if not isinstance(contract, dict):
+                continue
+            spec = contract.get(surface, {})
+            if not isinstance(spec, dict):
+                continue
+            exports = spec.get("exports", [])
+            if not isinstance(exports, list):
+                continue
+            for item in exports:
+                token = str(item or "").strip()
+                if not token:
+                    continue
+                owners_by_export.setdefault(token, []).append(plugin_id)
+        conflicts = {
+            export_name: owners
+            for export_name, owners in owners_by_export.items()
+            if len(owners) > 1
+        }
+        for export_name, owners in sorted(conflicts.items()):
+            msg = (
+                f"Duplicate declared {surface} export '{export_name}' "
+                f"across active plugins: {', '.join(sorted(owners))}"
+            )
+            if strict:
+                raise ValueError(msg)
+            errors.append(msg)
+
+
 def initialize_plugin_runtime(
     *,
     api_version: int,
@@ -420,6 +463,12 @@ def initialize_plugin_runtime(
             strict=strict,
             errors=errors,
         )
+    _validate_declared_export_conflicts(
+        registry,
+        slots=slot_data,
+        strict=strict,
+        errors=errors,
+    )
 
     with _RUNTIME_LOCK:
         global _RUNTIME_REGISTRY, _RUNTIME_ERRORS, _RUNTIME_WARNINGS
