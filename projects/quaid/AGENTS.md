@@ -58,6 +58,7 @@
 - Make changes in `~/quaid/dev` only.
 - Treat `~/quaid/benchmark-checkpoint` as a cut artifact, not a dev workspace.
 - Keep benchmark/checkpoint operations in their own runbooks under `operations/`.
+- Keep `npm run check:boundaries` green; dynamic imports (`__import__`, `importlib.import_module`) are boundary-checked the same as static imports.
 
 ### Plugin Contract Discipline
 - Plugin runtime surfaces are contract-owned and manifest-declared.
