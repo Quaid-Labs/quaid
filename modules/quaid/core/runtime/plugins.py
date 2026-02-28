@@ -189,6 +189,17 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
             raise ValueError(f"Manifest capabilities.contract missing required key: {key}")
         if not isinstance(contract.get(key), dict):
             raise ValueError(f"Manifest capabilities.contract.{key} must be an object")
+    for executable_key in _PLUGIN_CONTRACT_EXECUTABLE:
+        executable_spec = contract.get(executable_key, {})
+        executable_mode = str(executable_spec.get("mode", "")).strip().lower()
+        allowed_modes = {"hook"}
+        if executable_key == "dashboard":
+            allowed_modes.add("tbd")
+        if executable_mode not in allowed_modes:
+            allowed_list = "', '".join(sorted(allowed_modes))
+            raise ValueError(
+                f"Manifest capabilities.contract.{executable_key}.mode must be '{allowed_list}'"
+            )
     for declared_key in _PLUGIN_CONTRACT_DECLARED:
         declared_spec = contract.get(declared_key, {})
         declared_mode = str(declared_spec.get("mode", "")).strip().lower()
