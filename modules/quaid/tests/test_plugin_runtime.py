@@ -1108,6 +1108,160 @@ def test_run_plugin_contract_surface_collect_health_returns_results(tmp_path: Pa
             sys.path.remove(str(tmp_path))
 
 
+def test_run_plugin_contract_surface_collect_dashboard_returns_results(tmp_path: Path):
+    pkg = tmp_path / "dashpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_config(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_status(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_dashboard(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"widgets\": 2, \"healthy\": True}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"ready\": True}\n"
+        "    def on_health(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"healthy\": True}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_dashboard(ctx):\n"
+        "    return _CONTRACT.on_dashboard(ctx)\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.dashboard",
+            "plugin_type": "adapter",
+            "module": "dashpkg.impl",
+            "capabilities": {
+                "display_name": "Dashboard Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook", "handler": "on_dashboard"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns, results = run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"adapter": "adapter.dashboard"},
+            surface="dashboard",
+            config={},
+            plugin_config={},
+            workspace_root=str(tmp_path),
+            strict=True,
+            payload={},
+        )
+        assert errs == []
+        assert warns == []
+        assert results == [("adapter.dashboard", {"widgets": 2, "healthy": True})]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
+def test_run_plugin_contract_surface_collect_tool_runtime_returns_results(tmp_path: Path):
+    pkg = tmp_path / "toolrtpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_config(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_status(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_dashboard(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"ready\": True, \"tools\": 3}\n"
+        "    def on_health(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"healthy\": True}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_tool_runtime(ctx):\n"
+        "    return _CONTRACT.on_tool_runtime(ctx)\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.tool-runtime",
+            "plugin_type": "adapter",
+            "module": "toolrtpkg.impl",
+            "capabilities": {
+                "display_name": "Tool Runtime Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook", "handler": "on_tool_runtime"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns, results = run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"adapter": "adapter.tool-runtime"},
+            surface="tool_runtime",
+            config={},
+            plugin_config={},
+            workspace_root=str(tmp_path),
+            strict=True,
+            payload={},
+        )
+        assert errs == []
+        assert warns == []
+        assert results == [("adapter.tool-runtime", {"ready": True, "tools": 3})]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 def test_run_plugin_contract_surface_collect_non_strict_emits_warnings(tmp_path: Path):
     pkg = tmp_path / "hookwarn"
     pkg.mkdir(parents=True)
