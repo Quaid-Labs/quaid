@@ -85,23 +85,25 @@ class TestStoreValidation:
 
     def test_missing_owner_falls_back_to_default(self, tmp_path):
         from datastore.memorydb.memory_graph import store
+        from config import get_config
         graph, _ = _make_graph(tmp_path)
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             result = store("Quaid likes espresso coffee", owner_id=None)
             node = graph.get_node(result["id"])
             assert node is not None
-            assert node.owner_id == "default"
+            assert node.owner_id == get_config().users.default_owner
 
     def test_empty_owner_falls_back_to_default(self, tmp_path):
         from datastore.memorydb.memory_graph import store
+        from config import get_config
         graph, _ = _make_graph(tmp_path)
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
              patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
             result = store("Quaid likes espresso coffee", owner_id="")
             node = graph.get_node(result["id"])
             assert node is not None
-            assert node.owner_id == "default"
+            assert node.owner_id == get_config().users.default_owner
 
     def test_confidence_above_one_raises(self, tmp_path):
         from datastore.memorydb.memory_graph import store

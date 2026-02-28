@@ -25,6 +25,8 @@ MCP server tool surface (`core/interface/mcp_server.py`):
 - `memory_extract`
 - `memory_store`
 - `memory_recall`
+- `memory_domain_list`
+- `memory_domain_register`
 - `memory_write`
 - `memory_search`
 - `memory_get`
@@ -93,7 +95,7 @@ Parameter map:
 - `options.datastoreOptions.<store>`: per-store options.
 
 <!-- AUTO-GENERATED:DOMAIN-LIST:START -->
-Available domains (from `config/memory.json -> retrieval.domains`):
+Available domains (from datastore `domain_registry` active rows):
 - `personal`: identity, preferences, relationships, life events
 - `technical`: code, infra, APIs, architecture
 - `project`: project status, tasks, files, milestones
@@ -108,8 +110,8 @@ Available domains (from `config/memory.json -> retrieval.domains`):
 <!-- AUTO-GENERATED:DOMAIN-LIST:END -->
 
 Domain list maintenance:
-- Source of truth is `config/memory.json -> retrieval.domains`.
-- Rebuild this block whenever domains change so tool docs stay aligned with runtime filtering behavior.
+- Source of truth is datastore `domain_registry` (`active=1`).
+- `memory_domain_register` updates the registry and triggers TOOLS domain block sync automatically.
 
 Use cases:
 - relationship questions (`family`, `who is X`, `how are X and Y connected`)
@@ -173,6 +175,20 @@ Parameter map:
   - `source` (string, optional, default `"mcp"`)
   - `pinned` (boolean, optional, default `false`)
   - `domains_json` (stringified JSON array, optional, for example `["technical","project"]`)
+
+### `memory_domain_list` (MCP)
+Lists domain registry entries from datastore (`domain_registry` table).
+
+Parameter map:
+- `active_only` (boolean, optional, default `true`): include only active domains.
+
+### `memory_domain_register` (MCP)
+Registers or updates a domain in datastore and automatically refreshes the TOOLS domain block.
+
+Parameter map:
+- `domain` (string, required): domain id (normalized to lowercase snake-like token).
+- `description` (string, optional): brief guidance shown in extraction/tool context.
+- `active` (boolean, optional, default `true`): enable/disable the domain.
 
 ### `memory_forget`
 Use this for explicit deletion requests.
