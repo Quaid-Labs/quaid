@@ -3285,7 +3285,7 @@ def _normalize_domain_boost(
     Accepted forms:
       - list[str]: ["technical", "project"] -> each gets default_factor
       - dict[str, number|bool|None]: {"technical": 1.5, "project": true}
-        bool/None values use default_factor
+        bool True / None values use default_factor
     """
     out: Dict[str, float] = {}
     if value is None:
@@ -3305,11 +3305,14 @@ def _normalize_domain_boost(
         if not domain_id:
             continue
         factor = default_factor
-        if raw_factor not in (None, True, False):
+        if raw_factor is False:
+            continue
+        if raw_factor not in (None, True):
             try:
                 parsed = float(raw_factor)
-                if parsed > 0:
-                    factor = parsed
+                if parsed <= 0:
+                    continue
+                factor = parsed
             except (TypeError, ValueError):
                 pass
         factor = max(1.0, min(factor, 2.0))
@@ -3415,6 +3418,29 @@ def recall(
         active_domains,
     )
     boosted_domains = _normalize_domain_boost(domain_boost, active_domains, default_factor=1.3)
+    boosted_node_factors: Dict[str, float] = {}
+    if boosted_domains:
+        try:
+            with graph._get_conn() as conn:
+                placeholders = ",".join("?" for _ in boosted_domains)
+                rows = conn.execute(
+                    f"SELECT node_id, domain FROM node_domains WHERE domain IN ({placeholders})",
+                    list(boosted_domains.keys()),
+                ).fetchall()
+            for row in rows:
+                node_id = str(row[0])
+                domain_id = _normalize_domain_tag(row[1])
+                if not node_id or not domain_id:
+                    continue
+                factor = boosted_domains.get(domain_id)
+                if factor is None:
+                    continue
+                prior = boosted_node_factors.get(node_id, 1.0)
+                if factor > prior:
+                    boosted_node_factors[node_id] = factor
+        except Exception as exc:
+            logger.warning("domain boost index lookup failed; skipping boost: %s", exc)
+            boosted_node_factors = {}
     requested_project = _normalize_project_tag(project)
 
     # Strip gateway metadata from query (e.g. "[Telegram User id:...] actual message")
@@ -3510,11 +3536,10 @@ def recall(
         if type_boosts and node.type in type_boosts:
             type_boost_applied = type_boosts[node.type]
             composite = min(composite * type_boost_applied, 1.0)
-        if boosted_domains:
-            node_domains = set(_domains_from_attrs(node.attributes if isinstance(node.attributes, dict) else {}))
-            matched_factors = [boosted_domains[d] for d in node_domains if d in boosted_domains]
-            if matched_factors:
-                composite = min(composite * max(matched_factors), 1.0)
+        if boosted_node_factors:
+            boost_factor = boosted_node_factors.get(node.id)
+            if boost_factor:
+                composite = min(composite * boost_factor, 1.0)
         scored_results.append((node, composite))
 
         if debug:
@@ -3600,11 +3625,10 @@ def recall(
                             )
                             if type_boosts and node.type in type_boosts:
                                 composite = min(composite * type_boosts[node.type], 1.0)
-                            if boosted_domains:
-                                node_domains = set(_domains_from_attrs(node.attributes if isinstance(node.attributes, dict) else {}))
-                                matched_factors = [boosted_domains[d] for d in node_domains if d in boosted_domains]
-                                if matched_factors:
-                                    composite = min(composite * max(matched_factors), 1.0)
+                            if boosted_node_factors:
+                                boost_factor = boosted_node_factors.get(node.id)
+                                if boost_factor:
+                                    composite = min(composite * boost_factor, 1.0)
                             if composite >= min_similarity:
                                 scored_results.append((node, composite))
                                 existing_ids.add(node.id)

@@ -169,7 +169,7 @@ def memory_extract(
             label=label,
             dry_run=dry_run,
         )
-    except Exception as exc:
+    except (ValueError, RuntimeError) as exc:
         return {"error": str(exc)}
 
 
@@ -347,9 +347,9 @@ def memory_recall(
                 domain=parsed_domain,
                 domain_boost=parsed_domain_boost,
             )
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
             logger.warning("memory_recall domain validation error: %s", exc)
-            return []
+            return {"error": str(exc)}
 
     participant_entity_ids = None
     if participant_entity_ids_json and participant_entity_ids_json.strip():
@@ -387,9 +387,9 @@ def memory_recall(
             participant_entity_ids=participant_entity_ids,
             include_unscoped=bool(include_unscoped),
         )
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         logger.warning("memory_recall domain validation error: %s", exc)
-        return []
+        return {"error": str(exc)}
 
 
 @_mcp_contract_tool()
@@ -426,17 +426,20 @@ def memory_write(
             confidence = float(raw_confidence if raw_confidence is not None else 0.5)
         except (TypeError, ValueError):
             return {"error": f"invalid confidence: {raw_confidence!r}"}
-        return store(
-            text=text,
-            owner_id=OWNER_ID,
-            category=str(payload.get("category") or "fact"),
-            confidence=confidence,
-            knowledge_type=str(payload.get("knowledge_type") or "fact"),
-            source=str(payload.get("source") or "mcp"),
-            source_type=str(payload.get("source_type") or "import"),
-            pinned=bool(payload.get("pinned") or False),
-            domains=payload.get("domains") if isinstance(payload.get("domains"), list) else None,
-        )
+        try:
+            return store(
+                text=text,
+                owner_id=OWNER_ID,
+                category=str(payload.get("category") or "fact"),
+                confidence=confidence,
+                knowledge_type=str(payload.get("knowledge_type") or "fact"),
+                source=str(payload.get("source") or "mcp"),
+                source_type=str(payload.get("source_type") or "import"),
+                pinned=bool(payload.get("pinned") or False),
+                domains=payload.get("domains") if isinstance(payload.get("domains"), list) else None,
+            )
+        except (ValueError, RuntimeError) as exc:
+            return {"error": str(exc)}
 
     if ds == "graph" and act == "create_edge":
         subject_name = str(payload.get("subject_name") or "").strip()
@@ -444,13 +447,16 @@ def memory_write(
         object_name = str(payload.get("object_name") or "").strip()
         if not subject_name or not relation or not object_name:
             return {"error": "payload.subject_name, payload.relation, payload.object_name are required"}
-        return create_edge(
-            subject_name=subject_name,
-            relation=relation,
-            object_name=object_name,
-            owner_id=OWNER_ID,
-            source_fact_id=str(payload.get("source_fact_id") or "").strip() or None,
-        )
+        try:
+            return create_edge(
+                subject_name=subject_name,
+                relation=relation,
+                object_name=object_name,
+                owner_id=OWNER_ID,
+                source_fact_id=str(payload.get("source_fact_id") or "").strip() or None,
+            )
+        except (ValueError, RuntimeError) as exc:
+            return {"error": str(exc)}
 
     return {"error": f"unsupported datastore/action: {ds}/{act}"}
 
