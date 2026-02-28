@@ -806,7 +806,7 @@ step3_models() {
 
     # --- Notification verbosity ---
     echo ""
-    if confirm "Do you want to trade off a little less quality for a LOT of savings by auto-compacting after timeout memory extraction? [Y/n]"; then
+    if confirm "Do you want to trade off a little less quality for a LOT of savings by auto-compacting after timeout memory extraction?"; then
         AUTO_COMPACTION_ON_TIMEOUT=true
         info "Timeout auto-compaction: enabled (recommended)"
     else
