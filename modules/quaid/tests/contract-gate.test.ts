@@ -25,6 +25,18 @@ describe("contract gate", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts extended declared surfaces", () => {
+    const warn = vi.fn();
+    assertDeclaredRegistration(
+      "notifications",
+      "memory_extraction",
+      new Set(["memory_extraction"]),
+      true,
+      warn,
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("validates required api surface", () => {
     const warn = vi.fn();
     expect(() => validateApiSurface(new Set(), true, warn)).toThrow(/missing required export/);
