@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestMemory, cleanupTestMemory, TestMemoryInterface, mockSessionId } from './setup'
 
 describe('Session Isolation', () => {
@@ -9,14 +9,14 @@ describe('Session Isolation', () => {
   })
 
   afterEach(async () => {
-    delete process.env.TEST_SESSION_ID
+    vi.unstubAllEnvs()
     await cleanupTestMemory(memory)
   })
 
   describe('Session ID Tracking', () => {
     it('memories are assigned session IDs when stored', async () => {
       const sessionId = mockSessionId()
-      process.env.TEST_SESSION_ID = sessionId
+      vi.stubEnv('TEST_SESSION_ID', sessionId)
       
       const result = await memory.store('Test session memory', 'testuser')
       
@@ -24,16 +24,16 @@ describe('Session Isolation', () => {
       expect(result.id).toBeDefined()
       expect(result.content).toBe('Test session memory')
       
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
     })
 
     it('different sessions create separate memory contexts', async () => {
       // Session 1
-      process.env.TEST_SESSION_ID = mockSessionId()
+      vi.stubEnv('TEST_SESSION_ID', mockSessionId())
       await memory.store('Session 1 memory', 'testuser')
       
       // Session 2
-      process.env.TEST_SESSION_ID = mockSessionId()
+      vi.stubEnv('TEST_SESSION_ID', mockSessionId())
       await memory.store('Session 2 memory', 'testuser')
       
       // Both memories should exist in storage
@@ -44,11 +44,11 @@ describe('Session Isolation', () => {
       expect(contents).toContain('Session 1 memory')
       expect(contents).toContain('Session 2 memory')
       
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
     })
 
     it('handles undefined session IDs gracefully', async () => {
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
       
       const result = await memory.store('Memory without session', 'testuser')
       expect(result.id).toBeDefined()
@@ -64,16 +64,16 @@ describe('Session Isolation', () => {
       const session2 = mockSessionId()
       
       // Store memory in session 1
-      process.env.TEST_SESSION_ID = session1
+      vi.stubEnv('TEST_SESSION_ID', session1)
       await memory.store('Previous session coffee preference', 'testuser')
       
       // Search from session 2 should include session 1 memory
-      process.env.TEST_SESSION_ID = session2
+      vi.stubEnv('TEST_SESSION_ID', session2)
       const results = await memory.search('coffee preference', 'testuser')
       expect(results.length).toBe(1)
       expect(results[0].content).toBe('Previous session coffee preference')
       
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
     })
 
     it('maintains session isolation across multiple users', async () => {
@@ -81,7 +81,7 @@ describe('Session Isolation', () => {
       const sessionB = mockSessionId()
 
       // User 1, Session A
-      process.env.TEST_SESSION_ID = sessionA
+      vi.stubEnv('TEST_SESSION_ID', sessionA)
       await memory.store('User1 session A memory', 'user1')
 
       // User 2, Session A
@@ -89,7 +89,7 @@ describe('Session Isolation', () => {
 
       // User 1, Session B - should see previous session memories
       // Both users' memories are visible because default privacy is "shared"
-      process.env.TEST_SESSION_ID = sessionB
+      vi.stubEnv('TEST_SESSION_ID', sessionB)
       const user1Results = await memory.search('memory', 'user1')
       expect(user1Results.length).toBeGreaterThanOrEqual(1)
       expect(user1Results.some(r => r.content === 'User1 session A memory')).toBe(true)
@@ -99,7 +99,7 @@ describe('Session Isolation', () => {
       expect(user2Results.length).toBeGreaterThanOrEqual(1)
       expect(user2Results.some(r => r.content === 'User2 session A memory')).toBe(true)
 
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
     })
   })
 
@@ -112,17 +112,17 @@ describe('Session Isolation', () => {
       const session3 = mockSessionId()
       
       // Build knowledge across sessions
-      process.env.TEST_SESSION_ID = session1
+      vi.stubEnv('TEST_SESSION_ID', session1)
       await memory.store('Quaid likes coffee', 'testuser')
       
-      process.env.TEST_SESSION_ID = session2
+      vi.stubEnv('TEST_SESSION_ID', session2)
       const coffeeResults = await memory.search('coffee', 'testuser')
       expect(coffeeResults.length).toBeGreaterThanOrEqual(1)
       
       // Add related memory in session 2
       await memory.store('Quaid drinks espresso daily', 'testuser')
       
-      process.env.TEST_SESSION_ID = session3
+      vi.stubEnv('TEST_SESSION_ID', session3)
       const espressoResults = await memory.search('espresso', 'testuser')
       expect(espressoResults.length).toBeGreaterThanOrEqual(1) // May find both memories
       
@@ -130,7 +130,7 @@ describe('Session Isolation', () => {
       const allCoffeeResults = await memory.search('coffee', 'testuser')
       expect(allCoffeeResults.length).toBeGreaterThanOrEqual(1)
       
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
     })
 
     it.todo('handles session transitions correctly')
@@ -143,7 +143,7 @@ describe('Session Isolation', () => {
 
     it('preserves session isolation after memory operations', async () => {
       const sessionId = mockSessionId()
-      process.env.TEST_SESSION_ID = sessionId
+      vi.stubEnv('TEST_SESSION_ID', sessionId)
       
       // Store memory
       const stored = await memory.store('Isolation test memory', 'testuser')
@@ -155,14 +155,14 @@ describe('Session Isolation', () => {
       const searchResults = await memory.search('Isolation test', 'testuser')
       expect(searchResults.length).toBe(0)
       
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
     })
   })
 
   describe('Session Metadata', () => {
     it('tracks session context in memory metadata', async () => {
       const sessionId = mockSessionId()
-      process.env.TEST_SESSION_ID = sessionId
+      vi.stubEnv('TEST_SESSION_ID', sessionId)
       
       const result = await memory.store('Session metadata test', 'testuser')
       
@@ -170,12 +170,12 @@ describe('Session Isolation', () => {
       expect(result.id).toBeDefined()
       expect(result.content).toBe('Session metadata test')
       
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
     })
 
     it('handles missing session context gracefully', async () => {
       // Ensure no session context is set
-      delete process.env.TEST_SESSION_ID
+      vi.unstubAllEnvs()
       
       const result = await memory.store('No session context', 'testuser')
       expect(result.id).toBeDefined()
