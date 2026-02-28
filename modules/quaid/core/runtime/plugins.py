@@ -147,6 +147,8 @@ class PluginRegistry:
         return records
 
     def singletons(self) -> Dict[str, str]:
+        # Adapter is currently the only singleton slot; ingest/datastore slots
+        # are intentionally multi-plugin lists validated at config load.
         with self._lock:
             return dict(self._singletons)
 
@@ -395,6 +397,8 @@ def initialize_plugin_runtime(
         errors=errors,
     )
     adapter_rec = registry.get(adapter_slot) if adapter_slot else None
+    # Adapter remains the only singleton because it is the sole runtime
+    # type with an exclusive active slot. Ingest/datastore slots are lists.
     if adapter_slot and adapter_rec and adapter_rec.manifest.plugin_type == "adapter":
         registry.activate_singleton("adapter", adapter_slot)
     for idx, plugin_id in enumerate(slot_data.get("ingest", []) or []):
