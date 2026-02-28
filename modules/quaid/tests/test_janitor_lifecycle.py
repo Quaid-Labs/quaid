@@ -42,6 +42,7 @@ def _make_cfg(projects_enabled: bool = True, lifecycle_timeout_seconds: float = 
                 lock_wait_seconds=5,
                 lock_require_registration=True,
                 lifecycle_prepass_timeout_seconds=lifecycle_timeout_seconds,
+                lifecycle_prepass_timeout_retries=1,
             )
         ),
     )
@@ -328,12 +329,14 @@ def test_lifecycle_registry_parallel_map_times_out(tmp_path):
         return SimpleNamespace(metrics={"ok": 1}, logs=[], errors=[], data={})
 
     registry.register("slow_map", _slow_map)
+    cfg = _make_cfg(False, lifecycle_timeout_seconds=0.05)
+    cfg.core.parallel.lifecycle_prepass_timeout_retries = 0
 
     with pytest.raises(TimeoutError, match="timed out"):
         registry.run(
             "slow_map",
             RoutineContext(
-                cfg=_make_cfg(False, lifecycle_timeout_seconds=0.05),
+                cfg=cfg,
                 dry_run=True,
                 workspace=tmp_path,
             ),
@@ -383,7 +386,68 @@ def test_lifecycle_registry_parallel_map_passes_scheduler_controls(monkeypatch, 
     assert called["requested_workers"] == 2
     assert called["timeout_seconds"] == 42
     assert called["timeout_retries"] == 3
-    assert called["workload_key"] == "lifecycle_prepass"
+    assert called["workload_key"] == "lifecycle_prepass:default"
+
+
+def test_lifecycle_registry_parallel_map_uses_routine_scoped_workload_key(monkeypatch, tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    ctx = RoutineContext(cfg=_make_cfg(False), dry_run=True, workspace=tmp_path, options={"_lifecycle_routine": "snippets"})
+    called = {}
+
+    class _FakeScheduler:
+        def run_map(self, **kwargs):
+            called.update(kwargs)
+            return [1]
+
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.get_global_llm_scheduler", lambda: _FakeScheduler())
+    out = registry._core_parallel_map(ctx, [1], lambda x: x, max_workers=1)
+    assert out == [1]
+    assert called["workload_key"] == "lifecycle_prepass:snippets"
+
+
+def test_parallel_map_timeout_retries_honors_explicit_zero(tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    cfg = _make_cfg(False)
+    cfg.core.parallel.lifecycle_prepass_timeout_retries = 0
+    ctx = RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path)
+    assert registry._parallel_map_timeout_retries(ctx) == 0
+
+
+def test_parallel_map_timeout_retries_env_override(monkeypatch, tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    cfg = _make_cfg(False)
+    cfg.core.parallel.lifecycle_prepass_timeout_retries = 5
+    ctx = RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path)
+    monkeypatch.setenv("QUAID_CORE_PARALLEL_MAP_TIMEOUT_RETRIES", "0")
+    assert registry._parallel_map_timeout_retries(ctx) == 0
+
+
+def test_lifecycle_registry_uses_prepass_workers_from_config(monkeypatch, tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    cfg = _make_cfg(False)
+    cfg.core.parallel.llm_workers = 9
+    cfg.core.parallel.lifecycle_prepass_workers = 2
+    ctx = RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path)
+
+    called = {}
+
+    class _FakeScheduler:
+        def run_map(self, **kwargs):
+            called.update(kwargs)
+            return [1, 2]
+
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.get_global_llm_scheduler", lambda: _FakeScheduler())
+    out = registry._core_parallel_map(ctx, [1, 2], lambda x: x, max_workers=None)
+    assert out == [1, 2]
+    assert called["configured_workers"] == 2
 
 
 def test_lifecycle_registry_requires_write_registration_when_enabled(tmp_path):

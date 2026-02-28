@@ -7,6 +7,7 @@ all LLM-parallel call sites that opt in.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import threading
@@ -91,61 +92,90 @@ class GlobalLlmScheduler:
 
         timeout = max(0.001, float(timeout_seconds))
         retries_left = max(0, int(timeout_retries))
-        had_timeout = False
+        results: List[Any] = [None] * len(seq)
+        remaining_indices = list(range(len(seq)))
 
         while True:
-            sem = threading.Semaphore(worker_count)
-            results: List[Any] = [None] * len(seq)
+            if not remaining_indices:
+                self._record_success(workload_key, configured, worker_count)
+                return results
+
+            if worker_count <= 1:
+                for idx in remaining_indices:
+                    results[idx] = fn(seq[idx])
+                self._record_success(workload_key, configured, 1)
+                return results
+
             deadline = time.monotonic() + timeout
+            in_flight: Dict[Any, int] = {}
+            attempt_pending = list(remaining_indices)
+            cursor = 0
 
-            def _run(idx_item: tuple[int, Any]) -> tuple[int, Any]:
-                idx, item = idx_item
-                with sem:
-                    return idx, fn(item)
+            def _submit_available() -> None:
+                nonlocal cursor
+                while cursor < len(attempt_pending) and len(in_flight) < worker_count:
+                    idx = attempt_pending[cursor]
+                    cursor += 1
+                    fut = self._executor.submit(fn, seq[idx])
+                    in_flight[fut] = idx
 
-            futs = [self._executor.submit(_run, (idx, item)) for idx, item in enumerate(seq)]
-            pending = set(futs)
+            _submit_available()
             timed_out = False
+            completed_this_attempt: List[int] = []
 
-            while pending:
+            while in_flight:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     timed_out = True
                     break
                 try:
-                    done = next(as_completed(pending, timeout=remaining))
+                    done = next(as_completed(list(in_flight.keys()), timeout=remaining))
                 except TimeoutError:
                     timed_out = True
                     break
-                pending.discard(done)
-                idx, value = done.result()
-                results[idx] = value
+                idx = in_flight.pop(done)
+                try:
+                    results[idx] = done.result()
+                except Exception:
+                    for fut in list(in_flight.keys()):
+                        fut.cancel()
+                    raise
+                completed_this_attempt.append(idx)
+                _submit_available()
 
             if not timed_out:
-                if not had_timeout:
-                    self._record_success(workload_key, configured, worker_count)
-                return results
+                # Completed all in-flight work for this attempt; if there are no remaining
+                # indices we are done, else loop will execute next attempt for leftovers.
+                if completed_this_attempt:
+                    remaining_set = set(remaining_indices)
+                    remaining_set.difference_update(completed_this_attempt)
+                    remaining_indices = [idx for idx in remaining_indices if idx in remaining_set]
+                continue
 
-            had_timeout = True
-            for fut in list(pending):
+            # Timeout path: cancel queued futures, keep only incomplete indices for retry.
+            for fut in list(in_flight.keys()):
                 fut.cancel()
 
+            completed_set = set(completed_this_attempt)
+            remaining_indices = [idx for idx in remaining_indices if idx not in completed_set]
+
             next_workers = self._set_backoff_cap(workload_key, configured, worker_count)
-            if retries_left <= 0 or worker_count <= 1:
+            if retries_left <= 0:
                 raise TimeoutError(
                     f"Parallel map timed out after {timeout:.2f}s "
                     f"(items={len(seq)}, workers={worker_count}, workload={workload_key})"
                 )
 
             logger.warning(
-                "LLM scheduler timeout workload=%s workers=%s timeout=%.2fs retry_workers=%s retries_left=%s",
+                "LLM scheduler timeout workload=%s workers=%s timeout=%.2fs retry_workers=%s retries_left=%s remaining=%s",
                 workload_key,
                 worker_count,
                 timeout,
                 next_workers,
                 retries_left - 1,
+                len(remaining_indices),
             )
-            worker_count = max(1, min(next_workers, len(seq)))
+            worker_count = max(1, min(next_workers, len(remaining_indices)))
             retries_left -= 1
 
 
@@ -178,5 +208,8 @@ def reset_global_llm_scheduler(wait: bool = False) -> None:
     with _SCHEDULER_LOCK:
         sched = _SCHEDULER
         _SCHEDULER = None
-    if sched is not None:
-        sched.shutdown(wait=wait)
+        if sched is not None:
+            sched.shutdown(wait=wait)
+
+
+atexit.register(reset_global_llm_scheduler, wait=False)
