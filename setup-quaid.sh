@@ -1324,6 +1324,7 @@ _write_config() {
     local base_url_json="null"
     local adapter_type="standalone"
     local adapter_plugin_slot=""
+    local owner_name_json owner_display_json
     if $IS_OPENCLAW; then
         adapter_type="openclaw"
         adapter_plugin_slot="openclaw.adapter"
@@ -1331,6 +1332,8 @@ _write_config() {
     if [[ -n "$BASE_URL" ]]; then
         base_url_json="\"${BASE_URL}\""
     fi
+    owner_name_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "${OWNER_NAME}")"
+    owner_display_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "${OWNER_DISPLAY}")"
 
     cat > "${CONFIG_DIR}/memory.json" <<JSONEOF
 {
@@ -1494,12 +1497,12 @@ _write_config() {
     "defaultProject": "quaid"
   },
   "users": {
-    "defaultOwner": "${OWNER_NAME}",
+    "defaultOwner": ${owner_name_json},
     "identities": {
-      "${OWNER_NAME}": {
+      ${owner_name_json}: {
         "channels": { "cli": ["*"] },
-        "speakers": ["${OWNER_DISPLAY}", "${OWNER_NAME}", "The user"],
-        "personNodeName": "${OWNER_DISPLAY}"
+        "speakers": [${owner_display_json}, ${owner_name_json}, "The user"],
+        "personNodeName": ${owner_display_json}
       }
     }
   },

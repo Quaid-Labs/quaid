@@ -91,6 +91,7 @@ let _cachedDatastoreStats: Record<string, any> | null = null;
 let _datastoreStatsTimestamp = 0;
 let _memoryConfigErrorLogged = false;
 let _memoryConfigMtimeMs = -1;
+let _memoryConfigPath = "";
 
 function _envTimeoutMs(name: string, fallbackMs: number): number {
   const raw = Number(process.env[name] || "");
@@ -181,8 +182,33 @@ function computeDynamicK(): number {
 
 // Model resolution — reads from config/memory.json, no hardcoded model IDs
 let _memoryConfig: any = null;
+function _memoryConfigCandidates(): string[] {
+  return [
+    path.join(WORKSPACE, "config", "memory.json"),
+    path.join(os.homedir(), ".quaid", "memory-config.json"),
+    path.join(process.cwd(), "memory-config.json"),
+  ];
+}
+
+function _resolveMemoryConfigPath(): string {
+  for (const candidate of _memoryConfigCandidates()) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // Ignore filesystem probe failures and continue to next candidate.
+    }
+  }
+  return _memoryConfigCandidates()[0];
+}
+
 function getMemoryConfig(): any {
-  const configPath = path.join(WORKSPACE, "config/memory.json");
+  const configPath = _resolveMemoryConfigPath();
+  if (configPath !== _memoryConfigPath) {
+    _memoryConfigMtimeMs = -1;
+    _memoryConfigPath = configPath;
+  }
   let mtimeMs = -1;
   try {
     mtimeMs = fs.statSync(configPath).mtimeMs;
@@ -230,6 +256,7 @@ function isPluginStrictMode(): boolean {
 }
 
 type AdapterContractDeclarations = {
+  enabled: boolean;
   tools: Set<string>;
   events: Set<string>;
   api: Set<string>;
@@ -240,6 +267,7 @@ function loadAdapterContractDeclarations(): AdapterContractDeclarations {
     const payload = JSON.parse(fs.readFileSync(ADAPTER_PLUGIN_MANIFEST_PATH, "utf8"));
     const contract = payload?.capabilities?.contract || {};
     return {
+      enabled: true,
       tools: normalizeDeclaredExports(contract?.tools?.exports),
       events: normalizeDeclaredExports(contract?.events?.exports),
       api: normalizeDeclaredExports(contract?.api?.exports),
@@ -250,7 +278,7 @@ function loadAdapterContractDeclarations(): AdapterContractDeclarations {
       throw new Error(msg);
     }
     console.warn(msg);
-    return { tools: new Set<string>(), events: new Set<string>(), api: new Set<string>() };
+    return { enabled: false, tools: new Set<string>(), events: new Set<string>(), api: new Set<string>() };
   }
 }
 
@@ -2543,15 +2571,21 @@ const quaidPlugin = {
     runStartupSelfCheck();
     const contractDecl = loadAdapterContractDeclarations();
     const strictContracts = isPluginStrictMode();
-    validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
+    if (contractDecl.enabled) {
+      validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
+    }
     const onChecked = (eventName: string, handler: any, options?: any) => {
-      assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
+      if (contractDecl.enabled) {
+        assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
+      }
       return api.on(eventName as any, handler, options);
     };
     const registerToolChecked = (factory: () => any) => {
       const spec = factory();
       const toolName = String(spec?.name || "").trim();
-      assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
+      if (contractDecl.enabled) {
+        assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
+      }
       return api.registerTool(() => spec);
     };
 
