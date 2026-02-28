@@ -124,6 +124,55 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
     },
 ]
 
+_EVENT_NAME_ALIASES: Dict[str, str] = {
+    # OpenClaw typed hook names map to canonical Quaid runtime events.
+    "before_agent_start": "session.agent_start",
+    "agent_end": "session.agent_end",
+    "before_compaction": "session.compaction",
+    "before_reset": "session.reset",
+}
+
+
+def _canonical_event_name(name: str) -> str:
+    token = str(name or "").strip()
+    if not token:
+        return token
+    return _EVENT_NAME_ALIASES.get(token, token)
+
+
+def validate_declared_event_contract(
+    *,
+    registry: Any,
+    slots: Dict[str, Any],
+    strict: bool = True,
+) -> List[str]:
+    """Validate manifest-declared events resolve to known runtime events.
+
+    This bridges adapter hook names to canonical runtime event names so mixed
+    ecosystems can declare either form safely.
+    """
+    from core.runtime.plugins import collect_declared_exports
+
+    declared = collect_declared_exports(registry=registry, slots=slots, surface="events")
+    known = {
+        str(item.get("name", "")).strip()
+        for item in EVENT_REGISTRY
+        if isinstance(item, dict)
+    }
+    errors: List[str] = []
+    for plugin_id, exported in declared.items():
+        for raw_name in exported:
+            canonical = _canonical_event_name(raw_name)
+            if canonical in known:
+                continue
+            errors.append(
+                f"Plugin '{plugin_id}' declares unknown event '{raw_name}' "
+                f"(canonical '{canonical}')"
+            )
+    if strict and errors:
+        raise ValueError("Event contract validation failed: " + "; ".join(errors))
+    return errors
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
