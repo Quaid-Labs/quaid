@@ -26,3 +26,13 @@ export function validateApiSurface(declaredApi, strict, warn, requiredApi = "ope
   }
   warn(msg);
 }
+export function validateApiRegistrations(declaredApi, registeredApi, strict, warn) {
+  for (const declared of declaredApi) {
+    if (registeredApi.has(declared)) continue;
+    const msg = `[quaid][contract] api declared but not registered at runtime: ${declared}`;
+    if (strict) {
+      throw new Error(msg);
+    }
+    warn(msg);
+  }
+}

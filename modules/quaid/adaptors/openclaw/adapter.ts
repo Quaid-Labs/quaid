@@ -18,7 +18,12 @@ import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
-import { assertDeclaredRegistration, normalizeDeclaredExports, validateApiSurface } from "./contract-gate.js";
+import {
+  assertDeclaredRegistration,
+  normalizeDeclaredExports,
+  validateApiRegistrations,
+  validateApiSurface,
+} from "./contract-gate.js";
 
 
 // Configuration
@@ -2581,6 +2586,7 @@ const quaidPlugin = {
     if (contractDecl.enabled) {
       validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
     }
+    const registeredApi = new Set<string>(["openclaw_adapter_entry"]);
     const onChecked = (eventName: string, handler: any, options?: any) => {
       if (contractDecl.enabled) {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
@@ -2599,6 +2605,9 @@ const quaidPlugin = {
       const routePath = String(route?.path || "").trim();
       if (contractDecl.enabled) {
         assertDeclaredRegistration("api", routePath, contractDecl.api, strictContracts, (m) => console.warn(m));
+      }
+      if (routePath) {
+        registeredApi.add(routePath);
       }
       return api.registerHttpRoute(route as any);
     };
@@ -4499,6 +4508,10 @@ notify_memory_extraction(
         }
       }
     });
+
+    if (contractDecl.enabled) {
+      validateApiRegistrations(contractDecl.api, registeredApi, strictContracts, (m) => console.warn(m));
+    }
 
     console.log("[quaid] Plugin loaded with compaction/reset hooks and HTTP endpoint");
   },

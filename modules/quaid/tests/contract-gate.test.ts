@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertDeclaredRegistration,
   normalizeDeclaredExports,
+  validateApiRegistrations,
   validateApiSurface,
 } from "../adaptors/openclaw/contract-gate.js";
 
@@ -42,5 +43,17 @@ describe("contract gate", () => {
     expect(() => validateApiSurface(new Set(), true, warn)).toThrow(/missing required export/);
     validateApiSurface(new Set(), false, warn);
     expect(warn).toHaveBeenCalled();
+  });
+
+  it("detects api exports declared but not registered", () => {
+    const warn = vi.fn();
+    expect(() =>
+      validateApiRegistrations(
+        new Set(["openclaw_adapter_entry", "/plugins/quaid/llm"]),
+        new Set(["openclaw_adapter_entry"]),
+        true,
+        warn,
+      )
+    ).toThrow(/declared but not registered/);
   });
 });
