@@ -32,6 +32,10 @@ function _resolveWorkspace(): string {
   if (envWorkspace) {
     return envWorkspace;
   }
+  const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
+  if (envQuaidHome) {
+    return envQuaidHome;
+  }
 
   try {
     const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
