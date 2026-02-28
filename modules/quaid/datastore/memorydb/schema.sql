@@ -139,7 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_source_fact ON edges(source_fact_id);
 CREATE TABLE IF NOT EXISTS domain_registry (
     domain TEXT PRIMARY KEY,
     description TEXT DEFAULT '',
-    active INTEGER DEFAULT 1,
+    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
