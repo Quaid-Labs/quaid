@@ -366,6 +366,16 @@ class TestConfigLoading:
                         "config": {"mode": "hook"},
                         "status": {"mode": "hook"},
                         "dashboard": {"mode": "tbd"},
+                        "maintenance": {"mode": "hook"},
+                        "tool_runtime": {"mode": "hook"},
+                        "health": {"mode": "hook"},
+                        "tools": {"mode": "declared", "exports": []},
+                        "api": {"mode": "declared", "exports": []},
+                        "events": {"mode": "declared", "exports": []},
+                        "ingest_triggers": {"mode": "declared", "exports": []},
+                        "auth_requirements": {"mode": "declared", "exports": []},
+                        "migrations": {"mode": "declared", "exports": []},
+                        "notifications": {"mode": "declared", "exports": []},
                     },
                 },
             }))
@@ -382,6 +392,16 @@ class TestConfigLoading:
                         "config": {"mode": "hook"},
                         "status": {"mode": "hook"},
                         "dashboard": {"mode": "tbd"},
+                        "maintenance": {"mode": "hook"},
+                        "tool_runtime": {"mode": "hook"},
+                        "health": {"mode": "hook"},
+                        "tools": {"mode": "declared", "exports": []},
+                        "api": {"mode": "declared", "exports": []},
+                        "events": {"mode": "declared", "exports": []},
+                        "ingest_triggers": {"mode": "declared", "exports": []},
+                        "auth_requirements": {"mode": "declared", "exports": []},
+                        "migrations": {"mode": "declared", "exports": []},
+                        "notifications": {"mode": "declared", "exports": []},
                     },
                 },
             }))
@@ -398,6 +418,16 @@ class TestConfigLoading:
                         "config": {"mode": "hook"},
                         "status": {"mode": "hook"},
                         "dashboard": {"mode": "tbd"},
+                        "maintenance": {"mode": "hook"},
+                        "tool_runtime": {"mode": "hook"},
+                        "health": {"mode": "hook"},
+                        "tools": {"mode": "declared", "exports": []},
+                        "api": {"mode": "declared", "exports": []},
+                        "events": {"mode": "declared", "exports": []},
+                        "ingest_triggers": {"mode": "declared", "exports": []},
+                        "auth_requirements": {"mode": "declared", "exports": []},
+                        "migrations": {"mode": "declared", "exports": []},
+                        "notifications": {"mode": "declared", "exports": []},
                     },
                     "supports_multi_user": True,
                     "supports_policy_metadata": True,
@@ -628,7 +658,7 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
-    def test_domains_callback_syncs_registry_and_tools(self, tmp_path):
+    def test_memorydb_plugin_config_hook_syncs_registry_and_tools(self, tmp_path):
         import config
         old_config = config._config
         config._config = None
@@ -639,9 +669,46 @@ class TestConfigLoading:
             conn.execute("CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY)")
             conn.commit()
             conn.close()
+            (tmp_path / "plugins" / "memorydb").mkdir(parents=True)
+            (tmp_path / "plugins" / "memorydb" / "plugin.json").write_text(json.dumps({
+                "plugin_api_version": 1,
+                "plugin_id": "memorydb.core",
+                "plugin_type": "datastore",
+                "module": "core.plugins.memorydb_contract",
+                "capabilities": {
+                    "display_name": "MemoryDB",
+                    "contract": {
+                        "init": {"mode": "hook", "handler": "on_init"},
+                        "config": {"mode": "hook", "handler": "on_config"},
+                        "status": {"mode": "hook", "handler": "on_status"},
+                        "dashboard": {"mode": "hook", "handler": "on_dashboard"},
+                        "maintenance": {"mode": "hook", "handler": "on_maintenance"},
+                        "tool_runtime": {"mode": "hook", "handler": "on_tool_runtime"},
+                        "health": {"mode": "hook", "handler": "on_health"},
+                        "tools": {"mode": "declared", "exports": []},
+                        "api": {"mode": "declared", "exports": []},
+                        "events": {"mode": "declared", "exports": []},
+                        "ingest_triggers": {"mode": "declared", "exports": []},
+                        "auth_requirements": {"mode": "declared", "exports": []},
+                        "migrations": {"mode": "declared", "exports": []},
+                        "notifications": {"mode": "declared", "exports": []},
+                    },
+                    "supports_multi_user": True,
+                    "supports_policy_metadata": True,
+                    "supports_redaction": True,
+                },
+            }))
 
             config_file = tmp_path / "memory.json"
             config_file.write_text(json.dumps({
+                "plugins": {
+                    "enabled": True,
+                    "strict": True,
+                    "apiVersion": 1,
+                    "paths": ["plugins"],
+                    "allowList": ["memorydb.core"],
+                    "slots": {"dataStores": ["memorydb.core"]},
+                },
                 "retrieval": {
                     "domains": {
                         "technical": "code and systems",
@@ -658,7 +725,7 @@ class TestConfigLoading:
             with patch.dict(os.environ, {"MEMORY_DB_PATH": str(db_path)}, clear=False), \
                  patch.object(config, "_config_paths", lambda: [config_file]), \
                  patch.object(config, "_workspace_root", lambda: tmp_path), \
-                 patch("lib.tools_domain_sync.sync_tools_domain_block", side_effect=_capture_sync):
+                 patch("core.plugins.memorydb_contract.sync_tools_domain_block", side_effect=_capture_sync):
                 _ = load_config()
 
             with sqlite3.connect(db_path) as verify:

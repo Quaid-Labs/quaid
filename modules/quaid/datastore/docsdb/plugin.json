@@ -1,0 +1,86 @@
+{
+  "plugin_api_version": 1,
+  "plugin_id": "docsdb.core",
+  "plugin_type": "datastore",
+  "module": "core.plugins.docsdb_contract",
+  "capabilities": {
+    "display_name": "DocsDB",
+    "contract": {
+      "init": {
+        "mode": "hook",
+        "handler": "on_init"
+      },
+      "config": {
+        "mode": "hook",
+        "handler": "on_config"
+      },
+      "status": {
+        "mode": "hook",
+        "handler": "on_status"
+      },
+      "dashboard": {
+        "mode": "hook",
+        "handler": "on_dashboard"
+      },
+      "maintenance": {
+        "mode": "hook",
+        "handler": "on_maintenance"
+      },
+      "tool_runtime": {
+        "mode": "hook",
+        "handler": "on_tool_runtime"
+      },
+      "health": {
+        "mode": "hook",
+        "handler": "on_health"
+      },
+      "tools": {
+        "mode": "declared",
+        "exports": [
+          "search_docs",
+          "project_read"
+        ]
+      },
+      "api": {
+        "mode": "declared",
+        "exports": [
+          "index_document",
+          "search_docs"
+        ]
+      },
+      "events": {
+        "mode": "declared",
+        "exports": [
+          "docs.ingest_transcript"
+        ]
+      },
+      "ingest_triggers": {
+        "mode": "declared",
+        "exports": [
+          "manual",
+          "compaction",
+          "reset"
+        ]
+      },
+      "auth_requirements": {
+        "mode": "declared",
+        "exports": []
+      },
+      "migrations": {
+        "mode": "declared",
+        "exports": []
+      },
+      "notifications": {
+        "mode": "declared",
+        "exports": [
+          "docs_search"
+        ]
+      }
+    },
+    "supports_multi_user": true,
+    "supports_policy_metadata": false,
+    "supports_redaction": false
+  },
+  "priority": 110,
+  "enabled": true
+}

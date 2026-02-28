@@ -5,15 +5,49 @@ from __future__ import annotations
 import json
 import os
 import re
+import importlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _PLUGIN_TYPES = {"adapter", "ingest", "datastore"}
 _PLUGIN_API_VERSION = 1
-_PLUGIN_CONTRACT_REQUIRED = ("init", "config", "status", "dashboard")
+_PLUGIN_CONTRACT_REQUIRED = (
+    "init",
+    "config",
+    "status",
+    "dashboard",
+    "maintenance",
+    "tool_runtime",
+    "health",
+    "tools",
+    "api",
+    "events",
+    "ingest_triggers",
+    "auth_requirements",
+    "migrations",
+    "notifications",
+)
+_PLUGIN_CONTRACT_EXECUTABLE = (
+    "init",
+    "config",
+    "status",
+    "dashboard",
+    "maintenance",
+    "tool_runtime",
+    "health",
+)
+_PLUGIN_CONTRACT_DECLARED = (
+    "tools",
+    "api",
+    "events",
+    "ingest_triggers",
+    "auth_requirements",
+    "migrations",
+    "notifications",
+)
 _DATASTORE_REQUIRED_CAPABILITIES = (
     "supports_multi_user",
     "supports_policy_metadata",
@@ -43,6 +77,15 @@ class PluginManifest:
 class PluginRecord:
     manifest: PluginManifest
     owner_path: str
+
+
+@dataclass(frozen=True)
+class PluginHookContext:
+    plugin: PluginManifest
+    config: Any
+    plugin_config: Dict[str, Any]
+    workspace_root: str
+    payload: Dict[str, Any] = field(default_factory=dict)
 
 
 class PluginRegistry:
@@ -143,6 +186,22 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
             raise ValueError(f"Manifest capabilities.contract missing required key: {key}")
         if not isinstance(contract.get(key), dict):
             raise ValueError(f"Manifest capabilities.contract.{key} must be an object")
+    for declared_key in _PLUGIN_CONTRACT_DECLARED:
+        declared_spec = contract.get(declared_key, {})
+        declared_mode = str(declared_spec.get("mode", "")).strip().lower()
+        if declared_mode != "declared":
+            raise ValueError(
+                f"Manifest capabilities.contract.{declared_key}.mode must be 'declared'"
+            )
+        declared_exports = declared_spec.get("exports", [])
+        if not isinstance(declared_exports, list):
+            raise ValueError(
+                f"Manifest capabilities.contract.{declared_key}.exports must be an array"
+            )
+        if any(not isinstance(item, str) or not item.strip() for item in declared_exports):
+            raise ValueError(
+                f"Manifest capabilities.contract.{declared_key}.exports must contain non-empty strings"
+            )
     if plugin_type == "datastore":
         missing = [k for k in _DATASTORE_REQUIRED_CAPABILITIES if k not in capabilities]
         if missing:
@@ -350,3 +409,197 @@ def reset_plugin_runtime() -> None:
         _RUNTIME_REGISTRY = None
         _RUNTIME_ERRORS = []
         _RUNTIME_WARNINGS = []
+
+
+def _iter_active_plugin_ids(slots: Optional[Dict[str, Any]]) -> List[str]:
+    data = slots or {}
+    ids: List[str] = []
+    adapter_id = str(data.get("adapter", "")).strip()
+    if adapter_id:
+        ids.append(adapter_id)
+    for value in data.get("ingest", []) or []:
+        pid = str(value or "").strip()
+        if pid:
+            ids.append(pid)
+    for value in data.get("datastores", []) or []:
+        pid = str(value or "").strip()
+        if pid:
+            ids.append(pid)
+    # deterministic de-dupe while preserving order
+    seen = set()
+    out: List[str] = []
+    for pid in ids:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def _resolve_hook_callable(manifest: PluginManifest, handler_ref: str) -> Callable[[PluginHookContext], Any]:
+    token = str(handler_ref or "").strip()
+    if not token:
+        raise ValueError("hook handler reference is empty")
+    mod = importlib.import_module(manifest.module)
+    if ":" in token:
+        module_ref, func_name = token.split(":", 1)
+        module_ref = module_ref.strip()
+        func_name = func_name.strip()
+        target_mod = importlib.import_module(module_ref)
+        fn = getattr(target_mod, func_name, None)
+    else:
+        fn = getattr(mod, token, None)
+    if not callable(fn):
+        raise ValueError(
+            f"hook handler '{token}' for plugin '{manifest.plugin_id}' is not callable"
+        )
+    return fn
+
+
+def _validate_contract_instance(manifest: PluginManifest) -> None:
+    mod = importlib.import_module(manifest.module)
+    contract_obj = getattr(mod, "_CONTRACT", None)
+    if contract_obj is None:
+        raise ValueError(
+            f"plugin '{manifest.plugin_id}' must export _CONTRACT implementing PluginContractBase"
+        )
+    try:
+        from core.contracts.plugin_contract import PluginContractBase
+    except Exception as exc:
+        raise ValueError(
+            f"plugin '{manifest.plugin_id}' failed loading PluginContractBase: {exc}"
+        ) from exc
+    if not isinstance(contract_obj, PluginContractBase):
+        raise ValueError(
+            f"plugin '{manifest.plugin_id}' _CONTRACT must inherit PluginContractBase"
+        )
+    for method_name in (
+        "on_init",
+        "on_config",
+        "on_status",
+        "on_dashboard",
+        "on_maintenance",
+        "on_tool_runtime",
+        "on_health",
+    ):
+        if not callable(getattr(contract_obj, method_name, None)):
+            raise ValueError(
+                f"plugin '{manifest.plugin_id}' _CONTRACT missing callable {method_name}()"
+            )
+
+
+def run_plugin_contract_surface(
+    *,
+    registry: PluginRegistry,
+    slots: Optional[Dict[str, Any]],
+    surface: str,
+    config: Any,
+    plugin_config: Optional[Dict[str, Any]] = None,
+    workspace_root: Optional[str] = None,
+    strict: bool = True,
+) -> Tuple[List[str], List[str]]:
+    errors, warnings, _ = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots=slots,
+        surface=surface,
+        config=config,
+        plugin_config=plugin_config,
+        workspace_root=workspace_root,
+        strict=strict,
+    )
+    return errors, warnings
+
+
+def run_plugin_contract_surface_collect(
+    *,
+    registry: PluginRegistry,
+    slots: Optional[Dict[str, Any]],
+    surface: str,
+    config: Any,
+    plugin_config: Optional[Dict[str, Any]] = None,
+    workspace_root: Optional[str] = None,
+    strict: bool = True,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[str], List[str], List[Tuple[str, Any]]]:
+    key = str(surface or "").strip()
+    if key not in _PLUGIN_CONTRACT_EXECUTABLE:
+        raise ValueError(f"Unknown contract surface: {surface}")
+    errors: List[str] = []
+    warnings: List[str] = []
+    results: List[Tuple[str, Any]] = []
+    cfg_map = plugin_config if isinstance(plugin_config, dict) else {}
+    root = str(workspace_root or _workspace_root())
+    raw_payload = payload if isinstance(payload, dict) else {}
+
+    for plugin_id in _iter_active_plugin_ids(slots):
+        record = registry.get(plugin_id)
+        if not record:
+            continue
+        contract = (record.manifest.capabilities or {}).get("contract", {})
+        if not isinstance(contract, dict):
+            continue
+        surface_spec = contract.get(key, {})
+        if not isinstance(surface_spec, dict):
+            continue
+        mode = str(surface_spec.get("mode", "")).strip().lower()
+        if mode != "hook":
+            continue
+        handler_ref = str(surface_spec.get("handler", "")).strip()
+        if not handler_ref:
+            # Hook mode without handler is permitted as a declared TODO surface.
+            continue
+        try:
+            _validate_contract_instance(record.manifest)
+            fn = _resolve_hook_callable(record.manifest, handler_ref)
+            ctx = PluginHookContext(
+                plugin=record.manifest,
+                config=config,
+                plugin_config=dict(cfg_map.get(plugin_id, {}) or {}),
+                workspace_root=root,
+                payload=dict(raw_payload),
+            )
+            result = fn(ctx)
+            results.append((plugin_id, result))
+        except Exception as exc:
+            msg = (
+                f"Plugin '{plugin_id}' {key} hook failed "
+                f"({handler_ref or 'missing-handler'}): {exc}"
+            )
+            if strict:
+                errors.append(msg)
+            else:
+                warnings.append(msg)
+
+    return errors, warnings, results
+
+
+def get_runtime_registry() -> Optional[PluginRegistry]:
+    with _RUNTIME_LOCK:
+        return _RUNTIME_REGISTRY
+
+
+def collect_declared_exports(
+    *,
+    registry: PluginRegistry,
+    slots: Optional[Dict[str, Any]],
+    surface: str,
+) -> Dict[str, List[str]]:
+    key = str(surface or "").strip()
+    if key not in _PLUGIN_CONTRACT_DECLARED:
+        raise ValueError(f"Unsupported declaration surface: {surface}")
+    out: Dict[str, List[str]] = {}
+    for plugin_id in _iter_active_plugin_ids(slots):
+        record = registry.get(plugin_id)
+        if not record:
+            continue
+        contract = (record.manifest.capabilities or {}).get("contract", {})
+        if not isinstance(contract, dict):
+            continue
+        spec = contract.get(key, {})
+        if not isinstance(spec, dict):
+            continue
+        exports = spec.get("exports", [])
+        if not isinstance(exports, list):
+            continue
+        out[plugin_id] = [str(item).strip() for item in exports if str(item).strip()]
+    return out

@@ -1155,6 +1155,29 @@ print('[+] Database initialized')
     info "Writing configuration..."
     _write_config
 
+    # Installer-owned memorydb bootstrap: ensure domain registry/tables + TOOLS domain block
+    (
+        cd "$PLUGIN_DIR"
+        export QUAID_HOME="${WORKSPACE_ROOT}"
+        export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
+        python3 -c "
+import os, sys
+from types import SimpleNamespace
+os.environ['QUAID_QUIET'] = '1'
+sys.path.insert(0, '.')
+from config import get_config
+from core.plugins.memorydb_contract import on_init
+ctx = SimpleNamespace(
+    plugin=SimpleNamespace(plugin_id='memorydb.core'),
+    config=get_config(),
+    plugin_config={},
+    workspace_root='${WORKSPACE_ROOT}',
+)
+on_init(ctx)
+print('[+] MemoryDB domain init complete')
+" 2>/dev/null || true
+    ) || true
+
     # Create minimal workspace files if they don't exist
     for f in SOUL.md USER.md MEMORY.md; do
         if [[ ! -f "${WORKSPACE_ROOT}/${f}" ]]; then
@@ -1300,8 +1323,10 @@ print(f'[+] Quaid project registered ({len(found)} docs)')
 _write_config() {
     local base_url_json="null"
     local adapter_type="standalone"
+    local adapter_plugin_slot=""
     if $IS_OPENCLAW; then
         adapter_type="openclaw"
+        adapter_plugin_slot="openclaw.adapter"
     fi
     if [[ -n "$BASE_URL" ]]; then
         base_url_json="\"${BASE_URL}\""
@@ -1311,6 +1336,22 @@ _write_config() {
 {
   "adapter": {
     "type": "${adapter_type}"
+  },
+  "plugins": {
+    "enabled": true,
+    "strict": true,
+    "apiVersion": 1,
+    "paths": ["plugins"],
+    "allowList": ["memorydb.core", "core.extract", "openclaw.adapter"],
+    "slots": {
+      "adapter": "${adapter_plugin_slot}",
+      "ingest": ["core.extract"],
+      "dataStores": ["memorydb.core"]
+    },
+    "config": {
+      "memorydb.core": {},
+      "core.extract": {}
+    }
   },
   "systems": {
     "memory": ${SYS_MEMORY},

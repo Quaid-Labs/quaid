@@ -45,6 +45,133 @@ def _run_config_callbacks_after_save() -> None:
     reload_config()
 
 
+def _active_plugin_ids(data: dict[str, Any]) -> list[str]:
+    slots = _get(data, "plugins.slots", {})
+    if not isinstance(slots, dict):
+        return []
+    ids: list[str] = []
+    adapter = str(slots.get("adapter", "")).strip()
+    if adapter:
+        ids.append(adapter)
+    ingest = slots.get("ingest", [])
+    if isinstance(ingest, list):
+        ids.extend(str(v).strip() for v in ingest if str(v).strip())
+    stores = slots.get("dataStores", slots.get("datastores", slots.get("data_stores", [])))
+    if isinstance(stores, list):
+        ids.extend(str(v).strip() for v in stores if str(v).strip())
+    out: list[str] = []
+    seen = set()
+    for pid in ids:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def _discover_plugin_manifests(path: Path, data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    try:
+        from core.runtime.plugins import discover_plugin_manifests
+    except Exception:
+        return {}
+    plugin_paths = _get(data, "plugins.paths", [])
+    if not isinstance(plugin_paths, list):
+        plugin_paths = []
+    if not plugin_paths:
+        plugin_paths = ["plugins"]
+    allowlist = _get(data, "plugins.allowList", _get(data, "plugins.allowlist", []))
+    if not isinstance(allowlist, list):
+        allowlist = []
+    strict = bool(_get(data, "plugins.strict", True))
+    try:
+        manifests, _errors = discover_plugin_manifests(
+            paths=[str(v) for v in plugin_paths],
+            allowlist=[str(v) for v in allowlist if str(v).strip()],
+            strict=strict,
+            workspace_root=path.parent.parent,
+        )
+    except Exception:
+        return {}
+    return {
+        m.plugin_id: {
+            "plugin_id": m.plugin_id,
+            "plugin_type": m.plugin_type,
+            "module": m.module,
+            "capabilities": dict(m.capabilities or {}),
+        }
+        for m in manifests
+    }
+
+
+def _coerce_prompt_value(raw: str, field_type: str) -> Any:
+    value = raw.strip()
+    if field_type == "boolean":
+        return value.lower() in {"1", "true", "yes", "on"}
+    if field_type == "integer":
+        return int(value)
+    if field_type == "number":
+        return float(value)
+    if field_type in {"object", "array", "json"}:
+        parsed = json.loads(value)
+        if field_type == "object" and not isinstance(parsed, dict):
+            raise ValueError("Expected JSON object")
+        if field_type == "array" and not isinstance(parsed, list):
+            raise ValueError("Expected JSON array")
+        return parsed
+    return value
+
+
+def _edit_plugin_config_schema(staged: dict[str, Any], path: Path, plugin_id: str, schema: dict[str, Any]) -> None:
+    current = _get(staged, f"plugins.config.{plugin_id}", {})
+    if not isinstance(current, dict):
+        current = {}
+    fields = schema.get("fields", [])
+    if isinstance(fields, dict):
+        fields = [{"key": k, **(v if isinstance(v, dict) else {})} for k, v in fields.items()]
+    if not isinstance(fields, list):
+        fields = []
+    if not fields:
+        print(f"No schema fields for {plugin_id}, falling back to JSON editor.")
+        _edit_plugin_config_json(staged, plugin_id)
+        return
+    updated = dict(current)
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        key = str(field.get("key", "")).strip()
+        if not key:
+            continue
+        label = str(field.get("label", key)).strip() or key
+        desc = str(field.get("description", "")).strip()
+        field_type = str(field.get("type", "string")).strip().lower()
+        default = field.get("default")
+        enum_vals = field.get("enum", [])
+        cur = updated.get(key, default)
+        if desc:
+            print(f"{label}: {desc}")
+        if isinstance(enum_vals, list) and enum_vals:
+            print(f"Allowed: {enum_vals}")
+        raw = input(f"{plugin_id}.{key} [{json.dumps(cur)}]: ").strip()
+        if not raw:
+            continue
+        updated[key] = _coerce_prompt_value(raw, field_type)
+    _set(staged, f"plugins.config.{plugin_id}", updated)
+
+
+def _edit_plugin_config_json(staged: dict[str, Any], plugin_id: str) -> None:
+    current = _get(staged, f"plugins.config.{plugin_id}", {})
+    print("Current plugin config:")
+    print(json.dumps(current, indent=2))
+    raw = input("New JSON object (blank to cancel): ").strip()
+    if not raw:
+        print("Cancelled")
+        return
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("Plugin config must be a JSON object")
+    _set(staged, f"plugins.config.{plugin_id}", parsed)
+
+
 def _get(data: dict[str, Any], dotted: str, default: Any = None) -> Any:
     cur: Any = data
     for seg in dotted.split("."):
@@ -84,6 +211,10 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"core parallel:    {_get(data, 'core.parallel.enabled', True)}")
     print(f"llm workers:      {_get(data, 'core.parallel.llmWorkers', _get(data, 'core.parallel.llm_workers', 4))}")
     print(f"idle timeout:     {_get(data, 'capture.inactivity_timeout_minutes', _get(data, 'capture.inactivityTimeoutMinutes', 120))}m")
+    print(f"plugin adapter:   {_get(data, 'plugins.slots.adapter', '(none)')}")
+    print(f"plugin ingest:    {_get(data, 'plugins.slots.ingest', [])}")
+    print(f"plugin stores:    {_get(data, 'plugins.slots.dataStores', _get(data, 'plugins.slots.datastores', []))}")
+    print(f"plugin config ids:{list((_get(data, 'plugins.config', {}) or {}).keys())}")
     print()
     print("systems:")
     for key in ("memory", "journal", "projects", "workspace"):
@@ -106,6 +237,26 @@ def _prompt_int(label: str, current: int) -> int:
 def _toggle_bool(data: dict[str, Any], key: str) -> None:
     current = bool(_get(data, key, True))
     _set(data, key, not current)
+
+
+def _edit_plugin_config(staged: dict[str, Any], path: Path) -> None:
+    active = _active_plugin_ids(staged)
+    if active:
+        print(f"Active plugins: {active}")
+    manifests = _discover_plugin_manifests(path, staged)
+    plugin_id = input("Plugin id (e.g. memorydb.core): ").strip()
+    if not plugin_id:
+        print("No plugin id provided")
+        return
+    manifest = manifests.get(plugin_id, {})
+    capabilities = manifest.get("capabilities", {}) if isinstance(manifest, dict) else {}
+    contract = capabilities.get("contract", {}) if isinstance(capabilities, dict) else {}
+    cfg_spec = contract.get("config", {}) if isinstance(contract, dict) else {}
+    schema = cfg_spec.get("schema", {}) if isinstance(cfg_spec, dict) else {}
+    if isinstance(schema, dict) and schema:
+        _edit_plugin_config_schema(staged, path, plugin_id, schema)
+        return
+    _edit_plugin_config_json(staged, plugin_id)
 
 
 def _edit_systems(data: dict[str, Any]) -> None:
@@ -145,8 +296,9 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
         print("8. Core parallel enabled")
         print("9. Core LLM workers")
         print("10. Systems on/off")
-        print("11. Show summary")
-        print("12. Save and exit")
+        print("11. Edit plugin config JSON")
+        print("12. Show summary")
+        print("13. Save and exit")
         print("0. Exit without saving")
         choice = input("Select: ").strip()
 
@@ -185,8 +337,10 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
             elif choice == "10":
                 _edit_systems(staged)
             elif choice == "11":
-                _print_summary(path, staged)
+                _edit_plugin_config(staged, path)
             elif choice == "12":
+                _print_summary(path, staged)
+            elif choice == "13":
                 _save_config(path, staged)
                 _run_config_callbacks_after_save()
                 print(f"Saved: {path}")

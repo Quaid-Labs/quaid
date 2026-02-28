@@ -893,6 +893,51 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             llm_timeout = 0.0
             if math.isfinite(remaining_budget):
                 llm_timeout = max(0.0, float(remaining_budget))
+            try:
+                from core.runtime.plugins import get_runtime_registry, run_plugin_contract_surface_collect
+
+                registry = get_runtime_registry()
+                if registry is not None and getattr(_cfg, "plugins", None) and _cfg.plugins.enabled:
+                    p_errors, p_warnings, p_results = run_plugin_contract_surface_collect(
+                        registry=registry,
+                        slots={
+                            "adapter": "",
+                            "ingest": [],
+                            "datastores": list(getattr(_cfg.plugins.slots, "datastores", []) or []),
+                        },
+                        surface="maintenance",
+                        config=_cfg,
+                        plugin_config=dict(getattr(_cfg.plugins, "config", {}) or {}),
+                        workspace_root=str(_workspace()),
+                        strict=bool(getattr(_cfg.plugins, "strict", True)),
+                        payload={
+                            "stage": stage,
+                            "subtask": stage,
+                            "dry_run": bool(stage_dry_run),
+                            "max_items": int(stage_cap or 0),
+                            "llm_timeout_seconds": float(llm_timeout),
+                        },
+                    )
+                    for warning in p_warnings:
+                        janitor_logger.warn("plugin_maintenance_warning", message=warning)
+                    if p_errors:
+                        for err in p_errors:
+                            janitor_logger.error("plugin_maintenance_error", message=err)
+                        if bool(getattr(_cfg.plugins, "strict", True)):
+                            result = RoutineResult()
+                            result.errors.extend(list(p_errors))
+                            return result
+                    for _plugin_id, output in p_results:
+                        if not isinstance(output, dict) or not output.get("handled"):
+                            continue
+                        result = RoutineResult()
+                        result.metrics.update(dict(output.get("metrics", {}) or {}))
+                        result.errors.extend(list(output.get("errors", []) or []))
+                        result.logs.extend(list(output.get("logs", []) or []))
+                        result.data.update(dict(output.get("data", {}) or {}))
+                        return result
+            except Exception as exc:
+                janitor_logger.warn("plugin_maintenance_dispatch_failed", error=str(exc), stage=stage)
             return _LIFECYCLE_REGISTRY.run(
                 "memory_graph_maintenance",
                 RoutineContext(
