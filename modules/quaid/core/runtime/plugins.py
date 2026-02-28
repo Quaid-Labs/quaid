@@ -295,7 +295,8 @@ def discover_plugin_manifests(
 ) -> Tuple[List[PluginManifest], List[str]]:
     """Discover plugin manifests from configured plugin directories.
 
-    Returns (manifests, errors). In strict mode, malformed manifests raise.
+    Returns (manifests, errors). In strict mode, collects all malformed manifests
+    and raises once after scanning completes.
     """
     resolved_paths = _resolve_plugin_paths(paths, workspace_root=workspace_root)
     allowed = {str(x).strip() for x in (allowlist or []) if str(x).strip()}
@@ -306,8 +307,6 @@ def discover_plugin_manifests(
             continue
         if not base.is_dir():
             msg = f"Plugin path is not a directory: {base}"
-            if strict:
-                raise ValueError(msg)
             errors.append(msg)
             continue
         for manifest_path in sorted(base.rglob("plugin.json")):
@@ -321,9 +320,9 @@ def discover_plugin_manifests(
                 manifests.append(manifest)
             except Exception as exc:
                 msg = f"Invalid plugin manifest {manifest_path}: {exc}"
-                if strict:
-                    raise ValueError(msg) from exc
                 errors.append(msg)
+    if strict and errors:
+        raise ValueError("Plugin manifest discovery failed: " + "; ".join(errors))
     return manifests, errors
 
 
