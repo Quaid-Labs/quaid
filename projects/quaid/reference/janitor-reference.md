@@ -288,7 +288,7 @@ When new relation types are created during edge extraction, search keywords are 
 
 **Safeguards:**
 - Consecutive failure abort: 3 failed batches in a row stops the loop
-- Time limit: configurable per-task timeout (`janitor.taskTimeoutMinutes`)
+- Time limit: configurable per-task timeout (`janitor.task_timeout_minutes`)
 - Cost tracking: input/output tokens and estimated USD
 - Merged-ID tracking: prevents double-merging nodes within a single run (see Task 3)
 - FK constraint handling: foreign key violations during merges are caught and logged as warnings (see Task 3)
@@ -336,6 +336,15 @@ python3 core/lifecycle/janitor.py --task duplicates --dry-run
 
 # Full scan (ignore last-run timestamp)
 python3 core/lifecycle/janitor.py --task all --apply --full-scan
+
+# Force journal distillation regardless of schedule window
+python3 core/lifecycle/janitor.py --task journal --apply --force-distill
+
+# Cap run duration and token spend
+python3 core/lifecycle/janitor.py --task all --apply --time-budget 1800 --token-budget 12000
+
+# Explicitly approve policy-gated apply mode
+python3 core/lifecycle/janitor.py --task review --apply --approve
 ```
 
 ## Dashboard Integration
@@ -362,7 +371,7 @@ Every run writes `api_usage` to `logs/janitor-stats.json`:
 
 The janitor uses the same provider-agnostic model-tier architecture as the rest of Quaid. Rather than hardcoding a single provider, model references in `config/memory.json` are resolved through adapter/provider dispatch and gateway state.
 
-Model names are resolved via `models.deepReasoning` / `models.fastReasoning` and `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses` in `config/memory.json`, with adapter/provider dispatch selecting the active provider.
+Model names are resolved via `models.deep_reasoning` / `models.fast_reasoning` and `models.deep_reasoning_model_classes` / `models.fast_reasoning_model_classes` in `config/memory.json`, with adapter/provider dispatch selecting the active provider.
 
 The provider/adapter refactor separates LLM and embedding concerns into distinct interfaces, keeping janitor logic independent of provider-specific details.
 
@@ -408,13 +417,13 @@ Settings are driven by `config/memory.json`. Key sections used by the janitor:
 
 | Config Section | Used By | Settings |
 |----------------|---------|----------|
-| `models.deepReasoning` | review, workspace | High-tier reasoning model (explicit or `default`) |
-| `models.fastReasoning` | duplicates, contradictions | Fast-tier reasoning model ID |
+| `models.deep_reasoning` | review, workspace | High-tier reasoning model (explicit or `default`) |
+| `models.fast_reasoning` | duplicates, contradictions | Fast-tier reasoning model ID |
 | `database.path` | all tasks | Main DB path |
-| `rag.docsDir` | rag task | Docs directory to index |
+| `docs.docs_dir` | rag task | Docs directory to index |
 | `decay` | decay task | Decay rates, thresholds |
 | `dedup` | duplicates | Similarity threshold, batch size |
-| `models.deepReasoningModelClasses` / `models.fastReasoningModelClasses` | all LLM tasks | Provider→tier model-class maps used when tier is `default` |
+| `models.deep_reasoning_model_classes` / `models.fast_reasoning_model_classes` | all LLM tasks | Provider→tier model-class maps used when tier is `default` |
 
 Model names are resolved from `config/memory.json` by model tier, then routed through adapter/provider dispatch using active gateway provider/auth state.
 
