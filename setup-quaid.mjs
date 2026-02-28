@@ -1271,27 +1271,9 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
   }
 
-  // Install internal reset/new command hook (OpenClaw workaround for before_reset).
-  const quaidHookSrc = path.join(PLUGIN_DIR, "adaptors/openclaw/hooks/quaid-reset-signal");
-  const quaidHookDst = path.join(WORKSPACE, "hooks", "quaid-reset-signal");
-  if (fs.existsSync(path.join(quaidHookSrc, "HOOK.md")) && fs.existsSync(path.join(quaidHookSrc, "handler.js"))) {
-    fs.mkdirSync(path.join(WORKSPACE, "hooks"), { recursive: true });
-    fs.rmSync(quaidHookDst, { recursive: true, force: true });
-    fs.cpSync(quaidHookSrc, quaidHookDst, { recursive: true });
-    log.info("Installed internal hook: quaid-reset-signal");
-    const hookCli = canRun("openclaw") ? "openclaw" : (canRun("clawdbot") ? "clawdbot" : "");
-    if (hookCli) {
-      const hookEnable = spawnSync(hookCli, ["hooks", "enable", "quaid-reset-signal"], { stdio: "pipe" });
-      if (hookEnable.status !== 0) {
-        const errOut = String(hookEnable.stderr || hookEnable.stdout || "").trim();
-        log.warn(`Could not auto-enable quaid-reset-signal hook via ${hookCli}: ${errOut || "unknown error"}`);
-      }
-    } else {
-      log.warn("Could not auto-enable quaid-reset-signal hook: no openclaw/clawdbot CLI found in PATH");
-    }
-  } else {
-    log.warn("quaid-reset-signal hook missing from plugin source");
-  }
+  // Legacy quaid-reset-signal hook is intentionally not installed.
+  // Reset/compaction extraction signaling is now contract-owned inside adapter handlers.
+  log.info("Skipping legacy hook install: quaid-reset-signal (contract-owned lifecycle handlers active)");
 
   // Install Python dependency: sqlite-vec (vector search extension)
   s.start("Installing sqlite-vec...");

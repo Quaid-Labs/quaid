@@ -1212,22 +1212,9 @@ step6_install() {
         warn "sqlite-vec install skipped — install manually: pip3 install sqlite-vec"
     fi
 
-    # Install internal reset/new command hook (OpenClaw workaround for before_reset).
-    local quaid_hook_src="${PLUGIN_DIR}/adaptors/openclaw/hooks/quaid-reset-signal"
-    local quaid_hook_dst="${WORKSPACE_ROOT}/hooks/quaid-reset-signal"
-    if [[ -f "${quaid_hook_src}/HOOK.md" ]] && [[ -f "${quaid_hook_src}/handler.js" ]]; then
-        mkdir -p "${WORKSPACE_ROOT}/hooks"
-        rm -rf "${quaid_hook_dst}"
-        cp -R "${quaid_hook_src}" "${quaid_hook_dst}"
-        info "Installed internal hook: quaid-reset-signal"
-        if command -v openclaw &>/dev/null; then
-            openclaw hooks enable quaid-reset-signal >/dev/null 2>&1 || true
-        elif command -v clawdbot &>/dev/null; then
-            clawdbot hooks enable quaid-reset-signal >/dev/null 2>&1 || true
-        fi
-    else
-        warn "quaid-reset-signal hook missing from plugin source"
-    fi
+    # Legacy quaid-reset-signal hook is intentionally not installed.
+    # Reset/compaction extraction signaling is now contract-owned inside adapter handlers.
+    info "Skipping legacy hook install: quaid-reset-signal (contract-owned lifecycle handlers active)"
 
     # Initialize database
     info "Initializing database..."
