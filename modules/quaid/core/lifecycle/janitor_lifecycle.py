@@ -88,7 +88,9 @@ class LifecycleRegistry:
             routine = self._routines.get(name)
         if routine is None:
             return RoutineResult(errors=[f"No lifecycle routine registered: {name}"])
-        bound_ctx = self._bind_core_runtime(ctx)
+        _opts = dict(ctx.options or {})
+        _opts.setdefault("_lifecycle_routine", name)
+        bound_ctx = self._bind_core_runtime(replace(ctx, options=_opts))
         lock_cfg = self._lock_config(ctx)
         if not lock_cfg["enabled"]:
             return routine(bound_ctx)
@@ -189,7 +191,14 @@ class LifecycleRegistry:
 
     def _llm_workers(self, ctx: RoutineContext) -> int:
         parallel = get_parallel_config(ctx.cfg)
-        workers = int(getattr(parallel, "llm_workers", 4) or 4)
+        workers = int(
+            getattr(
+                parallel,
+                "lifecycle_prepass_workers",
+                getattr(parallel, "llm_workers", 4),
+            )
+            or 4
+        )
         return max(1, workers)
 
     def _core_parallel_map(
@@ -205,9 +214,10 @@ class LifecycleRegistry:
             return []
         configured_workers = self._llm_workers(ctx)
         requested_workers = max_workers if max_workers is not None else configured_workers
+        routine_name = str((ctx.options or {}).get("_lifecycle_routine") or "default").strip() or "default"
         scheduler = get_global_llm_scheduler()
         return scheduler.run_map(
-            workload_key="lifecycle_prepass",
+            workload_key=f"lifecycle_prepass:{routine_name}",
             items=seq,
             fn=fn,
             configured_workers=configured_workers,
@@ -286,10 +296,8 @@ class LifecycleRegistry:
                 )
         try:
             parallel_cfg = get_parallel_config(ctx.cfg)
-            parsed_cfg = int(
-                getattr(parallel_cfg, "lifecycle_prepass_timeout_retries", default_retries)
-                or default_retries
-            )
+            cfg_raw = getattr(parallel_cfg, "lifecycle_prepass_timeout_retries", None)
+            parsed_cfg = int(default_retries if cfg_raw is None else cfg_raw)
             if parsed_cfg >= 0:
                 return parsed_cfg
         except Exception:
