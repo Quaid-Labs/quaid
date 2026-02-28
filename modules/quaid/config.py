@@ -157,6 +157,7 @@ class CoreParallelConfig:
     task_workers: Dict[str, int] = field(default_factory=dict)
     lifecycle_prepass_workers: int = 3
     lifecycle_prepass_timeout_seconds: int = 300
+    lifecycle_prepass_timeout_retries: int = 1
     lock_enforcement_enabled: bool = True
     lock_wait_seconds: int = 120
     lock_require_registration: bool = True
@@ -969,6 +970,13 @@ def _load_config_inner() -> MemoryConfig:
                 parallel_data.get('lifecyclePrepassTimeoutSeconds', 300),
             ),
             300,
+        ),
+        lifecycle_prepass_timeout_retries=_coerce_nonnegative_int(
+            parallel_data.get(
+                'lifecycle_prepass_timeout_retries',
+                parallel_data.get('lifecyclePrepassTimeoutRetries', 1),
+            ),
+            1,
         ),
         lock_enforcement_enabled=bool(parallel_data.get(
             'lock_enforcement_enabled',

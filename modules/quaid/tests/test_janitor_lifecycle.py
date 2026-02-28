@@ -2,7 +2,6 @@ import sys
 import sqlite3
 import time
 import importlib
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -359,32 +358,32 @@ def test_lifecycle_registry_parallel_map_cancels_pending_on_worker_error(tmp_pat
     assert started == [0]
 
 
-def test_lifecycle_registry_parallel_map_uses_max_workers_for_executor_size(monkeypatch, tmp_path):
+def test_lifecycle_registry_parallel_map_passes_scheduler_controls(monkeypatch, tmp_path):
     from core.lifecycle.janitor_lifecycle import LifecycleRegistry
 
     registry = LifecycleRegistry()
     cfg = _make_cfg(False)
     cfg.core.parallel.llm_workers = 8
+    cfg.core.parallel.lifecycle_prepass_timeout_seconds = 42
+    cfg.core.parallel.lifecycle_prepass_timeout_retries = 3
     ctx = RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path)
 
-    called = {"workers": None}
-    created: list[ThreadPoolExecutor] = []
+    called = {}
 
-    def _fake_ensure(workers: int):
-        called["workers"] = workers
-        ex = ThreadPoolExecutor(max_workers=workers)
-        created.append(ex)
-        return ex
+    class _FakeScheduler:
+        def run_map(self, **kwargs):
+            called.update(kwargs)
+            return [1, 2, 3]
 
-    monkeypatch.setattr(registry, "_ensure_llm_executor", _fake_ensure)
-    try:
-        out = registry._core_parallel_map(ctx, [1, 2, 3], lambda x: x, max_workers=2)
-    finally:
-        for ex in created:
-            ex.shutdown(wait=False, cancel_futures=True)
+    monkeypatch.setattr("core.lifecycle.janitor_lifecycle.get_global_llm_scheduler", lambda: _FakeScheduler())
+    out = registry._core_parallel_map(ctx, [1, 2, 3], lambda x: x, max_workers=2)
 
     assert out == [1, 2, 3]
-    assert called["workers"] == 2
+    assert called["configured_workers"] == 8
+    assert called["requested_workers"] == 2
+    assert called["timeout_seconds"] == 42
+    assert called["timeout_retries"] == 3
+    assert called["workload_key"] == "lifecycle_prepass"
 
 
 def test_lifecycle_registry_requires_write_registration_when_enabled(tmp_path):
@@ -528,16 +527,12 @@ def test_lifecycle_registry_resolves_write_resources_to_absolute_paths(tmp_path)
     assert f"file:{(tmp_path / 'docs' / 'AGENTS.md').resolve()}" in resolved
 
 
-def test_lifecycle_registry_shutdown_releases_llm_executor():
+def test_lifecycle_registry_shutdown_is_noop():
     from core.lifecycle.janitor_lifecycle import LifecycleRegistry
 
     registry = LifecycleRegistry()
-    ex = registry._ensure_llm_executor(2)
-    assert ex is not None
-    assert registry._llm_executor is not None
-
+    # LLM scheduler is process-global; lifecycle shutdown intentionally does nothing.
     registry.shutdown(wait=False)
-    assert registry._llm_executor is None
 
 
 def test_lifecycle_registry_caps_workspace_lock_registry_cache(tmp_path):
