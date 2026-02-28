@@ -1152,15 +1152,15 @@ function installHeartbeatSchedule(hour) {
   //
   // We add an entry to HEARTBEAT.md that the bot checks on each wake.
   const heartbeatPath = path.join(WORKSPACE, "HEARTBEAT.md");
-  const minStart = hour === 0 ? 23 : hour - 1;
   const minEnd = hour === 23 ? 0 : hour + 1;
   const padH = (h) => String(h).padStart(2, "0");
+  const scheduleWindowEnd = hour === 23 ? "24:00" : `${padH(minEnd)}:00`;
 
   const janitorBlock = [
     "",
     `## Quaid Janitor (${padH(hour)}:00 daily)`,
     "",
-    `**Schedule:** Check if current time is between ${padH(hour)}:00-${padH(minEnd)}:00 and janitor hasn't run today.`,
+    `**Schedule:** Check if current time is between ${padH(hour)}:00-${scheduleWindowEnd} and janitor hasn't run today.`,
     "",
     "**IMPORTANT:** The janitor requires your LLM API key. It must be run through",
     "the bot's heartbeat — NOT from a standalone cron job or launchd agent.",
@@ -1169,7 +1169,7 @@ function installHeartbeatSchedule(hour) {
     "**To run:** `quaid janitor --apply --task all`",
     "",
     "**Logic:**",
-    `- If time is between ${padH(hour)}:00 and ${padH(minEnd)}:00 AND janitor hasn't run today:`,
+    `- If time is between ${padH(hour)}:00 and ${scheduleWindowEnd} AND janitor hasn't run today:`,
     "  - Run: `./quaid janitor --apply --task all`",
     "  - Log completion status",
     "- Otherwise: skip (already ran or not time yet)",
