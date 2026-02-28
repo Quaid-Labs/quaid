@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-# Ensure plugins/quaid is on the path
+# Ensure modules/quaid is on the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Set env before imports

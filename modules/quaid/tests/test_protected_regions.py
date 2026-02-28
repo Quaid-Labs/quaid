@@ -26,7 +26,7 @@ def _wa_adapter_patch(tmp_path):
     finally:
         reset_adapter()
 
-# Ensure plugins/quaid is on the path
+# Ensure modules/quaid is on the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Must set MEMORY_DB_PATH before importing anything that touches config
