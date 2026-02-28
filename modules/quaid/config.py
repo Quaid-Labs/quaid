@@ -568,19 +568,26 @@ _KNOWN_RETRIEVAL_KEYS = {
     "reranker",
 }
 
-_DEFAULT_DOMAIN_DESCRIPTIONS = {
-    "personal": "identity, preferences, relationships, life events",
-    "technical": "code, infra, APIs, architecture",
-    "project": "project status, tasks, files, milestones",
-    "work": "job/team/process decisions not deeply technical",
-    "health": "training, injuries, routines, wellness",
-    "finance": "budgeting, purchases, salary, bills",
-    "travel": "trips, moves, places, logistics",
-    "schedule": "dates, appointments, deadlines",
-    "research": "options considered, comparisons, tradeoff analysis",
-    "household": "home, chores, food planning, shared logistics",
-    "legal": "contracts, policy, and regulatory constraints",
-}
+try:
+    from datastore.memorydb.domain_defaults import default_domain_descriptions as _default_domain_descriptions
+except Exception:
+    def _default_domain_descriptions() -> Dict[str, str]:
+        return {
+            "personal": "identity, preferences, relationships, life events",
+            "technical": "code, infra, APIs, architecture",
+            "project": "project status, tasks, files, milestones",
+            "work": "job/team/process decisions not deeply technical",
+            "health": "training, injuries, routines, wellness",
+            "finance": "budgeting, purchases, salary, bills",
+            "travel": "trips, moves, places, logistics",
+            "schedule": "dates, appointments, deadlines",
+            "research": "options considered, comparisons, tradeoff analysis",
+            "household": "home, chores, food planning, shared logistics",
+            "legal": "contracts, policy, and regulatory constraints",
+        }
+
+
+_DEFAULT_DOMAIN_DESCRIPTIONS = _default_domain_descriptions()
 
 
 def _normalize_domain_key(value: Any) -> str:
