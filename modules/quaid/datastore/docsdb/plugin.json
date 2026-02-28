@@ -36,10 +36,7 @@
       },
       "tools": {
         "mode": "declared",
-        "exports": [
-          "search_docs",
-          "project_read"
-        ]
+        "exports": []
       },
       "api": {
         "mode": "declared",

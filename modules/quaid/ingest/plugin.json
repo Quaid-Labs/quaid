@@ -47,17 +47,11 @@
       },
       "tools": {
         "mode": "declared",
-        "exports": [
-          "session_reset",
-          "session_compact"
-        ]
+        "exports": []
       },
       "api": {
         "mode": "declared",
-        "exports": [
-          "extract_and_store",
-          "process_pending_extraction_signals"
-        ]
+        "exports": []
       },
       "events": {
         "mode": "declared",
