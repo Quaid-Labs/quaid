@@ -735,7 +735,7 @@ async function step4_embeddings() {
       const s = spinner();
       s.start("Starting Ollama...");
       try {
-        execSync("brew services start ollama 2>/dev/null || (ollama serve &>/dev/null &)", { stdio: "pipe" });
+        execSync("brew services start ollama 2>/dev/null || (ollama serve >/dev/null 2>&1 &)", { stdio: "pipe" });
         await sleep(3000);
         execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" });
         ollamaRunning = true;
@@ -761,7 +761,7 @@ async function step4_embeddings() {
           execSync("brew services start ollama 2>/dev/null || true", { stdio: "pipe" });
         } else {
           execSync("curl -fsSL https://ollama.ai/install.sh | sh", { stdio: "inherit" });
-          execSync("ollama serve &>/dev/null &", { stdio: "pipe" });
+          execSync("ollama serve >/dev/null 2>&1 &", { stdio: "pipe" });
         }
         await sleep(3000);
         execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" });
