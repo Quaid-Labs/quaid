@@ -32,10 +32,10 @@ def get_db_path() -> Path:
     """
     env_path = os.environ.get("MEMORY_DB_PATH")
     if env_path:
-        return Path(env_path)
+        return Path(env_path).expanduser()
     cfg = _get_cfg()
-    p = cfg.database.path
-    return Path(p) if p.startswith('/') else _workspace_root() / p
+    p = Path(str(cfg.database.path)).expanduser()
+    return p if p.is_absolute() else _workspace_root() / p
 
 
 def get_archive_db_path() -> Path:
@@ -45,10 +45,10 @@ def get_archive_db_path() -> Path:
     """
     env_path = os.environ.get("MEMORY_ARCHIVE_DB_PATH")
     if env_path:
-        return Path(env_path)
+        return Path(env_path).expanduser()
     cfg = _get_cfg()
-    p = cfg.database.archive_path
-    return Path(p) if p.startswith('/') else _workspace_root() / p
+    p = Path(str(cfg.database.archive_path)).expanduser()
+    return p if p.is_absolute() else _workspace_root() / p
 
 
 def get_ollama_url() -> str:
