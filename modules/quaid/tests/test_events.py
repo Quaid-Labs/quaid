@@ -11,6 +11,7 @@ from core.runtime.events import (
     list_events,
     process_events,
     register_event_handler,
+    validate_declared_event_contract,
 )
 from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
 
@@ -384,3 +385,47 @@ def test_register_event_handler_overwrites_with_force(caplog):
         assert "overwriting existing handler" in caplog.text
     finally:
         register_event_handler("session.reset", original, force=True)
+
+
+def test_validate_declared_event_contract_accepts_openclaw_aliases(monkeypatch):
+    def _fake_collect_declared_exports(*, registry, slots, surface):
+        assert surface == "events"
+        return {"openclaw.adapter": ["before_reset", "agent_end", "before_compaction"]}
+
+    monkeypatch.setattr(
+        "core.runtime.plugins.collect_declared_exports",
+        _fake_collect_declared_exports,
+    )
+
+    errors = validate_declared_event_contract(
+        registry=object(),
+        slots={"adapter": "openclaw.adapter", "ingest": [], "datastores": []},
+        strict=True,
+    )
+    assert errors == []
+
+
+def test_validate_declared_event_contract_rejects_unknown_declared_events(monkeypatch):
+    def _fake_collect_declared_exports(*, registry, slots, surface):
+        assert surface == "events"
+        return {"bad.plugin": ["totally.unknown.event"]}
+
+    monkeypatch.setattr(
+        "core.runtime.plugins.collect_declared_exports",
+        _fake_collect_declared_exports,
+    )
+
+    errors = validate_declared_event_contract(
+        registry=object(),
+        slots={"adapter": "bad.plugin", "ingest": [], "datastores": []},
+        strict=False,
+    )
+    assert len(errors) == 1
+    assert "bad.plugin" in errors[0]
+
+    with pytest.raises(ValueError, match="Event contract validation failed"):
+        validate_declared_event_contract(
+            registry=object(),
+            slots={"adapter": "bad.plugin", "ingest": [], "datastores": []},
+            strict=True,
+        )
