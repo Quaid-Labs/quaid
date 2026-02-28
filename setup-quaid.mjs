@@ -1960,7 +1960,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
         highSimilarityThreshold: 0.95,
         autoRejectThreshold: 0.98,
         grayZoneLow: 0.88,
-        haikuVerifyEnabled: true,
+        llmVerifyEnabled: true,
       },
       contradiction: { enabled: true, timeoutMinutes: 60, minSimilarity: 0.6, maxSimilarity: 0.85 },
     },
