@@ -324,6 +324,10 @@ The previous per-message approach (Haiku classifier on each message pair) was:
 
 **Current extraction** happens in `before_compaction` and `before_reset` hooks via Opus (full transcript), plus inactivity-timeout extraction when enabled. **Combined fact+edge extraction** performs both fact extraction and relationship detection in a chunked deep-reasoning loop for efficiency and context-window safety.
 
+Capture timeout config keys:
+- `capture.inactivity_timeout_minutes` (default `120`): minutes of inactivity before timeout extraction runs (`0` disables timeout extraction).
+- `capture.auto_compaction_on_timeout` (default `true`): when timeout extraction runs, whether to trigger gateway compaction automatically after extraction.
+
 ---
 
 ### 7. Shared Library (`lib/`)

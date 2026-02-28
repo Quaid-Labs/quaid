@@ -164,7 +164,12 @@ Parameter map:
 - `text` (string): exact memory note text to queue for extraction.
 - `category` (`preference|fact|decision|entity|other`, optional): lightweight hint.
 - OpenClaw runtime path: accepts only `text` and optional `category`.
-- MCP path (`core/interface/mcp_server.py`) also accepts `domains_json` (stringified JSON array, for example `["technical","project"]`).
+- MCP path (`core/interface/mcp_server.py`) also accepts:
+  - `confidence` (number, optional, default `0.5`)
+  - `knowledge_type` (string, optional, default `"fact"`)
+  - `source` (string, optional, default `"mcp"`)
+  - `pinned` (boolean, optional, default `false`)
+  - `domains_json` (stringified JSON array, optional, for example `["technical","project"]`)
 
 ### `memory_forget`
 Use this for explicit deletion requests.
