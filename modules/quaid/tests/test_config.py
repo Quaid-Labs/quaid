@@ -601,6 +601,7 @@ class TestConfigLoading:
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
                 assert cfg.core.parallel.llm_workers == 4
+                assert cfg.core.parallel.lifecycle_prepass_timeout_seconds == 300
         finally:
             config._config = old_config
 
@@ -615,6 +616,7 @@ class TestConfigLoading:
                     "parallel": {
                         "llmWorkers": "four",
                         "lifecyclePrepassWorkers": "three",
+                        "lifecyclePrepassTimeoutSeconds": "slow",
                         "lockWaitSeconds": "sixty",
                     }
                 }
@@ -623,6 +625,7 @@ class TestConfigLoading:
                 cfg = load_config()
                 assert cfg.core.parallel.llm_workers == 4
                 assert cfg.core.parallel.lifecycle_prepass_workers == 3
+                assert cfg.core.parallel.lifecycle_prepass_timeout_seconds == 300
                 assert cfg.core.parallel.lock_wait_seconds == 120
         finally:
             config._config = old_config
