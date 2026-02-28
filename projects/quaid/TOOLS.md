@@ -159,6 +159,9 @@ Notes:
 ### `memory_store`
 Use this only for explicit/manual memory insertion when needed.
 Default behavior should favor automatic extraction.
+Behavior differs by surface:
+- OpenClaw adapter path queues the note for extraction at compaction/reset.
+- MCP path stores immediately.
 
 Parameter map:
 - `text` (string): exact memory note text to queue for extraction.

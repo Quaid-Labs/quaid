@@ -60,12 +60,7 @@
       },
       "ingest_triggers": {
         "mode": "declared",
-        "exports": [
-          "manual",
-          "compaction",
-          "reset",
-          "timeout"
-        ]
+        "exports": []
       },
       "auth_requirements": {
         "mode": "declared",
