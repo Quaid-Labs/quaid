@@ -2595,6 +2595,13 @@ const quaidPlugin = {
       }
       return api.registerTool(() => spec);
     };
+    const registerHttpRouteChecked = (route: { path: string; handler: any }) => {
+      const routePath = String(route?.path || "").trim();
+      if (contractDecl.enabled) {
+        assertDeclaredRegistration("api", routePath, contractDecl.api, strictContracts, (m) => console.warn(m));
+      }
+      return api.registerHttpRoute(route as any);
+    };
 
     // Ensure database exists
     const dataDir = path.dirname(DB_PATH);
@@ -4350,7 +4357,7 @@ notify_memory_extraction(
 
     // Register HTTP endpoint for LLM proxy (used by Python janitor/extraction)
     // Python code calls this instead of the Anthropic API directly — gateway handles auth.
-    api.registerHttpRoute({
+    registerHttpRouteChecked({
       path: "/plugins/quaid/llm",
       handler: async (req, res) => {
         if (req.method !== "POST") {
@@ -4418,7 +4425,7 @@ notify_memory_extraction(
     });
 
     // Register HTTP endpoint for memory dashboard
-    api.registerHttpRoute({
+    registerHttpRouteChecked({
       path: "/memory/injected",
       handler: async (req, res) => {
         try {

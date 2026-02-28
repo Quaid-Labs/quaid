@@ -52,7 +52,9 @@
       "api": {
         "mode": "declared",
         "exports": [
-          "openclaw_adapter_entry"
+          "openclaw_adapter_entry",
+          "/plugins/quaid/llm",
+          "/memory/injected"
         ]
       },
       "events": {
