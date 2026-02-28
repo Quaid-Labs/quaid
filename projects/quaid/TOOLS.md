@@ -144,7 +144,8 @@ Parameter map:
 - `query` (string, required): semantic search query.
 - `limit` (number, optional): max hits (default `5`).
 - `project` (string, optional): restrict search to one project.
-- `docs` (string array, optional): optional doc path/name filters to narrow RAG scope.
+- `docs` (string array, optional, OpenClaw adapter path only): optional doc path/name filters to narrow RAG scope.
+- MCP path (`core/interface/mcp_server.py`) supports `query`, `limit`, and `project` only.
 
 Use cases:
 - finding where a feature is documented
