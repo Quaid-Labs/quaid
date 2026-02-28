@@ -464,6 +464,17 @@ def initialize_plugin_runtime(
     )
     warnings: List[str] = []
     for manifest in manifests:
+        contract = (manifest.capabilities or {}).get("contract", {})
+        if isinstance(contract, dict):
+            for surface in _PLUGIN_CONTRACT_DECLARED:
+                spec = contract.get(surface, {})
+                if not isinstance(spec, dict):
+                    continue
+                exports = spec.get("exports", [])
+                if isinstance(exports, list) and len(exports) == 0:
+                    warnings.append(
+                        f"Plugin '{manifest.plugin_id}' declares surface '{surface}' with empty exports"
+                    )
         try:
             registry.register(manifest)
         except Exception as exc:
