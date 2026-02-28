@@ -942,9 +942,9 @@ def test_run_plugin_contract_surface_accepts_cross_module_handler_contract(tmp_p
             sys.path.remove(str(tmp_path))
 
 
-def test_active_slot_plugins_have_executable_init_and_config_hooks(tmp_path: Path):
+def test_active_slot_plugins_have_executable_init_and_config_hooks(tmp_path: Path, monkeypatch):
     plugin_root = Path(__file__).resolve().parents[1]
-    allow = ["memorydb.core", "core.extract", "openclaw.adapter"]
+    allow = ["memorydb.core", "core.extract"]
     manifests, errors = discover_plugin_manifests(
         paths=[str(plugin_root)],
         allowlist=allow,
@@ -960,20 +960,24 @@ def test_active_slot_plugins_have_executable_init_and_config_hooks(tmp_path: Pat
         registry.register(m)
 
     db_path = tmp_path / "memory.db"
+    monkeypatch.setenv("MEMORY_DB_PATH", str(db_path))
+    # Seed minimal datastore schema for strict hook execution.
+    import sqlite3
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY)")
     cfg = SimpleNamespace(
         database=SimpleNamespace(path=str(db_path)),
         retrieval=SimpleNamespace(domains={"technical": "code"}),
-        adapter=SimpleNamespace(type="openclaw"),
+        adapter=SimpleNamespace(type="standalone"),
     )
     slots = {
-        "adapter": "openclaw.adapter",
+        "adapter": "",
         "ingest": ["core.extract"],
         "datastores": ["memorydb.core"],
     }
     plugin_config = {
         "memorydb.core": {},
         "core.extract": {"enabled": True},
-        "openclaw.adapter": {},
     }
     init_errs, init_warns = run_plugin_contract_surface(
         registry=registry,

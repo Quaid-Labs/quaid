@@ -121,7 +121,16 @@ def _refresh_runtime_state() -> None:
     MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 120) * 60
 
 
+def _ensure_runtime_state() -> None:
+    """Keep config-derived globals current for helper-only call paths."""
+    global _cfg
+    latest_cfg = get_config()
+    if latest_cfg is not _cfg:
+        _refresh_runtime_state()
+
+
 def _lifecycle_registry():
+    _ensure_runtime_state()
     global _LIFECYCLE_REGISTRY
     if _LIFECYCLE_REGISTRY is None:
         _LIFECYCLE_REGISTRY = build_default_registry()
@@ -129,6 +138,7 @@ def _lifecycle_registry():
 
 
 def _plugin_maintenance_slots() -> Dict[str, Any]:
+    _ensure_runtime_state()
     slots = getattr(getattr(_cfg, "plugins", None), "slots", None)
     return {
         "adapter": str(getattr(slots, "adapter", "") or "").strip(),
@@ -148,6 +158,7 @@ def _janitor_test_timeout_seconds(default_seconds: int = 600) -> int:
 
 def _default_owner_id() -> str:
     """Resolve default owner from config with safe fallback."""
+    _ensure_runtime_state()
     try:
         return _cfg.users.default_owner
     except Exception as exc:
@@ -159,6 +170,7 @@ def _default_owner_id() -> str:
 
 def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
     """Run npm test for quaid plugin and report pass/fail counts."""
+    _ensure_runtime_state()
     metrics.start_task("tests")
     plugin_dir = str(Path(__file__).parent)
 
@@ -387,6 +399,7 @@ def _resolve_apply_mode(args_apply: bool, args_approve: bool) -> tuple[bool, Opt
     Returns (dry_run, warning_message). warning_message is user-facing guidance
     when an apply request is downgraded to dry-run by policy.
     """
+    _ensure_runtime_state()
     if not args_apply:
         return True, None
 

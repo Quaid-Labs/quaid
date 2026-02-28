@@ -46,19 +46,11 @@
       },
       "tools": {
         "mode": "declared",
-        "exports": [
-          "memory_recall",
-          "memory_store",
-          "memory_forget"
-        ]
+        "exports": []
       },
       "api": {
         "mode": "declared",
-        "exports": [
-          "store",
-          "recall",
-          "forget"
-        ]
+        "exports": []
       },
       "events": {
         "mode": "declared",
@@ -85,10 +77,7 @@
       },
       "notifications": {
         "mode": "declared",
-        "exports": [
-          "memory_recall",
-          "memory_extraction"
-        ]
+        "exports": []
       }
     },
     "supports_multi_user": true,
