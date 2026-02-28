@@ -361,8 +361,12 @@ class StandaloneAdapter(QuaidAdapter):
         if provider_id == "openai-compatible":
             from lib.providers import OpenAICompatibleLLMProvider
             import os
-            base_url = os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:8000")
-            api_key = os.environ.get("OPENAI_API_KEY", "")
+            base_url = str(
+                getattr(cfg.models, "base_url", "")
+                or os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:8000")
+            )
+            api_key_env = str(getattr(cfg.models, "api_key_env", "") or "OPENAI_API_KEY")
+            api_key = os.environ.get(api_key_env, os.environ.get("OPENAI_API_KEY", ""))
             return OpenAICompatibleLLMProvider(
                 base_url=base_url, api_key=api_key,
                 deep_model=deep_model,

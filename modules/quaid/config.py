@@ -83,6 +83,8 @@ class ModelConfig:
     fast_reasoning_max_output: int = 8192
     deep_reasoning_max_output: int = 16384
     batch_budget_percent: float = 0.50
+    api_key_env: str = "OPENAI_API_KEY"
+    base_url: str = ""
 
     def context_window(self, tier: str) -> int:
         """Get context window size for a model tier ('deep' or 'fast')."""
@@ -501,6 +503,7 @@ _KNOWN_TOP_LEVEL_CONFIG_KEYS = {
     "ollama",
     "plugins",
     "privacy",
+    "projects",
     "rag",
     "retrieval",
     "systems",
@@ -523,6 +526,8 @@ _KNOWN_MODELS_KEYS = {
     "fast_reasoning_max_output",
     "deep_reasoning_max_output",
     "batch_budget_percent",
+    "api_key_env",
+    "base_url",
 }
 
 _KNOWN_CAPTURE_KEYS = {
@@ -701,6 +706,17 @@ def _load_nested(data: Dict[str, Any], keys_map: Dict[str, str] = None) -> Dict[
     return result
 
 
+def _extract_raw_plugin_config(raw_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Preserve plugin-owned config keys as opaque payload (no key normalization)."""
+    plugins = raw_config.get("plugins")
+    if not isinstance(plugins, dict):
+        return {}
+    cfg = plugins.get("config")
+    if not isinstance(cfg, dict):
+        return {}
+    return dict(cfg)
+
+
 def _decode_json_list(raw_value: Any, *, field_name: str, default: Optional[List[Any]] = None) -> List[Any]:
     """Decode list-typed JSON fields defensively."""
     fallback = list(default or [])
@@ -780,8 +796,13 @@ def _load_config_inner() -> MemoryConfig:
         if not os.environ.get("QUAID_QUIET"):
             print("[config] Using defaults (no config file found)", file=sys.stderr)
     
+    raw_plugin_config = _extract_raw_plugin_config(raw_config)
     # Convert camelCase to snake_case
     config_data = _load_nested(raw_config)
+    if raw_plugin_config:
+        plugins_section = config_data.setdefault("plugins", {})
+        if isinstance(plugins_section, dict):
+            plugins_section["config"] = raw_plugin_config
     _warn_unknown_keys("", config_data, _KNOWN_TOP_LEVEL_CONFIG_KEYS)
     _warn_unknown_keys("models", config_data.get("models", {}), _KNOWN_MODELS_KEYS)
     _warn_unknown_keys("capture", config_data.get("capture", {}), _KNOWN_CAPTURE_KEYS)
@@ -827,6 +848,8 @@ def _load_config_inner() -> MemoryConfig:
         fast_reasoning_max_output=_coerce_positive_int(models_data.get('fast_reasoning_max_output', 8192), 8192),
         deep_reasoning_max_output=_coerce_positive_int(models_data.get('deep_reasoning_max_output', 16384), 16384),
         batch_budget_percent=_coerce_positive_float(models_data.get('batch_budget_percent', 0.50), 0.50),
+        api_key_env=str(models_data.get('api_key_env', models_data.get('apiKeyEnv', 'OPENAI_API_KEY')) or 'OPENAI_API_KEY'),
+        base_url=str(models_data.get('base_url', models_data.get('baseUrl', '')) or ''),
     )
 
     capture_data = config_data.get('capture', {})
