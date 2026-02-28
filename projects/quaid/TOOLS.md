@@ -128,7 +128,7 @@ Use this for recent-session discovery and transcript retrieval.
 Parameter map:
 - `action` (`list|load`):
   - `list`: returns recent extracted sessions.
-  - `load`: loads one session transcript by `session_id`. If transcript is unavailable, returns an error payload (no automatic extracted-facts fallback).
+  - `load`: loads one session transcript by `session_id`. OpenClaw path falls back to extracted facts for that `session_id` when raw transcript is unavailable; MCP path returns an error payload when transcript data is missing.
 - `session_id` (string): required for `load`. Pattern: `[a-zA-Z0-9_-]{1,128}`.
 - `limit` (number): list size for `action=list` (default 5, max 20).
 
