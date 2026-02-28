@@ -975,3 +975,46 @@ class TestConfigLoading:
             config._config = old_config
             config._warned_unknown_config_keys.clear()
             config._warned_unknown_config_keys.update(old_warned)
+
+    def test_config_callback_failure_warns_when_plugins_non_strict(self, capsys):
+        import config
+
+        def _boom(_value, _cfg):
+            raise ValueError("callback boom")
+
+        cfg = MemoryConfig()
+        cfg.plugins.strict = False
+
+        with config._config_callbacks_lock:
+            callbacks = config._config_callbacks.setdefault("plugins.slots.adapter", [])
+            callbacks.append(_boom)
+        try:
+            config._run_config_callbacks(cfg)
+            err = capsys.readouterr().err
+            assert "Config callback failed for 'plugins.slots.adapter'" in err
+        finally:
+            with config._config_callbacks_lock:
+                callbacks = config._config_callbacks.get("plugins.slots.adapter", [])
+                if _boom in callbacks:
+                    callbacks.remove(_boom)
+
+    def test_config_callback_failure_raises_when_plugins_strict(self):
+        import config
+
+        def _boom(_value, _cfg):
+            raise ValueError("callback boom")
+
+        cfg = MemoryConfig()
+        cfg.plugins.strict = True
+
+        with config._config_callbacks_lock:
+            callbacks = config._config_callbacks.setdefault("plugins.slots.adapter", [])
+            callbacks.append(_boom)
+        try:
+            with pytest.raises(ValueError, match="Config callback failed for 'plugins.slots.adapter'"):
+                config._run_config_callbacks(cfg)
+        finally:
+            with config._config_callbacks_lock:
+                callbacks = config._config_callbacks.get("plugins.slots.adapter", [])
+                if _boom in callbacks:
+                    callbacks.remove(_boom)
