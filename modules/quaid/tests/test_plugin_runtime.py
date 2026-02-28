@@ -825,6 +825,78 @@ def test_run_plugin_contract_surface_rejects_missing_base_contract(tmp_path: Pat
             sys.path.remove(str(tmp_path))
 
 
+def test_run_plugin_contract_surface_accepts_cross_module_handler_contract(tmp_path: Path):
+    pkg = tmp_path / "crosspkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "def noop():\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    (pkg / "handlers.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx): return None\n"
+        "    def on_config(self, ctx): return {\"ok\": True}\n"
+        "    def on_status(self, ctx): return {}\n"
+        "    def on_dashboard(self, ctx): return {}\n"
+        "    def on_maintenance(self, ctx): return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx): return {\"ready\": True}\n"
+        "    def on_health(self, ctx): return {\"healthy\": True}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_config(ctx):\n"
+        "    return _CONTRACT.on_config(ctx)\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.cross",
+            "plugin_type": "adapter",
+            "module": "crosspkg.impl",
+            "capabilities": {
+                "display_name": "Cross Module Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook", "handler": "crosspkg.handlers:on_config"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns = run_plugin_contract_surface(
+            registry=registry,
+            slots={"adapter": "adapter.cross"},
+            surface="config",
+            config={},
+            plugin_config={"adapter.cross": {}},
+            workspace_root=str(tmp_path),
+            strict=True,
+        )
+        assert errs == []
+        assert warns == []
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 def test_active_slot_plugins_have_executable_init_and_config_hooks(tmp_path: Path):
     plugin_root = Path(__file__).resolve().parents[1]
     allow = ["memorydb.core", "core.extract", "openclaw.adapter"]
