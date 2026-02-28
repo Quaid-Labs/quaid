@@ -566,9 +566,8 @@ def run_plugin_contract_surface_collect(
                 f"Plugin '{plugin_id}' {key} hook failed "
                 f"({handler_ref or 'missing-handler'}): {exc}"
             )
-            if strict:
-                errors.append(msg)
-            else:
+            errors.append(msg)
+            if not strict:
                 warnings.append(msg)
 
     return errors, warnings, results
