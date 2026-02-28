@@ -749,8 +749,12 @@ async function step4_embeddings() {
         execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" });
         ollamaRunning = true;
         s.stop(C.green("Ollama started"));
-      } catch {
+      } catch (err) {
         s.stop("Could not start Ollama");
+        const detail = String(err?.message || err || "").trim();
+        if (detail) {
+          log.warn(`Start failure detail: ${detail}`);
+        }
         log.warn("You can start it manually later: ollama serve");
       }
     }
@@ -776,8 +780,12 @@ async function step4_embeddings() {
         execSync("curl -sf http://localhost:11434/api/tags", { stdio: "pipe" });
         ollamaRunning = true;
         s.stop(C.green("Ollama installed and running"));
-      } catch {
+      } catch (err) {
         s.stop("Ollama install had issues");
+        const detail = String(err?.message || err || "").trim();
+        if (detail) {
+          log.warn(`Install failure detail: ${detail}`);
+        }
         log.warn("You may need to start it manually: ollama serve");
       }
     }
