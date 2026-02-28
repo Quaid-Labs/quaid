@@ -1761,7 +1761,7 @@ else:
     `${C.bcyan("→")} Facts are extracted automatically on context compaction and new sessions`,
     `${C.bcyan("→")} The nightly janitor reviews, deduplicates, and maintains memories`,
     `${C.bcyan("→")} Run the janitor now to discover and organize your projects:`,
-    `   ${C.bcyan("cd plugins/quaid && python3 janitor.py --task workspace --apply")}`,
+    `   ${C.bcyan("cd modules/quaid && python3 core/lifecycle/janitor.py --task workspace --apply")}`,
     `   The janitor will scan TOOLS.md and AGENTS.md for project specs`,
     `   and flag them for review. Your agent will walk you through the`,
     `   findings on your next conversation and help organize them.`,
