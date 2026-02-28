@@ -496,6 +496,85 @@ def test_run_plugin_contract_surface_executes_config_hook(tmp_path: Path):
             sys.path.remove(str(tmp_path))
 
 
+def test_run_plugin_contract_surface_collect_orders_by_manifest_priority(tmp_path: Path):
+    pkg = tmp_path / "prioritypkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx): return None\n"
+        "    def on_config(self, ctx): return {\"plugin\": ctx.plugin.plugin_id}\n"
+        "    def on_status(self, ctx): return {}\n"
+        "    def on_dashboard(self, ctx): return {}\n"
+        "    def on_maintenance(self, ctx): return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx): return {\"ready\": True}\n"
+        "    def on_health(self, ctx): return {\"healthy\": True}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_config(ctx):\n"
+        "    return _CONTRACT.on_config(ctx)\n",
+        encoding="utf-8",
+    )
+
+    ingest_manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "core.ingest_high",
+            "plugin_type": "ingest",
+            "module": "prioritypkg.impl",
+            "priority": 99,
+            "capabilities": {
+                **_contract_caps("Ingest High"),
+                "contract": {
+                    **_contract_caps("Ingest High")["contract"],
+                    "config": {"mode": "hook", "handler": "on_config"},
+                },
+            },
+        }
+    )
+    datastore_manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "memorydb.low",
+            "plugin_type": "datastore",
+            "module": "prioritypkg.impl",
+            "priority": 1,
+            "capabilities": {
+                **_datastore_caps("Datastore Low"),
+                "contract": {
+                    **_datastore_caps("Datastore Low")["contract"],
+                    "config": {"mode": "hook", "handler": "on_config"},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(ingest_manifest)
+    registry.register(datastore_manifest)
+
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns, results = run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={
+                "ingest": ["core.ingest_high"],
+                "datastores": ["memorydb.low"],
+            },
+            surface="config",
+            config={},
+            plugin_config={},
+            workspace_root=str(tmp_path),
+            strict=True,
+        )
+        assert errs == []
+        assert warns == []
+        assert [plugin_id for plugin_id, _ in results] == ["memorydb.low", "core.ingest_high"]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 def test_run_plugin_contract_surface_rejects_missing_base_contract(tmp_path: Path):
     pkg = tmp_path / "badpkg"
     pkg.mkdir(parents=True)
