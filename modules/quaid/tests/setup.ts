@@ -172,48 +172,19 @@ export class TestMemoryInterface {
     if (options.skipDedup) args.push('--skip-dedup')
     
     const result = await this.callPython("store", args)
-    
-    // Parse the output format: "Stored: <id>" 
+
     if (result.startsWith('Stored: ')) {
       const id = result.replace('Stored: ', '').trim()
-      
-      // Return a mock structure that matches what tests expect
-      return {
-        id,
-        content: content,
-        name: content,
-        owner: owner,
-        owner_id: owner,
-        created_at: new Date().toISOString(),
-        confidence: options.confidence !== undefined ? options.confidence : 1.0,
-        verified: options.verified || false,
-        pinned: options.pinned || false,
-        category: options.category,
-        type: options.category || 'fact',
-        embedding: this.generateMockEmbedding(content) // Mock embedding based on content
-      }
-    } else if (result.startsWith('Duplicate')) {
-      throw new Error('Duplicate memory detected')
-    } else if (result.startsWith('Updated existing:')) {
-      // Handle update case - extract ID and treat as successful store
-      const id = result.replace('Updated existing: ', '').trim()
-      return {
-        id,
-        content: content,
-        name: content,
-        owner: owner,
-        owner_id: owner,
-        created_at: new Date().toISOString(),
-        confidence: options.confidence !== undefined ? options.confidence : 1.0,
-        verified: options.verified || false,
-        pinned: options.pinned || false,
-        category: options.category,
-        type: options.category || 'fact',
-        embedding: this.generateMockEmbedding(content) // Mock embedding based on content
-      }
-    } else {
-      throw new Error(`Unexpected store result: ${result}`)
+      return this.materializeStoredNode(id, content, owner, options)
     }
+    if (result.startsWith('Duplicate')) {
+      throw new Error('Duplicate memory detected')
+    }
+    if (result.startsWith('Updated existing:')) {
+      const id = result.replace('Updated existing: ', '').trim()
+      return this.materializeStoredNode(id, content, owner, options)
+    }
+    throw new Error(`Unexpected store result: ${result}`)
   }
 
   async search(query: string, owner: string = 'testuser', limit: number = 5, minSimilarity: number = 0.3): Promise<any[]> {
@@ -330,6 +301,31 @@ export class TestMemoryInterface {
       hash = hash & hash // Convert to 32bit integer
     }
     return Math.abs(hash)
+  }
+
+  private async materializeStoredNode(id: string, content: string, owner: string, options: any): Promise<any> {
+    const raw = await this.getRaw(id)
+    const rawText = typeof raw?.text === 'string' && raw.text.length > 0 ? raw.text : content
+    const rawOwner = typeof raw?.owner_id === 'string' && raw.owner_id.length > 0 ? raw.owner_id : owner
+    return {
+      ...raw,
+      id,
+      content: rawText,
+      name: rawText,
+      owner: rawOwner,
+      owner_id: rawOwner,
+      created_at: raw?.created_at || new Date().toISOString(),
+      confidence: typeof raw?.confidence === 'number'
+        ? raw.confidence
+        : (options.confidence !== undefined ? options.confidence : 1.0),
+      verified: Boolean(raw?.verified ?? options.verified ?? false),
+      pinned: Boolean(raw?.pinned ?? options.pinned ?? false),
+      category: raw?.category ?? options.category,
+      type: raw?.type ?? options.category ?? 'fact',
+      embedding: Array.isArray(raw?.embedding) && raw.embedding.length > 0
+        ? raw.embedding
+        : this.generateMockEmbedding(rawText),
+    }
   }
 
   async close(): Promise<void> {
