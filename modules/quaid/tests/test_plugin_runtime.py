@@ -363,6 +363,58 @@ def test_initialize_plugin_runtime_non_strict_collects_slot_errors(tmp_path: Pat
     assert any("unknown plugin_id 'missing.ingest'" in msg for msg in errors)
 
 
+def test_initialize_plugin_runtime_strict_rejects_duplicate_declared_exports(tmp_path: Path):
+    plugins_dir = tmp_path / "plugins"
+    p1 = plugins_dir / "ingest-a"
+    p2 = plugins_dir / "ingest-b"
+    p1.mkdir(parents=True)
+    p2.mkdir(parents=True)
+    for plugin_id, folder in (("ingest.a", p1), ("ingest.b", p2)):
+        payload = {
+            "plugin_api_version": 1,
+            "plugin_id": plugin_id,
+            "plugin_type": "ingest",
+            "module": f"ingest.{plugin_id.replace('.', '_')}",
+            "capabilities": _contract_caps(plugin_id),
+        }
+        payload["capabilities"]["contract"]["tools"]["exports"] = ["shared_tool"]
+        (folder / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="Duplicate declared tools export 'shared_tool'"):
+        initialize_plugin_runtime(
+            api_version=1,
+            paths=[str(plugins_dir)],
+            strict=True,
+            slots={"ingest": ["ingest.a", "ingest.b"]},
+            workspace_root=str(tmp_path),
+        )
+
+
+def test_initialize_plugin_runtime_non_strict_collects_duplicate_declared_exports(tmp_path: Path):
+    plugins_dir = tmp_path / "plugins"
+    p1 = plugins_dir / "ingest-a"
+    p2 = plugins_dir / "ingest-b"
+    p1.mkdir(parents=True)
+    p2.mkdir(parents=True)
+    for plugin_id, folder in (("ingest.a", p1), ("ingest.b", p2)):
+        payload = {
+            "plugin_api_version": 1,
+            "plugin_id": plugin_id,
+            "plugin_type": "ingest",
+            "module": f"ingest.{plugin_id.replace('.', '_')}",
+            "capabilities": _contract_caps(plugin_id),
+        }
+        payload["capabilities"]["contract"]["tools"]["exports"] = ["shared_tool"]
+        (folder / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
+    _registry, errors, _warnings = initialize_plugin_runtime(
+        api_version=1,
+        paths=[str(plugins_dir)],
+        strict=False,
+        slots={"ingest": ["ingest.a", "ingest.b"]},
+        workspace_root=str(tmp_path),
+    )
+    assert any("Duplicate declared tools export 'shared_tool'" in msg for msg in errors)
+
+
 def test_runtime_diagnostics_accessors_reflect_latest_initialize(tmp_path: Path):
     reset_plugin_runtime()
     plugins_dir = tmp_path / "plugins"
