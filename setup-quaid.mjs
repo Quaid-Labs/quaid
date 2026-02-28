@@ -1394,7 +1394,7 @@ import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from memory_graph import store
+from datastore.memorydb.memory_graph import store
 try:
     store('${safeDisplay}', owner_id='${safeId}', category='person', source='installer')
 except Exception as e:
@@ -1426,7 +1426,7 @@ import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from memory_graph import store
+from datastore.memorydb.memory_graph import store
 files = ${JSON.stringify(mdFiles)}
 total = 0
 for fname in files:
@@ -1500,7 +1500,7 @@ import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from docs_registry import DocsRegistry
+from datastore.docsdb.registry import DocsRegistry
 reg = DocsRegistry()
 names = ${projNames}
 total_docs = 0
@@ -1578,7 +1578,7 @@ import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from docs_registry import DocsRegistry
+from datastore.docsdb.registry import DocsRegistry
 reg = DocsRegistry()
 try:
     reg.create_project('quaid', label='Quaid Knowledge Layer', description='Knowledge layer reference docs and agent instructions.')
@@ -1673,7 +1673,7 @@ import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
-from memory_graph import store, recall
+from datastore.memorydb.memory_graph import store, recall
 node_id = store('Quaid installer smoke test fact', owner_id='${smokeSafeId}', category='fact', source='installer-test')
 results = recall('installer smoke test', owner_id='${smokeSafeId}', limit=1)
 if results:

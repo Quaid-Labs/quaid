@@ -59,6 +59,30 @@ run_stage "JavaScript syntax check" node --check adaptors/openclaw/index.js
 run_stage "JavaScript syntax check (timeout manager)" node --check core/session-timeout.js
 run_stage "TypeScript lint" npm run lint:ts
 run_stage "Python lint" npm run lint:py
+run_stage "Plugin contract health smoke" python3 - <<PY
+import json
+import os
+import subprocess
+
+out = subprocess.check_output(
+    ["python3", "core/runtime/plugin_health.py"],
+    text=True,
+    env={
+        **os.environ,
+        "PYTHONPATH": ".",
+        "QUAID_HOME": "${REPO_ROOT}",
+        "CLAWDBOT_WORKSPACE": "${REPO_ROOT}",
+    },
+)
+payload = json.loads(out)
+if not isinstance(payload, dict):
+    raise SystemExit("plugin_health output was not a JSON object")
+if "enabled" not in payload:
+    raise SystemExit("plugin_health output missing 'enabled'")
+if "plugins" not in payload:
+    raise SystemExit("plugin_health output missing 'plugins'")
+print(json.dumps({"enabled": bool(payload["enabled"]), "plugin_count": len(payload.get("plugins", {}))}))
+PY
 run_optional_repo_checks
 
 # 2) Deterministic TypeScript integration coverage
