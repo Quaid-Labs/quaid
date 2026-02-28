@@ -60,9 +60,8 @@ function makeWorkspace(caseName: string, strictContracts: unknown): string {
       "",
     ].join("\n"),
   );
-  // Startup preflight checks for these hard-coded plugin layout files.
-  writeFile(join(workspace, "plugins", "quaid", "core", "lifecycle", "janitor.py"), "print('ok')\n");
-  writeFile(join(workspace, "plugins", "quaid", "datastore", "memorydb", "memory_graph.py"), "print('ok')\n");
+  // Startup preflight checks for runtime plugin layout files.
+  writeFile(join(workspace, "modules", "quaid", "core", "lifecycle", "janitor.py"), "print('ok')\n");
   return workspace;
 }
 
