@@ -51,7 +51,9 @@ const checks = [
 
 function checkToolsDomainBlock(errors) {
   const toolsPath = path.join(ROOT, 'projects/quaid/TOOLS.md');
+  const defaultsPath = path.join(ROOT, 'modules/quaid/datastore/memorydb/domain_defaults.py');
   const tools = fs.readFileSync(toolsPath, 'utf8');
+  const defaults = fs.readFileSync(defaultsPath, 'utf8');
   const startMarker = '<!-- AUTO-GENERATED:DOMAIN-LIST:START -->';
   const endMarker = '<!-- AUTO-GENERATED:DOMAIN-LIST:END -->';
   const start = tools.indexOf(startMarker);
@@ -62,8 +64,41 @@ function checkToolsDomainBlock(errors) {
     return;
   }
 
-  // Marker presence is enforced here. Domain content synchronization is
-  // event-driven (installer + runtime domain-registration paths).
+  const expected = new Map();
+  for (const line of defaults.split('\n')) {
+    const m = line.match(/^\s*"([^"]+)":\s*"([^"]*)",?\s*$/);
+    if (!m) continue;
+    expected.set(m[1], m[2]);
+  }
+  if (!expected.size) {
+    errors.push('modules/quaid/datastore/memorydb/domain_defaults.py: failed to parse default domain map');
+    return;
+  }
+
+  const block = tools.slice(start + startMarker.length, end);
+  const actual = new Map();
+  for (const line of block.split('\n')) {
+    const m = line.trim().match(/^- `([^`]+)`: (.+)$/);
+    if (!m) continue;
+    actual.set(m[1], m[2]);
+  }
+
+  for (const [key, desc] of expected.entries()) {
+    if (!actual.has(key)) {
+      errors.push(`projects/quaid/TOOLS.md: missing domain '${key}' in AUTO-GENERATED block`);
+      continue;
+    }
+    if (actual.get(key) !== desc) {
+      errors.push(
+        `projects/quaid/TOOLS.md: domain '${key}' description drift (expected '${desc}', got '${actual.get(key)}')`,
+      );
+    }
+  }
+  for (const key of actual.keys()) {
+    if (!expected.has(key)) {
+      errors.push(`projects/quaid/TOOLS.md: unknown domain '${key}' in AUTO-GENERATED block`);
+    }
+  }
 }
 
 const errors = [];
