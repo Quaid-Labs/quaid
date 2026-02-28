@@ -54,6 +54,13 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from lib.config import get_db_path, get_ollama_url
 from lib.database import get_connection as _lib_get_connection, has_vec as _lib_has_vec
+from datastore.memorydb.domain_registry import (
+    ensure_domain_tables as _ensure_domain_registry_tables,
+    read_active_domains as _read_active_domain_map,
+    bootstrap_default_domains as _bootstrap_default_domain_map,
+    normalize_domain_id as _normalize_domain_id,
+    sanitize_domain_description as _sanitize_domain_description,
+)
 from lib.embeddings import (
     get_embedding as _lib_get_embedding,
     pack_embedding as _lib_pack_embedding,
@@ -553,33 +560,28 @@ class MemoryGraph:
         node_id: str,
         domains: List[str],
     ) -> None:
-        conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
-        if not domains:
-            return
         registered = self._active_domain_set(conn)
+        if not registered:
+            raise RuntimeError("No active domains are registered in domain_registry")
+        if not domains:
+            conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
+            return
+        invalid = sorted({d for d in domains if d not in registered})
+        if invalid:
+            raise ValueError(f"Unsupported domains for node {node_id}: {invalid}")
+        conn.execute("DELETE FROM node_domains WHERE node_id = ?", (node_id,))
         for domain in domains:
-            if domain not in registered:
-                continue
             conn.execute(
                 "INSERT OR IGNORE INTO node_domains(node_id, domain) VALUES (?, ?)",
                 (node_id, domain),
             )
 
     def _active_domain_set(self, conn: sqlite3.Connection) -> set[str]:
-        try:
-            rows = conn.execute(
-                "SELECT domain FROM domain_registry WHERE active = 1"
-            ).fetchall()
-            active = {
-                d
-                for d in (_normalize_domain_tag(r[0]) for r in rows)
-                if d
-            }
-            if active:
-                return active
-        except Exception:
-            pass
-        return set()
+        _ensure_domain_registry_tables(conn)
+        active_map = _read_active_domain_map(conn)
+        if not active_map:
+            active_map = _bootstrap_default_domain_map(conn)
+        return set(active_map.keys())
 
     # ==========================================================================
     # Node Operations
@@ -2467,6 +2469,7 @@ def graph_aware_recall(
 
 _graph: Optional[MemoryGraph] = None
 _graph_lock = threading.Lock()
+_domain_publish_lock = threading.RLock()
 
 def get_graph() -> MemoryGraph:
     """Get singleton graph instance."""
@@ -2483,41 +2486,13 @@ def stats() -> Dict[str, Any]:
 
 
 def _ensure_domain_tables(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS domain_registry (
-            domain TEXT PRIMARY KEY,
-            description TEXT DEFAULT '',
-            active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-            created_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS node_domains (
-            node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-            domain TEXT NOT NULL REFERENCES domain_registry(domain) ON DELETE RESTRICT,
-            created_at TEXT DEFAULT (datetime('now')),
-            PRIMARY KEY (node_id, domain)
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_node_domain ON node_domains(node_id, domain)")
+    _ensure_domain_registry_tables(conn)
 
 
 def _active_domain_map(conn: sqlite3.Connection) -> Dict[str, str]:
-    rows = conn.execute(
-        "SELECT domain, description FROM domain_registry WHERE active = 1 ORDER BY domain"
-    ).fetchall()
-    out: Dict[str, str] = {}
-    for row in rows:
-        did = _normalize_domain_tag(row[0])
-        if not did:
-            continue
-        out[did] = str(row[1] or "").strip()
+    out = _read_active_domain_map(conn)
+    if not out:
+        out = _bootstrap_default_domain_map(conn)
     return out
 
 
@@ -2550,7 +2525,7 @@ def register_domain(domain: str, description: str = "", active: bool = True) -> 
     did = _normalize_domain_tag(domain)
     if not did:
         raise ValueError("Invalid domain id")
-    desc = str(description or "").strip()
+    desc = _sanitize_domain_description(description)
     graph = get_graph()
     with graph._get_conn() as conn:
         _ensure_domain_tables(conn)
@@ -2565,13 +2540,24 @@ def register_domain(domain: str, description: str = "", active: bool = True) -> 
             """,
             (did, desc, 1 if active else 0),
         )
+        if not active:
+            conn.execute("DELETE FROM node_domains WHERE domain = ?", (did,))
         active_domains = _active_domain_map(conn)
+    if _HAS_CONFIG:
+        try:
+            cfg = _get_memory_config()
+            retrieval = getattr(cfg, "retrieval", None)
+            if retrieval is not None:
+                with _domain_publish_lock:
+                    setattr(retrieval, "domains", dict(active_domains))
+        except Exception as exc:
+            logger.warning("register_domain: failed publishing active domains to runtime config: %s", exc)
     try:
         from lib.tools_domain_sync import sync_tools_domain_block
 
-        sync_tools_domain_block(domains=active_domains)
-    except Exception:
-        pass
+        sync_tools_domain_block(domains=active_domains, workspace=get_workspace_dir())
+    except Exception as exc:
+        logger.warning("register_domain: failed syncing TOOLS domain block: %s", exc)
     return {
         "status": "ok",
         "domain": did,
@@ -3216,14 +3202,7 @@ def _log_recall(graph, query: str, owner_id: Optional[str], intent: str,
 
 def _normalize_domain_tag(value: Optional[str]) -> Optional[str]:
     """Normalize domain labels for registry and memory attributes."""
-    if value is None:
-        return None
-    raw = str(value).strip().lower()
-    if not raw:
-        return None
-    norm = re.sub(r"[^a-z0-9_]+", "_", raw)
-    norm = re.sub(r"_{2,}", "_", norm).strip("_")
-    return norm[:64] if norm else None
+    return _normalize_domain_id(value)
 
 
 def _registered_domains() -> Dict[str, str]:
@@ -3260,20 +3239,13 @@ def _domains_from_attrs(attrs: Any) -> List[str]:
 def _active_domains_for_filter(graph: Optional["MemoryGraph"] = None) -> set[str]:
     """Resolve active domains from DB only."""
     if graph is not None:
-        try:
-            with graph._get_conn() as conn:
-                rows = conn.execute(
-                    "SELECT domain FROM domain_registry WHERE active = 1"
-                ).fetchall()
-            active = {
-                d
-                for d in (_normalize_domain_tag(r[0]) for r in rows)
-                if d
-            }
+        with graph._get_conn() as conn:
+            _ensure_domain_registry_tables(conn)
+            active = set(_read_active_domain_map(conn).keys())
+            if not active:
+                active = set(_bootstrap_default_domain_map(conn).keys())
             if active:
                 return active
-        except Exception:
-            pass
     return set()
 
 
@@ -3291,18 +3263,10 @@ def _normalize_domain_filter(value: Any, allowed_domains: Optional[set[str]] = N
         if bool(v) and _normalize_domain_tag(k) and _normalize_domain_tag(k) != "all"
     }
     registered = set(allowed_domains) if allowed_domains is not None else set(_registered_domains().keys())
-    if registered:
-        include = {d for d in requested if d in registered}
-    else:
-        # If no registry is available yet, honor explicit requested filters so
-        # attribute-based filtering can still narrow results.
-        include = set(requested)
-
-    # If caller asked for domain filtering but only supplied unknown keys
-    # (e.g. {"workstream": true}), fail open to "all" instead of returning
-    # an empty slice due to a non-matching filter.
-    if requested and not include:
-        return True, set()
+    include = {d for d in requested if d in registered}
+    unknown = sorted(d for d in requested if d not in registered)
+    if unknown:
+        raise ValueError(f"Unknown domain filters requested: {unknown}")
 
     if include:
         return False, include
