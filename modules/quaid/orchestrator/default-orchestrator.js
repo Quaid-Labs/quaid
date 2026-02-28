@@ -272,11 +272,11 @@ intent: ${intent}`;
       },
       vector_basic: {
         key: "vector_basic",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { personal: true }, ctx.opts.domainBoost, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { personal: true }, void 0, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
       },
       vector_technical: {
         key: "vector_technical",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { technical: true }, ctx.opts.domainBoost, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { technical: true }, void 0, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
       },
       graph: {
         key: "graph",
