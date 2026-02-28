@@ -757,3 +757,51 @@ class TestConfigLoading:
                     _ = load_config()
         finally:
             config._config = old_config
+
+    def test_plugin_config_keys_preserved_as_opaque_payload(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "plugins": {
+                    "enabled": False,
+                    "config": {
+                        "memorydb.core": {
+                            "customKey": True,
+                            "nestedMap": {"innerKey": 1},
+                        }
+                    },
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                payload = cfg.plugins.config.get("memorydb.core", {})
+                assert "customKey" in payload
+                assert "nestedMap" in payload
+                assert "custom_key" not in payload
+                assert "nested_map" not in payload
+        finally:
+            config._config = old_config
+
+    def test_models_base_url_and_api_key_env_loaded_from_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "models": {
+                    "llmProvider": "openai-compatible",
+                    "apiKeyEnv": "E2E_TEST_KEY_OPENAI",
+                    "baseUrl": "https://openrouter.ai/api/v1",
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.models.llm_provider == "openai-compatible"
+                assert cfg.models.api_key_env == "E2E_TEST_KEY_OPENAI"
+                assert cfg.models.base_url == "https://openrouter.ai/api/v1"
+        finally:
+            config._config = old_config

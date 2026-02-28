@@ -1737,10 +1737,11 @@ function keyEnvFor(provider) {
 }
 
 function baseUrlFor(provider) {
+  const ollamaResolved = (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/+$/, "");
   const map = {
     openrouter: "https://openrouter.ai/api/v1",
     together: "https://api.together.xyz/v1",
-    ollama: "http://localhost:11434/v1",
+    ollama: ollamaResolved.endsWith("/v1") ? ollamaResolved : `${ollamaResolved}/v1`,
   };
   return map[provider] || null;
 }
@@ -1982,7 +1983,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       walMode: true,
     },
     ollama: {
-      url: "http://localhost:11434",
+      url: (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/v1\/?$/, "").replace(/\/+$/, ""),
       embeddingModel: embeddings.embedModel,
       embeddingDim: embeddings.embedDim,
     },

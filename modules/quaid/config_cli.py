@@ -162,7 +162,11 @@ def _edit_plugin_config_schema(staged: dict[str, Any], path: Path, plugin_id: st
         raw = input(f"{plugin_id}.{key} [{json.dumps(cur)}]: ").strip()
         if not raw:
             continue
-        updated[key] = _coerce_prompt_value(raw, field_type)
+        try:
+            updated[key] = _coerce_prompt_value(raw, field_type)
+        except ValueError as err:
+            print(f"Invalid value for {plugin_id}.{key}: {err} (keeping previous value)")
+            continue
     _plugin_config_set(staged, plugin_id, updated)
 
 
@@ -214,9 +218,9 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(str(path))
     print()
 
-    print(f"provider:         {_get(data, 'models.llmProvider', 'default')}")
-    print(f"deep reasoning:   {_get(data, 'models.deepReasoning', 'default')}")
-    print(f"fast reasoning:    {_get(data, 'models.fastReasoning', 'default')}")
+    print(f"provider:         {_get(data, 'models.llm_provider', _get(data, 'models.llmProvider', 'default'))}")
+    print(f"deep reasoning:   {_get(data, 'models.deep_reasoning', _get(data, 'models.deepReasoning', 'default'))}")
+    print(f"fast reasoning:    {_get(data, 'models.fast_reasoning', _get(data, 'models.fastReasoning', 'default'))}")
     print(f"embeddings model: {_get(data, 'ollama.embeddingModel', _get(data, 'ollama.embedding_model', 'qwen3-embedding:8b'))}")
     print(f"notify level:     {_get(data, 'notifications.level', 'normal')}")
     print(f"fail hard:        {_get(data, 'retrieval.fail_hard', _get(data, 'retrieval.failHard', True))}")
@@ -251,6 +255,16 @@ def _prompt_int(label: str, current: int) -> int:
 def _toggle_bool(data: dict[str, Any], key: str) -> None:
     current = bool(_get(data, key, True))
     _set(data, key, not current)
+
+
+def _model_key_path(staged: dict[str, Any], snake: str, camel: str) -> str:
+    models = _get(staged, "models", {})
+    if isinstance(models, dict):
+        if snake in models:
+            return f"models.{snake}"
+        if camel in models:
+            return f"models.{camel}"
+    return f"models.{snake}"
 
 
 def _edit_plugin_config(staged: dict[str, Any], path: Path) -> None:
@@ -318,14 +332,17 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
 
         try:
             if choice == "1":
-                cur = str(_get(staged, "models.llmProvider", "default"))
-                _set(staged, "models.llmProvider", _prompt_str("models.llmProvider", cur))
+                key = _model_key_path(staged, "llm_provider", "llmProvider")
+                cur = str(_get(staged, key, "default"))
+                _set(staged, key, _prompt_str(key, cur))
             elif choice == "2":
-                cur = str(_get(staged, "models.deepReasoning", "default"))
-                _set(staged, "models.deepReasoning", _prompt_str("models.deepReasoning", cur))
+                key = _model_key_path(staged, "deep_reasoning", "deepReasoning")
+                cur = str(_get(staged, key, "default"))
+                _set(staged, key, _prompt_str(key, cur))
             elif choice == "3":
-                cur = str(_get(staged, "models.fastReasoning", "default"))
-                _set(staged, "models.fastReasoning", _prompt_str("models.fastReasoning", cur))
+                key = _model_key_path(staged, "fast_reasoning", "fastReasoning")
+                cur = str(_get(staged, key, "default"))
+                _set(staged, key, _prompt_str(key, cur))
             elif choice == "4":
                 cur = str(_get(staged, "ollama.embeddingModel", _get(staged, "ollama.embedding_model", "qwen3-embedding:8b")))
                 _set(staged, "ollama.embeddingModel", _prompt_str("ollama.embeddingModel", cur))
@@ -364,7 +381,7 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 return False
             else:
                 print("Invalid choice")
-        except ValueError as err:
+        except (ValueError, RuntimeError) as err:
             print(f"Invalid value: {err}")
 
 
@@ -417,9 +434,13 @@ def main() -> int:
         return 0
 
     if cmd == "set":
-        _set(data, args.key, parse_literal(args.value))
-        _save_config(path, data)
-        _run_config_callbacks_after_save()
+        try:
+            _set(data, args.key, parse_literal(args.value))
+            _save_config(path, data)
+            _run_config_callbacks_after_save()
+        except Exception as err:
+            print(f"Failed to set {args.key}: {err}")
+            return 1
         print(f"Set {args.key} in {path}")
         return 0
 
