@@ -310,14 +310,20 @@ class TestNodePersistence:
 
     def test_row_to_node_fallback_for_missing_column(self, tmp_path):
         """If storage_strength column doesn't exist in row, default to 0.0."""
-        from datastore.memorydb.memory_graph import Node
         graph = _make_graph(tmp_path)
         node = _make_node(graph, "Fallback test")
 
-        # Simulate a row without storage_strength by querying specific columns
+        # Query an explicit projection that omits storage_strength to hit fallback.
         with graph._get_conn() as conn:
-            # The actual _row_to_node handles missing columns gracefully
-            row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node.id,)).fetchone()
+            row = conn.execute(
+                """
+                SELECT id, type, name, attributes, embedding, verified, confidence,
+                       source, source_id, privacy, valid_from, valid_until,
+                       created_at, updated_at, accessed_at, access_count
+                FROM nodes WHERE id = ?
+                """,
+                (node.id,),
+            ).fetchone()
             loaded = graph._row_to_node(row)
             assert loaded.storage_strength == 0.0
 
