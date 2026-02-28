@@ -1,29 +1,30 @@
 import pytest
 
 import lib.archive as archive
+from datastore.memorydb import archive_store
 
 
 def test_search_archive_returns_empty_when_fail_hard_disabled(monkeypatch):
-    monkeypatch.setattr(archive, "is_fail_hard_enabled", lambda: False)
-    monkeypatch.setattr(archive, "_get_archive_conn", lambda _db_path=None: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(archive_store, "is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(archive_store, "_get_archive_conn", lambda _db_path=None: (_ for _ in ()).throw(RuntimeError("db down")))
     assert archive.search_archive("hello", db_path=None) == []
 
 
 def test_search_archive_raises_when_fail_hard_enabled(monkeypatch):
-    monkeypatch.setattr(archive, "is_fail_hard_enabled", lambda: True)
-    monkeypatch.setattr(archive, "_get_archive_conn", lambda _db_path=None: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(archive_store, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(archive_store, "_get_archive_conn", lambda _db_path=None: (_ for _ in ()).throw(RuntimeError("db down")))
     with pytest.raises(RuntimeError, match="fail-hard mode"):
         archive.search_archive("hello", db_path=None)
 
 
 def test_archive_node_returns_false_when_fail_hard_disabled(monkeypatch):
-    monkeypatch.setattr(archive, "is_fail_hard_enabled", lambda: False)
-    monkeypatch.setattr(archive, "_get_archive_conn", lambda _db_path=None: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(archive_store, "is_fail_hard_enabled", lambda: False)
+    monkeypatch.setattr(archive_store, "_get_archive_conn", lambda _db_path=None: (_ for _ in ()).throw(RuntimeError("db down")))
     assert archive.archive_node({"id": "n1"}, "test", db_path=None) is False
 
 
 def test_archive_node_raises_when_fail_hard_enabled(monkeypatch):
-    monkeypatch.setattr(archive, "is_fail_hard_enabled", lambda: True)
-    monkeypatch.setattr(archive, "_get_archive_conn", lambda _db_path=None: (_ for _ in ()).throw(RuntimeError("db down")))
+    monkeypatch.setattr(archive_store, "is_fail_hard_enabled", lambda: True)
+    monkeypatch.setattr(archive_store, "_get_archive_conn", lambda _db_path=None: (_ for _ in ()).throw(RuntimeError("db down")))
     with pytest.raises(RuntimeError, match="fail-hard mode"):
         archive.archive_node({"id": "n1"}, "test", db_path=None)

@@ -44,7 +44,7 @@ from datastore.memorydb.memory_graph import (
 )
 from lib.config import get_db_path
 from lib.tokens import extract_key_tokens, estimate_tokens
-from lib.archive import archive_node as _archive_node
+from datastore.memorydb.archive_store import archive_node as _archive_node
 from config import get_config
 from lib.llm_clients import (
     call_fast_reasoning,
