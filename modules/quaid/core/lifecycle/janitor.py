@@ -102,6 +102,25 @@ MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 1
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 
 
+def _refresh_runtime_state() -> None:
+    """Refresh config-derived globals for long-lived processes."""
+    global _cfg, _LIFECYCLE_REGISTRY
+    global DUPLICATE_MIN_SIM, DUPLICATE_MAX_SIM
+    global CONTRADICTION_MIN_SIM, CONTRADICTION_MAX_SIM
+    global CONFIDENCE_DECAY_DAYS, CONFIDENCE_DECAY_RATE
+    global MAX_EXECUTION_TIME
+
+    _cfg = get_config()
+    _LIFECYCLE_REGISTRY = build_default_registry()
+    DUPLICATE_MIN_SIM = _cfg.janitor.dedup.similarity_threshold
+    DUPLICATE_MAX_SIM = _cfg.janitor.dedup.high_similarity_threshold
+    CONTRADICTION_MIN_SIM = _cfg.janitor.contradiction.min_similarity
+    CONTRADICTION_MAX_SIM = _cfg.janitor.contradiction.max_similarity
+    CONFIDENCE_DECAY_DAYS = _cfg.decay.threshold_days
+    CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0
+    MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 120) * 60
+
+
 def _janitor_test_timeout_seconds(default_seconds: int = 600) -> int:
     raw = os.environ.get("QUAID_JANITOR_TEST_TIMEOUT_S", "")
     try:
@@ -324,6 +343,7 @@ def run_task_optimized(task: str, dry_run: bool = True, incremental: bool = True
         token_budget: Max total tokens for LLM calls. 0 = unlimited.
             When set, LLM calls return None after budget is exhausted.
     """
+    _refresh_runtime_state()
     if token_budget > 0:
         set_token_budget(token_budget)
     else:
@@ -1701,6 +1721,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
 
 if __name__ == "__main__":
+    _refresh_runtime_state()
     parser = argparse.ArgumentParser(description="Memory Janitor (Optimized)")
     parser.add_argument("--task", choices=["embeddings", "workspace", "docs_staleness", "docs_cleanup", "snippets", "journal", "review", "dedup_review", "duplicates", "contradictions", "decay", "decay_review", "graduate", "rag", "tests", "cleanup", "update_check", "all"],
                        default="all", help="Task to run")
