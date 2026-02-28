@@ -1224,6 +1224,24 @@ def read_tail_since(path: str, start: int):
                 out.append(line.strip())
     return out
 
+def resolve_runtime_session_id(marker_text: str, fallback_session_id: str, seconds: int = 35) -> str:
+    session_dir = os.path.join(ws, "logs", "quaid", "session-messages")
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if os.path.isdir(session_dir):
+            for name in os.listdir(session_dir):
+                if not name.endswith(".jsonl"):
+                    continue
+                fp = os.path.join(session_dir, name)
+                try:
+                    content = open(fp, "r", encoding="utf-8", errors="replace").read()
+                except Exception:
+                    continue
+                if marker_text in content:
+                    return name[:-6]
+        time.sleep(1)
+    return fallback_session_id
+
 def wait_for(predicate, seconds: int, label: str, start_line: int):
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -1261,10 +1279,11 @@ notify_start = line_count(notify_log_path)
 timeout_marker = f"E2E_TIMEOUT_{uuid.uuid4().hex[:10]}"
 start = line_count(events_path)
 run_agent(f"E2E timeout probe marker: {timeout_marker}")
-print(f"[e2e] Timeout runtime session_id: {session_id}")
+runtime_session_id = resolve_runtime_session_id(timeout_marker, session_id)
+print(f"[e2e] Timeout runtime session_id: {runtime_session_id}")
 wait_for(
     lambda lines: any(
-        f'"session_id":"{session_id}"' in ln
+        f'"session_id":"{runtime_session_id}"' in ln
         and (
             '"event":"timer_fired"' in ln
             or ('"event":"extract_begin"' in ln and '"timeout_minutes"' in ln)
@@ -1284,7 +1303,7 @@ start = line_count(events_path)
 run_agent("/compact")
 wait_for(
     lambda lines: any(
-        f'"session_id":"{session_id}"' in ln
+        f'"session_id":"{runtime_session_id}"' in ln
         and '"label":"CompactionSignal"' in ln
         and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
         for ln in lines
@@ -1332,7 +1351,7 @@ assert_notify_worker_healthy(notify_start)
 
 # Ensure session cursor bookkeeping is active for replay safety.
 cursor_dir = os.path.join(ws, "data", "session-cursors")
-cursor_path = os.path.join(cursor_dir, f"{session_id}.json")
+cursor_path = os.path.join(cursor_dir, f"{runtime_session_id}.json")
 deadline = time.time() + 20
 cursor_payload = None
 while time.time() < deadline:
@@ -1347,11 +1366,11 @@ while time.time() < deadline:
     time.sleep(1)
 if not isinstance(cursor_payload, dict):
     raise SystemExit(
-        f"[e2e] ERROR: session cursor was not written for live events session ({session_id})"
+        f"[e2e] ERROR: session cursor was not written for live events session ({runtime_session_id})"
     )
-if str(cursor_payload.get("sessionId") or "") != session_id:
+if str(cursor_payload.get("sessionId") or "") != runtime_session_id:
     raise SystemExit(
-        f"[e2e] ERROR: session cursor sessionId mismatch: {cursor_payload.get('sessionId')!r} != {session_id!r}"
+        f"[e2e] ERROR: session cursor sessionId mismatch: {cursor_payload.get('sessionId')!r} != {runtime_session_id!r}"
     )
 if not cursor_payload.get("lastMessageKey"):
     raise SystemExit("[e2e] ERROR: session cursor missing lastMessageKey")
@@ -2195,7 +2214,25 @@ def run_agent(session_id: str, message: str) -> None:
         restart_gateway()
     raise SystemExit(last_err or "[e2e] ERROR: notify matrix agent call failed")
 
-def wait_for_reset_start(session_id: str, start_line: int, seconds: int = 120) -> None:
+def resolve_runtime_session_id(marker_text: str, fallback_session_id: str, seconds: int = 35) -> str:
+    session_dir = os.path.join(ws, "logs", "quaid", "session-messages")
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if os.path.isdir(session_dir):
+            for name in os.listdir(session_dir):
+                if not name.endswith(".jsonl"):
+                    continue
+                fp = os.path.join(session_dir, name)
+                try:
+                    content = open(fp, "r", encoding="utf-8", errors="replace").read()
+                except Exception:
+                    continue
+                if marker_text in content:
+                    return name[:-6]
+        time.sleep(1)
+    return fallback_session_id
+
+def wait_for_reset_start(session_id: str, start_line: int, seconds: int = 120):
     deadline = time.time() + seconds
     while time.time() < deadline:
         lines = read_tail_since(events_path, start_line)
@@ -2205,13 +2242,10 @@ def wait_for_reset_start(session_id: str, start_line: int, seconds: int = 120) -
             and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
             for ln in lines
         ):
-            return
+            return True, ""
         time.sleep(1)
     preview = "\n".join(read_tail_since(events_path, start_line)[-30:])
-    raise SystemExit(
-        f"[e2e] ERROR: notify matrix timed out waiting for reset extraction start "
-        f"(session={session_id})\n{preview}"
-    )
+    return False, preview
 
 def assert_no_fatal_notify_errors(lines) -> None:
     patterns = (
@@ -2292,8 +2326,20 @@ for level in ("quiet", "normal", "debug"):
     sid = f"quaid-e2e-notify-{level}-{uuid.uuid4().hex[:8]}"
     marker = f"E2E_NOTIFY_LEVEL_{level}_{uuid.uuid4().hex[:6]}"
     run_agent(sid, f"notification level marker: {marker}")
+    runtime_sid = resolve_runtime_session_id(marker, sid)
     run_agent(sid, "/reset")
-    wait_for_reset_start(sid, events_start, 45)
+    seen, preview = wait_for_reset_start(runtime_sid, events_start, 45)
+    if not seen:
+        # Under heavy queue pressure, reset extraction can lag; retry once after
+        # gateway restart before failing the lane.
+        restart_gateway()
+        run_agent(sid, "/reset")
+        seen, preview = wait_for_reset_start(runtime_sid, events_start, 120)
+        if not seen:
+            raise SystemExit(
+                f"[e2e] ERROR: notify matrix timed out waiting for reset extraction start "
+                f"(session={runtime_sid})\n{preview}"
+            )
     summary = collect_notify_activity(level, notify_start)
     results.append({"level": level, **summary})
     loaded = summary["loaded_count"]

@@ -14,7 +14,7 @@ python3 modules/quaid/datastore/docsdb/registry.py list-projects
 python3 modules/quaid/datastore/docsdb/registry.py list --project quaid
 
 # inspect one project
-python3 modules/quaid/datastore/docsdb/registry.py get-project quaid
+python3 modules/quaid/datastore/docsdb/registry.py read quaid
 
 # search docs
 python3 modules/quaid/datastore/docsdb/rag.py search "memory extraction flow"
