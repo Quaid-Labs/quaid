@@ -363,6 +363,42 @@ def test_initialize_plugin_runtime_non_strict_collects_slot_errors(tmp_path: Pat
     assert any("unknown plugin_id 'missing.ingest'" in msg for msg in errors)
 
 
+def test_initialize_plugin_runtime_non_strict_collects_adapter_singleton_errors(tmp_path: Path, monkeypatch):
+    reset_plugin_runtime()
+    plugins_dir = tmp_path / "plugins"
+    adapter_dir = plugins_dir / "adapter-a"
+    adapter_dir.mkdir(parents=True)
+    (adapter_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "adapter.a",
+                "plugin_type": "adapter",
+                "module": "adaptors.a",
+                "capabilities": _contract_caps("Adapter A"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        PluginRegistry,
+        "activate_singleton",
+        lambda self, slot, plugin_id: (_ for _ in ()).throw(ValueError("slot conflict")),
+    )
+
+    _registry, errors, _warnings = initialize_plugin_runtime(
+        api_version=1,
+        paths=[str(plugins_dir)],
+        strict=False,
+        slots={"adapter": "adapter.a"},
+        workspace_root=str(tmp_path),
+    )
+
+    assert any("Adapter singleton activation failed for 'adapter.a'" in msg for msg in errors)
+    assert any("slot conflict" in msg for msg in errors)
+
+
 def test_initialize_plugin_runtime_strict_rejects_duplicate_declared_exports(tmp_path: Path):
     plugins_dir = tmp_path / "plugins"
     p1 = plugins_dir / "ingest-a"
