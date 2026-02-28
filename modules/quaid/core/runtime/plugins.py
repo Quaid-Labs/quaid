@@ -796,6 +796,7 @@ def collect_declared_exports(
     registry: PluginRegistry,
     slots: Optional[Dict[str, Any]],
     surface: str,
+    strict: bool = False,
 ) -> Dict[str, List[str]]:
     key = str(surface or "").strip()
     if key not in _PLUGIN_CONTRACT_DECLARED:
@@ -804,6 +805,10 @@ def collect_declared_exports(
     for plugin_id in _iter_active_plugin_ids(slots, registry=registry):
         record = registry.get(plugin_id)
         if not record:
+            if strict:
+                raise ValueError(
+                    f"Plugin '{plugin_id}' is active in slots but missing from runtime registry"
+                )
             continue
         contract = (record.manifest.capabilities or {}).get("contract", {})
         if not isinstance(contract, dict):

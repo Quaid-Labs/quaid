@@ -1585,6 +1585,17 @@ def test_collect_declared_exports_for_active_plugins():
     assert apis == {"adapter.exports": ["openclaw_adapter_entry"]}
 
 
+def test_collect_declared_exports_strict_raises_for_missing_active_plugin():
+    registry = PluginRegistry(api_version=1)
+    with pytest.raises(ValueError, match="missing from runtime registry"):
+        collect_declared_exports(
+            registry=registry,
+            slots={"adapter": "missing.plugin"},
+            surface="events",
+            strict=True,
+        )
+
+
 def test_colon_handler_does_not_import_manifest_module(tmp_path: Path, monkeypatch):
     pkg = tmp_path / "plugpkg"
     pkg.mkdir(parents=True)
