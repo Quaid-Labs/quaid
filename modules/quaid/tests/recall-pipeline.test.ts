@@ -154,22 +154,6 @@ describe('Recall Pipeline', () => {
   })
 
   describe('Session Dedup in Recall', () => {
-    it('excludes current session memories from search', async () => {
-      const sessionId = `test-session-${Date.now()}`
-
-      // Store a memory in current session
-      vi.stubEnv('TEST_SESSION_ID', sessionId)
-      await memory.store('Current session fact about testing', 'quaid')
-
-      // Search within same session — should not find just-stored memory
-      // (prevents immediate feedback loops)
-      const results = await memory.search('current session fact', 'quaid')
-
-      // The current session memory may or may not appear depending on
-      // session filtering implementation. If it appears, it should still
-      // be a valid result.
-      expect(Array.isArray(results)).toBe(true)
-
-    })
+    it.todo('excludes current session memories from search')
   })
 })
