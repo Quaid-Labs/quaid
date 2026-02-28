@@ -10,8 +10,7 @@ const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
 const PYTHON_SCRIPT = (() => {
   const modernPath = path.join(WORKSPACE, "modules/quaid/datastore/memorydb/memory_graph.py")
   if (fs.existsSync(modernPath)) return modernPath
-  // Legacy layout fallback for historical workspaces.
-  return path.join(WORKSPACE, "plugins/quaid/datastore/memorydb/memory_graph.py")
+  throw new Error(`Missing memory graph script: ${modernPath}`)
 })()
 const PYTHON_MODULE_ROOT = path.resolve(path.dirname(PYTHON_SCRIPT), "../..")
 
