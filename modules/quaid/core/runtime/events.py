@@ -153,7 +153,12 @@ def validate_declared_event_contract(
     """
     from core.runtime.plugins import collect_declared_exports
 
-    declared = collect_declared_exports(registry=registry, slots=slots, surface="events")
+    declared = collect_declared_exports(
+        registry=registry,
+        slots=slots,
+        surface="events",
+        strict=strict,
+    )
     known = {
         str(item.get("name", "")).strip()
         for item in EVENT_REGISTRY
