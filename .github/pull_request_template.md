@@ -9,10 +9,10 @@ Describe what changed and why.
 
 ## Validation
 
-- [ ] `npm run check:runtime-pairs:strict` (from `plugins/quaid`)
-- [ ] `npm run lint` (from `plugins/quaid`)
-- [ ] `npm test` (from `plugins/quaid`)
-- [ ] `python3 scripts/run_pytests.py --mode unit --workers 4 --timeout 120` (from `plugins/quaid`)
+- [ ] `npm run check:runtime-pairs:strict` (from `modules/quaid`)
+- [ ] `npm run lint` (from `modules/quaid`)
+- [ ] `npm test` (from `modules/quaid`)
+- [ ] `python3 scripts/run_pytests.py --mode unit --workers 4 --timeout 120` (from `modules/quaid`)
 - [ ] `bash scripts/release-check.sh` (from repo root, for release-facing changes)
 
 ## Architecture & Ops Guardrails
