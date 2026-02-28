@@ -94,5 +94,5 @@ Nightly janitor (independent scheduler) -> Review -> Dedup -> Decay -> Graduate 
 
 Both systems extract entries at compaction/reset time:
 
-- **Soul Snippets (fast path)** — Bullet-point observations to `*.snippets.md`. Nightly janitor FOLDs/REWRITEs/DISCARDs into core files (SOUL.md, USER.md, MEMORY.md, AGENTS.md).
+- **Soul Snippets (fast path)** — Bullet-point observations to `*.snippets.md`. Nightly janitor FOLDs/REWRITEs/DISCARDs into core files (default: SOUL.md, USER.md, MEMORY.md; AGENTS.md optional via config).
 - **Journal (slow path)** — Diary paragraphs to `journal/*.journal.md`. Opus distills themes into core markdown. Old entries archived monthly.
