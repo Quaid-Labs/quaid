@@ -70,6 +70,7 @@ describe('Memory Query', () => {
     for (const result of quaidResults) {
       expect(result.owner || result.owner_id).toBe('quaid')
     }
+    expect(quaidResults.some(r => r.id === melinaStored.id)).toBe(false)
   })
 
   it('handles query with special characters', async () => {
