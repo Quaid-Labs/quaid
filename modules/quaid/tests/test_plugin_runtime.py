@@ -1176,10 +1176,9 @@ def test_run_plugin_contract_surface_collect_non_strict_emits_warnings(tmp_path:
             strict=False,
         )
         assert results == []
-        assert len(errs) == 1
+        assert errs == []
         assert len(warns) == 1
-        assert "status hook failed" in errs[0]
-        assert errs[0] == warns[0]
+        assert "status hook failed" in warns[0]
     finally:
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))
