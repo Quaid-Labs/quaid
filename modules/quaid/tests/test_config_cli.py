@@ -23,7 +23,7 @@ def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tm
             "7", "false",  # failHard -> false
             "8", "true",   # parallel enabled -> true
             "9", "6",      # llmWorkers -> 6
-            "12",          # save and exit
+            "13",          # save and exit
         ]
     )
 
@@ -64,7 +64,7 @@ def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeyp
         [
             "4", "qwen3-embedding:8b",
             "6", "60",
-            "12",
+            "13",
         ]
     )
 

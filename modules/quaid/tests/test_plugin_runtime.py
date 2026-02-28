@@ -1,14 +1,18 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from core.runtime.plugins import (
     PluginRegistry,
+    collect_declared_exports,
     discover_plugin_manifests,
     initialize_plugin_runtime,
     reset_plugin_runtime,
+    run_plugin_contract_surface_collect,
+    run_plugin_contract_surface,
     validate_manifest_dict,
 )
 
@@ -21,6 +25,16 @@ def _contract_caps(display_name: str) -> dict:
             "config": {"mode": "hook"},
             "status": {"mode": "hook"},
             "dashboard": {"mode": "tbd"},
+            "maintenance": {"mode": "hook"},
+            "tool_runtime": {"mode": "hook"},
+            "health": {"mode": "hook"},
+            "tools": {"mode": "declared", "exports": []},
+            "api": {"mode": "declared", "exports": []},
+            "events": {"mode": "declared", "exports": []},
+            "ingest_triggers": {"mode": "declared", "exports": []},
+            "auth_requirements": {"mode": "declared", "exports": []},
+            "migrations": {"mode": "declared", "exports": []},
+            "notifications": {"mode": "declared", "exports": []},
         },
     }
 
@@ -248,3 +262,427 @@ def test_registry_register_is_thread_safe():
         list(executor.map(_register, range(100)))
 
     assert len(registry.list("adapter")) == 100
+
+
+def test_run_plugin_contract_surface_executes_config_hook(tmp_path: Path):
+    pkg = tmp_path / "hookpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "CALLED = []\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_config(self, ctx: PluginHookContext) -> None:\n"
+        "        CALLED.append((ctx.plugin.plugin_id, sorted((ctx.plugin_config or {}).keys())))\n"
+        "    def on_status(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_dashboard(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"ready\": True}\n"
+        "    def on_health(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"healthy\": True}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_config(ctx):\n"
+        "    _CONTRACT.on_config(ctx)\n",
+        encoding="utf-8",
+    )
+
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.hook",
+            "plugin_type": "adapter",
+            "module": "hookpkg.impl",
+            "capabilities": {
+                "display_name": "Hook Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook", "handler": "on_config"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns = run_plugin_contract_surface(
+            registry=registry,
+            slots={"adapter": "adapter.hook"},
+            surface="config",
+            config={},
+            plugin_config={"adapter.hook": {"a": 1, "b": 2}},
+            workspace_root=str(tmp_path),
+            strict=True,
+        )
+        assert errs == []
+        assert warns == []
+        mod = __import__("hookpkg.impl", fromlist=["CALLED"])
+        assert mod.CALLED == [("adapter.hook", ["a", "b"])]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
+def test_run_plugin_contract_surface_rejects_missing_base_contract(tmp_path: Path):
+    pkg = tmp_path / "badpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "def on_config(ctx):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.bad",
+            "plugin_type": "adapter",
+            "module": "badpkg.impl",
+            "capabilities": {
+                "display_name": "Bad Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook", "handler": "on_config"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns = run_plugin_contract_surface(
+            registry=registry,
+            slots={"adapter": "adapter.bad"},
+            surface="config",
+            config={},
+            plugin_config={"adapter.bad": {}},
+            workspace_root=str(tmp_path),
+            strict=True,
+        )
+        assert warns == []
+        assert len(errs) == 1
+        assert "_CONTRACT implementing PluginContractBase" in errs[0]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
+def test_active_slot_plugins_have_executable_init_and_config_hooks(tmp_path: Path):
+    plugin_root = Path(__file__).resolve().parents[1]
+    allow = ["memorydb.core", "core.extract", "openclaw.adapter"]
+    manifests, errors = discover_plugin_manifests(
+        paths=[str(plugin_root)],
+        allowlist=allow,
+        strict=True,
+        workspace_root=plugin_root,
+    )
+    assert errors == []
+    got_ids = sorted([m.plugin_id for m in manifests])
+    assert got_ids == sorted(allow)
+
+    registry = PluginRegistry(api_version=1)
+    for m in manifests:
+        registry.register(m)
+
+    db_path = tmp_path / "memory.db"
+    cfg = SimpleNamespace(
+        database=SimpleNamespace(path=str(db_path)),
+        retrieval=SimpleNamespace(domains={"technical": "code"}),
+        adapter=SimpleNamespace(type="openclaw"),
+    )
+    slots = {
+        "adapter": "openclaw.adapter",
+        "ingest": ["core.extract"],
+        "datastores": ["memorydb.core"],
+    }
+    plugin_config = {
+        "memorydb.core": {},
+        "core.extract": {"enabled": True},
+        "openclaw.adapter": {},
+    }
+    init_errs, init_warns = run_plugin_contract_surface(
+        registry=registry,
+        slots=slots,
+        surface="init",
+        config=cfg,
+        plugin_config=plugin_config,
+        workspace_root=str(tmp_path),
+        strict=True,
+    )
+    cfg_errs, cfg_warns = run_plugin_contract_surface(
+        registry=registry,
+        slots=slots,
+        surface="config",
+        config=cfg,
+        plugin_config=plugin_config,
+        workspace_root=str(tmp_path),
+        strict=True,
+    )
+    assert init_errs == []
+    assert init_warns == []
+    assert cfg_errs == []
+    assert cfg_warns == []
+
+
+def test_run_plugin_contract_surface_collect_maintenance_returns_results(tmp_path: Path):
+    pkg = tmp_path / "maintpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_config(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_status(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_dashboard(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"handled\": True, \"metrics\": {\"x\": int((ctx.payload or {}).get(\"max_items\", 0))}}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"ready\": True}\n"
+        "    def on_health(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"healthy\": True}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_maintenance(ctx):\n"
+        "    return _CONTRACT.on_maintenance(ctx)\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "datastore.maint",
+            "plugin_type": "datastore",
+            "module": "maintpkg.impl",
+            "capabilities": {
+                **_datastore_caps("Maint DS"),
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook", "handler": "on_maintenance"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns, results = run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"datastores": ["datastore.maint"]},
+            surface="maintenance",
+            config={},
+            plugin_config={},
+            workspace_root=str(tmp_path),
+            strict=True,
+            payload={"max_items": 7},
+        )
+        assert errs == []
+        assert warns == []
+        assert results == [("datastore.maint", {"handled": True, "metrics": {"x": 7}})]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
+def test_run_plugin_contract_surface_collect_health_returns_results(tmp_path: Path):
+    pkg = tmp_path / "healthpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_config(self, ctx: PluginHookContext) -> None:\n"
+        "        return None\n"
+        "    def on_status(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_dashboard(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"ready\": True}\n"
+        "    def on_health(self, ctx: PluginHookContext) -> dict:\n"
+        "        return {\"healthy\": True, \"detail\": \"ok\"}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_health(ctx):\n"
+        "    return _CONTRACT.on_health(ctx)\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.health",
+            "plugin_type": "adapter",
+            "module": "healthpkg.impl",
+            "capabilities": {
+                "display_name": "Health Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook", "handler": "on_health"},
+                    "tools": {"mode": "declared", "exports": []},
+                    "api": {"mode": "declared", "exports": []},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(manifest)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns, results = run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"adapter": "adapter.health"},
+            surface="health",
+            config={},
+            plugin_config={},
+            workspace_root=str(tmp_path),
+            strict=True,
+            payload={},
+        )
+        assert errs == []
+        assert warns == []
+        assert results == [("adapter.health", {"healthy": True, "detail": "ok"})]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
+def test_validate_manifest_rejects_invalid_declared_exports():
+    with pytest.raises(ValueError, match="tools.exports must contain non-empty strings"):
+        validate_manifest_dict(
+            {
+                "plugin_api_version": 1,
+                "plugin_id": "adapter.invalidexports",
+                "plugin_type": "adapter",
+                "module": "adaptors.bad",
+                "capabilities": {
+                    "display_name": "Bad Exports",
+                    "contract": {
+                        "init": {"mode": "hook"},
+                        "config": {"mode": "hook"},
+                        "status": {"mode": "hook"},
+                        "dashboard": {"mode": "hook"},
+                        "maintenance": {"mode": "hook"},
+                        "tool_runtime": {"mode": "hook"},
+                        "health": {"mode": "hook"},
+                        "tools": {"mode": "declared", "exports": ["ok", ""]},
+                        "api": {"mode": "declared", "exports": ["x"]},
+                        "events": {"mode": "declared", "exports": []},
+                        "ingest_triggers": {"mode": "declared", "exports": []},
+                        "auth_requirements": {"mode": "declared", "exports": []},
+                        "migrations": {"mode": "declared", "exports": []},
+                        "notifications": {"mode": "declared", "exports": []},
+                    },
+                },
+            }
+        )
+
+
+def test_collect_declared_exports_for_active_plugins():
+    registry = PluginRegistry(api_version=1)
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.exports",
+            "plugin_type": "adapter",
+            "module": "adaptors.exports",
+            "capabilities": {
+                "display_name": "Exports Adapter",
+                "contract": {
+                    "init": {"mode": "hook"},
+                    "config": {"mode": "hook"},
+                    "status": {"mode": "hook"},
+                    "dashboard": {"mode": "hook"},
+                    "maintenance": {"mode": "hook"},
+                    "tool_runtime": {"mode": "hook"},
+                    "health": {"mode": "hook"},
+                    "tools": {"mode": "declared", "exports": ["memory_recall", "memory_store"]},
+                    "api": {"mode": "declared", "exports": ["openclaw_adapter_entry"]},
+                    "events": {"mode": "declared", "exports": []},
+                    "ingest_triggers": {"mode": "declared", "exports": []},
+                    "auth_requirements": {"mode": "declared", "exports": []},
+                    "migrations": {"mode": "declared", "exports": []},
+                    "notifications": {"mode": "declared", "exports": []},
+                },
+            },
+        }
+    )
+    registry.register(manifest)
+    tools = collect_declared_exports(
+        registry=registry,
+        slots={"adapter": "adapter.exports"},
+        surface="tools",
+    )
+    apis = collect_declared_exports(
+        registry=registry,
+        slots={"adapter": "adapter.exports"},
+        surface="api",
+    )
+    assert tools == {"adapter.exports": ["memory_recall", "memory_store"]}
+    assert apis == {"adapter.exports": ["openclaw_adapter_entry"]}

@@ -30,6 +30,7 @@ ALLOWLIST = {
     ("core/lifecycle/datastore_runtime.py", "datastore"),
     ("core/services/memory_service.py", "datastore"),
     ("core/docs/registry.py", "datastore"),
+    ("core/plugins/memorydb_contract.py", "datastore"),
     # Adapter selection composition point.
     ("lib/adapter.py", "adaptors"),
 }

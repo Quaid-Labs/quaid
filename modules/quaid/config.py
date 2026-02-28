@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import sys
 import threading
 from pathlib import Path
@@ -452,6 +451,7 @@ class PluginsConfig:
     paths: List[str] = field(default_factory=lambda: ["plugins"])
     allowlist: List[str] = field(default_factory=list)  # empty => allow all discovered
     slots: PluginSlotsConfig = field(default_factory=PluginSlotsConfig)
+    config: Dict[str, Any] = field(default_factory=dict)  # plugin_id -> plugin-specific config payload
 
 
 @dataclass
@@ -628,89 +628,6 @@ def _run_config_callbacks(config: "MemoryConfig") -> None:
             callback(value, config)
 
 
-def _resolve_database_path(config: "MemoryConfig") -> Path:
-    env_db_path = str(os.environ.get("MEMORY_DB_PATH", "")).strip()
-    if env_db_path:
-        return Path(env_db_path)
-    db_path = str(getattr(getattr(config, "database", None), "path", "data/memory.db") or "data/memory.db")
-    path = Path(db_path)
-    if path.is_absolute():
-        return path
-    return _workspace_root() / path
-
-
-def _ensure_domain_registry_and_mappings(domains: Dict[str, str], config: "MemoryConfig") -> None:
-    from lib.database import get_connection as _get_connection
-
-    db_path = _resolve_database_path(config)
-    with _get_connection(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS domain_registry (
-                domain TEXT PRIMARY KEY,
-                description TEXT DEFAULT '',
-                active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS node_domains (
-                node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-                domain TEXT NOT NULL REFERENCES domain_registry(domain) ON DELETE RESTRICT,
-                created_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (node_id, domain)
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_node_domain ON node_domains(node_id, domain)")
-        for domain_id, description in domains.items():
-            conn.execute(
-                """
-                INSERT INTO domain_registry(domain, description, active)
-                VALUES (?, ?, 1)
-                ON CONFLICT(domain) DO UPDATE SET
-                  description = excluded.description,
-                  active = 1,
-                  updated_at = datetime('now')
-                """,
-                (domain_id, description),
-            )
-        if domains:
-            placeholders = ",".join("?" for _ in domains)
-            conn.execute(
-                f"UPDATE domain_registry SET active = 0, updated_at = datetime('now') WHERE domain NOT IN ({placeholders})",
-                tuple(domains.keys()),
-            )
-
-
-def _on_domains_config(path_value: Any, config: "MemoryConfig") -> None:
-    if not isinstance(path_value, dict):
-        return
-    normalized: Dict[str, str] = {}
-    for raw_key, raw_desc in path_value.items():
-        key = _normalize_domain_key(raw_key)
-        if not key:
-            continue
-        normalized[key] = str(raw_desc or "").strip() or _DEFAULT_DOMAIN_DESCRIPTIONS.get(key, "")
-    if not normalized:
-        normalized = dict(_DEFAULT_DOMAIN_DESCRIPTIONS)
-    try:
-        _ensure_domain_registry_and_mappings(normalized, config)
-    except sqlite3.OperationalError as exc:
-        logger.warning("domain registry sync skipped (db schema unavailable): %s", exc)
-    except Exception as exc:
-        logger.warning("domain registry sync failed: %s", exc)
-    try:
-        from lib.tools_domain_sync import sync_tools_domain_block
-        sync_tools_domain_block(domains=normalized, workspace=_workspace_root())
-    except Exception as exc:
-        logger.warning("tools domain sync failed: %s", exc)
-
-
 def _on_adapter_slot_config(path_value: Any, _: "MemoryConfig") -> None:
     if path_value in (None, ""):
         return
@@ -738,7 +655,6 @@ def _on_datastore_slots_config(path_value: Any, _: "MemoryConfig") -> None:
 
 
 def _register_builtin_config_callbacks() -> None:
-    register_config_callback("retrieval.domains", _on_domains_config)
     register_config_callback("plugins.slots.adapter", _on_adapter_slot_config)
     register_config_callback("plugins.slots.ingest", _on_ingest_slots_config)
     register_config_callback("plugins.slots.datastores", _on_datastore_slots_config)
@@ -1349,6 +1265,7 @@ def _load_config_inner() -> MemoryConfig:
             ingest=ingest_slots,
             datastores=datastore_slots,
         ),
+        config=plugins_data.get('config', {}) if isinstance(plugins_data.get('config', {}), dict) else {},
     )
 
     systems_data = config_data.get('systems', {})
@@ -1395,9 +1312,9 @@ def _load_config_inner() -> MemoryConfig:
     _config = candidate
 
     if plugins.enabled:
-        from core.runtime.plugins import initialize_plugin_runtime
+        from core.runtime.plugins import initialize_plugin_runtime, run_plugin_contract_surface
 
-        _, plugin_errors, plugin_warnings = initialize_plugin_runtime(
+        registry, plugin_errors, plugin_warnings = initialize_plugin_runtime(
             api_version=plugins.api_version,
             paths=plugins.paths,
             allowlist=plugins.allowlist,
@@ -1409,10 +1326,57 @@ def _load_config_inner() -> MemoryConfig:
             },
             workspace_root=str(_workspace_root()),
         )
+        init_errors, init_warnings = run_plugin_contract_surface(
+            registry=registry,
+            slots={
+                "adapter": plugins.slots.adapter,
+                "ingest": list(plugins.slots.ingest),
+                "datastores": list(plugins.slots.datastores),
+            },
+            surface="init",
+            config=candidate,
+            plugin_config=plugins.config,
+            workspace_root=str(_workspace_root()),
+            strict=plugins.strict,
+        )
+        cfg_errors, cfg_warnings = run_plugin_contract_surface(
+            registry=registry,
+            slots={
+                "adapter": plugins.slots.adapter,
+                "ingest": list(plugins.slots.ingest),
+                "datastores": list(plugins.slots.datastores),
+            },
+            surface="config",
+            config=candidate,
+            plugin_config=plugins.config,
+            workspace_root=str(_workspace_root()),
+            strict=plugins.strict,
+        )
+        tool_runtime_errors, tool_runtime_warnings = run_plugin_contract_surface(
+            registry=registry,
+            slots={
+                "adapter": plugins.slots.adapter,
+                "ingest": list(plugins.slots.ingest),
+                "datastores": list(plugins.slots.datastores),
+            },
+            surface="tool_runtime",
+            config=candidate,
+            plugin_config=plugins.config,
+            workspace_root=str(_workspace_root()),
+            strict=plugins.strict,
+        )
+        plugin_errors.extend(init_errors)
+        plugin_errors.extend(cfg_errors)
+        plugin_errors.extend(tool_runtime_errors)
+        plugin_warnings.extend(init_warnings)
+        plugin_warnings.extend(cfg_warnings)
+        plugin_warnings.extend(tool_runtime_warnings)
         for msg in plugin_errors:
             print(f"[plugins][error] {msg}", file=sys.stderr)
         for msg in plugin_warnings:
             print(f"[plugins][warn] {msg}", file=sys.stderr)
+        if plugins.strict and plugin_errors:
+            raise ValueError("Plugin contract hook failures: " + "; ".join(plugin_errors))
 
     return _config
 
