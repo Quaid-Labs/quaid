@@ -26,7 +26,14 @@ export function assertDeclaredRegistration(
   warn: (message: string) => void,
 ): void {
   const token = String(name || "").trim();
-  if (!token) return;
+  if (!token) {
+    const msg = `[quaid][contract] invalid ${surface} registration: empty name`;
+    if (strict) {
+      throw new Error(msg);
+    }
+    warn(msg);
+    return;
+  }
   if (declared.has(token)) return;
   const msg = `[quaid][contract] undeclared ${surface} registration: ${token}`;
   if (strict) {
