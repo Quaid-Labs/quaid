@@ -9,10 +9,11 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 from lib.runtime_context import get_workspace_dir
 logger = logging.getLogger(__name__)
@@ -482,6 +483,8 @@ _config: Optional[MemoryConfig] = None
 _config_loading: bool = False  # Re-entrancy guard (load_config → get_db_path → get_config)
 _config_lock = threading.RLock()
 _warned_unknown_config_keys: set[str] = set()
+_config_callbacks_lock = threading.RLock()
+_config_callbacks: Dict[str, List[Callable[[Any, "MemoryConfig"], None]]] = {}
 
 _KNOWN_TOP_LEVEL_CONFIG_KEYS = {
     "adapter",
@@ -582,6 +585,166 @@ def _normalize_domain_key(value: Any) -> str:
     norm = re.sub(r"[^a-z0-9_]+", "_", raw)
     norm = re.sub(r"_{2,}", "_", norm).strip("_")
     return norm[:64]
+
+
+def _validate_plugin_id(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    if not re.fullmatch(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$", token):
+        raise ValueError(f"Invalid plugin id: {token}")
+    return token
+
+
+def register_config_callback(path: str, callback: Callable[[Any, "MemoryConfig"], None]) -> None:
+    key = str(path or "").strip()
+    if not key:
+        raise ValueError("Callback path is required")
+    with _config_callbacks_lock:
+        callbacks = _config_callbacks.setdefault(key, [])
+        if callback not in callbacks:
+            callbacks.append(callback)
+
+
+def _config_value_for_path(config: "MemoryConfig", path: str) -> Any:
+    cur: Any = config
+    for segment in str(path or "").split("."):
+        token = segment.strip()
+        if not token:
+            continue
+        if isinstance(cur, dict):
+            cur = cur.get(token)
+            continue
+        cur = getattr(cur, token, None)
+    return cur
+
+
+def _run_config_callbacks(config: "MemoryConfig") -> None:
+    with _config_callbacks_lock:
+        registered = {path: list(callbacks) for path, callbacks in _config_callbacks.items()}
+    for path, callbacks in registered.items():
+        value = _config_value_for_path(config, path)
+        for callback in callbacks:
+            callback(value, config)
+
+
+def _resolve_database_path(config: "MemoryConfig") -> Path:
+    env_db_path = str(os.environ.get("MEMORY_DB_PATH", "")).strip()
+    if env_db_path:
+        return Path(env_db_path)
+    db_path = str(getattr(getattr(config, "database", None), "path", "data/memory.db") or "data/memory.db")
+    path = Path(db_path)
+    if path.is_absolute():
+        return path
+    return _workspace_root() / path
+
+
+def _ensure_domain_registry_and_mappings(domains: Dict[str, str], config: "MemoryConfig") -> None:
+    from lib.database import get_connection as _get_connection
+
+    db_path = _resolve_database_path(config)
+    with _get_connection(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS domain_registry (
+                domain TEXT PRIMARY KEY,
+                description TEXT DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS node_domains (
+                node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                domain TEXT NOT NULL REFERENCES domain_registry(domain) ON DELETE RESTRICT,
+                created_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (node_id, domain)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_node_domain ON node_domains(node_id, domain)")
+        for domain_id, description in domains.items():
+            conn.execute(
+                """
+                INSERT INTO domain_registry(domain, description, active)
+                VALUES (?, ?, 1)
+                ON CONFLICT(domain) DO UPDATE SET
+                  description = excluded.description,
+                  active = 1,
+                  updated_at = datetime('now')
+                """,
+                (domain_id, description),
+            )
+        if domains:
+            placeholders = ",".join("?" for _ in domains)
+            conn.execute(
+                f"UPDATE domain_registry SET active = 0, updated_at = datetime('now') WHERE domain NOT IN ({placeholders})",
+                tuple(domains.keys()),
+            )
+
+
+def _on_domains_config(path_value: Any, config: "MemoryConfig") -> None:
+    if not isinstance(path_value, dict):
+        return
+    normalized: Dict[str, str] = {}
+    for raw_key, raw_desc in path_value.items():
+        key = _normalize_domain_key(raw_key)
+        if not key:
+            continue
+        normalized[key] = str(raw_desc or "").strip() or _DEFAULT_DOMAIN_DESCRIPTIONS.get(key, "")
+    if not normalized:
+        normalized = dict(_DEFAULT_DOMAIN_DESCRIPTIONS)
+    try:
+        _ensure_domain_registry_and_mappings(normalized, config)
+    except sqlite3.OperationalError as exc:
+        logger.warning("domain registry sync skipped (db schema unavailable): %s", exc)
+    except Exception as exc:
+        logger.warning("domain registry sync failed: %s", exc)
+    try:
+        from lib.tools_domain_sync import sync_tools_domain_block
+        sync_tools_domain_block(domains=normalized, workspace=_workspace_root())
+    except Exception as exc:
+        logger.warning("tools domain sync failed: %s", exc)
+
+
+def _on_adapter_slot_config(path_value: Any, _: "MemoryConfig") -> None:
+    if path_value in (None, ""):
+        return
+    if not isinstance(path_value, str):
+        raise ValueError("plugins.slots.adapter must be a string")
+    _validate_plugin_id(path_value)
+
+
+def _on_ingest_slots_config(path_value: Any, _: "MemoryConfig") -> None:
+    if path_value in (None, ""):
+        return
+    if not isinstance(path_value, list):
+        raise ValueError("plugins.slots.ingest must be a list of plugin ids")
+    for item in path_value:
+        _validate_plugin_id(item)
+
+
+def _on_datastore_slots_config(path_value: Any, _: "MemoryConfig") -> None:
+    if path_value in (None, ""):
+        return
+    if not isinstance(path_value, list):
+        raise ValueError("plugins.slots.datastores must be a list of plugin ids")
+    for item in path_value:
+        _validate_plugin_id(item)
+
+
+def _register_builtin_config_callbacks() -> None:
+    register_config_callback("retrieval.domains", _on_domains_config)
+    register_config_callback("plugins.slots.adapter", _on_adapter_slot_config)
+    register_config_callback("plugins.slots.ingest", _on_ingest_slots_config)
+    register_config_callback("plugins.slots.datastores", _on_datastore_slots_config)
+
+
+_register_builtin_config_callbacks()
 
 
 def _warn_unknown_keys(section: str, data: Any, known_keys: set[str]) -> None:
@@ -1223,6 +1386,7 @@ def _load_config_inner() -> MemoryConfig:
         notifications=notifications,
         prompt_set=prompt_set,
     )
+    _run_config_callbacks(candidate)
 
     # Fail fast on unknown prompt sets to keep prompt-family swaps explicit and safe.
     from prompt_sets import set_active_prompt_set

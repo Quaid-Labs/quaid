@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _PLUGIN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 _PLUGIN_TYPES = {"adapter", "ingest", "datastore"}
 _PLUGIN_API_VERSION = 1
+_PLUGIN_CONTRACT_REQUIRED = ("init", "config", "status", "dashboard")
 _DATASTORE_REQUIRED_CAPABILITIES = (
     "supports_multi_user",
     "supports_policy_metadata",
@@ -131,6 +132,17 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
         raise ValueError("Manifest missing module")
     if not isinstance(capabilities, dict):
         raise ValueError("Manifest capabilities must be an object")
+    contract = capabilities.get("contract", {})
+    if not isinstance(contract, dict):
+        raise ValueError("Manifest capabilities.contract must be an object")
+    display_name = capabilities.get("display_name", capabilities.get("displayName", ""))
+    if not isinstance(display_name, str) or not display_name.strip():
+        raise ValueError("Manifest capabilities.display_name is required")
+    for key in _PLUGIN_CONTRACT_REQUIRED:
+        if key not in contract:
+            raise ValueError(f"Manifest capabilities.contract missing required key: {key}")
+        if not isinstance(contract.get(key), dict):
+            raise ValueError(f"Manifest capabilities.contract.{key} must be an object")
     if plugin_type == "datastore":
         missing = [k for k in _DATASTORE_REQUIRED_CAPABILITIES if k not in capabilities]
         if missing:

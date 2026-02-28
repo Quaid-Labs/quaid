@@ -359,6 +359,15 @@ class TestConfigLoading:
                 "plugin_id": "openclaw.adapter",
                 "plugin_type": "adapter",
                 "module": "adaptors.openclaw.adapter",
+                "capabilities": {
+                    "display_name": "OpenClaw Adapter",
+                    "contract": {
+                        "init": {"mode": "hook"},
+                        "config": {"mode": "hook"},
+                        "status": {"mode": "hook"},
+                        "dashboard": {"mode": "tbd"},
+                    },
+                },
             }))
             (tmp_path / "vendor" / "plugins" / "core-extract").mkdir(parents=True)
             (tmp_path / "vendor" / "plugins" / "core-extract" / "plugin.json").write_text(json.dumps({
@@ -366,6 +375,15 @@ class TestConfigLoading:
                 "plugin_id": "core.extract",
                 "plugin_type": "ingest",
                 "module": "ingest.core",
+                "capabilities": {
+                    "display_name": "Core Extract Ingest",
+                    "contract": {
+                        "init": {"mode": "hook"},
+                        "config": {"mode": "hook"},
+                        "status": {"mode": "hook"},
+                        "dashboard": {"mode": "tbd"},
+                    },
+                },
             }))
             (tmp_path / "vendor" / "plugins" / "memorydb").mkdir(parents=True)
             (tmp_path / "vendor" / "plugins" / "memorydb" / "plugin.json").write_text(json.dumps({
@@ -374,6 +392,13 @@ class TestConfigLoading:
                 "plugin_type": "datastore",
                 "module": "datastore.memorydb",
                 "capabilities": {
+                    "display_name": "MemoryDB",
+                    "contract": {
+                        "init": {"mode": "hook"},
+                        "config": {"mode": "hook"},
+                        "status": {"mode": "hook"},
+                        "dashboard": {"mode": "tbd"},
+                    },
                     "supports_multi_user": True,
                     "supports_policy_metadata": True,
                     "supports_redaction": True,
@@ -426,7 +451,8 @@ class TestConfigLoading:
         old_config = config._config
         config._config = None
         try:
-            db_path = tmp_path / "memory.db"
+            db_path = tmp_path / "data" / "memory.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(db_path)
             conn.execute(
                 """
@@ -599,5 +625,68 @@ class TestConfigLoading:
                 assert isinstance(cfg, MemoryConfig)
                 # Defaults should be used
                 assert cfg.decay.threshold_days == 30
+        finally:
+            config._config = old_config
+
+    def test_domains_callback_syncs_registry_and_tools(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            db_path = tmp_path / "data" / "memory.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY)")
+            conn.commit()
+            conn.close()
+
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "domains": {
+                        "technical": "code and systems",
+                        "research": "comparisons and tradeoffs",
+                    }
+                }
+            }))
+            called = {"value": False}
+
+            def _capture_sync(*args, **kwargs):
+                called["value"] = True
+                return False
+
+            with patch.dict(os.environ, {"MEMORY_DB_PATH": str(db_path)}, clear=False), \
+                 patch.object(config, "_config_paths", lambda: [config_file]), \
+                 patch.object(config, "_workspace_root", lambda: tmp_path), \
+                 patch("lib.tools_domain_sync.sync_tools_domain_block", side_effect=_capture_sync):
+                _ = load_config()
+
+            with sqlite3.connect(db_path) as verify:
+                rows = verify.execute(
+                    "SELECT domain, active FROM domain_registry ORDER BY domain"
+                ).fetchall()
+                assert ("research", 1) in rows
+                assert ("technical", 1) in rows
+                verify.execute("SELECT 1 FROM node_domains LIMIT 1").fetchall()
+            assert called["value"] is True
+        finally:
+            config._config = old_config
+
+    def test_invalid_adapter_slot_fails_contract_validation(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "plugins": {
+                    "slots": {
+                        "adapter": "bad adapter id",
+                    }
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                with pytest.raises(ValueError, match="Invalid plugin id"):
+                    _ = load_config()
         finally:
             config._config = old_config
