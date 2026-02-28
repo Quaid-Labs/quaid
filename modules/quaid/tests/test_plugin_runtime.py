@@ -366,7 +366,7 @@ def test_initialize_plugin_runtime_non_strict_collects_slot_errors(tmp_path: Pat
         slots={"datastores": ["adapter.a"], "ingest": ["missing.ingest"]},
         workspace_root=str(tmp_path),
     )
-    assert not warnings
+    assert any("empty exports" in msg for msg in warnings)
     assert registry.get("adapter.a") is not None
     assert any("expected type 'datastore'" in msg for msg in errors)
     assert any("unknown plugin_id 'missing.ingest'" in msg for msg in errors)
@@ -541,7 +541,7 @@ def test_runtime_diagnostics_accessors_reflect_latest_initialize(tmp_path: Path)
         workspace_root=str(tmp_path),
     )
     assert any("expected type 'datastore'" in msg for msg in get_runtime_errors())
-    assert get_runtime_warnings() == []
+    assert any("empty exports" in msg for msg in get_runtime_warnings())
     reset_plugin_runtime()
     assert get_runtime_errors() == []
     assert get_runtime_warnings() == []
