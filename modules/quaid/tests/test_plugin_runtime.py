@@ -13,6 +13,30 @@ from core.runtime.plugins import (
 )
 
 
+def _contract_caps(display_name: str) -> dict:
+    return {
+        "display_name": display_name,
+        "contract": {
+            "init": {"mode": "hook"},
+            "config": {"mode": "hook"},
+            "status": {"mode": "hook"},
+            "dashboard": {"mode": "tbd"},
+        },
+    }
+
+
+def _datastore_caps(display_name: str) -> dict:
+    caps = _contract_caps(display_name)
+    caps.update(
+        {
+            "supports_multi_user": True,
+            "supports_policy_metadata": True,
+            "supports_redaction": True,
+        }
+    )
+    return caps
+
+
 def test_validate_manifest_happy_path():
     manifest = validate_manifest_dict(
         {
@@ -21,7 +45,7 @@ def test_validate_manifest_happy_path():
             "plugin_type": "adapter",
             "module": "adaptors.openclaw.adapter",
             "entrypoint": "register",
-            "capabilities": {"events": ["session.new"]},
+            "capabilities": _contract_caps("OpenClaw Adapter"),
         }
     )
     assert manifest.plugin_id == "openclaw.adapter"
@@ -49,11 +73,7 @@ def test_registry_rejects_plugin_id_conflict():
             "plugin_id": "quaid.memorydb",
             "plugin_type": "datastore",
             "module": "datastore.memorydb",
-            "capabilities": {
-                "supports_multi_user": True,
-                "supports_policy_metadata": True,
-                "supports_redaction": True,
-            },
+            "capabilities": _datastore_caps("MemoryDB"),
         }
     )
     second = validate_manifest_dict(
@@ -62,11 +82,7 @@ def test_registry_rejects_plugin_id_conflict():
             "plugin_id": "quaid.memorydb",
             "plugin_type": "datastore",
             "module": "datastore.memorydb.v2",
-            "capabilities": {
-                "supports_multi_user": True,
-                "supports_policy_metadata": True,
-                "supports_redaction": True,
-            },
+            "capabilities": _datastore_caps("MemoryDB v2"),
         }
     )
     registry.register(first)
@@ -82,6 +98,7 @@ def test_registry_singleton_slot_conflict():
             "plugin_id": "adapter.a",
             "plugin_type": "adapter",
             "module": "adaptors.a",
+            "capabilities": _contract_caps("Adapter A"),
         }
     )
     adapter_b = validate_manifest_dict(
@@ -90,6 +107,7 @@ def test_registry_singleton_slot_conflict():
             "plugin_id": "adapter.b",
             "plugin_type": "adapter",
             "module": "adaptors.b",
+            "capabilities": _contract_caps("Adapter B"),
         }
     )
     registry.register(adapter_a)
@@ -112,6 +130,7 @@ def test_discover_plugin_manifests_with_allowlist(tmp_path: Path):
                 "plugin_id": "adapter.a",
                 "plugin_type": "adapter",
                 "module": "adaptors.a",
+                "capabilities": _contract_caps("Adapter A"),
             }
         ),
         encoding="utf-8",
@@ -123,6 +142,7 @@ def test_discover_plugin_manifests_with_allowlist(tmp_path: Path):
                 "plugin_id": "adapter.b",
                 "plugin_type": "adapter",
                 "module": "adaptors.b",
+                "capabilities": _contract_caps("Adapter B"),
             }
         ),
         encoding="utf-8",
@@ -144,7 +164,10 @@ def test_validate_manifest_requires_datastore_capabilities():
                 "plugin_id": "quaid.memorydb",
                 "plugin_type": "datastore",
                 "module": "datastore.memorydb",
-                "capabilities": {"supports_multi_user": True},
+                "capabilities": {
+                    **_contract_caps("MemoryDB"),
+                    "supports_multi_user": True,
+                },
             }
         )
 
@@ -160,6 +183,7 @@ def test_initialize_plugin_runtime_strict_rejects_slot_type_mismatch(tmp_path: P
                 "plugin_id": "adapter.a",
                 "plugin_type": "adapter",
                 "module": "adaptors.a",
+                "capabilities": _contract_caps("Adapter A"),
             }
         ),
         encoding="utf-8",
@@ -186,6 +210,7 @@ def test_initialize_plugin_runtime_non_strict_collects_slot_errors(tmp_path: Pat
                 "plugin_id": "adapter.a",
                 "plugin_type": "adapter",
                 "module": "adaptors.a",
+                "capabilities": _contract_caps("Adapter A"),
             }
         ),
         encoding="utf-8",
@@ -214,6 +239,7 @@ def test_registry_register_is_thread_safe():
                     "plugin_id": f"adapter.{i}",
                     "plugin_type": "adapter",
                     "module": f"adaptors.a{i}",
+                    "capabilities": _contract_caps(f"Adapter {i}"),
                 }
             )
         )
