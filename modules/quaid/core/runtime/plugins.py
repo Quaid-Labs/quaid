@@ -164,7 +164,8 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
     entrypoint = str(payload.get("entrypoint", "register") or "register").strip()
     capabilities = payload.get("capabilities", {})
     dependencies = payload.get("dependencies", [])
-    priority = int(payload.get("priority", 100) or 100)
+    raw_priority = payload.get("priority", 100)
+    priority = int(100 if raw_priority is None else raw_priority)
     enabled = bool(payload.get("enabled", True))
 
     if plugin_api_version <= 0:
