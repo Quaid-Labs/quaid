@@ -2,6 +2,7 @@ import sys
 import sqlite3
 import time
 import importlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -351,6 +352,34 @@ def test_lifecycle_registry_parallel_map_cancels_pending_on_worker_error(tmp_pat
     with pytest.raises(RuntimeError, match="boom"):
         registry._core_parallel_map(ctx, [0, 1, 2], _worker, max_workers=1)
     assert started == [0]
+
+
+def test_lifecycle_registry_parallel_map_uses_max_workers_for_executor_size(monkeypatch, tmp_path):
+    from core.lifecycle.janitor_lifecycle import LifecycleRegistry
+
+    registry = LifecycleRegistry()
+    cfg = _make_cfg(False)
+    cfg.core.parallel.llm_workers = 8
+    ctx = RoutineContext(cfg=cfg, dry_run=True, workspace=tmp_path)
+
+    called = {"workers": None}
+    created: list[ThreadPoolExecutor] = []
+
+    def _fake_ensure(workers: int):
+        called["workers"] = workers
+        ex = ThreadPoolExecutor(max_workers=workers)
+        created.append(ex)
+        return ex
+
+    monkeypatch.setattr(registry, "_ensure_llm_executor", _fake_ensure)
+    try:
+        out = registry._core_parallel_map(ctx, [1, 2, 3], lambda x: x, max_workers=2)
+    finally:
+        for ex in created:
+            ex.shutdown(wait=False, cancel_futures=True)
+
+    assert out == [1, 2, 3]
+    assert called["workers"] == 2
 
 
 def test_lifecycle_registry_requires_write_registration_when_enabled(tmp_path):
