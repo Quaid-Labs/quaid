@@ -92,6 +92,8 @@ def _discover_plugin_manifests(path: Path, data: dict[str, Any]) -> dict[str, di
             workspace_root=path.parent.parent,
         )
     except Exception:
+        if strict:
+            raise
         return {}
     return {
         m.plugin_id: {
