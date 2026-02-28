@@ -29,7 +29,6 @@ ALLOWLIST = {
     # Core composition points intentionally bind datastore implementations.
     ("core/lifecycle/datastore_runtime.py", "datastore"),
     ("core/services/memory_service.py", "datastore"),
-    ("core/docs/registry.py", "datastore"),
     ("core/docs/updater.py", "datastore"),
     ("core/plugins/memorydb_contract.py", "datastore"),
     ("core/lifecycle/soul_snippets.py", "datastore"),
