@@ -40,6 +40,82 @@ def test_plugin_maintenance_slots_includes_all_plugin_surfaces(monkeypatch):
     }
 
 
+def test_review_stage_dispatches_plugin_maintenance_surface(monkeypatch, tmp_path):
+    calls = {}
+
+    monkeypatch.setattr(janitor, "_refresh_runtime_state", lambda: None)
+    monkeypatch.setattr(janitor, "_acquire_lock", lambda: True)
+    monkeypatch.setattr(janitor, "_release_lock", lambda: None)
+    monkeypatch.setattr(janitor, "rotate_logs", lambda: None)
+    monkeypatch.setattr(janitor, "reset_token_usage", lambda: None)
+    monkeypatch.setattr(janitor, "reset_token_budget", lambda: None)
+    monkeypatch.setattr(janitor, "get_graph", lambda: object())
+    monkeypatch.setattr(janitor, "init_janitor_metadata", lambda _graph: None)
+    monkeypatch.setattr(janitor, "get_last_run_time", lambda _graph, _task: None)
+    monkeypatch.setattr(janitor, "is_benchmark_mode", lambda: False)
+    monkeypatch.setattr(janitor, "_workspace", lambda: tmp_path)
+    monkeypatch.setattr(janitor, "_logs_dir", lambda: tmp_path / "logs")
+    monkeypatch.setattr(janitor, "_benchmark_review_gate_triggered", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        janitor,
+        "get_llm_provider",
+        lambda: SimpleNamespace(get_profiles=lambda: {"deep": {"available": True}}),
+    )
+    monkeypatch.setattr(janitor, "run_tests", lambda _metrics: {"success": True, "passed": 0, "failed": 0, "total": 0})
+    monkeypatch.setattr(janitor, "_check_for_updates", lambda: None)
+    monkeypatch.setattr(janitor, "_append_decision_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(janitor, "_checkpoint_save", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(janitor, "_send_notification", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(janitor, "_queue_delayed_notification", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(janitor, "save_run_time", lambda *_args, **_kwargs: None, raising=False)
+    monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
+
+    monkeypatch.setattr(
+        janitor,
+        "_cfg",
+        SimpleNamespace(
+            systems=SimpleNamespace(memory=True, journal=False, projects=False, workspace=False),
+            plugins=SimpleNamespace(
+                enabled=True,
+                strict=True,
+                config={},
+                slots=SimpleNamespace(
+                    adapter="openclaw.adapter",
+                    ingest=["core.extract"],
+                    datastores=["memorydb.core"],
+                ),
+            ),
+            janitor=SimpleNamespace(
+                apply_mode="auto",
+                approval_policies={},
+                test_timeout_seconds=60,
+            ),
+            notifications=SimpleNamespace(enabled=False, level="normal"),
+            users=SimpleNamespace(default_owner="quaid"),
+        ),
+    )
+
+    def _fake_collect(*, registry, slots, surface, config, plugin_config, workspace_root, strict, payload):
+        calls["surface"] = surface
+        calls["slots"] = slots
+        calls["payload"] = dict(payload or {})
+        assert registry is not None
+        assert strict is True
+        assert workspace_root == str(tmp_path)
+        return [], [], [("memorydb.core", {"handled": True, "metrics": {"memories_reviewed": 1}})]
+
+    monkeypatch.setattr("core.runtime.plugins.get_runtime_registry", lambda: object())
+    monkeypatch.setattr("core.runtime.plugins.run_plugin_contract_surface_collect", _fake_collect)
+
+    result = janitor.run_task_optimized("review", dry_run=True, incremental=False, resume_checkpoint=False)
+
+    assert result["success"] is True
+    assert calls["surface"] == "maintenance"
+    assert calls["payload"]["stage"] == "review"
+    assert calls["payload"]["subtask"] == "review"
+    assert "memorydb.core" in calls["slots"]["datastores"]
+
+
 def test_default_owner_raises_when_fail_hard_enabled(monkeypatch):
     monkeypatch.setattr(janitor, "_cfg", SimpleNamespace())
     monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: True)
