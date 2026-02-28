@@ -73,18 +73,34 @@ describe('Decay Review Queue', () => {
   })
 
   it('pinned memories are never queued for decay', async () => {
-    // Store a pinned memory
-    await memory.store('Core identity fact', 'quaid', { pinned: true })
+    const pinned = await memory.store('Core identity fact for pinned decay guard', 'quaid', {
+      pinned: true,
+      confidence: 0.15,
+      skipDedup: true,
+    })
+    const unpinned = await memory.store('Low-confidence aging memory expected in decay queue', 'quaid', {
+      confidence: 0.15,
+      skipDedup: true,
+    })
+    await memory.querySql(
+      `UPDATE nodes
+          SET accessed_at='2000-01-01T00:00:00Z', created_at='2000-01-01T00:00:00Z'
+        WHERE id IN ('${pinned.id.replace(/'/g, "''")}', '${unpinned.id.replace(/'/g, "''")}');`
+    )
 
     // Run decay
     await memory.runDecay()
 
-    // Queue should be empty - pinned memories skip decay entirely
+    // The unpinned low-confidence memory should be queued, but the pinned one must never be queued.
     const result = await memory.querySql(
-      "SELECT COUNT(*) as cnt FROM decay_review_queue;"
+      `SELECT node_id
+         FROM decay_review_queue
+        WHERE node_id IN ('${pinned.id.replace(/'/g, "''")}', '${unpinned.id.replace(/'/g, "''")}');`
     )
-    const rows = JSON.parse(result)
-    expect(rows[0].cnt).toBe(0)
+    const rows = result.trim() ? JSON.parse(result) : []
+    const queuedIds = new Set(rows.map((r: any) => String(r.node_id)))
+    expect(queuedIds.has(unpinned.id)).toBe(true)
+    expect(queuedIds.has(pinned.id)).toBe(false)
   })
 
   it('decay runs without errors when review queue is enabled', async () => {
