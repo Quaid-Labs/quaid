@@ -398,8 +398,18 @@ def _register_module_routines(
                 self._base = base
                 self._owner = owner
 
-            def register(self, name: str, routine: LifecycleRoutine) -> None:
-                self._base.register(name, routine, owner=self._owner)
+            def register(
+                self,
+                name: str,
+                routine: LifecycleRoutine,
+                write_resources: Optional[List[str]] = None,
+            ) -> None:
+                self._base.register(
+                    name,
+                    routine,
+                    owner=self._owner,
+                    write_resources=write_resources,
+                )
 
         registrar(_ScopedRegistry(registry, module_name), RoutineResult)
     except Exception as exc:
