@@ -1536,7 +1536,6 @@ _write_config() {
     "maxTokens": 2000,
     "reranker": {
       "enabled": true,
-      "provider": "llm",
       "topK": 20
     },
     "rrfK": 60,

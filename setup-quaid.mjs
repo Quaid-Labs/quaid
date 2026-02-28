@@ -1974,7 +1974,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       boostRecent: true,
       boostFrequent: true,
       maxTokens: 2000,
-      reranker: { enabled: true, provider: "llm", topK: 20 },
+      reranker: { enabled: true, topK: 20 },
       rrfK: 60,
       rerankerBlend: 0.5,
       compositeRelevanceWeight: 0.60,
