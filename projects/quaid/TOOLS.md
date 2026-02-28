@@ -248,6 +248,11 @@ python3 core/lifecycle/janitor.py --task all --apply
 python3 core/lifecycle/janitor.py --task review --apply --approve
 python3 core/lifecycle/janitor.py --task journal --apply --force-distill
 python3 core/lifecycle/janitor.py --task all --apply --time-budget 1800 --token-budget 12000
+
+# Contract/docs consistency
+python3 scripts/sync-tools-domain-block.py
+node scripts/check-docs-consistency.mjs
+npm run check:boundaries
 ```
 
 ## Related Docs
