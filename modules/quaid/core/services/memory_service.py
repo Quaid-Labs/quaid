@@ -24,6 +24,8 @@ from datastore.facade import (
     search_memories,
     create_edge,
     datastore_stats,
+    list_memory_domains,
+    register_memory_domain,
     forget_memory,
     get_memory_by_id,
 )
@@ -165,6 +167,12 @@ class DatastoreMemoryService(MemoryServicePort):
 
     def stats(self) -> Dict[str, Any]:
         return datastore_stats()
+
+    def list_domains(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        return list_memory_domains(active_only=active_only)
+
+    def register_domain(self, domain: str, description: str = "", active: bool = True) -> Dict[str, Any]:
+        return register_memory_domain(domain=domain, description=description, active=active)
 
 _MEMORY_SERVICE: MemoryServicePort = DatastoreMemoryService()
 _IDENTITY_RUNTIME_BOOTSTRAPPED = False

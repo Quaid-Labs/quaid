@@ -38,6 +38,8 @@ from core.interface.api import (
     store,
     recall,
     search,
+    list_domains,
+    register_domain,
     create_edge,
     forget,
     get_memory,
@@ -83,6 +85,8 @@ _DECLARED_MCP_TOOLS = {
     "memory_provider",
     "memory_capabilities",
     "memory_write",
+    "memory_domain_list",
+    "memory_domain_register",
     "memory_event_emit",
     "memory_event_list",
     "memory_event_process",
@@ -204,6 +208,21 @@ def memory_store(
     if domains:
         store_kwargs["domains"] = domains
     return store(**store_kwargs)
+
+
+@_mcp_contract_tool()
+def memory_domain_list(active_only: bool = True) -> dict:
+    """List known memory domains from the datastore registry."""
+    return {"domains": list_domains(active_only=bool(active_only))}
+
+
+@_mcp_contract_tool()
+def memory_domain_register(domain: str, description: str = "", active: bool = True) -> dict:
+    """Register or update a memory domain in the datastore registry.
+
+    Automatically refreshes the TOOLS.md domain block from active registry values.
+    """
+    return register_domain(domain=domain, description=description, active=bool(active))
 
 
 @_mcp_contract_tool()
@@ -654,7 +673,7 @@ def memory_capabilities() -> dict:
     """Return read/write/event capabilities for runtime orchestration."""
     from core.runtime.events import get_event_registry
     try:
-        available_domains = list((get_config().retrieval.domains or {}).keys())
+        available_domains = [d.get("domain") for d in list_domains(active_only=True) if d.get("domain")]
     except Exception:
         available_domains = []
     return {

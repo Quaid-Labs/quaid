@@ -10,6 +10,7 @@ __all__ = [
     "MemoryGraph", "Node", "Edge",
     # Core operations (CLI / plugin entry points)
     "store", "recall", "create_edge", "get_graph", "initialize_db",
+    "list_domains", "register_domain",
     # Graph management
     "hard_delete_node", "soft_delete", "forget", "get_memory",
     # Contradiction pipeline
@@ -2479,6 +2480,105 @@ def get_graph() -> MemoryGraph:
 def stats() -> Dict[str, Any]:
     """Datastore stats interface for API/core callers."""
     return get_graph().get_stats()
+
+
+def _ensure_domain_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS domain_registry (
+            domain TEXT PRIMARY KEY,
+            description TEXT DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS node_domains (
+            node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+            domain TEXT NOT NULL REFERENCES domain_registry(domain) ON DELETE RESTRICT,
+            created_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (node_id, domain)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_domain_node ON node_domains(domain, node_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_node_domains_node_domain ON node_domains(node_id, domain)")
+
+
+def _active_domain_map(conn: sqlite3.Connection) -> Dict[str, str]:
+    rows = conn.execute(
+        "SELECT domain, description FROM domain_registry WHERE active = 1 ORDER BY domain"
+    ).fetchall()
+    out: Dict[str, str] = {}
+    for row in rows:
+        did = _normalize_domain_tag(row[0])
+        if not did:
+            continue
+        out[did] = str(row[1] or "").strip()
+    return out
+
+
+def list_domains(active_only: bool = True) -> List[Dict[str, Any]]:
+    graph = get_graph()
+    with graph._get_conn() as conn:
+        _ensure_domain_tables(conn)
+        if active_only:
+            rows = conn.execute(
+                "SELECT domain, description, active FROM domain_registry WHERE active = 1 ORDER BY domain"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT domain, description, active FROM domain_registry ORDER BY domain"
+            ).fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        did = _normalize_domain_tag(row[0])
+        if not did:
+            continue
+        out.append({
+            "domain": did,
+            "description": str(row[1] or "").strip(),
+            "active": bool(int(row[2] or 0)),
+        })
+    return out
+
+
+def register_domain(domain: str, description: str = "", active: bool = True) -> Dict[str, Any]:
+    did = _normalize_domain_tag(domain)
+    if not did:
+        raise ValueError("Invalid domain id")
+    desc = str(description or "").strip()
+    graph = get_graph()
+    with graph._get_conn() as conn:
+        _ensure_domain_tables(conn)
+        conn.execute(
+            """
+            INSERT INTO domain_registry(domain, description, active)
+            VALUES (?, ?, ?)
+            ON CONFLICT(domain) DO UPDATE SET
+              description = excluded.description,
+              active = excluded.active,
+              updated_at = datetime('now')
+            """,
+            (did, desc, 1 if active else 0),
+        )
+        active_domains = _active_domain_map(conn)
+    try:
+        from lib.tools_domain_sync import sync_tools_domain_block
+
+        sync_tools_domain_block(domains=active_domains)
+    except Exception:
+        pass
+    return {
+        "status": "ok",
+        "domain": did,
+        "description": desc,
+        "active": bool(active),
+        "active_domains": sorted(active_domains.keys()),
+    }
 
 
 def search(

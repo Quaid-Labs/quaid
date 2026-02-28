@@ -52,9 +52,6 @@ def _resolve_domains(ctx: PluginHookContext) -> Dict[str, str]:
     db_domains = _domains_from_db(_resolve_db_path(ctx))
     if db_domains:
         return db_domains
-    retrieval_domains = getattr(getattr(ctx.config, "retrieval", None), "domains", {}) or {}
-    if isinstance(retrieval_domains, dict) and retrieval_domains:
-        return _normalize_domain_map(retrieval_domains)
     return default_domain_descriptions()
 
 

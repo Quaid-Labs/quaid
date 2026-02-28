@@ -40,6 +40,8 @@ def _import_mcp_server():
     mock_api.search.return_value = [
         {"id": "s1", "text": "User drinks tea", "similarity": 0.7, "confidence": 0.6}
     ]
+    mock_api.list_domains.return_value = [{"domain": "personal", "description": "identity", "active": True}]
+    mock_api.register_domain.return_value = {"status": "ok", "domain": "research", "active": True}
     mock_api.get_memory.return_value = {"id": "g1", "name": "Test memory", "type": "fact"}
     mock_api.forget.return_value = True
     mock_api.create_edge.return_value = {"edge_id": "e1", "status": "created"}
@@ -71,6 +73,8 @@ def _import_mcp_server():
          patch("core.ingest_runtime.run_extract_from_transcript", mock_api.extract_transcript), \
          patch("core.interface.api.recall", mock_api.recall), \
          patch("core.interface.api.search", mock_api.search), \
+         patch("core.interface.api.list_domains", mock_api.list_domains), \
+         patch("core.interface.api.register_domain", mock_api.register_domain), \
          patch("core.interface.api.get_memory", mock_api.get_memory), \
          patch("core.interface.api.forget", mock_api.forget), \
          patch("core.interface.api.create_edge", mock_api.create_edge), \
@@ -102,6 +106,8 @@ EXPECTED_TOOLS = {
     "memory_extract",
     "memory_store",
     "memory_recall",
+    "memory_domain_list",
+    "memory_domain_register",
     "memory_search",
     "memory_get",
     "memory_forget",
@@ -248,6 +254,20 @@ class TestMemoryStore:
         mod.memory_store("A fact", source="telegram")
         assert mock_api.store.call_args.kwargs["source_type"] == "import"
         assert mock_api.store.call_args.kwargs["source"] == "telegram"
+
+
+class TestMemoryDomains:
+    def test_domain_list(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_domain_list()
+        mock_api.list_domains.assert_called_once_with(active_only=True)
+        assert result["domains"][0]["domain"] == "personal"
+
+    def test_domain_register(self, server):
+        mod, mock_api, *_ = server
+        result = mod.memory_domain_register("research", "tradeoffs and options", True)
+        mock_api.register_domain.assert_called_once_with(domain="research", description="tradeoffs and options", active=True)
+        assert result["status"] == "ok"
 
 
 # ---------------------------------------------------------------------------
