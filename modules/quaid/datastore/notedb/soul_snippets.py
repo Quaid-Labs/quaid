@@ -159,22 +159,6 @@ def _get_journal_config():
         return None
 
 
-def _get_snippet_review_model() -> str:
-    """Model override for snippet/journal review calls."""
-    try:
-        env_model = str(os.environ.get("QUAID_JANITOR_REVIEW_MODEL", "") or "").strip()
-        if env_model:
-            return env_model
-        cfg = get_config()
-        model = str(getattr(cfg.janitor.opus_review, "model", "") or "").strip()
-        if model:
-            return model
-        return str(getattr(cfg.models, "deep_reasoning", "default") or "default")
-    except Exception as exc:
-        logger.warning("Failed resolving snippet review model; defaulting to 'default': %s", exc)
-        return "default"
-
-
 def _snippet_review_timeout_seconds(default_seconds: int = 120) -> float:
     """Timeout budget for snippet/journal LLM review calls."""
     raw_env = os.environ.get("QUAID_SNIPPETS_REVIEW_TIMEOUT_SECONDS")
@@ -195,14 +179,6 @@ def _snippet_review_timeout_seconds(default_seconds: int = 120) -> float:
     except Exception:
         pass
     return float(default_seconds)
-
-
-def _review_model_tier(model_name: str) -> str:
-    """Map configured review model hint to provider tier."""
-    m = (model_name or "").lower()
-    if "haiku" in m:
-        return "fast"
-    return "deep"
 
 
 def _get_target_files() -> List[str]:
@@ -1285,11 +1261,10 @@ def run_journal_distillation(
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
     llm_timeout = _snippet_review_timeout_seconds()
-    review_model = _get_snippet_review_model()
     worker_count = min(max(1, int(llm_workers or 1)), len(work_items))
     print(
         f"  Calling review model for distillation across {len(work_items)} files "
-        f"({review_model}, workers={worker_count})..."
+        f"(configured deep-reasoning model, workers={worker_count})..."
     )
 
     def _distill_file(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1300,7 +1275,6 @@ def run_journal_distillation(
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             timeout=llm_timeout,
-            model=review_model,
         )
         if not response_text:
             return {"filename": filename, "error": f"No response for {filename}"}
@@ -1448,11 +1422,10 @@ def run_soul_snippets_review(
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
     llm_timeout = _snippet_review_timeout_seconds()
-    review_model = _get_snippet_review_model()
     worker_count = min(max(1, int(llm_workers or 1)), len(all_snippets))
     print(
         f"  Calling review model for snippet review across {len(all_snippets)} files "
-        f"({review_model}, workers={worker_count})..."
+        f"(configured deep-reasoning model, workers={worker_count})..."
     )
 
     def _review_file(filename: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1462,7 +1435,6 @@ def run_soul_snippets_review(
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             timeout=llm_timeout,
-            model=review_model,
         )
         if not response_text:
             return {"filename": filename, "error": f"No response from review model for {filename}"}
