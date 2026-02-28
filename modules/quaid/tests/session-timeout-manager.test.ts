@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -19,6 +19,10 @@ function writeFailHardConfig(workspace: string, failHard: boolean): void {
 }
 
 describe('SessionTimeoutManager scheduling', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('allows only one timeout worker leader per workspace', () => {
     const workspace = makeWorkspace('quaid-timeout-leader-')
     const managerA = new SessionTimeoutManager({
@@ -158,7 +162,7 @@ describe('SessionTimeoutManager scheduling', () => {
   it('requeues extraction signal after failed extraction to preserve retry path', async () => {
     const workspace = makeWorkspace('quaid-timeout-requeue-')
     writeFailHardConfig(workspace, false)
-    process.env.QUAID_SIGNAL_MAX_RETRIES = '3'
+    vi.stubEnv('QUAID_SIGNAL_MAX_RETRIES', '3')
     try {
       const manager = new SessionTimeoutManager({
         workspace,
@@ -183,15 +187,13 @@ describe('SessionTimeoutManager scheduling', () => {
       const buffered = (manager as any).readBuffer('session-requeue') as any[]
       expect(Array.isArray(buffered)).toBe(true)
       expect(buffered.length).toBeGreaterThan(0)
-    } finally {
-      delete process.env.QUAID_SIGNAL_MAX_RETRIES
-    }
+    } finally {}
   })
 
   it('drops extraction signal after retry budget is exhausted', async () => {
     const workspace = makeWorkspace('quaid-timeout-requeue-cap-')
     writeFailHardConfig(workspace, false)
-    process.env.QUAID_SIGNAL_MAX_RETRIES = '1'
+    vi.stubEnv('QUAID_SIGNAL_MAX_RETRIES', '1')
     try {
       const manager = new SessionTimeoutManager({
         workspace,
@@ -216,9 +218,7 @@ describe('SessionTimeoutManager scheduling', () => {
 
       await manager.processPendingExtractionSignals()
       expect(fs.existsSync(signalPath)).toBe(false)
-    } finally {
-      delete process.env.QUAID_SIGNAL_MAX_RETRIES
-    }
+    } finally {}
   })
 
   it('filters internal/system traffic from extraction payloads', async () => {
@@ -325,7 +325,7 @@ describe('SessionTimeoutManager scheduling', () => {
     try {
       const workspace = makeWorkspace('quaid-timeout-extract-guard-')
       writeFailHardConfig(workspace, false)
-      process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS = '10'
+      vi.stubEnv('QUAID_SESSION_EXTRACT_TIMEOUT_MS', '10')
       const manager = new SessionTimeoutManager({
         workspace,
         timeoutMinutes: 10,
@@ -343,7 +343,6 @@ describe('SessionTimeoutManager scheduling', () => {
       await vi.advanceTimersByTimeAsync(20)
       await assertion
     } finally {
-      delete process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS
       vi.useRealTimers()
     }
   })
