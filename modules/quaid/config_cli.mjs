@@ -92,6 +92,29 @@ function saveConfig(p, data) {
   fs.renameSync(tmp, p);
 }
 
+function runConfigCallbacksAfterSave() {
+  const py = [
+    "import os",
+    "os.environ.setdefault('QUAID_QUIET', '1')",
+    "from config import reload_config",
+    "reload_config()",
+  ].join("\n");
+  const res = spawnSync("python3", ["-c", py], {
+    cwd: path.dirname(path.resolve(process.argv[1] || "config_cli.mjs")),
+    env: {
+      ...process.env,
+      QUAID_HOME: workspaceRoot(),
+      CLAWDBOT_WORKSPACE: workspaceRoot(),
+    },
+    encoding: "utf8",
+  });
+  if (res.status !== 0) {
+    const stderr = String(res.stderr || "").trim();
+    const stdout = String(res.stdout || "").trim();
+    throw new Error(`reload_config failed: ${stderr || stdout || `exit ${res.status}`}`);
+  }
+}
+
 function getPath(obj, dotted, fallback = undefined) {
   let cur = obj;
   for (const seg of dotted.split(".")) {
@@ -739,6 +762,7 @@ async function runEdit() {
       await editSystems(cfg, cfgPath);
     } else if (menu === "save") {
       saveConfig(cfgPath, cfg);
+      runConfigCallbacksAfterSave();
       console.log(`Saved: ${cfgPath}`);
       return;
     } else if (menu === "discard") {
@@ -789,6 +813,7 @@ function setConfig(dotted, raw) {
   const { path: cfgPath, data: cfg } = loadConfig();
   setPath(cfg, dotted, parseValue(raw));
   saveConfig(cfgPath, cfg);
+  runConfigCallbacksAfterSave();
   console.log(`Set ${dotted} in ${cfgPath}`);
 }
 
