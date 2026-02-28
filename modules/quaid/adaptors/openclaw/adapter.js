@@ -2261,6 +2261,13 @@ const quaidPlugin = {
       }
       return api.registerTool(() => spec);
     };
+    const registerHttpRouteChecked = (route) => {
+      const routePath = String(route?.path || "").trim();
+      if (contractDecl.enabled) {
+        assertDeclaredRegistration("api", routePath, contractDecl.api, strictContracts, (m) => console.warn(m));
+      }
+      return api.registerHttpRoute(route);
+    };
     const dataDir = path.dirname(DB_PATH);
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -3853,7 +3860,7 @@ notify_memory_extraction(
       name: "reset-memory-extraction",
       priority: 10
     });
-    api.registerHttpRoute({
+    registerHttpRouteChecked({
       path: "/plugins/quaid/llm",
       handler: async (req, res) => {
         if (req.method !== "POST") {
@@ -3914,7 +3921,7 @@ notify_memory_extraction(
         }
       }
     });
-    api.registerHttpRoute({
+    registerHttpRouteChecked({
       path: "/memory/injected",
       handler: async (req, res) => {
         try {
