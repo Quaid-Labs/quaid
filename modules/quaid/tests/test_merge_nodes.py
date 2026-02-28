@@ -501,6 +501,35 @@ class TestMergeEdgeMigrationAdvanced:
             ).fetchone()[0]
         assert count == 1, f"Expected exactly 1 edge, found {count}"
 
+    def test_duplicate_edge_conflict_preserves_non_null_source_fact_id(self, tmp_path):
+        """When duplicate edges conflict on UNIQUE, source_fact_id should survive merge."""
+        from datastore.memorydb.maintenance_ops import _merge_nodes_into
+        graph, _ = _make_graph(tmp_path)
+        node_a = _store_and_get(graph, "Quaid knows FastAPI patterns")
+        node_b = _store_and_get(graph, "Quaid also knows FastAPI internals")
+        fastapi_node = _make_node(graph, "FastAPI")
+
+        # First edge has NULL source_fact_id, second has source_fact_id=node_b.id.
+        _create_edge_direct(graph, node_a.id, fastapi_node.id, "knows", source_fact_id=None)
+        _create_edge_direct(graph, node_b.id, fastapi_node.id, "knows", source_fact_id=node_b.id)
+
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._HAS_CONFIG", False):
+            result = _merge_nodes_into(
+                graph, "Quaid knows FastAPI deeply",
+                [node_a.id, node_b.id]
+            )
+
+        merged_id = result["id"]
+        with graph._get_conn() as conn:
+            row = conn.execute(
+                "SELECT source_fact_id FROM edges WHERE source_id = ? AND target_id = ? AND relation = ?",
+                (merged_id, fastapi_node.id, "knows")
+            ).fetchone()
+        assert row is not None
+        assert row[0] == merged_id
+
     def test_contradictions_and_decay_queue_cleaned(self, tmp_path):
         """Merge cleans up contradictions and decay_review_queue for originals."""
         from datastore.memorydb.maintenance_ops import _merge_nodes_into
