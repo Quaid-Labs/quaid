@@ -1250,28 +1250,24 @@ print('[+] Database initialized')
     info "Writing configuration..."
     _write_config
 
-    # Installer-owned memorydb bootstrap: ensure domain registry/tables + TOOLS domain block
-    (
-        cd "$PLUGIN_DIR"
-        export QUAID_HOME="${WORKSPACE_ROOT}"
-        export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
+    # Installer-owned memorydb bootstrap: load config once so plugin init/config
+    # hooks run exactly once (including MemoryDB domain sync + TOOLS sync).
+    local domain_init_out=""
+    if ! domain_init_out="$(
+        cd "$PLUGIN_DIR" && \
+        export QUAID_HOME="${WORKSPACE_ROOT}" && \
+        export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}" && \
         python3 -c "
 import os, sys
-from types import SimpleNamespace
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from config import get_config
-from core.plugins.memorydb_contract import on_init
-ctx = SimpleNamespace(
-    plugin=SimpleNamespace(plugin_id='memorydb.core'),
-    config=get_config(),
-    plugin_config={},
-    workspace_root='${WORKSPACE_ROOT}',
-)
-on_init(ctx)
+_cfg = get_config()
 print('[+] MemoryDB domain init complete')
-" 2>/dev/null || true
-    ) || true
+" 2>&1
+    )"; then
+        warn "MemoryDB domain bootstrap failed during install; continuing. ${domain_init_out}"
+    fi
 
     # Create minimal workspace files if they don't exist
     for f in SOUL.md USER.md MEMORY.md; do
