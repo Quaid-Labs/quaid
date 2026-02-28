@@ -260,6 +260,83 @@ _ollama_reachable() {
     curl -sf "${url}/api/tags" &>/dev/null
 }
 
+_pad2() {
+    local value="${1:-0}"
+    printf "%02d" "$value"
+}
+
+_install_heartbeat_schedule() {
+    local hour="$1"
+    local heartbeat_path="${WORKSPACE_ROOT}/HEARTBEAT.md"
+    local start_marker="<!-- QUAID_JANITOR_SCHEDULE_START -->"
+    local end_marker="<!-- QUAID_JANITOR_SCHEDULE_END -->"
+    local end_hour=$(( (hour + 1) % 24 ))
+    local schedule_window_end
+    if [[ "$hour" -eq 23 ]]; then
+        schedule_window_end="24:00"
+    else
+        schedule_window_end="$(_pad2 "$end_hour"):00"
+    fi
+
+    if [[ ! -f "$heartbeat_path" ]]; then
+        cat > "$heartbeat_path" << 'HBHDR'
+# HEARTBEAT.md
+
+# Periodic checks — the bot reads this on each heartbeat wake
+HBHDR
+    fi
+
+    local tmp_path="${heartbeat_path}.tmp.$$"
+    awk -v start="$start_marker" -v end="$end_marker" '
+        $0 == start { skip=1; next }
+        $0 == end { skip=0; next }
+        !skip { print }
+    ' "$heartbeat_path" > "$tmp_path"
+    mv "$tmp_path" "$heartbeat_path"
+
+    {
+        echo ""
+        echo "$start_marker"
+        echo "## Janitor Schedule (Quaid)"
+        echo ""
+        echo "**Schedule:** Check if current time is between $(_pad2 "$hour"):00-${schedule_window_end} and janitor hasn't run today."
+        echo ""
+        echo "**IMPORTANT:** The janitor requires your LLM API key. Run it from the bot heartbeat,"
+        echo "not a standalone cron job, so key injection stays in the agent runtime."
+        echo ""
+        echo "**To run:** \`./quaid janitor --apply --task all\`"
+        echo ""
+        echo "On each heartbeat:"
+        echo "- If time is between $(_pad2 "$hour"):00 and ${schedule_window_end} AND janitor hasn't run today:"
+        echo "  - Run: \`./quaid janitor --apply --task all\`"
+        echo "  - Record run metadata under \`logs/janitor/\`."
+        echo "$end_marker"
+    } >> "$heartbeat_path"
+}
+
+_configure_janitor_schedule() {
+    echo ""
+    info "Nightly janitor scheduling (heartbeat-driven)"
+    echo "  Quaid schedules janitor via HEARTBEAT.md so API keys stay in the bot runtime."
+    if ! confirm "Configure nightly janitor schedule now?" "y"; then
+        warn "Skipping schedule setup. Add a Janitor block to HEARTBEAT.md manually."
+        return
+    fi
+
+    local hour=""
+    while true; do
+        ask "Janitor start hour (0-23, default 4):"
+        hour="${REPLY:-4}"
+        if [[ "$hour" =~ ^[0-9]+$ ]] && [[ "$hour" -ge 0 ]] && [[ "$hour" -le 23 ]]; then
+            break
+        fi
+        warn "Enter a valid integer hour between 0 and 23."
+    done
+
+    _install_heartbeat_schedule "$hour"
+    info "Janitor schedule written to HEARTBEAT.md ($(_pad2 "$hour"):00 daily window)"
+}
+
 _ollama_is_local() {
     local url="$1"
     [[ "$url" == *"localhost"* ]] || [[ "$url" == *"127.0.0.1"* ]] || [[ "$url" == *"0.0.0.0"* ]]
@@ -1284,6 +1361,9 @@ except Exception as e:
     # Migration check
     echo ""
     _check_migration
+
+    # Janitor schedule via HEARTBEAT.md
+    _configure_janitor_schedule
 
     # Install Quaid project reference docs and constitutional guidance
     if $SYS_PROJECTS; then
