@@ -209,6 +209,26 @@ class TestHardDeleteNode:
             """).fetchall()
             assert len(orphans) == 0
 
+    def test_cleans_up_node_domains_when_foreign_keys_disabled(self, tmp_path):
+        """node_domains rows are removed even when caller connection has FK enforcement disabled."""
+        from datastore.memorydb.memory_graph import hard_delete_node
+        graph, _ = _make_graph(tmp_path)
+        node = _make_node(graph, "Domain-tagged fact")
+
+        with graph._get_conn() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute(
+                "INSERT OR IGNORE INTO node_domains (node_id, domain) VALUES (?, ?)",
+                (node.id, "technical"),
+            )
+            with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph):
+                assert hard_delete_node(node.id, conn=conn) is True
+            remaining = conn.execute(
+                "SELECT COUNT(*) FROM node_domains WHERE node_id = ?",
+                (node.id,),
+            ).fetchone()[0]
+            assert remaining == 0
+
 
 # ===========================================================================
 # apply_decay_optimized() — non-dry-run tests
