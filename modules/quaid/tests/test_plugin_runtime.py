@@ -803,6 +803,56 @@ def test_run_plugin_contract_surface_collect_missing_handler_non_strict_warns():
     assert "hook missing handler declaration" in warns[0]
 
 
+def test_validate_contract_instance_caches_repeated_validation(tmp_path: Path, monkeypatch):
+    pkg = tmp_path / "cachehook"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "from core.runtime.plugins import PluginHookContext\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx: PluginHookContext): return None\n"
+        "    def on_config(self, ctx: PluginHookContext): return None\n"
+        "    def on_status(self, ctx: PluginHookContext): return {}\n"
+        "    def on_dashboard(self, ctx: PluginHookContext): return {}\n"
+        "    def on_maintenance(self, ctx: PluginHookContext): return {\"handled\": False}\n"
+        "    def on_tool_runtime(self, ctx: PluginHookContext): return {\"ready\": True}\n"
+        "    def on_health(self, ctx: PluginHookContext): return {\"healthy\": True}\n"
+        "_CONTRACT = _Contract()\n",
+        encoding="utf-8",
+    )
+    manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "adapter.cache",
+            "plugin_type": "adapter",
+            "module": "cachehook.impl",
+            "capabilities": _contract_caps("Cache Adapter"),
+        }
+    )
+    import core.runtime.plugins as plugin_runtime
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    real_import = plugin_runtime.importlib.import_module
+    calls = {"module": 0}
+
+    def _counting_import(name: str, package=None):
+        if name == "cachehook.impl":
+            calls["module"] += 1
+        return real_import(name, package)
+
+    monkeypatch.setattr(plugin_runtime.importlib, "import_module", _counting_import)
+    plugin_runtime.reset_plugin_runtime()
+    try:
+        plugin_runtime._validate_contract_instance(manifest)
+        plugin_runtime._validate_contract_instance(manifest)
+        assert calls["module"] == 1
+    finally:
+        plugin_runtime.reset_plugin_runtime()
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 def test_validate_manifest_rejects_invalid_declared_exports():
     with pytest.raises(ValueError, match="tools.exports must contain non-empty strings"):
         validate_manifest_dict(
