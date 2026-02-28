@@ -683,6 +683,90 @@ def test_run_plugin_contract_surface_collect_orders_by_manifest_priority(tmp_pat
             sys.path.remove(str(tmp_path))
 
 
+def test_run_plugin_contract_surface_collect_strict_stops_after_first_hook_failure(tmp_path: Path):
+    pkg = tmp_path / "failfastpkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "impl.py").write_text(
+        "from core.contracts.plugin_contract import PluginContractBase\n"
+        "CALLS = []\n"
+        "class _Contract(PluginContractBase):\n"
+        "    def on_init(self, ctx): return None\n"
+        "    def on_config(self, ctx):\n"
+        "        CALLS.append(ctx.plugin.plugin_id)\n"
+        "        if ctx.plugin.plugin_id == 'ingest.fail':\n"
+        "            raise RuntimeError('boom')\n"
+        "        return {'ok': True}\n"
+        "    def on_status(self, ctx): return {}\n"
+        "    def on_dashboard(self, ctx): return {}\n"
+        "    def on_maintenance(self, ctx): return {'handled': False}\n"
+        "    def on_tool_runtime(self, ctx): return {'ready': True}\n"
+        "    def on_health(self, ctx): return {'healthy': True}\n"
+        "_CONTRACT = _Contract()\n"
+        "def on_config(ctx):\n"
+        "    return _CONTRACT.on_config(ctx)\n",
+        encoding="utf-8",
+    )
+
+    fail_manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "ingest.fail",
+            "plugin_type": "ingest",
+            "module": "failfastpkg.impl",
+            "priority": 1,
+            "capabilities": {
+                **_contract_caps("Fail Ingest"),
+                "contract": {
+                    **_contract_caps("Fail Ingest")["contract"],
+                    "config": {"mode": "hook", "handler": "on_config"},
+                },
+            },
+        }
+    )
+    later_manifest = validate_manifest_dict(
+        {
+            "plugin_api_version": 1,
+            "plugin_id": "ingest.later",
+            "plugin_type": "ingest",
+            "module": "failfastpkg.impl",
+            "priority": 2,
+            "capabilities": {
+                **_contract_caps("Later Ingest"),
+                "contract": {
+                    **_contract_caps("Later Ingest")["contract"],
+                    "config": {"mode": "hook", "handler": "on_config"},
+                },
+            },
+        }
+    )
+    registry = PluginRegistry(api_version=1)
+    registry.register(fail_manifest)
+    registry.register(later_manifest)
+
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        errs, warns, results = run_plugin_contract_surface_collect(
+            registry=registry,
+            slots={"ingest": ["ingest.fail", "ingest.later"]},
+            surface="config",
+            config={},
+            plugin_config={},
+            workspace_root=str(tmp_path),
+            strict=True,
+        )
+        assert len(errs) == 1
+        assert "ingest.fail" in errs[0]
+        assert warns == []
+        assert results == []
+        mod = __import__("failfastpkg.impl", fromlist=["CALLS"])
+        assert mod.CALLS == ["ingest.fail"]
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+
+
 def test_run_plugin_contract_surface_rejects_missing_base_contract(tmp_path: Path):
     pkg = tmp_path / "badpkg"
     pkg.mkdir(parents=True)
