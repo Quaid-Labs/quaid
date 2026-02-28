@@ -80,7 +80,7 @@ def bootstrap_default_domains(conn) -> Dict[str, str]:
             """,
             (domain_id, description),
         )
-    return defaults
+    return read_active_domains(conn)
 
 
 def load_active_domains(

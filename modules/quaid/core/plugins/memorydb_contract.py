@@ -7,7 +7,6 @@ are implemented here and invoked by core plugin contract execution.
 from __future__ import annotations
 
 import sqlite3
-import threading
 from pathlib import Path
 from typing import Dict
 
@@ -15,13 +14,13 @@ from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
 from datastore.memorydb.domain_registry import (
     apply_domain_set,
+    ensure_domain_tables,
     load_active_domains,
     normalize_domain_map,
 )
 from lib.config import get_db_path
+from lib.domain_runtime import publish_domains_to_runtime_config
 from lib.tools_domain_sync import sync_tools_domain_block
-
-_PUBLISH_LOCK = threading.RLock()
 
 def _resolve_db_path(ctx: PluginHookContext) -> Path:
     _ = ctx
@@ -38,11 +37,7 @@ def _resolve_domains(ctx: PluginHookContext) -> Dict[str, str]:
 
 
 def _publish_domains_to_runtime_config(ctx: PluginHookContext, domains: Dict[str, str]) -> None:
-    retrieval = getattr(ctx.config, "retrieval", None)
-    if retrieval is None:
-        return
-    with _PUBLISH_LOCK:
-        setattr(retrieval, "domains", dict(domains))
+    publish_domains_to_runtime_config(ctx.config, domains)
 
 
 def _sync_domains(ctx: PluginHookContext) -> None:
@@ -53,6 +48,7 @@ def _sync_domains(ctx: PluginHookContext) -> None:
         from lib.database import get_connection
 
         with get_connection(db_path) as conn:
+            ensure_domain_tables(conn)
             domains = apply_domain_set(conn, explicit_domains, deactivate_others=True)
     else:
         domains = load_active_domains(db_path, bootstrap_if_empty=True)

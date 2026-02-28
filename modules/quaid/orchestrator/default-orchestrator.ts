@@ -16,6 +16,7 @@ export type TotalRecallOptions = {
   expandGraph: boolean;
   graphDepth: number;
   domain: DomainFilter;
+  domainBoost?: Record<string, number> | string[];
   intent?: RecallIntent;
   ranking?: {
     sourceTypeBoosts?: Partial<Record<SourceType, number>>;
@@ -46,6 +47,7 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
     query: string,
     limit: number,
     domain: DomainFilter,
+    domainBoost?: Record<string, number> | string[],
     project?: string,
     dateFrom?: string,
     dateTo?: string
@@ -55,6 +57,7 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
     limit: number,
     depth: number,
     domain: DomainFilter,
+    domainBoost?: Record<string, number> | string[],
     project?: string,
     dateFrom?: string,
     dateTo?: string
@@ -388,16 +391,16 @@ ${projectHints}
           const project = typeof projectRaw === "string" && projectRaw.trim()
             ? projectRaw.trim()
             : ctx.opts.project;
-          return deps.recallVector(ctx.query, ctx.limit, domain, project, ctx.opts.dateFrom, ctx.opts.dateTo);
+          return deps.recallVector(ctx.query, ctx.limit, domain, ctx.opts.domainBoost, project, ctx.opts.dateFrom, ctx.opts.dateTo);
         },
       },
       vector_basic: {
         key: "vector_basic",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { personal: true }, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo),
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { personal: true }, ctx.opts.domainBoost, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo),
       },
       vector_technical: {
         key: "vector_technical",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { technical: true }, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo),
+        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { technical: true }, ctx.opts.domainBoost, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo),
       },
       graph: {
         key: "graph",
@@ -412,7 +415,7 @@ ${projectHints}
           const project = typeof projectRaw === "string" && projectRaw.trim()
             ? projectRaw.trim()
             : ctx.opts.project;
-          return deps.recallGraph(ctx.query, ctx.limit, depth, domain, project, ctx.opts.dateFrom, ctx.opts.dateTo);
+          return deps.recallGraph(ctx.query, ctx.limit, depth, domain, ctx.opts.domainBoost, project, ctx.opts.dateFrom, ctx.opts.dateTo);
         },
       },
       journal: {

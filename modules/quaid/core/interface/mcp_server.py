@@ -19,6 +19,7 @@ import os
 import sys
 import json
 import logging
+import hmac
 import uuid
 
 # MCP uses stdout for JSON-RPC — redirect stdout to stderr before any imports
@@ -116,7 +117,7 @@ def _domain_admin_allowed(admin_token: str = "") -> tuple[bool, str]:
     if enabled in {"0", "false", "no", "off"}:
         return False, "domain registration disabled (set QUAID_ENABLE_DOMAIN_REGISTER=1)"
     expected = os.environ.get("QUAID_DOMAIN_ADMIN_TOKEN", "").strip()
-    if expected and admin_token.strip() != expected:
+    if expected and not hmac.compare_digest(admin_token.strip(), expected):
         return False, "domain registration denied (invalid admin token)"
     return True, ""
 
@@ -161,12 +162,15 @@ def memory_extract(
     Returns:
         Dict with facts_stored, facts_skipped, edges_created, and extracted details.
     """
-    return run_extract_from_transcript(
-        transcript=transcript,
-        owner_id=OWNER_ID,
-        label=label,
-        dry_run=dry_run,
-    )
+    try:
+        return run_extract_from_transcript(
+            transcript=transcript,
+            owner_id=OWNER_ID,
+            label=label,
+            dry_run=dry_run,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 @_mcp_contract_tool()
@@ -217,7 +221,10 @@ def memory_store(
     }
     if domains:
         store_kwargs["domains"] = domains
-    return store(**store_kwargs)
+    try:
+        return store(**store_kwargs)
+    except (ValueError, RuntimeError) as exc:
+        return {"error": str(exc)}
 
 
 @_mcp_contract_tool()
@@ -251,6 +258,7 @@ def memory_recall(
     query: str,
     limit: int = 5,
     domain_json: str = '{"all": true}',
+    domain_boost_json: str = "{}",
     min_similarity: float = 0.0,
     debug: bool = False,
     use_routing: bool = True,
@@ -278,6 +286,7 @@ def memory_recall(
         query: Natural language query (e.g. "What are the user's hobbies?").
         limit: Maximum number of results (1-20).
         domain_json: Domain filter map JSON, e.g. {"all": true} or {"technical": true}.
+        domain_boost_json: Optional boost map/list JSON, e.g. {"technical": 1.4} or ["technical"].
         min_similarity: Optional floor (0.0 uses config/default behavior).
         debug: Include scoring breakdown payloads.
         use_routing: Enable intent/routing search heuristics.
@@ -297,6 +306,12 @@ def memory_recall(
             raise ValueError("domain_json must decode to a JSON object")
     except Exception as e:
         raise ValueError(f"invalid domain_json: {e}")
+    try:
+        parsed_domain_boost = json.loads(domain_boost_json or "{}")
+        if not isinstance(parsed_domain_boost, (dict, list)):
+            raise ValueError("domain_boost_json must decode to a JSON object or JSON array")
+    except Exception as e:
+        raise ValueError(f"invalid domain_boost_json: {e}")
     try:
         parsed_min_similarity = float(min_similarity) if min_similarity is not None else 0.0
     except (TypeError, ValueError):
@@ -318,12 +333,23 @@ def memory_recall(
         or bool(source_author_id.strip() if source_author_id else "")
         or bool(viewer_entity_id.strip() if viewer_entity_id else "")
         or bool(participant_entity_ids_json.strip() if participant_entity_ids_json else "")
+        or bool(domain_boost_json and domain_boost_json.strip() and domain_boost_json.strip() not in ("{}", "[]"))
         or not bool(include_unscoped)
     )
 
     # Fast path for common/default usage: stay on the stable API wrapper.
     if not has_advanced:
-        return recall(query=query, owner_id=OWNER_ID, limit=limit, domain=parsed_domain)
+        try:
+            return recall(
+                query=query,
+                owner_id=OWNER_ID,
+                limit=limit,
+                domain=parsed_domain,
+                domain_boost=parsed_domain_boost,
+            )
+        except ValueError as exc:
+            logger.warning("memory_recall domain validation error: %s", exc)
+            return []
 
     participant_entity_ids = None
     if participant_entity_ids_json and participant_entity_ids_json.strip():
@@ -336,29 +362,34 @@ def memory_recall(
             raise ValueError(f"invalid participant_entity_ids_json: {e}")
 
     # Advanced path: still route through API boundary.
-    return recall(
-        query=query,
-        owner_id=OWNER_ID,
-        limit=limit,
-        domain=parsed_domain,
-        min_similarity=(parsed_min_similarity if parsed_min_similarity > 0 else None),
-        debug=bool(debug),
-        use_routing=bool(use_routing),
-        use_aliases=bool(use_aliases),
-        use_intent=bool(use_intent),
-        use_multi_pass=bool(use_multi_pass),
-        use_reranker=bool(use_reranker),
-        date_from=(date_from.strip() if date_from else None),
-        date_to=(date_to.strip() if date_to else None),
-        actor_id=(actor_id.strip() if actor_id else None),
-        subject_entity_id=(subject_entity_id.strip() if subject_entity_id else None),
-        source_channel=(source_channel.strip().lower() if source_channel else None),
-        source_conversation_id=(source_conversation_id.strip() if source_conversation_id else None),
-        source_author_id=(source_author_id.strip() if source_author_id else None),
-        viewer_entity_id=(viewer_entity_id.strip() if viewer_entity_id else None),
-        participant_entity_ids=participant_entity_ids,
-        include_unscoped=bool(include_unscoped),
-    )
+    try:
+        return recall(
+            query=query,
+            owner_id=OWNER_ID,
+            limit=limit,
+            domain=parsed_domain,
+            domain_boost=parsed_domain_boost,
+            min_similarity=(parsed_min_similarity if parsed_min_similarity > 0 else None),
+            debug=bool(debug),
+            use_routing=bool(use_routing),
+            use_aliases=bool(use_aliases),
+            use_intent=bool(use_intent),
+            use_multi_pass=bool(use_multi_pass),
+            use_reranker=bool(use_reranker),
+            date_from=(date_from.strip() if date_from else None),
+            date_to=(date_to.strip() if date_to else None),
+            actor_id=(actor_id.strip() if actor_id else None),
+            subject_entity_id=(subject_entity_id.strip() if subject_entity_id else None),
+            source_channel=(source_channel.strip().lower() if source_channel else None),
+            source_conversation_id=(source_conversation_id.strip() if source_conversation_id else None),
+            source_author_id=(source_author_id.strip() if source_author_id else None),
+            viewer_entity_id=(viewer_entity_id.strip() if viewer_entity_id else None),
+            participant_entity_ids=participant_entity_ids,
+            include_unscoped=bool(include_unscoped),
+        )
+    except ValueError as exc:
+        logger.warning("memory_recall domain validation error: %s", exc)
+        return []
 
 
 @_mcp_contract_tool()
