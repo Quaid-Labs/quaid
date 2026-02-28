@@ -3353,7 +3353,12 @@ def recall(
     search_limit = limit * 3
     if _ollama_up:
         # Route query through LLM (HyDE) — only when embeddings will be used
-        _use_hyde = use_routing
+        cfg_use_hyde = True
+        try:
+            cfg_use_hyde = bool(get_config().retrieval.use_hyde)
+        except Exception:
+            cfg_use_hyde = True
+        _use_hyde = bool(use_routing) and cfg_use_hyde
         if not _HAS_LLM_CLIENTS:
             _use_hyde = False
         search_query = route_query(clean_query) if _use_hyde else clean_query
