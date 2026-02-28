@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestMemory, cleanupTestMemory, TestMemoryInterface } from './setup'
 
 describe('Recall Pipeline', () => {
@@ -9,6 +9,7 @@ describe('Recall Pipeline', () => {
   })
 
   afterEach(async () => {
+    vi.unstubAllEnvs()
     await cleanupTestMemory(memory)
   })
 
@@ -157,7 +158,7 @@ describe('Recall Pipeline', () => {
       const sessionId = `test-session-${Date.now()}`
 
       // Store a memory in current session
-      process.env.TEST_SESSION_ID = sessionId
+      vi.stubEnv('TEST_SESSION_ID', sessionId)
       await memory.store('Current session fact about testing', 'quaid')
 
       // Search within same session — should not find just-stored memory
@@ -169,7 +170,6 @@ describe('Recall Pipeline', () => {
       // be a valid result.
       expect(Array.isArray(results)).toBe(true)
 
-      delete process.env.TEST_SESSION_ID
     })
   })
 })
