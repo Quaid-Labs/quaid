@@ -661,6 +661,82 @@ class TestGatewayLLMProvider:
             with pytest.raises(urllib.error.HTTPError):
                 p.llm_call([{"role": "user", "content": "test"}], timeout=1)
 
+    def test_llm_call_falls_back_to_openresponses_on_405(self):
+        import urllib.request
+        import urllib.error
+
+        p = GatewayLLMProvider(port=18789, token="test-token")
+        first_err = urllib.error.HTTPError(
+            url="http://127.0.0.1:18789/plugins/quaid/llm",
+            code=405,
+            msg="Method Not Allowed",
+            hdrs=None,
+            fp=io.BytesIO(b"Method Not Allowed"),
+        )
+        fallback_resp = MagicMock()
+        fallback_resp.read.return_value = json.dumps({
+            "output_text": "fallback ok",
+            "model": "claude-haiku-4-5",
+            "usage": {"input_tokens": 12, "output_tokens": 7},
+            "incomplete": False,
+        }).encode()
+        fallback_resp.__enter__ = MagicMock(return_value=fallback_resp)
+        fallback_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(urllib.request, "urlopen", side_effect=[first_err, fallback_resp]) as mock_open:
+            result = p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hello"}],
+                model_tier="fast",
+                timeout=1,
+            )
+
+        assert result.text == "fallback ok"
+        assert result.input_tokens == 12
+        assert result.output_tokens == 7
+        assert mock_open.call_count == 2
+        fallback_req = mock_open.call_args_list[1][0][0]
+        assert "/v1/responses" in fallback_req.full_url
+        sent_body = json.loads(fallback_req.data)
+        assert sent_body["model"] == "claude-haiku-4-5"
+        assert sent_body["input"] == "hello"
+        assert sent_body["instructions"] == "sys"
+
+    def test_openresponses_fallback_uses_workspace_model_from_memory_config(self, tmp_path, monkeypatch):
+        import urllib.request
+
+        workspace = tmp_path / "ws"
+        cfg_dir = workspace / "config"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "memory.json").write_text(
+            json.dumps({"models": {"fastReasoning": "qwen2.5-coder:7b", "deepReasoning": "claude-opus-4-6"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("QUAID_HOME", str(workspace))
+
+        p = GatewayLLMProvider(port=18789, token="test-token")
+        fallback_resp = MagicMock()
+        fallback_resp.read.return_value = json.dumps({
+            "output_text": "ok",
+            "model": "qwen2.5-coder:7b",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }).encode()
+        fallback_resp.__enter__ = MagicMock(return_value=fallback_resp)
+        fallback_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(urllib.request, "urlopen", return_value=fallback_resp) as mock_open:
+            result = p._llm_call_openresponses(
+                system_prompt="sys",
+                user_message="hello",
+                model_tier="fast",
+                max_tokens=32,
+                timeout=1,
+                start_time=0.0,
+            )
+        assert result.text == "ok"
+        req_obj = mock_open.call_args[0][0]
+        sent_body = json.loads(req_obj.data)
+        assert sent_body["model"] == "qwen2.5-coder:7b"
+
 
 class TestABCEnforcement:
     def test_llm_provider_cannot_instantiate(self):
