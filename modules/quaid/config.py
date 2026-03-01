@@ -387,6 +387,7 @@ class NotificationsConfig:
     # Notification presentation controls
     full_text: bool = False             # Show full text in notifications (no truncation)
     show_processing_start: bool = True  # Notify user when extraction starts
+    project_create_enabled: bool = True  # Notify when a new project is registered
 
     # Level presets:
     #   quiet:   janitor=off, extraction=off, retrieval=off
@@ -1303,6 +1304,12 @@ def _load_config_inner() -> MemoryConfig:
         retrieval=FeatureNotificationConfig.from_config(notif_data.get('retrieval', None)),
         full_text=notif_data.get('full_text', False),
         show_processing_start=notif_data.get('show_processing_start', True),
+        project_create_enabled=bool(
+            notif_data.get('project_create', {}).get(
+                'enabled',
+                notif_data.get('projectCreate', {}).get('enabled', True),
+            )
+        ),
     )
 
     # Parse systems config (toggleable subsystems)

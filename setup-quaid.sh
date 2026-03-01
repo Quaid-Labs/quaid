@@ -1738,6 +1738,7 @@ _write_config() {
     "janitor": { "verbosity": "${NOTIF_JANITOR}", "channel": "last_used" },
     "extraction": { "verbosity": "${NOTIF_EXTRACTION}", "channel": "last_used" },
     "retrieval": { "verbosity": "${NOTIF_RETRIEVAL}", "channel": "last_used" },
+    "projectCreate": { "enabled": true },
     "fullText": true,
     "showProcessingStart": true
   },
