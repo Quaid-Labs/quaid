@@ -350,6 +350,19 @@ function shouldNotifyFeature(feature: "janitor" | "extraction" | "retrieval", de
   return effective === "full";
 }
 
+function shouldNotifyProjectCreate(): boolean {
+  const notifications = getMemoryConfig().notifications || {};
+  const snake = notifications.project_create;
+  if (snake && typeof snake === "object" && typeof snake.enabled === "boolean") {
+    return snake.enabled;
+  }
+  const camel = notifications.projectCreate;
+  if (camel && typeof camel === "object" && typeof camel.enabled === "boolean") {
+    return camel.enabled;
+  }
+  return true;
+}
+
 type ModelTier = "deep" | "fast";
 type ExtractionTrigger = "compaction" | "reset" | "new" | "recovery" | "timeout" | "unknown";
 
@@ -3606,6 +3619,25 @@ notify_docs_search(data['query'], data['results'])
             if (params.description) { args.push("--description", params.description); }
             if (params.source_roots) { args.push("--source-roots", ...params.source_roots); }
             const output = await callDocsRegistry("create-project", args);
+            if (shouldNotifyProjectCreate()) {
+              try {
+                const notifyPayload = JSON.stringify({
+                  name: params.name,
+                  label: params.label || "",
+                });
+                spawnNotifyScript(`
+import json
+from core.runtime.notify import notify_user
+data = json.loads(${JSON.stringify(notifyPayload)})
+name = str(data.get("name", "")).strip()
+label = str(data.get("label", "")).strip()
+project_label = f"{name} ({label})" if label else name
+notify_user(f"📁 Project registered: {project_label}")
+`);
+              } catch (notifyErr: unknown) {
+                console.warn(`[quaid] Project-create notification skipped: ${(notifyErr as Error).message}`);
+              }
+            }
             return {
               content: [{ type: "text", text: output || `Project '${params.name}' created.` }],
               details: { name: params.name },
