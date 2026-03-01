@@ -33,7 +33,7 @@ If an agent needs to predict prompts or run non-interactively, it should use `se
 Use the Node installer directly instead of `curl | bash` when an agent is driving install:
 
 ```bash
-git clone https://github.com/steadman-labs/quaid.git
+git clone https://github.com/quaid-labs/quaid.git
 cd quaid
 node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace" --owner-name "<Person Name>"
 ```
