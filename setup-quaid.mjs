@@ -1044,6 +1044,13 @@ async function step4_embeddings() {
 
   log.info(C.dim("Embeddings power semantic search — turning text into vectors"));
   log.info(C.dim("so Quaid can find relevant memories by meaning, not just keywords."));
+  const { total: totalRam, free: freeRam } = getSystemRAM();
+  log.info(C.dim(`System RAM: ${totalRam}GB total, ~${freeRam}GB available`));
+  const recommendedByRam =
+    (freeRam >= 8 || totalRam >= 24) ? "qwen3-embedding:8b" :
+    (freeRam >= 4 || totalRam >= 12) ? "nomic-embed-text" :
+    "all-minilm";
+  log.info(C.dim(`Recommended embedding by RAM: ${recommendedByRam}`));
 
   // Check Ollama
   let ollamaRunning = false;
@@ -1080,8 +1087,11 @@ async function step4_embeddings() {
   if (!ollamaRunning && (process.env.QUAID_TEST_NO_OLLAMA || !canRun("ollama"))) {
     log.warn("Ollama not found.");
     log.info(C.dim("Ollama runs embedding models locally — free, fast, and private."));
-    log.info(C.dim("Without it, Quaid uses keyword search only (no semantic recall)."));
-    const install = handleCancel(await confirm({ message: "Install Ollama now?" }));
+    log.info(C.dim("Without it, semantic recall degrades substantially."));
+    const install = handleCancel(await confirm({
+      message: "Install Ollama now? (recommended)",
+      initialValue: true,
+    }));
     if (install) {
       const s = spinner();
       s.start("Installing Ollama...");
@@ -1104,6 +1114,14 @@ async function step4_embeddings() {
           log.warn(`Install failure detail: ${detail}`);
         }
         log.warn("You may need to start it manually: ollama serve");
+      }
+    } else {
+      const proceedDegraded = handleCancel(await confirm({
+        message: "Continue without Ollama and accept degraded recall quality?",
+        initialValue: false,
+      }));
+      if (!proceedDegraded) {
+        bail("Install cancelled. Re-run after installing Ollama.");
       }
     }
   }
@@ -1209,10 +1227,15 @@ async function step4_embeddings() {
       }
     }
   } else {
-    // No Ollama — keyword-only for now (cloud embeddings on roadmap)
-    log.warn(C.bold("Ollama not available — semantic search requires local embeddings."));
+    const proceedDegraded = handleCancel(await confirm({
+      message: "Ollama is still unavailable. Continue with keyword-only mode (degraded)?",
+      initialValue: false,
+    }));
+    if (!proceedDegraded) {
+      bail("Install cancelled. Re-run after starting or installing Ollama.");
+    }
+    log.warn(C.bold("Proceeding without Ollama — semantic search disabled."));
     log.info(C.bold("Install Ollama later for vector search: https://ollama.ai"));
-    log.info(C.dim("Cloud embedding support (OpenAI API) is on the roadmap."));
     embedModel = "none";
     embedDim = 0;
     log.success("Keyword-only mode (FTS5 full-text search)");
