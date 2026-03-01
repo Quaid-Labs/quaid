@@ -23,16 +23,18 @@ Use the Node installer directly instead of `curl | bash` when an agent is drivin
 ```bash
 git clone https://github.com/steadman-labs/quaid.git
 cd quaid
-node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace"
+node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace" --owner-name "<Person Name>"
 ```
 
 `--workspace` is the safest way to avoid wrong workspace detection in non-interactive sessions.
+`--owner-name` ensures memory ownership is tagged to the human (not a system account).
 
 ## Environment Variables (optional)
 
 - `QUAID_WORKSPACE` or `QUAID_HOME`: explicit workspace override
 - `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint
 - `QUAID_INSTALL_AGENT=1`: enable non-interactive installer defaults
+- `QUAID_OWNER_NAME`: explicit human owner name for memory tagging
 
 ## OpenClaw-specific Notes
 
@@ -44,7 +46,7 @@ node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace"
 ## Minimal Non-interactive Command
 
 ```bash
-QUAID_WORKSPACE="/absolute/path/to/workspace" QUAID_INSTALL_AGENT=1 node setup-quaid.mjs --agent
+QUAID_WORKSPACE="/absolute/path/to/workspace" QUAID_OWNER_NAME="<Person Name>" QUAID_INSTALL_AGENT=1 node setup-quaid.mjs --agent
 ```
 
 ## Optional Dry Context Step for Agents
@@ -58,6 +60,25 @@ node setup-quaid.mjs --help
 Then inspect `setup-quaid.mjs` for step prompts/defaults and execute the non-interactive command above.
 
 ## Agent Communication Requirement (Mandatory)
+
+Before running install, the AI agent must run a short pre-install survey with the human.
+
+Show all planned answers (including defaults) and ask: "Do you want to change any of these before I run install?"
+
+Minimum survey fields:
+
+- Owner name (`users.defaultOwner`) as a human name, not system username
+- Workspace path
+- Adapter type
+- LLM provider + deep/fast models
+- Embeddings provider/model
+- Notifications level + per-feature verbosity
+- Enabled systems
+- Janitor apply mode/policies
+- Janitor schedule choice
+- Workspace file import choice
+
+Only execute install after the user confirms or edits these values.
 
 When an AI agent runs install, it must explicitly report all selected options to the user, including values that were defaults.
 

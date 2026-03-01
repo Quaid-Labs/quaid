@@ -29,6 +29,7 @@ HOOKS_PR_URL="https://github.com/openclaw/openclaw/pull/13287"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_MODE=false
 WORKSPACE_OVERRIDE=""
+OWNER_NAME_OVERRIDE="${QUAID_OWNER_NAME:-}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --agent) AGENT_MODE=true; shift ;;
@@ -40,12 +41,29 @@ while [[ $# -gt 0 ]]; do
             WORKSPACE_OVERRIDE="${2:-}"
             shift 2
             ;;
+        --owner-name)
+            if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == --* ]]; then
+                echo "Error: --owner-name requires a value" >&2
+                exit 2
+            fi
+            OWNER_NAME_OVERRIDE="${2:-}"
+            shift 2
+            ;;
+        --owner-name=*)
+            OWNER_NAME_OVERRIDE="${1#*=}"
+            if [[ -z "${OWNER_NAME_OVERRIDE}" ]]; then
+                echo "Error: --owner-name requires a non-empty value" >&2
+                exit 2
+            fi
+            shift
+            ;;
         -h|--help)
             cat <<'USAGE'
 Usage: bash setup-quaid.sh [options]
 
 Options:
   --workspace <path>  Override workspace/home path (highest priority)
+  --owner-name <name> Person name used to tag memories (recommended for --agent)
   --agent             Non-interactive agent mode (accept defaults)
   -h, --help          Show this help
 USAGE
@@ -334,11 +352,40 @@ enable_required_openclaw_hooks() {
 
     info "Explicitly enabling required OpenClaw hooks: bootstrap-extra-files, session-memory"
 
+    _force_enable_openclaw_hook() {
+        local hook_name="$1"
+        python3 - "$hook_name" <<'PY'
+import json, os, sys
+hook_name = str(sys.argv[1] or "").strip()
+if not hook_name:
+    raise SystemExit(1)
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+hooks = data.setdefault("hooks", {})
+internal = hooks.setdefault("internal", {})
+entries = internal.setdefault("entries", {})
+entry = entries.get(hook_name)
+if not isinstance(entry, dict):
+    entry = {}
+    entries[hook_name] = entry
+entry["enabled"] = True
+tmp_path = f"{cfg_path}.tmp-{os.getpid()}"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp_path, cfg_path)
+PY
+    }
+
     # Each row: canonical:alias (alias supports historical/typo variants in some gateway builds)
     local hook_pairs=(
         "bootstrap-extra-files:bot-strap-extra-files"
         "session-memory:session-memoey"
     )
+    local forced_any=false
     local pair canonical alias last_err
     for pair in "${hook_pairs[@]}"; do
         canonical="${pair%%:*}"
@@ -355,8 +402,20 @@ enable_required_openclaw_hooks() {
             fi
             last_err="$("$cli" hooks enable "$alias" 2>&1 || true)"
         fi
+        if _force_enable_openclaw_hook "$canonical"; then
+            warn "Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed: ${last_err})"
+            forced_any=true
+            continue
+        fi
         warn "Could not enable hook '${canonical}': ${last_err}"
     done
+    if $forced_any; then
+        if "$cli" gateway restart >/dev/null 2>&1; then
+            info "Restarted OpenClaw gateway to apply forced hook state"
+        else
+            warn "Could not auto-restart OpenClaw gateway after forced hook enable. Restart manually."
+        fi
+    fi
 }
 
 # --- Ollama URL resolution ---
@@ -561,6 +620,30 @@ os.replace(tmp_path, cfg_path)
 PY
 }
 
+_ensure_openclaw_responses_endpoint() {
+    python3 - <<'PY'
+import json, os, sys
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+gateway = data.setdefault("gateway", {})
+http = gateway.setdefault("http", {})
+endpoints = http.setdefault("endpoints", {})
+responses = endpoints.setdefault("responses", {})
+if bool(responses.get("enabled", False)):
+    raise SystemExit(0)
+responses["enabled"] = True
+tmp_path = f"{cfg_path}.tmp-{os.getpid()}"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp_path, cfg_path)
+raise SystemExit(2)
+PY
+}
+
 # =============================================================================
 # Step 1: Welcome & Pre-flight
 # =============================================================================
@@ -645,6 +728,18 @@ step1_preflight() {
         fi
         if ! $has_agent; then
             warn "OpenClaw agents.list still missing. Install will continue, but run 'openclaw setup' if agent sessions fail."
+        fi
+        local responses_rc=0
+        _ensure_openclaw_responses_endpoint || responses_rc=$?
+        if [[ $responses_rc -eq 2 ]]; then
+            info "Enabled OpenClaw gateway endpoint: gateway.http.endpoints.responses.enabled=true"
+            if [[ -n "$cli" ]] && "$cli" gateway restart >/dev/null 2>&1; then
+                info "Restarted OpenClaw gateway to apply endpoint config"
+            else
+                warn "Could not auto-restart OpenClaw gateway. Restart it manually to apply endpoint config."
+            fi
+        elif [[ $responses_rc -ne 0 ]]; then
+            warn "Could not verify OpenClaw responses endpoint config. If /v1/responses returns 405, set gateway.http.endpoints.responses.enabled=true."
         fi
         info "OpenClaw onboarding check complete"
     else
@@ -838,36 +933,34 @@ conn.close()
 step2_owner() {
     step 2 "Detecting owner"
 
-    echo "  Quaid stores memories per-owner. Detecting your identity..."
+    echo "  Quaid stores memories per-owner."
+    echo "  Tell us your real name so memory tags stay human-readable."
     echo ""
 
-    # Try git config (most reliable — most devs have this set)
     local git_name=""
     if command -v git &>/dev/null; then
         git_name=$(git config user.name 2>/dev/null || true)
     fi
+    local suggested="${OWNER_NAME_OVERRIDE:-${git_name}}"
 
-    if [[ -n "$git_name" ]]; then
-        OWNER_DISPLAY="$git_name"
-        info "Detected from git: ${OWNER_DISPLAY}"
-    elif [[ -n "${USER:-}" ]]; then
-        # Fall back to OS username
-        OWNER_DISPLAY="$USER"
-        info "Using system user: ${OWNER_DISPLAY}"
-    else
-        ask "Could not auto-detect. What's your name?"
-        OWNER_DISPLAY="${REPLY:-User}"
+    if [[ -n "$suggested" ]]; then
+        info "Suggested: ${suggested}"
     fi
 
-    OWNER_NAME=$(echo "$OWNER_DISPLAY" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
-    info "Owner ID: ${OWNER_NAME}"
-
-    if ! confirm "Use '${OWNER_DISPLAY}' as your owner name?"; then
-        ask "Enter your preferred name:"
-        OWNER_DISPLAY="${REPLY:-$OWNER_DISPLAY}"
-        OWNER_NAME=$(echo "$OWNER_DISPLAY" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
-        info "Owner ID: ${OWNER_NAME}"
+    if $AGENT_MODE && [[ -z "$suggested" ]]; then
+        error "Agent mode requires --owner-name or QUAID_OWNER_NAME so memories are tagged to a person."
+        exit 2
     fi
+
+    ask "What is your name so we can tag your memories?" "$suggested"
+    OWNER_DISPLAY="$(echo "${REPLY:-}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [[ -z "$OWNER_DISPLAY" ]]; then
+        error "Name is required. Re-run with --owner-name \"Your Name\" or set QUAID_OWNER_NAME."
+        exit 2
+    fi
+    OWNER_NAME="$(echo "$OWNER_DISPLAY" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+    [[ -z "$OWNER_NAME" ]] && OWNER_NAME="default"
+    info "Owner: ${OWNER_DISPLAY} (${OWNER_NAME})"
 }
 
 # =============================================================================
@@ -1393,17 +1486,20 @@ step6_install() {
 
     # Install Python dependency: sqlite-vec (vector search extension)
     info "Installing sqlite-vec..."
-    if pip3 install sqlite-vec >/dev/null 2>&1; then
+    if python3 -m pip install sqlite-vec >/dev/null 2>&1; then
         info "sqlite-vec installed"
+    elif python3 -m pip install --user sqlite-vec >/dev/null 2>&1; then
+        info "sqlite-vec installed (user site)"
+    elif pip3 install sqlite-vec >/dev/null 2>&1; then
+        info "sqlite-vec installed (pip3 fallback)"
     elif pip install sqlite-vec >/dev/null 2>&1; then
         info "sqlite-vec installed (pip fallback)"
     else
-        warn "sqlite-vec install skipped — install manually: pip3 install sqlite-vec"
+        warn "sqlite-vec install skipped — install manually: python3 -m pip install --user sqlite-vec"
     fi
 
-    # Legacy quaid-reset-signal hook is intentionally not installed.
-    # Reset/compaction extraction signaling is now contract-owned inside adapter handlers.
-    info "Skipping legacy hook install: quaid-reset-signal (contract-owned lifecycle handlers active)"
+    # Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
+    info "Legacy hook quaid-reset-signal is deprecated; lifecycle handlers are already active."
     if $IS_OPENCLAW; then
         enable_required_openclaw_hooks
     fi
@@ -1861,7 +1957,6 @@ _check_migration() {
     echo ""
     echo "  Would you like to import facts from these files into memory?"
     echo "  This uses your configured model and may take 2-5 minutes."
-    echo -e "  Estimated cost: ${YELLOW}~\$0.15-0.50${RESET} depending on content."
     echo ""
 
     if confirm "Import facts from existing files?"; then

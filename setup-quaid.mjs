@@ -22,7 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function parseInstallArgs(argv) {
-  const opts = { workspace: "", agent: false, help: false, errors: [] };
+  const opts = { workspace: "", ownerName: "", agent: false, help: false, errors: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--workspace") {
@@ -48,6 +48,25 @@ function parseInstallArgs(argv) {
       opts.agent = true;
       continue;
     }
+    if (arg === "--owner-name") {
+      const next = argv[i + 1] || "";
+      if (!next || next.startsWith("--")) {
+        opts.errors.push("--owner-name requires a value");
+      } else {
+        opts.ownerName = next;
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--owner-name=")) {
+      const value = arg.slice("--owner-name=".length);
+      if (!value) {
+        opts.errors.push("--owner-name requires a non-empty value");
+      } else {
+        opts.ownerName = value;
+      }
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       opts.help = true;
       continue;
@@ -62,6 +81,7 @@ function printUsageAndExit() {
 
 Options:
   --workspace <path>  Override workspace/home path (highest priority)
+  --owner-name <name> Person name used to tag memories (recommended for --agent)
   --agent             Non-interactive agent mode (accepts sane defaults)
   -h, --help          Show this help
 `);
@@ -367,6 +387,15 @@ function canRun(cmd) {
   return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
 }
 
+function ownerIdFromDisplayName(displayName) {
+  const normalized = String(displayName || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "default";
+}
+
 function _readAgentsList(cli) {
   const out = shell(`${cli} config get agents.list 2>/dev/null </dev/null`, false);
   if (!out) return [];
@@ -409,6 +438,35 @@ function _ensureAgentsList(cli, workspacePath) {
     return _readAgentsList(cli).some((a) => a && typeof a === "object" && a.id);
   } catch (err) {
     log.warn(`Could not auto-heal agents.list: ${String(err)}`);
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
+function _ensureOpenClawResponsesEndpoint() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed.gateway || typeof parsed.gateway !== "object") parsed.gateway = {};
+    if (!parsed.gateway.http || typeof parsed.gateway.http !== "object") parsed.gateway.http = {};
+    if (!parsed.gateway.http.endpoints || typeof parsed.gateway.http.endpoints !== "object") {
+      parsed.gateway.http.endpoints = {};
+    }
+    if (!parsed.gateway.http.endpoints.responses || typeof parsed.gateway.http.endpoints.responses !== "object") {
+      parsed.gateway.http.endpoints.responses = {};
+    }
+    const alreadyEnabled = !!parsed.gateway.http.endpoints.responses.enabled;
+    if (alreadyEnabled) return false;
+    parsed.gateway.http.endpoints.responses.enabled = true;
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
     return false;
   } finally {
     try {
@@ -602,6 +660,16 @@ async function step1_preflight() {
         "OpenClaw agents.list is still missing. Install continues, but run `openclaw setup` if agent sessions fail.",
       );
     }
+    const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
+    if (responsesEndpointChanged) {
+      log.info("Enabled gateway.http.endpoints.responses.enabled=true in ~/.openclaw/openclaw.json");
+      const restart = spawnSync(cfgCli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
+      if (restart.status === 0) {
+        log.info("Restarted OpenClaw gateway to apply endpoint config");
+      } else {
+        log.warn("Could not auto-restart OpenClaw gateway. Restart it manually to apply endpoint config.");
+      }
+    }
     s.stop(C.green("OpenClaw") + " gateway running");
   } else {
     // --- Standalone mode: ensure workspace directory exists ---
@@ -766,31 +834,24 @@ async function step2_owner() {
 
   log.info(C.bold("Every memory is stored against an owner name."));
   log.info(C.bold("This is how Quaid keeps memories namespaced — one owner per person."));
-  log.info(C.dim("Multi-user support is planned. For now, this is your identity."));
+  log.info(C.dim("Tell us your real name so memory tags stay human-readable."));
   log.message("");
 
-  let detected = shell("git config user.name 2>/dev/null") || process.env.USER || "";
-
-  if (detected) {
-    log.info(`Detected: ${C.bcyan(detected)}`);
-    const ok = handleCancel(await confirm({ message: `Use "${detected}" as your owner name?` }));
-    if (!ok) {
-      detected = handleCancel(await text({
-        message: "Enter your preferred name:",
-        placeholder: detected,
-        validate: v => v.length === 0 ? "Name is required" : undefined,
-      }));
-    }
-  } else {
-    detected = handleCancel(await text({
-      message: "What's your name?",
-      placeholder: "Your Name",
-      validate: v => v.length === 0 ? "Name is required" : undefined,
-    }));
+  const seedName =
+    String(INSTALL_ARGS.ownerName || process.env.QUAID_OWNER_NAME || shell("git config user.name 2>/dev/null") || "").trim();
+  if (seedName) {
+    log.info(`Suggested: ${C.bcyan(seedName)}`);
+  } else if (AGENT_MODE) {
+    throw new Error("Agent mode requires --owner-name or QUAID_OWNER_NAME so memories are tagged to the person.");
   }
 
-  const display = detected;
-  const id = display.toLowerCase().replace(/\s+/g, "-");
+  const display = handleCancel(await text({
+    message: "What is your name so we can tag your memories?",
+    initialValue: seedName || undefined,
+    placeholder: "Solomon",
+    validate: (v) => String(v || "").trim().length === 0 ? "Name is required" : undefined,
+  }));
+  const id = ownerIdFromDisplayName(display);
   log.success(`Owner: ${C.bcyan(display)} ${C.dim(`(${id})`)}`);
   return { display, id };
 }
@@ -1498,9 +1559,8 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
   }
 
-  // Legacy quaid-reset-signal hook is intentionally not installed.
-  // Reset/compaction extraction signaling is now contract-owned inside adapter handlers.
-  log.info("Skipping legacy hook install: quaid-reset-signal (contract-owned lifecycle handlers active)");
+  // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
+  log.info("Legacy hook quaid-reset-signal is deprecated; lifecycle handlers are already active.");
   if (IS_OPENCLAW) {
     enableRequiredOpenClawHooks();
   }
@@ -1508,16 +1568,26 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Install Python dependency: sqlite-vec (vector search extension)
   s.start("Installing sqlite-vec...");
   try {
-    const pip3Result = spawnSync("pip3", ["install", "sqlite-vec"], { stdio: "pipe" });
-    if (pip3Result.status !== 0) {
-      const pipResult = spawnSync("pip", ["install", "sqlite-vec"], { stdio: "pipe" });
-      if (pipResult.status !== 0) {
-        throw new Error("pip install sqlite-vec failed");
+    const attempts = [
+      ["python3", ["-m", "pip", "install", "sqlite-vec"]],
+      ["python3", ["-m", "pip", "install", "--user", "sqlite-vec"]],
+      ["pip3", ["install", "sqlite-vec"]],
+      ["pip", ["install", "sqlite-vec"]],
+    ];
+    let ok = false;
+    for (const [cmd, args] of attempts) {
+      const res = spawnSync(cmd, args, { stdio: "pipe" });
+      if (res.status === 0) {
+        ok = true;
+        break;
       }
+    }
+    if (!ok) {
+      throw new Error("sqlite-vec install failed");
     }
     s.stop(C.green("sqlite-vec installed"));
   } catch {
-    s.stop(C.yellow("sqlite-vec install skipped — install manually: pip3 install sqlite-vec"));
+    s.stop(C.yellow("sqlite-vec install skipped — install manually: python3 -m pip install --user sqlite-vec"));
   }
 
   // Initialize database
@@ -1689,7 +1759,7 @@ except Exception as e:
     log.info(`Found existing workspace files: ${C.bcyan(mdFiles.join(", "))}`);
     const doMigrate = handleCancel(await confirm({
       message: "Import facts from existing files into memory? (uses LLM processing)",
-      initialValue: false,
+      initialValue: true,
     }));
     if (doMigrate) {
       s.start("Extracting facts from workspace files...");
@@ -2077,8 +2147,35 @@ function enableRequiredOpenClawHooks() {
     ["bootstrap-extra-files", "bot-strap-extra-files"],
     ["session-memory", "session-memoey"],
   ];
+  let forcedAny = false;
 
   log.info("Explicitly enabling required OpenClaw hooks: bootstrap-extra-files, session-memory");
+  const forceEnableHook = (hookName) => {
+    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+    const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      const raw = fs.readFileSync(cfgPath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (!parsed.hooks || typeof parsed.hooks !== "object") parsed.hooks = {};
+      if (!parsed.hooks.internal || typeof parsed.hooks.internal !== "object") parsed.hooks.internal = {};
+      if (!parsed.hooks.internal.entries || typeof parsed.hooks.internal.entries !== "object") {
+        parsed.hooks.internal.entries = {};
+      }
+      if (!parsed.hooks.internal.entries[hookName] || typeof parsed.hooks.internal.entries[hookName] !== "object") {
+        parsed.hooks.internal.entries[hookName] = {};
+      }
+      parsed.hooks.internal.entries[hookName].enabled = true;
+      fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+      fs.renameSync(tmpPath, cfgPath);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch {}
+    }
+  };
   for (const candidates of requiredHooks) {
     let enabled = false;
     let lastErr = "";
@@ -2099,8 +2196,22 @@ function enableRequiredOpenClawHooks() {
     }
     if (!enabled) {
       const canonical = candidates[0];
-      if (lastErr) log.warn(`Could not enable hook '${canonical}': ${lastErr}`);
-      else log.warn(`Could not enable hook '${canonical}'`);
+      if (forceEnableHook(canonical)) {
+        log.warn(`Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed).`);
+        forcedAny = true;
+      } else if (lastErr) {
+        log.warn(`Could not enable hook '${canonical}': ${lastErr}`);
+      } else {
+        log.warn(`Could not enable hook '${canonical}'`);
+      }
+    }
+  }
+  if (forcedAny) {
+    const restart = spawnSync(cli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
+    if (restart.status === 0) {
+      log.info("Restarted OpenClaw gateway to apply forced hook state");
+    } else {
+      log.warn("Could not auto-restart OpenClaw gateway after forced hook enable. Restart manually.");
     }
   }
 }
