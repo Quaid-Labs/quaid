@@ -723,6 +723,48 @@ wait_for_gateway_listen() {
   return 1
 }
 
+enable_required_openclaw_hooks() {
+  local cli=""
+  if command -v openclaw >/dev/null 2>&1; then
+    cli="openclaw"
+  elif command -v clawdbot >/dev/null 2>&1; then
+    cli="clawdbot"
+  else
+    echo "[e2e] WARN: OpenClaw CLI not found; cannot enable required hooks." >&2
+    return 0
+  fi
+
+  local hook_pairs=(
+    "bootstrap-extra-files:bot-strap-extra-files"
+    "session-memory:session-memoey"
+  )
+  local pair canonical alias out
+  for pair in "${hook_pairs[@]}"; do
+    canonical="${pair%%:*}"
+    alias="${pair#*:}"
+    if [[ "$alias" == "$canonical" ]]; then
+      alias=""
+    fi
+
+    if out="$("$cli" hooks enable "$canonical" 2>&1)"; then
+      echo "[e2e] Hook enabled: ${canonical}"
+      continue
+    fi
+
+    if [[ -n "$alias" ]]; then
+      if out="$("$cli" hooks enable "$alias" 2>&1)"; then
+        echo "[e2e] Hook enabled: ${canonical} (via alias '${alias}')"
+        continue
+      fi
+    fi
+
+    echo "[e2e] WARN: failed to enable hook '${canonical}' via ${cli}; continuing." >&2
+    if [[ -n "${out:-}" ]]; then
+      echo "[e2e] WARN: ${out}" >&2
+    fi
+  done
+}
+
 restore_test_gateway() {
   set +e
   echo "[e2e] Restoring gateway config to test workspace..."
@@ -1078,6 +1120,8 @@ else
 fi
 
 echo "[e2e] Skipping legacy quaid-reset-signal hook setup (contract-owned lifecycle handlers active)."
+echo "[e2e] Ensuring required OpenClaw hooks are enabled..."
+enable_required_openclaw_hooks
 
 # Keep timeout test practical in CI/dev by forcing a short inactivity timeout.
 MEMORY_CFG="${E2E_WS}/config/memory.json"
