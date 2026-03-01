@@ -15,8 +15,8 @@ const checks = [
     file: 'README.md',
     require: [
       'active knowledge layer',
-      'v0.2.1-alpha',
-      'docs/releases/v0.2.1-alpha.md',
+      'v0.2.2-alpha',
+      'docs/releases/v0.2.2-alpha.md',
     ],
     forbid: [
       'docs/releases/v0.20.0-alpha.md',
