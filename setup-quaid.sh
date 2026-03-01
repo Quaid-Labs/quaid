@@ -233,6 +233,44 @@ check_gateway_hooks() {
     return 1
 }
 
+enable_required_openclaw_hooks() {
+    local cli=""
+    if command -v openclaw >/dev/null 2>&1; then
+        cli="openclaw"
+    elif command -v clawdbot >/dev/null 2>&1; then
+        cli="clawdbot"
+    else
+        warn "OpenClaw CLI not found; skipping explicit hook enable."
+        return 0
+    fi
+
+    info "Explicitly enabling required OpenClaw hooks: bootstrap-extra-files, session-memory"
+
+    # Each row: canonical:alias (alias supports historical/typo variants in some gateway builds)
+    local hook_pairs=(
+        "bootstrap-extra-files:bot-strap-extra-files"
+        "session-memory:session-memoey"
+    )
+    local pair canonical alias last_err
+    for pair in "${hook_pairs[@]}"; do
+        canonical="${pair%%:*}"
+        alias="${pair##*:}"
+        if "$cli" hooks enable "$canonical" >/dev/null 2>&1; then
+            info "Hook enabled: ${canonical}"
+            continue
+        fi
+        last_err="$("$cli" hooks enable "$canonical" 2>&1 || true)"
+        if [[ "$last_err" =~ [Nn]ot\ found|[Uu]nknown|[Nn]o\ such\ hook|[Ii]nvalid ]]; then
+            if "$cli" hooks enable "$alias" >/dev/null 2>&1; then
+                info "Hook enabled: ${canonical}"
+                continue
+            fi
+            last_err="$("$cli" hooks enable "$alias" 2>&1 || true)"
+        fi
+        warn "Could not enable hook '${canonical}': ${last_err}"
+    done
+}
+
 # --- Ollama URL resolution ---
 # Priority: OLLAMA_URL env > existing config > localhost default
 # This allows reusing a host Ollama from a VM (see RUNBOOK.md Ollama Sharing)
@@ -1215,6 +1253,9 @@ step6_install() {
     # Legacy quaid-reset-signal hook is intentionally not installed.
     # Reset/compaction extraction signaling is now contract-owned inside adapter handlers.
     info "Skipping legacy hook install: quaid-reset-signal (contract-owned lifecycle handlers active)"
+    if $IS_OPENCLAW; then
+        enable_required_openclaw_hooks
+    fi
 
     # Initialize database
     info "Initializing database..."
