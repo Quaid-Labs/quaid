@@ -100,6 +100,12 @@ This is mandatory even when using `--agent` non-interactive mode.
 For embeddings specifically: agents must not silently default to degraded mode when Ollama is unavailable.
 They must ask the user whether to install/start Ollama first, and only proceed degraded after explicit approval.
 
+### macOS Memory Reporting Note
+
+On macOS, installer RAM availability is estimated from `vm_stat` pages (`free + inactive + speculative + purgeable`), not just strictly free pages.
+This can differ from Activity Monitor's displayed "free" number, and may differ from what users expect when cache/compression is active.
+Agents should state which memory metric they used in the survey and confirm with the user before choosing a lower-tier embedding model.
+
 When an AI agent runs install, it must explicitly report all selected options to the user, including values that were defaults.
 
 Do not say only "install succeeded." Always include a compact options summary so the user can see what was chosen and what can be changed later.
