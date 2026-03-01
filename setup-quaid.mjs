@@ -168,27 +168,92 @@ const EMBED_MODELS = {
   "all-minilm":          { dim: 384,  ramGB: 0.5, quality: "Basic", rank: 5 },
 };
 
+function readPkgName(pkgDir) {
+  try {
+    const raw = fs.readFileSync(path.join(pkgDir, "package.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const name = String(parsed?.name || "").trim();
+    return name;
+  } catch {
+    return "";
+  }
+}
+
+function findPackageRootFrom(startPath, allowedNames = new Set(["openclaw", "clawdbot"])) {
+  let dir = startPath;
+  try {
+    const st = fs.statSync(startPath);
+    if (!st.isDirectory()) {
+      dir = path.dirname(startPath);
+    }
+  } catch {
+    dir = path.dirname(startPath);
+  }
+
+  while (true) {
+    const pkgJson = path.join(dir, "package.json");
+    if (fs.existsSync(pkgJson)) {
+      const pkgName = readPkgName(dir);
+      if (allowedNames.has(pkgName)) {
+        return dir;
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function discoverOpenClawRoots() {
+  const roots = new Set();
+  const allowed = new Set(["openclaw", "clawdbot"]);
+
+  for (const cli of ["clawdbot", "openclaw"]) {
+    const cliBin = shell(`command -v ${cli} 2>/dev/null`) || "";
+    if (!cliBin) continue;
+    for (const candidate of [cliBin, fs.existsSync(cliBin) ? fs.realpathSync(cliBin) : ""]) {
+      if (!candidate) continue;
+      const root = findPackageRootFrom(candidate, allowed);
+      if (root) roots.add(root);
+    }
+  }
+
+  const npmRoot = shell("npm root -g 2>/dev/null") || "";
+  if (npmRoot && fs.existsSync(npmRoot)) {
+    for (const entry of fs.readdirSync(npmRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (!entry.name.startsWith("openclaw") && !entry.name.startsWith("clawdbot")) continue;
+      const dir = path.join(npmRoot, entry.name);
+      const root = findPackageRootFrom(dir, allowed) || (fs.existsSync(path.join(dir, "package.json")) ? dir : null);
+      if (root) roots.add(root);
+    }
+  }
+
+  for (const dir of [
+    path.join(os.homedir(), "openclaw"),
+    path.join(os.homedir(), "openclaw-source"),
+    "/opt/homebrew/lib/node_modules/openclaw",
+    "/opt/homebrew/lib/node_modules/clawdbot",
+    "/usr/local/lib/node_modules/openclaw",
+    "/usr/local/lib/node_modules/clawdbot",
+    "/usr/lib/node_modules/openclaw",
+    "/usr/lib/node_modules/clawdbot",
+  ]) {
+    if (!fs.existsSync(path.join(dir, "package.json"))) continue;
+    const root = findPackageRootFrom(dir, allowed) || dir;
+    if (root) roots.add(root);
+  }
+
+  return [...roots];
+}
+
 // --- Resolve @clack/prompts ---
 // Try OpenClaw installation first, then well-known paths, then local/global npm
 let clack;
-if (IS_OPENCLAW) {
-  try {
-    const cliBin = shell("which clawdbot || which openclaw", true);
-    const resolved = fs.realpathSync(cliBin);
-    const pkgRoot = path.join(path.dirname(resolved), "..");
-    const clackPath = path.join(pkgRoot, "node_modules", "@clack", "prompts", "dist", "index.mjs");
-    if (fs.existsSync(clackPath)) {
-      clack = await import(clackPath);
-    }
-  } catch { /* fall through */ }
-}
-
 if (!clack) {
   for (const base of [
-    "/opt/homebrew/lib/node_modules/clawdbot",
-    "/opt/homebrew/lib/node_modules/openclaw",
-    "/usr/local/lib/node_modules/clawdbot",
-    "/usr/local/lib/node_modules/openclaw",
+    ...discoverOpenClawRoots(),
     // Standalone: try @clack/prompts installed globally or alongside this script
     path.join(__dirname, "node_modules", "@clack", "prompts"),
     ...(process.env.npm_config_prefix ? [path.join(process.env.npm_config_prefix, "lib", "node_modules", "@clack", "prompts")] : []),
@@ -1982,24 +2047,10 @@ function baseUrlFor(provider) {
 }
 
 function findGateway() {
-  for (const cli of ["clawdbot", "openclaw"]) {
-    const bin = shell(`which ${cli}`);
-    if (!bin) continue;
-    try {
-      const resolved = fs.realpathSync(bin);
-      const candidate = path.join(path.dirname(resolved), "..");
-      if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
-    } catch {}
-  }
-  for (const candidate of [
-    "/opt/homebrew/lib/node_modules/openclaw",
-    "/opt/homebrew/lib/node_modules/clawdbot",
-    "/usr/local/lib/node_modules/openclaw",
-    "/usr/local/lib/node_modules/clawdbot",
-    "/usr/lib/node_modules/openclaw",
-    "/usr/lib/node_modules/clawdbot",
-  ]) {
-    if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
+  for (const candidate of discoverOpenClawRoots()) {
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
+      return candidate;
+    }
   }
   return null;
 }
