@@ -46,6 +46,13 @@ if [[ -z "${QUAID_HOME:-}" ]]; then
   fi
 fi
 
+# Ensure Python can import Quaid modules when invoked from any cwd.
+if [[ -z "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="$SCRIPT_DIR"
+elif [[ ":${PYTHONPATH}:" != *":${SCRIPT_DIR}:"* ]]; then
+  export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
+fi
+
 case "$CMD" in
   # Janitor commands
   janitor)

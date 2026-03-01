@@ -209,31 +209,51 @@ _try_brew_install() {
 GATEWAY_DIR=""  # Set by check_gateway_hooks if found
 
 _find_gateway() {
-    # Try resolving the clawdbot/openclaw CLI symlink to find the gateway root
+    # Try resolving the clawdbot/openclaw CLI path and walking upward to package root.
     for cli_name in clawdbot openclaw; do
         if command -v "$cli_name" &>/dev/null; then
             local resolved
-            resolved=$(readlink -f "$(command -v "$cli_name")" 2>/dev/null || readlink "$(command -v "$cli_name")" 2>/dev/null || true)
+            resolved=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$(command -v "$cli_name")" 2>/dev/null || true)
             if [[ -n "$resolved" ]]; then
-                local candidate_dir
-                candidate_dir=$(dirname "$(dirname "$resolved")")
-                if [[ -f "${candidate_dir}/package.json" ]]; then
-                    echo "$candidate_dir"
-                    return 0
-                fi
+                local scan
+                scan="$(dirname "$resolved")"
+                while [[ "$scan" != "/" && -n "$scan" ]]; do
+                    if [[ -f "${scan}/package.json" ]]; then
+                        local pkg_name
+                        pkg_name=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],"r",encoding="utf-8")).get("name",""))' "${scan}/package.json" 2>/dev/null || true)
+                        if [[ "$pkg_name" == "openclaw" || "$pkg_name" == "clawdbot" ]]; then
+                            echo "$scan"
+                            return 0
+                        fi
+                    fi
+                    scan="$(dirname "$scan")"
+                done
             fi
         fi
     done
-    # Fall back to common npm global paths
+    # Fall back to npm global roots and common local source paths.
+    local npm_root
+    npm_root="$(npm root -g 2>/dev/null || true)"
     for candidate in \
-        "$(npm root -g 2>/dev/null)/openclaw" \
-        "$(npm root -g 2>/dev/null)/clawdbot" \
+        "${npm_root}/openclaw" \
+        "${npm_root}/openclaw"* \
+        "${npm_root}/clawdbot" \
+        "${npm_root}/clawdbot"* \
         "/opt/homebrew/lib/node_modules/openclaw" \
+        "/opt/homebrew/lib/node_modules/openclaw"* \
         "/opt/homebrew/lib/node_modules/clawdbot" \
+        "/opt/homebrew/lib/node_modules/clawdbot"* \
         "/usr/local/lib/node_modules/openclaw" \
-        "/usr/local/lib/node_modules/clawdbot"
+        "/usr/local/lib/node_modules/openclaw"* \
+        "/usr/local/lib/node_modules/clawdbot" \
+        "/usr/local/lib/node_modules/clawdbot"* \
+        "${HOME}/openclaw" \
+        "${HOME}/openclaw-source"
     do
-        if [[ -d "$candidate" ]] && [[ -f "${candidate}/package.json" ]]; then
+        [[ -d "$candidate" && -f "${candidate}/package.json" ]] || continue
+        local pkg_name
+        pkg_name=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],"r",encoding="utf-8")).get("name",""))' "${candidate}/package.json" 2>/dev/null || true)
+        if [[ "$pkg_name" == "openclaw" || "$pkg_name" == "clawdbot" ]]; then
             echo "$candidate"
             return 0
         fi
