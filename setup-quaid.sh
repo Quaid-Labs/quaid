@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # --- Constants ---
-QUAID_VERSION="0.2.6-alpha"
+QUAID_VERSION="0.2.7-alpha"
 MIN_PYTHON_VERSION="3.10"
 MIN_SQLITE_VERSION="3.35"
 # Gateway PR #13287 — required hooks for knowledge extraction
