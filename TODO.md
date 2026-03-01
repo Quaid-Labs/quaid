@@ -48,6 +48,7 @@
   - adapter only reports source/channel/message identity and log locations
   - ingest/datastore own parsing/indexing/search behavior
   - no business logic in adapter fallbacks
+  - eliminate remaining direct `adaptors/openclaw` imports/usages of `datastore` and `ingest` modules; all adapter IO must route through core-owned contract surfaces
 - [ ] Benchmark track:
   - add multi-user benchmark lane (agent swarms + group chat attribution)
   - add privacy regression assertions (no leakage across entities)
