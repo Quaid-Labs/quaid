@@ -737,6 +737,24 @@ class TestGatewayLLMProvider:
         sent_body = json.loads(req_obj.data)
         assert sent_body["model"] == "qwen2.5-coder:7b"
 
+    def test_gateway_provider_resolves_token_from_env_when_missing_explicit_token(self, monkeypatch):
+        monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token")
+        p = GatewayLLMProvider(port=18789, token="")
+        assert p._token == "env-gateway-token"
+
+    def test_gateway_provider_resolves_token_from_openclaw_config(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        cfg_dir = home / ".openclaw"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "openclaw.json").write_text(
+            json.dumps({"gateway": {"auth": {"mode": "token", "token": "cfg-token"}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        p = GatewayLLMProvider(port=18789, token="")
+        assert p._token == "cfg-token"
+
 
 class TestABCEnforcement:
     def test_llm_provider_cannot_instantiate(self):
