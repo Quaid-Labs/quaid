@@ -1297,6 +1297,12 @@ def _load_config_inner() -> MemoryConfig:
 
     # Parse notifications config
     notif_data = config_data.get('notifications', {})
+    project_create_data = notif_data.get('project_create', {})
+    if not isinstance(project_create_data, dict):
+        project_create_data = {}
+    project_create_camel_data = notif_data.get('projectCreate', {})
+    if not isinstance(project_create_camel_data, dict):
+        project_create_camel_data = {}
     notifications = NotificationsConfig(
         level=notif_data.get('level', 'normal'),
         janitor=FeatureNotificationConfig.from_config(notif_data.get('janitor', None)),
@@ -1305,9 +1311,9 @@ def _load_config_inner() -> MemoryConfig:
         full_text=notif_data.get('full_text', False),
         show_processing_start=notif_data.get('show_processing_start', True),
         project_create_enabled=bool(
-            notif_data.get('project_create', {}).get(
+            project_create_data.get(
                 'enabled',
-                notif_data.get('projectCreate', {}).get('enabled', True),
+                project_create_camel_data.get('enabled', True),
             )
         ),
     )
