@@ -460,6 +460,48 @@ def test_initialize_plugin_runtime_non_strict_collects_duplicate_declared_export
     assert any("Duplicate declared tools export 'shared_tool'" in msg for msg in errors)
 
 
+def test_repo_manifests_have_no_duplicate_declared_exports():
+    repo_root = Path(__file__).resolve().parents[1]
+    manifests, errors = discover_plugin_manifests(paths=[str(repo_root)], strict=True)
+    assert not errors
+    assert manifests, "Expected at least one plugin manifest in repository"
+
+    registry = PluginRegistry(api_version=1)
+    for manifest in manifests:
+        registry.register(manifest)
+
+    slots = {
+        "adapter": next((m.plugin_id for m in manifests if m.plugin_type == "adapter"), ""),
+        "ingest": [m.plugin_id for m in manifests if m.plugin_type == "ingest"],
+        "datastores": [m.plugin_id for m in manifests if m.plugin_type == "datastore"],
+    }
+
+    duplicates = []
+    for surface in _PLUGIN_CONTRACT_DECLARED:
+        exports_by_plugin = collect_declared_exports(
+            registry=registry,
+            slots=slots,
+            surface=surface,
+            strict=True,
+        )
+        owners_by_export = {}
+        for plugin_id, exports in exports_by_plugin.items():
+            for export_name in exports:
+                owners_by_export.setdefault(export_name, []).append(plugin_id)
+        for export_name, owners in sorted(owners_by_export.items()):
+            unique_owners = sorted(set(owners))
+            if len(unique_owners) > 1:
+                duplicates.append((surface, export_name, unique_owners))
+
+    assert not duplicates, (
+        "Duplicate declared exports found in repository manifests: "
+        + "; ".join(
+            f"{surface}.{name} -> {', '.join(owners)}"
+            for surface, name, owners in duplicates
+        )
+    )
+
+
 def test_initialize_plugin_runtime_strict_rejects_unknown_dependency(tmp_path: Path):
     plugins_dir = tmp_path / "plugins"
     ingest_dir = plugins_dir / "ingest"

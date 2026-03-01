@@ -81,9 +81,7 @@
       "notifications": {
         "mode": "declared",
         "exports": [
-          "memory_recall",
-          "memory_extraction",
-          "docs_search"
+          "memory_recall"
         ]
       }
     }
