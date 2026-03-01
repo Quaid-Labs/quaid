@@ -1048,8 +1048,7 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
             { type: "message", role: "user", content: userMessage }
           ],
           max_output_tokens: maxTokens,
-          stream: false,
-          ...sessionKey ? { session_id: sessionKey } : {}
+          stream: false
         }),
         signal: AbortSignal.timeout(timeoutMs)
       });

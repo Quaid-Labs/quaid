@@ -1190,12 +1190,19 @@ def backfill_embeddings(graph: MemoryGraph, metrics: JanitorMetrics,
                         "UPDATE nodes SET embedding = ? WHERE id = ?",
                         (packed, node_id)
                     )
-                    _upsert_vec_embedding(
-                        conn,
-                        node_id,
-                        packed,
-                        context="backfill",
-                    )
+                    try:
+                        _upsert_vec_embedding(
+                            conn,
+                            node_id,
+                            packed,
+                            context="backfill",
+                        )
+                    except Exception as exc:
+                        # Backfill should not hard-fail janitor when vec table sync
+                        # is unavailable; node embedding has already been restored.
+                        msg = f"vec_nodes sync skipped during backfill for node {node_id}: {exc}"
+                        logger.warning(msg)
+                        metrics.add_warning(msg)
                 embedded += 1
             else:
                 metrics.add_error(f"Failed to embed node {node_id}: {name[:50]}")

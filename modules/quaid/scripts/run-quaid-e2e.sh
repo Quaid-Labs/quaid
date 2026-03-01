@@ -194,17 +194,31 @@ suite_has() {
   return 1
 }
 
-if suite_has "nightly"; then
+suite_has_exact() {
+  local needle="$1"
+  local token
+  IFS=',' read -r -a _suite_tokens <<< "$E2E_SUITES"
+  for token in "${_suite_tokens[@]}"; do
+    token="$(echo "$token" | tr '[:upper:]' '[:lower:]' | xargs)"
+    [[ -z "$token" ]] && continue
+    if [[ "$token" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+if suite_has_exact "nightly"; then
   NIGHTLY_MODE=true
   E2E_SUITES="full"
 fi
-if suite_has "nightly-strict-notify"; then
+if suite_has_exact "nightly-strict-notify"; then
   NIGHTLY_MODE=true
   NOTIFY_REQUIRE_DELIVERY="true"
   E2E_SUITES="full"
 fi
 
-if suite_has "blocker"; then
+if suite_has_exact "blocker"; then
   RUN_LLM_SMOKE=false
   RUN_INTEGRATION_TESTS=true
   RUN_LIVE_EVENTS=true
@@ -213,7 +227,7 @@ if suite_has "blocker"; then
   RUN_JANITOR=false
   RUN_JANITOR_SEED=false
   RUN_MEMORY_FLOW=true
-elif suite_has "pre-benchmark"; then
+elif suite_has_exact "pre-benchmark"; then
   RUN_LLM_SMOKE=true
   RUN_INTEGRATION_TESTS=true
   RUN_LIVE_EVENTS=true
@@ -223,7 +237,7 @@ elif suite_has "pre-benchmark"; then
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
   RUN_PREBENCH_GUARDS=true
-elif suite_has "janitor-parallel-bench"; then
+elif suite_has_exact "janitor-parallel-bench"; then
   RUN_LLM_SMOKE=false
   RUN_INTEGRATION_TESTS=false
   RUN_LIVE_EVENTS=false
@@ -234,7 +248,7 @@ elif suite_has "janitor-parallel-bench"; then
   RUN_MEMORY_FLOW=false
   RUN_PREBENCH_GUARDS=true
   RUN_JANITOR_PARALLEL_BENCH=true
-elif suite_has "core"; then
+elif suite_has_exact "core"; then
   RUN_LLM_SMOKE=true
   RUN_INTEGRATION_TESTS=true
   RUN_LIVE_EVENTS=true
@@ -243,7 +257,7 @@ elif suite_has "core"; then
   RUN_JANITOR=true
   RUN_JANITOR_SEED=true
   RUN_MEMORY_FLOW=true
-elif suite_has "full"; then
+elif suite_has_exact "full" || suite_has_exact "all"; then
   RUN_LLM_SMOKE=true
   RUN_INTEGRATION_TESTS=true
   RUN_LIVE_EVENTS=true
@@ -738,7 +752,7 @@ enable_required_openclaw_hooks() {
     "bootstrap-extra-files:bot-strap-extra-files"
     "session-memory:session-memoey"
   )
-  local pair canonical alias out
+  local pair canonical alias out out_file
   for pair in "${hook_pairs[@]}"; do
     canonical="${pair%%:*}"
     alias="${pair#*:}"
@@ -746,16 +760,24 @@ enable_required_openclaw_hooks() {
       alias=""
     fi
 
-    if out="$("$cli" hooks enable "$canonical" 2>&1)"; then
+    out_file="$(mktemp -t quaid-e2e-hook.XXXXXX)"
+    if "$cli" hooks enable "$canonical" >"$out_file" 2>&1; then
+      rm -f "$out_file"
       echo "[e2e] Hook enabled: ${canonical}"
       continue
     fi
+    out="$(cat "$out_file" 2>/dev/null || true)"
+    rm -f "$out_file"
 
     if [[ -n "$alias" ]]; then
-      if out="$("$cli" hooks enable "$alias" 2>&1)"; then
+      out_file="$(mktemp -t quaid-e2e-hook.XXXXXX)"
+      if "$cli" hooks enable "$alias" >"$out_file" 2>&1; then
+        rm -f "$out_file"
         echo "[e2e] Hook enabled: ${canonical} (via alias '${alias}')"
         continue
       fi
+      out="$(cat "$out_file" 2>/dev/null || true)"
+      rm -f "$out_file"
     fi
 
     echo "[e2e] WARN: failed to enable hook '${canonical}' via ${cli}; continuing." >&2
@@ -915,6 +937,11 @@ openclaw = obj.setdefault("openclaw", {})
 creds = openclaw.setdefault("authProfileCredentials", {})
 auth_profiles = openclaw.setdefault("authProfiles", {})
 auth_order = openclaw.setdefault("authOrder", {})
+
+# E2E must not emit live Telegram traffic.
+channels = openclaw.setdefault("channels", {})
+telegram = channels.setdefault("telegram", {})
+telegram["enabled"] = False
 
 openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
 if openai_api_key:
@@ -2539,7 +2566,7 @@ else
 fi
 
 if [[ "$RUN_JANITOR" == true ]]; then
-begin_stage "janitor"
+  begin_stage "janitor"
 if [[ "$RUN_JANITOR_SEED" == true ]]; then
 echo "[e2e] Seeding janitor workload (pending memory/snippets/journal/project/rag)..."
 python3 - "$E2E_WS" <<'PY'
@@ -2679,7 +2706,8 @@ rows = [
     mk_node("Fact", f"{multi_owner_marker}: preferred coding beverage is matcha tea", "pending", 0.79, "owner_beta"),
 ]
 
-with sqlite3.connect(db_path) as conn:
+with sqlite3.connect(db_path, timeout=30.0) as conn:
+    conn.execute("PRAGMA busy_timeout=30000")
     schema_path = ws / "plugins" / "quaid" / "datastore" / "memorydb" / "schema.sql"
     if not schema_path.exists():
         schema_path = ws / "modules" / "quaid" / "datastore" / "memorydb" / "schema.sql"
@@ -2847,6 +2875,25 @@ print(
 )
 PY
 fi
+
+python3 - "$E2E_WS" <<'PY'
+import os
+import sys
+
+ws = sys.argv[1]
+pending_dir = os.path.join(ws, "data", "pending-extraction-signals")
+removed = 0
+if os.path.isdir(pending_dir):
+    for name in os.listdir(pending_dir):
+        if name.endswith(".json") or ".json.processing." in name:
+            path = os.path.join(pending_dir, name)
+            try:
+                os.unlink(path)
+                removed += 1
+            except FileNotFoundError:
+                pass
+print(f"[e2e] Cleared pending extraction signal files before janitor: {removed}")
+PY
 
 echo "[e2e] Running janitor (${JANITOR_MODE})..."
 python3 - "$E2E_WS" "$JANITOR_TIMEOUT_SECONDS" "$JANITOR_MODE" "$RUN_PREBENCH_GUARDS" "$RUN_JANITOR_STRESS" "$JANITOR_STRESS_PASSES" "$RUN_JANITOR_PARALLEL_BENCH" "$JANITOR_PARALLEL_REPORT_PATH" <<'PY'

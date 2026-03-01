@@ -1204,7 +1204,6 @@ async function callConfiguredLLM(
           ],
           max_output_tokens: maxTokens,
           stream: false,
-          ...(sessionKey ? { session_id: sessionKey } : {}),
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });
