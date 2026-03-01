@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # --- Constants ---
-QUAID_VERSION="0.2.3-alpha"
+QUAID_VERSION="0.2.5-alpha"
 MIN_PYTHON_VERSION="3.10"
 MIN_SQLITE_VERSION="3.35"
 # Gateway PR #13287 — required hooks for knowledge extraction
@@ -27,10 +27,52 @@ MIN_GATEWAY_VERSION="2026.2.10"
 HOOKS_PR_URL="https://github.com/openclaw/openclaw/pull/13287"
 # Hooks merged into OpenClaw main via PR #13287 (Feb 2026)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="${QUAID_HOME:-${CLAWDBOT_WORKSPACE:-}}"
+AGENT_MODE=false
+WORKSPACE_OVERRIDE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --agent) AGENT_MODE=true; shift ;;
+        --workspace) WORKSPACE_OVERRIDE="${2:-}"; shift 2 ;;
+        -h|--help)
+            cat <<'USAGE'
+Usage: bash setup-quaid.sh [options]
+
+Options:
+  --workspace <path>  Override workspace/home path (highest priority)
+  --agent             Non-interactive agent mode (accept defaults)
+  -h, --help          Show this help
+USAGE
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 2
+            ;;
+    esac
+done
+if [[ "${QUAID_INSTALL_AGENT:-}" == "1" ]]; then
+    AGENT_MODE=true
+fi
+_read_workspace_from_openclaw_file() {
+    python3 - <<'PY'
+import json, os
+cfg = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg, "r", encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+for candidate in [data.get("workspace"), ((data.get("agents") or {}).get("defaults") or {}).get("workspace")]:
+    if isinstance(candidate, str) and candidate.strip():
+        print(candidate.strip())
+        raise SystemExit(0)
+print("")
+PY
+}
+WORKSPACE_ROOT="${WORKSPACE_OVERRIDE:-${QUAID_HOME:-${CLAWDBOT_WORKSPACE:-${QUAID_WORKSPACE:-}}}}"
 if [[ -z "$WORKSPACE_ROOT" ]]; then
     if command -v clawdbot &>/dev/null || command -v openclaw &>/dev/null; then
-        WORKSPACE_ROOT=$(clawdbot config get workspace 2>/dev/null || openclaw config get workspace 2>/dev/null || echo "")
+        WORKSPACE_ROOT=$(clawdbot config get workspace 2>/dev/null || openclaw config get workspace 2>/dev/null || _read_workspace_from_openclaw_file || echo "")
     fi
 fi
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/quaid}"
@@ -63,10 +105,25 @@ info()  { echo -e "${GREEN}[+]${RESET} $*"; }
 warn()  { echo -e "${YELLOW}[!]${RESET} $*"; }
 error() { echo -e "${RED}[x]${RESET} $*"; }
 step()  { echo -e "\n${BOLD}${CYAN}=== Step $1 of 7 — $2 ===${RESET}\n"; }
-ask()   { echo -en "${BOLD}$1${RESET} "; read -r REPLY; }
+ask() {
+    local prompt="$1"
+    local default="${2:-}"
+    if $AGENT_MODE || [[ ! -t 0 ]]; then
+        REPLY="$default"
+        echo -e "${BOLD}${prompt}${RESET} ${DIM}[auto:${default}]${RESET}"
+        return 0
+    fi
+    echo -en "${BOLD}${prompt}${RESET} "
+    read -r REPLY
+}
 confirm() {
     local prompt="${1:-Continue?}"
     local default="${2:-y}"
+    if $AGENT_MODE || [[ ! -t 0 ]]; then
+        echo -e "${BOLD}${prompt}${RESET} ${DIM}[auto:${default}]${RESET}"
+        [[ "$default" =~ ^[Yy]$ ]]
+        return
+    fi
     if [[ "$default" == "y" ]]; then
         echo -en "${BOLD}${prompt} [Y/n]${RESET} "
     else
@@ -401,6 +458,58 @@ NOTIF_EXTRACTION="summary"
 NOTIF_RETRIEVAL="off"
 AUTO_COMPACTION_ON_TIMEOUT=true
 
+_openclaw_cli() {
+    if command -v clawdbot >/dev/null 2>&1; then
+        echo "clawdbot"
+        return 0
+    fi
+    if command -v openclaw >/dev/null 2>&1; then
+        echo "openclaw"
+        return 0
+    fi
+    return 1
+}
+
+_has_openclaw_agent_list() {
+    local cli="$1"
+    "$cli" config get agents.list 2>/dev/null </dev/null | python3 -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+ok = isinstance(payload, list) and any(isinstance(item, dict) and item.get("id") for item in payload)
+sys.exit(0 if ok else 1)
+'
+}
+
+_ensure_openclaw_agent_list() {
+    local workspace="$1"
+    python3 - "$workspace" <<'PY'
+import json, os, sys
+workspace = sys.argv[1].strip()
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+agents = data.setdefault("agents", {})
+lst = agents.get("list")
+if isinstance(lst, list) and any(isinstance(item, dict) and item.get("id") for item in lst):
+    raise SystemExit(0)
+resolved_ws = workspace or data.get("workspace") or ((agents.get("defaults") or {}).get("workspace")) or os.path.expanduser("~/quaid")
+agents["list"] = [{
+    "id": "main",
+    "default": True,
+    "name": "Default",
+    "workspace": resolved_ws,
+}]
+with open(cfg_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+}
+
 # =============================================================================
 # Step 1: Welcome & Pre-flight
 # =============================================================================
@@ -463,39 +572,26 @@ step1_preflight() {
         fi
         info "OpenClaw gateway is running"
 
-        # Check that OpenClaw onboarding has been completed (at least one agent configured)
+        # Check that OpenClaw onboarding has at least one agent.list entry.
+        local cli
+        cli="$(_openclaw_cli || true)"
         local has_agent=false
-        if clawdbot config get agents 2>/dev/null </dev/null | python3 -c '
-import json, sys
-try:
-    payload = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-if isinstance(payload, list):
-    ok = any(isinstance(item, dict) and item.get("id") for item in payload)
-elif isinstance(payload, dict):
-    items = payload.get("list", [])
-    ok = isinstance(items, list) and any(isinstance(item, dict) and item.get("id") for item in items)
-else:
-    ok = False
-sys.exit(0 if ok else 1)
-'; then
+        if [[ -n "$cli" ]] && _has_openclaw_agent_list "$cli"; then
             has_agent=true
         fi
-
         if ! $has_agent; then
-            echo ""
-            error "OpenClaw setup has not been completed."
-            echo ""
-            echo "  Quaid needs at least one agent configured before it can install."
-            echo "  Run the OpenClaw setup wizard first:"
-            echo ""
-            echo -e "  ${BOLD}  openclaw setup${RESET}"
-            echo ""
-            echo "  Then re-run this installer."
-            exit 1
+            warn "No OpenClaw agents.list entry found; attempting auto-heal."
+            if _ensure_openclaw_agent_list "$WORKSPACE_ROOT"; then
+                if [[ -n "$cli" ]] && _has_openclaw_agent_list "$cli"; then
+                    has_agent=true
+                    info "OpenClaw agents.list auto-healed"
+                fi
+            fi
         fi
-        info "OpenClaw onboarding complete"
+        if ! $has_agent; then
+            warn "OpenClaw agents.list still missing. Install will continue, but run 'openclaw setup' if agent sessions fail."
+        fi
+        info "OpenClaw onboarding check complete"
     else
         info "Installing in standalone mode (no OpenClaw detected)"
         mkdir -p "$WORKSPACE_ROOT"

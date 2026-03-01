@@ -54,6 +54,12 @@ git clone https://github.com/steadman-labs/quaid.git
 cd quaid && node setup-quaid.mjs
 ```
 
+**AI/agent-driven installs:** prefer direct installer invocation (not `curl | bash`) and pass workspace explicitly:
+```bash
+node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace"
+```
+See [docs/AI-INSTALL.md](docs/AI-INSTALL.md) for full guidance.
+
 ---
 
 ## Benchmarks
@@ -153,7 +159,7 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 
 Quaid is in early alpha. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
 
-Known limitations for **v0.2.3-alpha**:
+Known limitations for **v0.2.5-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows support exists but has less operational coverage than macOS/Linux *(experimental)*.
@@ -180,7 +186,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Maintainer Lifecycle](docs/MAINTAINER-LIFECYCLE.md) — Safe branch/release model for post-user operation
 - [Contributing](CONTRIBUTING.md) — PR expectations, validation, and AI-assisted contribution policy
 - [Good First Issues](docs/GOOD-FIRST-ISSUES.md) — Small scoped tasks for new contributors
-- [v0.2.3-alpha Notes](docs/releases/v0.2.3-alpha.md) — Release highlights and known limitations
+- [v0.2.5-alpha Notes](docs/releases/v0.2.5-alpha.md) — Release highlights and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 
 ---

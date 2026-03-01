@@ -21,16 +21,75 @@ import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function parseInstallArgs(argv) {
+  const opts = { workspace: "", agent: false, help: false };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--workspace") {
+      opts.workspace = argv[i + 1] || "";
+      i++;
+      continue;
+    }
+    if (arg === "--agent") {
+      opts.agent = true;
+      continue;
+    }
+    if (arg === "-h" || arg === "--help") {
+      opts.help = true;
+      continue;
+    }
+  }
+  return opts;
+}
+
+function printUsageAndExit() {
+  console.log(`Usage: node setup-quaid.mjs [options]
+
+Options:
+  --workspace <path>  Override workspace/home path (highest priority)
+  --agent             Non-interactive agent mode (accepts sane defaults)
+  -h, --help          Show this help
+`);
+  process.exit(0);
+}
+
+const INSTALL_ARGS = parseInstallArgs(process.argv.slice(2));
+if (INSTALL_ARGS.help) printUsageAndExit();
+
 // --- Constants ---
-const VERSION = "0.2.3-alpha";
+const VERSION = "0.2.5-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw"; // Hooks merged in PR #13287
 const PROJECT_URL = "https://github.com/steadman-labs/quaid";
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
 function which(cmd) {
   return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
 }
+function readWorkspaceFromOpenClawConfig() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const ws = parsed?.workspace || parsed?.agents?.defaults?.workspace || "";
+    return typeof ws === "string" ? ws.trim() : "";
+  } catch {
+    return "";
+  }
+}
+function detectWorkspaceFromCli() {
+  return (
+    shell("clawdbot config get workspace 2>/dev/null </dev/null") ||
+    shell("openclaw config get workspace 2>/dev/null </dev/null") ||
+    readWorkspaceFromOpenClawConfig()
+  );
+}
 const IS_OPENCLAW = !!(process.env.CLAWDBOT_WORKSPACE || which("clawdbot") || which("openclaw"));
-const WORKSPACE = process.env.QUAID_HOME || process.env.CLAWDBOT_WORKSPACE || path.join(os.homedir(), "quaid");
+const WORKSPACE =
+  INSTALL_ARGS.workspace ||
+  process.env.QUAID_HOME ||
+  process.env.CLAWDBOT_WORKSPACE ||
+  detectWorkspaceFromCli() ||
+  path.join(os.homedir(), "quaid");
+const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1";
 const PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
 const CONFIG_DIR = path.join(WORKSPACE, "config");
 const DATA_DIR = path.join(WORKSPACE, "data");
@@ -167,13 +226,38 @@ const log = _log;
 
 const select = _testAnswers
   ? async (opts) => { const a = _nextAnswer("select", opts.message); log.info(C.dim(`[test] select "${opts.message}" → ${a}`)); return a; }
-  : _clack.select;
+  : AGENT_MODE
+    ? async (opts) => {
+        const initial = opts?.initialValue;
+        if (initial !== undefined && initial !== null) {
+          log.info(C.dim(`[agent] select "${opts.message}" → ${initial}`));
+          return initial;
+        }
+        const first = Array.isArray(opts?.options) ? opts.options[0] : undefined;
+        const picked = first?.value ?? first;
+        log.info(C.dim(`[agent] select "${opts.message}" → ${picked}`));
+        return picked;
+      }
+    : _clack.select;
 const confirm = _testAnswers
   ? async (opts) => { const a = _nextAnswer("confirm", opts.message); log.info(C.dim(`[test] confirm "${opts.message}" → ${a}`)); return a; }
-  : _clack.confirm;
+  : AGENT_MODE
+    ? async (opts) => {
+        const v = opts?.initialValue;
+        const picked = v === undefined ? true : !!v;
+        log.info(C.dim(`[agent] confirm "${opts.message}" → ${picked}`));
+        return picked;
+      }
+    : _clack.confirm;
 const text = _testAnswers
   ? async (opts) => { const a = _nextAnswer("text", opts.message); log.info(C.dim(`[test] text "${opts.message}" → ${a}`)); return a; }
-  : _clack.text;
+  : AGENT_MODE
+    ? async (opts) => {
+        const picked = opts?.initialValue ?? opts?.placeholder ?? "";
+        log.info(C.dim(`[agent] text "${opts.message}" → ${picked}`));
+        return picked;
+      }
+    : _clack.text;
 const spinner = _testAnswers
   ? () => ({ start: (m) => log.info(C.dim(`[test] spinner: ${m}`)), stop: (m) => log.info(C.dim(`[test] done: ${m}`)) })
   : _clack.spinner;
@@ -188,6 +272,46 @@ function shell(cmd, trim = true) {
 
 function canRun(cmd) {
   return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
+}
+
+function _readAgentsList(cli) {
+  const out = shell(`${cli} config get agents.list 2>/dev/null </dev/null`, false);
+  if (!out) return [];
+  try {
+    const parsed = JSON.parse(out);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function _ensureAgentsList(cli, workspacePath) {
+  const existing = _readAgentsList(cli);
+  if (existing.some((a) => a && typeof a === "object" && a.id)) return true;
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const ws =
+      workspacePath ||
+      parsed?.workspace ||
+      parsed?.agents?.defaults?.workspace ||
+      path.join(os.homedir(), "quaid");
+    if (!parsed.agents || typeof parsed.agents !== "object") parsed.agents = {};
+    parsed.agents.list = [
+      {
+        id: "main",
+        default: true,
+        name: "Default",
+        workspace: ws,
+      },
+    ];
+    fs.writeFileSync(cfgPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    return _readAgentsList(cli).some((a) => a && typeof a === "object" && a.id);
+  } catch (err) {
+    log.warn(`Could not auto-heal agents.list: ${String(err)}`);
+    return false;
+  }
 }
 
 function bail(msg) {
@@ -363,22 +487,17 @@ async function step1_preflight() {
       bail("OpenClaw gateway is not running.");
     }
 
-    // --- Onboarding complete ---
-    // Try both CLIs; pick whichever returns valid agent config (must contain "id")
-    const cbAgents = shell("clawdbot config get agents 2>/dev/null </dev/null");
-    const ocAgents = shell("openclaw config get agents 2>/dev/null </dev/null");
-    const agentConfig = (cbAgents.includes('"id"') ? cbAgents : null) ||
-                        (ocAgents.includes('"id"') ? ocAgents : null) || "";
-    if (!agentConfig.includes('"id"')) {
-      s.stop(C.red("Onboarding incomplete"), 2);
-      note(
-        "Quaid needs at least one agent configured.\n" +
-        "Run the setup wizard first:\n\n" +
-        "  openclaw setup\n\n" +
-        "Then re-run this installer.",
-        "Setup required"
+    // --- Onboarding / agents list ---
+    const cfgCli = canRun("clawdbot") ? "clawdbot" : "openclaw";
+    let hasAgent = _readAgentsList(cfgCli).some((a) => a && typeof a === "object" && a.id);
+    if (!hasAgent) {
+      log.warn("No agents.list detected; attempting auto-heal in ~/.openclaw/openclaw.json");
+      hasAgent = _ensureAgentsList(cfgCli, WORKSPACE);
+    }
+    if (!hasAgent) {
+      log.warn(
+        "OpenClaw agents.list is still missing. Install continues, but run `openclaw setup` if agent sessions fail.",
       );
-      bail("OpenClaw setup has not been completed.");
     }
     s.stop(C.green("OpenClaw") + " gateway running");
   } else {
@@ -2144,6 +2263,10 @@ function sleep(ms) {
 // =============================================================================
 async function main() {
   try {
+    if (AGENT_MODE) {
+      log.info("Agent mode enabled: using non-interactive defaults where prompts are normally required.");
+      log.info(`Workspace override: ${WORKSPACE}`);
+    }
     const pluginSrc = await step1_preflight();
     const owner = await step2_owner();
     const models = await step3_models();
