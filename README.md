@@ -54,11 +54,8 @@ git clone https://github.com/steadman-labs/quaid.git
 cd quaid && node setup-quaid.mjs
 ```
 
-**AI/agent-driven installs:** prefer direct installer invocation (not `curl | bash`) and pass workspace explicitly:
-```bash
-node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace"
-```
-See [docs/AI-INSTALL.md](docs/AI-INSTALL.md) for full guidance.
+**AI/agent-driven installs:** To have your agent install this, send them this link: [docs/AI-INSTALL.md](docs/AI-INSTALL.md).  
+If you're an agent, go there as well and do not use the commands above.
 
 ---
 
