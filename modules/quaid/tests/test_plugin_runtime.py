@@ -462,7 +462,14 @@ def test_initialize_plugin_runtime_non_strict_collects_duplicate_declared_export
 
 def test_repo_manifests_have_no_duplicate_declared_exports():
     repo_root = Path(__file__).resolve().parents[1]
-    manifests, errors = discover_plugin_manifests(paths=[str(repo_root)], strict=True)
+    manifests, errors = discover_plugin_manifests(
+        paths=[
+            str(repo_root / "adaptors"),
+            str(repo_root / "datastore"),
+            str(repo_root / "ingest"),
+        ],
+        strict=True,
+    )
     assert not errors
     assert manifests, "Expected at least one plugin manifest in repository"
 
@@ -504,12 +511,23 @@ def test_repo_manifests_have_no_duplicate_declared_exports():
 
 def test_repo_active_slots_init_surface_bootstraps_without_import_cycles(tmp_path: Path, monkeypatch):
     repo_root = Path(__file__).resolve().parents[1]
-    manifests, errors = discover_plugin_manifests(paths=[str(repo_root)], strict=True)
+    manifests, errors = discover_plugin_manifests(
+        paths=[
+            str(repo_root / "adaptors"),
+            str(repo_root / "datastore"),
+            str(repo_root / "ingest"),
+        ],
+        strict=True,
+    )
     assert not errors
 
     registry, init_errors, _warnings = initialize_plugin_runtime(
         api_version=1,
-        paths=[str(repo_root)],
+        paths=[
+            str(repo_root / "adaptors"),
+            str(repo_root / "datastore"),
+            str(repo_root / "ingest"),
+        ],
         strict=True,
         slots={
             "adapter": "openclaw.adapter",

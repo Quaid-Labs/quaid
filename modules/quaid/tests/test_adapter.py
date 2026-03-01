@@ -608,6 +608,7 @@ class TestNotifyEdgeCases:
             session_key="agent:main:main"
         )
         monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
         mock_result = MagicMock()
         mock_result.returncode = 0
         with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
@@ -625,6 +626,7 @@ class TestNotifyEdgeCases:
             session_key="agent:main:main"
         )
         monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
         mock_result = MagicMock()
         mock_result.returncode = 0
         with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
@@ -642,6 +644,7 @@ class TestNotifyEdgeCases:
             session_key="agent:main:main"
         )
         monkeypatch.setattr(adapter, "get_last_channel", lambda s="": mock_info)
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
         mock_result = MagicMock()
         mock_result.returncode = 0
         with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:

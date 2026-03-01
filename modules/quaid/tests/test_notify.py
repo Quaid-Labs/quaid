@@ -469,6 +469,7 @@ class TestNotifyFallbackVisibility:
         mock_info = ChannelInfo(channel="telegram", target="123",
                                 account_id="default", session_key="test")
         adapter.get_last_channel = lambda s="": mock_info
+        adapter._resolve_message_cli = lambda: "openclaw"
         set_adapter(adapter)
         try:
             with patch("adaptors.openclaw.adapter.subprocess.run") as mock_run:
@@ -545,6 +546,7 @@ class TestNotifyFallbackVisibility:
         info = _CI(channel="whatsapp", target="999",
                    account_id="work", session_key="test")
         adapter.get_last_channel = lambda s="": info
+        adapter._resolve_message_cli = lambda: "openclaw"
         set_adapter(adapter)
         mock_result = MagicMock()
         mock_result.returncode = 0
