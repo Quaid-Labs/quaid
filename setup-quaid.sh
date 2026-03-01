@@ -32,7 +32,14 @@ WORKSPACE_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --agent) AGENT_MODE=true; shift ;;
-        --workspace) WORKSPACE_OVERRIDE="${2:-}"; shift 2 ;;
+        --workspace)
+            if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == --* ]]; then
+                echo "Error: --workspace requires a path" >&2
+                exit 2
+            fi
+            WORKSPACE_OVERRIDE="${2:-}"
+            shift 2
+            ;;
         -h|--help)
             cat <<'USAGE'
 Usage: bash setup-quaid.sh [options]
@@ -69,7 +76,7 @@ for candidate in [data.get("workspace"), ((data.get("agents") or {}).get("defaul
 print("")
 PY
 }
-WORKSPACE_ROOT="${WORKSPACE_OVERRIDE:-${QUAID_HOME:-${CLAWDBOT_WORKSPACE:-${QUAID_WORKSPACE:-}}}}"
+WORKSPACE_ROOT="${WORKSPACE_OVERRIDE:-${QUAID_WORKSPACE:-${QUAID_HOME:-${CLAWDBOT_WORKSPACE:-}}}}"
 if [[ -z "$WORKSPACE_ROOT" ]]; then
     if command -v clawdbot &>/dev/null || command -v openclaw &>/dev/null; then
         WORKSPACE_ROOT=$(clawdbot config get workspace 2>/dev/null || openclaw config get workspace 2>/dev/null || _read_workspace_from_openclaw_file || echo "")
@@ -140,6 +147,10 @@ confirm() {
 _try_brew_install() {
     local package="$1"
     local label="${2:-$1}"
+    if $AGENT_MODE; then
+        warn "Agent mode: skipping auto-install for ${label}. Install manually: brew install ${package}"
+        return 1
+    fi
 
     if ! command -v brew &>/dev/null; then
         echo ""
@@ -483,6 +494,20 @@ sys.exit(0 if ok else 1)
 '
 }
 
+_has_openclaw_agent_list_file() {
+    python3 - <<'PY'
+import json, os, sys
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+lst = ((data.get("agents") or {}).get("list"))
+ok = isinstance(lst, list) and any(isinstance(item, dict) and item.get("id") for item in lst)
+sys.exit(0 if ok else 1)
+PY
+}
+
 _ensure_openclaw_agent_list() {
     local workspace="$1"
     python3 - "$workspace" <<'PY'
@@ -490,13 +515,17 @@ import json, os, sys
 workspace = sys.argv[1].strip()
 cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
 try:
-    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
 except Exception:
     raise SystemExit(1)
 agents = data.setdefault("agents", {})
 lst = agents.get("list")
 if isinstance(lst, list) and any(isinstance(item, dict) and item.get("id") for item in lst):
     raise SystemExit(0)
+if isinstance(lst, list) and len(lst) > 0:
+    # Preserve non-empty non-standard list entries; avoid destructive overwrite.
+    raise SystemExit(3)
 resolved_ws = workspace or data.get("workspace") or ((agents.get("defaults") or {}).get("workspace")) or os.path.expanduser("~/quaid")
 agents["list"] = [{
     "id": "main",
@@ -504,9 +533,11 @@ agents["list"] = [{
     "name": "Default",
     "workspace": resolved_ws,
 }]
-with open(cfg_path, "w", encoding="utf-8") as f:
+tmp_path = f"{cfg_path}.tmp-{os.getpid()}"
+with open(tmp_path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
+os.replace(tmp_path, cfg_path)
 PY
 }
 
@@ -582,9 +613,13 @@ step1_preflight() {
         if ! $has_agent; then
             warn "No OpenClaw agents.list entry found; attempting auto-heal."
             if _ensure_openclaw_agent_list "$WORKSPACE_ROOT"; then
-                if [[ -n "$cli" ]] && _has_openclaw_agent_list "$cli"; then
+                if { [[ -n "$cli" ]] && _has_openclaw_agent_list "$cli"; } || _has_openclaw_agent_list_file; then
                     has_agent=true
                     info "OpenClaw agents.list auto-healed"
+                fi
+            else
+                if [[ $? -eq 3 ]]; then
+                    warn "OpenClaw agents.list contains non-standard entries; leaving it unchanged."
                 fi
             fi
         fi
