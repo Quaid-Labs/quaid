@@ -1,5 +1,6 @@
 """Tests for extract.py — Memory extraction from conversation transcripts."""
 
+import itertools
 import json
 import os
 import sys
@@ -754,8 +755,10 @@ class TestExtractFromTranscript:
             "User: second chunk",
         ]
         mock_llm.return_value = (json.dumps({"facts": []}), 0.4)
-        # deadline init, chunk1 remaining check, chunk2 remaining check (expired)
-        mock_time.side_effect = [100.0, 100.0, 701.0]
+        # deadline init, chunk1 remaining check, chunk2 remaining check (expired).
+        # Use an unbounded iterator so incidental logging calls that touch time.time()
+        # cannot exhaust the mock in CI.
+        mock_time.side_effect = itertools.chain([100.0, 100.0, 701.0], itertools.repeat(701.0))
 
         result = extract_from_transcript(
             transcript="dummy",
