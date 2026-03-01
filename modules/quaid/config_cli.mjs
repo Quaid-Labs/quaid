@@ -197,9 +197,9 @@ function resolveEffectiveEmbeddingsProvider(cfg) {
 }
 
 function captureTimeoutMinutes(cfg) {
-  const raw = getPath(cfg, "capture.inactivity_timeout_minutes", getPath(cfg, "capture.inactivityTimeoutMinutes", 120));
+  const raw = getPath(cfg, "capture.inactivity_timeout_minutes", getPath(cfg, "capture.inactivityTimeoutMinutes", 60));
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 120;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 60;
 }
 
 function setCaptureTimeoutMinutes(cfg, minutes) {
