@@ -63,25 +63,43 @@ run_stage "Plugin contract health smoke" python3 - <<PY
 import json
 import os
 import subprocess
+import tempfile
+from pathlib import Path
 
-out = subprocess.check_output(
-    ["python3", "core/runtime/plugin_health.py"],
-    text=True,
-    env={
-        **os.environ,
-        "PYTHONPATH": ".",
-        "QUAID_HOME": "${REPO_ROOT}",
-        "CLAWDBOT_WORKSPACE": "${REPO_ROOT}",
-    },
-)
-payload = json.loads(out)
-if not isinstance(payload, dict):
-    raise SystemExit("plugin_health output was not a JSON object")
-if "enabled" not in payload:
-    raise SystemExit("plugin_health output missing 'enabled'")
-if "plugins" not in payload:
-    raise SystemExit("plugin_health output missing 'plugins'")
-print(json.dumps({"enabled": bool(payload["enabled"]), "plugin_count": len(payload.get("plugins", {}))}))
+with tempfile.TemporaryDirectory(prefix="quaid-plugin-health-") as tmp:
+    tmp_path = Path(tmp)
+    cfg_dir = tmp_path / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "memory.json").write_text(
+        json.dumps(
+            {
+                "adapter": {"type": "standalone"},
+                # Health smoke only needs config/bootstrap viability.
+                # Disable plugin runtime loading to avoid host-workspace assumptions.
+                "plugins": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = subprocess.check_output(
+        ["python3", "core/runtime/plugin_health.py"],
+        text=True,
+        env={
+            **os.environ,
+            "PYTHONPATH": ".",
+            "QUAID_HOME": str(tmp_path),
+            "CLAWDBOT_WORKSPACE": str(tmp_path),
+        },
+    )
+    payload = json.loads(out)
+    if not isinstance(payload, dict):
+        raise SystemExit("plugin_health output was not a JSON object")
+    if "enabled" not in payload:
+        raise SystemExit("plugin_health output missing 'enabled'")
+    if "plugins" not in payload:
+        raise SystemExit("plugin_health output missing 'plugins'")
+    print(json.dumps({"enabled": bool(payload["enabled"]), "plugin_count": len(payload.get("plugins", {}))}))
 PY
 run_optional_repo_checks
 
