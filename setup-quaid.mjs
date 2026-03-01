@@ -1688,7 +1688,7 @@ except Exception as e:
   if (mdFiles.length > 0) {
     log.info(`Found existing workspace files: ${C.bcyan(mdFiles.join(", "))}`);
     const doMigrate = handleCancel(await confirm({
-      message: "Import facts from existing files into memory? (uses LLM, ~$0.15-0.50)",
+      message: "Import facts from existing files into memory? (uses LLM processing)",
       initialValue: false,
     }));
     if (doMigrate) {

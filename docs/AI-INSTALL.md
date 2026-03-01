@@ -57,6 +57,28 @@ node setup-quaid.mjs --help
 
 Then inspect `setup-quaid.mjs` for step prompts/defaults and execute the non-interactive command above.
 
+## Agent Communication Requirement (Mandatory)
+
+When an AI agent runs install, it must explicitly report all selected options to the user, including values that were defaults.
+
+Do not say only "install succeeded." Always include a compact options summary so the user can see what was chosen and what can be changed later.
+
+Minimum required summary fields:
+
+- Owner (`users.defaultOwner`)
+- Adapter type (`adapter.type`)
+- LLM provider (`models.llmProvider`) and selected deep/fast models (`models.deepReasoning`, `models.fastReasoning`)
+- Notification settings (`notifications.level`, plus `notifications.janitor|extraction|retrieval.verbosity`)
+- Enabled systems (`systems.memory|journal|projects|workspace`)
+- Embedding provider/model (`models.embeddingsProvider`, `ollama.embeddingModel`)
+- Janitor apply mode/policies (`janitor.applyMode`, `janitor.approvalPolicies.*`)
+- Janitor schedule choice (or explicit "not scheduled")
+
+The summary should also tell the user where to edit settings:
+
+- Interactive editor: `quaid config edit`
+- Config file: `<workspace>/config/memory.json`
+
 ## Verification
 
 After install:
