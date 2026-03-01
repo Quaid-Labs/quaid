@@ -7,7 +7,7 @@
 //   - Standalone (default): Uses QUAID_HOME env or ~/quaid/ as home directory
 //   - OpenClaw: detected via CLAWDBOT_WORKSPACE env or clawdbot/openclaw on PATH
 //
-// Author: Steadman Labs (https://github.com/steadman-labs)
+// Author: Steadman Labs (https://github.com/quaid-labs)
 // License: MIT
 // =============================================================================
 
@@ -100,7 +100,7 @@ if (INSTALL_ARGS.errors.length) {
 // --- Constants ---
 const VERSION = "0.2.12-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw"; // Hooks merged in PR #13287
-const PROJECT_URL = "https://github.com/steadman-labs/quaid";
+const PROJECT_URL = "https://github.com/quaid-labs/quaid";
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
 function which(cmd) {
   return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
@@ -1355,7 +1355,7 @@ async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAsk
   if (hour === "skip") {
     log.warn("No schedule set.");
     log.warn("You MUST add a janitor entry to your HEARTBEAT.md manually.");
-    log.warn(C.dim("See: https://github.com/steadman-labs/quaid#janitor-scheduling"));
+    log.warn(C.dim("See: https://github.com/quaid-labs/quaid#janitor-scheduling"));
     return { hour: null, scheduled: false };
   }
 

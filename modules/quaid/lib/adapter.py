@@ -236,7 +236,7 @@ class QuaidAdapter(abc.ABC):
     # ---- Identity ----
 
     def get_repo_slug(self) -> str:
-        return "steadman-labs/quaid"
+        return "quaid-labs/quaid"
 
     def get_install_url(self) -> str:
         return f"https://raw.githubusercontent.com/{self.get_repo_slug()}/main/install.sh"

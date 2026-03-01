@@ -40,23 +40,23 @@ The guided installer sets up Quaid with knowledge capture, janitor scheduling, a
 
 **Tell your agent about it:**
 ```text
-https://github.com/steadman-labs/quaid/blob/main/docs/AI-INSTALL.md
+https://github.com/quaid-labs/quaid/blob/main/docs/AI-INSTALL.md
 ```
 If you're an agent, go there first and do not use the commands below.
 
 **Mac / Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | bash
 ```
 
 **Windows:**
 ```powershell
-irm https://raw.githubusercontent.com/steadman-labs/quaid/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/quaid-labs/quaid/main/install.ps1 | iex
 ```
 
 **Manual (all platforms):**
 ```bash
-git clone https://github.com/steadman-labs/quaid.git
+git clone https://github.com/quaid-labs/quaid.git
 cd quaid && node setup-quaid.mjs
 ```
 

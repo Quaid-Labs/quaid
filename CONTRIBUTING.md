@@ -27,7 +27,7 @@ AI-assisted contributions are welcome, with explicit accountability.
 ## Local Setup
 
 ```bash
-git clone https://github.com/Steadman-Labs/quaid.git
+git clone https://github.com/quaid-labs/quaid.git
 cd quaid/modules/quaid
 npm ci
 python3 -m pip install pytest ruff
