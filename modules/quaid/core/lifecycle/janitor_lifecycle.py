@@ -8,18 +8,24 @@ logic and register their routines here.
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from core.llm.scheduler import get_global_llm_scheduler
 from core.runtime.parallel_runtime import ResourceLockRegistry, get_parallel_config
 logger = logging.getLogger(__name__)
+
+_LIFECYCLE_PARALLEL_TELEMETRY_ENABLED = (
+    str(os.environ.get("QUAID_LIFECYCLE_PARALLEL_TELEMETRY", "0")).strip() == "1"
+)
 
 
 @dataclass
@@ -129,6 +135,36 @@ class LifecycleRegistry:
                 timeout_seconds = 300.0
         timeout_seconds = max(0.001, float(timeout_seconds))
         deadline = time.monotonic() + timeout_seconds
+        run_started = time.monotonic()
+        run_id = f"{int(time.time() * 1000)}-{os.getpid()}-{threading.get_ident()}"
+        ws_for_telemetry = routines[0][1].workspace
+        self._append_parallel_telemetry(
+            ws_for_telemetry,
+            {
+                "event": "run_start",
+                "run_id": run_id,
+                "worker_count": int(worker_count),
+                "timeout_seconds": float(timeout_seconds),
+                "routines": [name for name, _ in routines],
+            },
+        )
+
+        task_started_monotonic: Dict[str, float] = {}
+        for idx, (name, _ctx) in enumerate(routines, start=1):
+            task_started_monotonic[name] = time.monotonic()
+            self._append_parallel_telemetry(
+                ws_for_telemetry,
+                {
+                    "event": "task_submit",
+                    "run_id": run_id,
+                    "routine": name,
+                    "task_index": int(idx),
+                    "worker_count": int(worker_count),
+                },
+            )
+
+        timed_out = 0
+        failed = 0
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             fut_to_name = {
                 executor.submit(self.run, name, ctx): name
@@ -141,8 +177,22 @@ class LifecycleRegistry:
                     for fut in list(pending):
                         name = fut_to_name[fut]
                         fut.cancel()
+                        timed_out += 1
                         results[name] = RoutineResult(
                             errors=[f"Parallel lifecycle run timed out for {name} after {timeout_seconds:.2f}s"]
+                        )
+                        self._append_parallel_telemetry(
+                            ws_for_telemetry,
+                            {
+                                "event": "task_timeout",
+                                "run_id": run_id,
+                                "routine": name,
+                                "elapsed_seconds": round(
+                                    max(0.0, time.monotonic() - float(task_started_monotonic.get(name, run_started))),
+                                    3,
+                                ),
+                                "timeout_seconds": float(timeout_seconds),
+                            },
                         )
                         pending.discard(fut)
                     break
@@ -157,18 +207,104 @@ class LifecycleRegistry:
                         pending.discard(completed)
                         try:
                             results[name] = completed.result()
+                            self._append_parallel_telemetry(
+                                ws_for_telemetry,
+                                {
+                                    "event": "task_done",
+                                    "run_id": run_id,
+                                    "routine": name,
+                                    "elapsed_seconds": round(
+                                        max(
+                                            0.0,
+                                            time.monotonic() - float(task_started_monotonic.get(name, run_started)),
+                                        ),
+                                        3,
+                                    ),
+                                    "errors": len(results[name].errors or []),
+                                },
+                            )
                         except Exception as exc:  # pragma: no cover
+                            failed += 1
                             results[name] = RoutineResult(
                                 errors=[f"Parallel lifecycle run failed for {name}: {exc}"]
+                            )
+                            self._append_parallel_telemetry(
+                                ws_for_telemetry,
+                                {
+                                    "event": "task_error",
+                                    "run_id": run_id,
+                                    "routine": name,
+                                    "elapsed_seconds": round(
+                                        max(
+                                            0.0,
+                                            time.monotonic() - float(task_started_monotonic.get(name, run_started)),
+                                        ),
+                                        3,
+                                    ),
+                                    "error": str(exc),
+                                },
                             )
                     continue
                 name = fut_to_name[done]
                 pending.discard(done)
                 try:
                     results[name] = done.result()
+                    self._append_parallel_telemetry(
+                        ws_for_telemetry,
+                        {
+                            "event": "task_done",
+                            "run_id": run_id,
+                            "routine": name,
+                            "elapsed_seconds": round(
+                                max(0.0, time.monotonic() - float(task_started_monotonic.get(name, run_started))),
+                                3,
+                            ),
+                            "errors": len(results[name].errors or []),
+                        },
+                    )
                 except Exception as exc:  # pragma: no cover
+                    failed += 1
                     results[name] = RoutineResult(errors=[f"Parallel lifecycle run failed for {name}: {exc}"])
+                    self._append_parallel_telemetry(
+                        ws_for_telemetry,
+                        {
+                            "event": "task_error",
+                            "run_id": run_id,
+                            "routine": name,
+                            "elapsed_seconds": round(
+                                max(0.0, time.monotonic() - float(task_started_monotonic.get(name, run_started))),
+                                3,
+                            ),
+                            "error": str(exc),
+                        },
+                    )
+        self._append_parallel_telemetry(
+            ws_for_telemetry,
+            {
+                "event": "run_end",
+                "run_id": run_id,
+                "elapsed_seconds": round(max(0.0, time.monotonic() - run_started), 3),
+                "worker_count": int(worker_count),
+                "routine_count": len(routines),
+                "completed_count": len(results),
+                "timed_out_count": int(timed_out),
+                "failed_count": int(failed),
+            },
+        )
         return results
+
+    def _append_parallel_telemetry(self, workspace: Path, payload: Dict[str, Any]) -> None:
+        if not _LIFECYCLE_PARALLEL_TELEMETRY_ENABLED:
+            return
+        try:
+            logs_dir = Path(workspace).resolve() / "logs" / "janitor"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            row = {"ts": datetime.now(timezone.utc).isoformat(), **dict(payload or {})}
+            with (logs_dir / "lifecycle-parallel-telemetry.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+        except Exception:
+            # Telemetry must never break janitor execution.
+            return
 
     def _lock_registry_for_workspace(self, workspace: Path) -> ResourceLockRegistry:
         lock_root = (Path(workspace).resolve() / ".quaid" / "runtime" / "locks" / "janitor")
