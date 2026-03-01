@@ -102,7 +102,10 @@ fi
 
 # --- Detect workspace ---
 WORKSPACE=""
-if [[ -n "${QUAID_HOME:-}" ]]; then
+if [[ -n "${QUAID_WORKSPACE:-}" ]]; then
+    WORKSPACE="$QUAID_WORKSPACE"
+    info "Using QUAID_WORKSPACE: $WORKSPACE"
+elif [[ -n "${QUAID_HOME:-}" ]]; then
     WORKSPACE="$QUAID_HOME"
     info "Using QUAID_HOME: $WORKSPACE"
 elif [[ -n "${CLAWDBOT_WORKSPACE:-}" ]]; then
@@ -113,6 +116,27 @@ elif command -v clawdbot &>/dev/null || command -v openclaw &>/dev/null; then
     WORKSPACE=$(clawdbot config get workspace 2>/dev/null || openclaw config get workspace 2>/dev/null || echo "")
     if [[ -n "$WORKSPACE" ]]; then
         info "Detected workspace from CLI: $WORKSPACE"
+    fi
+fi
+# Fallback to OpenClaw config file if CLI lookup is unavailable/empty.
+if [[ -z "$WORKSPACE" && -f "$HOME/.openclaw/openclaw.json" ]]; then
+    WORKSPACE="$(python3 - <<'PY'
+import json, os
+cfg = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg, "r", encoding="utf-8"))
+except Exception:
+    print("")
+    raise SystemExit(0)
+for candidate in [data.get("workspace"), ((data.get("agents") or {}).get("defaults") or {}).get("workspace")]:
+    if isinstance(candidate, str) and candidate.strip():
+        print(candidate.strip())
+        raise SystemExit(0)
+print("")
+PY
+)"
+    if [[ -n "$WORKSPACE" ]]; then
+        info "Detected workspace from ~/.openclaw/openclaw.json: $WORKSPACE"
     fi
 fi
 # Last resort: standalone default
