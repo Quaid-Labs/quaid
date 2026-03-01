@@ -78,3 +78,7 @@
   - `modules/quaid/datastore/memorydb/memory_graph.py` (best-effort blocks and soft-degrade paths)
   - `modules/quaid/core/session-timeout.ts` (event-message fallback behavior)
 - [ ] Add tests that fail if silent fallback paths are introduced in critical flows (recall/extract/janitor).
+- [ ] Centralize timeout defaults to one source of truth:
+  - eliminate duplicated default constants for `capture.inactivity_timeout_minutes` across runtime config, installers, and config CLIs
+  - keep compatibility key parsing (`inactivity_timeout_minutes` + `inactivityTimeoutMinutes`) but derive fallback value from one shared default
+  - update related tests/fixtures to assert the single canonical default

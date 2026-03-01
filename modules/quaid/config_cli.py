@@ -240,7 +240,7 @@ def _print_summary(path: Path, data: dict[str, Any]) -> None:
     print(f"strict privacy:   {_get(data, 'privacy.enforceStrictFilters', _get(data, 'privacy.enforce_strict_filters', True))}")
     print(f"core parallel:    {_get(data, 'core.parallel.enabled', True)}")
     print(f"llm workers:      {_get(data, 'core.parallel.llmWorkers', _get(data, 'core.parallel.llm_workers', 4))}")
-    print(f"idle timeout:     {_get(data, 'capture.inactivity_timeout_minutes', _get(data, 'capture.inactivityTimeoutMinutes', 120))}m")
+    print(f"idle timeout:     {_get(data, 'capture.inactivity_timeout_minutes', _get(data, 'capture.inactivityTimeoutMinutes', 60))}m")
     print(f"plugin adapter:   {_get(data, 'plugins.slots.adapter', '(none)')}")
     print(f"plugin ingest:    {_get(data, 'plugins.slots.ingest', [])}")
     print(f"plugin stores:    {_get(data, 'plugins.slots.dataStores', _get(data, 'plugins.slots.datastores', []))}")
@@ -362,7 +362,7 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = str(_get(staged, "notifications.level", "normal"))
                 _set(staged, "notifications.level", _prompt_str("notifications.level", cur))
             elif choice == "6":
-                cur = int(_get(staged, "capture.inactivity_timeout_minutes", _get(staged, "capture.inactivityTimeoutMinutes", 120)))
+                cur = int(_get(staged, "capture.inactivity_timeout_minutes", _get(staged, "capture.inactivityTimeoutMinutes", 60)))
                 _set(staged, "capture.inactivity_timeout_minutes", _prompt_int("capture.inactivity_timeout_minutes", cur))
             elif choice == "7":
                 cur = bool(_get(staged, "retrieval.fail_hard", _get(staged, "retrieval.failHard", True)))
