@@ -1199,6 +1199,35 @@ step4_embeddings() {
     echo "  so Quaid can find relevant memories by meaning, not just keywords."
     echo ""
 
+    # System RAM guidance (shown even before Ollama is available)
+    local total_ram_gb=0
+    local free_ram_gb=0
+    if [[ "$(uname)" == "Darwin" ]]; then
+        total_ram_gb=$(sysctl -n hw.memsize 2>/dev/null | awk '{printf "%.0f", $1/1024/1024/1024}')
+        local page_size
+        page_size=$(vm_stat 2>/dev/null | head -1 | grep -oE '[0-9]+' || echo 16384)
+        local free_pages
+        free_pages=$(vm_stat 2>/dev/null | awk '/Pages free/ {gsub(/\./,"",$3); print $3}')
+        local inactive_pages
+        inactive_pages=$(vm_stat 2>/dev/null | awk '/Pages inactive/ {gsub(/\./,"",$3); print $3}')
+        free_ram_gb=$(echo "${free_pages:-0} ${inactive_pages:-0} ${page_size}" | awk '{printf "%.0f", ($1+$2)*$3/1024/1024/1024}')
+    else
+        total_ram_gb=$(free -g 2>/dev/null | awk '/^Mem:/ {print $2}')
+        free_ram_gb=$(free -g 2>/dev/null | awk '/^Mem:/ {print $7}')
+    fi
+    total_ram_gb="${total_ram_gb:-0}"
+    free_ram_gb="${free_ram_gb:-0}"
+    if [[ "$total_ram_gb" -gt 0 ]]; then
+        info "System RAM: ${total_ram_gb}GB total, ~${free_ram_gb}GB available"
+    fi
+    if [[ "$free_ram_gb" -ge 8 ]] || [[ "$total_ram_gb" -ge 24 ]]; then
+        info "Recommended embedding by RAM: qwen3-embedding:8b"
+    elif [[ "$free_ram_gb" -ge 4 ]] || [[ "$total_ram_gb" -ge 12 ]]; then
+        info "Recommended embedding by RAM: nomic-embed-text"
+    else
+        info "Recommended embedding by RAM: all-minilm"
+    fi
+
     # Resolve Ollama URL: OLLAMA_URL env > existing config > localhost
     OLLAMA_RESOLVED_URL="$(_resolve_ollama_url)"
     local ollama_running=false
@@ -1258,7 +1287,7 @@ step4_embeddings() {
             echo -e "  ${DIM}If you have Ollama running on another machine, set OLLAMA_URL first:${RESET}"
             echo -e "  ${DIM}  OLLAMA_URL=http://192.168.x.x:11434 bash setup-quaid.sh${RESET}"
             echo ""
-            if confirm "Install Ollama locally?"; then
+            if confirm "Install Ollama locally? (recommended)" "y"; then
                 if command -v brew &>/dev/null; then
                     info "Installing Ollama via Homebrew..."
                     if brew install ollama 2>&1 | tail -3; then
@@ -1296,31 +1325,16 @@ step4_embeddings() {
                         echo "  Close and reopen your terminal, then re-run this installer."
                     fi
                 fi
+            else
+                if ! confirm "Continue without Ollama and accept degraded recall quality?" "n"; then
+                    error "Install cancelled. Re-run after installing Ollama."
+                    exit 1
+                fi
             fi
         fi
     fi
 
     if $ollama_running; then
-        # Check available system RAM to guide model selection
-        local total_ram_gb=0
-        local free_ram_gb=0
-        if [[ "$(uname)" == "Darwin" ]]; then
-            total_ram_gb=$(sysctl -n hw.memsize 2>/dev/null | awk '{printf "%.0f", $1/1024/1024/1024}')
-            # On macOS, estimate free RAM from vm_stat
-            local page_size
-            page_size=$(vm_stat 2>/dev/null | head -1 | grep -oE '[0-9]+' || echo 16384)
-            local free_pages
-            free_pages=$(vm_stat 2>/dev/null | awk '/Pages free/ {gsub(/\./,"",$3); print $3}')
-            local inactive_pages
-            inactive_pages=$(vm_stat 2>/dev/null | awk '/Pages inactive/ {gsub(/\./,"",$3); print $3}')
-            free_ram_gb=$(echo "${free_pages:-0} ${inactive_pages:-0} ${page_size}" | awk '{printf "%.0f", ($1+$2)*$3/1024/1024/1024}')
-        else
-            total_ram_gb=$(free -g 2>/dev/null | awk '/^Mem:/ {print $2}')
-            free_ram_gb=$(free -g 2>/dev/null | awk '/^Mem:/ {print $7}')
-        fi
-        total_ram_gb="${total_ram_gb:-0}"
-        free_ram_gb="${free_ram_gb:-0}"
-
         echo ""
         if [[ "$total_ram_gb" -gt 0 ]]; then
             info "System RAM: ${total_ram_gb}GB total, ~${free_ram_gb}GB available"
@@ -1417,13 +1431,19 @@ exit(0 if any(model in n for n in names) else 1)
         fi
     else
         echo ""
-        echo "  Without Ollama, Quaid will use OpenAI's API for embeddings."
-        echo "  This costs ~\$0.02 per million tokens but requires an OpenAI API key."
-        echo ""
-        warn "Cloud embeddings are experimental and may not work in all configurations"
-        EMBED_MODEL="text-embedding-3-small"
-        EMBED_DIM=1536
-        info "Using OpenAI text-embedding-3-small (cloud, 1536 dim)"
+        warn "Ollama is still unavailable."
+        if confirm "Use cloud embeddings (OpenAI text-embedding-3-small, experimental)?" "n"; then
+            EMBED_MODEL="text-embedding-3-small"
+            EMBED_DIM=1536
+            info "Using OpenAI text-embedding-3-small (cloud, 1536 dim)"
+        elif confirm "Continue without embeddings (keyword-only, degraded recall)?" "n"; then
+            EMBED_MODEL="none"
+            EMBED_DIM=0
+            warn "Proceeding with keyword-only mode (no semantic recall)"
+        else
+            error "Install cancelled. Re-run after installing or starting Ollama."
+            exit 1
+        fi
     fi
 
     echo ""
