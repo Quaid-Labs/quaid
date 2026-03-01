@@ -48,9 +48,7 @@
       },
       "ingest_triggers": {
         "mode": "declared",
-        "exports": [
-          "manual"
-        ]
+        "exports": []
       },
       "auth_requirements": {
         "mode": "declared",

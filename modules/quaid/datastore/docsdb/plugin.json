@@ -47,17 +47,11 @@
       },
       "events": {
         "mode": "declared",
-        "exports": [
-          "docs.ingest_transcript"
-        ]
+        "exports": []
       },
       "ingest_triggers": {
         "mode": "declared",
-        "exports": [
-          "manual",
-          "compaction",
-          "reset"
-        ]
+        "exports": []
       },
       "auth_requirements": {
         "mode": "declared",
