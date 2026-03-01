@@ -1815,7 +1815,7 @@ _write_config() {
   "capture": {
     "enabled": true,
     "strictness": "high",
-    "inactivityTimeoutMinutes": 120,
+    "inactivityTimeoutMinutes": 60,
     "autoCompactionOnTimeout": ${AUTO_COMPACTION_ON_TIMEOUT},
     "skipPatterns": ["^(thanks|ok|sure|yes|no)$", "^(hi|hello|hey)\\\\b"]
   },
