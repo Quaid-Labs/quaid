@@ -2208,6 +2208,7 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       janitor: { verbosity: models.notifConfig?.janitor ?? "summary", channel: "last_used" },
       extraction: { verbosity: models.notifConfig?.extraction ?? "summary", channel: "last_used" },
       retrieval: { verbosity: models.notifConfig?.retrieval ?? "off", channel: "last_used" },
+      projectCreate: { enabled: true },
       fullText: true,
       showProcessingStart: true,
     },

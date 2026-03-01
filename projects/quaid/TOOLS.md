@@ -219,6 +219,7 @@ Parameter map:
   - `auto_update` defaults to `false`; set it to `true` only for docs that should be drift-tracked from mapped source files.
 - `project_create`
   - `name` (required; validated by `registry.py` regex `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`; kebab-case is recommended for consistency), plus optional `label`, `description`, `source_roots`.
+  - successful creates emit a user notification by default; toggle with `notifications.projectCreate.enabled` (or `notifications.project_create.enabled`).
 - `project_list`
   - no parameters.
 

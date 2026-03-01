@@ -298,6 +298,18 @@ function shouldNotifyFeature(feature, detail = "summary") {
   if (detail === "summary") return effective === "summary" || effective === "full";
   return effective === "full";
 }
+function shouldNotifyProjectCreate() {
+  const notifications = getMemoryConfig().notifications || {};
+  const snake = notifications.project_create;
+  if (snake && typeof snake === "object" && typeof snake.enabled === "boolean") {
+    return snake.enabled;
+  }
+  const camel = notifications.projectCreate;
+  if (camel && typeof camel === "object" && typeof camel.enabled === "boolean") {
+    return camel.enabled;
+  }
+  return true;
+}
 function normalizeProvider(provider) {
   return String(provider || "").trim().toLowerCase();
 }
@@ -3197,6 +3209,25 @@ notify_docs_search(data['query'], data['results'])
               args.push("--source-roots", ...params.source_roots);
             }
             const output = await callDocsRegistry("create-project", args);
+            if (shouldNotifyProjectCreate()) {
+              try {
+                const notifyPayload = JSON.stringify({
+                  name: params.name,
+                  label: params.label || ""
+                });
+                spawnNotifyScript(`
+import json
+from core.runtime.notify import notify_user
+data = json.loads(${JSON.stringify(notifyPayload)})
+name = str(data.get("name", "")).strip()
+label = str(data.get("label", "")).strip()
+project_label = f"{name} ({label})" if label else name
+notify_user(f"\u{1F4C1} Project registered: {project_label}")
+`);
+              } catch (notifyErr) {
+                console.warn(`[quaid] Project-create notification skipped: ${notifyErr.message}`);
+              }
+            }
             return {
               content: [{ type: "text", text: output || `Project '${params.name}' created.` }],
               details: { name: params.name }
