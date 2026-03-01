@@ -156,7 +156,7 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 
 Quaid is in early alpha. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
 
-Known limitations for **v0.2.11-alpha**:
+Known limitations for **v0.2.12-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows support exists but has less operational coverage than macOS/Linux *(experimental)*.
@@ -183,7 +183,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Maintainer Lifecycle](docs/MAINTAINER-LIFECYCLE.md) — Safe branch/release model for post-user operation
 - [Contributing](CONTRIBUTING.md) — PR expectations, validation, and AI-assisted contribution policy
 - [Good First Issues](docs/GOOD-FIRST-ISSUES.md) — Small scoped tasks for new contributors
-- [v0.2.11-alpha Notes](docs/releases/v0.2.11-alpha.md) — Release highlights and known limitations
+- [v0.2.12-alpha Notes](docs/releases/v0.2.12-alpha.md) — Release highlights and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 
 ---

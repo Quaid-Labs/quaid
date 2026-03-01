@@ -98,7 +98,7 @@ if (INSTALL_ARGS.errors.length) {
 }
 
 // --- Constants ---
-const VERSION = "0.2.11-alpha";
+const VERSION = "0.2.12-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw"; // Hooks merged in PR #13287
 const PROJECT_URL = "https://github.com/steadman-labs/quaid";
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
