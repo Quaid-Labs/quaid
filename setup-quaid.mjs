@@ -1279,6 +1279,9 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Legacy quaid-reset-signal hook is intentionally not installed.
   // Reset/compaction extraction signaling is now contract-owned inside adapter handlers.
   log.info("Skipping legacy hook install: quaid-reset-signal (contract-owned lifecycle handlers active)");
+  if (IS_OPENCLAW) {
+    enableRequiredOpenClawHooks();
+  }
 
   // Install Python dependency: sqlite-vec (vector search extension)
   s.start("Installing sqlite-vec...");
@@ -1852,6 +1855,46 @@ function gatewayHasHooks(gwDir) {
     if (out) return true;  // before_compaction is the critical hook
   }
   return false;
+}
+
+function enableRequiredOpenClawHooks() {
+  const cli = canRun("openclaw") ? "openclaw" : (canRun("clawdbot") ? "clawdbot" : "");
+  if (!cli) {
+    log.warn("OpenClaw CLI not found; skipping explicit hook enable.");
+    return;
+  }
+
+  // Support canonical names plus compatibility aliases observed across gateway builds.
+  const requiredHooks = [
+    ["bootstrap-extra-files", "bot-strap-extra-files"],
+    ["session-memory", "session-memoey"],
+  ];
+
+  log.info("Explicitly enabling required OpenClaw hooks: bootstrap-extra-files, session-memory");
+  for (const candidates of requiredHooks) {
+    let enabled = false;
+    let lastErr = "";
+    for (const hookName of candidates) {
+      const res = spawnSync(cli, ["hooks", "enable", hookName], { encoding: "utf8", stdio: "pipe" });
+      if (res.status === 0) {
+        const label = hookName === "bot-strap-extra-files" ? "bootstrap-extra-files" :
+          (hookName === "session-memoey" ? "session-memory" : hookName);
+        log.info(`Hook enabled: ${label}`);
+        enabled = true;
+        break;
+      }
+      lastErr = String(res.stderr || res.stdout || "").trim();
+      // Not found or unknown hook name: try alias fallback.
+      if (/not found|unknown|no such hook|invalid/i.test(lastErr)) continue;
+      // Eligible/state failures should still be surfaced but do not fail install.
+      break;
+    }
+    if (!enabled) {
+      const canonical = candidates[0];
+      if (lastErr) log.warn(`Could not enable hook '${canonical}': ${lastErr}`);
+      else log.warn(`Could not enable hook '${canonical}'`);
+    }
+  }
 }
 
 async function tryBrewInstall(pkg, label) {
