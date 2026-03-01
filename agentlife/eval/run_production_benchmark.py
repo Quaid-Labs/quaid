@@ -294,6 +294,45 @@ def _read_json_or_none(path: Path) -> Optional[Any]:
         return None
 
 
+def _enable_required_openclaw_hooks() -> None:
+    """Best-effort enablement for required OpenClaw hooks in benchmark flows."""
+    cli = shutil.which("openclaw") or shutil.which("clawdbot")
+    if not cli:
+        print("  WARNING: OpenClaw CLI not found; skipping hook enablement")
+        return
+
+    hook_pairs = (
+        ("bootstrap-extra-files", "bot-strap-extra-files"),
+        ("session-memory", "session-memoey"),
+    )
+    for canonical, alias in hook_pairs:
+        attempted: list[str] = []
+        for candidate in (canonical, alias):
+            if not candidate or candidate in attempted:
+                continue
+            attempted.append(candidate)
+            try:
+                proc = subprocess.run(
+                    [cli, "hooks", "enable", candidate],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+            except Exception as exc:
+                print(f"  WARNING: failed to run '{Path(cli).name} hooks enable {candidate}': {exc}")
+                continue
+            if proc.returncode == 0:
+                suffix = "" if candidate == canonical else f" (via alias '{candidate}')"
+                print(f"  Hook enabled: {canonical}{suffix}")
+                break
+        else:
+            stderr = (proc.stderr or proc.stdout or "").strip() if "proc" in locals() else ""
+            print(f"  WARNING: unable to enable hook '{canonical}' via {Path(cli).name}; continuing")
+            if stderr:
+                print(f"  WARNING: {stderr}")
+
+
 def _git_lock_holder_pid(lock_path: Path) -> str:
     """Best-effort PID lookup for a git index.lock owner."""
     holder_pid = ""
@@ -6613,6 +6652,8 @@ def main():
         sys.exit(2)
     if args.no_cache and args.resume_extraction:
         print("WARNING: --no-cache is ignored when --resume-extraction is enabled")
+
+    _enable_required_openclaw_hooks()
 
     # Global benchmark policy: no Opus runs.
     for name, value in [("model", args.model), ("eval_model", args.eval_model)]:
