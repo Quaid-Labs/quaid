@@ -84,6 +84,10 @@ Minimum survey fields:
 - Adapter type
 - LLM provider + deep/fast models
 - Embeddings provider/model
+  - Include RAM snapshot the agent used for recommendation
+  - Include whether Ollama is installed/running
+  - Include whether the agent will attempt Ollama install/start
+  - Include explicit user confirmation if proceeding without Ollama (degraded recall)
 - Notifications level + per-feature verbosity
 - Enabled systems
 - Janitor apply mode/policies
@@ -92,6 +96,9 @@ Minimum survey fields:
 
 Only execute install after the user confirms or edits these values.
 This is mandatory even when using `--agent` non-interactive mode.
+
+For embeddings specifically: agents must not silently default to degraded mode when Ollama is unavailable.
+They must ask the user whether to install/start Ollama first, and only proceed degraded after explicit approval.
 
 When an AI agent runs install, it must explicitly report all selected options to the user, including values that were defaults.
 

@@ -38,6 +38,12 @@ Runtime event capabilities are discoverable (`memory_event_capabilities`, `quaid
 
 The guided installer sets up Quaid with knowledge capture, janitor scheduling, and host integration.
 
+**Tell your agent about it:**
+```text
+https://github.com/steadman-labs/quaid/blob/main/docs/AI-INSTALL.md
+```
+If you're an agent, go there first and do not use the commands below.
+
 **Mac / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/steadman-labs/quaid/main/install.sh | bash
@@ -53,9 +59,6 @@ irm https://raw.githubusercontent.com/steadman-labs/quaid/main/install.ps1 | iex
 git clone https://github.com/steadman-labs/quaid.git
 cd quaid && node setup-quaid.mjs
 ```
-
-**AI/agent-driven installs:** To have your agent install this, send them this link: [docs/AI-INSTALL.md](docs/AI-INSTALL.md).  
-If you're an agent, go there as well and do not use the commands above.
 
 ---
 
