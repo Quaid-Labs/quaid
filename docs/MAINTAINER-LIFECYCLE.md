@@ -29,7 +29,7 @@ Enable branch protection on `main`:
 Apply via script:
 
 ```bash
-node scripts/github-protect-main.mjs --repo Steadman-Labs/quaid
+node scripts/github-protect-main.mjs --repo quaid-labs/quaid
 ```
 
 ## Release Flow

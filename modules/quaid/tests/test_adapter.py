@@ -202,11 +202,11 @@ class TestStandaloneAdapter:
         assert standalone.get_gateway_config_path() is None
 
     def test_repo_slug(self, standalone):
-        assert standalone.get_repo_slug() == "steadman-labs/quaid"
+        assert standalone.get_repo_slug() == "quaid-labs/quaid"
 
     def test_install_url(self, standalone):
         url = standalone.get_install_url()
-        assert "steadman-labs/quaid" in url
+        assert "quaid-labs/quaid" in url
         assert "install.sh" in url
 
 

@@ -13,7 +13,7 @@ Before public usage, treat `main` as immutable history:
 Configure GitHub protection:
 
 ```bash
-node scripts/github-protect-main.mjs --repo Steadman-Labs/quaid
+node scripts/github-protect-main.mjs --repo quaid-labs/quaid
 ```
 
 ## Ownership Guard

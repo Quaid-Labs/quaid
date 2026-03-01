@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const repoArgIdx = args.indexOf('--repo');
-const repo = repoArgIdx >= 0 ? args[repoArgIdx + 1] : 'Steadman-Labs/quaid';
+const repo = repoArgIdx >= 0 ? args[repoArgIdx + 1] : 'quaid-labs/quaid';
 if (!repo || repo.startsWith('--')) {
   console.error('Usage: node scripts/github-protect-main.mjs --repo owner/name');
   process.exit(2);

@@ -1466,7 +1466,7 @@ step5_systems() {
     echo -e "    ${GREEN}✓${RESET} Workspace  — Monitor core markdown file health"
     echo ""
     echo -e "  ${DIM}Disable systems if they conflict with other plugins or you don't need them.${RESET}"
-    echo -e "  ${DIM}Learn more: https://github.com/steadman-labs/quaid${RESET}"
+    echo -e "  ${DIM}Learn more: https://github.com/quaid-labs/quaid${RESET}"
     echo ""
 
     if confirm "Keep all systems enabled?" "y"; then
@@ -2190,7 +2190,7 @@ else:
     echo "    • The nightly janitor reviews, deduplicates, and maintains memories"
     echo "    • Run 'quaid stats' to see your memory database grow"
     echo ""
-    echo -e "  ${DIM}Docs: https://github.com/steadman-labs/quaid${RESET}"
+    echo -e "  ${DIM}Docs: https://github.com/quaid-labs/quaid${RESET}"
     echo ""
     echo -e "  ${DIM}Get your ass to Mars.${RESET}"
     echo ""

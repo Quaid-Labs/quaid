@@ -1,13 +1,13 @@
 # Quaid Memory Plugin — Windows Installer
-# Usage: irm https://raw.githubusercontent.com/steadman-labs/quaid/main/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/quaid-labs/quaid/main/install.ps1 | iex
 #
 # Or with a specific version:
-#   $env:QUAID_VERSION = "v1.0.0"; irm https://raw.githubusercontent.com/steadman-labs/quaid/main/install.ps1 | iex
+#   $env:QUAID_VERSION = "v1.0.0"; irm https://raw.githubusercontent.com/quaid-labs/quaid/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
 $Version = if ($env:QUAID_VERSION) { $env:QUAID_VERSION } else { "latest" }
-$Repo = "steadman-labs/quaid"
+$Repo = "quaid-labs/quaid"
 $InstallDir = Join-Path $env:TEMP "quaid-install-$PID"
 
 function Write-Info  { param($msg) Write-Host "[quaid] $msg" -ForegroundColor Blue }
