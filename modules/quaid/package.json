@@ -1,6 +1,6 @@
 {
   "name": "quaid",
-  "version": "0.2.8-alpha",
+  "version": "0.2.9-alpha",
   "description": "Total Recall memory system — graph-based memory plugin using SQLite + Ollama",
   "main": "adaptors/openclaw/index.js",
   "type": "module",
