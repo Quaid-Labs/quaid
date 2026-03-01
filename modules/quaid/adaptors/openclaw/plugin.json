@@ -68,12 +68,7 @@
       },
       "ingest_triggers": {
         "mode": "declared",
-        "exports": [
-          "timeout",
-          "compaction",
-          "reset",
-          "manual"
-        ]
+        "exports": []
       },
       "auth_requirements": {
         "mode": "declared",
