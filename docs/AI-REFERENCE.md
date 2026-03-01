@@ -4,6 +4,19 @@ This document is designed for AI agents (Claude, GPT, etc.) working on or with t
 
 ---
 
+## AI Installer Path
+
+For agent-driven installs, use:
+
+```bash
+node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace"
+```
+
+Avoid `curl | bash` when the session needs explicit workspace control.
+Full installer guidance: [`docs/AI-INSTALL.md`](AI-INSTALL.md).
+
+---
+
 ## System Overview
 
 Quaid is a graph-based persistent knowledge layer for AI agents. It works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a deep integration for [OpenClaw](https://github.com/openclaw/openclaw). Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
