@@ -23,11 +23,29 @@ class GatewayLLMProvider(LLMProvider):
 
     def __init__(self, port: int = 18789, token: str = ""):
         self._port = port
-        self._token = token
+        self._token = (token or "").strip() or self._resolve_gateway_token()
         self._fallback_models = {
             "fast": "claude-haiku-4-5",
             "deep": "claude-opus-4-6",
         }
+
+    @staticmethod
+    def _resolve_gateway_token() -> str:
+        env_token = str(os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")).strip()
+        if env_token:
+            return env_token
+        cfg_path = Path.home() / ".openclaw" / "openclaw.json"
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            gateway = cfg.get("gateway", {}) if isinstance(cfg, dict) else {}
+            auth = gateway.get("auth", {}) if isinstance(gateway, dict) else {}
+            mode = str(auth.get("mode", "")).strip().lower()
+            token = str(auth.get("token", "")).strip()
+            if mode == "token" and token:
+                return token
+        except Exception:
+            pass
+        return ""
 
     def _resolve_model_for_tier(self, model_tier: str) -> str:
         tier = "fast" if model_tier == "fast" else "deep"
