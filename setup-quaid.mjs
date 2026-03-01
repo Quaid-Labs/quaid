@@ -396,6 +396,24 @@ function ownerIdFromDisplayName(displayName) {
   return normalized || "default";
 }
 
+function _hasSqliteVec() {
+  return spawnSync("python3", ["-c", "import sqlite_vec"], { stdio: "pipe" }).status === 0;
+}
+
+function _installSqliteVec() {
+  const attempts = [
+    ["python3", ["-m", "pip", "install", "sqlite-vec"]],
+    ["python3", ["-m", "pip", "install", "--user", "sqlite-vec"]],
+    ["pip3", ["install", "sqlite-vec"]],
+    ["pip", ["install", "sqlite-vec"]],
+  ];
+  for (const [cmd, args] of attempts) {
+    const res = spawnSync(cmd, args, { stdio: "pipe" });
+    if (res.status === 0) return true;
+  }
+  return false;
+}
+
 function _readAgentsList(cli) {
   const out = shell(`${cli} config get agents.list 2>/dev/null </dev/null`, false);
   if (!out) return [];
@@ -747,6 +765,17 @@ async function step1_preflight() {
   }
   const gitVer = shell("git --version").replace("git version ", "").trim();
   s.stop(C.green(`Git ${gitVer}`));
+
+  // --- sqlite-vec (required) ---
+  s.start("Checking sqlite-vec (required)...");
+  if (!_hasSqliteVec()) {
+    const installed = _installSqliteVec();
+    if (!installed || !_hasSqliteVec()) {
+      s.stop(C.red("sqlite-vec unavailable"), 2);
+      bail("sqlite-vec is required for vector retrieval. Install with: python3 -m pip install --user sqlite-vec");
+    }
+  }
+  s.stop(C.green("sqlite-vec"));
 
   // --- Gateway hooks (OpenClaw only) ---
   if (IS_OPENCLAW) {
@@ -1565,29 +1594,9 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     enableRequiredOpenClawHooks();
   }
 
-  // Install Python dependency: sqlite-vec (vector search extension)
-  s.start("Installing sqlite-vec...");
-  try {
-    const attempts = [
-      ["python3", ["-m", "pip", "install", "sqlite-vec"]],
-      ["python3", ["-m", "pip", "install", "--user", "sqlite-vec"]],
-      ["pip3", ["install", "sqlite-vec"]],
-      ["pip", ["install", "sqlite-vec"]],
-    ];
-    let ok = false;
-    for (const [cmd, args] of attempts) {
-      const res = spawnSync(cmd, args, { stdio: "pipe" });
-      if (res.status === 0) {
-        ok = true;
-        break;
-      }
-    }
-    if (!ok) {
-      throw new Error("sqlite-vec install failed");
-    }
-    s.stop(C.green("sqlite-vec installed"));
-  } catch {
-    s.stop(C.yellow("sqlite-vec install skipped — install manually: python3 -m pip install --user sqlite-vec"));
+  // sqlite-vec is required and already checked in preflight; re-verify here.
+  if (!_hasSqliteVec()) {
+    throw new Error("sqlite-vec is required for vector retrieval");
   }
 
   // Initialize database

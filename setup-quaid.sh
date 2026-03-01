@@ -644,6 +644,34 @@ raise SystemExit(2)
 PY
 }
 
+_ensure_sqlite_vec_required() {
+    if python3 -c "import sqlite_vec" >/dev/null 2>&1; then
+        info "sqlite-vec — OK"
+        return 0
+    fi
+    warn "sqlite-vec missing; attempting install..."
+    if python3 -m pip install sqlite-vec >/dev/null 2>&1; then
+        :
+    elif python3 -m pip install --user sqlite-vec >/dev/null 2>&1; then
+        :
+    elif pip3 install sqlite-vec >/dev/null 2>&1; then
+        :
+    elif pip install sqlite-vec >/dev/null 2>&1; then
+        :
+    else
+        error "sqlite-vec is required and could not be installed."
+        echo "  Try: python3 -m pip install --user sqlite-vec"
+        return 1
+    fi
+    if python3 -c "import sqlite_vec" >/dev/null 2>&1; then
+        info "sqlite-vec — OK"
+        return 0
+    fi
+    error "sqlite-vec install completed but import failed."
+    echo "  Try: python3 -m pip install --user sqlite-vec"
+    return 1
+}
+
 # =============================================================================
 # Step 1: Welcome & Pre-flight
 # =============================================================================
@@ -864,6 +892,12 @@ conn.close()
         fi
     fi
     info "Git $(git --version | sed 's/git version //') — OK"
+
+    # Check sqlite-vec (required for vector retrieval).
+    info "Checking sqlite-vec..."
+    if ! _ensure_sqlite_vec_required; then
+        exit 1
+    fi
 
     # Check gateway compatibility (hooks from PR #13287) — only for OpenClaw mode
     if $IS_OPENCLAW; then
@@ -1484,18 +1518,11 @@ step6_install() {
         fi
     fi
 
-    # Install Python dependency: sqlite-vec (vector search extension)
-    info "Installing sqlite-vec..."
-    if python3 -m pip install sqlite-vec >/dev/null 2>&1; then
-        info "sqlite-vec installed"
-    elif python3 -m pip install --user sqlite-vec >/dev/null 2>&1; then
-        info "sqlite-vec installed (user site)"
-    elif pip3 install sqlite-vec >/dev/null 2>&1; then
-        info "sqlite-vec installed (pip3 fallback)"
-    elif pip install sqlite-vec >/dev/null 2>&1; then
-        info "sqlite-vec installed (pip fallback)"
-    else
-        warn "sqlite-vec install skipped — install manually: python3 -m pip install --user sqlite-vec"
+    # sqlite-vec is required and already checked in preflight; re-verify here.
+    if ! python3 -c "import sqlite_vec" >/dev/null 2>&1; then
+        error "sqlite-vec is required but unavailable after preflight."
+        error "Install with: python3 -m pip install --user sqlite-vec"
+        exit 1
     fi
 
     # Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
