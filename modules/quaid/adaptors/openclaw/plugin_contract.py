@@ -14,13 +14,10 @@ _INIT_ERROR: Optional[str] = None
 class OpenClawAdapterPluginContract(PluginContractBase):
     def on_init(self, ctx: PluginHookContext) -> None:
         global _INIT_READY, _INIT_ERROR
-        # Exercise datastore bootstrap from the contract surface so init is
-        # not a no-op and failures surface early during config load.
+        # Keep init lightweight and side-effect free. Datastore access here can
+        # create import cycles during config/plugin bootstrap.
         _ = ctx
-        from core.services.memory_service import get_memory_service
-
         try:
-            get_memory_service().stats()
             _INIT_READY = True
             _INIT_ERROR = None
         except Exception as exc:

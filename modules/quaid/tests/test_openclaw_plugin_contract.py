@@ -24,37 +24,29 @@ def _ctx() -> PluginHookContext:
 
 
 def test_openclaw_contract_on_init_bootstraps_memory_service(monkeypatch):
-    called = {"stats": 0}
+    called = {"memory_service": 0}
 
-    class _Svc:
-        def stats(self):
-            called["stats"] += 1
-            return {"ok": True}
+    def _fail_if_called():
+        called["memory_service"] += 1
+        raise AssertionError("on_init must not touch memory service")
 
-    monkeypatch.setattr(
-        "core.services.memory_service.get_memory_service",
-        lambda: _Svc(),
-    )
+    monkeypatch.setattr("core.services.memory_service.get_memory_service", _fail_if_called)
     contract = OpenClawAdapterPluginContract()
     contract.on_init(_ctx())
     status = contract.on_status(_ctx())
-    assert called["stats"] == 1
+    assert called["memory_service"] == 0
     assert status["ready"] is True
     assert "init_error" not in status
 
 
-def test_openclaw_contract_on_init_surfaces_bootstrap_failures(monkeypatch):
-    class _Svc:
-        def stats(self):
-            raise RuntimeError("bootstrap failed")
-
+def test_openclaw_contract_on_init_remains_lightweight_without_datastore(monkeypatch):
+    # Datastore path may not be import-safe during plugin bootstrap.
     monkeypatch.setattr(
         "core.services.memory_service.get_memory_service",
-        lambda: _Svc(),
+        lambda: (_ for _ in ()).throw(RuntimeError("should not be touched")),
     )
     contract = OpenClawAdapterPluginContract()
-    with pytest.raises(RuntimeError, match="bootstrap failed"):
-        contract.on_init(_ctx())
+    contract.on_init(_ctx())
     status = contract.on_status(_ctx())
-    assert status["ready"] is False
-    assert "bootstrap failed" in str(status.get("init_error", ""))
+    assert status["ready"] is True
+    assert "init_error" not in status

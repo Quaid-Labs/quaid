@@ -502,6 +502,47 @@ def test_repo_manifests_have_no_duplicate_declared_exports():
     )
 
 
+def test_repo_active_slots_init_surface_bootstraps_without_import_cycles(tmp_path: Path, monkeypatch):
+    repo_root = Path(__file__).resolve().parents[1]
+    manifests, errors = discover_plugin_manifests(paths=[str(repo_root)], strict=True)
+    assert not errors
+
+    registry, init_errors, _warnings = initialize_plugin_runtime(
+        api_version=1,
+        paths=[str(repo_root)],
+        strict=True,
+        slots={
+            "adapter": "openclaw.adapter",
+            "ingest": ["core.extract"],
+            "datastores": ["memorydb.core"],
+        },
+        workspace_root=str(tmp_path),
+    )
+    assert not init_errors
+
+    # Ensure memorydb init resolves DB path without relying on global config.
+    monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
+    cfg = SimpleNamespace(
+        adapter=SimpleNamespace(type="openclaw"),
+        retrieval=SimpleNamespace(domains={}),
+    )
+
+    errors, _warnings, _results = run_plugin_contract_surface_collect(
+        registry=registry,
+        slots={
+            "adapter": "openclaw.adapter",
+            "ingest": ["core.extract"],
+            "datastores": ["memorydb.core"],
+        },
+        surface="init",
+        config=cfg,
+        plugin_config={},
+        workspace_root=str(tmp_path),
+        strict=True,
+    )
+    assert not errors
+
+
 def test_initialize_plugin_runtime_strict_rejects_unknown_dependency(tmp_path: Path):
     plugins_dir = tmp_path / "plugins"
     ingest_dir = plugins_dir / "ingest"
