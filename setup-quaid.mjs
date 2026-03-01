@@ -22,12 +22,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function parseInstallArgs(argv) {
-  const opts = { workspace: "", agent: false, help: false };
+  const opts = { workspace: "", agent: false, help: false, errors: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--workspace") {
-      opts.workspace = argv[i + 1] || "";
-      i++;
+      const next = argv[i + 1] || "";
+      if (!next || next.startsWith("--")) {
+        opts.errors.push("--workspace requires a path value");
+      } else {
+        opts.workspace = next;
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--workspace=")) {
+      const value = arg.slice("--workspace=".length);
+      if (!value) {
+        opts.errors.push("--workspace requires a non-empty path");
+      } else {
+        opts.workspace = value;
+      }
       continue;
     }
     if (arg === "--agent") {
@@ -38,6 +52,7 @@ function parseInstallArgs(argv) {
       opts.help = true;
       continue;
     }
+    opts.errors.push(`Unknown option: ${arg}`);
   }
   return opts;
 }
@@ -55,6 +70,12 @@ Options:
 
 const INSTALL_ARGS = parseInstallArgs(process.argv.slice(2));
 if (INSTALL_ARGS.help) printUsageAndExit();
+if (INSTALL_ARGS.errors.length) {
+  console.error("[x] Invalid installer arguments:");
+  for (const err of INSTALL_ARGS.errors) console.error(`    - ${err}`);
+  console.error("    Use --help for usage.");
+  process.exit(2);
+}
 
 // --- Constants ---
 const VERSION = "0.2.5-alpha";
@@ -85,6 +106,7 @@ function detectWorkspaceFromCli() {
 const IS_OPENCLAW = !!(process.env.CLAWDBOT_WORKSPACE || which("clawdbot") || which("openclaw"));
 const WORKSPACE =
   INSTALL_ARGS.workspace ||
+  process.env.QUAID_WORKSPACE ||
   process.env.QUAID_HOME ||
   process.env.CLAWDBOT_WORKSPACE ||
   detectWorkspaceFromCli() ||
@@ -253,7 +275,13 @@ const text = _testAnswers
   ? async (opts) => { const a = _nextAnswer("text", opts.message); log.info(C.dim(`[test] text "${opts.message}" → ${a}`)); return a; }
   : AGENT_MODE
     ? async (opts) => {
-        const picked = opts?.initialValue ?? opts?.placeholder ?? "";
+        const picked = String(opts?.initialValue ?? opts?.placeholder ?? "");
+        if (typeof opts?.validate === "function") {
+          const validation = await opts.validate(picked);
+          if (typeof validation === "string" && validation.trim()) {
+            throw new Error(`Agent-mode invalid default for "${opts?.message || "text"}": ${validation}`);
+          }
+        }
         log.info(C.dim(`[agent] text "${opts.message}" → ${picked}`));
         return picked;
       }
@@ -288,7 +316,12 @@ function _readAgentsList(cli) {
 function _ensureAgentsList(cli, workspacePath) {
   const existing = _readAgentsList(cli);
   if (existing.some((a) => a && typeof a === "object" && a.id)) return true;
+  if (Array.isArray(existing) && existing.length > 0) {
+    log.warn("agents.list exists but entries are non-standard (missing id); refusing to overwrite");
+    return false;
+  }
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
   try {
     const raw = fs.readFileSync(cfgPath, "utf8");
     const parsed = JSON.parse(raw);
@@ -306,11 +339,16 @@ function _ensureAgentsList(cli, workspacePath) {
         workspace: ws,
       },
     ];
-    fs.writeFileSync(cfgPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
     return _readAgentsList(cli).some((a) => a && typeof a === "object" && a.id);
   } catch (err) {
     log.warn(`Could not auto-heal agents.list: ${String(err)}`);
     return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
   }
 }
 
@@ -360,7 +398,7 @@ function getSystemRAM() {
 }
 
 async function waitForKey(msg = "Press any key to continue...") {
-  if (_testAnswers) return; // skip in test mode
+  if (_testAnswers || AGENT_MODE) return; // skip in test + agent mode
   log.message(C.dim(msg));
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
@@ -2017,6 +2055,10 @@ function enableRequiredOpenClawHooks() {
 }
 
 async function tryBrewInstall(pkg, label) {
+  if (AGENT_MODE) {
+    log.warn(`Agent mode: skipping auto-install for ${label}. Install manually: brew install ${pkg}`);
+    return false;
+  }
   if (!canRun("brew")) {
     const installBrew = handleCancel(await confirm({
       message: "Homebrew is not installed. Install it now?",
