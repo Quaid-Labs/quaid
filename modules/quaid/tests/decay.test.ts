@@ -114,7 +114,7 @@ describe('Confidence Decay', () => {
   })
 
   it('maintains embedding data through decay', async () => {
-    const stored = await memory.store('Embedding preservation test', 'quaid')
+    await memory.store('Embedding preservation test', 'quaid')
     
     await memory.runDecay()
     
