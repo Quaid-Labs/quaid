@@ -923,18 +923,35 @@ function getAllConversationMessages(messages: any[]): any[] {
 
 function detectLifecycleCommandSignal(messages: any[]): "ResetSignal" | "CompactionSignal" | null {
   if (!Array.isArray(messages) || messages.length === 0) return null;
-  const last = messages[messages.length - 1];
-  const prev = messages.length > 1 ? messages[messages.length - 2] : null;
-  const candidate = last?.role === "user" ? last : (prev?.role === "user" ? prev : null);
-  if (!candidate) return null;
-  const text = getMessageText(candidate).trim().toLowerCase();
-  if (!text) return null;
-  const normalized = text.replace(/\[\[[^\]]+\]\]\s*/g, "").trim();
-  const m = normalized.match(/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/);
-  if (!m) return null;
-  const command = `/${m[1]}`;
-  if (command === "/new" || command === "/reset" || command === "/restart") return "ResetSignal";
-  if (command === "/compact") return "CompactionSignal";
+  const tail = messages.slice(-8);
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const msg = tail[i];
+    const text = getMessageText(msg).trim();
+    if (!text) continue;
+    const normalized = text
+      .replace(/\[\[[^\]]+\]\]\s*/g, "")
+      .replace(/^\[[^\]]+\]\s*/g, "")
+      .trim();
+    const lower = normalized.toLowerCase();
+
+    if (msg?.role === "user") {
+      const m = lower.match(/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/);
+      if (m) {
+        const command = `/${m[1]}`;
+        if (command === "/new" || command === "/reset" || command === "/restart") return "ResetSignal";
+        if (command === "/compact") return "CompactionSignal";
+      }
+    }
+
+    // OpenClaw auto-compaction notice (no slash command is emitted).
+    // Example: "[... GMT+8] Compacted (37k → 5.0k) • Context 5.0k/200k (2%)"
+    const hasCompacted = /\bcompacted\b/i.test(normalized);
+    const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
+    const hasContext = /\bcontext\b/i.test(normalized);
+    if (hasCompacted && (hasDelta || hasContext)) {
+      return "CompactionSignal";
+    }
+  }
   return null;
 }
 
@@ -2974,7 +2991,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
       timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
-      const commandSignal = detectLifecycleCommandSignal(conversationMessages);
+      const commandSignal = detectLifecycleCommandSignal(messages);
       if (commandSignal && timeoutSessionId) {
         timeoutManager.queueExtractionSignal(timeoutSessionId, commandSignal);
         void timeoutManager.processPendingExtractionSignals();
@@ -4609,3 +4626,6 @@ notify_memory_extraction(
 };
 
 export default quaidPlugin;
+export const __test = {
+  detectLifecycleCommandSignal,
+};
