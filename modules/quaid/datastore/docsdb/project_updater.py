@@ -29,6 +29,11 @@ from lib.delayed_requests import queue_delayed_request
 from lib.runtime_context import get_workspace_dir
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
 
+_DISTILLED_SECTION = "## Distilled Project Context"
+_PROJECT_LOG_SECTION = "## Project Log"
+_PROJECT_LOG_EMPTY = "(empty)"
+
+
 def _workspace() -> Path:
     return get_workspace_dir()
 
@@ -295,6 +300,24 @@ def _check_registry_staleness(
                 "doc_mtime": doc_mtime,
             })
 
+    # Project Log is authoritative: any non-empty log marks PROJECT.md stale.
+    cfg = get_config()
+    defn = cfg.projects.definitions.get(project_name)
+    if defn:
+        project_md_rel = f"{defn.home_dir.rstrip('/')}/PROJECT.md"
+        project_md_abs = _resolve_path(project_md_rel)
+        if project_md_abs.exists():
+            content = project_md_abs.read_text()
+            log_items = _project_log_items(content)
+            if log_items:
+                stale.append({
+                    "doc_path": project_md_rel,
+                    "stale_sources": ["__project_log__"],
+                    "stale_reason": "project_log_populated",
+                    "project_log_items": log_items,
+                    "doc_mtime": project_md_abs.stat().st_mtime,
+                })
+
     return stale
 
 
@@ -315,6 +338,15 @@ def _apply_updates(
         purposes = get_doc_purposes()
         for stale_info in stale_docs:
             doc_path = stale_info["doc_path"]
+            if stale_info.get("stale_reason") == "project_log_populated":
+                print(f"  Folding Project Log into PROJECT.md: {doc_path}")
+                ok = _fold_project_log_into_project_md(Path(doc_path))
+                if ok:
+                    updates_applied.append(doc_path)
+                    now = datetime.now().isoformat()
+                    registry.update_timestamps(doc_path, modified_at=now)
+                continue
+
             sources = stale_info["stale_sources"]
             purpose = purposes.get(doc_path, "")
 
@@ -370,6 +402,7 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
         return
 
     content = project_md_path.read_text()
+    content = _ensure_project_log_sections(content)
     docs = registry.list_docs(project=project_name)
 
     # Use canonical real paths for reliable comparison (macOS /private/var symlinks)
@@ -468,6 +501,121 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
                 tmp_path.unlink()
             except OSError:
                 pass
+
+
+def _section_body(content: str, heading: str) -> Optional[str]:
+    pattern = re.compile(
+        rf"(^## {re.escape(heading)}\n)(.*?)(?=^\#\# |\Z)",
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    m = pattern.search(content)
+    if not m:
+        return None
+    return m.group(2)
+
+
+def _replace_section_body(content: str, heading: str, new_body: str) -> str:
+    pattern = re.compile(
+        rf"(^## {re.escape(heading)}\n)(.*?)(?=^\#\# |\Z)",
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if pattern.search(content):
+        return pattern.sub(rf"\1{new_body.rstrip()}\n\n", content, count=1)
+    return content.rstrip() + f"\n\n## {heading}\n{new_body.rstrip()}\n"
+
+
+def _normalize_log_item(line: str) -> Optional[str]:
+    cleaned = line.strip()
+    if not cleaned or cleaned == _PROJECT_LOG_EMPTY or cleaned.startswith("<!--"):
+        return None
+    if cleaned.startswith("- "):
+        cleaned = cleaned[2:].strip()
+    elif cleaned.startswith("* "):
+        cleaned = cleaned[2:].strip()
+    return cleaned or None
+
+
+def _project_log_items(content: str) -> List[str]:
+    body = _section_body(content, "Project Log")
+    if body is None:
+        return []
+    items: List[str] = []
+    for raw in body.splitlines():
+        item = _normalize_log_item(raw)
+        if item:
+            items.append(item)
+    return items
+
+
+def _ensure_project_log_sections(content: str) -> str:
+    updated = content
+    if _DISTILLED_SECTION not in updated:
+        insert_at = updated.find("\n## Exclude")
+        block = "\n## Distilled Project Context\n- (none yet)\n"
+        if insert_at >= 0:
+            updated = updated[:insert_at] + block + updated[insert_at:]
+        else:
+            updated = updated.rstrip() + block
+    if _PROJECT_LOG_SECTION not in updated:
+        insert_at = updated.find("\n## Exclude")
+        block = (
+            "\n## Project Log\n"
+            "<!-- Append timestamped project-context notes here. Janitor folds this into Distilled Project Context and clears this section. -->\n"
+            "(empty)\n"
+        )
+        if insert_at >= 0:
+            updated = updated[:insert_at] + block + updated[insert_at:]
+        else:
+            updated = updated.rstrip() + block
+    return updated
+
+
+def _fold_project_log_into_project_md(project_md_rel: Path) -> bool:
+    project_md_abs = _resolve_path(str(project_md_rel))
+    if not project_md_abs.exists():
+        return False
+
+    content = project_md_abs.read_text()
+    content = _ensure_project_log_sections(content)
+    log_items = _project_log_items(content)
+    if not log_items:
+        return False
+
+    distilled_body = _section_body(content, "Distilled Project Context") or "- (none yet)\n"
+    existing: List[str] = []
+    for raw in distilled_body.splitlines():
+        normalized = _normalize_log_item(raw)
+        if normalized and normalized != "(none yet)":
+            existing.append(normalized)
+
+    seen = {e.lower() for e in existing}
+    merged = existing[:]
+    for item in log_items:
+        key = item.lower()
+        if key not in seen:
+            seen.add(key)
+            merged.append(item)
+
+    if merged:
+        new_distilled = "\n".join(f"- {item}" for item in merged)
+    else:
+        new_distilled = "- (none yet)"
+    content = _replace_section_body(content, "Distilled Project Context", new_distilled)
+    content = _replace_section_body(content, "Project Log", _PROJECT_LOG_EMPTY)
+
+    tmp_path = project_md_abs.with_suffix(".tmp")
+    try:
+        tmp_path.write_text(content)
+        tmp_path.replace(project_md_abs)
+        return True
+    except OSError as e:
+        print(f"  Error writing PROJECT.md: {e}", file=sys.stderr)
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        return False
 
 
 def _notify_user(project_name: str, updates_applied: List[str], trigger: str) -> None:
