@@ -100,6 +100,22 @@ This is mandatory even when using `--agent` non-interactive mode.
 For long-running installs, the agent must send a brief progress update before backgrounding:
 "Install is running and may take 1-2 minutes; I'll report back when complete."
 
+### Completion Notification (Mandatory)
+
+Do not rely only on one long blocking process poll to detect completion.
+On some runtimes (notably OpenClaw + Telegram), long polls can fail silently and the user receives no completion message.
+
+Use one of these patterns:
+
+- `Option A (recommended for OpenClaw/Telegram)`: run install in background, append `EXIT:<code>` to a log, and poll the log in short intervals. Send a channel message as soon as `EXIT:` appears.
+- `Option B`: use short (15-20s) poll loops and explicitly post a completion summary when the process exits.
+
+Never:
+
+- Use a single blocking poll longer than 30s on Telegram/OpenClaw surfaces.
+- Go silent after backgrounding.
+- Assume polling wake-up is guaranteed across runtimes.
+
 For embeddings specifically: agents must not silently default to degraded mode when Ollama is unavailable.
 They must ask the user whether to install/start Ollama first, and only proceed degraded after explicit approval.
 

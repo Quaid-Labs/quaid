@@ -807,18 +807,28 @@ function getAllConversationMessages(messages) {
 }
 function detectLifecycleCommandSignal(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
-  const last = messages[messages.length - 1];
-  const prev = messages.length > 1 ? messages[messages.length - 2] : null;
-  const candidate = last?.role === "user" ? last : prev?.role === "user" ? prev : null;
-  if (!candidate) return null;
-  const text = getMessageText(candidate).trim().toLowerCase();
-  if (!text) return null;
-  const normalized = text.replace(/\[\[[^\]]+\]\]\s*/g, "").trim();
-  const m = normalized.match(/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/);
-  if (!m) return null;
-  const command = `/${m[1]}`;
-  if (command === "/new" || command === "/reset" || command === "/restart") return "ResetSignal";
-  if (command === "/compact") return "CompactionSignal";
+  const tail = messages.slice(-8);
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const msg = tail[i];
+    const text = getMessageText(msg).trim();
+    if (!text) continue;
+    const normalized = text.replace(/\[\[[^\]]+\]\]\s*/g, "").replace(/^\[[^\]]+\]\s*/g, "").trim();
+    const lower = normalized.toLowerCase();
+    if (msg?.role === "user") {
+      const m = lower.match(/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/);
+      if (m) {
+        const command = `/${m[1]}`;
+        if (command === "/new" || command === "/reset" || command === "/restart") return "ResetSignal";
+        if (command === "/compact") return "CompactionSignal";
+      }
+    }
+    const hasCompacted = /\bcompacted\b/i.test(normalized);
+    const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
+    const hasContext = /\bcontext\b/i.test(normalized);
+    if (hasCompacted && (hasDelta || hasContext)) {
+      return "CompactionSignal";
+    }
+  }
   return null;
 }
 function isInternalMaintenancePrompt(text) {
@@ -2573,7 +2583,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const timeoutSessionId = ctx?.sessionId || extractSessionId(messages, ctx);
       timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
-      const commandSignal = detectLifecycleCommandSignal(conversationMessages);
+      const commandSignal = detectLifecycleCommandSignal(messages);
       if (commandSignal && timeoutSessionId) {
         timeoutManager.queueExtractionSignal(timeoutSessionId, commandSignal);
         void timeoutManager.processPendingExtractionSignals();
@@ -4083,6 +4093,10 @@ notify_memory_extraction(
   }
 };
 var adapter_default = quaidPlugin;
+const __test = {
+  detectLifecycleCommandSignal
+};
 export {
+  __test,
   adapter_default as default
 };
