@@ -146,6 +146,7 @@ jobs:
           import json, pathlib
 
           import os
+          scenario = os.environ.get("SCENARIO", "")
           cfg = pathlib.Path(os.environ.get("OPENCLAW_CFG_PATH", str(pathlib.Path.home() / ".openclaw" / "openclaw.json")))
           if not cfg.exists():
               raise SystemExit("openclaw.json missing after installer run")
@@ -169,7 +170,10 @@ jobs:
           install_path = (installs.get("quaid") or {}).get("installPath")
           ext = pathlib.Path(install_path) if isinstance(install_path, str) and install_path else None
           if ext is not None and not ext.exists():
-              raise SystemExit(f"expected extension install path missing: {ext}")
+              if scenario == "stale-registry-upgrade":
+                  print(f"stale scenario: installPath points to missing path (allowed): {ext}")
+              else:
+                  raise SystemExit(f"expected extension install path missing: {ext}")
           print("installer smoke assertions passed")
           PY
 
