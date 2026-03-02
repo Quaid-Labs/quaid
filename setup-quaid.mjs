@@ -2930,29 +2930,59 @@ async function waitForGatewayWarmup(timeoutMs = 12000) {
   return false;
 }
 
-function notifyInstallCompletion(owner, models, embeddings, systems) {
-  if (!AGENT_MODE || !IS_OPENCLAW) return;
-  if (String(process.env.QUAID_INSTALL_NOTIFY_COMPLETE || "1").trim() === "0") return;
+let _installNotifyUnavailableLogged = false;
 
-  const enabledSystems = Object.entries(systems || {})
-    .filter(([, enabled]) => !!enabled)
-    .map(([name]) => name)
-    .join(", ");
+function _resolveInstallerMessageCli() {
+  return shell("command -v openclaw 2>/dev/null") || shell("command -v clawdbot 2>/dev/null") || "";
+}
 
-  const summary = [
-    "✅ Quaid install complete.",
-    `Owner: ${owner.display}`,
-    `Workspace: ${WORKSPACE}`,
-    `Models: deep=${models.highModel}, fast=${models.lowModel}`,
-    `Embeddings: ${embeddings.embedModel}`,
-    `Systems: ${enabledSystems}`,
-  ].join("\n");
+function _resolveLastChannelFromSessions() {
+  try {
+    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    if (!fs.existsSync(sessionsPath)) return null;
+    const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf8"));
+    const mainSession = sessions?.["agent:main:main"];
+    if (!mainSession) return null;
+    const channel = String(mainSession.lastChannel || "").trim();
+    const target = String(mainSession.lastTo || "").trim();
+    const account = String(mainSession.lastAccountId || "").trim();
+    if (!channel || !target) return null;
+    return { channel, target, account };
+  } catch {
+    return null;
+  }
+}
 
+function sendInstallerNotification(message) {
+  if (!AGENT_MODE || !IS_OPENCLAW) return false;
+  if (String(process.env.QUAID_INSTALL_NOTIFY || "1").trim() === "0") return false;
+
+  const cli = _resolveInstallerMessageCli();
+  const lastChannel = _resolveLastChannelFromSessions();
+  if (cli && lastChannel) {
+    const args = [
+      "message", "send",
+      "--channel", lastChannel.channel,
+      "--target", lastChannel.target,
+      "--message", String(message || ""),
+    ];
+    if (lastChannel.account && lastChannel.account !== "default") {
+      args.push("--account", lastChannel.account);
+    }
+    const cliRes = spawnSync(cli, args, {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 15_000,
+    });
+    if (!cliRes.error && cliRes.status === 0) return true;
+  }
+
+  // Fallback once plugin is installed/configured: adapter notify path.
   const py = `
 import os, sys
 sys.path.insert(0, ${JSON.stringify(PLUGIN_DIR)})
 from core.runtime.notify import notify_user
-ok = notify_user(${JSON.stringify(summary)})
+ok = notify_user(${JSON.stringify(message)})
 print("ok" if ok else "no_channel")
 `;
   const env = { ...process.env };
@@ -2968,18 +2998,55 @@ print("ok" if ok else "no_channel")
     timeout: 15_000,
   });
   if (res.error) {
-    log.warn(`Install completion notification failed: ${String(res.error.message || res.error)}`);
-    return;
+    if (!_installNotifyUnavailableLogged) {
+      _installNotifyUnavailableLogged = true;
+      log.warn(`Installer notification unavailable: ${String(res.error.message || res.error)}`);
+    }
+    return false;
   }
   if (res.status !== 0) {
     const detail = String(res.stderr || res.stdout || "").trim();
-    log.warn(`Install completion notification failed: ${detail || "python exited non-zero"}`);
-    return;
+    if (!_installNotifyUnavailableLogged) {
+      _installNotifyUnavailableLogged = true;
+      log.warn(`Installer notification unavailable: ${detail || "python exited non-zero"}`);
+    }
+    return false;
   }
   const out = String(res.stdout || "").trim();
-  if (out && out !== "ok") {
-    log.warn(`Install completion notification status: ${out}`);
+  if (out === "ok") return true;
+  if (out && out !== "ok" && !_installNotifyUnavailableLogged) {
+    _installNotifyUnavailableLogged = true;
+    log.warn(`Installer notification status: ${out}`);
   }
+  return false;
+}
+
+function notifyInstallCheckpoint(step, total, title, detail, funLine = "") {
+  if (String(process.env.QUAID_INSTALL_NOTIFY_PROGRESS || "1").trim() === "0") return;
+  const lines = [
+    `🛠️ Quaid install checkpoint ${step}/${total}: ${title}`,
+    detail,
+  ];
+  if (funLine) lines.push(funLine);
+  sendInstallerNotification(lines.join("\n"));
+}
+
+function notifyInstallCompletion(owner, models, embeddings, systems) {
+  if (String(process.env.QUAID_INSTALL_NOTIFY_COMPLETE || "1").trim() === "0") return;
+  const enabledSystems = Object.entries(systems || {})
+    .filter(([, enabled]) => !!enabled)
+    .map(([name]) => name)
+    .join(", ");
+  const summary = [
+    "✅ Quaid install complete.",
+    `Owner: ${owner.display}`,
+    `Workspace: ${WORKSPACE}`,
+    `Models: deep=${models.highModel}, fast=${models.lowModel}`,
+    `Embeddings: ${embeddings.embedModel}`,
+    `Systems: ${enabledSystems}`,
+    "No memory mutants detected.",
+  ].join("\n");
+  sendInstallerNotification(summary);
 }
 
 // =============================================================================
@@ -2991,14 +3058,23 @@ async function main() {
       log.info("Agent mode enabled: using non-interactive defaults where prompts are normally required.");
       log.info(`Workspace override: ${WORKSPACE}`);
     }
+    notifyInstallCheckpoint(0, 8, "boot", "Installer started in agent mode.", "Spinning up Rekall vibes...");
     const pluginSrc = await step1_preflight();
+    notifyInstallCheckpoint(1, 8, "preflight", "Dependencies checked and plugin source resolved.", "All systems nominal.");
     const owner = await step2_owner();
+    notifyInstallCheckpoint(2, 8, "identity", `Owner tagged as ${owner.display}.`, "Memory now has a name.");
     const models = await step3_models();
+    notifyInstallCheckpoint(3, 8, "models", `Deep=${models.highModel}, Fast=${models.lowModel}.`, "Brains selected.");
     const embeddings = await step4_embeddings();
+    notifyInstallCheckpoint(4, 8, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
     const systems = await step5_systems(models.advancedSetup);
+    notifyInstallCheckpoint(5, 8, "systems", "Subsystem toggles captured (memory/journal/projects/workspace).", "Switchboard locked.");
     const schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
+    notifyInstallCheckpoint(6, 8, "janitor", "Janitor policy and schedule configured.", "Night shift assigned.");
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
+    notifyInstallCheckpoint(7, 8, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
     await step8_validate(owner, models, embeddings, systems);
+    notifyInstallCheckpoint(8, 8, "validation", "Smoke checks passed.", "No richters spotted.");
     notifyInstallCompletion(owner, models, embeddings, systems);
 
     // In test mode, write results for the test runner to verify

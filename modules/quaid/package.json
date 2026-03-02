@@ -29,6 +29,7 @@
     "test:adapter:openclaw:ts": "node test-runner.js tests/session-timeout-manager.test.ts tests/chat-flow.integration.test.ts tests/delayed-requests.integration.test.ts",
     "test:adapter:openclaw:py": "python3 scripts/run_pytests.py --mode adapter_openclaw --workers 4 --timeout 120",
     "test:adapter:openclaw": "npm run test:adapter:openclaw:ts && npm run test:adapter:openclaw:py",
+    "test:release-gate": "node scripts/run-release-gate.mjs",
     "test:raw": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",

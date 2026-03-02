@@ -19,4 +19,10 @@ echo "[release-check] runtime ts/js pairs"
   node scripts/check-runtime-pairs.mjs --strict
 )
 
+echo "[release-check] quaid release gate"
+(
+  cd "$PLUGIN_DIR"
+  npm run test:release-gate
+)
+
 echo "[release-check] PASS"

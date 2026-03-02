@@ -448,6 +448,10 @@ class SessionTimeoutManager {
   }
   queueExtractionSignal(sessionId, label) {
     if (!sessionId) return;
+    if (!this.hasUnprocessedSessionMessages(sessionId)) {
+      this.writeQuaidLog("signal_queue_skipped_already_cleared", sessionId, { label: String(label || "Signal") });
+      return;
+    }
     const signal = {
       sessionId,
       label: String(label || "Signal"),
@@ -1031,6 +1035,12 @@ class SessionTimeoutManager {
       });
     }
     return incoming;
+  }
+  hasUnprocessedSessionMessages(sessionId) {
+    const messages = this.readSessionMessages(sessionId);
+    if (!messages.length) return false;
+    const filtered = this.filterReplayedMessages(sessionId, messages);
+    return filtered.length > 0;
   }
   writeQuaidLog(event, sessionId, data) {
     const now = (/* @__PURE__ */ new Date()).toISOString();

@@ -4195,7 +4195,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
       const triggerType = resolveExtractionTrigger(label);
-      const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
+      const alwaysNotifyCompletion = (triggerType === "timeout")
         && hasMeaningfulUserContent
         && shouldNotifyFeature("extraction", "summary");
       const dedupeSession = sessionId || extractSessionId(messages, {});
@@ -4719,6 +4719,8 @@ export const __test = {
   detectLifecycleCommandSignal,
   detectLifecycleSignal,
   shouldProcessLifecycleSignal,
+  shouldEmitExtractionNotify,
   markLifecycleSignalFromHook,
   clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
+  clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
 };

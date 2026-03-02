@@ -80,6 +80,8 @@ function readSessionMessages(jsonlPath) {
 }
 
 function hasCompactionMarker(msg) {
+  const role = String(msg?.role || "");
+  if (role !== "system" && role !== "user") return false;
   const text = getMessageText(msg);
   if (!text) return false;
   const normalized = text.toLowerCase();

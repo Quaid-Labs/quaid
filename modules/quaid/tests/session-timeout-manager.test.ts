@@ -97,6 +97,10 @@ describe('SessionTimeoutManager scheduling', () => {
       logger: () => {},
     })
 
+    manager.onAgentEnd([
+      { id: 'u1', role: 'user', content: 'remember this', timestamp: Date.now() },
+      { id: 'a1', role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
+    ], 'session-1')
     manager.queueExtractionSignal('session-1', 'Compaction')
     manager.queueExtractionSignal('session-1', 'Reset')
 
@@ -117,6 +121,10 @@ describe('SessionTimeoutManager scheduling', () => {
       logger: () => {},
     })
 
+    manager.onAgentEnd([
+      { id: 'u1', role: 'user', content: 'remember this', timestamp: Date.now() },
+      { id: 'a1', role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
+    ], 'session-promote')
     manager.queueExtractionSignal('session-promote', 'Compaction')
     const signalPath = (manager as any).signalPath('session-promote') as string
     const existing = JSON.parse(fs.readFileSync(signalPath, 'utf8'))
@@ -338,6 +346,34 @@ describe('SessionTimeoutManager scheduling', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0].messages).toHaveLength(2)
     expect(calls[0].messages[0].content).toContain('father is Kent')
+  })
+
+  it('skips re-queueing signals when session was already extracted and cleared', async () => {
+    const workspace = makeWorkspace('quaid-timeout-already-cleared-')
+    const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async (messages, sessionId, label) => {
+        calls.push({ messages, sessionId, label })
+      },
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    const msgs = [
+      { id: 'u1', role: 'user', content: 'remember this one thing', timestamp: Date.now() },
+      { id: 'a1', role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
+    ]
+
+    manager.onAgentEnd(msgs, 'session-cleared')
+    manager.queueExtractionSignal('session-cleared', 'Reset')
+    await manager.processPendingExtractionSignals()
+    expect(calls).toHaveLength(1)
+
+    manager.queueExtractionSignal('session-cleared', 'Reset')
+    await manager.processPendingExtractionSignals()
+    expect(calls).toHaveLength(1)
   })
 
   it('recovers orphaned signal processing claims from dead pids', async () => {
