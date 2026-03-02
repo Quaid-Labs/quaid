@@ -105,8 +105,10 @@ jobs:
           fi
 
           start_gateway() {
-            "${OC[@]}" gateway run --allow-unconfigured --force --port 18789 >"/tmp/openclaw-gateway-${SCENARIO}.log" 2>&1 &
-            sleep 3
+            if ! "${OC[@]}" gateway start --allow-unconfigured --port 18789 >"/tmp/openclaw-gateway-${SCENARIO}.log" 2>&1; then
+              "${OC[@]}" gateway run --allow-unconfigured --force --port 18789 >"/tmp/openclaw-gateway-${SCENARIO}.log" 2>&1 &
+              sleep 3
+            fi
             if ! "${OC[@]}" gateway probe; then
               echo "gateway probe failed; dumping startup log" >&2
               cat "/tmp/openclaw-gateway-${SCENARIO}.log" >&2 || true
