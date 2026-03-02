@@ -1,0 +1,103 @@
+name: Installer OpenClaw Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'setup-quaid.mjs'
+      - 'setup-quaid.sh'
+      - 'install.sh'
+      - 'install.ps1'
+      - '.github/workflows/installer-openclaw-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'setup-quaid.mjs'
+      - 'setup-quaid.sh'
+      - 'install.sh'
+      - 'install.ps1'
+
+jobs:
+  openclaw-installer-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install sqlite-vec prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip sqlite-vec || \
+          python -m pip install --user --break-system-packages sqlite-vec
+
+      - name: Install OpenClaw
+        run: npm install -g openclaw
+
+      - name: Run installer smoke against fresh OpenClaw
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export HOME="${RUNNER_TEMP}/quaid-installer-home"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          WORKSPACE="${HOME}/workspace"
+          mkdir -p "${WORKSPACE}"
+
+          # Resolve OpenClaw CLI with fallback to direct node entry if wrapper is missing.
+          OPENCLAW_BIN="$(command -v openclaw || true)"
+          if [[ -n "${OPENCLAW_BIN}" ]]; then
+            OC=( "${OPENCLAW_BIN}" )
+          else
+            OPENCLAW_ENTRY="$(npm root -g)/openclaw/dist/entry.js"
+            if [[ ! -f "${OPENCLAW_ENTRY}" ]]; then
+              echo "OpenClaw entry not found at ${OPENCLAW_ENTRY}" >&2
+              exit 1
+            fi
+            OC=( node "${OPENCLAW_ENTRY}" )
+          fi
+
+          # Fresh CI homes are unconfigured; allow bootstrap startup.
+          "${OC[@]}" gateway --allow-unconfigured --port 18789 >/tmp/openclaw-gateway.log 2>&1 &
+          sleep 3
+          "${OC[@]}" gateway probe
+          node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
+
+          python - <<'PY'
+          import json, pathlib
+
+          cfg = pathlib.Path.home() / ".openclaw" / "openclaw.json"
+          if not cfg.exists():
+              raise SystemExit("openclaw.json missing after installer run")
+          data = json.loads(cfg.read_text())
+          plugins = data.get("plugins") or {}
+          slots = plugins.get("slots") or {}
+          entries = plugins.get("entries") or {}
+
+          if slots.get("memory") != "quaid":
+              raise SystemExit(f"expected plugins.slots.memory=quaid, got {slots.get('memory')!r}")
+          if "quaid" not in entries:
+              raise SystemExit("plugins.entries.quaid missing after install")
+          if isinstance(entries.get("quaid"), dict) and "workspace" in entries["quaid"]:
+              raise SystemExit("invalid plugins.entries.quaid.workspace key present")
+
+          ext = pathlib.Path.home() / ".openclaw" / "extensions" / "quaid"
+          if not ext.exists():
+              raise SystemExit(f"expected extension install path missing: {ext}")
+          print("installer smoke assertions passed")
+          PY
+
+          "${OC[@]}" doctor
