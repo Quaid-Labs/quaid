@@ -22,7 +22,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function parseInstallArgs(argv) {
-  const opts = { workspace: "", ownerName: "", agent: false, help: false, errors: [] };
+  const opts = {
+    workspace: "",
+    ownerName: "",
+    source: "",
+    ref: "",
+    githubRepo: "",
+    artifact: "",
+    agent: false,
+    help: false,
+    errors: [],
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--workspace") {
@@ -46,6 +56,82 @@ function parseInstallArgs(argv) {
     }
     if (arg === "--agent") {
       opts.agent = true;
+      continue;
+    }
+    if (arg === "--source") {
+      const next = argv[i + 1] || "";
+      if (!next || next.startsWith("--")) {
+        opts.errors.push("--source requires a value (local|github|artifact)");
+      } else {
+        opts.source = next;
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--source=")) {
+      const value = arg.slice("--source=".length);
+      if (!value) {
+        opts.errors.push("--source requires a non-empty value");
+      } else {
+        opts.source = value;
+      }
+      continue;
+    }
+    if (arg === "--ref") {
+      const next = argv[i + 1] || "";
+      if (!next || next.startsWith("--")) {
+        opts.errors.push("--ref requires a value");
+      } else {
+        opts.ref = next;
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--ref=")) {
+      const value = arg.slice("--ref=".length);
+      if (!value) {
+        opts.errors.push("--ref requires a non-empty value");
+      } else {
+        opts.ref = value;
+      }
+      continue;
+    }
+    if (arg === "--github-repo") {
+      const next = argv[i + 1] || "";
+      if (!next || next.startsWith("--")) {
+        opts.errors.push("--github-repo requires a value (owner/repo)");
+      } else {
+        opts.githubRepo = next;
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--github-repo=")) {
+      const value = arg.slice("--github-repo=".length);
+      if (!value) {
+        opts.errors.push("--github-repo requires a non-empty value");
+      } else {
+        opts.githubRepo = value;
+      }
+      continue;
+    }
+    if (arg === "--artifact") {
+      const next = argv[i + 1] || "";
+      if (!next || next.startsWith("--")) {
+        opts.errors.push("--artifact requires a URL or local file path");
+      } else {
+        opts.artifact = next;
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith("--artifact=")) {
+      const value = arg.slice("--artifact=".length);
+      if (!value) {
+        opts.errors.push("--artifact requires a non-empty value");
+      } else {
+        opts.artifact = value;
+      }
       continue;
     }
     if (arg === "--owner-name") {
@@ -82,6 +168,10 @@ function printUsageAndExit() {
 Options:
   --workspace <path>  Override workspace/home path (highest priority)
   --owner-name <name> Person name used to tag memories (recommended for --agent)
+  --source <kind>     Plugin source: local (default), github, artifact
+  --ref <git-ref>     Git ref/commit to install when --source github
+  --github-repo <r>   GitHub repo for github source (default: quaid-labs/quaid)
+  --artifact <path>   Local file path or URL to .tar.gz when --source artifact
   --agent             Non-interactive agent mode (accepts sane defaults)
   -h, --help          Show this help
 `);
@@ -94,6 +184,23 @@ if (INSTALL_ARGS.errors.length) {
   console.error("[x] Invalid installer arguments:");
   for (const err of INSTALL_ARGS.errors) console.error(`    - ${err}`);
   console.error("    Use --help for usage.");
+  process.exit(2);
+}
+const INSTALL_SOURCE = String(INSTALL_ARGS.source || process.env.QUAID_INSTALL_SOURCE || "local").trim().toLowerCase();
+const INSTALL_REF = String(INSTALL_ARGS.ref || process.env.QUAID_INSTALL_REF || "main").trim();
+const INSTALL_GITHUB_REPO = String(INSTALL_ARGS.githubRepo || process.env.QUAID_INSTALL_GITHUB_REPO || "quaid-labs/quaid").trim();
+const INSTALL_ARTIFACT = String(INSTALL_ARGS.artifact || process.env.QUAID_INSTALL_ARTIFACT || "").trim();
+if (!["local", "github", "artifact"].includes(INSTALL_SOURCE)) {
+  console.error(`[x] Invalid --source: ${INSTALL_SOURCE}`);
+  console.error("    Expected one of: local, github, artifact");
+  process.exit(2);
+}
+if (INSTALL_SOURCE === "github" && !INSTALL_REF) {
+  console.error("[x] --source github requires --ref (or QUAID_INSTALL_REF).");
+  process.exit(2);
+}
+if (INSTALL_SOURCE === "artifact" && !INSTALL_ARTIFACT) {
+  console.error("[x] --source artifact requires --artifact (or QUAID_INSTALL_ARTIFACT).");
   process.exit(2);
 }
 
@@ -385,6 +492,102 @@ function shell(cmd, trim = true) {
 
 function canRun(cmd) {
   return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
+}
+
+function looksLikeUrl(value) {
+  return /^https?:\/\//i.test(String(value || "").trim());
+}
+
+async function downloadRemoteFile(url, destPath) {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "quaid-installer",
+      Accept: "application/octet-stream",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`download failed (${res.status} ${res.statusText}) for ${url}`);
+  }
+  const ab = await res.arrayBuffer();
+  fs.writeFileSync(destPath, Buffer.from(ab));
+}
+
+function extractTarGz(archivePath, extractDir) {
+  const tarRes = spawnSync("tar", ["-xzf", archivePath, "-C", extractDir], { stdio: "pipe", encoding: "utf8" });
+  if (tarRes.status !== 0) {
+    const detail = `${tarRes.stderr || ""}\n${tarRes.stdout || ""}`.trim();
+    throw new Error(`failed to extract archive (${archivePath}): ${detail || "tar exited non-zero"}`);
+  }
+}
+
+function findPluginDirInExtracted(rootDir) {
+  const candidates = [
+    path.join(rootDir, "modules", "quaid"),
+    path.join(rootDir, "quaid"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
+      return candidate;
+    }
+  }
+  try {
+    for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const nested = path.join(rootDir, entry.name, "modules", "quaid");
+      if (fs.existsSync(path.join(nested, "package.json"))) return nested;
+      const pluginOnly = path.join(rootDir, entry.name, "quaid");
+      if (fs.existsSync(path.join(pluginOnly, "package.json"))) return pluginOnly;
+    }
+  } catch {}
+  return "";
+}
+
+async function resolvePluginSource() {
+  if (INSTALL_SOURCE === "local") {
+    const pluginSrc = [
+      path.join(__dirname, "modules", "quaid"),
+      PLUGIN_DIR,
+    ].find((p) => {
+      try {
+        return fs.existsSync(p) && fs.statSync(p).isDirectory() && fs.readdirSync(p).length > 0;
+      } catch {
+        return false;
+      }
+    });
+    if (!pluginSrc) {
+      throw new Error(`expected local plugin source at ${path.join(__dirname, "modules", "quaid")} or ${PLUGIN_DIR}`);
+    }
+    return pluginSrc;
+  }
+
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "quaid-installer-src-"));
+  const archivePath = path.join(tmpBase, "source.tar.gz");
+  const extractDir = path.join(tmpBase, "extract");
+  fs.mkdirSync(extractDir, { recursive: true });
+
+  if (INSTALL_SOURCE === "github") {
+    const refSafe = encodeURIComponent(INSTALL_REF);
+    const repoSafe = INSTALL_GITHUB_REPO.replace(/^https?:\/\/github\.com\//i, "").replace(/\.git$/i, "");
+    const url = `https://codeload.github.com/${repoSafe}/tar.gz/${refSafe}`;
+    await downloadRemoteFile(url, archivePath);
+  } else {
+    if (looksLikeUrl(INSTALL_ARTIFACT)) {
+      await downloadRemoteFile(INSTALL_ARTIFACT, archivePath);
+    } else {
+      const localPath = path.resolve(INSTALL_ARTIFACT);
+      if (!fs.existsSync(localPath)) {
+        throw new Error(`artifact file not found: ${localPath}`);
+      }
+      fs.copyFileSync(localPath, archivePath);
+    }
+  }
+
+  extractTarGz(archivePath, extractDir);
+  const pluginSrc = findPluginDirInExtracted(extractDir);
+  if (!pluginSrc) {
+    throw new Error(`could not find modules/quaid in extracted source (${extractDir})`);
+  }
+  return pluginSrc;
 }
 
 function ownerIdFromDisplayName(displayName) {
@@ -959,20 +1162,19 @@ async function step1_preflight() {
   }
 
   // --- Plugin source ---
-  s.start("Locating plugin source...");
-  const pluginSrc = [
-    path.join(__dirname, "modules", "quaid"),
-    PLUGIN_DIR,
-  ].find(p => {
-    try {
-      return fs.existsSync(p) && fs.statSync(p).isDirectory() && fs.readdirSync(p).length > 0;
-    } catch { return false; }
-  });
-  if (!pluginSrc) {
+  s.start("Resolving plugin source...");
+  let pluginSrc = "";
+  try {
+    pluginSrc = await resolvePluginSource();
+  } catch (err) {
     s.stop(C.red("Plugin source not found"), 2);
-    bail(`Expected at ${path.join(__dirname, "modules", "quaid")} or ${PLUGIN_DIR}`);
+    bail(String((err && err.message) ? err.message : err));
   }
-  s.stop(C.green("Plugin source found"));
+  const srcInfo =
+    INSTALL_SOURCE === "github"
+      ? `${INSTALL_GITHUB_REPO}@${INSTALL_REF}`
+      : (INSTALL_SOURCE === "artifact" ? INSTALL_ARTIFACT : "local workspace");
+  s.stop(C.green(`Plugin source ready (${INSTALL_SOURCE}: ${srcInfo})`));
 
   log.success("All checks passed. Ready to install.");
   log.message("");

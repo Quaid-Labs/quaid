@@ -60,6 +60,13 @@ git clone https://github.com/quaid-labs/quaid.git
 cd quaid && node setup-quaid.mjs
 ```
 
+**Canary / commit testing (no public release cut):**
+```bash
+node setup-quaid.mjs --source github --ref canary
+# or pin exact commit:
+node setup-quaid.mjs --source github --ref <commit-sha>
+```
+
 ---
 
 ## Benchmarks
