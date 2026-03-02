@@ -20,10 +20,18 @@ describe("chat flow integration", () => {
   it("routes new/reset/restart/compact commands into extraction signals", async () => {
     const workspace = makeWorkspace("quaid-chat-flow-");
     const calls: Array<{ sessionId?: string; label?: string; messages: any[] }> = [];
+    const sourceMessagesBySession = new Map<string, any[]>();
+    const sourceActivityBySession = new Map<string, number>();
 
     const manager = new SessionTimeoutManager({
       workspace,
       timeoutMinutes: 10,
+      readSessionMessages: (sid: string) => sourceMessagesBySession.get(sid) || [],
+      listSessionActivity: () =>
+        Array.from(sourceActivityBySession.entries()).map(([sessionId, lastActivityMs]) => ({
+          sessionId,
+          lastActivityMs,
+        })),
       extract: async (messages, sessionId, label) => {
         calls.push({ messages, sessionId, label });
       },
@@ -39,6 +47,11 @@ describe("chat flow integration", () => {
       ],
       sessionId,
     );
+    sourceMessagesBySession.set(sessionId, [
+      { role: "user", content: "My sibling is Shannon.", timestamp: Date.now() - 2 },
+      { role: "assistant", content: "Got it.", timestamp: Date.now() - 1 },
+    ]);
+    sourceActivityBySession.set(sessionId, Date.now() - 1);
 
     const events = [
       { action: "new", userText: "Fact one: my sister is Shannon." },
@@ -57,6 +70,11 @@ describe("chat flow integration", () => {
         ],
         sessionId,
       );
+      sourceMessagesBySession.set(sessionId, [
+        { role: "user", content: userText, timestamp: Date.now() + idx * 2 },
+        { role: "assistant", content: `Acknowledged (${idx + 1}).`, timestamp: Date.now() + idx * 2 + 1 },
+      ]);
+      sourceActivityBySession.set(sessionId, Date.now() + idx * 2 + 1);
       const label = signalLabelForAction(action);
       if (label) {
         manager.queueExtractionSignal(sessionId, label);

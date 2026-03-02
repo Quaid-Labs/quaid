@@ -4047,6 +4047,8 @@ notify_user(f"📁 Project registered: {project_label}")
       workspace: WORKSPACE,
       timeoutMinutes: getCaptureTimeoutMinutes(),
       isBootstrapOnly: isResetBootstrapOnlyConversation,
+      readSessionMessages: (sessionId: string) => readMessagesForTimeoutSession(sessionId),
+      listSessionActivity: () => listSessionActivityForTimeout(),
       logger: (msg: string) => {
         const lowered = String(msg || "").toLowerCase();
         if (lowered.includes("fail") || lowered.includes("error")) {
@@ -4150,7 +4152,7 @@ notify_user(f"📁 Project registered: {project_label}")
       return mergeRecallResults(primary, secondary, limit);
     }
 
-    // Read messages from a session JSONL file (same format as recovery scan)
+    // Read messages from a session JSONL file
     function readMessagesFromSessionFile(sessionFile: string): any[] {
       const content = fs.readFileSync(sessionFile, 'utf8');
       const lines = content.trim().split('\n');
@@ -4172,23 +4174,120 @@ notify_user(f"📁 Project registered: {project_label}")
       return messages;
     }
 
+    function resolveOpenClawSessionStorePath(): string {
+      return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    }
+
+    let openClawSessionStoreCache:
+      | { mtimeMs: number; data: Record<string, any> }
+      | null = null;
+
+    function loadOpenClawSessionStore(): Record<string, any> {
+      const storePath = resolveOpenClawSessionStorePath();
+      try {
+        if (!fs.existsSync(storePath)) return {};
+        const stat = fs.statSync(storePath);
+        const mtimeMs = Number.isFinite(stat.mtimeMs) ? stat.mtimeMs : 0;
+        if (openClawSessionStoreCache && openClawSessionStoreCache.mtimeMs === mtimeMs) {
+          return openClawSessionStoreCache.data;
+        }
+        const raw = JSON.parse(fs.readFileSync(storePath, "utf8"));
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+        const data = raw as Record<string, any>;
+        openClawSessionStoreCache = { mtimeMs, data };
+        return data;
+      } catch (err: unknown) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+        console.warn(`[quaid][timeout] session store read failed: ${String((err as Error)?.message || err)}`);
+        return {};
+      }
+    }
+
+    function parseSessionUpdatedAtMs(entry: any): number | null {
+      const candidates = [entry?.updatedAt, entry?.updated_at, entry?.lastMessageAt, entry?.last_message_at];
+      for (const raw of candidates) {
+        if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+        if (typeof raw === "string") {
+          const asNum = Number(raw);
+          if (Number.isFinite(asNum)) return asNum;
+          const parsed = Date.parse(raw);
+          if (Number.isFinite(parsed)) return parsed;
+        }
+      }
+      return null;
+    }
+
+    function resolveSessionTranscriptPath(entry: any, sessionId: string): string | null {
+      const pathCandidates = [entry?.sessionFile, entry?.session_file];
+      for (const raw of pathCandidates) {
+        const p = String(raw || "").trim();
+        if (!p) continue;
+        if (fs.existsSync(p)) return p;
+      }
+      const fallbackDirs = [
+        path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
+        path.join(os.homedir(), ".openclaw", "sessions"),
+      ];
+      for (const dir of fallbackDirs) {
+        const candidate = path.join(dir, `${sessionId}.jsonl`);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+      return null;
+    }
+
+    function readMessagesForTimeoutSession(sessionId: string): any[] {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return [];
+      const store = loadOpenClawSessionStore();
+      const entries = Object.entries(store || {}) as Array<[string, any]>;
+      for (const [, entry] of entries) {
+        if (String(entry?.sessionId || "").trim() !== sid) continue;
+        const transcriptPath = resolveSessionTranscriptPath(entry, sid);
+        if (!transcriptPath) return [];
+        return readMessagesFromSessionFile(transcriptPath);
+      }
+      const fallbackPath = resolveSessionTranscriptPath({}, sid);
+      if (!fallbackPath) return [];
+      return readMessagesFromSessionFile(fallbackPath);
+    }
+
+    function listSessionActivityForTimeout(): Array<{ sessionId: string; lastActivityMs: number }> {
+      const store = loadOpenClawSessionStore();
+      const rows: Array<{ sessionId: string; lastActivityMs: number }> = [];
+      const entries = Object.entries(store || {}) as Array<[string, any]>;
+      for (const [, entry] of entries) {
+        const sid = String(entry?.sessionId || "").trim();
+        if (!sid) continue;
+        const updatedAtMs = parseSessionUpdatedAtMs(entry);
+        if (updatedAtMs !== null) {
+          rows.push({ sessionId: sid, lastActivityMs: updatedAtMs });
+          continue;
+        }
+        const transcriptPath = resolveSessionTranscriptPath(entry, sid);
+        if (!transcriptPath) continue;
+        try {
+          const stat = fs.statSync(transcriptPath);
+          if (Number.isFinite(stat.mtimeMs) && stat.mtimeMs > 0) {
+            rows.push({ sessionId: sid, lastActivityMs: stat.mtimeMs });
+          }
+        } catch (err: unknown) {
+          if (isFailHardEnabled()) {
+            throw err;
+          }
+          console.warn(`[quaid][timeout] session mtime read failed for ${sid}: ${String((err as Error)?.message || err)}`);
+        }
+      }
+      return rows;
+    }
+
     // Shared memory extraction logic — used by both compaction and reset hooks
     const extractMemoriesFromMessages = async (messages: any[], label: string, sessionId?: string) => {
       console.log(`[quaid][extract] start label=${label} session=${sessionId || "unknown"} message_count=${messages.length}`);
       if (!messages.length) {
         console.log(`[quaid] ${label}: no messages to analyze`);
         return;
-      }
-
-      const hasRestart = messages.some((m: any) => {
-        const content = typeof m.content === "string" ? m.content : "";
-        return content.startsWith("GatewayRestart:");
-      });
-      if (hasRestart) {
-        console.log(`[quaid][extract] ${label}: detected GatewayRestart marker; scheduling recovery scan`);
-        void checkForUnextractedSessions().catch((err: unknown) => {
-          console.error("[quaid] Recovery scan error:", err);
-        });
       }
 
       const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
@@ -4416,117 +4515,19 @@ notify_memory_extraction(
         console.warn(msg);
       }
     };
-    // Recovery scan: detect sessions interrupted by gateway restart before extraction fired
-    async function checkForUnextractedSessions(): Promise<void> {
-      // Rate limit: only run once per gateway restart
-      const flagPath = path.join(QUAID_RUNTIME_DIR, "quaid-recovery-ran.txt");
-      try {
-        const flagStat = fs.statSync(flagPath);
-        const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-        if (flagStat.mtimeMs > fiveMinAgo) {
-          console.log('[quaid] Recovery scan already ran recently, skipping');
-          return;
-        }
-      } catch (err: unknown) {
-        const code = (err as NodeJS.ErrnoException | undefined)?.code;
-        const msg = String((err as Error)?.message || err || "");
-        if (code !== "ENOENT") {
-          console.warn(`[quaid] Recovery scan flag read failed: ${msg}`);
-        }
-      } // Flag missing is expected on first run.
-
-      console.log('[quaid] Running recovery scan for unextracted sessions...');
-
-      const sessionsDir = path.join(os.homedir(), '.openclaw', 'sessions');
-      if (!fs.existsSync(sessionsDir)) {
-        console.log('[quaid] No sessions directory found, skipping recovery');
-        fs.writeFileSync(flagPath, new Date().toISOString());
-        return;
-      }
-
-      // Load extraction log
-      const extractionLogPath = path.join(WORKSPACE, 'data', 'extraction-log.json');
-      let extractionLog: Record<string, { last_extracted_at: string; message_count: number }> = {};
-      try {
-        const parsed = JSON.parse(fs.readFileSync(extractionLogPath, 'utf8'));
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          throw new Error("extraction log must be a JSON object");
-        }
-        extractionLog = parsed as Record<string, { last_extracted_at: string; message_count: number }>;
-      } catch (err: unknown) {
-        if (isFailHardEnabled() && !isMissingFileError(err)) {
-          throw new Error("[quaid] recovery extraction log read failed under failHard", { cause: err as Error });
-        }
-        console.warn(`[quaid] Recovery scan extraction log read failed: ${String((err as Error)?.message || err)}`);
-      }
-
-      const sessionFiles = fs.readdirSync(sessionsDir).filter(f => f.endsWith('.jsonl'));
-      let recovered = 0;
-
-      for (const file of sessionFiles) {
-        const sessionId = file.replace('.jsonl', '');
-        const filePath = path.join(sessionsDir, file);
-
-        try {
-          const stat = fs.statSync(filePath);
-
-          // Skip sessions younger than 5 minutes (may be active)
-          if (Date.now() - stat.mtimeMs < 5 * 60 * 1000) { continue; }
-
-          // Check if already extracted
-          const logEntry = extractionLog[sessionId];
-          if (logEntry) {
-            const extractedAt = new Date(logEntry.last_extracted_at).getTime();
-            if (extractedAt >= stat.mtimeMs) { continue; } // Already extracted
-          }
-
-          // Read JSONL and build messages (handles both direct {role} and {type:"message"} formats)
-          const messages = readMessagesFromSessionFile(filePath);
-
-          // Skip short sessions
-          if (messages.length < 4) { continue; }
-
-          console.log(`[quaid] Recovering unextracted session ${sessionId} (${messages.length} messages)`);
-          await extractMemoriesFromMessages(messages, 'Recovery', sessionId);
-          recovered++;
-        } catch (err: unknown) {
-          console.error(`[quaid] Recovery failed for session ${sessionId}:`, (err as Error).message);
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-        }
-      }
-
-      console.log(`[quaid] Recovery scan complete: ${recovered} sessions recovered`);
-      fs.writeFileSync(flagPath, new Date().toISOString());
-    }
-
     // Register compaction hook — extract memories in parallel with compaction LLM.
-    // Uses sessionFile (JSONL on disk) when available, else event.messages.
+    // Source of truth is timeout manager's OpenClaw session reader + local cursor gate.
     onChecked("before_compaction", async (event: any, ctx: any) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
         }
-        // Prefer reading from sessionFile (all messages already on disk, runs in
-        // parallel with compaction). Fall back to in-memory messages array.
-        let messages: any[];
-        if (event.sessionFile) {
-          try {
-            messages = readMessagesFromSessionFile(event.sessionFile);
-            console.log(`[quaid] before_compaction: read ${messages.length} messages from sessionFile`);
-          } catch (readErr: unknown) {
-            console.warn(`[quaid] before_compaction: sessionFile read failed, falling back to messages array: ${String(readErr)}`);
-            messages = event.messages || [];
-          }
-        } else {
-          messages = event.messages || [];
-        }
+        const messages: any[] = event.messages || [];
         const sessionId = ctx?.sessionId;
         const conversationMessages = getAllConversationMessages(messages);
         const extractionSessionId = sessionId || extractSessionId(messages, ctx);
         if (conversationMessages.length === 0) {
-          console.log(`[quaid] before_compaction: empty/internal transcript from hook payload; attempting session-log fallback session=${extractionSessionId || "unknown"}`);
+          console.log(`[quaid] before_compaction: empty/internal hook payload; deferring to timeout source session=${extractionSessionId || "unknown"}`);
         } else {
           console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
         }
@@ -4618,26 +4619,14 @@ notify_memory_extraction(
       priority: 10
     });
 
-    // Register reset hook — extract memories before session is cleared by /new or /reset
-    // Uses sessionFile when available, falls back to in-memory messages.
+    // Register reset hook — extract memories before session is cleared by /new or /reset.
+    // Source of truth is timeout manager's OpenClaw session reader + local cursor gate.
     onChecked("before_reset", async (event: any, ctx: any) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
         }
-        // Prefer sessionFile (complete transcript on disk), fall back to in-memory messages
-        let messages: any[];
-        if (event.sessionFile) {
-          try {
-            messages = readMessagesFromSessionFile(event.sessionFile);
-            console.log(`[quaid] before_reset: read ${messages.length} messages from sessionFile`);
-          } catch (readErr: unknown) {
-            console.warn(`[quaid] before_reset: sessionFile read failed, falling back to messages array: ${String(readErr)}`);
-            messages = event.messages || [];
-          }
-        } else {
-          messages = event.messages || [];
-        }
+        const messages: any[] = event.messages || [];
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
         const conversationMessages = getAllConversationMessages(messages);

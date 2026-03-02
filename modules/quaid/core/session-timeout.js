@@ -145,20 +145,20 @@ class SessionTimeoutManager {
   extract;
   isBootstrapOnly;
   logger;
+  readSessionMessagesSource;
+  listSessionActivitySource;
   timer = null;
-  pendingMessages = null;
+  pendingFallbackMessages = null;
   pendingSessionId;
-  buffers = /* @__PURE__ */ new Map();
-  bufferTouchedAt = /* @__PURE__ */ new Map();
-  bufferDir;
-  logDir;
-  sessionLogDir;
-  sessionMessageLogDir;
   sessionCursorDir;
   pendingSignalDir;
   workerLockPath;
   workerLockToken;
+  staleSweepStatePath;
+  installStatePath;
   ownsWorkerLock = false;
+  logDir;
+  sessionLogDir;
   logFilePath;
   eventFilePath;
   workerTimer = null;
@@ -166,7 +166,6 @@ class SessionTimeoutManager {
   failHard;
   extractTimeoutMs;
   maxSignalRetries;
-  maxInMemoryBuffers = 200;
   staleRecoveryInitialBackoffMs = 5e3;
   staleRecoveryMaxBackoffMs = 5 * 60 * 1e3;
   constructor(opts) {
@@ -174,14 +173,37 @@ class SessionTimeoutManager {
     this.extract = opts.extract;
     this.isBootstrapOnly = opts.isBootstrapOnly;
     this.logger = opts.logger;
-    this.bufferDir = path.join(opts.workspace, "data", "timeout-buffers");
+    this.readSessionMessagesSource = (sessionId) => {
+      try {
+        return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || []);
+      } catch (err) {
+        safeLog(this.logger, `[quaid][timeout] source readSessionMessages failed for ${sessionId}: ${String(err?.message || err)}`);
+        if (this.failHard) throw err;
+        return [];
+      }
+    };
+    this.listSessionActivitySource = () => {
+      try {
+        const rows = opts.listSessionActivity?.() || [];
+        if (!Array.isArray(rows)) return [];
+        return rows.map((r) => ({
+          sessionId: String(r?.sessionId || "").trim(),
+          lastActivityMs: Number(r?.lastActivityMs)
+        })).filter((r) => r.sessionId && Number.isFinite(r.lastActivityMs) && r.lastActivityMs > 0);
+      } catch (err) {
+        safeLog(this.logger, `[quaid][timeout] source listSessionActivity failed: ${String(err?.message || err)}`);
+        if (this.failHard) throw err;
+        return [];
+      }
+    };
     this.logDir = path.join(opts.workspace, "logs", "quaid");
     this.sessionLogDir = path.join(this.logDir, "sessions");
-    this.sessionMessageLogDir = path.join(this.logDir, "session-messages");
     this.sessionCursorDir = path.join(opts.workspace, "data", "session-cursors");
     this.pendingSignalDir = path.join(opts.workspace, "data", "pending-extraction-signals");
     this.workerLockPath = path.join(opts.workspace, "data", "session-timeout-worker.lock");
     this.workerLockToken = `${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    this.staleSweepStatePath = path.join(opts.workspace, "data", "stale-sweep-state.json");
+    this.installStatePath = path.join(opts.workspace, "data", "installed-at.json");
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
     this.eventFilePath = path.join(this.logDir, "session-timeout-events.jsonl");
     this.failHard = isFailHardEnabled(opts.workspace);
@@ -192,9 +214,10 @@ class SessionTimeoutManager {
     try {
       fs.mkdirSync(this.logDir, { recursive: true });
       fs.mkdirSync(this.sessionLogDir, { recursive: true });
-      fs.mkdirSync(this.sessionMessageLogDir, { recursive: true });
       fs.mkdirSync(this.sessionCursorDir, { recursive: true });
       fs.mkdirSync(this.pendingSignalDir, { recursive: true });
+      fs.mkdirSync(path.dirname(this.staleSweepStatePath), { recursive: true });
+      fs.mkdirSync(path.dirname(this.installStatePath), { recursive: true });
     } catch (err) {
       const msg = String(err?.message || err || "unknown directory initialization error");
       safeLog(this.logger, `[quaid][timeout] failed to initialize runtime directories: ${msg}`);
@@ -258,52 +281,42 @@ class SessionTimeoutManager {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    const inMemory = this.buffers.get(sessionId) || [];
-    const onDisk = this.readBuffer(sessionId);
-    const existing = mergeUniqueMessages(onDisk, inMemory);
-    const merged = mergeUniqueMessages(existing, gatedIncoming);
-    const added = merged.slice(existing.length);
-    this.buffers.set(sessionId, merged);
-    this.bufferTouchedAt.set(sessionId, Date.now());
-    this.evictInMemoryBuffersIfNeeded(sessionId);
-    this.writeBuffer(sessionId, merged);
-    this.appendSessionMessages(sessionId, added);
-    this.pendingMessages = merged;
-    this.pendingSessionId = sessionId;
-    safeLog(this.logger, `[quaid][timeout] buffered session=${sessionId} appended=${Math.max(0, merged.length - existing.length)} total=${merged.length}`);
+    if (this.pendingSessionId === sessionId && this.pendingFallbackMessages) {
+      this.pendingFallbackMessages = mergeUniqueMessages(this.pendingFallbackMessages, gatedIncoming);
+    } else {
+      this.pendingFallbackMessages = gatedIncoming;
+      this.pendingSessionId = sessionId;
+    }
     this.writeQuaidLog("buffered", sessionId, {
-      appended: added.length,
-      total: merged.length,
-      timeout_minutes: this.timeoutMinutes
+      appended: gatedIncoming.length,
+      timeout_minutes: this.timeoutMinutes,
+      source: "event_messages"
     });
     if (this.timeoutMinutes <= 0) return;
     this.timer = setTimeout(() => {
-      const msgs = this.pendingMessages;
       const sid = this.pendingSessionId;
+      const fallback = this.pendingFallbackMessages || [];
       this.timer = null;
-      this.pendingMessages = null;
       this.pendingSessionId = void 0;
-      if (!msgs || !sid || msgs.length === 0) return;
-      const loggedMessages = this.readSessionMessages(sid);
-      const extractionMessages = loggedMessages.length > 0 ? loggedMessages : msgs;
+      this.pendingFallbackMessages = null;
+      if (!sid) return;
       this.writeQuaidLog("timer_fired", sid, {
-        message_count: extractionMessages.length,
-        timeout_minutes: this.timeoutMinutes,
-        source: loggedMessages.length > 0 ? "session_message_log" : "pending_buffer"
+        timeout_minutes: this.timeoutMinutes
       });
-      this.queueExtraction(extractionMessages, sid, this.timeoutMinutes);
+      this.queueExtractionFromSession(sid, fallback, this.timeoutMinutes);
     }, this.timeoutMinutes * 60 * 1e3);
   }
-  async extractSessionFromLogDirect(sessionId, label, fallbackMessages) {
+  async extractSessionFromSourceDirect(sessionId, label, fallbackMessages) {
     if (!sessionId) return false;
-    const loggedMessages = this.readSessionMessages(sessionId);
-    const fallback = filterEligibleMessages(fallbackMessages || []);
+    const sourceMessages = this.readSourceSessionMessages(sessionId);
+    const sourceUnprocessed = this.filterReplayedMessages(sessionId, sourceMessages);
+    const fallback = this.filterReplayedMessages(sessionId, filterEligibleMessages(fallbackMessages || []));
     const allowFallback = !this.failHard;
-    const source = loggedMessages.length > 0 ? "session_message_log" : allowFallback && fallback.length > 0 ? "fallback_event_messages" : "none";
-    const messages = loggedMessages.length > 0 ? loggedMessages : allowFallback ? fallback : [];
+    const source = sourceUnprocessed.length > 0 ? "source_session_messages" : allowFallback && fallback.length > 0 ? "fallback_event_messages" : "none";
+    const messages = sourceUnprocessed.length > 0 ? sourceUnprocessed : allowFallback ? fallback : [];
     if (!messages.length) {
-      if (this.failHard && fallback.length > 0) {
-        const msg = "session-timeout fallback payload blocked by failHard; no session_message_log available";
+      if (this.failHard && fallback.length > 0 && sourceUnprocessed.length === 0) {
+        const msg = "session-timeout fallback payload blocked by failHard; no source session messages available";
         this.writeQuaidLog("extract_fail_hard_blocked_fallback", sessionId, { label, fallback_count: fallback.length });
         throw new Error(msg);
       }
@@ -313,7 +326,7 @@ class SessionTimeoutManager {
     this.writeQuaidLog("extract_begin", sessionId, { label, message_count: messages.length, source });
     await this.runExtractWithTimeout(messages, sessionId, label);
     this.writeQuaidLog("extract_done", sessionId, { label, message_count: messages.length, source });
-    this.clearSession(sessionId);
+    this.clearSession(sessionId, messages);
     return true;
   }
   async extractSessionFromLog(sessionId, label, fallbackMessages) {
@@ -322,7 +335,7 @@ class SessionTimeoutManager {
       safeLog(this.logger, `[quaid][timeout] previous extraction chain error: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     }).then(async () => {
-      extracted = await this.extractSessionFromLogDirect(sessionId, label, fallbackMessages);
+      extracted = await this.extractSessionFromSourceDirect(sessionId, label, fallbackMessages);
     }).catch((err) => {
       safeLog(this.logger, `[quaid][timeout] extraction queue failed: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
@@ -331,20 +344,14 @@ class SessionTimeoutManager {
     await work;
     return extracted;
   }
-  clearSession(sessionId) {
+  clearSession(sessionId, cursorMessages) {
     if (!sessionId) return;
-    const loggedMessages = this.readSessionMessages(sessionId);
-    const bufferedMessages = this.buffers.get(sessionId) || this.readBuffer(sessionId);
-    const cursorMessages = loggedMessages.length > 0 ? loggedMessages : bufferedMessages;
-    this.writeSessionCursor(sessionId, cursorMessages);
-    this.buffers.delete(sessionId);
-    this.bufferTouchedAt.delete(sessionId);
-    this.clearBuffer(sessionId);
-    this.clearSessionMessageLog(sessionId);
+    const sourceMessages = cursorMessages || this.filterReplayedMessages(sessionId, this.readSourceSessionMessages(sessionId));
+    this.writeSessionCursor(sessionId, sourceMessages);
     this.writeQuaidLog("session_cleared", sessionId);
     if (this.pendingSessionId === sessionId) {
-      this.pendingMessages = null;
       this.pendingSessionId = void 0;
+      this.pendingFallbackMessages = null;
       if (this.timer) {
         clearTimeout(this.timer);
         this.timer = null;
@@ -352,94 +359,102 @@ class SessionTimeoutManager {
       }
     }
   }
-  evictInMemoryBuffersIfNeeded(currentSessionId) {
-    while (this.buffers.size > this.maxInMemoryBuffers) {
-      const oldestSession = Array.from(this.bufferTouchedAt.entries()).sort((a, b) => a[1] - b[1]).find(([sid]) => sid !== currentSessionId && sid !== this.pendingSessionId)?.[0];
-      if (!oldestSession) {
-        break;
-      }
-      this.buffers.delete(oldestSession);
-      this.bufferTouchedAt.delete(oldestSession);
-      this.writeQuaidLog("buffer_evicted", oldestSession, {
-        reason: "in_memory_buffer_limit",
-        limit: this.maxInMemoryBuffers
-      });
-    }
-  }
   async recoverStaleBuffers() {
     if (this.timeoutMinutes <= 0) return;
-    this.recoverOrphanedBufferClaims();
-    const now = Date.now();
-    const staleMs = this.timeoutMinutes * 60 * 1e3;
-    for (const filePath of this.listBufferFiles()) {
-      const lockedPath = this.claimBufferFile(filePath);
-      if (!lockedPath) {
-        continue;
-      }
-      let sid = path.basename(filePath, ".json").trim();
-      let payload = null;
-      try {
-        payload = JSON.parse(fs.readFileSync(lockedPath, "utf8"));
-        sid = String(payload?.sessionId || sid).trim();
-        const updatedAtMs = Date.parse(String(payload?.updatedAt || ""));
-        const nextRecoveryAtMs = Date.parse(String(payload?.nextRecoveryAt || ""));
-        const msgs = filterEligibleMessages(Array.isArray(payload?.messages) ? payload.messages : []);
-        if (!sid || msgs.length === 0) {
-          try {
-            fs.unlinkSync(lockedPath);
-          } catch (unlinkErr) {
-            safeLog(this.logger, `[quaid][timeout] failed to delete invalid stale buffer claim ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
-          }
-          continue;
-        }
-        if (Number.isFinite(updatedAtMs) && now - updatedAtMs < staleMs) {
-          this.releaseBufferFile(lockedPath, filePath);
-          continue;
-        }
-        if (Number.isFinite(nextRecoveryAtMs) && nextRecoveryAtMs > now) {
-          this.releaseBufferFile(lockedPath, filePath);
-          continue;
-        }
-        const loggedMessages = this.readSessionMessages(sid);
-        const extractionMessages = loggedMessages.length > 0 ? loggedMessages : msgs;
-        safeLog(this.logger, `[quaid][timeout] recovering stale buffer session=${sid} message_count=${extractionMessages.length}`);
-        this.writeQuaidLog("recover_stale_buffer", sid, {
-          message_count: extractionMessages.length,
-          source: loggedMessages.length > 0 ? "session_message_log" : "pending_buffer"
-        });
-        await this.runExtractWithTimeout(extractionMessages, sid);
-        this.clearSession(sid);
-        try {
-          fs.unlinkSync(lockedPath);
-        } catch (unlinkErr) {
-          safeLog(this.logger, `[quaid][timeout] failed to delete processed stale buffer claim ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
-        }
-      } catch (err) {
-        const error = String(err?.message || err);
-        safeLog(this.logger, `[quaid][timeout] stale buffer recovery failed for ${filePath}: ${error}`);
-        if (sid && payload && fs.existsSync(lockedPath)) {
-          const nextAttemptCount = Math.max(0, Number(payload.recoveryAttemptCount || 0)) + 1;
-          const delayMs = this.staleRecoveryDelayMs(nextAttemptCount);
-          const nextRecoveryPayload = {
-            ...payload,
-            recoveryAttemptCount: nextAttemptCount,
-            nextRecoveryAt: new Date(now + delayMs).toISOString(),
-            lastRecoveryError: error
-          };
-          try {
-            fs.writeFileSync(lockedPath, JSON.stringify(nextRecoveryPayload), { mode: 384 });
-            this.writeQuaidLog("recover_stale_buffer_backoff", sid, {
-              attempt_count: nextAttemptCount,
-              delay_ms: delayMs,
-              error
-            });
-          } catch (writeErr) {
-            safeLog(this.logger, `[quaid][timeout] failed to persist stale buffer recovery backoff ${filePath}: ${String(writeErr?.message || writeErr)}`);
-          }
-        }
-        this.releaseBufferFile(lockedPath, filePath);
+    const timeoutMs = this.timeoutMinutes * 60 * 1e3;
+    const nowMs = Date.now();
+    const state = this.readStaleSweepState();
+    const installedAtMs = Date.parse(String(state.installedAt || this.readInstalledAt() || ""));
+    const hasInstalledAt = Number.isFinite(installedAtMs);
+    let lastSweepMs = Date.parse(String(state.lastSweepAt || ""));
+    const isFirstSweep = !Number.isFinite(lastSweepMs);
+    if (!Number.isFinite(lastSweepMs)) {
+      lastSweepMs = nowMs - timeoutMs;
+    }
+    if (lastSweepMs > nowMs) {
+      lastSweepMs = nowMs;
+    }
+    const currentCutoffMs = nowMs - timeoutMs;
+    let previousCutoffMs = lastSweepMs - timeoutMs;
+    if (isFirstSweep && hasInstalledAt) {
+      previousCutoffMs = Math.min(previousCutoffMs, installedAtMs - timeoutMs);
+    }
+    if (previousCutoffMs > currentCutoffMs) {
+      previousCutoffMs = currentCutoffMs;
+    }
+    const activityRows = this.listSessionActivityRows();
+    const latestActivityBySession = /* @__PURE__ */ new Map();
+    for (const row of activityRows) {
+      const prior = latestActivityBySession.get(row.sessionId);
+      if (prior == null || row.lastActivityMs > prior) {
+        latestActivityBySession.set(row.sessionId, row.lastActivityMs);
       }
     }
+    const candidates = /* @__PURE__ */ new Map();
+    for (const [sessionId, lastActivityMs] of latestActivityBySession.entries()) {
+      if (lastActivityMs > currentCutoffMs) continue;
+      if (lastActivityMs <= previousCutoffMs) continue;
+      candidates.set(sessionId, lastActivityMs);
+    }
+    const retries = state.retries || {};
+    for (const [sessionId, retry] of Object.entries(retries)) {
+      const nextRecoveryAtMs = Date.parse(String(retry.nextRecoveryAt || ""));
+      if (Number.isFinite(nextRecoveryAtMs) && nextRecoveryAtMs > nowMs) {
+        continue;
+      }
+      const latestActivity = latestActivityBySession.get(sessionId);
+      if (typeof latestActivity === "number" && latestActivity > Number(retry.lastActivityMs || 0)) {
+        delete retries[sessionId];
+        continue;
+      }
+      candidates.set(sessionId, Number(retry.lastActivityMs || latestActivity || 0));
+    }
+    this.writeQuaidLog("stale_sweep_window", void 0, {
+      timeout_minutes: this.timeoutMinutes,
+      previous_cutoff_ms: previousCutoffMs,
+      current_cutoff_ms: currentCutoffMs,
+      candidate_count: candidates.size
+    });
+    for (const [sessionId, lastActivityMs] of candidates.entries()) {
+      const messages = this.filterReplayedMessages(sessionId, this.readSourceSessionMessages(sessionId));
+      if (!messages.length) {
+        delete retries[sessionId];
+        this.writeQuaidLog("recover_stale_buffer_skip_empty", sessionId, { last_activity_ms: lastActivityMs });
+        continue;
+      }
+      this.writeQuaidLog("recover_stale_buffer", sessionId, {
+        message_count: messages.length,
+        source: "source_session_messages",
+        last_activity_ms: lastActivityMs
+      });
+      try {
+        await this.runExtractWithTimeout(messages, sessionId, "Recovery");
+        this.clearSession(sessionId, messages);
+        delete retries[sessionId];
+      } catch (err) {
+        const error = String(err?.message || err);
+        const priorAttempts = Math.max(0, Number(retries[sessionId]?.attemptCount || 0));
+        const nextAttemptCount = priorAttempts + 1;
+        const delayMs = this.staleRecoveryDelayMs(nextAttemptCount);
+        retries[sessionId] = {
+          sessionId,
+          lastActivityMs,
+          attemptCount: nextAttemptCount,
+          nextRecoveryAt: new Date(nowMs + delayMs).toISOString(),
+          lastError: error
+        };
+        this.writeQuaidLog("recover_stale_buffer_backoff", sessionId, {
+          attempt_count: nextAttemptCount,
+          delay_ms: delayMs,
+          error
+        });
+      }
+    }
+    this.writeStaleSweepState({
+      installedAt: state.installedAt || this.readInstalledAt(),
+      lastSweepAt: new Date(nowMs).toISOString(),
+      retries
+    });
   }
   staleRecoveryDelayMs(attemptCount) {
     const attempt = Math.max(1, Math.floor(attemptCount));
@@ -531,7 +546,7 @@ class SessionTimeoutManager {
       let restoredClaim = false;
       try {
         this.writeQuaidLog("signal_process_begin", sessionId, { label });
-        await this.extractSessionFromLogDirect(sessionId, label);
+        await this.extractSessionFromSourceDirect(sessionId, label);
         this.writeQuaidLog("signal_process_done", sessionId, { label });
       } catch (err) {
         this.writeQuaidLog("signal_process_error", sessionId, { label, error: String(err?.message || err) });
@@ -707,16 +722,17 @@ class SessionTimeoutManager {
     this.ownsWorkerLock = false;
     return true;
   }
-  queueExtraction(messages, sessionId, timeoutMinutes) {
+  queueExtractionFromSession(sessionId, fallbackMessages, timeoutMinutes) {
     this.chain = this.chain.catch((err) => {
       safeLog(this.logger, `[quaid][timeout] previous extraction chain error: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     }).then(async () => {
-      safeLog(this.logger, `[quaid] Inactivity timeout (${timeoutMinutes}m) \u2014 extracting ${messages.length} messages`);
-      this.writeQuaidLog("extract_begin", sessionId, { message_count: messages.length, timeout_minutes: timeoutMinutes });
-      await this.runExtractWithTimeout(messages, sessionId, "Timeout");
-      this.writeQuaidLog("extract_done", sessionId, { message_count: messages.length });
-      this.clearSession(sessionId);
+      const extracted = await this.extractSessionFromSourceDirect(sessionId, "Timeout", fallbackMessages);
+      if (!extracted) {
+        this.writeQuaidLog("timeout_extract_skip_empty", sessionId, { timeout_minutes: timeoutMinutes });
+        return;
+      }
+      this.writeQuaidLog("timeout_extract_done", sessionId, { timeout_minutes: timeoutMinutes });
     }).catch((err) => {
       safeLog(this.logger, `[quaid][timeout] extraction queue failed: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
@@ -792,186 +808,6 @@ class SessionTimeoutManager {
       return null;
     }
   }
-  bufferPath(sessionId) {
-    const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
-    return path.join(this.bufferDir, `${safeSessionId}.json`);
-  }
-  readBuffer(sessionId) {
-    try {
-      const payload = JSON.parse(fs.readFileSync(this.bufferPath(sessionId), "utf8"));
-      if (Array.isArray(payload?.messages)) return payload.messages;
-    } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed reading buffer session=${sessionId}: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-    return [];
-  }
-  writeBuffer(sessionId, messages) {
-    try {
-      fs.mkdirSync(this.bufferDir, { recursive: true });
-      const payload = {
-        sessionId,
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        messages
-      };
-      fs.writeFileSync(this.bufferPath(sessionId), JSON.stringify(payload), { mode: 384 });
-    } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed to persist buffer session=${sessionId}: ${String(err?.message || err)}`);
-      this.writeQuaidLog("buffer_persist_error", sessionId, { error: String(err?.message || err) });
-      if (this.failHard) {
-        throw err;
-      }
-    }
-  }
-  clearBuffer(sessionId) {
-    try {
-      fs.unlinkSync(this.bufferPath(sessionId));
-    } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed clearing buffer session=${sessionId}: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-  }
-  listBufferFiles() {
-    try {
-      if (!fs.existsSync(this.bufferDir)) return [];
-      return fs.readdirSync(this.bufferDir).filter((f) => f.endsWith(".json")).map((f) => path.join(this.bufferDir, f));
-    } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed listing buffer files: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-      return [];
-    }
-  }
-  listBufferClaimFiles() {
-    try {
-      if (!fs.existsSync(this.bufferDir)) return [];
-      return fs.readdirSync(this.bufferDir).filter((f) => /\.json\.processing\.\d+$/.test(f)).map((f) => path.join(this.bufferDir, f));
-    } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed listing buffer claim files: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-      return [];
-    }
-  }
-  recoverOrphanedBufferClaims() {
-    for (const lockedPath of this.listBufferClaimFiles()) {
-      const m = lockedPath.match(/^(.*\.json)\.processing\.(\d+)$/);
-      if (!m) continue;
-      const originalPath = m[1];
-      const ownerPid = Number(m[2]);
-      if (this.isPidAlive(ownerPid)) continue;
-      try {
-        if (fs.existsSync(originalPath)) {
-          fs.unlinkSync(lockedPath);
-          continue;
-        }
-        fs.renameSync(lockedPath, originalPath);
-      } catch (err) {
-        safeLog(this.logger, `[quaid][timeout] failed recovering orphaned buffer claim ${lockedPath}: ${String(err?.message || err)}`);
-        if (this.failHard && err?.code !== "ENOENT") {
-          throw err;
-        }
-      }
-    }
-  }
-  claimBufferFile(filePath) {
-    const lockedPath = `${filePath}.processing.${process.pid}`;
-    try {
-      fs.renameSync(filePath, lockedPath);
-      return lockedPath;
-    } catch {
-      return null;
-    }
-  }
-  releaseBufferFile(lockedPath, originalPath) {
-    try {
-      if (!fs.existsSync(lockedPath)) return;
-      if (fs.existsSync(originalPath)) {
-        try {
-          fs.unlinkSync(lockedPath);
-        } catch (unlinkErr) {
-          safeLog(this.logger, `[quaid][timeout] failed removing buffer claim ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
-          if (this.failHard && unlinkErr?.code !== "ENOENT") {
-            throw unlinkErr;
-          }
-        }
-        return;
-      }
-      fs.renameSync(lockedPath, originalPath);
-    } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed releasing buffer claim ${lockedPath}: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-  }
-  sessionMessagePath(sessionId) {
-    const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
-    return path.join(this.sessionMessageLogDir, `${safeSessionId}.jsonl`);
-  }
-  appendSessionMessages(sessionId, messages) {
-    const sanitized = filterEligibleMessages(messages);
-    if (!sanitized.length) {
-      return;
-    }
-    try {
-      fs.mkdirSync(this.sessionMessageLogDir, { recursive: true });
-      const fp = this.sessionMessagePath(sessionId);
-      const lines = sanitized.map((m) => JSON.stringify(m)).join("\n");
-      fs.appendFileSync(fp, `${lines}
-`, "utf8");
-      this.writeQuaidLog("session_messages_appended", sessionId, { appended: sanitized.length });
-    } catch (err) {
-      this.writeQuaidLog("session_message_append_error", sessionId, { error: String(err?.message || err) });
-      if (this.failHard) {
-        throw err;
-      }
-    }
-  }
-  readSessionMessages(sessionId) {
-    try {
-      const fp = this.sessionMessagePath(sessionId);
-      if (!fs.existsSync(fp)) {
-        return [];
-      }
-      const content = fs.readFileSync(fp, "utf8");
-      if (!content.trim()) {
-        return [];
-      }
-      const lines = content.trim().split("\n");
-      const out = [];
-      for (const line of lines) {
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed && typeof parsed === "object") {
-            out.push(parsed);
-          }
-        } catch (err) {
-          safeLog(this.logger, `[quaid][timeout] skipped malformed session-message line for ${sessionId}: ${String(err?.message || err)}`);
-        }
-      }
-      return filterEligibleMessages(out);
-    } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed reading session message log for ${sessionId}: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-      return [];
-    }
-  }
-  clearSessionMessageLog(sessionId) {
-    try {
-      fs.unlinkSync(this.sessionMessagePath(sessionId));
-    } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed clearing session message log for ${sessionId}: ${String(err?.message || err)}`);
-    }
-  }
   cursorPath(sessionId) {
     const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
     return path.join(this.sessionCursorDir, `${safeSessionId}.json`);
@@ -1036,11 +872,97 @@ class SessionTimeoutManager {
     }
     return incoming;
   }
+  readSourceSessionMessages(sessionId) {
+    const rows = this.readSessionMessagesSource(sessionId);
+    if (!Array.isArray(rows)) return [];
+    return filterEligibleMessages(rows);
+  }
+  listSessionActivityRows() {
+    return this.listSessionActivitySource();
+  }
   hasUnprocessedSessionMessages(sessionId) {
-    const messages = this.readSessionMessages(sessionId);
+    if (this.pendingSessionId === sessionId && Array.isArray(this.pendingFallbackMessages)) {
+      const pending = this.filterReplayedMessages(sessionId, filterEligibleMessages(this.pendingFallbackMessages));
+      if (pending.length > 0) return true;
+    }
+    const messages = this.readSourceSessionMessages(sessionId);
     if (!messages.length) return false;
     const filtered = this.filterReplayedMessages(sessionId, messages);
     return filtered.length > 0;
+  }
+  readStaleSweepState() {
+    try {
+      const installedAt = this.readInstalledAt();
+      if (!fs.existsSync(this.staleSweepStatePath)) return { installedAt };
+      const parsed = JSON.parse(fs.readFileSync(this.staleSweepStatePath, "utf8"));
+      if (!parsed || typeof parsed !== "object") return { installedAt };
+      const retriesRaw = parsed.retries && typeof parsed.retries === "object" ? parsed.retries : {};
+      const retries = {};
+      for (const [sid, value] of Object.entries(retriesRaw)) {
+        const item = value;
+        const sessionId = String(item.sessionId || sid).trim();
+        const lastActivityMs = Number(item.lastActivityMs);
+        const attemptCount = Math.max(0, Number(item.attemptCount || 0));
+        if (!sessionId || !Number.isFinite(lastActivityMs) || lastActivityMs <= 0) continue;
+        retries[sessionId] = {
+          sessionId,
+          lastActivityMs,
+          attemptCount,
+          nextRecoveryAt: item.nextRecoveryAt,
+          lastError: item.lastError
+        };
+      }
+      return {
+        installedAt: typeof parsed.installedAt === "string" ? parsed.installedAt : installedAt,
+        lastSweepAt: typeof parsed.lastSweepAt === "string" ? parsed.lastSweepAt : void 0,
+        retries
+      };
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed reading stale sweep state: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
+      return { installedAt: this.readInstalledAt() };
+    }
+  }
+  writeStaleSweepState(state) {
+    try {
+      fs.mkdirSync(path.dirname(this.staleSweepStatePath), { recursive: true });
+      const installedAt = state.installedAt || this.readInstalledAt();
+      fs.writeFileSync(this.staleSweepStatePath, JSON.stringify({ ...state, installedAt }), { mode: 384 });
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed writing stale sweep state: ${String(err?.message || err)}`);
+      if (this.failHard) {
+        throw err;
+      }
+    }
+  }
+  readInstalledAt() {
+    try {
+      if (fs.existsSync(this.installStatePath)) {
+        const raw = JSON.parse(fs.readFileSync(this.installStatePath, "utf8"));
+        const installedAt2 = String(raw?.installedAt || "").trim();
+        if (installedAt2) {
+          return installedAt2;
+        }
+      }
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed reading installed-at state: ${String(err?.message || err)}`);
+      if (this.failHard && err?.code !== "ENOENT") {
+        throw err;
+      }
+    }
+    const installedAt = (/* @__PURE__ */ new Date()).toISOString();
+    try {
+      fs.mkdirSync(path.dirname(this.installStatePath), { recursive: true });
+      fs.writeFileSync(this.installStatePath, JSON.stringify({ installedAt }), { mode: 384 });
+    } catch (err) {
+      safeLog(this.logger, `[quaid][timeout] failed writing installed-at state: ${String(err?.message || err)}`);
+      if (this.failHard) {
+        throw err;
+      }
+    }
+    return installedAt;
   }
   writeQuaidLog(event, sessionId, data) {
     const now = (/* @__PURE__ */ new Date()).toISOString();

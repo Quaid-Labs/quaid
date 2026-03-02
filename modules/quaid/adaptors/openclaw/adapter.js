@@ -3567,6 +3567,8 @@ ${factsOutput || "No facts found."}` }],
       workspace: WORKSPACE,
       timeoutMinutes: getCaptureTimeoutMinutes(),
       isBootstrapOnly: isResetBootstrapOnlyConversation,
+      readSessionMessages: (sessionId) => readMessagesForTimeoutSession(sessionId),
+      listSessionActivity: () => listSessionActivityForTimeout(),
       logger: (msg) => {
         const lowered = String(msg || "").toLowerCase();
         if (lowered.includes("fail") || lowered.includes("error")) {
@@ -3697,21 +3699,110 @@ ${factsOutput || "No facts found."}` }],
       }
       return messages;
     }
+    function resolveOpenClawSessionStorePath() {
+      return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    }
+    let openClawSessionStoreCache = null;
+    function loadOpenClawSessionStore() {
+      const storePath = resolveOpenClawSessionStorePath();
+      try {
+        if (!fs.existsSync(storePath)) return {};
+        const stat = fs.statSync(storePath);
+        const mtimeMs = Number.isFinite(stat.mtimeMs) ? stat.mtimeMs : 0;
+        if (openClawSessionStoreCache && openClawSessionStoreCache.mtimeMs === mtimeMs) {
+          return openClawSessionStoreCache.data;
+        }
+        const raw = JSON.parse(fs.readFileSync(storePath, "utf8"));
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+        const data = raw;
+        openClawSessionStoreCache = { mtimeMs, data };
+        return data;
+      } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+        console.warn(`[quaid][timeout] session store read failed: ${String(err?.message || err)}`);
+        return {};
+      }
+    }
+    function parseSessionUpdatedAtMs(entry) {
+      const candidates = [entry?.updatedAt, entry?.updated_at, entry?.lastMessageAt, entry?.last_message_at];
+      for (const raw of candidates) {
+        if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+        if (typeof raw === "string") {
+          const asNum = Number(raw);
+          if (Number.isFinite(asNum)) return asNum;
+          const parsed = Date.parse(raw);
+          if (Number.isFinite(parsed)) return parsed;
+        }
+      }
+      return null;
+    }
+    function resolveSessionTranscriptPath(entry, sessionId) {
+      const pathCandidates = [entry?.sessionFile, entry?.session_file];
+      for (const raw of pathCandidates) {
+        const p = String(raw || "").trim();
+        if (!p) continue;
+        if (fs.existsSync(p)) return p;
+      }
+      const fallbackDirs = [
+        path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
+        path.join(os.homedir(), ".openclaw", "sessions")
+      ];
+      for (const dir of fallbackDirs) {
+        const candidate = path.join(dir, `${sessionId}.jsonl`);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+      return null;
+    }
+    function readMessagesForTimeoutSession(sessionId) {
+      const sid = String(sessionId || "").trim();
+      if (!sid) return [];
+      const store = loadOpenClawSessionStore();
+      const entries = Object.entries(store || {});
+      for (const [, entry] of entries) {
+        if (String(entry?.sessionId || "").trim() !== sid) continue;
+        const transcriptPath = resolveSessionTranscriptPath(entry, sid);
+        if (!transcriptPath) return [];
+        return readMessagesFromSessionFile(transcriptPath);
+      }
+      const fallbackPath = resolveSessionTranscriptPath({}, sid);
+      if (!fallbackPath) return [];
+      return readMessagesFromSessionFile(fallbackPath);
+    }
+    function listSessionActivityForTimeout() {
+      const store = loadOpenClawSessionStore();
+      const rows = [];
+      const entries = Object.entries(store || {});
+      for (const [, entry] of entries) {
+        const sid = String(entry?.sessionId || "").trim();
+        if (!sid) continue;
+        const updatedAtMs = parseSessionUpdatedAtMs(entry);
+        if (updatedAtMs !== null) {
+          rows.push({ sessionId: sid, lastActivityMs: updatedAtMs });
+          continue;
+        }
+        const transcriptPath = resolveSessionTranscriptPath(entry, sid);
+        if (!transcriptPath) continue;
+        try {
+          const stat = fs.statSync(transcriptPath);
+          if (Number.isFinite(stat.mtimeMs) && stat.mtimeMs > 0) {
+            rows.push({ sessionId: sid, lastActivityMs: stat.mtimeMs });
+          }
+        } catch (err) {
+          if (isFailHardEnabled()) {
+            throw err;
+          }
+          console.warn(`[quaid][timeout] session mtime read failed for ${sid}: ${String(err?.message || err)}`);
+        }
+      }
+      return rows;
+    }
     const extractMemoriesFromMessages = async (messages, label, sessionId) => {
       console.log(`[quaid][extract] start label=${label} session=${sessionId || "unknown"} message_count=${messages.length}`);
       if (!messages.length) {
         console.log(`[quaid] ${label}: no messages to analyze`);
         return;
-      }
-      const hasRestart = messages.some((m) => {
-        const content = typeof m.content === "string" ? m.content : "";
-        return content.startsWith("GatewayRestart:");
-      });
-      if (hasRestart) {
-        console.log(`[quaid][extract] ${label}: detected GatewayRestart marker; scheduling recovery scan`);
-        void checkForUnextractedSessions().catch((err) => {
-          console.error("[quaid] Recovery scan error:", err);
-        });
       }
       const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
       const allNotes = Array.from(/* @__PURE__ */ new Set([...sessionNotes]));
@@ -3905,99 +3996,17 @@ notify_memory_extraction(
         console.warn(msg);
       }
     };
-    async function checkForUnextractedSessions() {
-      const flagPath = path.join(QUAID_RUNTIME_DIR, "quaid-recovery-ran.txt");
-      try {
-        const flagStat = fs.statSync(flagPath);
-        const fiveMinAgo = Date.now() - 5 * 60 * 1e3;
-        if (flagStat.mtimeMs > fiveMinAgo) {
-          console.log("[quaid] Recovery scan already ran recently, skipping");
-          return;
-        }
-      } catch (err) {
-        const code = err?.code;
-        const msg = String(err?.message || err || "");
-        if (code !== "ENOENT") {
-          console.warn(`[quaid] Recovery scan flag read failed: ${msg}`);
-        }
-      }
-      console.log("[quaid] Running recovery scan for unextracted sessions...");
-      const sessionsDir = path.join(os.homedir(), ".openclaw", "sessions");
-      if (!fs.existsSync(sessionsDir)) {
-        console.log("[quaid] No sessions directory found, skipping recovery");
-        fs.writeFileSync(flagPath, (/* @__PURE__ */ new Date()).toISOString());
-        return;
-      }
-      const extractionLogPath = path.join(WORKSPACE, "data", "extraction-log.json");
-      let extractionLog = {};
-      try {
-        const parsed = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          throw new Error("extraction log must be a JSON object");
-        }
-        extractionLog = parsed;
-      } catch (err) {
-        if (isFailHardEnabled() && !isMissingFileError(err)) {
-          throw new Error("[quaid] recovery extraction log read failed under failHard", { cause: err });
-        }
-        console.warn(`[quaid] Recovery scan extraction log read failed: ${String(err?.message || err)}`);
-      }
-      const sessionFiles = fs.readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
-      let recovered = 0;
-      for (const file of sessionFiles) {
-        const sessionId = file.replace(".jsonl", "");
-        const filePath = path.join(sessionsDir, file);
-        try {
-          const stat = fs.statSync(filePath);
-          if (Date.now() - stat.mtimeMs < 5 * 60 * 1e3) {
-            continue;
-          }
-          const logEntry = extractionLog[sessionId];
-          if (logEntry) {
-            const extractedAt = new Date(logEntry.last_extracted_at).getTime();
-            if (extractedAt >= stat.mtimeMs) {
-              continue;
-            }
-          }
-          const messages = readMessagesFromSessionFile(filePath);
-          if (messages.length < 4) {
-            continue;
-          }
-          console.log(`[quaid] Recovering unextracted session ${sessionId} (${messages.length} messages)`);
-          await extractMemoriesFromMessages(messages, "Recovery", sessionId);
-          recovered++;
-        } catch (err) {
-          console.error(`[quaid] Recovery failed for session ${sessionId}:`, err.message);
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-        }
-      }
-      console.log(`[quaid] Recovery scan complete: ${recovered} sessions recovered`);
-      fs.writeFileSync(flagPath, (/* @__PURE__ */ new Date()).toISOString());
-    }
     onChecked("before_compaction", async (event, ctx) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
         }
-        let messages;
-        if (event.sessionFile) {
-          try {
-            messages = readMessagesFromSessionFile(event.sessionFile);
-            console.log(`[quaid] before_compaction: read ${messages.length} messages from sessionFile`);
-          } catch (readErr) {
-            console.warn(`[quaid] before_compaction: sessionFile read failed, falling back to messages array: ${String(readErr)}`);
-            messages = event.messages || [];
-          }
-        } else {
-          messages = event.messages || [];
-        }
+        const messages = event.messages || [];
         const sessionId = ctx?.sessionId;
         const conversationMessages = getAllConversationMessages(messages);
         const extractionSessionId = sessionId || extractSessionId(messages, ctx);
         if (conversationMessages.length === 0) {
-          console.log(`[quaid] before_compaction: empty/internal transcript from hook payload; attempting session-log fallback session=${extractionSessionId || "unknown"}`);
+          console.log(`[quaid] before_compaction: empty/internal hook payload; deferring to timeout source session=${extractionSessionId || "unknown"}`);
         } else {
           console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
         }
@@ -4075,18 +4084,7 @@ notify_memory_extraction(
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
         }
-        let messages;
-        if (event.sessionFile) {
-          try {
-            messages = readMessagesFromSessionFile(event.sessionFile);
-            console.log(`[quaid] before_reset: read ${messages.length} messages from sessionFile`);
-          } catch (readErr) {
-            console.warn(`[quaid] before_reset: sessionFile read failed, falling back to messages array: ${String(readErr)}`);
-            messages = event.messages || [];
-          }
-        } else {
-          messages = event.messages || [];
-        }
+        const messages = event.messages || [];
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
         const conversationMessages = getAllConversationMessages(messages);

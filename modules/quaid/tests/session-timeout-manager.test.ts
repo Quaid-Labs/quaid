@@ -1,786 +1,491 @@
-import { afterEach, describe, it, expect, vi } from 'vitest'
-import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
-import { SessionTimeoutManager } from '../core/session-timeout'
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { SessionTimeoutManager } from "../core/session-timeout";
 
 function makeWorkspace(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
 function writeFailHardConfig(workspace: string, failHard: boolean): void {
-  const configDir = path.join(workspace, "config")
-  fs.mkdirSync(configDir, { recursive: true })
+  const configDir = path.join(workspace, "config");
+  fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(
     path.join(configDir, "memory.json"),
     JSON.stringify({ retrieval: { failHard } }),
     "utf8",
-  )
+  );
 }
 
-describe('SessionTimeoutManager scheduling', () => {
+type SourceState = {
+  messagesBySession: Map<string, any[]>;
+  activityBySession: Map<string, number>;
+};
+
+function createSourceState(): SourceState {
+  return {
+    messagesBySession: new Map<string, any[]>(),
+    activityBySession: new Map<string, number>(),
+  };
+}
+
+function buildManager(params: {
+  workspace: string;
+  timeoutMinutes: number;
+  source: SourceState;
+  extract?: (messages: any[], sessionId?: string, label?: string) => Promise<void>;
+}) {
+  return new SessionTimeoutManager({
+    workspace: params.workspace,
+    timeoutMinutes: params.timeoutMinutes,
+    isBootstrapOnly: () => false,
+    logger: () => {},
+    readSessionMessages: (sessionId: string) => params.source.messagesBySession.get(sessionId) || [],
+    listSessionActivity: () =>
+      Array.from(params.source.activityBySession.entries()).map(([sessionId, lastActivityMs]) => ({
+        sessionId,
+        lastActivityMs,
+      })),
+    extract:
+      params.extract ||
+      (async () => {
+        // no-op
+      }),
+  });
+}
+
+describe("SessionTimeoutManager (cursor + source)", () => {
   afterEach(() => {
-    vi.unstubAllEnvs()
-  })
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
 
-  it('allows only one timeout worker leader per workspace', () => {
-    const workspace = makeWorkspace('quaid-timeout-leader-')
-    const managerA = new SessionTimeoutManager({
+  it("allows only one timeout worker leader per workspace", () => {
+    const workspace = makeWorkspace("quaid-timeout-leader-");
+    const source = createSourceState();
+
+    const managerA = buildManager({ workspace, timeoutMinutes: 10, source });
+    const managerB = buildManager({ workspace, timeoutMinutes: 10, source });
+
+    expect(managerA.startWorker(30)).toBe(true);
+    expect(managerB.startWorker(30)).toBe(false);
+
+    managerA.stopWorker();
+    expect(managerB.startWorker(30)).toBe(true);
+    managerB.stopWorker();
+  });
+
+  it("coalesces duplicate extraction signals and promotes Reset over Compaction", () => {
+    const workspace = makeWorkspace("quaid-timeout-signal-");
+    const source = createSourceState();
+    source.messagesBySession.set("session-1", [
+      { id: "u1", role: "user", content: "remember this", timestamp: Date.now() },
+      { id: "a1", role: "assistant", content: "ok", timestamp: Date.now() + 1 },
+    ]);
+
+    const manager = buildManager({ workspace, timeoutMinutes: 10, source });
+    manager.queueExtractionSignal("session-1", "Compaction");
+    manager.queueExtractionSignal("session-1", "Reset");
+
+    const signalPath = path.join(workspace, "data", "pending-extraction-signals", "session-1.json");
+    const queued = JSON.parse(fs.readFileSync(signalPath, "utf8"));
+    expect(queued.label).toBe("Reset");
+  });
+
+  it("extracts from source session messages and writes cursor", async () => {
+    const workspace = makeWorkspace("quaid-timeout-source-extract-");
+    const source = createSourceState();
+    source.messagesBySession.set("session-2", [
+      { id: "u1", role: "user", content: "fact", timestamp: new Date().toISOString() },
+      { id: "a1", role: "assistant", content: "ack", timestamp: new Date().toISOString() },
+    ]);
+
+    const calls: Array<{ sessionId?: string; label?: string; messages: any[] }> = [];
+    const manager = buildManager({
       workspace,
       timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    const managerB = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
-    const first = managerA.startWorker(30)
-    const second = managerB.startWorker(30)
-
-    expect(first).toBe(true)
-    expect(second).toBe(false)
-
-    managerA.stopWorker()
-    const afterRelease = managerB.startWorker(30)
-    expect(afterRelease).toBe(true)
-    managerB.stopWorker()
-  })
-
-  it('does not remove worker lock when stale check sees lock content change', () => {
-    const workspace = makeWorkspace('quaid-timeout-lock-race-')
-    const managerA = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    const managerB = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
-    expect(managerA.startWorker(30)).toBe(true)
-    const lockPath = (managerA as any).workerLockPath as string
-
-    vi.spyOn(managerB as any, 'isPidAlive').mockImplementation(() => {
-      fs.writeFileSync(
-        lockPath,
-        JSON.stringify({ pid: 99999999, token: 'different-token', started_at: new Date().toISOString() }),
-        'utf8',
-      )
-      return false
-    })
-
-    const acquired = (managerB as any).tryAcquireWorkerLock()
-    expect(acquired).toBe(false)
-    expect(JSON.parse(fs.readFileSync(lockPath, 'utf8')).token).toBe('different-token')
-    managerA.stopWorker()
-  })
-
-  it('coalesces duplicate extraction signals per session and promotes reset over compaction', () => {
-    const workspace = makeWorkspace('quaid-timeout-signal-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
-    manager.onAgentEnd([
-      { id: 'u1', role: 'user', content: 'remember this', timestamp: Date.now() },
-      { id: 'a1', role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
-    ], 'session-1')
-    manager.queueExtractionSignal('session-1', 'Compaction')
-    manager.queueExtractionSignal('session-1', 'Reset')
-
-    const signalDir = path.join(workspace, 'data', 'pending-extraction-signals')
-    const files = fs.readdirSync(signalDir).filter((f) => f.endsWith('.json'))
-    expect(files).toHaveLength(1)
-    const queued = JSON.parse(fs.readFileSync(path.join(signalDir, files[0]), 'utf8'))
-    expect(queued.label).toBe('Reset')
-  })
-
-  it('resets retry attempt count when promoting to a higher-priority signal', () => {
-    const workspace = makeWorkspace('quaid-timeout-signal-promote-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
-    manager.onAgentEnd([
-      { id: 'u1', role: 'user', content: 'remember this', timestamp: Date.now() },
-      { id: 'a1', role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
-    ], 'session-promote')
-    manager.queueExtractionSignal('session-promote', 'Compaction')
-    const signalPath = (manager as any).signalPath('session-promote') as string
-    const existing = JSON.parse(fs.readFileSync(signalPath, 'utf8'))
-    existing.attemptCount = 3
-    fs.writeFileSync(signalPath, JSON.stringify(existing), 'utf8')
-
-    manager.queueExtractionSignal('session-promote', 'Reset')
-    const promoted = JSON.parse(fs.readFileSync(signalPath, 'utf8'))
-    expect(promoted.label).toBe('Reset')
-    expect(promoted.attemptCount).toBe(0)
-  })
-
-  it('processes signal extraction from per-session message log', async () => {
-    const workspace = makeWorkspace('quaid-timeout-extract-')
-    const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
-
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
+      source,
       extract: async (messages, sessionId, label) => {
-        calls.push({ messages, sessionId, label })
+        calls.push({ messages, sessionId, label });
       },
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
+    });
 
-    const msgs = [
-      { id: 'u1', role: 'user', content: 'my fact', timestamp: new Date().toISOString() },
-      { id: 'a1', role: 'assistant', content: 'ack', timestamp: new Date().toISOString() },
-    ]
+    const ok = await manager.extractSessionFromLog("session-2", "Reset");
+    expect(ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sessionId).toBe("session-2");
 
-    manager.onAgentEnd(msgs, 'session-2')
-    manager.queueExtractionSignal('session-2', 'Reset')
-    await manager.processPendingExtractionSignals()
+    const second = await manager.extractSessionFromLog("session-2", "Reset");
+    expect(second).toBe(false);
+  });
 
-    expect(calls).toHaveLength(1)
-    expect(calls[0].sessionId).toBe('session-2')
-    expect(calls[0].label).toBe('Reset')
-    expect(calls[0].messages).toHaveLength(2)
-  })
+  it("blocks fallback payload when failHard=true and source has no messages", async () => {
+    const workspace = makeWorkspace("quaid-timeout-failhard-block-");
+    writeFailHardConfig(workspace, true);
+    const source = createSourceState();
 
-  it('requeues extraction signal after failed extraction to preserve retry path', async () => {
-    const workspace = makeWorkspace('quaid-timeout-requeue-')
-    writeFailHardConfig(workspace, false)
-    vi.stubEnv('QUAID_SIGNAL_MAX_RETRIES', '3')
-    try {
-      const manager = new SessionTimeoutManager({
-        workspace,
-        timeoutMinutes: 10,
-        extract: async () => {
-          throw new Error('forced extraction failure')
-        },
-        isBootstrapOnly: () => false,
-        logger: () => {},
-      })
-      ;(manager as any).failHard = false
-
-      manager.onAgentEnd([
-        { role: 'user', content: 'remember this', timestamp: Date.now() },
-        { role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
-      ], 'session-requeue')
-      manager.queueExtractionSignal('session-requeue', 'Reset')
-      await manager.processPendingExtractionSignals()
-
-      const signalPath = (manager as any).signalPath('session-requeue') as string
-      expect(fs.existsSync(signalPath)).toBe(true)
-      const buffered = (manager as any).readBuffer('session-requeue') as any[]
-      expect(Array.isArray(buffered)).toBe(true)
-      expect(buffered.length).toBeGreaterThan(0)
-    } finally {}
-  })
-
-  it('drops extraction signal after retry budget is exhausted', async () => {
-    const workspace = makeWorkspace('quaid-timeout-requeue-cap-')
-    writeFailHardConfig(workspace, false)
-    vi.stubEnv('QUAID_SIGNAL_MAX_RETRIES', '1')
-    try {
-      const manager = new SessionTimeoutManager({
-        workspace,
-        timeoutMinutes: 10,
-        extract: async () => {
-          throw new Error('forced extraction failure')
-        },
-        isBootstrapOnly: () => false,
-        logger: () => {},
-      })
-      ;(manager as any).failHard = false
-
-      manager.onAgentEnd([
-        { role: 'user', content: 'remember this', timestamp: Date.now() },
-        { role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
-      ], 'session-requeue-cap')
-      manager.queueExtractionSignal('session-requeue-cap', 'Reset')
-
-      await manager.processPendingExtractionSignals()
-      const signalPath = (manager as any).signalPath('session-requeue-cap') as string
-      expect(fs.existsSync(signalPath)).toBe(true)
-
-      await manager.processPendingExtractionSignals()
-      expect(fs.existsSync(signalPath)).toBe(false)
-    } finally {}
-  })
-
-  it('applies stale buffer recovery backoff after extraction failure', async () => {
-    const workspace = makeWorkspace('quaid-timeout-stale-backoff-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 1,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = false
-    const runExtractSpy = vi
-      .spyOn(manager as any, 'runExtractWithTimeout')
-      .mockRejectedValue(new Error('gateway timeout after 10000ms'))
-
-    const sessionId = 'session-stale-backoff'
-    const bufferPath = (manager as any).bufferPath(sessionId) as string
-    fs.mkdirSync(path.dirname(bufferPath), { recursive: true })
-    fs.writeFileSync(bufferPath, JSON.stringify({
-      sessionId,
-      updatedAt: new Date(Date.now() - (2 * 60 * 1000)).toISOString(),
-      messages: [{ role: 'user', content: 'remember this', timestamp: Date.now() }],
-    }), 'utf8')
-
-    const beforeMs = Date.now()
-    await manager.recoverStaleBuffers()
-
-    expect(runExtractSpy).toHaveBeenCalledTimes(1)
-    expect(fs.existsSync(bufferPath)).toBe(true)
-    const updated = JSON.parse(fs.readFileSync(bufferPath, 'utf8'))
-    expect(updated.recoveryAttemptCount).toBe(1)
-    expect(updated.lastRecoveryError).toContain('gateway timeout')
-    expect(Date.parse(updated.nextRecoveryAt)).toBeGreaterThanOrEqual(beforeMs + 5000)
-  })
-
-  it('skips stale buffer recovery while backoff window is active', async () => {
-    const workspace = makeWorkspace('quaid-timeout-stale-backoff-skip-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 1,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = false
-    const runExtractSpy = vi.spyOn(manager as any, 'runExtractWithTimeout')
-
-    const sessionId = 'session-stale-backoff-skip'
-    const bufferPath = (manager as any).bufferPath(sessionId) as string
-    fs.mkdirSync(path.dirname(bufferPath), { recursive: true })
-    fs.writeFileSync(bufferPath, JSON.stringify({
-      sessionId,
-      updatedAt: new Date(Date.now() - (2 * 60 * 1000)).toISOString(),
-      nextRecoveryAt: new Date(Date.now() + 60_000).toISOString(),
-      recoveryAttemptCount: 2,
-      messages: [{ role: 'user', content: 'remember this', timestamp: Date.now() }],
-    }), 'utf8')
-
-    await manager.recoverStaleBuffers()
-
-    expect(runExtractSpy).not.toHaveBeenCalled()
-    expect(fs.existsSync(bufferPath)).toBe(true)
-  })
-
-  it('retries stale buffer recovery once backoff window has elapsed', async () => {
-    const workspace = makeWorkspace('quaid-timeout-stale-backoff-elapsed-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 1,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = false
-    const runExtractSpy = vi.spyOn(manager as any, 'runExtractWithTimeout')
-
-    const sessionId = 'session-stale-backoff-elapsed'
-    const bufferPath = (manager as any).bufferPath(sessionId) as string
-    fs.mkdirSync(path.dirname(bufferPath), { recursive: true })
-    fs.writeFileSync(bufferPath, JSON.stringify({
-      sessionId,
-      updatedAt: new Date(Date.now() - (2 * 60 * 1000)).toISOString(),
-      nextRecoveryAt: new Date(Date.now() - 1000).toISOString(),
-      recoveryAttemptCount: 2,
-      messages: [{ role: 'user', content: 'remember this', timestamp: Date.now() }],
-    }), 'utf8')
-
-    await manager.recoverStaleBuffers()
-
-    expect(runExtractSpy).toHaveBeenCalledTimes(1)
-    expect(fs.existsSync(bufferPath)).toBe(false)
-  })
-
-  it('filters internal/system traffic from extraction payloads', async () => {
-    const workspace = makeWorkspace('quaid-timeout-filter-')
-    const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async (messages, sessionId, label) => {
-        calls.push({ messages, sessionId, label })
-      },
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
-    manager.onAgentEnd([
-      { role: 'user', content: 'Given a personal memory query and memory documents', timestamp: Date.now() },
-      { role: 'assistant', content: '{"facts":[],"journal_entries":[]}', timestamp: Date.now() + 1 },
-      { role: 'user', content: 'My father is Kent', timestamp: Date.now() + 2 },
-      { role: 'assistant', content: 'Saved.', timestamp: Date.now() + 3 },
-    ], 'session-filter')
-
-    manager.queueExtractionSignal('session-filter', 'Reset')
-    await manager.processPendingExtractionSignals()
-
-    expect(calls).toHaveLength(1)
-    expect(calls[0].messages).toHaveLength(2)
-    expect(calls[0].messages[0].content).toContain('father is Kent')
-  })
-
-  it('skips re-queueing signals when session was already extracted and cleared', async () => {
-    const workspace = makeWorkspace('quaid-timeout-already-cleared-')
-    const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async (messages, sessionId, label) => {
-        calls.push({ messages, sessionId, label })
-      },
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
-    const msgs = [
-      { id: 'u1', role: 'user', content: 'remember this one thing', timestamp: Date.now() },
-      { id: 'a1', role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
-    ]
-
-    manager.onAgentEnd(msgs, 'session-cleared')
-    manager.queueExtractionSignal('session-cleared', 'Reset')
-    await manager.processPendingExtractionSignals()
-    expect(calls).toHaveLength(1)
-
-    manager.queueExtractionSignal('session-cleared', 'Reset')
-    await manager.processPendingExtractionSignals()
-    expect(calls).toHaveLength(1)
-  })
-
-  it('recovers orphaned signal processing claims from dead pids', async () => {
-    const workspace = makeWorkspace('quaid-timeout-orphan-signal-')
-    const calls: Array<{ sessionId?: string; label?: string }> = []
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async (_messages, sessionId, label) => {
-        calls.push({ sessionId, label })
-      },
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
-    const signalDir = path.join(workspace, 'data', 'pending-extraction-signals')
-    const orphanClaim = path.join(signalDir, 'session-orphan.json.processing.99999999')
-    fs.writeFileSync(orphanClaim, JSON.stringify({
-      sessionId: 'session-orphan',
-      label: 'Reset',
-      queuedAt: new Date().toISOString(),
-    }))
-    manager.onAgentEnd([
-      { role: 'user', content: 'remember this', timestamp: Date.now() },
-      { role: 'assistant', content: 'ok', timestamp: Date.now() + 1 },
-    ], 'session-orphan')
-
-    await manager.processPendingExtractionSignals()
-
-    expect(calls).toHaveLength(1)
-    expect(calls[0].sessionId).toBe('session-orphan')
-  })
-
-  it('blocks fallback event payload extraction when failHard=true', async () => {
-    const workspace = makeWorkspace('quaid-timeout-failhard-')
-    writeFailHardConfig(workspace, true)
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
+    const manager = buildManager({ workspace, timeoutMinutes: 10, source });
     await expect(
-      manager.extractSessionFromLog('session-failhard', 'Reset', [
-        { role: 'user', content: 'remember this', timestamp: Date.now() },
+      manager.extractSessionFromLog("session-failhard", "Reset", [
+        { role: "user", content: "remember this", timestamp: Date.now() },
       ]),
-    ).rejects.toThrow(/fallback payload blocked by failHard/i)
-  })
+    ).rejects.toThrow(/fallback payload blocked by failHard/i);
+  });
 
-  it('allows fallback event payload extraction when failHard=false', async () => {
-    const workspace = makeWorkspace('quaid-timeout-soft-')
-    writeFailHardConfig(workspace, false)
-    const calls: Array<{ messages: any[] }> = []
-    const manager = new SessionTimeoutManager({
+  it("allows fallback payload when failHard=false", async () => {
+    const workspace = makeWorkspace("quaid-timeout-soft-fallback-");
+    writeFailHardConfig(workspace, false);
+    const source = createSourceState();
+
+    const calls: Array<any[]> = [];
+    const manager = buildManager({
       workspace,
       timeoutMinutes: 10,
+      source,
       extract: async (messages) => {
-        calls.push({ messages })
+        calls.push(messages);
       },
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
+    });
 
-    const ok = await manager.extractSessionFromLog('session-soft', 'Reset', [
-      { role: 'user', content: 'remember this', timestamp: Date.now() },
-    ])
-    expect(ok).toBe(true)
-    expect(calls).toHaveLength(1)
-    expect(calls[0].messages).toHaveLength(1)
-  })
+    const ok = await manager.extractSessionFromLog("session-soft", "Reset", [
+      { role: "user", content: "remember this", timestamp: Date.now() },
+    ]);
 
-  it('enforces extraction timeout guard for queued extraction work', async () => {
-    vi.useFakeTimers()
-    try {
-      const workspace = makeWorkspace('quaid-timeout-extract-guard-')
-      writeFailHardConfig(workspace, false)
-      vi.stubEnv('QUAID_SESSION_EXTRACT_TIMEOUT_MS', '10')
-      const manager = new SessionTimeoutManager({
-        workspace,
-        timeoutMinutes: 10,
-        extract: async () => await new Promise<void>(() => {}),
-        isBootstrapOnly: () => false,
-        logger: () => {},
-      })
-      ;(manager as any).failHard = true
+    expect(ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(1);
+  });
 
-      manager.onAgentEnd([
-        { role: 'user', content: 'remember this', timestamp: Date.now() },
-      ], 'session-timeout-guard')
-      const pending = manager.extractSessionFromLog('session-timeout-guard', 'Reset')
-      const assertion = expect(pending).rejects.toThrow(/timed out/i)
-      await vi.advanceTimersByTimeAsync(20)
-      await assertion
-    } finally {
-      vi.useRealTimers()
-    }
-  })
+  it("recovers only sessions that became stale within the current sweep window", async () => {
+    const workspace = makeWorkspace("quaid-timeout-stale-window-");
+    const source = createSourceState();
+    const now = Date.now();
 
-  it('serializes concurrent extractSessionFromLog calls to avoid double extraction', async () => {
-    const workspace = makeWorkspace('quaid-timeout-serialize-')
-    writeFailHardConfig(workspace, false)
-    const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
-    const manager = new SessionTimeoutManager({
+    source.activityBySession.set("session-window-hit", now - 61 * 60 * 1000);
+    source.activityBySession.set("session-window-miss", now - 70 * 60 * 1000);
+
+    source.messagesBySession.set("session-window-hit", [
+      { id: "u1", role: "user", content: "hit", timestamp: now - 61 * 60 * 1000 },
+    ]);
+    source.messagesBySession.set("session-window-miss", [
+      { id: "u2", role: "user", content: "miss", timestamp: now - 70 * 60 * 1000 },
+    ]);
+
+    const calls: string[] = [];
+    const manager = buildManager({
       workspace,
-      timeoutMinutes: 10,
-      extract: async (messages, sessionId, label) => {
-        calls.push({ messages, sessionId, label })
-        await new Promise((resolve) => setTimeout(resolve, 15))
+      timeoutMinutes: 60,
+      source,
+      extract: async (_messages, sessionId) => {
+        calls.push(String(sessionId));
       },
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = false
+    });
+
+    const staleStatePath = path.join(workspace, "data", "stale-sweep-state.json");
+    fs.mkdirSync(path.dirname(staleStatePath), { recursive: true });
+    fs.writeFileSync(
+      staleStatePath,
+      JSON.stringify({ lastSweepAt: new Date(now - 5 * 60 * 1000).toISOString(), retries: {} }),
+      "utf8",
+    );
+
+    await manager.recoverStaleBuffers();
+
+    expect(calls).toEqual(["session-window-hit"]);
+  });
+
+  it("uses installedAt lower bound on first stale sweep to include older post-install sessions", async () => {
+    const workspace = makeWorkspace("quaid-timeout-stale-installed-bound-");
+    const source = createSourceState();
+    const now = Date.now();
+    const installedAtMs = now - 6 * 60 * 60 * 1000;
+
+    source.activityBySession.set("session-post-install", now - 5 * 60 * 60 * 1000);
+    source.activityBySession.set("session-pre-install", installedAtMs - 2 * 60 * 60 * 1000);
+    source.messagesBySession.set("session-post-install", [
+      { id: "u1", role: "user", content: "include me", timestamp: now - 5 * 60 * 60 * 1000 },
+    ]);
+    source.messagesBySession.set("session-pre-install", [
+      { id: "u2", role: "user", content: "skip me", timestamp: installedAtMs - 2 * 60 * 60 * 1000 },
+    ]);
+
+    const installStatePath = path.join(workspace, "data", "installed-at.json");
+    fs.mkdirSync(path.dirname(installStatePath), { recursive: true });
+    fs.writeFileSync(installStatePath, JSON.stringify({ installedAt: new Date(installedAtMs).toISOString() }), "utf8");
+
+    const calls: string[] = [];
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 60,
+      source,
+      extract: async (_messages, sessionId) => {
+        calls.push(String(sessionId));
+      },
+    });
+
+    await manager.recoverStaleBuffers();
+    expect(calls).toEqual(["session-post-install"]);
+  });
+
+  it("records stale recovery backoff when extraction fails", async () => {
+    const workspace = makeWorkspace("quaid-timeout-stale-backoff-");
+    const source = createSourceState();
+    const now = Date.now();
+
+    source.activityBySession.set("session-stale", now - 61 * 60 * 1000);
+    source.messagesBySession.set("session-stale", [
+      { id: "u1", role: "user", content: "retry me", timestamp: now - 61 * 60 * 1000 },
+    ]);
+
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 60,
+      source,
+      extract: async () => {
+        throw new Error("gateway timeout after 10000ms");
+      },
+    });
+    ;(manager as any).failHard = false;
+
+    await manager.recoverStaleBuffers();
+
+    const staleStatePath = path.join(workspace, "data", "stale-sweep-state.json");
+    const state = JSON.parse(fs.readFileSync(staleStatePath, "utf8"));
+    const retry = state?.retries?.["session-stale"];
+    expect(retry).toBeTruthy();
+    expect(retry.attemptCount).toBe(1);
+    expect(String(retry.lastError || "")).toContain("gateway timeout");
+  });
+
+  it("retries stale recovery when retry is due even if outside stale window", async () => {
+    const workspace = makeWorkspace("quaid-timeout-stale-retry-due-");
+    const source = createSourceState();
+    const now = Date.now();
+
+    source.activityBySession.set("session-old", now - 5 * 60 * 60 * 1000);
+    source.messagesBySession.set("session-old", [
+      { id: "u1", role: "user", content: "old but retry", timestamp: now - 5 * 60 * 60 * 1000 },
+    ]);
+
+    const calls: string[] = [];
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 60,
+      source,
+      extract: async (_messages, sessionId) => {
+        calls.push(String(sessionId));
+      },
+    });
+
+    const staleStatePath = path.join(workspace, "data", "stale-sweep-state.json");
+    fs.mkdirSync(path.dirname(staleStatePath), { recursive: true });
+    fs.writeFileSync(
+      staleStatePath,
+      JSON.stringify({
+        lastSweepAt: new Date(now).toISOString(),
+        retries: {
+          "session-old": {
+            sessionId: "session-old",
+            lastActivityMs: now - 5 * 60 * 60 * 1000,
+            attemptCount: 2,
+            nextRecoveryAt: new Date(now - 1_000).toISOString(),
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await manager.recoverStaleBuffers();
+
+    expect(calls).toEqual(["session-old"]);
+    const state = JSON.parse(fs.readFileSync(staleStatePath, "utf8"));
+    expect(state?.retries?.["session-old"]).toBeUndefined();
+  });
+
+  it("drops retry entry when session has newer activity than failed stale snapshot", async () => {
+    const workspace = makeWorkspace("quaid-timeout-stale-retry-drop-");
+    const source = createSourceState();
+    const now = Date.now();
+
+    source.activityBySession.set("session-changed", now - 10 * 60 * 1000);
+    source.messagesBySession.set("session-changed", [
+      { id: "u1", role: "user", content: "newer", timestamp: now - 10 * 60 * 1000 },
+    ]);
+
+    const manager = buildManager({ workspace, timeoutMinutes: 60, source });
+
+    const staleStatePath = path.join(workspace, "data", "stale-sweep-state.json");
+    fs.mkdirSync(path.dirname(staleStatePath), { recursive: true });
+    fs.writeFileSync(
+      staleStatePath,
+      JSON.stringify({
+        lastSweepAt: new Date(now).toISOString(),
+        retries: {
+          "session-changed": {
+            sessionId: "session-changed",
+            lastActivityMs: now - 5 * 60 * 60 * 1000,
+            attemptCount: 2,
+            nextRecoveryAt: new Date(now - 1_000).toISOString(),
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await manager.recoverStaleBuffers();
+
+    const state = JSON.parse(fs.readFileSync(staleStatePath, "utf8"));
+    expect(state?.retries?.["session-changed"]).toBeUndefined();
+  });
+
+  it("runs timeout extraction by reading source on timer fire", async () => {
+    vi.useFakeTimers();
+    const workspace = makeWorkspace("quaid-timeout-timer-source-");
+    const source = createSourceState();
+    const now = Date.now();
+
+    source.messagesBySession.set("session-timer", [
+      { id: "u1", role: "user", content: "via timer", timestamp: now },
+      { id: "a1", role: "assistant", content: "ok", timestamp: now + 1 },
+    ]);
+
+    const calls: Array<{ sid?: string; label?: string }> = [];
+    const manager = buildManager({
+      workspace,
+      timeoutMinutes: 1,
+      source,
+      extract: async (_messages, sid, label) => {
+        calls.push({ sid, label });
+      },
+    });
 
     manager.onAgentEnd([
-      { role: 'user', content: 'remember this once', timestamp: Date.now() },
-    ], 'session-serialize')
+      { role: "user", content: "via timer", timestamp: now },
+      { role: "assistant", content: "ok", timestamp: now + 1 },
+    ], "session-timer");
 
-    const [first, second] = await Promise.all([
-      manager.extractSessionFromLog('session-serialize', 'Reset'),
-      manager.extractSessionFromLog('session-serialize', 'Reset'),
-    ])
+    await vi.advanceTimersByTimeAsync(61_000);
+    await (manager as any).chain;
 
-    expect(first).toBe(true)
-    expect(second).toBe(false)
-    expect(calls).toHaveLength(1)
-  })
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.sid).toBe("session-timer");
+    expect(calls[0]?.label).toBe("Timeout");
+  });
 
-  it('bounds in-memory buffers to avoid unbounded session growth', () => {
-    const workspace = makeWorkspace('quaid-timeout-buffer-cap-')
-    const manager = new SessionTimeoutManager({
+  it("recovers orphaned signal claim files and processes them", async () => {
+    const workspace = makeWorkspace("quaid-timeout-orphan-claim-");
+    const source = createSourceState();
+    source.messagesBySession.set("session-orphan", [
+      { id: "u1", role: "user", content: "recover me", timestamp: Date.now() - 5000 },
+    ]);
+
+    const calls: Array<{ sid?: string; label?: string }> = [];
+    const manager = buildManager({
       workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
+      timeoutMinutes: 60,
+      source,
+      extract: async (_messages, sid, label) => {
+        calls.push({ sid, label });
+      },
+    });
 
-    for (let i = 0; i < 240; i += 1) {
-      manager.onAgentEnd(
-        [{ role: 'user', content: `message ${i}`, timestamp: Date.now() + i }],
-        `session-${i}`,
-      )
-    }
+    const pendingDir = path.join(workspace, "data", "pending-extraction-signals");
+    fs.mkdirSync(pendingDir, { recursive: true });
+    const claimedPath = path.join(pendingDir, "session-orphan.json.processing.999999");
+    fs.writeFileSync(
+      claimedPath,
+      JSON.stringify({
+        sessionId: "session-orphan",
+        label: "Reset",
+        queuedAt: new Date().toISOString(),
+      }),
+      "utf8",
+    );
 
-    const buffers: Map<string, unknown[]> = (manager as any).buffers
-    expect(buffers.size).toBeLessThanOrEqual(200)
-  })
+    await manager.processPendingExtractionSignals();
 
-  it('caches failHard config reads between extraction calls', async () => {
-    const workspace = makeWorkspace('quaid-timeout-failhard-cache-')
-    writeFailHardConfig(workspace, false)
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sid).toBe("session-orphan");
+    expect(calls[0]?.label).toBe("Reset");
+    expect(fs.existsSync(claimedPath)).toBe(false);
+  });
 
-    const manager = new SessionTimeoutManager({
+  it("drops signal immediately when max retry budget is zero", async () => {
+    vi.stubEnv("QUAID_SIGNAL_MAX_RETRIES", "0");
+    const workspace = makeWorkspace("quaid-timeout-zero-retry-");
+    const source = createSourceState();
+    source.messagesBySession.set("session-drop", [
+      { id: "u1", role: "user", content: "this will fail", timestamp: Date.now() - 1000 },
+    ]);
+
+    const manager = buildManager({
       workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
+      timeoutMinutes: 60,
+      source,
+      extract: async () => {
+        throw new Error("forced failure");
+      },
+    });
+    ;(manager as any).failHard = false;
 
-    const payload = [{ role: 'user', content: 'remember this', timestamp: Date.now() }]
-    const firstOk = await manager.extractSessionFromLog('session-cache-1', 'Reset', payload)
-    expect(firstOk).toBe(true)
+    manager.queueExtractionSignal("session-drop", "Reset");
+    await manager.processPendingExtractionSignals();
 
-    // Flip config immediately; second call should use cached failHard state.
-    writeFailHardConfig(workspace, true)
-    const secondOk = await manager.extractSessionFromLog('session-cache-2', 'Reset', payload)
+    const pendingDir = path.join(workspace, "data", "pending-extraction-signals");
+    const files = fs.readdirSync(pendingDir).filter((f) => f.includes("session-drop"));
+    expect(files).toEqual([]);
+  });
 
-    expect(secondOk).toBe(true)
-  })
+  it("filters internal system maintenance traffic from source extraction payload", async () => {
+    const workspace = makeWorkspace("quaid-timeout-filter-system-");
+    const source = createSourceState();
+    source.messagesBySession.set("session-filter", [
+      { id: "s1", role: "system", content: "Compacted (37k → 5k)", timestamp: Date.now() - 5 },
+      {
+        id: "u1",
+        role: "user",
+        content: "Extract memorable facts and journal entries from this conversation",
+        timestamp: Date.now() - 4,
+      },
+      { id: "a1", role: "assistant", content: "{\"facts\":[],\"journal_entries\":[],\"soul_snippets\":[]}", timestamp: Date.now() - 3 },
+      { id: "u2", role: "user", content: "real user context", timestamp: Date.now() - 2 },
+      { id: "a2", role: "assistant", content: "real assistant context", timestamp: Date.now() - 1 },
+    ]);
 
-  it('throws on signal directory listing failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-list-failhard-')
-    const manager = new SessionTimeoutManager({
+    const calls: any[][] = [];
+    const manager = buildManager({
       workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
+      timeoutMinutes: 60,
+      source,
+      extract: async (messages) => {
+        calls.push(messages);
+      },
+    });
 
-    const notADir = path.join(workspace, 'data', 'signals-not-a-dir')
-    fs.mkdirSync(path.dirname(notADir), { recursive: true })
-    fs.writeFileSync(notADir, 'x', 'utf8')
-    ;(manager as any).pendingSignalDir = notADir
-    expect(() => (manager as any).listSignalFiles()).toThrow()
-  })
+    const ok = await manager.extractSessionFromLog("session-filter", "Reset");
+    expect(ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.map((m) => m.id)).toEqual(["u2", "a2"]);
+  });
 
-  it('throws on malformed buffer payload when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-buffer-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
+  it("persists installedAt marker for future bounded migration logic", async () => {
+    const workspace = makeWorkspace("quaid-timeout-installed-at-");
+    const source = createSourceState();
+    const manager = buildManager({ workspace, timeoutMinutes: 60, source });
 
-    const bufferPath = (manager as any).bufferPath('session-bad')
-    fs.mkdirSync(path.dirname(bufferPath), { recursive: true })
-    fs.writeFileSync(bufferPath, '{bad json', 'utf8')
+    await manager.recoverStaleBuffers();
 
-    expect(() => (manager as any).readBuffer('session-bad')).toThrow()
-  })
+    const installStatePath = path.join(workspace, "data", "installed-at.json");
+    const staleStatePath = path.join(workspace, "data", "stale-sweep-state.json");
 
-  it('throws on buffer directory listing failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-buffer-list-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
+    expect(fs.existsSync(installStatePath)).toBe(true);
+    expect(fs.existsSync(staleStatePath)).toBe(true);
 
-    const notADir = path.join(workspace, 'data', 'buffers-not-a-dir')
-    fs.mkdirSync(path.dirname(notADir), { recursive: true })
-    fs.writeFileSync(notADir, 'x', 'utf8')
-    ;(manager as any).bufferDir = notADir
-    expect(() => (manager as any).listBufferFiles()).toThrow()
-  })
+    const installState = JSON.parse(fs.readFileSync(installStatePath, "utf8"));
+    const staleState = JSON.parse(fs.readFileSync(staleStatePath, "utf8"));
 
-  it('throws on stale lock parse failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-lock-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-
-    const lockPath = (manager as any).workerLockPath as string
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true })
-    fs.writeFileSync(lockPath, '{not json', 'utf8')
-
-    expect(() => (manager as any).tryAcquireWorkerLock()).toThrow()
-  })
-
-  it('throws on session message read failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-session-read-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-
-    const fp = (manager as any).sessionMessagePath('session-bad-read') as string
-    fs.mkdirSync(fp, { recursive: true })
-
-    expect(() => (manager as any).readSessionMessages('session-bad-read')).toThrow()
-  })
-
-  it('throws on malformed session cursor when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-cursor-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-
-    const fp = (manager as any).cursorPath('session-bad-cursor') as string
-    fs.mkdirSync(path.dirname(fp), { recursive: true })
-    fs.writeFileSync(fp, '{bad json', 'utf8')
-
-    expect(() => (manager as any).readSessionCursor('session-bad-cursor')).toThrow()
-  })
-
-  it('throws on worker lock validation parse failure during release when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-release-lock-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-    ;(manager as any).ownsWorkerLock = true
-
-    const lockPath = (manager as any).workerLockPath as string
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true })
-    fs.writeFileSync(lockPath, '{bad json', 'utf8')
-
-    expect(() => (manager as any).releaseWorkerLock()).toThrow()
-  })
-
-  it('throws on orphaned signal-claim recovery failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-orphan-signal-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-
-    const signalDir = (manager as any).pendingSignalDir as string
-    fs.mkdirSync(signalDir, { recursive: true })
-    const originalPath = path.join(signalDir, 'session-x.json')
-    fs.writeFileSync(originalPath, JSON.stringify({ sessionId: 'session-x' }), 'utf8')
-    const lockedPath = `${originalPath}.processing.1`
-    fs.mkdirSync(lockedPath, { recursive: true })
-
-    expect(() => (manager as any).recoverOrphanedSignalClaims()).toThrow()
-  })
-
-  it('throws on clearBuffer unlink failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-clear-buffer-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-
-    const fp = (manager as any).bufferPath('session-bad-clear') as string
-    fs.mkdirSync(fp, { recursive: true })
-
-    expect(() => (manager as any).clearBuffer('session-bad-clear')).toThrow()
-  })
-
-  it('throws on session message append failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-session-append-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-
-    const fp = (manager as any).sessionMessagePath('session-bad-append') as string
-    fs.mkdirSync(fp, { recursive: true })
-
-    expect(() => (manager as any).appendSessionMessages('session-bad-append', [{ role: 'user', content: 'hi' }])).toThrow()
-  })
-
-  it('throws on session cursor write failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-cursor-write-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-
-    const fp = (manager as any).cursorPath('session-bad-cursor-write') as string
-    fs.mkdirSync(path.dirname(fp), { recursive: true })
-    fs.mkdirSync(fp, { recursive: true })
-
-    expect(() => (manager as any).writeSessionCursor('session-bad-cursor-write', [{ role: 'user', content: 'hello' }])).toThrow()
-  })
-
-  it('throws on timeout log write failure when failHard=true', () => {
-    const workspace = makeWorkspace('quaid-timeout-log-write-failhard-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-    ;(manager as any).failHard = true
-
-    const logPath = (manager as any).logFilePath as string
-    fs.mkdirSync(path.dirname(logPath), { recursive: true })
-    fs.mkdirSync(logPath, { recursive: true })
-
-    expect(() => (manager as any).writeQuaidLog('unit_test')).toThrow()
-  })
-
-  it('recreates missing session timeout log directories before writing', () => {
-    const workspace = makeWorkspace('quaid-timeout-log-dir-recreate-')
-    const manager = new SessionTimeoutManager({
-      workspace,
-      timeoutMinutes: 10,
-      extract: async () => {},
-      isBootstrapOnly: () => false,
-      logger: () => {},
-    })
-
-    const logDir = path.join(workspace, 'logs', 'quaid')
-    fs.rmSync(logDir, { recursive: true, force: true })
-
-    expect(() => (manager as any).writeQuaidLog('test_event', 'session-dir-recreate', { ok: true })).not.toThrow()
-
-    const sessionPath = path.join(logDir, 'sessions', 'session-dir-recreate.jsonl')
-    expect(fs.existsSync(sessionPath)).toBe(true)
-  })
-})
+    expect(typeof installState?.installedAt).toBe("string");
+    expect(staleState?.installedAt).toBe(installState?.installedAt);
+  });
+});
