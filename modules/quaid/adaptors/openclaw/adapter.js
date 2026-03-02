@@ -3819,7 +3819,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
         const dedupeSession2 = sessionId || extractSessionId(messages, {});
         const dedupeKey = `start:${dedupeSession2}:${triggerType2}`;
         const triggerDesc = triggerType2 === "compaction" ? "compaction" : triggerType2 === "recovery" ? "recovery" : triggerType2 === "timeout" ? "timeout" : triggerType2 === "new" ? "/new" : "reset";
-        if (!suppressBacklogNotify2 && hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
+        if (triggerType2 !== "recovery" && !suppressBacklogNotify2 && hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
           spawnNotifyScript(`
 from core.runtime.notify import notify_user
 notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
@@ -3890,7 +3890,7 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
       if (!suppressBacklogNotify && shouldNotifyFeature("extraction", "summary") && triggerType === "compaction") {
         queueCompactionNotificationBatch(dedupeSession, stored, skipped, edgesCreated);
-      } else if (!suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && shouldNotifyFeature("extraction", "summary") && shouldEmitExtractionNotify(completionDedupeKey)) {
+      } else if (triggerType !== "recovery" && !suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && shouldNotifyFeature("extraction", "summary") && shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
           const mergedDetails = {};

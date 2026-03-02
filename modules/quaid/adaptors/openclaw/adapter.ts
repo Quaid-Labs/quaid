@@ -4318,7 +4318,10 @@ notify_user(f"📁 Project registered: {project_label}")
               : triggerType === "new"
                 ? "/new"
                 : "reset";
-        if (!suppressBacklogNotify && hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
+        if (triggerType !== "recovery"
+          && !suppressBacklogNotify
+          && hasMeaningfulUserContent
+          && shouldEmitExtractionNotify(dedupeKey)) {
           spawnNotifyScript(`
 from core.runtime.notify import notify_user
 notify_user("🧠 Processing memories from ${triggerDesc}...")
@@ -4406,7 +4409,8 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         // OpenClaw may emit many compaction-related micro-sessions in bursts.
         // Batch notification output so one user-triggered compact does not spam.
         queueCompactionNotificationBatch(dedupeSession, stored, skipped, edgesCreated);
-      } else if (!suppressBacklogNotify
+      } else if (triggerType !== "recovery"
+        && !suppressBacklogNotify
         && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
         && shouldNotifyFeature("extraction", "summary")
         && shouldEmitExtractionNotify(completionDedupeKey)) {

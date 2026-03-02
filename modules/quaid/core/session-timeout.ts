@@ -1013,6 +1013,28 @@ export class SessionTimeoutManager {
           });
           continue;
         }
+        // Preserve the queued work, but mark it as orphan recovery so downstream
+        // notification logic can suppress user-facing noise.
+        try {
+          const raw = JSON.parse(fs.readFileSync(lockedPath, "utf8")) as PendingExtractionSignal;
+          if (raw && typeof raw === "object") {
+            const priorLabel = String(raw.label || "Signal");
+            const priorMeta = raw.meta && typeof raw.meta === "object" ? raw.meta : {};
+            const patched: PendingExtractionSignal = {
+              sessionId: String(raw.sessionId || path.basename(originalPath, ".json")),
+              label: priorLabel.toLowerCase().includes("recover") ? priorLabel : "RecoverySignal",
+              queuedAt: String(raw.queuedAt || new Date().toISOString()),
+              attemptCount: Math.max(0, Number(raw.attemptCount || 0)),
+              meta: {
+                ...priorMeta,
+                source: "orphan_recovery",
+                recovered_orphan: true,
+                original_label: priorLabel,
+              },
+            };
+            fs.writeFileSync(lockedPath, JSON.stringify(patched), { mode: 0o600 });
+          }
+        } catch {}
         fs.renameSync(lockedPath, originalPath);
         this.writeQuaidLog("signal_file_recovered", path.basename(originalPath, ".json"), {
           from: lockedPath,
