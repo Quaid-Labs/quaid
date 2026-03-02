@@ -2965,7 +2965,12 @@ print("ok" if ok else "no_channel")
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
     env,
+    timeout: 15_000,
   });
+  if (res.error) {
+    log.warn(`Install completion notification failed: ${String(res.error.message || res.error)}`);
+    return;
+  }
   if (res.status !== 0) {
     const detail = String(res.stderr || res.stdout || "").trim();
     log.warn(`Install completion notification failed: ${detail || "python exited non-zero"}`);
