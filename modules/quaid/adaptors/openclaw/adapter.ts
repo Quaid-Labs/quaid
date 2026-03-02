@@ -212,6 +212,29 @@ function _resolveMemoryConfigPath(): string {
   return _memoryConfigCandidates()[0];
 }
 
+function _buildFallbackMemoryConfig(): any {
+  return {
+    models: {
+      llmProvider: "default",
+      deepReasoning: "default",
+      fastReasoning: "default",
+      deepReasoningModelClasses: {
+        anthropic: "claude-opus-4-6",
+        openai: "gpt-5",
+        "openai-compatible": "gpt-4.1",
+      },
+      fastReasoningModelClasses: {
+        anthropic: "claude-haiku-4-5",
+        openai: "gpt-5-mini",
+        "openai-compatible": "gpt-4.1-mini",
+      },
+    },
+    retrieval: {
+      maxLimit: 8,
+    },
+  };
+}
+
 function getMemoryConfig(): any {
   const configPath = _resolveMemoryConfigPath();
   if (configPath !== _memoryConfigPath) {
@@ -241,8 +264,14 @@ function getMemoryConfig(): any {
       _memoryConfigErrorLogged = true;
       console.error("[quaid] failed to load config/memory.json:", (err as Error)?.message || String(err));
     }
-    // Prevent isFailHardEnabled() -> getMemoryConfig() mutual recursion on missing/invalid config.
-    _memoryConfig = {};
+    if (isMissingFileError(err)) {
+      // During gateway reloads, config may be briefly unavailable; keep plugin alive with safe defaults.
+      _memoryConfig = _buildFallbackMemoryConfig();
+      _memoryConfigMtimeMs = -1;
+      return _memoryConfig;
+    }
+    // Prevent isFailHardEnabled() -> getMemoryConfig() mutual recursion on invalid config.
+    _memoryConfig = _buildFallbackMemoryConfig();
     _memoryConfigMtimeMs = mtimeMs;
     if (isFailHardEnabled()) {
       throw err;
