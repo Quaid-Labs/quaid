@@ -93,9 +93,10 @@ function preview(msg) {
 
 function detectLifecycleCommandSignal(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
-  const recent = messages.slice(-8);
+  const recent = messages.slice(-2);
 
   for (const msg of recent) {
+    if (msg?.role !== "system") continue;
     const text = getMessageText(msg);
     if (!text) continue;
     const normalized = text.trim().toLowerCase();
