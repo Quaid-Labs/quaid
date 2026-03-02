@@ -107,7 +107,7 @@ jobs:
           fi
 
           start_gateway() {
-            "${OC[@]}" gateway run --allow-unconfigured --port 18789 >"/tmp/openclaw-gateway-${SCENARIO}.log" 2>&1 &
+            "${OC[@]}" gateway run --allow-unconfigured --force --port 18789 >"/tmp/openclaw-gateway-${SCENARIO}.log" 2>&1 &
             sleep 3
             if ! "${OC[@]}" gateway probe; then
               echo "gateway probe failed; dumping startup log" >&2
@@ -135,9 +135,7 @@ jobs:
           fi
 
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
-          if ! "${OC[@]}" gateway probe >/dev/null 2>&1; then
-            start_gateway
-          fi
+          start_gateway
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
 
           OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
