@@ -167,6 +167,8 @@ class SessionTimeoutManager {
   extractTimeoutMs;
   maxSignalRetries;
   maxInMemoryBuffers = 200;
+  staleRecoveryInitialBackoffMs = 5e3;
+  staleRecoveryMaxBackoffMs = 5 * 60 * 1e3;
   constructor(opts) {
     this.timeoutMinutes = opts.timeoutMinutes;
     this.extract = opts.extract;
@@ -374,10 +376,13 @@ class SessionTimeoutManager {
       if (!lockedPath) {
         continue;
       }
+      let sid = path.basename(filePath, ".json").trim();
+      let payload = null;
       try {
-        const payload = JSON.parse(fs.readFileSync(lockedPath, "utf8"));
-        const sid = String(payload?.sessionId || path.basename(filePath, ".json")).trim();
+        payload = JSON.parse(fs.readFileSync(lockedPath, "utf8"));
+        sid = String(payload?.sessionId || sid).trim();
         const updatedAtMs = Date.parse(String(payload?.updatedAt || ""));
+        const nextRecoveryAtMs = Date.parse(String(payload?.nextRecoveryAt || ""));
         const msgs = filterEligibleMessages(Array.isArray(payload?.messages) ? payload.messages : []);
         if (!sid || msgs.length === 0) {
           try {
@@ -388,6 +393,10 @@ class SessionTimeoutManager {
           continue;
         }
         if (Number.isFinite(updatedAtMs) && now - updatedAtMs < staleMs) {
+          this.releaseBufferFile(lockedPath, filePath);
+          continue;
+        }
+        if (Number.isFinite(nextRecoveryAtMs) && nextRecoveryAtMs > now) {
           this.releaseBufferFile(lockedPath, filePath);
           continue;
         }
@@ -406,10 +415,36 @@ class SessionTimeoutManager {
           safeLog(this.logger, `[quaid][timeout] failed to delete processed stale buffer claim ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
         }
       } catch (err) {
-        safeLog(this.logger, `[quaid][timeout] stale buffer recovery failed for ${filePath}: ${String(err?.message || err)}`);
+        const error = String(err?.message || err);
+        safeLog(this.logger, `[quaid][timeout] stale buffer recovery failed for ${filePath}: ${error}`);
+        if (sid && payload && fs.existsSync(lockedPath)) {
+          const nextAttemptCount = Math.max(0, Number(payload.recoveryAttemptCount || 0)) + 1;
+          const delayMs = this.staleRecoveryDelayMs(nextAttemptCount);
+          const nextRecoveryPayload = {
+            ...payload,
+            recoveryAttemptCount: nextAttemptCount,
+            nextRecoveryAt: new Date(now + delayMs).toISOString(),
+            lastRecoveryError: error
+          };
+          try {
+            fs.writeFileSync(lockedPath, JSON.stringify(nextRecoveryPayload), { mode: 384 });
+            this.writeQuaidLog("recover_stale_buffer_backoff", sid, {
+              attempt_count: nextAttemptCount,
+              delay_ms: delayMs,
+              error
+            });
+          } catch (writeErr) {
+            safeLog(this.logger, `[quaid][timeout] failed to persist stale buffer recovery backoff ${filePath}: ${String(writeErr?.message || writeErr)}`);
+          }
+        }
         this.releaseBufferFile(lockedPath, filePath);
       }
     }
+  }
+  staleRecoveryDelayMs(attemptCount) {
+    const attempt = Math.max(1, Math.floor(attemptCount));
+    const multiplier = 2 ** (attempt - 1);
+    return Math.min(this.staleRecoveryInitialBackoffMs * multiplier, this.staleRecoveryMaxBackoffMs);
   }
   queueExtractionSignal(sessionId, label) {
     if (!sessionId) return;
