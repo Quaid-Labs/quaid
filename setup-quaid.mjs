@@ -98,7 +98,7 @@ if (INSTALL_ARGS.errors.length) {
 }
 
 // --- Constants ---
-const VERSION = "0.2.12-alpha";
+const VERSION = "0.2.13-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw"; // Hooks merged in PR #13287
 const PROJECT_URL = "https://github.com/quaid-labs/quaid";
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
@@ -493,6 +493,90 @@ function _ensureOpenClawResponsesEndpoint() {
   }
 }
 
+function _sanitizeOpenClawQuaidPluginEntry() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const entries = parsed?.plugins?.entries;
+    const quaid = entries?.quaid;
+    if (!quaid || typeof quaid !== "object" || !Object.prototype.hasOwnProperty.call(quaid, "workspace")) {
+      return false;
+    }
+    delete quaid.workspace;
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
+function _ensureOpenClawCompactionModeDefault() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed.agents || typeof parsed.agents !== "object") parsed.agents = {};
+    if (!parsed.agents.defaults || typeof parsed.agents.defaults !== "object") {
+      parsed.agents.defaults = {};
+    }
+    if (!parsed.agents.defaults.compaction || typeof parsed.agents.defaults.compaction !== "object") {
+      parsed.agents.defaults.compaction = {};
+    }
+    const current = String(parsed.agents.defaults.compaction.mode || "").trim().toLowerCase();
+    if (current === "default") return false;
+    parsed.agents.defaults.compaction.mode = "default";
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
+function _registerOpenClawQuaidPlugin(pluginPath) {
+  const cli = canRun("openclaw") ? "openclaw" : (canRun("clawdbot") ? "clawdbot" : "");
+  if (!cli) return { ok: false, reason: "OpenClaw CLI not found" };
+  const normalize = (s) => String(s || "").toLowerCase();
+
+  const installRes = spawnSync(cli, ["plugins", "install", pluginPath], { encoding: "utf8", stdio: "pipe" });
+  if (installRes.status !== 0) {
+    const msg = `${installRes.stderr || ""}\n${installRes.stdout || ""}`;
+    const norm = normalize(msg);
+    if (!norm.includes("already installed") && !norm.includes("already exists")) {
+      return { ok: false, reason: `plugins install failed: ${msg.trim() || "unknown error"}` };
+    }
+  }
+
+  const enableRes = spawnSync(cli, ["plugins", "enable", "quaid"], { encoding: "utf8", stdio: "pipe" });
+  if (enableRes.status !== 0) {
+    const msg = `${enableRes.stderr || ""}\n${enableRes.stdout || ""}`;
+    const norm = normalize(msg);
+    if (!norm.includes("already enabled")) {
+      return { ok: false, reason: `plugins enable failed: ${msg.trim() || "unknown error"}` };
+    }
+  }
+
+  const restartRes = spawnSync(cli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
+  if (restartRes.status !== 0) {
+    const msg = `${restartRes.stderr || ""}\n${restartRes.stdout || ""}`.trim();
+    return { ok: false, reason: `gateway restart failed: ${msg || "unknown error"}` };
+  }
+
+  return { ok: true, reason: "" };
+}
+
 function bail(msg) {
   cancel(msg);
   process.exit(1);
@@ -678,6 +762,9 @@ async function step1_preflight() {
         "OpenClaw agents.list is still missing. Install continues, but run `openclaw setup` if agent sessions fail.",
       );
     }
+    if (_sanitizeOpenClawQuaidPluginEntry()) {
+      log.info("Removed invalid plugins.entries.quaid.workspace from ~/.openclaw/openclaw.json");
+    }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
       log.info("Enabled gateway.http.endpoints.responses.enabled=true in ~/.openclaw/openclaw.json");
@@ -687,6 +774,9 @@ async function step1_preflight() {
       } else {
         log.warn("Could not auto-restart OpenClaw gateway. Restart it manually to apply endpoint config.");
       }
+    }
+    if (_ensureOpenClawCompactionModeDefault()) {
+      log.info("Set agents.defaults.compaction.mode=default in ~/.openclaw/openclaw.json");
     }
     s.stop(C.green("OpenClaw") + " gateway running");
   } else {
@@ -1614,6 +1704,13 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated; lifecycle handlers are already active.");
   if (IS_OPENCLAW) {
+    s.start("Registering Quaid plugin in OpenClaw...");
+    const reg = _registerOpenClawQuaidPlugin(PLUGIN_DIR);
+    if (!reg.ok) {
+      s.stop(C.red("OpenClaw plugin registration failed"));
+      throw new Error(reg.reason || "openclaw plugins install/enable failed");
+    }
+    s.stop(C.green("OpenClaw plugin registered"));
     enableRequiredOpenClawHooks();
   }
 

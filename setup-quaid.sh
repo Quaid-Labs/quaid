@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # --- Constants ---
-QUAID_VERSION="0.2.12-alpha"
+QUAID_VERSION="0.2.13-alpha"
 MIN_PYTHON_VERSION="3.10"
 MIN_SQLITE_VERSION="3.35"
 # Gateway PR #13287 — required hooks for knowledge extraction
@@ -644,6 +644,85 @@ raise SystemExit(2)
 PY
 }
 
+_sanitize_openclaw_quaid_plugin_entry() {
+    python3 - <<'PY'
+import json, os, sys
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+entries = ((data.get("plugins") or {}).get("entries") or {})
+quaid = entries.get("quaid")
+if not isinstance(quaid, dict) or "workspace" not in quaid:
+    raise SystemExit(0)
+del quaid["workspace"]
+tmp_path = f"{cfg_path}.tmp-{os.getpid()}"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp_path, cfg_path)
+raise SystemExit(2)
+PY
+}
+
+_ensure_openclaw_compaction_mode_default() {
+    python3 - <<'PY'
+import json, os, sys
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+agents = data.setdefault("agents", {})
+defaults = agents.setdefault("defaults", {})
+compaction = defaults.setdefault("compaction", {})
+mode = str(compaction.get("mode", "")).strip().lower()
+if mode == "default":
+    raise SystemExit(0)
+compaction["mode"] = "default"
+tmp_path = f"{cfg_path}.tmp-{os.getpid()}"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp_path, cfg_path)
+raise SystemExit(2)
+PY
+}
+
+_register_openclaw_quaid_plugin() {
+    local plugin_path="$1"
+    local cli
+    cli="$(_openclaw_cli || true)"
+    if [[ -z "$cli" ]]; then
+        warn "OpenClaw CLI not found; cannot register quaid plugin."
+        return 1
+    fi
+
+    local install_out=""
+    if ! install_out="$("$cli" plugins install "$plugin_path" 2>&1)"; then
+        if ! grep -Eiq "already installed|already exists" <<<"$install_out"; then
+            warn "OpenClaw plugin install failed: ${install_out}"
+            return 1
+        fi
+    fi
+
+    local enable_out=""
+    if ! enable_out="$("$cli" plugins enable quaid 2>&1)"; then
+        if ! grep -Eiq "already enabled" <<<"$enable_out"; then
+            warn "OpenClaw plugin enable failed: ${enable_out}"
+            return 1
+        fi
+    fi
+
+    if ! "$cli" gateway restart >/dev/null 2>&1; then
+        warn "OpenClaw gateway restart failed after quaid plugin registration."
+        return 1
+    fi
+
+    return 0
+}
+
 _ensure_sqlite_vec_required() {
     if python3 -c "import sqlite_vec" >/dev/null 2>&1; then
         info "sqlite-vec — OK"
@@ -757,6 +836,13 @@ step1_preflight() {
         if ! $has_agent; then
             warn "OpenClaw agents.list still missing. Install will continue, but run 'openclaw setup' if agent sessions fail."
         fi
+        local quaid_entry_rc=0
+        _sanitize_openclaw_quaid_plugin_entry || quaid_entry_rc=$?
+        if [[ $quaid_entry_rc -eq 2 ]]; then
+            info "Removed invalid OpenClaw config key: plugins.entries.quaid.workspace"
+        elif [[ $quaid_entry_rc -ne 0 ]]; then
+            warn "Could not verify plugins.entries.quaid config shape."
+        fi
         local responses_rc=0
         _ensure_openclaw_responses_endpoint || responses_rc=$?
         if [[ $responses_rc -eq 2 ]]; then
@@ -768,6 +854,13 @@ step1_preflight() {
             fi
         elif [[ $responses_rc -ne 0 ]]; then
             warn "Could not verify OpenClaw responses endpoint config. If /v1/responses returns 405, set gateway.http.endpoints.responses.enabled=true."
+        fi
+        local compaction_mode_rc=0
+        _ensure_openclaw_compaction_mode_default || compaction_mode_rc=$?
+        if [[ $compaction_mode_rc -eq 2 ]]; then
+            info "Set OpenClaw agents.defaults.compaction.mode=default"
+        elif [[ $compaction_mode_rc -ne 0 ]]; then
+            warn "Could not enforce OpenClaw compaction mode default."
         fi
         info "OpenClaw onboarding check complete"
     else
@@ -1548,6 +1641,13 @@ step6_install() {
     # Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
     info "Legacy hook quaid-reset-signal is deprecated; lifecycle handlers are already active."
     if $IS_OPENCLAW; then
+        info "Registering quaid plugin in OpenClaw..."
+        if _register_openclaw_quaid_plugin "$PLUGIN_DIR"; then
+            info "OpenClaw plugin registered"
+        else
+            error "OpenClaw plugin registration failed (plugins install/enable)."
+            exit 1
+        fi
         enable_required_openclaw_hooks
     fi
 
