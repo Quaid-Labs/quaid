@@ -80,6 +80,7 @@ const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-reques
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 const LIFECYCLE_SIGNAL_SUPPRESS_MS = 15_000;
+const LIFECYCLE_SIGNAL_RETENTION_MS = 10 * 60_000;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
 const extractionNotifyHistory = new Map<string, number>();
 const lifecycleSignalHistory = new Map<string, {
@@ -999,12 +1000,17 @@ function shouldProcessLifecycleSignal(
   signal: { label: "ResetSignal" | "CompactionSignal"; source: "user_command" | "system_notice"; signature: string }
 ): boolean {
   const now = Date.now();
+  for (const [k, v] of lifecycleSignalHistory.entries()) {
+    if ((now - v.seenAt) > LIFECYCLE_SIGNAL_RETENTION_MS) {
+      lifecycleSignalHistory.delete(k);
+    }
+  }
   const key = lifecycleSignalKey(sessionId, signal.label);
   const prior = lifecycleSignalHistory.get(key);
   lifecycleSignalHistory.set(key, { source: signal.source, signature: signal.signature, seenAt: now });
   if (!prior) return true;
   const ageMs = now - prior.seenAt;
-  if (prior.signature === signal.signature) return false;
+  if (prior.signature === signal.signature && ageMs < LIFECYCLE_SIGNAL_SUPPRESS_MS) return false;
   if (ageMs < LIFECYCLE_SIGNAL_SUPPRESS_MS && prior.source === "hook" && signal.source === "system_notice") {
     return false;
   }
