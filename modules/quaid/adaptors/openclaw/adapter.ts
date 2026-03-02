@@ -82,7 +82,20 @@ const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "
 const LIFECYCLE_SIGNAL_SUPPRESS_MS = 15_000;
 const LIFECYCLE_SIGNAL_RETENTION_MS = 10 * 60_000;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
+const COMPACTION_NOTIFY_BATCH_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MS", 45_000);
+const COMPACTION_NOTIFY_BATCH_MAX_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MAX_MS", 120_000);
 const extractionNotifyHistory = new Map<string, number>();
+type CompactionNotifyBatchState = {
+  startedAtMs: number;
+  lastUpdateMs: number;
+  sessions: Set<string>;
+  sessionsWithFacts: Set<string>;
+  stored: number;
+  skipped: number;
+  edges: number;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+let compactionNotifyBatchState: CompactionNotifyBatchState | null = null;
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 90_000;
 const lifecycleSignalHistory = new Map<string, {
@@ -947,6 +960,81 @@ function shouldEmitExtractionNotify(key: string, now: number = Date.now()): bool
   extractionNotifyHistory.set(key, now);
   if (!prior) return true;
   return (now - prior) > EXTRACTION_NOTIFY_DEDUPE_MS;
+}
+
+function queueCompactionNotificationBatch(sessionId: string, stored: number, skipped: number, edges: number): void {
+  const now = Date.now();
+  if (!compactionNotifyBatchState) {
+    compactionNotifyBatchState = {
+      startedAtMs: now,
+      lastUpdateMs: now,
+      sessions: new Set<string>(),
+      sessionsWithFacts: new Set<string>(),
+      stored: 0,
+      skipped: 0,
+      edges: 0,
+      timer: null,
+    };
+  }
+  const state = compactionNotifyBatchState;
+  const sid = String(sessionId || "").trim() || `unknown-${now}`;
+  state.sessions.add(sid);
+  if (stored > 0) {
+    state.sessionsWithFacts.add(sid);
+  }
+  state.stored += Math.max(0, Number(stored || 0));
+  state.skipped += Math.max(0, Number(skipped || 0));
+  state.edges += Math.max(0, Number(edges || 0));
+  state.lastUpdateMs = now;
+
+  const batchAgeMs = now - state.startedAtMs;
+  if (batchAgeMs >= COMPACTION_NOTIFY_BATCH_MAX_MS) {
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    // Force flush now so sustained compaction traffic cannot defer forever.
+    state.startedAtMs = 0;
+    state.lastUpdateMs = now;
+  }
+
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+
+  const flushDelayMs = state.startedAtMs === 0
+    ? 0
+    : Math.max(0, Math.min(COMPACTION_NOTIFY_BATCH_MS, COMPACTION_NOTIFY_BATCH_MAX_MS - (now - state.startedAtMs)));
+  state.timer = setTimeout(() => {
+    const flushState = compactionNotifyBatchState;
+    if (!flushState) return;
+    compactionNotifyBatchState = null;
+    if (flushState.timer) {
+      clearTimeout(flushState.timer);
+      flushState.timer = null;
+    }
+    const sessionCount = flushState.sessions.size;
+    if (sessionCount <= 0) return;
+    const durationSec = Math.max(1, Math.round((flushState.lastUpdateMs - flushState.startedAtMs) / 1000));
+    const summary = [
+      "**[Quaid]** 💾 **Compaction extraction summary:**",
+      "",
+      `• Sessions processed: ${sessionCount}`,
+      `• Facts stored: ${flushState.stored}`,
+      `• Facts skipped: ${flushState.skipped}`,
+      `• Edges created: ${flushState.edges}`,
+      `• Sessions with new facts: ${flushState.sessionsWithFacts.size}`,
+      `• Window: ${durationSec}s`,
+    ].join("\n");
+    spawnNotifyScript(`
+from core.runtime.notify import notify_user, _resolve_channel
+notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extraction"))
+`);
+  }, flushDelayMs);
+  if (typeof (state.timer as any).unref === "function") {
+    (state.timer as any).unref();
+  }
 }
 
 function latestMessageTimestampMs(messages: any[]): number | null {
@@ -4249,6 +4337,12 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const dedupeSession = sessionId || extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
       if (!suppressBacklogNotify
+        && shouldNotifyFeature("extraction", "summary")
+        && triggerType === "compaction") {
+        // OpenClaw may emit many compaction-related micro-sessions in bursts.
+        // Batch notification output so one user-triggered compact does not spam.
+        queueCompactionNotificationBatch(dedupeSession, stored, skipped, edgesCreated);
+      } else if (!suppressBacklogNotify
         && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
         && shouldNotifyFeature("extraction", "summary")
         && shouldEmitExtractionNotify(completionDedupeKey)) {
@@ -4447,11 +4541,12 @@ notify_memory_extraction(
         }
         const sessionId = ctx?.sessionId;
         const conversationMessages = getAllConversationMessages(messages);
+        const extractionSessionId = sessionId || extractSessionId(messages, ctx);
         if (conversationMessages.length === 0) {
-          console.log(`[quaid] before_compaction: skip empty/internal transcript session=${sessionId || "unknown"}`);
-          return;
+          console.log(`[quaid] before_compaction: empty/internal transcript from hook payload; attempting session-log fallback session=${extractionSessionId || "unknown"}`);
+        } else {
+          console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
         }
-        console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
 
         // Wrap extraction in a promise that memory_recall can gate on.
         // This runs async (fire-and-forget from the hook's perspective) but
@@ -4459,12 +4554,26 @@ notify_memory_extraction(
         const doExtraction = async () => {
           // before_compaction hook is unreliable async-wise; queue signal for worker tick.
           if (isSystemEnabled("memory")) {
-            const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
-            markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
-            timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal");
-            console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
+            if (conversationMessages.length > 0) {
+              markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
+              timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal");
+              console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
+            } else {
+              const extracted = await timeoutManager.extractSessionFromLog(
+                extractionSessionId,
+                "CompactionSignal",
+                messages,
+              );
+              console.log(
+                `[quaid][signal] empty-hook-payload fallback session=${extractionSessionId} extracted=${extracted ? "yes" : "no"}`
+              );
+            }
           } else {
             console.log("[quaid] Compaction: memory extraction skipped — memory system disabled");
+          }
+
+          if (conversationMessages.length === 0) {
+            return;
           }
 
           // Auto-update docs from transcript (non-fatal)
