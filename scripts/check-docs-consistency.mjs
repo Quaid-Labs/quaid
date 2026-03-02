@@ -10,13 +10,16 @@ function read(rel) {
   return fs.readFileSync(path.join(ROOT, rel), 'utf8');
 }
 
+const packageVersion = JSON.parse(read('modules/quaid/package.json')).version;
+const releaseDocPath = `docs/releases/v${packageVersion}.md`;
+
 const checks = [
   {
     file: 'README.md',
     require: [
       'active knowledge layer',
-      'v0.2.12-alpha',
-      'docs/releases/v0.2.12-alpha.md',
+      `v${packageVersion}`,
+      releaseDocPath,
     ],
     forbid: [
       'docs/releases/v0.20.0-alpha.md',
