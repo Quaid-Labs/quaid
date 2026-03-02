@@ -315,8 +315,8 @@ class StandaloneAdapter(QuaidAdapter):
         # Resolve provider from config with tier-aware overrides.
         from config import get_config
         cfg = get_config()
-        deep_model = getattr(cfg.models, "deep_reasoning", "claude-opus-4-6")
-        fast_model = getattr(cfg.models, "fast_reasoning", "claude-haiku-4-5")
+        deep_model = getattr(cfg.models, "deep_reasoning", "default")
+        fast_model = getattr(cfg.models, "fast_reasoning", "default")
         provider_id = cfg.models.llm_provider
         if model_tier == "fast":
             fast_provider = getattr(cfg.models, "fast_reasoning_provider", "default")
@@ -367,16 +367,40 @@ class StandaloneAdapter(QuaidAdapter):
             )
             api_key_env = str(getattr(cfg.models, "api_key_env", "") or "OPENAI_API_KEY")
             api_key = os.environ.get(api_key_env, os.environ.get("OPENAI_API_KEY", ""))
+            resolved_deep = deep_model
+            resolved_fast = fast_model
+            if not resolved_deep or str(resolved_deep).strip() == "default":
+                resolved_deep = (
+                    (getattr(cfg.models, "deep_reasoning_model_classes", {}) or {}).get(provider_id)
+                    or ""
+                )
+            if not resolved_fast or str(resolved_fast).strip() == "default":
+                resolved_fast = (
+                    (getattr(cfg.models, "fast_reasoning_model_classes", {}) or {}).get(provider_id)
+                    or ""
+                )
             return OpenAICompatibleLLMProvider(
                 base_url=base_url, api_key=api_key,
-                deep_model=deep_model,
-                fast_model=fast_model,
+                deep_model=resolved_deep,
+                fast_model=resolved_fast,
             )
 
         if provider_id == "claude-code":
+            resolved_deep = deep_model
+            resolved_fast = fast_model
+            if not resolved_deep or str(resolved_deep).strip() == "default":
+                resolved_deep = (
+                    (getattr(cfg.models, "deep_reasoning_model_classes", {}) or {}).get(provider_id)
+                    or "claude-opus-4-6"
+                )
+            if not resolved_fast or str(resolved_fast).strip() == "default":
+                resolved_fast = (
+                    (getattr(cfg.models, "fast_reasoning_model_classes", {}) or {}).get(provider_id)
+                    or "claude-haiku-4-5"
+                )
             return ClaudeCodeLLMProvider(
-                deep_model=deep_model,
-                fast_model=fast_model,
+                deep_model=resolved_deep,
+                fast_model=resolved_fast,
             )
 
         if provider_id == "anthropic":
@@ -386,7 +410,23 @@ class StandaloneAdapter(QuaidAdapter):
                     "LLM provider is 'anthropic' but ANTHROPIC_API_KEY not found. "
                     "Set it in your environment or in ~/quaid/.env."
                 )
-            return AnthropicLLMProvider(api_key=api_key)
+            resolved_deep = deep_model
+            resolved_fast = fast_model
+            if not resolved_deep or str(resolved_deep).strip() == "default":
+                resolved_deep = (
+                    (getattr(cfg.models, "deep_reasoning_model_classes", {}) or {}).get(provider_id)
+                    or "claude-opus-4-6"
+                )
+            if not resolved_fast or str(resolved_fast).strip() == "default":
+                resolved_fast = (
+                    (getattr(cfg.models, "fast_reasoning_model_classes", {}) or {}).get(provider_id)
+                    or "claude-haiku-4-5"
+                )
+            return AnthropicLLMProvider(
+                api_key=api_key,
+                deep_model=str(resolved_deep),
+                fast_model=str(resolved_fast),
+            )
 
         raise RuntimeError(
             f"Unknown LLM provider '{provider_id}'. "
