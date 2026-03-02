@@ -2745,25 +2745,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const timeoutSessionId = ctx?.sessionId || extractSessionId(messages, ctx);
       timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
-      const signal = detectLifecycleSignal(messages);
-      if (signal && timeoutSessionId && shouldProcessLifecycleSignal(timeoutSessionId, signal)) {
-        timeoutManager.queueExtractionSignal(timeoutSessionId, signal.label);
-        void timeoutManager.processPendingExtractionSignals();
-        const trigger = signal.label === "CompactionSignal" ? "compact" : "reset";
-        const transcriptTrigger = trigger === "compact" ? "Compaction" : "Reset";
-        void (async () => {
-          try {
-            await updateDocsFromTranscript(conversationMessages, transcriptTrigger, timeoutSessionId);
-          } catch (err) {
-            console.error(`[quaid] ${transcriptTrigger} doc update fallback failed:`, err.message);
-          }
-          try {
-            await emitProjectEvent(conversationMessages, trigger, timeoutSessionId);
-          } catch (err) {
-            console.error(`[quaid] ${transcriptTrigger} project event fallback failed:`, err.message);
-          }
-        })();
-      }
     };
     console.log("[quaid] Registering agent_end hook for auto-capture");
     onChecked("agent_end", agentEndHandler, {

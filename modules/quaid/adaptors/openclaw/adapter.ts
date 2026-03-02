@@ -3183,7 +3183,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       priority: 10
     });
 
-    // End-of-turn hook drives timeout scheduling and extraction signaling.
+    // End-of-turn hook only updates session-timeout buffers/logs.
+    // Lifecycle extraction is handled by dedicated hooks:
+    // - before_compaction => CompactionSignal
+    // - workflow reset/new hooks => ResetSignal
     const agentEndHandler = async (event: any, ctx: any) => {
       if (isInternalQuaidSession(ctx?.sessionId)) return;
       if (!isSystemEnabled("memory")) return;
@@ -3195,26 +3198,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
       timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
-      const signal = detectLifecycleSignal(messages);
-      if (signal && timeoutSessionId && shouldProcessLifecycleSignal(timeoutSessionId, signal)) {
-        timeoutManager.queueExtractionSignal(timeoutSessionId, signal.label);
-        void timeoutManager.processPendingExtractionSignals();
-        const trigger = signal.label === "CompactionSignal" ? "compact" : "reset";
-        const transcriptTrigger = trigger === "compact" ? "Compaction" : "Reset";
-        void (async () => {
-          try {
-            await updateDocsFromTranscript(conversationMessages, transcriptTrigger, timeoutSessionId);
-          } catch (err: unknown) {
-            console.error(`[quaid] ${transcriptTrigger} doc update fallback failed:`, (err as Error).message);
-          }
-          try {
-            await emitProjectEvent(conversationMessages, trigger, timeoutSessionId);
-          } catch (err: unknown) {
-            console.error(`[quaid] ${transcriptTrigger} project event fallback failed:`, (err as Error).message);
-          }
-        })();
-      }
-
     };
 
     // Register agent_end hook using onChecked() for typed hooks
