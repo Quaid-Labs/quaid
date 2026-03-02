@@ -13,6 +13,7 @@ type PendingExtractionSignal = {
   label: string;
   queuedAt: string;
   attemptCount?: number;
+  meta?: Record<string, any>;
 };
 
 type SessionActivityRecord = {
@@ -574,10 +575,14 @@ export class SessionTimeoutManager {
     return Math.min(this.staleRecoveryInitialBackoffMs * multiplier, this.staleRecoveryMaxBackoffMs);
   }
 
-  queueExtractionSignal(sessionId: string, label: string): void {
+  queueExtractionSignal(sessionId: string, label: string, meta?: Record<string, any>): void {
     if (!sessionId) return;
+    const signalMeta = meta && typeof meta === "object" ? meta : undefined;
     if (!this.hasUnprocessedSessionMessages(sessionId)) {
-      this.writeQuaidLog("signal_queue_skipped_already_cleared", sessionId, { label: String(label || "Signal") });
+      this.writeQuaidLog("signal_queue_skipped_already_cleared", sessionId, {
+        label: String(label || "Signal"),
+        ...(signalMeta ? { meta: signalMeta } : {}),
+      });
       return;
     }
     const signal: PendingExtractionSignal = {
@@ -585,6 +590,7 @@ export class SessionTimeoutManager {
       label: String(label || "Signal"),
       queuedAt: new Date().toISOString(),
       attemptCount: 0,
+      ...(signalMeta ? { meta: signalMeta } : {}),
     };
     try {
       fs.mkdirSync(this.pendingSignalDir, { recursive: true });
@@ -608,22 +614,31 @@ export class SessionTimeoutManager {
             from: existingLabel,
             to: signal.label,
             previous_attempt_count: existingAttemptCount,
+            ...(signalMeta ? { meta: signalMeta } : {}),
           });
         } else {
           this.writeQuaidLog("signal_queue_coalesced", sessionId, {
             label: signal.label,
             existing_label: existingLabel,
             reason: "already_pending",
+            ...(signalMeta ? { meta: signalMeta } : {}),
           });
         }
         this.triggerWorkerTick();
         return;
       }
       fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 0o600 });
-      this.writeQuaidLog("signal_queued", sessionId, { label: signal.label });
+      this.writeQuaidLog("signal_queued", sessionId, {
+        label: signal.label,
+        ...(signalMeta ? { meta: signalMeta } : {}),
+      });
       this.triggerWorkerTick();
     } catch (err: unknown) {
-      this.writeQuaidLog("signal_queue_error", sessionId, { label: signal.label, error: String((err as Error)?.message || err) });
+      this.writeQuaidLog("signal_queue_error", sessionId, {
+        label: signal.label,
+        ...(signalMeta ? { meta: signalMeta } : {}),
+        error: String((err as Error)?.message || err),
+      });
     }
   }
 
@@ -647,6 +662,7 @@ export class SessionTimeoutManager {
       const sessionId = String(signal?.sessionId || path.basename(filePath, ".json")).trim();
       const label = String(signal?.label || "Signal");
       const attemptCount = Math.max(0, Number(signal?.attemptCount || 0));
+      const meta = signal?.meta && typeof signal.meta === "object" ? signal.meta : undefined;
       if (!sessionId) {
         try {
           fs.unlinkSync(lockedPath);
@@ -657,11 +673,21 @@ export class SessionTimeoutManager {
       }
       let restoredClaim = false;
       try {
-        this.writeQuaidLog("signal_process_begin", sessionId, { label });
+        this.writeQuaidLog("signal_process_begin", sessionId, {
+          label,
+          ...(meta ? { meta } : {}),
+        });
         await this.extractSessionFromSourceDirect(sessionId, label);
-        this.writeQuaidLog("signal_process_done", sessionId, { label });
+        this.writeQuaidLog("signal_process_done", sessionId, {
+          label,
+          ...(meta ? { meta } : {}),
+        });
       } catch (err: unknown) {
-        this.writeQuaidLog("signal_process_error", sessionId, { label, error: String((err as Error)?.message || err) });
+        this.writeQuaidLog("signal_process_error", sessionId, {
+          label,
+          ...(meta ? { meta } : {}),
+          error: String((err as Error)?.message || err),
+        });
         const nextAttemptCount = attemptCount + 1;
         const canRetry = nextAttemptCount <= this.maxSignalRetries;
         try {
@@ -672,6 +698,7 @@ export class SessionTimeoutManager {
               label,
               queuedAt: String(signal?.queuedAt || new Date().toISOString()),
               attemptCount: nextAttemptCount,
+              ...(meta ? { meta } : {}),
             };
             fs.writeFileSync(lockedPath, JSON.stringify(nextSignal), { mode: 0o600 });
             fs.renameSync(lockedPath, originalPath);
@@ -680,6 +707,7 @@ export class SessionTimeoutManager {
               label,
               attempt_count: nextAttemptCount,
               max_retries: this.maxSignalRetries,
+              ...(meta ? { meta } : {}),
             });
           } else if (!canRetry) {
             this.writeQuaidLog("signal_process_dropped", sessionId, {
@@ -687,6 +715,7 @@ export class SessionTimeoutManager {
               attempt_count: nextAttemptCount,
               max_retries: this.maxSignalRetries,
               reason: "max_retries_exceeded",
+              ...(meta ? { meta } : {}),
             });
           }
         } catch (restoreErr: unknown) {
