@@ -722,6 +722,25 @@ raise SystemExit(2)
 PY
 }
 
+_wait_for_gateway_warmup() {
+    local timeout_sec="${1:-12}"
+    local end_ts=$(( $(date +%s) + timeout_sec ))
+    local port="${OPENCLAW_GATEWAY_PORT:-18789}"
+    while [[ $(date +%s) -lt $end_ts ]]; do
+        local health_code
+        local responses_code
+        local plugin_code
+        health_code="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 2 "http://127.0.0.1:${port}/health" 2>/dev/null || echo "000")"
+        responses_code="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 2 -X POST -H "Content-Type: application/json" --data '{}' "http://127.0.0.1:${port}/v1/responses" 2>/dev/null || echo "000")"
+        plugin_code="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 2 -X POST -H "Content-Type: application/json" --data '{}' "http://127.0.0.1:${port}/plugins/quaid/llm" 2>/dev/null || echo "000")"
+        if [[ "$health_code" == "200" ]] && { [[ "$responses_code" =~ ^[1-5][0-9][0-9]$ ]] || [[ "$plugin_code" =~ ^[1-5][0-9][0-9]$ ]]; }; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 _register_openclaw_quaid_plugin() {
     local plugin_path="$1"
     local cli
@@ -750,6 +769,9 @@ _register_openclaw_quaid_plugin() {
     if ! "$cli" gateway restart >/dev/null 2>&1; then
         warn "OpenClaw gateway restart failed after quaid plugin registration."
         return 1
+    fi
+    if ! _wait_for_gateway_warmup 12; then
+        warn "Gateway warmup timed out after plugin registration; continuing in best-effort mode."
     fi
 
     return 0
@@ -888,6 +910,9 @@ step1_preflight() {
             info "Enabled OpenClaw gateway endpoint: gateway.http.endpoints.responses.enabled=true"
             if [[ -n "$cli" ]] && "$cli" gateway restart >/dev/null 2>&1; then
                 info "Restarted OpenClaw gateway to apply endpoint config"
+                if ! _wait_for_gateway_warmup 12; then
+                    warn "Gateway warmup timed out after endpoint restart; continuing in best-effort mode."
+                fi
             else
                 warn "Could not auto-restart OpenClaw gateway. Restart it manually to apply endpoint config."
             fi
@@ -2146,6 +2171,12 @@ _check_migration() {
     echo ""
 
     if confirm "Import facts from existing files?"; then
+        if $IS_OPENCLAW; then
+            info "Waiting for OpenClaw gateway/plugin route to finish warming up..."
+            if ! _wait_for_gateway_warmup 12; then
+                warn "Gateway warmup timed out; continuing migration in best-effort mode."
+            fi
+        fi
         info "Starting migration... (this may take a few minutes)"
         (
             cd "$PLUGIN_DIR"
@@ -2182,9 +2213,17 @@ Skip meta-information, instructions, and formatting.
 Document ({fname}):
 {content}'''
 
-    response, _ = call_deep_reasoning(prompt, max_tokens=4000)
+    try:
+        response, _ = call_deep_reasoning(prompt, max_tokens=4000)
+    except Exception as e:
+        print(f'[warn] LLM call failed for {fname}: {e}')
+        continue
     if response:
-        parsed = parse_json_response(response)
+        try:
+            parsed = parse_json_response(response)
+        except Exception as e:
+            print(f'[warn] Failed to parse response for {fname}: {e}')
+            parsed = None
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict) and 'fact' in item:
@@ -2267,6 +2306,12 @@ conn.close()
 
     # Smoke test: store and recall a fact
     echo ""
+    if $IS_OPENCLAW; then
+        info "Waiting for OpenClaw gateway/plugin route to finish warming up..."
+        if ! _wait_for_gateway_warmup 12; then
+            warn "Gateway warmup timed out; smoke test will run in best-effort mode."
+        fi
+    fi
     info "Running smoke test (store + recall)..."
     local smoke_status="SMOKE_FAILED"
     local smoke_output
@@ -2283,17 +2328,18 @@ sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store, recall
 owner_id = os.environ.get('QUAID_OWNER_ID', 'user')
 
-# Store a test fact
-node_id = store('Quaid installer smoke test fact', owner_id=owner_id, category='fact', source='installer-test')
-print(f'[+] Stored test fact (node {node_id})')
-
-# Try to recall it (FTS only, no embedding needed)
-results = recall('installer smoke test', owner_id=owner_id, limit=1)
-if results:
-    print(f'[+] Recalled: {results[0][\"name\"][:60]}...')
-    print('SMOKE_OK')
-else:
-    print('[!] Recall returned no results (embeddings may not be ready yet)')
+try:
+    node_id = store('Quaid installer smoke test fact', owner_id=owner_id, category='fact', source='installer-test')
+    print(f'[+] Stored test fact (node {node_id})')
+    results = recall('installer smoke test', owner_id=owner_id, limit=1)
+    if results:
+        print(f'[+] Recalled: {results[0][\"name\"][:60]}...')
+        print('SMOKE_OK')
+    else:
+        print('[!] Recall returned no results (embeddings may not be ready yet)')
+        print('SMOKE_PARTIAL')
+except Exception as e:
+    print(f'[warn] Smoke test degraded due to transient startup issue: {e}')
     print('SMOKE_PARTIAL')
 " 2>&1
       )

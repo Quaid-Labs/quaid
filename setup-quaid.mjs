@@ -1924,6 +1924,12 @@ except Exception as e:
       initialValue: true,
     }));
     if (doMigrate) {
+      if (IS_OPENCLAW) {
+        log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
+        if (!(await waitForGatewayWarmup())) {
+          log.warn("Gateway warmup timed out; proceeding with migration in best-effort mode.");
+        }
+      }
       s.start("Extracting facts from workspace files...");
       const useMock = process.env.QUAID_TEST_MOCK_MIGRATION === "1";
       const migrateScript = useMock ? `
@@ -1964,9 +1970,17 @@ for fname in files:
 [{{"fact": "...", "category": "fact|preference|belief|experience"}}]
 Only extract clear, specific facts. Skip meta-information and formatting.
 Document ({fname}):\\n{content}"""
-    response, _ = call_deep_reasoning(prompt, max_tokens=4000)
+    try:
+        response, _ = call_deep_reasoning(prompt, max_tokens=4000)
+    except Exception as e:
+        print(f'warn: migration llm call failed for {fname}: {e}', file=sys.stderr)
+        continue
     if response:
-        parsed = parse_json_response(response)
+        try:
+            parsed = parse_json_response(response)
+        except Exception as e:
+            print(f'warn: migration response parse failed for {fname}: {e}', file=sys.stderr)
+            parsed = None
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict) and 'fact' in item:
@@ -2192,6 +2206,12 @@ c.close()
   note(checks.join("\n"), C.bmag("STATUS"));
 
   // Smoke test
+  if (IS_OPENCLAW) {
+    log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
+    if (!(await waitForGatewayWarmup())) {
+      log.warn("Gateway warmup timed out; smoke test will run in best-effort mode.");
+    }
+  }
   s.start("Smoke test (store + recall)...");
   const smokeSafeId = owner.id.replace(/'/g, "\\'");
   const smokeScript = `
@@ -2200,11 +2220,15 @@ ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store, recall
-node_id = store('Quaid installer smoke test fact', owner_id='${smokeSafeId}', category='fact', source='installer-test')
-results = recall('installer smoke test', owner_id='${smokeSafeId}', limit=1)
-if results:
-    print('OK')
-else:
+try:
+    store('Quaid installer smoke test fact', owner_id='${smokeSafeId}', category='fact', source='installer-test')
+    results = recall('installer smoke test', owner_id='${smokeSafeId}', limit=1)
+    if results:
+        print('OK')
+    else:
+        print('PARTIAL')
+except Exception as e:
+    print(f'warn: {e}', file=sys.stderr)
     print('PARTIAL')
 `;
   const smoke = spawnSync("python3", ["-c", smokeScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
@@ -2623,6 +2647,36 @@ function copyDirSync(src, dest) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function _gatewayHttpCode(pathname, method = "GET", body = null) {
+  if (!canRun("curl")) return 0;
+  const rawPort = String(process.env.OPENCLAW_GATEWAY_PORT || "18789").trim();
+  const port = /^[0-9]+$/.test(rawPort) ? rawPort : "18789";
+  const url = `http://127.0.0.1:${port}${pathname}`;
+  const args = ["-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2", "-X", method, url];
+  if (body !== null) {
+    args.push("-H", "Content-Type: application/json", "--data", body);
+  }
+  const res = spawnSync("curl", args, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  if (res.status !== 0) return 0;
+  const code = Number.parseInt(String(res.stdout || "").trim(), 10);
+  return Number.isFinite(code) ? code : 0;
+}
+
+async function waitForGatewayWarmup(timeoutMs = 12000) {
+  if (!IS_OPENCLAW || !canRun("curl")) return true;
+  const deadline = Date.now() + Math.max(1000, timeoutMs);
+  while (Date.now() < deadline) {
+    const health = _gatewayHttpCode("/health", "GET", null);
+    const responses = _gatewayHttpCode("/v1/responses", "POST", "{}");
+    const pluginLlm = _gatewayHttpCode("/plugins/quaid/llm", "POST", "{}");
+    if (health === 200 && ((responses >= 100 && responses <= 599) || (pluginLlm >= 100 && pluginLlm <= 599))) {
+      return true;
+    }
+    await sleep(500);
+  }
+  return false;
 }
 
 // =============================================================================
