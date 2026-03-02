@@ -65,6 +65,7 @@ jobs:
           mkdir -p "${HOME}"
           WORKSPACE="${HOME}/workspace"
           mkdir -p "${WORKSPACE}"
+          npm install --no-save @clack/prompts
 
           # Resolve OpenClaw CLI with fallback to direct node entry if wrapper is missing.
           OPENCLAW_BIN="$(command -v openclaw || true)"
