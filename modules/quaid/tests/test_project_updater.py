@@ -81,13 +81,6 @@ A test project.
 
 ## Update Rules
 
-## Distilled Project Context
-- (none yet)
-
-## Project Log
-<!-- Append timestamped project-context notes here. Janitor folds this into Distilled Project Context and clears this section. -->
-(empty)
-
 ## Exclude
 - *.log
 - *.db
@@ -297,88 +290,6 @@ A test project.
         assert "### In This Directory" in content
         assert "### External Files" in content
         assert "- projects/test-project/notes.md" in content
-
-    def test_refresh_adds_project_log_sections_when_missing(self, setup_env):
-        from datastore.docsdb.project_updater import refresh_project_md
-
-        tmp_path = setup_env
-        project_md_path = tmp_path / "projects" / "test-project" / "PROJECT.md"
-        project_md_path.write_text(
-            """# Project: Test Project
-
-## Overview
-A test project.
-
-## Files & Assets
-
-### In This Directory
-<!-- Auto-discovered -->
-
-### External Files
-| File | Purpose | Auto-Update |
-|------|---------|-------------|
-
-## Documents
-| Document | Tracks | Auto-Update |
-|----------|--------|-------------|
-"""
-        )
-
-        ok = refresh_project_md("test-project")
-        assert ok is True
-        content = project_md_path.read_text()
-        assert "## Distilled Project Context" in content
-        assert "## Project Log" in content
-        assert "(empty)" in content
-
-
-class TestProjectLogStaleness:
-    def test_project_log_marks_project_md_stale(self, setup_env):
-        from datastore.docsdb.project_updater import _check_registry_staleness
-
-        tmp_path = setup_env
-        registry = _get_registry()
-        project_md_path = tmp_path / "projects" / "test-project" / "PROJECT.md"
-        project_md_path.write_text(
-            project_md_path.read_text().replace("(empty)", "- 2026-03-02: clarified deployment constraints")
-        )
-
-        stale = _check_registry_staleness(registry, "test-project")
-        project_entries = [s for s in stale if s.get("stale_reason") == "project_log_populated"]
-        assert len(project_entries) == 1
-        assert project_entries[0]["doc_path"] == "projects/test-project/PROJECT.md"
-
-    def test_process_event_folds_and_clears_project_log(self, setup_env):
-        from datastore.docsdb.project_updater import process_event
-
-        tmp_path = setup_env
-        project_md_path = tmp_path / "projects" / "test-project" / "PROJECT.md"
-        project_md_path.write_text(
-            project_md_path.read_text().replace(
-                "(empty)",
-                "- 2026-03-02: user prefers date-based temporal anchors\n- 2026-03-02: non-question scoring should focus on privacy",
-            )
-        )
-
-        event = {
-            "project_hint": "test-project",
-            "files_touched": [],
-            "summary": "",
-            "trigger": "janitor",
-        }
-        event_path = tmp_path / "projects" / "staging" / "test-event-log.json"
-        event_path.write_text(json.dumps(event))
-
-        result = process_event(str(event_path))
-        assert result["success"] is True
-        assert result["updates"] >= 1
-
-        content = project_md_path.read_text()
-        assert "## Distilled Project Context" in content
-        assert "- 2026-03-02: user prefers date-based temporal anchors" in content
-        assert "- 2026-03-02: non-question scoring should focus on privacy" in content
-        log_section = content.split("## Project Log", 1)[1]
-        assert "(empty)" in log_section
 
 
 class TestExclusionPatterns:

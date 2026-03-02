@@ -96,13 +96,6 @@ PROJECT_MD_TEMPLATE = """# Project: {label}
 
 ## Update Rules
 
-## Distilled Project Context
-- (none yet)
-
-## Project Log
-<!-- Append timestamped project-context notes here. Janitor folds this into Distilled Project Context and clears this section. -->
-(empty)
-
 ## Exclude
 {exclude_lines}
 """
@@ -761,8 +754,6 @@ class DocsRegistry:
             project=name,
             asset_type="doc",
             title=f"Project: {label}",
-            description="Project definition with distilled context and Project Log.",
-            tags=["project-definition", "project-log"],
             registered_by="create-project",
         )
 
