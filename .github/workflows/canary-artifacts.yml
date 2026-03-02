@@ -1,0 +1,101 @@
+name: Canary Artifacts
+
+on:
+  push:
+    branches:
+      - canary
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref/branch/tag to package"
+        required: false
+        default: "canary"
+        type: string
+      include_full_source:
+        description: "Also publish full-source tarball"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  package-canary:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Build canary packages
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          SHA="${GITHUB_SHA}"
+          SHORT_SHA="${SHA:0:12}"
+          VERSION="$(node -p "require('./modules/quaid/package.json').version")"
+
+          PLUGIN_TAR="quaid-plugin-${SHORT_SHA}.tar.gz"
+          tar -czf "dist/${PLUGIN_TAR}" modules/quaid
+          shasum -a 256 "dist/${PLUGIN_TAR}" > "dist/${PLUGIN_TAR}.sha256"
+
+          if [[ "${{ github.event.inputs.include_full_source || 'false' }}" == "true" ]]; then
+            FULL_TAR="quaid-source-${SHORT_SHA}.tar.gz"
+            tar \
+              --exclude='.git' \
+              --exclude='node_modules' \
+              --exclude='logs' \
+              --exclude='.pytest-home' \
+              -czf "dist/${FULL_TAR}" \
+              .
+            shasum -a 256 "dist/${FULL_TAR}" > "dist/${FULL_TAR}.sha256"
+          fi
+
+          cat > dist/canary-manifest.json <<JSON
+          {
+            "version": "${VERSION}",
+            "git_sha": "${SHA}",
+            "git_ref": "${GITHUB_REF}",
+            "run_id": "${GITHUB_RUN_ID}",
+            "built_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "artifacts_dir": "dist"
+          }
+          JSON
+
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "plugin_tar=${PLUGIN_TAR}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload canary artifact bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: quaid-canary-${{ steps.package.outputs.short_sha }}
+          retention-days: 14
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/canary-manifest.json
+
+      - name: Job summary
+        shell: bash
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Canary artifacts ready
+
+          - Artifact bundle: \`quaid-canary-${{ steps.package.outputs.short_sha }}\`
+          - Plugin package: \`${{ steps.package.outputs.plugin_tar }}\`
+
+          Install from canary branch:
+
+          \`\`\`bash
+          node setup-quaid.mjs --source github --ref canary --agent --owner-name "<Person Name>" --workspace "<workspace>"
+          \`\`\`
+
+          Install from pinned commit:
+
+          \`\`\`bash
+          node setup-quaid.mjs --source github --ref ${{ github.sha }} --agent --owner-name "<Person Name>" --workspace "<workspace>"
+          \`\`\`
+          EOF

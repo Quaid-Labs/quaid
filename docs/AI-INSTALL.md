@@ -41,12 +41,48 @@ node setup-quaid.mjs --agent --workspace "/absolute/path/to/workspace" --owner-n
 `--workspace` is the safest way to avoid wrong workspace detection in non-interactive sessions.
 `--owner-name` ensures memory ownership is tagged to the human (not a system account).
 
+## Canary / Private Test Installs (No Public Release Required)
+
+For pre-release validation, install directly from a branch or commit SHA:
+
+```bash
+node setup-quaid.mjs --agent \
+  --workspace "/absolute/path/to/workspace" \
+  --owner-name "<Person Name>" \
+  --source github \
+  --ref canary
+```
+
+Pin to an exact commit for reproducible tests:
+
+```bash
+node setup-quaid.mjs --agent \
+  --workspace "/absolute/path/to/workspace" \
+  --owner-name "<Person Name>" \
+  --source github \
+  --ref <commit-sha>
+```
+
+Artifact fallback (local file path or URL to a `.tar.gz` canary package):
+
+```bash
+node setup-quaid.mjs --agent \
+  --workspace "/absolute/path/to/workspace" \
+  --owner-name "<Person Name>" \
+  --source artifact \
+  --artifact "/path/to/quaid-plugin-<sha>.tar.gz"
+```
+
 ## Environment Variables (optional)
 
 - `QUAID_WORKSPACE` or `QUAID_HOME`: explicit workspace override
 - `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint
 - `QUAID_INSTALL_AGENT=1`: enable non-interactive installer defaults
 - `QUAID_OWNER_NAME`: explicit human owner name for memory tagging
+- `QUAID_INSTALL_SOURCE`: `local|github|artifact`
+- `QUAID_INSTALL_REF`: git branch/tag/commit (for github source)
+- `QUAID_INSTALL_GITHUB_REPO`: repo override (default `quaid-labs/quaid`)
+- `QUAID_INSTALL_ARTIFACT`: local path or URL to `.tar.gz` (for artifact source)
 
 ## OpenClaw-specific Notes
 
