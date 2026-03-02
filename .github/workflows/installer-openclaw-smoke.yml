@@ -63,6 +63,10 @@ jobs:
           export HOME="${RUNNER_TEMP}/quaid-installer-home-${SCENARIO}"
           export XDG_CONFIG_HOME="${HOME}/.config"
           mkdir -p "${HOME}"
+          mkdir -p "${HOME}/.openclaw"
+          if [[ ! -f "${HOME}/.openclaw/openclaw.json" ]]; then
+            printf '{}\n' > "${HOME}/.openclaw/openclaw.json"
+          fi
           WORKSPACE="${HOME}/workspace"
           mkdir -p "${WORKSPACE}"
           npm install --no-save @clack/prompts
@@ -98,7 +102,10 @@ jobs:
           "${OC[@]}" gateway --allow-unconfigured --port 18789 >"/tmp/openclaw-gateway-${SCENARIO}.log" 2>&1 &
           sleep 3
           "${OC[@]}" gateway probe || true
-          OPENCLAW_CFG_PATH="$(find "${HOME}" -type f -name 'openclaw.json' 2>/dev/null | head -n1 || true)"
+          OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
+          if [[ ! -f "${OPENCLAW_CFG_PATH}" ]]; then
+            OPENCLAW_CFG_PATH="$(find "${HOME}" -type f -name 'openclaw.json' 2>/dev/null | head -n1 || true)"
+          fi
           if [[ -z "${OPENCLAW_CFG_PATH}" ]]; then
             OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
           fi
@@ -114,6 +121,12 @@ jobs:
 
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
+
+          OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
+          if [[ ! -f "${OPENCLAW_CFG_PATH}" ]]; then
+            OPENCLAW_CFG_PATH="$(find "${HOME}" -type f -name 'openclaw.json' 2>/dev/null | head -n1 || true)"
+          fi
+          export OPENCLAW_CFG_PATH
 
           python - <<'PY'
           import json, pathlib
