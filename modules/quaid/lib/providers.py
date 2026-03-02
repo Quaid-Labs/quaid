@@ -241,6 +241,44 @@ class AnthropicLLMProvider(LLMProvider):
                     model=data.get("model", model),
                     truncated=truncated,
                 )
+        except urllib.error.HTTPError as e:
+            duration = time.time() - start_time
+            body_preview = ""
+            try:
+                body_preview = (e.read() or b"").decode("utf-8", errors="ignore")
+            except Exception:
+                body_preview = ""
+            body_preview = body_preview.replace("\n", " ")[:400]
+            headers_lc = {}
+            try:
+                headers_lc = {str(k).lower(): str(v) for k, v in (e.headers.items() if e.headers else [])}
+            except Exception:
+                headers_lc = {}
+            request_id = (
+                headers_lc.get("anthropic-request-id")
+                or headers_lc.get("request-id")
+                or headers_lc.get("x-request-id")
+                or ""
+            )
+            ratelimit_headers = {
+                k: v for k, v in headers_lc.items() if "ratelimit" in k
+            }
+            logger.error(
+                "Anthropic API HTTPError code=%s model=%s tier=%s request_id=%s "
+                "ratelimit=%s body_preview=%s",
+                getattr(e, "code", "unknown"),
+                model,
+                model_tier,
+                request_id,
+                ratelimit_headers,
+                body_preview,
+            )
+            raise RuntimeError(
+                "Anthropic API HTTPError "
+                f"code={getattr(e, 'code', 'unknown')} "
+                f"model={model} tier={model_tier} request_id={request_id} "
+                f"ratelimit={ratelimit_headers} body={body_preview}"
+            ) from e
         except Exception as e:
             duration = time.time() - start_time
             logger.error("Anthropic API error: %s", e)
