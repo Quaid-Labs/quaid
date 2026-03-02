@@ -547,6 +547,32 @@ function _sanitizeOpenClawMemorySlot() {
   }
 }
 
+function _ensureOpenClawPluginsAllowQuaid() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed.plugins || typeof parsed.plugins !== "object") parsed.plugins = {};
+    const plugins = parsed.plugins;
+    if (!Array.isArray(plugins.allow)) {
+      plugins.allow = [];
+    }
+    const hasQuaid = plugins.allow.some((entry) => String(entry || "").trim() === "quaid");
+    if (hasQuaid) return false;
+    plugins.allow.push("quaid");
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
 function _ensureOpenClawCompactionModeDefault() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -797,6 +823,9 @@ async function step1_preflight() {
     }
     if (_sanitizeOpenClawQuaidPluginEntry()) {
       log.info("Removed invalid plugins.entries.quaid.workspace from ~/.openclaw/openclaw.json");
+    }
+    if (_ensureOpenClawPluginsAllowQuaid()) {
+      log.info("Added 'quaid' to plugins.allow in ~/.openclaw/openclaw.json");
     }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
@@ -1735,7 +1764,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   }
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
-  log.info("Legacy hook quaid-reset-signal is deprecated; lifecycle handlers are already active.");
+  log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
   if (IS_OPENCLAW) {
     s.start("Registering Quaid plugin in OpenClaw...");
     const reg = _registerOpenClawQuaidPlugin(PLUGIN_DIR);
@@ -2103,7 +2132,8 @@ print(total_docs)
         "",
       ].join("\n"));
     }
-    // Register Quaid as a project
+    // Register Quaid as a project unless it was already covered by existing project scan.
+    const quaidAlreadyRegisteredViaExisting = existingDirs.includes("quaid");
     const regQuaidScript = `
 import os, sys
 ${PY_ENV_SETUP}
@@ -2118,9 +2148,13 @@ except ValueError:
 found = reg.auto_discover('quaid')
 print(len(found))
 `;
-    const regQuaidResult = spawnSync("python3", ["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-    const quaidDocCount = (regQuaidResult.stdout || "").trim();
-    log.info(`Quaid project installed (${quaidDocCount} docs registered)`);
+    if (quaidAlreadyRegisteredViaExisting) {
+      log.info("Quaid project docs were already registered in the existing-project scan; skipping duplicate registration pass.");
+    } else {
+      const regQuaidResult = spawnSync("python3", ["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      const quaidDocCount = (regQuaidResult.stdout || "").trim();
+      log.info(`Quaid project installed (${quaidDocCount} new docs discovered)`);
+    }
 
     // Keep projects/quaid/TOOLS.md domain block aligned after install.
     spawnSync("python3", ["scripts/sync-tools-domain-block.py", "--workspace", WORKSPACE], {
