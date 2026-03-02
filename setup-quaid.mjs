@@ -1936,6 +1936,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   stepHeader(7, 8, "INSTALL", STEP_QUOTES.install);
 
   const s = spinner();
+  let postInstallStateStabilized = false;
 
   // Create directories
   s.start("Creating directories...");
@@ -2248,6 +2249,16 @@ print(total)
     }
   }
 
+  if (!postInstallStateStabilized) {
+    const postInstall = _stabilizePostInstallExtractionState();
+    postInstallStateStabilized = true;
+    log.info(
+      `Marked prior sessions as extracted: seeded ${postInstall.cursorsSeeded} cursor(s), `
+      + `cleared ${postInstall.pendingSignalsCleared} pending signal(s), `
+      + `${postInstall.timeoutBuffersCleared} stale timeout buffer(s).`
+    );
+  }
+
   // Projects system — always create a default project with PROJECT.md
   if (systems.projects) {
     const existingDirs = [];
@@ -2374,6 +2385,15 @@ print(len(found))
     });
   }
 
+  if (!postInstallStateStabilized) {
+    const postInstall = _stabilizePostInstallExtractionState();
+    postInstallStateStabilized = true;
+    log.info(
+      `Marked prior sessions as extracted: seeded ${postInstall.cursorsSeeded} cursor(s), `
+      + `cleared ${postInstall.pendingSignalsCleared} pending signal(s), `
+      + `${postInstall.timeoutBuffersCleared} stale timeout buffer(s).`
+    );
+  }
   log.success("Installation complete!");
   log.message("");
   try {
@@ -2898,6 +2918,85 @@ function copyDirSync(src, dest) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function _messageDedupKey(msg) {
+  const id = typeof msg?.id === "string" ? msg.id : "";
+  if (id) return `id:${id}`;
+  const ts = typeof msg?.timestamp === "string" ? msg.timestamp : "";
+  const role = typeof msg?.role === "string" ? msg.role : "";
+  const text = (typeof msg?.content === "string" ? msg.content : "").slice(0, 200);
+  return `fallback:${ts}:${role}:${text}`;
+}
+
+function _parseMessageTimestampMs(msg) {
+  const ts = msg?.timestamp;
+  if (typeof ts === "number" && Number.isFinite(ts)) return ts;
+  if (typeof ts === "string") {
+    const asNum = Number(ts);
+    if (Number.isFinite(asNum)) return asNum;
+    const parsed = Date.parse(ts);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function _stabilizePostInstallExtractionState() {
+  const dataDir = path.join(WORKSPACE, "data");
+  const sessionMessagesDir = path.join(LOGS_DIR, "session-messages");
+  const cursorDir = path.join(dataDir, "session-cursors");
+  const pendingSignalsDir = path.join(dataDir, "pending-extraction-signals");
+  const timeoutBuffersDir = path.join(dataDir, "timeout-buffers");
+  const summary = { cursorsSeeded: 0, pendingSignalsCleared: 0, timeoutBuffersCleared: 0 };
+
+  try {
+    fs.mkdirSync(cursorDir, { recursive: true });
+    if (fs.existsSync(sessionMessagesDir)) {
+      for (const name of fs.readdirSync(sessionMessagesDir)) {
+        if (!name.endsWith(".jsonl")) continue;
+        const sessionId = name.replace(/\.jsonl$/, "");
+        const fp = path.join(sessionMessagesDir, name);
+        const lines = fs.readFileSync(fp, "utf8").split("\n").filter(Boolean);
+        let last = null;
+        for (const line of lines) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed && typeof parsed === "object") last = parsed;
+          } catch {}
+        }
+        if (!last) continue;
+        const payload = {
+          sessionId,
+          clearedAt: new Date().toISOString(),
+          lastMessageKey: _messageDedupKey(last),
+        };
+        const ts = _parseMessageTimestampMs(last);
+        if (typeof ts === "number") payload.lastTimestampMs = ts;
+        fs.writeFileSync(path.join(cursorDir, `${sessionId}.json`), JSON.stringify(payload), { mode: 0o600 });
+        summary.cursorsSeeded += 1;
+      }
+    }
+  } catch (err) {
+    log.warn(`Post-install cursor seeding failed: ${String(err?.message || err)}`);
+  }
+
+  for (const dir of [pendingSignalsDir, timeoutBuffersDir]) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      for (const name of fs.readdirSync(dir)) {
+        if (!name.endsWith(".json") && !name.includes(".processing.")) continue;
+        try {
+          fs.unlinkSync(path.join(dir, name));
+          if (dir === pendingSignalsDir) summary.pendingSignalsCleared += 1;
+          if (dir === timeoutBuffersDir) summary.timeoutBuffersCleared += 1;
+        } catch {}
+      }
+    } catch (err) {
+      log.warn(`Post-install cleanup failed for ${dir}: ${String(err?.message || err)}`);
+    }
+  }
+
+  return summary;
 }
 
 function _gatewayHttpCode(pathname, method = "GET", body = null) {
