@@ -575,9 +575,22 @@ export class SessionTimeoutManager {
     return Math.min(this.staleRecoveryInitialBackoffMs * multiplier, this.staleRecoveryMaxBackoffMs);
   }
 
+  private buildOriginHintMeta(meta?: Record<string, any>): Record<string, any> | undefined {
+    if (meta && typeof meta === "object") return meta;
+    const stack = String(new Error().stack || "");
+    const lines = stack.split("\n").map((s) => s.trim()).filter(Boolean);
+    const caller = lines.find((line) =>
+      !line.includes("buildOriginHintMeta")
+      && !line.includes("queueExtractionSignal")
+      && !line.includes("SessionTimeoutManager.")
+    );
+    if (!caller) return undefined;
+    return { origin_hint: caller.slice(0, 240) };
+  }
+
   queueExtractionSignal(sessionId: string, label: string, meta?: Record<string, any>): void {
     if (!sessionId) return;
-    const signalMeta = meta && typeof meta === "object" ? meta : undefined;
+    const signalMeta = this.buildOriginHintMeta(meta);
     if (!this.hasUnprocessedSessionMessages(sessionId)) {
       this.writeQuaidLog("signal_queue_skipped_already_cleared", sessionId, {
         label: String(label || "Signal"),
