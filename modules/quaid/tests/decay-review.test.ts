@@ -111,7 +111,7 @@ describe('Decay Review Queue', () => {
   })
 
   it('memories remain searchable after decay with queue enabled', async () => {
-    const stored = await memory.store('Searchable after decay test', 'quaid')
+    await memory.store('Searchable after decay test', 'quaid')
 
     await memory.runDecay()
 

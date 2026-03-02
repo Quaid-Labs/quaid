@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { createTestMemory, cleanupTestMemory, fixtures, type TestMemoryInterface } from './setup'
+import { createTestMemory, cleanupTestMemory, type TestMemoryInterface } from './setup'
 
 describe('Owner Isolation', () => {
   let memory: TestMemoryInterface

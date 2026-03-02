@@ -184,7 +184,6 @@ describe('Embedding Consistency', () => {
       const stored = await memory.store(content, 'testuser')
       
       expect(stored.embedding).toBeDefined()
-      const originalEmbedding = stored.embedding
       
       // Retrieve the raw memory to verify embedding persistence
       const retrieved = await memory.getRaw(stored.id)
