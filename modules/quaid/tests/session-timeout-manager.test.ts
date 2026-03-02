@@ -71,7 +71,6 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(managerA.startWorker(30)).toBe(true)
     const lockPath = (managerA as any).workerLockPath as string
-    const originalRaw = fs.readFileSync(lockPath, 'utf8')
 
     vi.spyOn(managerB as any, 'isPidAlive').mockImplementation(() => {
       fs.writeFileSync(

@@ -7,7 +7,7 @@
 
 import type { ClawdbotPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
-import { execFileSync, execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -1128,9 +1128,8 @@ async function callConfiguredLLM(
   const resolved = resolveTierModel(modelTier);
   const provider = normalizeProvider(resolved.provider);
   const started = Date.now();
-  let sessionKey: string | undefined;
   try {
-    sessionKey = _ensureGatewaySessionOverride(modelTier, resolved);
+    _ensureGatewaySessionOverride(modelTier, resolved);
   } catch (err: unknown) {
     const msg = String((err as Error)?.message || err);
     if (isFailHardEnabled()) {
@@ -2372,7 +2371,6 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
         const m = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
         if (!m) continue;
         const sourcePath = m[1];
-        const file = sourcePath.split("/").pop() || sourcePath;
         const section = m[2].trim();
         const sim = Number.parseFloat(m[3]) || 0.6;
         const parts = sourcePath.split("/");
