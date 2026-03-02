@@ -54,6 +54,9 @@ type SessionTimeoutManagerOptions = {
   readSessionMessages?: (sessionId: string) => any[];
   listSessionActivity?: () => SessionActivityRecord[];
 };
+type AgentEndMeta = {
+  source?: string;
+};
 
 type FailHardCacheEntry = {
   value: boolean;
@@ -337,7 +340,7 @@ export class SessionTimeoutManager {
     }
   }
 
-  onAgentEnd(messages: any[], sessionId: string): void {
+  onAgentEnd(messages: any[], sessionId: string, meta?: AgentEndMeta): void {
     if (!Array.isArray(messages) || messages.length === 0) return;
     if (!sessionId) return;
     const incoming = filterEligibleMessages(messages);
@@ -364,11 +367,24 @@ export class SessionTimeoutManager {
       this.timer = null;
     }
 
+    const source = String(meta?.source || "unknown");
     if (this.pendingSessionId === sessionId && this.pendingFallbackMessages) {
       this.pendingFallbackMessages = mergeUniqueMessages(this.pendingFallbackMessages, gatedIncoming);
+      this.writeQuaidLog("buffer_write", sessionId, {
+        source,
+        mode: "merge",
+        appended: gatedIncoming.length,
+        total: this.pendingFallbackMessages.length,
+      });
     } else {
       this.pendingFallbackMessages = gatedIncoming;
       this.pendingSessionId = sessionId;
+      this.writeQuaidLog("buffer_write", sessionId, {
+        source,
+        mode: "set",
+        appended: gatedIncoming.length,
+        total: this.pendingFallbackMessages.length,
+      });
     }
 
     this.writeQuaidLog("buffered", sessionId, {
@@ -623,6 +639,12 @@ export class SessionTimeoutManager {
         if (incomingPriority > existingPriority) {
           signal.attemptCount = 0;
           fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 0o600 });
+          this.writeQuaidLog("signal_file_write", sessionId, {
+            op: "promote_overwrite",
+            path: signalPath,
+            label: signal.label,
+            has_meta: Boolean(signalMeta),
+          });
           this.writeQuaidLog("signal_queue_promoted", sessionId, {
             from: existingLabel,
             to: signal.label,
@@ -641,6 +663,12 @@ export class SessionTimeoutManager {
         return;
       }
       fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 0o600 });
+      this.writeQuaidLog("signal_file_write", sessionId, {
+        op: "create",
+        path: signalPath,
+        label: signal.label,
+        has_meta: Boolean(signalMeta),
+      });
       this.writeQuaidLog("signal_queued", sessionId, {
         label: signal.label,
         ...(signalMeta ? { meta: signalMeta } : {}),
@@ -660,6 +688,10 @@ export class SessionTimeoutManager {
     for (const filePath of this.listSignalFiles()) {
       const lockedPath = this.claimSignalFile(filePath);
       if (!lockedPath) { continue; }
+      this.writeQuaidLog("signal_file_claimed", path.basename(filePath, ".json"), {
+        from: filePath,
+        to: lockedPath,
+      });
       let signal: PendingExtractionSignal | null = null;
       try {
         signal = JSON.parse(fs.readFileSync(lockedPath, "utf8")) as PendingExtractionSignal;
@@ -716,6 +748,12 @@ export class SessionTimeoutManager {
             fs.writeFileSync(lockedPath, JSON.stringify(nextSignal), { mode: 0o600 });
             fs.renameSync(lockedPath, originalPath);
             restoredClaim = true;
+            this.writeQuaidLog("signal_file_write", sessionId, {
+              op: "retry_requeue",
+              path: originalPath,
+              label,
+              has_meta: Boolean(meta),
+            });
             this.writeQuaidLog("signal_process_requeued", sessionId, {
               label,
               attempt_count: nextAttemptCount,
@@ -969,9 +1007,17 @@ export class SessionTimeoutManager {
       try {
         if (fs.existsSync(originalPath)) {
           fs.unlinkSync(lockedPath);
+          this.writeQuaidLog("signal_file_recover_skip", path.basename(originalPath, ".json"), {
+            reason: "original_exists",
+            orphan: lockedPath,
+          });
           continue;
         }
         fs.renameSync(lockedPath, originalPath);
+        this.writeQuaidLog("signal_file_recovered", path.basename(originalPath, ".json"), {
+          from: lockedPath,
+          to: originalPath,
+        });
       } catch (err: unknown) {
         safeLog(this.logger, `[quaid][timeout] failed recovering orphaned signal claim ${lockedPath}: ${String((err as Error)?.message || err)}`);
         if (this.failHard && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {

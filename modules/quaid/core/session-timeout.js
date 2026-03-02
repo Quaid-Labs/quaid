@@ -257,7 +257,7 @@ class SessionTimeoutManager {
       this.writeQuaidLog("timer_cleared", void 0, { reason: "agent_start" });
     }
   }
-  onAgentEnd(messages, sessionId) {
+  onAgentEnd(messages, sessionId, meta) {
     if (!Array.isArray(messages) || messages.length === 0) return;
     if (!sessionId) return;
     const incoming = filterEligibleMessages(messages);
@@ -281,11 +281,24 @@ class SessionTimeoutManager {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    const source = String(meta?.source || "unknown");
     if (this.pendingSessionId === sessionId && this.pendingFallbackMessages) {
       this.pendingFallbackMessages = mergeUniqueMessages(this.pendingFallbackMessages, gatedIncoming);
+      this.writeQuaidLog("buffer_write", sessionId, {
+        source,
+        mode: "merge",
+        appended: gatedIncoming.length,
+        total: this.pendingFallbackMessages.length
+      });
     } else {
       this.pendingFallbackMessages = gatedIncoming;
       this.pendingSessionId = sessionId;
+      this.writeQuaidLog("buffer_write", sessionId, {
+        source,
+        mode: "set",
+        appended: gatedIncoming.length,
+        total: this.pendingFallbackMessages.length
+      });
     }
     this.writeQuaidLog("buffered", sessionId, {
       appended: gatedIncoming.length,
@@ -506,6 +519,12 @@ class SessionTimeoutManager {
         if (incomingPriority > existingPriority) {
           signal.attemptCount = 0;
           fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 384 });
+          this.writeQuaidLog("signal_file_write", sessionId, {
+            op: "promote_overwrite",
+            path: signalPath,
+            label: signal.label,
+            has_meta: Boolean(signalMeta)
+          });
           this.writeQuaidLog("signal_queue_promoted", sessionId, {
             from: existingLabel,
             to: signal.label,
@@ -524,6 +543,12 @@ class SessionTimeoutManager {
         return;
       }
       fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 384 });
+      this.writeQuaidLog("signal_file_write", sessionId, {
+        op: "create",
+        path: signalPath,
+        label: signal.label,
+        has_meta: Boolean(signalMeta)
+      });
       this.writeQuaidLog("signal_queued", sessionId, {
         label: signal.label,
         ...signalMeta ? { meta: signalMeta } : {}
@@ -544,6 +569,10 @@ class SessionTimeoutManager {
       if (!lockedPath) {
         continue;
       }
+      this.writeQuaidLog("signal_file_claimed", path.basename(filePath, ".json"), {
+        from: filePath,
+        to: lockedPath
+      });
       let signal = null;
       try {
         signal = JSON.parse(fs.readFileSync(lockedPath, "utf8"));
@@ -600,6 +629,12 @@ class SessionTimeoutManager {
             fs.writeFileSync(lockedPath, JSON.stringify(nextSignal), { mode: 384 });
             fs.renameSync(lockedPath, originalPath);
             restoredClaim = true;
+            this.writeQuaidLog("signal_file_write", sessionId, {
+              op: "retry_requeue",
+              path: originalPath,
+              label,
+              has_meta: Boolean(meta)
+            });
             this.writeQuaidLog("signal_process_requeued", sessionId, {
               label,
               attempt_count: nextAttemptCount,
@@ -826,9 +861,17 @@ class SessionTimeoutManager {
       try {
         if (fs.existsSync(originalPath)) {
           fs.unlinkSync(lockedPath);
+          this.writeQuaidLog("signal_file_recover_skip", path.basename(originalPath, ".json"), {
+            reason: "original_exists",
+            orphan: lockedPath
+          });
           continue;
         }
         fs.renameSync(lockedPath, originalPath);
+        this.writeQuaidLog("signal_file_recovered", path.basename(originalPath, ".json"), {
+          from: lockedPath,
+          to: originalPath
+        });
       } catch (err) {
         safeLog(this.logger, `[quaid][timeout] failed recovering orphaned signal claim ${lockedPath}: ${String(err?.message || err)}`);
         if (this.failHard && err?.code !== "ENOENT") {
