@@ -2937,20 +2937,53 @@ function _resolveInstallerMessageCli() {
 }
 
 function _resolveLastChannelFromSessions() {
+  const candidates = [];
+  const home = os.homedir();
+  const root = path.join(home, ".openclaw", "agents");
   try {
-    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
-    if (!fs.existsSync(sessionsPath)) return null;
-    const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf8"));
-    const mainSession = sessions?.["agent:main:main"];
-    if (!mainSession) return null;
-    const channel = String(mainSession.lastChannel || "").trim();
-    const target = String(mainSession.lastTo || "").trim();
-    const account = String(mainSession.lastAccountId || "").trim();
-    if (!channel || !target) return null;
-    return { channel, target, account };
-  } catch {
-    return null;
+    if (fs.existsSync(root)) {
+      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        candidates.push(path.join(root, entry.name, "sessions", "sessions.json"));
+      }
+    }
+  } catch {}
+  candidates.push(path.join(home, ".openclaw", "agents", "main", "sessions", "sessions.json"));
+  candidates.push(path.join(home, ".openclaw", "sessions", "sessions.json"));
+
+  const scoreTs = (session, fallbackMs) => {
+    const raw =
+      session?.lastActivityAt
+      || session?.lastMessageAt
+      || session?.updatedAt
+      || session?.lastSeenAt
+      || session?.createdAt
+      || "";
+    const ts = Date.parse(String(raw || ""));
+    if (Number.isFinite(ts)) return ts;
+    return fallbackMs;
+  };
+
+  let best = null;
+  for (const sessionsPath of candidates) {
+    try {
+      if (!fs.existsSync(sessionsPath)) continue;
+      const fileStat = fs.statSync(sessionsPath);
+      const sessions = JSON.parse(fs.readFileSync(sessionsPath, "utf8"));
+      for (const session of Object.values(sessions || {})) {
+        const channel = String(session?.lastChannel || "").trim();
+        const target = String(session?.lastTo || "").trim();
+        const account = String(session?.lastAccountId || "").trim();
+        if (!channel || !target) continue;
+        const score = scoreTs(session, fileStat.mtimeMs);
+        if (!best || score > best.score) {
+          best = { channel, target, account, score };
+        }
+      }
+    } catch {}
   }
+  if (!best) return null;
+  return { channel: best.channel, target: best.target, account: best.account };
 }
 
 function sendInstallerNotification(message) {

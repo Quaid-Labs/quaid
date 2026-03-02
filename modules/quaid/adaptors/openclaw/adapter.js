@@ -69,6 +69,8 @@ const LIFECYCLE_SIGNAL_SUPPRESS_MS = 15e3;
 const LIFECYCLE_SIGNAL_RETENTION_MS = 10 * 6e4;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 9e4;
 const extractionNotifyHistory = /* @__PURE__ */ new Map();
+const ADAPTER_BOOT_TIME_MS = Date.now();
+const BACKLOG_NOTIFY_STALE_MS = 9e4;
 const lifecycleSignalHistory = /* @__PURE__ */ new Map();
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
@@ -824,6 +826,41 @@ function shouldEmitExtractionNotify(key, now = Date.now()) {
   extractionNotifyHistory.set(key, now);
   if (!prior) return true;
   return now - prior > EXTRACTION_NOTIFY_DEDUPE_MS;
+}
+function latestMessageTimestampMs(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  let latest = null;
+  for (const msg of messages) {
+    const raw = msg?.timestamp ?? msg?.createdAt ?? msg?.time ?? null;
+    if (raw == null) continue;
+    let ts = null;
+    if (typeof raw === "number" && Number.isFinite(raw)) ts = raw;
+    else {
+      const parsed = Date.parse(String(raw));
+      if (Number.isFinite(parsed)) ts = parsed;
+    }
+    if (ts == null) continue;
+    latest = latest == null ? ts : Math.max(latest, ts);
+  }
+  return latest;
+}
+function hasExplicitLifecycleUserCommand(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  for (const msg of messages) {
+    if (msg?.role !== "user") continue;
+    const text = getMessageText(msg).trim().toLowerCase();
+    if (!text) continue;
+    if (/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/.test(text)) return true;
+  }
+  return false;
+}
+function isBacklogLifecycleReplay(messages, trigger, nowMs = Date.now()) {
+  if (trigger !== "reset" && trigger !== "new" && trigger !== "recovery") return false;
+  const latestTs = latestMessageTimestampMs(messages);
+  if (latestTs == null) {
+    return !hasExplicitLifecycleUserCommand(messages);
+  }
+  return latestTs < Math.min(nowMs, ADAPTER_BOOT_TIME_MS) - BACKLOG_NOTIFY_STALE_MS;
 }
 function detectLifecycleSignal(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
@@ -3650,10 +3687,11 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${transcriptForExtraction.length} chars`);
       if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
         const triggerType2 = resolveExtractionTrigger(label);
+        const suppressBacklogNotify2 = isBacklogLifecycleReplay(messages, triggerType2);
         const dedupeSession2 = sessionId || extractSessionId(messages, {});
         const dedupeKey = `start:${dedupeSession2}:${triggerType2}`;
         const triggerDesc = triggerType2 === "compaction" ? "compaction" : triggerType2 === "recovery" ? "recovery" : triggerType2 === "timeout" ? "timeout" : triggerType2 === "new" ? "/new" : "reset";
-        if (hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
+        if (!suppressBacklogNotify2 && hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
           spawnNotifyScript(`
 from core.runtime.notify import notify_user
 notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
@@ -3718,10 +3756,11 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
       const triggerType = resolveExtractionTrigger(label);
-      const alwaysNotifyCompletion = triggerType === "timeout" && hasMeaningfulUserContent && shouldNotifyFeature("extraction", "summary");
+      const suppressBacklogNotify = isBacklogLifecycleReplay(messages, triggerType);
+      const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new") && hasMeaningfulUserContent && shouldNotifyFeature("extraction", "summary");
       const dedupeSession = sessionId || extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
-      if ((factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && shouldNotifyFeature("extraction", "summary") && shouldEmitExtractionNotify(completionDedupeKey)) {
+      if (!suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && shouldNotifyFeature("extraction", "summary") && shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
           const mergedDetails = {};
@@ -4168,6 +4207,9 @@ const __test = {
   detectLifecycleSignal,
   shouldProcessLifecycleSignal,
   shouldEmitExtractionNotify,
+  latestMessageTimestampMs,
+  hasExplicitLifecycleUserCommand,
+  isBacklogLifecycleReplay,
   markLifecycleSignalFromHook,
   clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
   clearExtractionNotifyHistory: () => extractionNotifyHistory.clear()
