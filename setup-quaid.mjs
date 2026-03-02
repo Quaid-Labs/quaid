@@ -824,9 +824,6 @@ async function step1_preflight() {
     if (_sanitizeOpenClawQuaidPluginEntry()) {
       log.info("Removed invalid plugins.entries.quaid.workspace from ~/.openclaw/openclaw.json");
     }
-    if (_ensureOpenClawPluginsAllowQuaid()) {
-      log.info("Added 'quaid' to plugins.allow in ~/.openclaw/openclaw.json");
-    }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
       log.info("Enabled gateway.http.endpoints.responses.enabled=true in ~/.openclaw/openclaw.json");
@@ -1773,6 +1770,9 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       throw new Error(reg.reason || "openclaw plugins install/enable failed");
     }
     s.stop(C.green("OpenClaw plugin registered"));
+    if (_ensureOpenClawPluginsAllowQuaid()) {
+      log.info("Added 'quaid' to plugins.allow in ~/.openclaw/openclaw.json");
+    }
     if (!(await waitForGatewayWarmup(8000))) {
       log.warn("Gateway warmup timed out after plugin registration; hook enable will continue in best-effort mode.");
     }
