@@ -135,8 +135,6 @@ jobs:
           fi
 
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
-          start_gateway
-          node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
 
           OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
           if [[ ! -f "${OPENCLAW_CFG_PATH}" ]]; then
