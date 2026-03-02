@@ -106,13 +106,17 @@ jobs:
             export PATH="${HOME}/.local/bin:${PATH}"
           fi
 
+          start_gateway() {
+            "${OC[@]}" gateway run --allow-unconfigured --port 18789 >"/tmp/openclaw-gateway-${SCENARIO}.log" 2>&1 &
+            sleep 3
+            if ! "${OC[@]}" gateway probe; then
+              echo "gateway probe failed; dumping startup log" >&2
+              cat "/tmp/openclaw-gateway-${SCENARIO}.log" >&2 || true
+            fi
+          }
+
           # Fresh CI homes are unconfigured; run foreground gateway in the background.
-          "${OC[@]}" gateway run --allow-unconfigured --port 18789 >"/tmp/openclaw-gateway-${SCENARIO}.log" 2>&1 &
-          sleep 3
-          if ! "${OC[@]}" gateway probe; then
-            echo "gateway probe failed; dumping startup log" >&2
-            cat "/tmp/openclaw-gateway-${SCENARIO}.log" >&2 || true
-          fi
+          start_gateway
           OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
           if [[ ! -f "${OPENCLAW_CFG_PATH}" ]]; then
             OPENCLAW_CFG_PATH="$(find "${HOME}" -type f -name 'openclaw.json' 2>/dev/null | head -n1 || true)"
@@ -131,6 +135,9 @@ jobs:
           fi
 
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
+          if ! "${OC[@]}" gateway probe >/dev/null 2>&1; then
+            start_gateway
+          fi
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
 
           OPENCLAW_CFG_PATH="${HOME}/.openclaw/openclaw.json"
