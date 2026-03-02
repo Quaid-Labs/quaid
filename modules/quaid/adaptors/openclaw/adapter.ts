@@ -80,6 +80,8 @@ const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-reques
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 const LIFECYCLE_SIGNAL_SUPPRESS_MS = 15_000;
+const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
+const extractionNotifyHistory = new Map<string, number>();
 const lifecycleSignalHistory = new Map<string, {
   source: "user_command" | "system_notice" | "hook";
   signature: string;
@@ -930,6 +932,18 @@ function getAllConversationMessages(messages: any[]): any[] {
 function detectLifecycleCommandSignal(messages: any[]): "ResetSignal" | "CompactionSignal" | null {
   const signal = detectLifecycleSignal(messages);
   return signal?.label || null;
+}
+
+function shouldEmitExtractionNotify(key: string, now: number = Date.now()): boolean {
+  for (const [k, ts] of extractionNotifyHistory.entries()) {
+    if ((now - ts) > EXTRACTION_NOTIFY_DEDUPE_MS) {
+      extractionNotifyHistory.delete(k);
+    }
+  }
+  const prior = extractionNotifyHistory.get(key);
+  extractionNotifyHistory.set(key, now);
+  if (!prior) return true;
+  return (now - prior) > EXTRACTION_NOTIFY_DEDUPE_MS;
 }
 
 function detectLifecycleSignal(messages: any[]): {
@@ -4067,6 +4081,15 @@ notify_user(f"📁 Project registered: {project_label}")
         return;
       }
 
+      const hasMeaningfulUserContent = messages.some((m: any) => {
+        if (m?.role !== "user") return false;
+        const text = getMessageText(m).trim();
+        if (!text) return false;
+        if (text.startsWith("GatewayRestart:")) return false;
+        if (text.startsWith("System:")) return false;
+        return true;
+      });
+
       const transcriptForExtraction = allNotes.length > 0
         ? (
           "=== USER EXPLICITLY ASKED TO REMEMBER THESE (extract as high-confidence facts) ===\n" +
@@ -4079,6 +4102,8 @@ notify_user(f"📁 Project registered: {project_label}")
 
       if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
         const triggerType = resolveExtractionTrigger(label);
+        const dedupeSession = sessionId || extractSessionId(messages, {});
+        const dedupeKey = `start:${dedupeSession}:${triggerType}`;
         const triggerDesc = triggerType === "compaction"
           ? "compaction"
           : triggerType === "recovery"
@@ -4088,10 +4113,12 @@ notify_user(f"📁 Project registered: {project_label}")
               : triggerType === "new"
                 ? "/new"
                 : "reset";
-        spawnNotifyScript(`
+        if (hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
+          spawnNotifyScript(`
 from core.runtime.notify import notify_user
 notify_user("🧠 Processing memories from ${triggerDesc}...")
 `);
+        }
       }
 
       const journalConfig = getMemoryConfig().docs?.journal || {};
@@ -4163,9 +4190,13 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
       const triggerType = resolveExtractionTrigger(label);
       const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
+        && hasMeaningfulUserContent
         && shouldNotifyFeature("extraction", "summary");
+      const dedupeSession = sessionId || extractSessionId(messages, {});
+      const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
       if ((factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
-        && shouldNotifyFeature("extraction", "summary")) {
+        && shouldNotifyFeature("extraction", "summary")
+        && shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
           const mergedDetails: Record<string, string[]> = {};

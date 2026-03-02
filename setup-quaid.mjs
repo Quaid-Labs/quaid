@@ -2808,8 +2808,8 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       extraction: { verbosity: models.notifConfig?.extraction ?? "summary", channel: "last_used" },
       retrieval: { verbosity: models.notifConfig?.retrieval ?? "off", channel: "last_used" },
       projectCreate: { enabled: true },
-      fullText: true,
-      showProcessingStart: true,
+      fullText: false,
+      showProcessingStart: false,
     },
     docs: {
       autoUpdateOnCompact: true,
@@ -2930,6 +2930,53 @@ async function waitForGatewayWarmup(timeoutMs = 12000) {
   return false;
 }
 
+function notifyInstallCompletion(owner, models, embeddings, systems) {
+  if (!AGENT_MODE || !IS_OPENCLAW) return;
+  if (String(process.env.QUAID_INSTALL_NOTIFY_COMPLETE || "1").trim() === "0") return;
+
+  const enabledSystems = Object.entries(systems || {})
+    .filter(([, enabled]) => !!enabled)
+    .map(([name]) => name)
+    .join(", ");
+
+  const summary = [
+    "✅ Quaid install complete.",
+    `Owner: ${owner.display}`,
+    `Workspace: ${WORKSPACE}`,
+    `Models: deep=${models.highModel}, fast=${models.lowModel}`,
+    `Embeddings: ${embeddings.embedModel}`,
+    `Systems: ${enabledSystems}`,
+  ].join("\n");
+
+  const py = `
+import os, sys
+sys.path.insert(0, ${JSON.stringify(PLUGIN_DIR)})
+from core.runtime.notify import notify_user
+ok = notify_user(${JSON.stringify(summary)})
+print("ok" if ok else "no_channel")
+`;
+  const env = { ...process.env };
+  const sep = process.platform === "win32" ? ";" : ":";
+  env.QUAID_HOME = WORKSPACE;
+  env.CLAWDBOT_WORKSPACE = WORKSPACE;
+  env.PYTHONPATH = env.PYTHONPATH ? `${PLUGIN_DIR}${sep}${env.PYTHONPATH}` : PLUGIN_DIR;
+
+  const res = spawnSync("python3", ["-c", py], {
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+    env,
+  });
+  if (res.status !== 0) {
+    const detail = String(res.stderr || res.stdout || "").trim();
+    log.warn(`Install completion notification failed: ${detail || "python exited non-zero"}`);
+    return;
+  }
+  const out = String(res.stdout || "").trim();
+  if (out && out !== "ok") {
+    log.warn(`Install completion notification status: ${out}`);
+  }
+}
+
 // =============================================================================
 // Main
 // =============================================================================
@@ -2947,6 +2994,7 @@ async function main() {
     const schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
     await step8_validate(owner, models, embeddings, systems);
+    notifyInstallCompletion(owner, models, embeddings, systems);
 
     // In test mode, write results for the test runner to verify
     if (_testAnswers && process.env.QUAID_TEST_RESULTS) {
