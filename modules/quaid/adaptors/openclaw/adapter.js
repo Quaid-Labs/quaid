@@ -66,6 +66,8 @@ const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-reques
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 const LIFECYCLE_SIGNAL_SUPPRESS_MS = 15e3;
+const EXTRACTION_NOTIFY_DEDUPE_MS = 9e4;
+const extractionNotifyHistory = /* @__PURE__ */ new Map();
 const lifecycleSignalHistory = /* @__PURE__ */ new Map();
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
@@ -810,6 +812,17 @@ function getAllConversationMessages(messages) {
 function detectLifecycleCommandSignal(messages) {
   const signal = detectLifecycleSignal(messages);
   return signal?.label || null;
+}
+function shouldEmitExtractionNotify(key, now = Date.now()) {
+  for (const [k, ts] of extractionNotifyHistory.entries()) {
+    if (now - ts > EXTRACTION_NOTIFY_DEDUPE_MS) {
+      extractionNotifyHistory.delete(k);
+    }
+  }
+  const prior = extractionNotifyHistory.get(key);
+  extractionNotifyHistory.set(key, now);
+  if (!prior) return true;
+  return now - prior > EXTRACTION_NOTIFY_DEDUPE_MS;
 }
 function detectLifecycleSignal(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
@@ -3615,6 +3628,14 @@ ${factsOutput || "No facts found."}` }],
         console.log(`[quaid] ${label}: empty transcript after filtering`);
         return;
       }
+      const hasMeaningfulUserContent = messages.some((m) => {
+        if (m?.role !== "user") return false;
+        const text = getMessageText(m).trim();
+        if (!text) return false;
+        if (text.startsWith("GatewayRestart:")) return false;
+        if (text.startsWith("System:")) return false;
+        return true;
+      });
       const transcriptForExtraction = allNotes.length > 0 ? `=== USER EXPLICITLY ASKED TO REMEMBER THESE (extract as high-confidence facts) ===
 ${allNotes.map((n) => `- ${n}`).join("\n")}
 === END EXPLICIT MEMORY REQUESTS ===
@@ -3623,11 +3644,15 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${transcriptForExtraction.length} chars`);
       if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
         const triggerType2 = resolveExtractionTrigger(label);
+        const dedupeSession2 = sessionId || extractSessionId(messages, {});
+        const dedupeKey = `start:${dedupeSession2}:${triggerType2}`;
         const triggerDesc = triggerType2 === "compaction" ? "compaction" : triggerType2 === "recovery" ? "recovery" : triggerType2 === "timeout" ? "timeout" : triggerType2 === "new" ? "/new" : "reset";
-        spawnNotifyScript(`
+        if (hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
+          spawnNotifyScript(`
 from core.runtime.notify import notify_user
 notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
 `);
+        }
       }
       const journalConfig = getMemoryConfig().docs?.journal || {};
       const journalEnabled = isSystemEnabled("journal") && journalConfig.enabled !== false;
@@ -3687,8 +3712,10 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
       const triggerType = resolveExtractionTrigger(label);
-      const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new") && shouldNotifyFeature("extraction", "summary");
-      if ((factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && shouldNotifyFeature("extraction", "summary")) {
+      const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new") && hasMeaningfulUserContent && shouldNotifyFeature("extraction", "summary");
+      const dedupeSession = sessionId || extractSessionId(messages, {});
+      const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
+      if ((factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && shouldNotifyFeature("extraction", "summary") && shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
           const mergedDetails = {};
