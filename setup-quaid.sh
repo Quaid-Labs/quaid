@@ -698,6 +698,31 @@ raise SystemExit(2)
 PY
 }
 
+_ensure_openclaw_plugins_allow_quaid() {
+    python3 - <<'PY'
+import json, os, sys
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+plugins = data.setdefault("plugins", {})
+allow = plugins.get("allow")
+if not isinstance(allow, list):
+    allow = []
+    plugins["allow"] = allow
+if any(str(x).strip() == "quaid" for x in allow):
+    raise SystemExit(0)
+allow.append("quaid")
+tmp_path = f"{cfg_path}.tmp-{os.getpid()}"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp_path, cfg_path)
+raise SystemExit(2)
+PY
+}
+
 _ensure_openclaw_compaction_mode_default() {
     python3 - <<'PY'
 import json, os, sys
@@ -903,6 +928,13 @@ step1_preflight() {
             info "Removed invalid OpenClaw config key: plugins.entries.quaid.workspace"
         elif [[ $quaid_entry_rc -ne 0 ]]; then
             warn "Could not verify plugins.entries.quaid config shape."
+        fi
+        local allow_quaid_rc=0
+        _ensure_openclaw_plugins_allow_quaid || allow_quaid_rc=$?
+        if [[ $allow_quaid_rc -eq 2 ]]; then
+            info "Added 'quaid' to OpenClaw plugins.allow list"
+        elif [[ $allow_quaid_rc -ne 0 ]]; then
+            warn "Could not verify OpenClaw plugins.allow includes quaid."
         fi
         local responses_rc=0
         _ensure_openclaw_responses_endpoint || responses_rc=$?
@@ -1703,7 +1735,7 @@ step6_install() {
     fi
 
     # Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
-    info "Legacy hook quaid-reset-signal is deprecated; lifecycle handlers are already active."
+    info "Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required)."
     if $IS_OPENCLAW; then
         info "Registering quaid plugin in OpenClaw..."
         if _register_openclaw_quaid_plugin "$PLUGIN_DIR"; then
