@@ -941,7 +941,7 @@ async function step1_preflight() {
     }
     const hasHooks = gatewayHasHooks(gwDir);
     if (!hasHooks) {
-      s.stop(C.red("Memory hooks missing"), 2);
+      s.stop(AGENT_MODE ? C.yellow("Memory hooks missing") : C.red("Memory hooks missing"), 2);
       note(
         `Your gateway is missing the memory hooks Quaid needs.\n` +
         `These were added to OpenClaw in PR #13287.\n\n` +
@@ -950,7 +950,10 @@ async function step1_preflight() {
         `Or check: ${HOOKS_PR_URL}`,
         "Gateway update required"
       );
-      bail("Gateway hooks required. Update OpenClaw and re-run.");
+      if (!AGENT_MODE) {
+        bail("Gateway hooks required. Update OpenClaw and re-run.");
+      }
+      log.warn("OpenClaw memory hooks are missing in agent mode; continuing with install.");
     }
     s.stop(C.green("Gateway hooks present"));
   }
