@@ -69,6 +69,7 @@ jobs:
           fi
           WORKSPACE="${HOME}/workspace"
           mkdir -p "${WORKSPACE}"
+          export CLAWDBOT_WORKSPACE="${WORKSPACE}"
           npm install --no-save @clack/prompts
 
           # Resolve OpenClaw CLI with fallback to direct node entry if wrapper is missing.
