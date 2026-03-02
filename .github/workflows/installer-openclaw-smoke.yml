@@ -101,10 +101,7 @@ jobs:
           fi
           if [[ -z "$(command -v openclaw || true)" && -n "${OPENCLAW_ENTRY}" ]]; then
             mkdir -p "${HOME}/.local/bin"
-            cat > "${HOME}/.local/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-exec node "${OPENCLAW_ENTRY}" "\$@"
-EOF
+            printf '%s\n' '#!/usr/bin/env bash' "exec node \"${OPENCLAW_ENTRY}\" \"\$@\"" > "${HOME}/.local/bin/openclaw"
             chmod +x "${HOME}/.local/bin/openclaw"
             export PATH="${HOME}/.local/bin:${PATH}"
           fi
