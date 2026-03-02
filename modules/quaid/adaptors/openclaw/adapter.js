@@ -2735,22 +2735,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       name: "memory-injection",
       priority: 10
     });
-    const agentEndHandler = async (event, ctx) => {
-      if (isInternalQuaidSession(ctx?.sessionId)) return;
-      if (!isSystemEnabled("memory")) return;
-      const messages = event.messages || [];
-      if (messages.length === 0) return;
-      const conversationMessages = getAllConversationMessages(messages);
-      if (conversationMessages.length === 0) return;
-      const timeoutSessionId = ctx?.sessionId || extractSessionId(messages, ctx);
-      timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
-      timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId, { source: "agent_end" });
-    };
-    console.log("[quaid] Registering agent_end hook for auto-capture");
-    onChecked("agent_end", agentEndHandler, {
-      name: "auto-capture",
-      priority: 10
-    });
+    console.log("[quaid] agent_end auto-capture disabled; using lifecycle hooks only");
     if (isSystemEnabled("memory")) {
       registerToolChecked(
         () => ({

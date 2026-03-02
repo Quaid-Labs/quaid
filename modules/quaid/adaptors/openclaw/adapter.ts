@@ -3183,29 +3183,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       priority: 10
     });
 
-    // End-of-turn hook only updates session-timeout buffers/logs.
-    // Lifecycle extraction is handled by dedicated hooks:
+    // Lifecycle extraction is hook-driven only:
     // - before_compaction => CompactionSignal
-    // - workflow reset/new hooks => ResetSignal
-    const agentEndHandler = async (event: any, ctx: any) => {
-      if (isInternalQuaidSession(ctx?.sessionId)) return;
-      if (!isSystemEnabled("memory")) return;
-      const messages = event.messages || [];
-      if (messages.length === 0) return;
-      const conversationMessages = getAllConversationMessages(messages);
-      if (conversationMessages.length === 0) return;
-      const timeoutSessionId = ctx?.sessionId || extractSessionId(messages, ctx);
-      timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
-      // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
-      timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId, { source: "agent_end" });
-    };
-
-    // Register agent_end hook using onChecked() for typed hooks
-    console.log("[quaid] Registering agent_end hook for auto-capture");
-    onChecked("agent_end", agentEndHandler, {
-      name: "auto-capture",
-      priority: 10
-    });
+    // - before_reset => ResetSignal
+    // We intentionally do NOT enqueue extraction from agent_end.
+    console.log("[quaid] agent_end auto-capture disabled; using lifecycle hooks only");
 
     // Register memory tools (gated by memory system)
     if (isSystemEnabled("memory")) {
