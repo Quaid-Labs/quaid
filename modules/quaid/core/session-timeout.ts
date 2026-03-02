@@ -1164,6 +1164,7 @@ export class SessionTimeoutManager {
     const safeSessionId = sessionId ? String(sessionId) : "";
     const line = `${now} event=${event}${safeSessionId ? ` session=${safeSessionId}` : ""}${data ? ` data=${JSON.stringify(data)}` : ""}\n`;
     try {
+      fs.mkdirSync(path.dirname(this.logFilePath), { recursive: true });
       fs.appendFileSync(this.logFilePath, line, "utf8");
     } catch (err: unknown) {
       safeLog(this.logger, `[quaid][timeout] failed writing timeout log file ${this.logFilePath}: ${String((err as Error)?.message || err)}`);
@@ -1174,6 +1175,7 @@ export class SessionTimeoutManager {
 
     const payload = { ts: now, event, session_id: safeSessionId || undefined, ...data };
     try {
+      fs.mkdirSync(path.dirname(this.eventFilePath), { recursive: true });
       fs.appendFileSync(this.eventFilePath, `${JSON.stringify(payload)}\n`, "utf8");
     } catch (err: unknown) {
       safeLog(this.logger, `[quaid][timeout] failed writing timeout event log ${this.eventFilePath}: ${String((err as Error)?.message || err)}`);
@@ -1186,6 +1188,7 @@ export class SessionTimeoutManager {
       const safeName = safeSessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
       const sessionPath = path.join(this.sessionLogDir, `${safeName}.jsonl`);
       try {
+        fs.mkdirSync(this.sessionLogDir, { recursive: true });
         fs.appendFileSync(sessionPath, `${JSON.stringify(payload)}\n`, "utf8");
       } catch (err: unknown) {
         safeLog(this.logger, `[quaid][timeout] failed writing timeout session log ${sessionPath}: ${String((err as Error)?.message || err)}`);
