@@ -57,4 +57,42 @@ describe("lifecycle signal detection", () => {
     const allowed = __test.shouldProcessLifecycleSignal("session-b", detail!);
     expect(allowed).toBe(false);
   });
+
+  it("treats stale reset transcripts as backlog replay for notification suppression", () => {
+    const old = new Date(Date.now() - (5 * 60 * 1000)).toISOString();
+    const isBacklog = __test.isBacklogLifecycleReplay(
+      [{ role: "user", content: "/reset", timestamp: old }],
+      "reset",
+      Date.now(),
+    );
+    expect(isBacklog).toBe(true);
+  });
+
+  it("does not treat recent compaction transcripts as backlog replay", () => {
+    const nowIso = new Date().toISOString();
+    const isBacklog = __test.isBacklogLifecycleReplay(
+      [{ role: "system", content: "Compacted (10k → 2k)", timestamp: nowIso }],
+      "compaction",
+      Date.now(),
+    );
+    expect(isBacklog).toBe(false);
+  });
+
+  it("treats timestamp-less implicit reset/recovery as backlog replay", () => {
+    const isBacklog = __test.isBacklogLifecycleReplay(
+      [{ role: "assistant", content: "resetting session state now" }],
+      "reset",
+      Date.now(),
+    );
+    expect(isBacklog).toBe(true);
+  });
+
+  it("does not treat timestamp-less explicit /reset command as backlog replay", () => {
+    const isBacklog = __test.isBacklogLifecycleReplay(
+      [{ role: "user", content: "/reset" }],
+      "reset",
+      Date.now(),
+    );
+    expect(isBacklog).toBe(false);
+  });
 });

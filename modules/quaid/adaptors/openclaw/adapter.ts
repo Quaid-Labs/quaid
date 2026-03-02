@@ -83,6 +83,8 @@ const LIFECYCLE_SIGNAL_SUPPRESS_MS = 15_000;
 const LIFECYCLE_SIGNAL_RETENTION_MS = 10 * 60_000;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
 const extractionNotifyHistory = new Map<string, number>();
+const ADAPTER_BOOT_TIME_MS = Date.now();
+const BACKLOG_NOTIFY_STALE_MS = 90_000;
 const lifecycleSignalHistory = new Map<string, {
   source: "user_command" | "system_notice" | "hook";
   signature: string;
@@ -945,6 +947,50 @@ function shouldEmitExtractionNotify(key: string, now: number = Date.now()): bool
   extractionNotifyHistory.set(key, now);
   if (!prior) return true;
   return (now - prior) > EXTRACTION_NOTIFY_DEDUPE_MS;
+}
+
+function latestMessageTimestampMs(messages: any[]): number | null {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  let latest: number | null = null;
+  for (const msg of messages) {
+    const raw = msg?.timestamp ?? msg?.createdAt ?? msg?.time ?? null;
+    if (raw == null) continue;
+    let ts: number | null = null;
+    if (typeof raw === "number" && Number.isFinite(raw)) ts = raw;
+    else {
+      const parsed = Date.parse(String(raw));
+      if (Number.isFinite(parsed)) ts = parsed;
+    }
+    if (ts == null) continue;
+    latest = latest == null ? ts : Math.max(latest, ts);
+  }
+  return latest;
+}
+
+function hasExplicitLifecycleUserCommand(messages: any[]): boolean {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  for (const msg of messages) {
+    if (msg?.role !== "user") continue;
+    const text = getMessageText(msg).trim().toLowerCase();
+    if (!text) continue;
+    if (/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/.test(text)) return true;
+  }
+  return false;
+}
+
+function isBacklogLifecycleReplay(
+  messages: any[],
+  trigger: ExtractionTrigger,
+  nowMs: number = Date.now(),
+): boolean {
+  if (trigger !== "reset" && trigger !== "new" && trigger !== "recovery") return false;
+  const latestTs = latestMessageTimestampMs(messages);
+  if (latestTs == null) {
+    // Old session replays often arrive without timestamps. Keep explicit user commands
+    // live, but suppress noisy implicit reset/recovery backlog notifications.
+    return !hasExplicitLifecycleUserCommand(messages);
+  }
+  return latestTs < (Math.min(nowMs, ADAPTER_BOOT_TIME_MS) - BACKLOG_NOTIFY_STALE_MS);
 }
 
 function detectLifecycleSignal(messages: any[]): {
@@ -4108,6 +4154,7 @@ notify_user(f"📁 Project registered: {project_label}")
 
       if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
         const triggerType = resolveExtractionTrigger(label);
+        const suppressBacklogNotify = isBacklogLifecycleReplay(messages, triggerType);
         const dedupeSession = sessionId || extractSessionId(messages, {});
         const dedupeKey = `start:${dedupeSession}:${triggerType}`;
         const triggerDesc = triggerType === "compaction"
@@ -4119,7 +4166,7 @@ notify_user(f"📁 Project registered: {project_label}")
               : triggerType === "new"
                 ? "/new"
                 : "reset";
-        if (hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
+        if (!suppressBacklogNotify && hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
           spawnNotifyScript(`
 from core.runtime.notify import notify_user
 notify_user("🧠 Processing memories from ${triggerDesc}...")
@@ -4195,12 +4242,14 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
       const triggerType = resolveExtractionTrigger(label);
-      const alwaysNotifyCompletion = (triggerType === "timeout")
+      const suppressBacklogNotify = isBacklogLifecycleReplay(messages, triggerType);
+      const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
         && hasMeaningfulUserContent
         && shouldNotifyFeature("extraction", "summary");
       const dedupeSession = sessionId || extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
-      if ((factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
+      if (!suppressBacklogNotify
+        && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
         && shouldNotifyFeature("extraction", "summary")
         && shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
@@ -4720,6 +4769,9 @@ export const __test = {
   detectLifecycleSignal,
   shouldProcessLifecycleSignal,
   shouldEmitExtractionNotify,
+  latestMessageTimestampMs,
+  hasExplicitLifecycleUserCommand,
+  isBacklogLifecycleReplay,
   markLifecycleSignalFromHook,
   clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
   clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
