@@ -221,6 +221,98 @@ describe('SessionTimeoutManager scheduling', () => {
     } finally {}
   })
 
+  it('applies stale buffer recovery backoff after extraction failure', async () => {
+    const workspace = makeWorkspace('quaid-timeout-stale-backoff-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 1,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = false
+    const runExtractSpy = vi
+      .spyOn(manager as any, 'runExtractWithTimeout')
+      .mockRejectedValue(new Error('gateway timeout after 10000ms'))
+
+    const sessionId = 'session-stale-backoff'
+    const bufferPath = (manager as any).bufferPath(sessionId) as string
+    fs.mkdirSync(path.dirname(bufferPath), { recursive: true })
+    fs.writeFileSync(bufferPath, JSON.stringify({
+      sessionId,
+      updatedAt: new Date(Date.now() - (2 * 60 * 1000)).toISOString(),
+      messages: [{ role: 'user', content: 'remember this', timestamp: Date.now() }],
+    }), 'utf8')
+
+    const beforeMs = Date.now()
+    await manager.recoverStaleBuffers()
+
+    expect(runExtractSpy).toHaveBeenCalledTimes(1)
+    expect(fs.existsSync(bufferPath)).toBe(true)
+    const updated = JSON.parse(fs.readFileSync(bufferPath, 'utf8'))
+    expect(updated.recoveryAttemptCount).toBe(1)
+    expect(updated.lastRecoveryError).toContain('gateway timeout')
+    expect(Date.parse(updated.nextRecoveryAt)).toBeGreaterThanOrEqual(beforeMs + 5000)
+  })
+
+  it('skips stale buffer recovery while backoff window is active', async () => {
+    const workspace = makeWorkspace('quaid-timeout-stale-backoff-skip-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 1,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = false
+    const runExtractSpy = vi.spyOn(manager as any, 'runExtractWithTimeout')
+
+    const sessionId = 'session-stale-backoff-skip'
+    const bufferPath = (manager as any).bufferPath(sessionId) as string
+    fs.mkdirSync(path.dirname(bufferPath), { recursive: true })
+    fs.writeFileSync(bufferPath, JSON.stringify({
+      sessionId,
+      updatedAt: new Date(Date.now() - (2 * 60 * 1000)).toISOString(),
+      nextRecoveryAt: new Date(Date.now() + 60_000).toISOString(),
+      recoveryAttemptCount: 2,
+      messages: [{ role: 'user', content: 'remember this', timestamp: Date.now() }],
+    }), 'utf8')
+
+    await manager.recoverStaleBuffers()
+
+    expect(runExtractSpy).not.toHaveBeenCalled()
+    expect(fs.existsSync(bufferPath)).toBe(true)
+  })
+
+  it('retries stale buffer recovery once backoff window has elapsed', async () => {
+    const workspace = makeWorkspace('quaid-timeout-stale-backoff-elapsed-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 1,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+    ;(manager as any).failHard = false
+    const runExtractSpy = vi.spyOn(manager as any, 'runExtractWithTimeout')
+
+    const sessionId = 'session-stale-backoff-elapsed'
+    const bufferPath = (manager as any).bufferPath(sessionId) as string
+    fs.mkdirSync(path.dirname(bufferPath), { recursive: true })
+    fs.writeFileSync(bufferPath, JSON.stringify({
+      sessionId,
+      updatedAt: new Date(Date.now() - (2 * 60 * 1000)).toISOString(),
+      nextRecoveryAt: new Date(Date.now() - 1000).toISOString(),
+      recoveryAttemptCount: 2,
+      messages: [{ role: 'user', content: 'remember this', timestamp: Date.now() }],
+    }), 'utf8')
+
+    await manager.recoverStaleBuffers()
+
+    expect(runExtractSpy).toHaveBeenCalledTimes(1)
+    expect(fs.existsSync(bufferPath)).toBe(false)
+  })
+
   it('filters internal/system traffic from extraction payloads', async () => {
     const workspace = makeWorkspace('quaid-timeout-filter-')
     const calls: Array<{ messages: any[]; sessionId?: string; label?: string }> = []
