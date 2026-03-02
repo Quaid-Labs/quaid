@@ -99,42 +99,11 @@ jobs:
           "${OC[@]}" gateway probe || true
 
           if [[ "${SCENARIO}" == "stale-registry-upgrade" ]]; then
-            python - <<'PY'
-import json, pathlib
-cfg = pathlib.Path.home()/".openclaw"/"openclaw.json"
-data = json.loads(cfg.read_text())
-plugins = data.setdefault("plugins", {})
-plugins.setdefault("slots", {})["memory"] = "quaid"
-plugins.setdefault("entries", {})["quaid"] = {
-    "enabled": True,
-    "workspace": str(pathlib.Path.home()/".openclaw"/"workspace"),
-}
-plugins.setdefault("installs", {})["quaid"] = {
-    "source": "path",
-    "sourcePath": "/tmp/missing-quaid-src",
-    "installPath": str(pathlib.Path.home()/".openclaw"/"extensions"/"quaid"),
-    "version": "0.0.0-test",
-}
-cfg.write_text(json.dumps(data, indent=2) + "\n")
-ext = pathlib.Path.home()/".openclaw"/"extensions"/"quaid"
-if ext.exists():
-    import shutil
-    shutil.rmtree(ext)
-print("seeded stale registry config")
-          PY
+            python -c "import json, pathlib, shutil; cfg=pathlib.Path.home()/'.openclaw'/'openclaw.json'; data=json.loads(cfg.read_text()); plugins=data.setdefault('plugins', {}); plugins.setdefault('slots', {})['memory']='quaid'; plugins.setdefault('entries', {})['quaid']={'enabled': True, 'workspace': str(pathlib.Path.home()/'.openclaw'/'workspace')}; plugins.setdefault('installs', {})['quaid']={'source':'path','sourcePath':'/tmp/missing-quaid-src','installPath':str(pathlib.Path.home()/'.openclaw'/'extensions'/'quaid'),'version':'0.0.0-test'}; cfg.write_text(json.dumps(data, indent=2) + '\n'); ext=pathlib.Path.home()/'.openclaw'/'extensions'/'quaid'; shutil.rmtree(ext) if ext.exists() else None; print('seeded stale registry config')"
           fi
 
           if [[ "${SCENARIO}" == "compaction-safeguard-upgrade" ]]; then
-            python - <<'PY'
-import json, pathlib
-cfg = pathlib.Path.home()/".openclaw"/"openclaw.json"
-data = json.loads(cfg.read_text())
-agents = data.setdefault("agents", {})
-defaults = agents.setdefault("defaults", {})
-defaults.setdefault("compaction", {})["mode"] = "safeguard"
-cfg.write_text(json.dumps(data, indent=2) + "\n")
-print("seeded compaction safeguard mode")
-          PY
+            python -c "import json, pathlib; cfg=pathlib.Path.home()/'.openclaw'/'openclaw.json'; data=json.loads(cfg.read_text()); agents=data.setdefault('agents', {}); defaults=agents.setdefault('defaults', {}); defaults.setdefault('compaction', {})['mode']='safeguard'; cfg.write_text(json.dumps(data, indent=2) + '\n'); print('seeded compaction safeguard mode')"
           fi
 
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
