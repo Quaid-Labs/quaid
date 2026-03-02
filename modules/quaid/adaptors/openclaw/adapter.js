@@ -4014,7 +4014,16 @@ notify_memory_extraction(
           if (isSystemEnabled("memory")) {
             if (conversationMessages.length > 0) {
               markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
-              timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal");
+              timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal", {
+                source: "before_compaction",
+                hook_session_id: String(sessionId || ""),
+                extraction_session_id: String(extractionSessionId || ""),
+                event_message_count: messages.length,
+                conversation_message_count: conversationMessages.length,
+                has_system_compacted_notice: conversationMessages.some(
+                  (m) => String(getMessageText(m) || "").toLowerCase().includes("compacted (")
+                )
+              });
               console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
             } else {
               const extracted = await timeoutManager.extractSessionFromLog(
@@ -4097,7 +4106,14 @@ notify_memory_extraction(
           if (isSystemEnabled("memory")) {
             const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
             markLifecycleSignalFromHook(extractionSessionId, "ResetSignal");
-            timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal");
+            timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal", {
+              source: "before_reset",
+              hook_session_id: String(sessionId || ""),
+              extraction_session_id: String(extractionSessionId || ""),
+              reason: String(reason || "unknown"),
+              event_message_count: messages.length,
+              conversation_message_count: conversationMessages.length
+            });
             console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
           } else {
             console.log("[quaid] Reset: memory extraction skipped \u2014 memory system disabled");
