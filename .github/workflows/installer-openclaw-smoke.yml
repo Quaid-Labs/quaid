@@ -74,6 +74,7 @@ jobs:
           npm install --no-save @clack/prompts
 
           # Resolve OpenClaw CLI with fallback to direct node entry if wrapper is missing.
+          OPENCLAW_ENTRY=""
           OPENCLAW_BIN="$(command -v openclaw || true)"
           if [[ "${SCENARIO}" == "wrapper-missing" ]]; then
             OPENCLAW_BIN=""
@@ -82,7 +83,6 @@ jobs:
             OC=( "${OPENCLAW_BIN}" )
           else
             OPENCLAW_ROOT="$(npm root -g)/openclaw"
-            OPENCLAW_ENTRY=""
             for candidate in \
               "${OPENCLAW_ROOT}/dist/entry.js" \
               "${OPENCLAW_ROOT}/dist/cli.js" \
@@ -98,6 +98,15 @@ jobs:
             else
               OC=( npx -y openclaw )
             fi
+          fi
+          if [[ -z "$(command -v openclaw || true)" && -n "${OPENCLAW_ENTRY}" ]]; then
+            mkdir -p "${HOME}/.local/bin"
+            cat > "${HOME}/.local/bin/openclaw" <<EOF
+#!/usr/bin/env bash
+exec node "${OPENCLAW_ENTRY}" "\$@"
+EOF
+            chmod +x "${HOME}/.local/bin/openclaw"
+            export PATH="${HOME}/.local/bin:${PATH}"
           fi
 
           # Fresh CI homes are unconfigured; allow bootstrap startup.
