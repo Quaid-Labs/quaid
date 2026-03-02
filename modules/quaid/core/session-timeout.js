@@ -461,9 +461,19 @@ class SessionTimeoutManager {
     const multiplier = 2 ** (attempt - 1);
     return Math.min(this.staleRecoveryInitialBackoffMs * multiplier, this.staleRecoveryMaxBackoffMs);
   }
+  buildOriginHintMeta(meta) {
+    if (meta && typeof meta === "object") return meta;
+    const stack = String(new Error().stack || "");
+    const lines = stack.split("\n").map((s) => s.trim()).filter(Boolean);
+    const caller = lines.find(
+      (line) => !line.includes("buildOriginHintMeta") && !line.includes("queueExtractionSignal") && !line.includes("SessionTimeoutManager.")
+    );
+    if (!caller) return void 0;
+    return { origin_hint: caller.slice(0, 240) };
+  }
   queueExtractionSignal(sessionId, label, meta) {
     if (!sessionId) return;
-    const signalMeta = meta && typeof meta === "object" ? meta : void 0;
+    const signalMeta = this.buildOriginHintMeta(meta);
     if (!this.hasUnprocessedSessionMessages(sessionId)) {
       this.writeQuaidLog("signal_queue_skipped_already_cleared", sessionId, {
         label: String(label || "Signal"),
