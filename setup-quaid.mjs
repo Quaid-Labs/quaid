@@ -805,7 +805,10 @@ async function step1_preflight() {
         "Then re-run this installer.",
         "Gateway offline"
       );
-      bail("OpenClaw gateway is not running.");
+      if (!AGENT_MODE) {
+        bail("OpenClaw gateway is not running.");
+      }
+      log.warn("OpenClaw status/probe unavailable in agent mode; continuing with install.");
     }
 
     // --- Onboarding / agents list ---
