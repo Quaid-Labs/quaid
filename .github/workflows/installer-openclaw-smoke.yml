@@ -74,12 +74,23 @@ jobs:
           if [[ -n "${OPENCLAW_BIN}" ]]; then
             OC=( "${OPENCLAW_BIN}" )
           else
-            OPENCLAW_ENTRY="$(npm root -g)/openclaw/dist/entry.js"
-            if [[ ! -f "${OPENCLAW_ENTRY}" ]]; then
-              echo "OpenClaw entry not found at ${OPENCLAW_ENTRY}" >&2
-              exit 1
+            OPENCLAW_ROOT="$(npm root -g)/openclaw"
+            OPENCLAW_ENTRY=""
+            for candidate in \
+              "${OPENCLAW_ROOT}/dist/entry.js" \
+              "${OPENCLAW_ROOT}/dist/cli.js" \
+              "${OPENCLAW_ROOT}/bin/openclaw.js" \
+              "${OPENCLAW_ROOT}/index.js"; do
+              if [[ -f "${candidate}" ]]; then
+                OPENCLAW_ENTRY="${candidate}"
+                break
+              fi
+            done
+            if [[ -n "${OPENCLAW_ENTRY}" ]]; then
+              OC=( node "${OPENCLAW_ENTRY}" )
+            else
+              OC=( npx -y openclaw )
             fi
-            OC=( node "${OPENCLAW_ENTRY}" )
           fi
 
           # Fresh CI homes are unconfigured; allow bootstrap startup.
