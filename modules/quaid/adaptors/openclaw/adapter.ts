@@ -3197,7 +3197,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const timeoutSessionId = ctx?.sessionId || extractSessionId(messages, ctx);
       timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
-      timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
+      timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId, { source: "agent_end" });
     };
 
     // Register agent_end hook using onChecked() for typed hooks
