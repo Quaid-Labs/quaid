@@ -60,14 +60,12 @@ jobs:
           set -euo pipefail
 
           export SCENARIO="${{ matrix.scenario }}"
-          export HOME="${RUNNER_TEMP}/quaid-installer-home-${SCENARIO}"
           export XDG_CONFIG_HOME="${HOME}/.config"
-          mkdir -p "${HOME}"
           mkdir -p "${HOME}/.openclaw"
           if [[ ! -f "${HOME}/.openclaw/openclaw.json" ]]; then
             printf '{}\n' > "${HOME}/.openclaw/openclaw.json"
           fi
-          WORKSPACE="${HOME}/workspace"
+          WORKSPACE="${RUNNER_TEMP}/quaid-installer-workspace-${SCENARIO}"
           mkdir -p "${WORKSPACE}"
           export CLAWDBOT_WORKSPACE="${WORKSPACE}"
           export PATH="$(npm config get prefix)/bin:${PATH}"
