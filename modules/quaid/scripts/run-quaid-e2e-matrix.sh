@@ -11,6 +11,7 @@ PATHS=("openai-oauth" "openai-api" "anthropic-oauth" "anthropic-api")
 EXPECT_SPEC=""
 JSON_OUT=""
 EXTRA_ARGS=()
+FAIL_ON_SKIP="${QUAID_E2E_MATRIX_FAIL_ON_SKIP:-false}"
 
 usage() {
   cat <<USAGE
@@ -25,6 +26,7 @@ Options:
 
 Environment:
   QUAID_E2E_PATH_TIMEOUT_SEC  Max seconds per auth path before timeout classification (default: 1200)
+  QUAID_E2E_MATRIX_FAIL_ON_SKIP  Treat skipped auth lanes as failures (default: false)
 USAGE
 }
 
@@ -370,6 +372,9 @@ for auth_path in "${PATHS[@]}"; do
       echo "  - ${auth_path}: ${status} (expected ${expected}) reason=${reason}"
     fi
   else
+    if [[ "$status" == "skipped" && "$FAIL_ON_SKIP" == "true" ]]; then
+      FAILED=1
+    fi
     if [[ -n "$expiry_hint" ]]; then
       echo "  - ${auth_path}: ${status} reason=${reason} ${expiry_hint}"
     else

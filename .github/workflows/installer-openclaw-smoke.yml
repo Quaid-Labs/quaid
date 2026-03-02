@@ -1,6 +1,8 @@
 name: Installer OpenClaw Smoke
 
 on:
+  schedule:
+    - cron: '17 9 * * *'
   workflow_dispatch:
   pull_request:
     branches: [main]
@@ -20,11 +22,15 @@ on:
 
 jobs:
   openclaw-installer-smoke:
+    name: installer-smoke (${{ matrix.openclaw_version }}, ${{ matrix.scenario }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
+        openclaw_version:
+          - latest
+          - 2026.2.26
         scenario:
           - fresh
           - stale-registry-upgrade
@@ -52,7 +58,16 @@ jobs:
           python -m pip install --user --break-system-packages sqlite-vec
 
       - name: Install OpenClaw
-        run: npm install -g openclaw
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.openclaw_version }}" == "latest" ]]; then
+            npm install -g openclaw
+          else
+            npm install -g "openclaw@${{ matrix.openclaw_version }}"
+          fi
+          echo "Installed OpenClaw:"
+          openclaw --version || true
 
       - name: Run installer matrix smoke
         shell: bash
