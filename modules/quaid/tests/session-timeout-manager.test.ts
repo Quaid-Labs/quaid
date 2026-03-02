@@ -407,7 +407,7 @@ describe("SessionTimeoutManager (cursor + source)", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.sid).toBe("session-orphan");
-    expect(calls[0]?.label).toBe("Reset");
+    expect(calls[0]?.label).toBe("RecoverySignal");
     expect(fs.existsSync(claimedPath)).toBe(false);
   });
 
