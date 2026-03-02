@@ -3016,13 +3016,25 @@ function _gatewayHttpCode(pathname, method = "GET", body = null) {
 
 async function waitForGatewayWarmup(timeoutMs = 12000) {
   if (!IS_OPENCLAW || !canRun("curl")) return true;
+  const startedAt = Date.now();
+  let nextHeartbeatAt = startedAt + 30_000;
   const deadline = Date.now() + Math.max(1000, timeoutMs);
   while (Date.now() < deadline) {
+    const now = Date.now();
     const health = _gatewayHttpCode("/health", "GET", null);
     const responses = _gatewayHttpCode("/v1/responses", "POST", "{}");
     const pluginLlm = _gatewayHttpCode("/plugins/quaid/llm", "POST", "{}");
     if (health === 200 && ((responses >= 100 && responses <= 599) || (pluginLlm >= 100 && pluginLlm <= 599))) {
       return true;
+    }
+    if (now >= nextHeartbeatAt) {
+      const elapsedSec = Math.floor((now - startedAt) / 1000);
+      const remainingSec = Math.max(0, Math.ceil((deadline - now) / 1000));
+      log.info(
+        `Still waiting for gateway warmup (${elapsedSec}s elapsed, ~${remainingSec}s remaining)` +
+        ` [health=${health} responses=${responses} plugin=${pluginLlm}]`
+      );
+      nextHeartbeatAt += 30_000;
     }
     await sleep(500);
   }
