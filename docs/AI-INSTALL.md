@@ -97,6 +97,9 @@ Minimum survey fields:
 Only execute install after the user confirms or edits these values.
 This is mandatory even when using `--agent` non-interactive mode.
 
+For long-running installs, the agent must send a brief progress update before backgrounding:
+"Install is running and may take 1-2 minutes; I'll report back when complete."
+
 For embeddings specifically: agents must not silently default to degraded mode when Ollama is unavailable.
 They must ask the user whether to install/start Ollama first, and only proceed degraded after explicit approval.
 
