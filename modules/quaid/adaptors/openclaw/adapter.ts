@@ -79,6 +79,12 @@ const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-app
 const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
+const LIFECYCLE_SIGNAL_SUPPRESS_MS = 15_000;
+const lifecycleSignalHistory = new Map<string, {
+  source: "user_command" | "system_notice" | "hook";
+  signature: string;
+  seenAt: number;
+}>();
 
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
@@ -922,15 +928,24 @@ function getAllConversationMessages(messages: any[]): any[] {
 }
 
 function detectLifecycleCommandSignal(messages: any[]): "ResetSignal" | "CompactionSignal" | null {
+  const signal = detectLifecycleSignal(messages);
+  return signal?.label || null;
+}
+
+function detectLifecycleSignal(messages: any[]): {
+  label: "ResetSignal" | "CompactionSignal";
+  source: "user_command" | "system_notice";
+  signature: string;
+} | null {
   if (!Array.isArray(messages) || messages.length === 0) return null;
-  const tail = messages.slice(-8);
+  const tail = messages.slice(-2);
   for (let i = tail.length - 1; i >= 0; i--) {
     const msg = tail[i];
     const text = getMessageText(msg).trim();
     if (!text) continue;
     const normalized = text
       .replace(/\[\[[^\]]+\]\]\s*/g, "")
-      .replace(/^\[[^\]]+\]\s*/g, "")
+      .replace(/^\[[^\]]+\]\s*/, "")
       .trim();
     const lower = normalized.toLowerCase();
 
@@ -938,21 +953,56 @@ function detectLifecycleCommandSignal(messages: any[]): "ResetSignal" | "Compact
       const m = lower.match(/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/);
       if (m) {
         const command = `/${m[1]}`;
-        if (command === "/new" || command === "/reset" || command === "/restart") return "ResetSignal";
-        if (command === "/compact") return "CompactionSignal";
+        if (command === "/new" || command === "/reset" || command === "/restart") {
+          return { label: "ResetSignal", source: "user_command", signature: `cmd:${command}` };
+        }
+        if (command === "/compact") {
+          return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}` };
+        }
       }
     }
 
     // OpenClaw auto-compaction notice (no slash command is emitted).
     // Example: "[... GMT+8] Compacted (37k → 5.0k) • Context 5.0k/200k (2%)"
-    const hasCompacted = /\bcompacted\b/i.test(normalized);
-    const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
-    const hasContext = /\bcontext\b/i.test(normalized);
-    if (hasCompacted && (hasDelta || hasContext)) {
-      return "CompactionSignal";
+    if (msg?.role === "system") {
+      const hasCompacted = /\bcompacted\b/i.test(normalized);
+      const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
+      const hasContext = /\bcontext\b/i.test(normalized);
+      if (hasCompacted && (hasDelta || hasContext)) {
+        return { label: "CompactionSignal", source: "system_notice", signature: `system:${normalized.toLowerCase()}` };
+      }
     }
   }
   return null;
+}
+
+function lifecycleSignalKey(sessionId: string, label: "ResetSignal" | "CompactionSignal"): string {
+  return `${sessionId}:${label}`;
+}
+
+function shouldProcessLifecycleSignal(
+  sessionId: string,
+  signal: { label: "ResetSignal" | "CompactionSignal"; source: "user_command" | "system_notice"; signature: string }
+): boolean {
+  const now = Date.now();
+  const key = lifecycleSignalKey(sessionId, signal.label);
+  const prior = lifecycleSignalHistory.get(key);
+  lifecycleSignalHistory.set(key, { source: signal.source, signature: signal.signature, seenAt: now });
+  if (!prior) return true;
+  const ageMs = now - prior.seenAt;
+  if (prior.signature === signal.signature) return false;
+  if (ageMs < LIFECYCLE_SIGNAL_SUPPRESS_MS && prior.source === "hook" && signal.source === "system_notice") {
+    return false;
+  }
+  return true;
+}
+
+function markLifecycleSignalFromHook(sessionId: string, label: "ResetSignal" | "CompactionSignal"): void {
+  lifecycleSignalHistory.set(lifecycleSignalKey(sessionId, label), {
+    source: "hook",
+    signature: `hook:${label}`,
+    seenAt: Date.now(),
+  });
 }
 
 function isInternalMaintenancePrompt(text: string): boolean {
@@ -2991,11 +3041,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       timeoutManager.setTimeoutMinutes(getCaptureTimeoutMinutes());
       // Adapter forwards conversation messages; core manages session log lifecycle + dedup.
       timeoutManager.onAgentEnd(conversationMessages, timeoutSessionId);
-      const commandSignal = detectLifecycleCommandSignal(messages);
-      if (commandSignal && timeoutSessionId) {
-        timeoutManager.queueExtractionSignal(timeoutSessionId, commandSignal);
+      const signal = detectLifecycleSignal(messages);
+      if (signal && timeoutSessionId && shouldProcessLifecycleSignal(timeoutSessionId, signal)) {
+        timeoutManager.queueExtractionSignal(timeoutSessionId, signal.label);
         void timeoutManager.processPendingExtractionSignals();
-        const trigger = commandSignal === "CompactionSignal" ? "compact" : "reset";
+        const trigger = signal.label === "CompactionSignal" ? "compact" : "reset";
         const transcriptTrigger = trigger === "compact" ? "Compaction" : "Reset";
         void (async () => {
           try {
@@ -4324,6 +4374,7 @@ notify_memory_extraction(
           // before_compaction hook is unreliable async-wise; queue signal for worker tick.
           if (isSystemEnabled("memory")) {
             const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
+            markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
             timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal");
             console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
           } else {
@@ -4422,6 +4473,7 @@ notify_memory_extraction(
           // before_reset can race with session teardown; queue signal for worker tick.
           if (isSystemEnabled("memory")) {
             const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
+            markLifecycleSignalFromHook(extractionSessionId, "ResetSignal");
             timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal");
             console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
           } else {
@@ -4628,4 +4680,8 @@ notify_memory_extraction(
 export default quaidPlugin;
 export const __test = {
   detectLifecycleCommandSignal,
+  detectLifecycleSignal,
+  shouldProcessLifecycleSignal,
+  markLifecycleSignalFromHook,
+  clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
 };
