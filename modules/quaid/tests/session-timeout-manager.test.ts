@@ -728,4 +728,23 @@ describe('SessionTimeoutManager scheduling', () => {
 
     expect(() => (manager as any).writeQuaidLog('unit_test')).toThrow()
   })
+
+  it('recreates missing session timeout log directories before writing', () => {
+    const workspace = makeWorkspace('quaid-timeout-log-dir-recreate-')
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      extract: async () => {},
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    })
+
+    const logDir = path.join(workspace, 'logs', 'quaid')
+    fs.rmSync(logDir, { recursive: true, force: true })
+
+    expect(() => (manager as any).writeQuaidLog('test_event', 'session-dir-recreate', { ok: true })).not.toThrow()
+
+    const sessionPath = path.join(logDir, 'sessions', 'session-dir-recreate.jsonl')
+    expect(fs.existsSync(sessionPath)).toBe(true)
+  })
 })

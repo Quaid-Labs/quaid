@@ -1038,6 +1038,7 @@ class SessionTimeoutManager {
     const line = `${now} event=${event}${safeSessionId ? ` session=${safeSessionId}` : ""}${data ? ` data=${JSON.stringify(data)}` : ""}
 `;
     try {
+      fs.mkdirSync(path.dirname(this.logFilePath), { recursive: true });
       fs.appendFileSync(this.logFilePath, line, "utf8");
     } catch (err) {
       safeLog(this.logger, `[quaid][timeout] failed writing timeout log file ${this.logFilePath}: ${String(err?.message || err)}`);
@@ -1047,6 +1048,7 @@ class SessionTimeoutManager {
     }
     const payload = { ts: now, event, session_id: safeSessionId || void 0, ...data };
     try {
+      fs.mkdirSync(path.dirname(this.eventFilePath), { recursive: true });
       fs.appendFileSync(this.eventFilePath, `${JSON.stringify(payload)}
 `, "utf8");
     } catch (err) {
@@ -1059,6 +1061,7 @@ class SessionTimeoutManager {
       const safeName = safeSessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
       const sessionPath = path.join(this.sessionLogDir, `${safeName}.jsonl`);
       try {
+        fs.mkdirSync(this.sessionLogDir, { recursive: true });
         fs.appendFileSync(sessionPath, `${JSON.stringify(payload)}
 `, "utf8");
       } catch (err) {

@@ -180,6 +180,28 @@ function _resolveMemoryConfigPath() {
   }
   return _memoryConfigCandidates()[0];
 }
+function _buildFallbackMemoryConfig() {
+  return {
+    models: {
+      llmProvider: "default",
+      deepReasoning: "default",
+      fastReasoning: "default",
+      deepReasoningModelClasses: {
+        anthropic: "claude-opus-4-6",
+        openai: "gpt-5",
+        "openai-compatible": "gpt-4.1"
+      },
+      fastReasoningModelClasses: {
+        anthropic: "claude-haiku-4-5",
+        openai: "gpt-5-mini",
+        "openai-compatible": "gpt-4.1-mini"
+      }
+    },
+    retrieval: {
+      maxLimit: 8
+    }
+  };
+}
 function getMemoryConfig() {
   const configPath = _resolveMemoryConfigPath();
   if (configPath !== _memoryConfigPath) {
@@ -209,7 +231,12 @@ function getMemoryConfig() {
       _memoryConfigErrorLogged = true;
       console.error("[quaid] failed to load config/memory.json:", err?.message || String(err));
     }
-    _memoryConfig = {};
+    if (isMissingFileError(err)) {
+      _memoryConfig = _buildFallbackMemoryConfig();
+      _memoryConfigMtimeMs = -1;
+      return _memoryConfig;
+    }
+    _memoryConfig = _buildFallbackMemoryConfig();
     _memoryConfigMtimeMs = mtimeMs;
     if (isFailHardEnabled()) {
       throw err;
@@ -984,9 +1011,8 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
   const resolved = resolveTierModel(modelTier);
   const provider = normalizeProvider(resolved.provider);
   const started = Date.now();
-  let sessionKey;
   try {
-    sessionKey = _ensureGatewaySessionOverride(modelTier, resolved);
+    _ensureGatewaySessionOverride(modelTier, resolved);
   } catch (err) {
     const msg = String(err?.message || err);
     if (isFailHardEnabled()) {
@@ -2121,7 +2147,6 @@ const knowledgeEngine = createKnowledgeEngine({
         const m = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
         if (!m) continue;
         const sourcePath = m[1];
-        const file = sourcePath.split("/").pop() || sourcePath;
         const section = m[2].trim();
         const sim = Number.parseFloat(m[3]) || 0.6;
         const parts = sourcePath.split("/");
