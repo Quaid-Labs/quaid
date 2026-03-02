@@ -121,7 +121,7 @@ jobs:
                 import shutil
                 shutil.rmtree(ext)
             print("seeded stale registry config")
-            PY
+          PY
           fi
 
           if [[ "${SCENARIO}" == "compaction-safeguard-upgrade" ]]; then
@@ -134,7 +134,7 @@ jobs:
             defaults.setdefault("compaction", {})["mode"] = "safeguard"
             cfg.write_text(json.dumps(data, indent=2) + "\n")
             print("seeded compaction safeguard mode")
-            PY
+          PY
           fi
 
           node setup-quaid.mjs --agent --workspace "${WORKSPACE}" --owner-name "CI Installer"
