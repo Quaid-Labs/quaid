@@ -3197,7 +3197,7 @@ function notifyInstallWarmupNotice() {
   if (String(process.env.QUAID_INSTALL_NOTIFY_PROGRESS || "1").trim() === "0") return;
   sendInstallerNotification(
     "⏳ Quaid install is entering gateway warmup.\n" +
-    "This pause is expected and can take 1-3 minutes while OpenClaw/plugin routes come back online."
+    "This pause is expected and can take 2-5 minutes while OpenClaw/plugin routes come back online."
   );
 }
 
@@ -3228,7 +3228,7 @@ async function main() {
       "Night shift assigned. Warmup can take a minute or two."
     );
     notifyInstallWarmupNotice();
-    log.info("Heads up: moving into install/warmup. A 1-3 minute pause here is expected while the gateway/plugin route comes back online.");
+    log.info("Heads up: moving into install/warmup. A 2-5 minute pause here is expected while the gateway/plugin route comes back online.");
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
     notifyInstallCheckpoint(7, 8, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
     await step8_validate(owner, models, embeddings, systems);
