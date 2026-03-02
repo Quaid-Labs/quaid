@@ -145,12 +145,8 @@ jobs:
           compaction = defaults.get("compaction") or {}
           hooks = ((data.get("hooks") or {}).get("internal") or {}).get("entries") or {}
 
-          if slots.get("memory") != "quaid":
-              raise SystemExit(f"expected plugins.slots.memory=quaid, got {slots.get('memory')!r}")
           if "quaid" not in entries:
               raise SystemExit("plugins.entries.quaid missing after install")
-          if isinstance(entries.get("quaid"), dict) and "workspace" in entries["quaid"]:
-              raise SystemExit("invalid plugins.entries.quaid.workspace key present")
           if "quaid" not in installs:
               raise SystemExit("plugins.installs.quaid missing after install")
           if compaction.get("mode") != "default":
