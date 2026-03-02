@@ -1744,6 +1744,9 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
       throw new Error(reg.reason || "openclaw plugins install/enable failed");
     }
     s.stop(C.green("OpenClaw plugin registered"));
+    if (!(await waitForGatewayWarmup(8000))) {
+      log.warn("Gateway warmup timed out after plugin registration; hook enable will continue in best-effort mode.");
+    }
     enableRequiredOpenClawHooks();
   }
 
@@ -2383,7 +2386,11 @@ function enableRequiredOpenClawHooks() {
     if (!enabled) {
       const canonical = candidates[0];
       if (forceEnableHook(canonical)) {
-        log.warn(`Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed).`);
+        if (lastErr) {
+          log.warn(`Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed: ${lastErr}).`);
+        } else {
+          log.warn(`Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed).`);
+        }
         forcedAny = true;
       } else if (lastErr) {
         log.warn(`Could not enable hook '${canonical}': ${lastErr}`);
