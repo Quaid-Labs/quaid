@@ -792,7 +792,9 @@ async function step1_preflight() {
 
     // --- Gateway running ---
     const statusOut = shell("clawdbot status 2>/dev/null </dev/null") ||
-                      shell("openclaw status 2>/dev/null </dev/null");
+                      shell("openclaw status 2>/dev/null </dev/null") ||
+                      shell("clawdbot gateway probe 2>/dev/null </dev/null") ||
+                      shell("openclaw gateway probe 2>/dev/null </dev/null");
     if (!statusOut) {
       s.stop(C.red("Gateway offline"), 2);
       note(
