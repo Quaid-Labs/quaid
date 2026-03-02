@@ -795,7 +795,8 @@ class TestMultiPassRetrieval:
         graph.search_hybrid = counting_search_hybrid
 
         with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
-             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding):
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph._ollama_healthy", return_value=True):
             recall_fn = __import__("datastore.memorydb.memory_graph", fromlist=["recall"]).recall
             # Use a query that will produce low-quality results
             recall_fn("Where does Quaid live", owner_id="quaid",

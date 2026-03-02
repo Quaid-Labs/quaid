@@ -978,7 +978,8 @@ class TestReviewFixTransaction:
         }]
 
         with patch("datastore.memorydb.maintenance_ops.is_fail_hard_enabled", return_value=False), \
-             patch("datastore.memorydb.maintenance_ops.create_edge", side_effect=RuntimeError("edge rebuild failed")):
+             patch("datastore.memorydb.maintenance_ops.create_edge", side_effect=RuntimeError("edge rebuild failed")), \
+             patch("lib.embeddings.get_embedding", side_effect=_fake_get_embedding):
             with pytest.raises(RuntimeError, match="edge rebuild failed"):
                 apply_review_decisions_from_list(graph, decision, dry_run=False)
 
