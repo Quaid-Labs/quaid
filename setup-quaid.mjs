@@ -3214,7 +3214,12 @@ async function main() {
     const systems = await step5_systems(models.advancedSetup);
     notifyInstallCheckpoint(5, 8, "systems", "Subsystem toggles captured (memory/journal/projects/workspace).", "Switchboard locked.");
     const schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
-    notifyInstallCheckpoint(6, 8, "janitor", "Janitor policy and schedule configured.", "Night shift assigned.");
+    notifyInstallCheckpoint(
+      6, 8, "janitor",
+      "Janitor policy and schedule configured. Next step may pause while gateway/plugin restarts and warms up.",
+      "Night shift assigned. Warmup can take a minute or two."
+    );
+    log.info("Heads up: moving into install/warmup. A 1-3 minute pause here is expected while the gateway/plugin route comes back online.");
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
     notifyInstallCheckpoint(7, 8, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
     await step8_validate(owner, models, embeddings, systems);
