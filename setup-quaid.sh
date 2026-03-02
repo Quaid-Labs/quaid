@@ -666,6 +666,38 @@ raise SystemExit(2)
 PY
 }
 
+_sanitize_openclaw_memory_slot() {
+    python3 - <<'PY'
+import json, os, sys
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+plugins = data.get("plugins")
+if not isinstance(plugins, dict):
+    raise SystemExit(0)
+slots = plugins.get("slots")
+if not isinstance(slots, dict):
+    raise SystemExit(0)
+if str(slots.get("memory", "")).strip() != "quaid":
+    raise SystemExit(0)
+installs = plugins.get("installs")
+quaid_install = installs.get("quaid") if isinstance(installs, dict) else None
+install_path = quaid_install.get("installPath") if isinstance(quaid_install, dict) else None
+quaid_present = isinstance(install_path, str) and install_path.strip() and os.path.exists(install_path)
+if quaid_present:
+    raise SystemExit(0)
+slots["memory"] = "memory-core"
+tmp_path = f"{cfg_path}.tmp-{os.getpid()}"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp_path, cfg_path)
+raise SystemExit(2)
+PY
+}
+
 _ensure_openclaw_compaction_mode_default() {
     python3 - <<'PY'
 import json, os, sys
@@ -835,6 +867,13 @@ step1_preflight() {
         fi
         if ! $has_agent; then
             warn "OpenClaw agents.list still missing. Install will continue, but run 'openclaw setup' if agent sessions fail."
+        fi
+        local memory_slot_rc=0
+        _sanitize_openclaw_memory_slot || memory_slot_rc=$?
+        if [[ $memory_slot_rc -eq 2 ]]; then
+            info "Healed stale OpenClaw slot: plugins.slots.memory=memory-core"
+        elif [[ $memory_slot_rc -ne 0 ]]; then
+            warn "Could not verify OpenClaw memory slot health."
         fi
         local quaid_entry_rc=0
         _sanitize_openclaw_quaid_plugin_entry || quaid_entry_rc=$?

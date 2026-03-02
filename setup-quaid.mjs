@@ -517,6 +517,36 @@ function _sanitizeOpenClawQuaidPluginEntry() {
   }
 }
 
+function _sanitizeOpenClawMemorySlot() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const plugins = parsed?.plugins;
+    if (!plugins || typeof plugins !== "object") return false;
+    const slots = plugins.slots;
+    if (!slots || typeof slots !== "object") return false;
+    if (String(slots.memory || "").trim() !== "quaid") return false;
+
+    const installs = plugins.installs;
+    const installPath = installs?.quaid?.installPath;
+    const quaidPresent = typeof installPath === "string" && installPath.trim() && fs.existsSync(installPath);
+    if (quaidPresent) return false;
+
+    slots.memory = "memory-core";
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
 function _ensureOpenClawCompactionModeDefault() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -761,6 +791,9 @@ async function step1_preflight() {
       log.warn(
         "OpenClaw agents.list is still missing. Install continues, but run `openclaw setup` if agent sessions fail.",
       );
+    }
+    if (_sanitizeOpenClawMemorySlot()) {
+      log.info("Healed stale plugins.slots.memory=quaid to memory-core (quaid not installed)");
     }
     if (_sanitizeOpenClawQuaidPluginEntry()) {
       log.info("Removed invalid plugins.entries.quaid.workspace from ~/.openclaw/openclaw.json");
