@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
-import { unlink, rm } from 'fs/promises'
-import { existsSync } from 'fs'
+import { unlink } from 'fs/promises'
 import * as path from 'node:path'
 
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
@@ -286,7 +285,7 @@ A second paragraph continues the discussion about document processing. It emphas
     
     try {
       await rm(TEST_FIXTURES_DIR, { recursive: true, force: true })
-    } catch (error) {
+    } catch {
       // Ignore cleanup errors
     }
   }
@@ -334,14 +333,14 @@ A second paragraph continues the discussion about document processing. It emphas
 
     it('re-indexes only changed files (mtime check)', async () => {
       // First index
-      const output1 = await rag.reindex()
+      await rag.reindex()
       const stats1 = await rag.stats()
       
       // Ensure we cross coarse filesystem mtime granularity (often 1s).
       await new Promise(resolve => setTimeout(resolve, 1100))
       
       // Second index without --all flag should skip unchanged files
-      const output2 = await rag.reindex()
+      await rag.reindex()
       const stats2 = await rag.stats()
 
       // Skip indicator text can vary by runtime; chunk totals should remain stable.
