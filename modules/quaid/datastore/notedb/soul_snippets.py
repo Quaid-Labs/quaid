@@ -653,9 +653,9 @@ def apply_distillation(filename: str, result: Dict[str, Any],
                         dry_run: bool = True) -> Dict[str, Any]:
     """Apply distillation results (additions/edits) to a core markdown file.
 
-    Returns stats: {"additions": int, "edits": int, "errors": [str]}
+    Returns stats: {"additions": int, "edits": int, "recovered_edits": int, "errors": [str]}
     """
-    stats = {"additions": 0, "edits": 0, "errors": []}
+    stats = {"additions": 0, "edits": 0, "recovered_edits": 0, "errors": []}
 
     file_path = _workspace_dir() / filename
     if not file_path.exists():
@@ -684,10 +684,28 @@ def apply_distillation(filename: str, result: Dict[str, Any],
             stats["edits"] += 1
             logger.info(f"Edit in {filename}: '{old_text[:40]}...' → '{new_text[:40]}...'")
         else:
-            stats["errors"].append(f"Edit target not found in {filename}: '{old_text[:50]}'")
+            # Recovery path: preserve distilled update by appending a tagged note at EOF.
+            # Missing file remains a hard error above; this only handles text-anchor drift.
+            recovery_tag = (
+                f"<!-- DISTILL_RECOVERY:{datetime.now().strftime('%Y%m%d%H%M%S')}:{filename} -->"
+            )
+            recovery_body = new_text.strip()
+            if not recovery_body.startswith("- "):
+                recovery_body = f"- {recovery_body}"
+            recovery_entry = f"\n{recovery_tag}\n{recovery_body}\n"
+            if not dry_run:
+                if not content.endswith("\n"):
+                    content += "\n"
+                content += recovery_entry
+            stats["recovered_edits"] += 1
+            logger.warning(
+                "Distillation anchor miss recovered in %s: '%s...'",
+                filename,
+                old_text[:50],
+            )
 
-    # Flush edits to disk before additions (so _insert_into_file sees edited content)
-    if not dry_run and stats["edits"] > 0:
+    # Flush edits/recoveries to disk before additions (so _insert_into_file sees latest content)
+    if not dry_run and (stats["edits"] > 0 or stats["recovered_edits"] > 0):
         _atomic_write_text(file_path, content)
 
     # Apply additions
@@ -1207,6 +1225,7 @@ def run_journal_distillation(
     total_entries = 0
     total_additions = 0
     total_edits = 0
+    total_recovered_edits = 0
     all_errors: List[str] = []
     files_distilled = 0
     work_items: List[Dict[str, Any]] = []
@@ -1320,6 +1339,7 @@ def run_journal_distillation(
         stats = apply_distillation(filename, result, dry_run=dry_run)
         total_additions += stats["additions"]
         total_edits += stats["edits"]
+        total_recovered_edits += int(stats.get("recovered_edits", 0))
         all_errors.extend(stats["errors"])
         files_distilled += 1
 
@@ -1348,7 +1368,7 @@ def run_journal_distillation(
 
     # Report
     print(f"  Results: {files_distilled} files distilled, {total_additions} additions, "
-          f"{total_edits} edits from {total_entries} entries")
+          f"{total_edits} edits (+{total_recovered_edits} recovered) from {total_entries} entries")
     if all_errors:
         for err in all_errors:
             print(f"  Error: {err}")
@@ -1358,6 +1378,7 @@ def run_journal_distillation(
         "files_distilled": files_distilled,
         "additions": total_additions,
         "edits": total_edits,
+        "recovered_edits": total_recovered_edits,
         "errors": all_errors,
     }
 
@@ -1535,6 +1556,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             )
             result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
             result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
+            result.metrics["journal_recovered_edits"] = int(journal_result.get("recovered_edits", 0))
             result.metrics["journal_entries_distilled"] = int(journal_result.get("total_entries", 0))
             for err in (journal_result.get("errors") or []):
                 result.errors.append(f"Journal distillation failed: {err}")

@@ -917,7 +917,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         "graduated_to_active": 0,
         "tests_passed": 0,
         "tests_failed": 0,
-        "tests_total": 0
+        "tests_total": 0,
+        "journal_recovered_edits": 0,
     }
 
     # Track which tasks were skipped due to budget
@@ -1403,6 +1404,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.add_error(err)
             applied_changes["journal_additions"] = lifecycle_result.metrics.get("journal_additions", 0)
             applied_changes["journal_edits"] = lifecycle_result.metrics.get("journal_edits", 0)
+            applied_changes["journal_recovered_edits"] = lifecycle_result.metrics.get("journal_recovered_edits", 0)
             applied_changes["journal_entries_distilled"] = lifecycle_result.metrics.get("journal_entries_distilled", 0)
             metrics.end_task("journal")
             print(f"Task completed in {metrics.task_duration('journal'):.2f}s\n")

@@ -126,7 +126,7 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
 
     def _run_journal_distillation(*, dry_run, force_distill, **kwargs):
         calls["journal"].append((dry_run, force_distill))
-        return {"additions": 3, "edits": 1, "total_entries": 9}
+        return {"additions": 3, "edits": 1, "recovered_edits": 2, "total_entries": 9}
 
     monkeypatch.setattr("datastore.notedb.soul_snippets.run_journal_distillation", _run_journal_distillation)
 
@@ -145,6 +145,7 @@ def test_snippets_and_journal_lifecycle_run(monkeypatch, tmp_path):
     assert journal_result.errors == []
     assert journal_result.metrics["journal_additions"] == 3
     assert journal_result.metrics["journal_edits"] == 1
+    assert journal_result.metrics["journal_recovered_edits"] == 2
     assert journal_result.metrics["journal_entries_distilled"] == 9
     assert calls["journal"] == [(True, True)]
 

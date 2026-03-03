@@ -442,7 +442,7 @@ class TestDistillation:
         assert "not found" in stats["errors"][0].lower()
 
     def test_apply_distillation_edit_not_found(self, workspace_dir, mock_config):
-        """apply_distillation records error when old_text doesn't match."""
+        """apply_distillation recovers anchor misses by appending tagged entry."""
         (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import apply_distillation
@@ -450,8 +450,42 @@ class TestDistillation:
                 "edits": [{"old_text": "text that does not exist", "new_text": "replacement"}],
             }, dry_run=False)
         assert stats["edits"] == 0
-        assert len(stats["errors"]) == 1
-        assert "not found" in stats["errors"][0].lower()
+        assert stats["recovered_edits"] == 1
+        assert len(stats["errors"]) == 0
+        content = (workspace_dir / "SOUL.md").read_text()
+        assert "<!-- DISTILL_RECOVERY:" in content
+        assert "- replacement" in content
+
+    def test_apply_distillation_recovery_dry_run(self, workspace_dir, mock_config):
+        """Dry-run recovery should count but not mutate file."""
+        original = "# SOUL\n\nI am Alfie.\n"
+        (workspace_dir / "SOUL.md").write_text(original)
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import apply_distillation
+            stats = apply_distillation("SOUL.md", {
+                "edits": [{"old_text": "missing anchor", "new_text": "would recover"}],
+            }, dry_run=True)
+        assert stats["edits"] == 0
+        assert stats["recovered_edits"] == 1
+        assert (workspace_dir / "SOUL.md").read_text() == original
+
+    def test_apply_distillation_mixed_edit_and_recovery(self, workspace_dir, mock_config):
+        """Matching edits apply while unmatched edits recover."""
+        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nmatch me\n")
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import apply_distillation
+            stats = apply_distillation("SOUL.md", {
+                "edits": [
+                    {"old_text": "match me", "new_text": "matched edit"},
+                    {"old_text": "not here", "new_text": "recovered edit"},
+                ],
+            }, dry_run=False)
+        assert stats["edits"] == 1
+        assert stats["recovered_edits"] == 1
+        assert len(stats["errors"]) == 0
+        content = (workspace_dir / "SOUL.md").read_text()
+        assert "matched edit" in content
+        assert "recovered edit" in content
 
     def test_apply_distillation_empty_edit_skipped(self, workspace_dir, mock_config):
         """apply_distillation silently skips edits with empty old_text or new_text."""
