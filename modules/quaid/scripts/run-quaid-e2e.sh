@@ -221,14 +221,12 @@ fi
 if suite_has_exact "blocker"; then
   RUN_LLM_SMOKE=false
   RUN_INTEGRATION_TESTS=true
-  # OpenClaw 2026.3.x CLI agent messaging no longer guarantees slash-command lifecycle
-  # hooks (/compact,/reset,/new) in this path; keep blocker deterministic via integration tests.
-  RUN_LIVE_EVENTS=false
+  RUN_LIVE_EVENTS=true
   RUN_NOTIFY_MATRIX=false
   RUN_INGEST_STRESS=false
   RUN_JANITOR=false
   RUN_JANITOR_SEED=false
-  RUN_MEMORY_FLOW=false
+  RUN_MEMORY_FLOW=true
 elif suite_has_exact "pre-benchmark"; then
   RUN_LLM_SMOKE=true
   RUN_INTEGRATION_TESTS=true
@@ -1986,10 +1984,11 @@ fi
 
 if [[ "$RUN_MEMORY_FLOW" == true ]]; then
 begin_stage "memory_flow"
-echo "[e2e] Running memory flow regression checks (compact/new-best-effort/recall)..."
+echo "[e2e] Running memory flow regression checks (extract + DB verify)..."
 python3 - "$E2E_WS" <<'PY'
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -1997,8 +1996,8 @@ import uuid
 
 ws = sys.argv[1]
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
+db_path = os.path.join(ws, "data", "memory.db")
 seed_session_id = f"quaid-e2e-memory-seed-{uuid.uuid4().hex[:10]}"
-recall_session_id = f"quaid-e2e-memory-recall-{uuid.uuid4().hex[:10]}"
 
 def line_count(path: str) -> int:
     if not os.path.exists(path):
@@ -2047,50 +2046,66 @@ def run_agent(message: str, timeout_sec: int = 220, sid: str = seed_session_id) 
             return parsed["output"]
     return out
 
-def wait_for_reset_signal(start_line: int, sid: str, seconds: int = 60) -> bool:
+def wait_for_extraction(start_line: int, sid: str, seconds: int = 90) -> bool:
     deadline = time.time() + seconds
     while time.time() < deadline:
         lines = read_tail_since(events_path, start_line)
         if any(
             f'"session_id":"{sid}"' in ln
-            and '"label":"ResetSignal"' in ln
-            and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+            and (
+                '"event":"extract_begin"' in ln
+                or '"event":"signal_process_begin"' in ln
+                or '"event":"timer_fired"' in ln
+            )
+            and (
+                '"label":"ResetSignal"' in ln
+                or '"label":"CompactionSignal"' in ln
+                or '"timeout_minutes"' in ln
+            )
             for ln in lines
         ):
             return True
         time.sleep(1)
     return False
 
-# Seed facts and force compaction extraction.
+# Seed facts and trigger lifecycle extraction.
 run_agent("Please remember this exactly: my mother is Wendy and my father is Kent.", sid=seed_session_id)
-run_agent("/compact", timeout_sec=260)
-
-# Trigger reset path as best-effort (latest OpenClaw non-interactive runs may treat slash commands as plain text).
 start_line = line_count(events_path)
+run_agent("/compact", timeout_sec=260, sid=seed_session_id)
 run_agent("/new", timeout_sec=260, sid=seed_session_id)
-if wait_for_reset_signal(start_line, seed_session_id, 60):
-    print("[e2e] Observed ResetSignal processing after /new.")
-else:
-    print("[e2e] NOTE: /new did not emit ResetSignal in this runtime path; continuing with cross-session recall check.")
-
-# Validate recall behavior from new session.
-answer = run_agent(
-    "What are my parents' names? Answer with exactly two names and no caveats.",
-    timeout_sec=260,
-    sid=recall_session_id,
-)
-answer_l = answer.lower()
-if "wendy" not in answer_l or "kent" not in answer_l:
+if not wait_for_extraction(start_line, seed_session_id, 90):
+    preview = "\n".join(read_tail_since(events_path, start_line)[-40:])
     raise SystemExit(
-        "[e2e] ERROR: memory flow recall did not return expected parent names.\n"
-        f"[e2e] answer={answer[:800]}"
+        "[e2e] ERROR: timed out waiting for extraction after compact/new in memory flow\n"
+        f"{preview}"
     )
 
-bad_markers = ("low-confidence", "low confidence", "outdated", "stale")
-if any(marker in answer_l for marker in bad_markers):
+deadline = time.time() + 45
+found_wendy = False
+found_kent = False
+while time.time() < deadline:
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT text FROM nodes WHERE owner_id = ? AND lower(text) LIKE ?",
+                ("maya", "%wendy%"),
+            ).fetchall()
+            found_wendy = len(rows) > 0
+            rows = conn.execute(
+                "SELECT text FROM nodes WHERE owner_id = ? AND lower(text) LIKE ?",
+                ("maya", "%kent%"),
+            ).fetchall()
+            found_kent = len(rows) > 0
+    except Exception:
+        pass
+    if found_wendy and found_kent:
+        break
+    time.sleep(1)
+
+if not (found_wendy and found_kent):
     raise SystemExit(
-        "[e2e] ERROR: memory flow answer included stale/low-confidence hedge language.\n"
-        f"[e2e] answer={answer[:800]}"
+        "[e2e] ERROR: extraction completed but expected facts were not stored in DB "
+        f"(wendy={found_wendy}, kent={found_kent})"
     )
 
 print("[e2e] Memory flow regression checks passed.")

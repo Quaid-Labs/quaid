@@ -27,14 +27,25 @@ import {
 
 
 // Configuration
+function _normalizeWorkspacePath(rawPath: string): string {
+  const trimmed = String(rawPath || "").trim();
+  if (!trimmed) {
+    return path.resolve(process.cwd());
+  }
+  const expanded = trimmed.startsWith("~")
+    ? path.join(os.homedir(), trimmed.slice(1))
+    : trimmed;
+  return path.resolve(expanded);
+}
+
 function _resolveWorkspace(): string {
   const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
   if (envWorkspace) {
-    return envWorkspace;
+    return _normalizeWorkspacePath(envWorkspace);
   }
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
-    return envQuaidHome;
+    return _normalizeWorkspacePath(envQuaidHome);
   }
 
   try {
@@ -45,14 +56,14 @@ function _resolveWorkspace(): string {
       const mainAgent = list.find((a: any) => a?.id === "main" || a?.default === true);
       const ws = String(mainAgent?.workspace || cfg?.agents?.defaults?.workspace || "").trim();
       if (ws) {
-        return ws;
+        return _normalizeWorkspacePath(ws);
       }
     }
   } catch (err: unknown) {
     console.error("[quaid][startup] workspace resolution failed:", (err as Error)?.message || String(err));
   }
 
-  return process.cwd();
+  return _normalizeWorkspacePath(process.cwd());
 }
 const WORKSPACE = _resolveWorkspace();
 function _resolvePythonPluginRoot(): string {
@@ -2953,6 +2964,38 @@ const quaidPlugin = {
       }
       // Cancel inactivity timer — agent is active again
       timeoutManager.onAgentStart();
+
+      // Fallback lifecycle detection for runtimes where before_reset/before_compaction
+      // hooks are not emitted consistently in non-interactive flows.
+      try {
+        const lifecycleMessages = Array.isArray(event?.messages)
+          ? event.messages
+          : (Array.isArray(ctx?.conversationMessages) ? ctx.conversationMessages : []);
+        const signal = detectLifecycleSignal(lifecycleMessages);
+        if (signal && isSystemEnabled("memory")) {
+          const extractionSessionId = extractSessionId(lifecycleMessages, ctx);
+          if (
+            extractionSessionId &&
+            !isInternalQuaidSession(extractionSessionId) &&
+            shouldProcessLifecycleSignal(extractionSessionId, signal)
+          ) {
+            const sourceMessages = getAllConversationMessages(lifecycleMessages);
+            timeoutManager.queueExtractionSignal(extractionSessionId, signal.label, {
+              source: "before_agent_start_fallback",
+              messages: sourceMessages.length ? sourceMessages : undefined,
+            });
+            console.log(
+              `[quaid][signal] queued ${signal.label} session=${extractionSessionId} ` +
+              `source=before_agent_start_fallback (${signal.source})`
+            );
+          }
+        }
+      } catch (err: unknown) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+        console.warn(`[quaid] before_agent_start lifecycle fallback failed: ${String((err as Error)?.message || err)}`);
+      }
 
       // Journal injection (full soul mode) — gated by journal system
       if (!isSystemEnabled("journal")) {

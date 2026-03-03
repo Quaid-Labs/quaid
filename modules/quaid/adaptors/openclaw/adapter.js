@@ -16,14 +16,22 @@ import {
   validateApiRegistrations,
   validateApiSurface
 } from "./contract-gate.js";
+function _normalizeWorkspacePath(rawPath) {
+  const trimmed = String(rawPath || "").trim();
+  if (!trimmed) {
+    return path.resolve(process.cwd());
+  }
+  const expanded = trimmed.startsWith("~") ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
+  return path.resolve(expanded);
+}
 function _resolveWorkspace() {
   const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
   if (envWorkspace) {
-    return envWorkspace;
+    return _normalizeWorkspacePath(envWorkspace);
   }
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
-    return envQuaidHome;
+    return _normalizeWorkspacePath(envQuaidHome);
   }
   try {
     const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
@@ -33,13 +41,13 @@ function _resolveWorkspace() {
       const mainAgent = list.find((a) => a?.id === "main" || a?.default === true);
       const ws = String(mainAgent?.workspace || cfg?.agents?.defaults?.workspace || "").trim();
       if (ws) {
-        return ws;
+        return _normalizeWorkspacePath(ws);
       }
     }
   } catch (err) {
     console.error("[quaid][startup] workspace resolution failed:", err?.message || String(err));
   }
-  return process.cwd();
+  return _normalizeWorkspacePath(process.cwd());
 }
 const WORKSPACE = _resolveWorkspace();
 function _resolvePythonPluginRoot() {
@@ -2556,6 +2564,29 @@ const quaidPlugin = {
         console.warn(`[quaid] Janitor health alert dispatch failed: ${String(err?.message || err)}`);
       }
       timeoutManager.onAgentStart();
+      try {
+        const lifecycleMessages = Array.isArray(event?.messages) ? event.messages : Array.isArray(ctx?.conversationMessages) ? ctx.conversationMessages : [];
+        const signal = detectLifecycleSignal(lifecycleMessages);
+        if (signal && isSystemEnabled("memory")) {
+          const extractionSessionId = extractSessionId(lifecycleMessages, ctx);
+          if (extractionSessionId && !isInternalQuaidSession(extractionSessionId) && shouldProcessLifecycleSignal(extractionSessionId, signal)) {
+            const sourceMessages = getAllConversationMessages(lifecycleMessages);
+            timeoutManager.queueExtractionSignal(extractionSessionId, signal.label, {
+              source: "before_agent_start_fallback",
+              messages: sourceMessages.length ? sourceMessages : void 0
+            });
+            console.log(
+              `[quaid][signal] queued ${signal.label} session=${extractionSessionId} ` +
+              `source=before_agent_start_fallback (${signal.source})`
+            );
+          }
+        }
+      } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+        console.warn(`[quaid] before_agent_start lifecycle fallback failed: ${String(err?.message || err)}`);
+      }
       if (!isSystemEnabled("journal")) {
       } else {
         try {
