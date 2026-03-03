@@ -3199,9 +3199,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
     };
 
-    // Register hooks using onChecked() for typed hooks (NOT api.registerHook!)
+    // Register lifecycle hooks via registerHook (api.on is for event bus signals).
     console.log("[quaid] Registering before_agent_start hook for memory injection");
-    onChecked("before_agent_start", beforeAgentStartHandler, {
+    registerInternalHookChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection",
       priority: 10
     });
@@ -3212,6 +3212,46 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // - before_reset => ResetSignal (compat fallback)
     // We intentionally do NOT enqueue extraction from agent_end.
     console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");
+
+    // Beta fallback: some gateway agent RPC paths do not emit lifecycle hooks for
+    // slash commands. Subscribe to transcript updates and queue lifecycle signals
+    // from explicit command/system markers.
+    const runtimeEvents = (api as any)?.runtime?.events;
+    const parseSessionIdFromTranscriptPath = (sessionFile: string): string => {
+      const base = path.basename(String(sessionFile || ""));
+      const match = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      return match ? match[0].toLowerCase() : "";
+    };
+    if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
+      runtimeEvents.onSessionTranscriptUpdate((update: any) => {
+        try {
+          const sessionFile = String(update?.sessionFile || "").trim();
+          if (!sessionFile || !fs.existsSync(sessionFile)) return;
+          const messages = readMessagesFromSessionFile(sessionFile);
+          if (!Array.isArray(messages) || messages.length === 0) return;
+          const detail = detectLifecycleSignal(messages);
+          if (!detail) return;
+          const sessionId =
+            parseSessionIdFromTranscriptPath(sessionFile) ||
+            String(update?.sessionId || "").trim();
+          if (!sessionId) {
+            console.log(`[quaid][signal] transcript_update missing session id file=${sessionFile}`);
+            return;
+          }
+          if (!shouldProcessLifecycleSignal(sessionId, detail)) {
+            console.log(`[quaid][signal] suppressed duplicate ${detail.label} session=${sessionId} source=transcript_update`);
+            return;
+          }
+          timeoutManager.queueExtractionSignal(sessionId, detail.label, {
+            source: "transcript_update",
+          });
+          console.log(`[quaid][signal] queued ${detail.label} session=${sessionId} source=transcript_update`);
+        } catch (err: unknown) {
+          console.error("[quaid] transcript_update fallback failed:", err);
+        }
+      });
+      console.log("[quaid] Registered runtime.events.onSessionTranscriptUpdate lifecycle fallback");
+    }
 
     // Register memory tools (gated by memory system)
     if (isSystemEnabled("memory")) {
@@ -4527,7 +4567,7 @@ notify_memory_extraction(
     };
     // Register compaction hook — extract memories in parallel with compaction LLM.
     // Source of truth is timeout manager's OpenClaw session reader + local cursor gate.
-    onChecked("before_compaction", async (event: any, ctx: any) => {
+    registerInternalHookChecked("before_compaction", async (event: any, ctx: any) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
@@ -4648,7 +4688,7 @@ notify_memory_extraction(
 
     // Register reset hook — compatibility fallback for older runtimes.
     // Primary reset/new boundary path is session_end below.
-    onChecked("before_reset", async (event: any, ctx: any) => {
+    registerInternalHookChecked("before_reset", async (event: any, ctx: any) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
@@ -4735,7 +4775,7 @@ notify_memory_extraction(
 
     // Primary reset/new lifecycle capture path.
     // session_end is emitted when OpenClaw replaces/resets a session.
-    onChecked("session_end", async (event: any, ctx: any) => {
+    registerInternalHookChecked("session_end", async (event: any, ctx: any) => {
       try {
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();

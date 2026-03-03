@@ -2745,11 +2745,45 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
     };
     console.log("[quaid] Registering before_agent_start hook for memory injection");
-    onChecked("before_agent_start", beforeAgentStartHandler, {
+    registerInternalHookChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection",
       priority: 10
     });
     console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");
+    const runtimeEvents = api?.runtime?.events;
+    const parseSessionIdFromTranscriptPath = (sessionFile) => {
+      const base = path.basename(String(sessionFile || ""));
+      const match = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      return match ? match[0].toLowerCase() : "";
+    };
+    if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
+      runtimeEvents.onSessionTranscriptUpdate((update) => {
+        try {
+          const sessionFile = String(update?.sessionFile || "").trim();
+          if (!sessionFile || !fs.existsSync(sessionFile)) return;
+          const messages = readMessagesFromSessionFile(sessionFile);
+          if (!Array.isArray(messages) || messages.length === 0) return;
+          const detail = detectLifecycleSignal(messages);
+          if (!detail) return;
+          const sessionId = parseSessionIdFromTranscriptPath(sessionFile) || String(update?.sessionId || "").trim();
+          if (!sessionId) {
+            console.log(`[quaid][signal] transcript_update missing session id file=${sessionFile}`);
+            return;
+          }
+          if (!shouldProcessLifecycleSignal(sessionId, detail)) {
+            console.log(`[quaid][signal] suppressed duplicate ${detail.label} session=${sessionId} source=transcript_update`);
+            return;
+          }
+          timeoutManager.queueExtractionSignal(sessionId, detail.label, {
+            source: "transcript_update"
+          });
+          console.log(`[quaid][signal] queued ${detail.label} session=${sessionId} source=transcript_update`);
+        } catch (err) {
+          console.error("[quaid] transcript_update fallback failed:", err);
+        }
+      });
+      console.log("[quaid] Registered runtime.events.onSessionTranscriptUpdate lifecycle fallback");
+    }
     if (isSystemEnabled("memory")) {
       registerToolChecked(
         () => ({
@@ -3995,7 +4029,7 @@ notify_memory_extraction(
         console.warn(msg);
       }
     };
-    onChecked("before_compaction", async (event, ctx) => {
+    registerInternalHookChecked("before_compaction", async (event, ctx) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
@@ -4095,7 +4129,7 @@ notify_memory_extraction(
       name: "compaction-memory-extraction",
       priority: 10
     });
-    onChecked("before_reset", async (event, ctx) => {
+    registerInternalHookChecked("before_reset", async (event, ctx) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
           return;
@@ -4169,7 +4203,7 @@ notify_memory_extraction(
       name: "reset-memory-extraction",
       priority: 10
     });
-    onChecked("session_end", async (event, ctx) => {
+    registerInternalHookChecked("session_end", async (event, ctx) => {
       try {
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();

@@ -994,11 +994,12 @@ telegram["enabled"] = False
 
 openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
 if openai_api_key:
-    # Always provision native OpenAI token profile for API-key auth paths.
+    # Always provision native OpenAI API-key profile for API-key auth paths.
     openai_profile = dict(creds.get("openai:default") or {})
-    openai_profile["type"] = "token"
+    openai_profile["type"] = "api_key"
     openai_profile["provider"] = "openai"
-    openai_profile["token"] = openai_api_key
+    openai_profile["key"] = openai_api_key
+    openai_profile.pop("token", None)
     creds["openai:default"] = openai_profile
     auth_profiles["openai:default"] = {"provider": "openai", "mode": "token"}
     if not isinstance(auth_order.get("openai"), list):
@@ -1007,9 +1008,10 @@ if openai_api_key:
         auth_order["openai"].insert(0, "openai:default")
 
     profile = dict(creds.get("openai-codex:api") or {})
-    profile["type"] = "token"
+    profile["type"] = "api_key"
     profile["provider"] = "openai-codex"
-    profile["token"] = openai_api_key
+    profile["key"] = openai_api_key
+    profile.pop("token", None)
     creds["openai-codex:api"] = profile
 
     # For openai-api path, pin default agent model to the OpenAI provider lane.
@@ -1027,9 +1029,10 @@ if openai_api_key:
 anthropic_api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 if anthropic_api_key:
     profile = dict(creds.get("anthropic:default") or {})
-    profile["type"] = "token"
+    profile["type"] = "api_key"
     profile["provider"] = "anthropic"
-    profile["token"] = anthropic_api_key
+    profile["key"] = anthropic_api_key
+    profile.pop("token", None)
     creds["anthropic:default"] = profile
 
 with open(out, "w", encoding="utf-8") as f:
