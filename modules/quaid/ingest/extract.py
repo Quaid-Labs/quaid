@@ -258,6 +258,8 @@ def extract_from_transcript(
         "facts": [],
         "snippets": {},
         "journal": {},
+        "project_logs": {},
+        "project_log_metrics": {},
         "dry_run": dry_run,
     }
 
@@ -325,6 +327,7 @@ def extract_from_transcript(
     all_facts: List[Dict] = []
     all_snippets: Dict[str, List[str]] = {}
     all_journal: Dict[str, str] = {}
+    all_project_logs: Dict[str, List[str]] = {}
     carry_facts: List[Dict[str, Any]] = []
     extract_deadline = time.time() + MAX_EXTRACT_WALL_SECONDS
 
@@ -402,6 +405,12 @@ def extract_from_transcript(
                 entry = "\n\n".join(s for s in entry if isinstance(s, str))
             if isinstance(entry, str) and entry.strip():
                 all_journal[file] = (all_journal[file] + "\n\n" + entry) if file in all_journal else entry
+        for project_name, items in (parsed.get("project_logs", {}) or {}).items():
+            if not isinstance(items, list):
+                continue
+            cleaned = [str(it).strip() for it in items if isinstance(it, str) and str(it).strip()]
+            if cleaned:
+                all_project_logs.setdefault(str(project_name), []).extend(cleaned)
 
     facts = all_facts
     logger.info(f"[extract] {label}: LLM returned {len(facts)} candidate facts{f' from {len(transcript_chunks)} chunks' if len(transcript_chunks) > 1 else ''}")
@@ -586,6 +595,37 @@ def extract_from_transcript(
         for filename, text in result["journal"].items():
             _load_soul_snippets_module().write_journal_entry(filename, text, trigger=trigger)
 
+    if isinstance(all_project_logs, dict):
+        for project_name, items in all_project_logs.items():
+            cleaned = [s.strip() for s in items if isinstance(s, str) and s.strip()]
+            if cleaned:
+                result["project_logs"][project_name] = cleaned
+
+    if result["project_logs"]:
+        trigger = "Compaction" if "compaction" in label.lower() else (
+            "Reset" if "reset" in label.lower() else "CLI"
+        )
+        try:
+            from datastore.docsdb.project_updater import append_project_logs
+
+            log_metrics = append_project_logs(
+                result["project_logs"],
+                trigger=trigger,
+                dry_run=dry_run,
+            )
+            result["project_log_metrics"] = log_metrics
+            logger.info(
+                "[extract] %s: project logs seen=%d written=%d projects_updated=%d unknown=%d missing=%d",
+                label,
+                int(log_metrics.get("entries_seen", 0)),
+                int(log_metrics.get("entries_written", 0)),
+                int(log_metrics.get("projects_updated", 0)),
+                int(log_metrics.get("projects_unknown", 0)),
+                int(log_metrics.get("projects_missing_file", 0)),
+            )
+        except Exception as exc:
+            logger.warning("[extract] %s: project log append failed: %s", label, exc, exc_info=True)
+
     logger.info(
         f"[extract] {label}: {result['facts_stored']} stored, "
         f"{result['facts_skipped']} skipped, {result['edges_created']} edges"
@@ -610,6 +650,10 @@ def _format_human_summary(result: Dict[str, Any]) -> str:
 
     if result["journal"]:
         lines.append(f"  Journal:       {len(result['journal'])} entries")
+    if result.get("project_logs"):
+        pcount = len(result["project_logs"])
+        ecount = sum(len(v) for v in result["project_logs"].values())
+        lines.append(f"  Project logs:  {ecount} across {pcount} projects")
 
     if result["facts"]:
         lines.append("")

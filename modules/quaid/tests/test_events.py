@@ -391,7 +391,7 @@ def test_validate_declared_event_contract_accepts_openclaw_aliases(monkeypatch):
     def _fake_collect_declared_exports(*, registry, slots, surface, strict=False):
         assert surface == "events"
         assert strict is True
-        return {"openclaw.adapter": ["before_reset", "agent_end", "before_compaction"]}
+        return {"openclaw.adapter": ["before_reset", "agent_end", "before_compaction", "session_end"]}
 
     monkeypatch.setattr(
         "core.runtime.plugins.collect_declared_exports",

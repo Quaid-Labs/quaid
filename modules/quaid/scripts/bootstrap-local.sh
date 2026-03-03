@@ -17,6 +17,7 @@ WORKTREE_REMOTE="origin"
 BACKUP_ROOT="${HOME}/quaid/backups"
 OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
 OPENCLAW_REPO_URL="${OPENCLAW_REPO_URL:-https://github.com/openclaw/openclaw.git}"
+OPENCLAW_REF="${OPENCLAW_REF:-}"
 OPENCLAW_REFRESH=true
 OPENCLAW_INSTALL=true
 WORKTREE_EXCLUDE_PATTERNS=(
@@ -71,6 +72,7 @@ Options:
   --detach-worktree      Leave runtime workspace detached (legacy behavior)
   --worktree-remote <r>  Remote to fetch before creating worktree (default: origin)
   --openclaw-source <p>  OpenClaw source checkout path (default: ~/quaid/openclaw-source)
+  --openclaw-ref <ref>   OpenClaw git ref/tag/sha to checkout (e.g. v2026.3.2-beta.1)
   --no-openclaw-refresh  Skip refreshing OpenClaw source checkout
   --no-openclaw-install  Skip installing OpenClaw CLI from source
 USAGE
@@ -89,6 +91,7 @@ while [[ $# -gt 0 ]]; do
     --detach-worktree) WORKTREE_DETACH=true; shift ;;
     --worktree-remote) WORKTREE_REMOTE="$2"; shift 2 ;;
     --openclaw-source) OPENCLAW_SOURCE="$2"; shift 2 ;;
+    --openclaw-ref) OPENCLAW_REF="$2"; shift 2 ;;
     --no-openclaw-refresh) OPENCLAW_REFRESH=false; shift ;;
     --no-openclaw-install) OPENCLAW_INSTALL=false; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -202,6 +205,12 @@ ensure_openclaw_source() {
       git -C "$OPENCLAW_SOURCE" pull --ff-only || true
     fi
   fi
+
+  if [[ -n "$OPENCLAW_REF" ]]; then
+    echo "Checking out OpenClaw ref: $OPENCLAW_REF"
+    git -C "$OPENCLAW_SOURCE" fetch --all --tags --prune
+    git -C "$OPENCLAW_SOURCE" checkout "$OPENCLAW_REF"
+  fi
 }
 
 install_openclaw_cli() {
@@ -269,13 +278,15 @@ if [[ "$USE_WORKTREE" == true ]]; then
     echo "Workspace on commit branch: ${WORKTREE_TEST_BRANCH}"
   fi
 
-  # Always align runtime workspace to the latest source branch tip.
-  # Without this, an existing test branch can silently drift behind current dev.
-  git -C "$WORKTREE_SOURCE" fetch "$WORKTREE_REMOTE" "$WORKTREE_BRANCH" >/dev/null 2>&1 || true
-  if git -C "$WORKSPACE" show-ref --verify --quiet "refs/remotes/${WORKTREE_REMOTE}/${WORKTREE_BRANCH}"; then
-    git -C "$WORKSPACE" reset --hard "${WORKTREE_REMOTE}/${WORKTREE_BRANCH}" >/dev/null 2>&1 || true
-  else
+  # Always align runtime workspace to the source branch tip from local dev first.
+  # Falling back to remote is acceptable when local branch isn't present.
+  if git -C "$WORKTREE_SOURCE" show-ref --verify --quiet "refs/heads/${WORKTREE_BRANCH}"; then
     git -C "$WORKSPACE" reset --hard "$WORKTREE_BRANCH" >/dev/null 2>&1 || true
+  else
+    git -C "$WORKTREE_SOURCE" fetch "$WORKTREE_REMOTE" "$WORKTREE_BRANCH" >/dev/null 2>&1 || true
+    if git -C "$WORKSPACE" show-ref --verify --quiet "refs/remotes/${WORKTREE_REMOTE}/${WORKTREE_BRANCH}"; then
+      git -C "$WORKSPACE" reset --hard "${WORKTREE_REMOTE}/${WORKTREE_BRANCH}" >/dev/null 2>&1 || true
+    fi
   fi
   echo "Aligned runtime workspace to: ${WORKTREE_BRANCH}"
 fi
@@ -295,6 +306,7 @@ python3 "${ROOT_DIR}/scripts/apply-runtime-profile.py" "${APPLY_ARGS[@]}"
 
 PLUGIN_DIR="${WORKSPACE}/plugins/quaid"
 MODULE_DIR="${WORKSPACE}/modules/quaid"
+ACTIVE_PLUGIN_DIR="${PLUGIN_DIR}"
 
 INSTALL_OWNER_NAME="${QUAID_BOOTSTRAP_OWNER_NAME:-Solomon Steadman}"
 INSTALLER_MJS="${WORKTREE_SOURCE}/setup-quaid.mjs"
@@ -312,6 +324,17 @@ else
 fi
 
 if [[ -f "${MODULE_DIR}/package.json" ]]; then
+  mkdir -p "${WORKSPACE}/plugins"
+  if [[ -d "${PLUGIN_DIR}" ]] && [[ ! -L "${PLUGIN_DIR}" ]] && [[ ! -f "${PLUGIN_DIR}/package.json" ]]; then
+    STALE_DIR_BACKUP="${PLUGIN_DIR}.stale.$(date +%Y%m%d-%H%M%S)"
+    mv "${PLUGIN_DIR}" "${STALE_DIR_BACKUP}"
+    echo "Moved stale plugin shim dir: ${PLUGIN_DIR} -> ${STALE_DIR_BACKUP}"
+  fi
+  ln -sfn ../modules/quaid "${PLUGIN_DIR}"
+  ACTIVE_PLUGIN_DIR="${MODULE_DIR}"
+fi
+
+if [[ -f "${MODULE_DIR}/package.json" ]]; then
   echo "Installing Quaid module test dependencies in: ${MODULE_DIR}"
   if [[ -f "${MODULE_DIR}/package-lock.json" ]]; then
     (cd "${MODULE_DIR}" && npm ci)
@@ -324,7 +347,7 @@ fi
 # This prevents stale links to old sandboxes (for example ~/clawd).
 BIN_DIR="${HOME}/bin"
 mkdir -p "${BIN_DIR}"
-ln -sfn "${PLUGIN_DIR}/quaid" "${BIN_DIR}/quaid"
-echo "Updated CLI shim: ${BIN_DIR}/quaid -> ${PLUGIN_DIR}/quaid"
+ln -sfn "${ACTIVE_PLUGIN_DIR}/quaid" "${BIN_DIR}/quaid"
+echo "Updated CLI shim: ${BIN_DIR}/quaid -> ${ACTIVE_PLUGIN_DIR}/quaid"
 
 echo "Local bootstrap complete for workspace: $WORKSPACE"

@@ -239,7 +239,11 @@ const WORKSPACE =
   detectWorkspaceFromCli() ||
   path.join(os.homedir(), "quaid");
 const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1";
-const PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
+const MODULES_PLUGIN_DIR = path.join(WORKSPACE, "modules", "quaid");
+const LEGACY_PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
+const PLUGIN_DIR = fs.existsSync(path.join(MODULES_PLUGIN_DIR, "package.json"))
+  ? MODULES_PLUGIN_DIR
+  : LEGACY_PLUGIN_DIR;
 const CONFIG_DIR = path.join(WORKSPACE, "config");
 const DATA_DIR = path.join(WORKSPACE, "data");
 const JOURNAL_DIR = path.join(WORKSPACE, "journal");
@@ -756,14 +760,16 @@ function _ensureOpenClawPluginsAllowQuaid() {
   try {
     const raw = fs.readFileSync(cfgPath, "utf8");
     const parsed = JSON.parse(raw);
-    if (!parsed.plugins || typeof parsed.plugins !== "object") parsed.plugins = {};
     const plugins = parsed.plugins;
-    if (!Array.isArray(plugins.allow)) {
-      plugins.allow = [];
+    if (!plugins || typeof plugins !== "object") return false;
+    const allow = Array.isArray(plugins.allow) ? plugins.allow : [];
+    const nextAllow = Array.from(
+      new Set(allow.map((entry) => String(entry || "").trim()).filter(Boolean).concat(["quaid"])),
+    );
+    if (allow.length === nextAllow.length && allow.every((entry, idx) => String(entry || "").trim() === nextAllow[idx])) {
+      return false;
     }
-    const hasQuaid = plugins.allow.some((entry) => String(entry || "").trim() === "quaid");
-    if (hasQuaid) return false;
-    plugins.allow.push("quaid");
+    plugins.allow = nextAllow;
     fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
     fs.renameSync(tmpPath, cfgPath);
     return true;
@@ -825,6 +831,24 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     if (!norm.includes("already enabled")) {
       return { ok: false, reason: `plugins enable failed: ${msg.trim() || "unknown error"}` };
     }
+  }
+
+  // Verify the plugin registry can actually resolve/load Quaid on this OpenClaw build.
+  // Some builds accept install/enable config writes but still do not expose the plugin at runtime.
+  const listRes = spawnSync(cli, ["plugins", "list", "--json"], { encoding: "utf8", stdio: "pipe" });
+  if (listRes.status !== 0) {
+    const msg = `${listRes.stderr || ""}\n${listRes.stdout || ""}`.trim();
+    return { ok: false, reason: `plugins list failed after enable: ${msg || "unknown error"}` };
+  }
+  const listRaw = String(listRes.stdout || "");
+  const hasQuaid = /"id"\s*:\s*"quaid"/.test(listRaw);
+  if (!hasQuaid) {
+    return {
+      ok: false,
+      reason:
+        "OpenClaw did not resolve plugin 'quaid' after install/enable (plugins list missing id=quaid). " +
+        "This OpenClaw build may be incompatible with Quaid's plugin registration path.",
+    };
   }
 
   const restartRes = spawnSync(cli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
@@ -1031,6 +1055,9 @@ async function step1_preflight() {
     }
     if (_sanitizeOpenClawQuaidPluginEntry()) {
       log.info("Removed invalid plugins.entries.quaid.workspace from ~/.openclaw/openclaw.json");
+    }
+    if (_ensureOpenClawPluginsAllowQuaid()) {
+      log.info("Ensured plugins.allow includes: quaid");
     }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
@@ -1268,6 +1295,7 @@ async function step3_models() {
     initialValue: false,
   }));
 
+  const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
   let provider = "anthropic";
   let adapterType = IS_OPENCLAW ? "openclaw" : "standalone";
   if (advancedSetup) {
@@ -1289,6 +1317,10 @@ async function step3_models() {
         { value: "ollama",     label: "Ollama (local)",     hint: "Experimental — quality depends on model size" },
       ],
     }));
+  }
+  if (!advancedSetup && ["anthropic", "openai", "openrouter", "together", "ollama"].includes(forcedProvider)) {
+    provider = forcedProvider;
+    log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
   }
 
   if (provider !== "anthropic") {
@@ -1982,7 +2014,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
     s.stop(C.green("OpenClaw plugin registered"));
     if (_ensureOpenClawPluginsAllowQuaid()) {
-      log.info("Added 'quaid' to plugins.allow in ~/.openclaw/openclaw.json");
+      log.info("Ensured plugins.allow includes: quaid");
     }
     if (!(await waitForGatewayWarmup(8000))) {
       log.warn("Gateway warmup timed out after plugin registration; hook enable will continue in best-effort mode.");
@@ -2600,6 +2632,39 @@ function enableRequiredOpenClawHooks() {
     ["bootstrap-extra-files", "bot-strap-extra-files"],
     ["session-memory", "session-memoey"],
   ];
+  const optionalHookSets = [
+    ["quaid-workflow"],
+    ["quaid-session-workflow"],
+    ["quaid-reset-signal"],
+    ["quaid-workspace-workflow"],
+    ["quaid-workspace-hooks"],
+  ];
+
+  const discoverOptionalQuaidHooks = () => {
+    try {
+      const listRes = spawnSync(cli, ["hooks", "list", "--json"], { encoding: "utf8", stdio: "pipe" });
+      if (listRes.status !== 0) return [];
+      const raw = String(listRes.stdout || "");
+      const start = raw.indexOf("{");
+      const end = raw.lastIndexOf("}");
+      if (start < 0 || end <= start) return [];
+      const parsed = JSON.parse(raw.slice(start, end + 1));
+      const hooks = Array.isArray(parsed?.hooks) ? parsed.hooks : [];
+      const names = hooks
+        .map((h) => String(h?.name || "").trim())
+        .filter(Boolean)
+        .filter((n) => /quaid/i.test(n));
+      return [...new Set(names)];
+    } catch {
+      return [];
+    }
+  };
+
+  for (const discovered of discoverOptionalQuaidHooks()) {
+    optionalHookSets.push([discovered]);
+  }
+
+  const hookSets = [...requiredHooks, ...optionalHookSets];
   let forcedAny = false;
 
   log.info("Explicitly enabling required OpenClaw hooks: bootstrap-extra-files, session-memory");
@@ -2629,7 +2694,7 @@ function enableRequiredOpenClawHooks() {
       } catch {}
     }
   };
-  for (const candidates of requiredHooks) {
+  for (const candidates of hookSets) {
     let enabled = false;
     let lastErr = "";
     for (const hookName of candidates) {
@@ -2735,7 +2800,9 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       enabled: true,
       strict: true,
       apiVersion: 1,
-      paths: ["plugins"],
+      // Include module path explicitly; pathlib rglob does not reliably recurse
+      // into symlinked plugin dirs across environments.
+      paths: ["modules/quaid", "plugins"],
       allowList: ["memorydb.core", "core.extract", "openclaw.adapter"],
       slots: {
         adapter: resolvedAdapterType === "openclaw" ? "openclaw.adapter" : "",

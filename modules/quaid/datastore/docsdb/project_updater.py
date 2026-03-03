@@ -470,6 +470,88 @@ def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
                 pass
 
 
+def append_project_logs(
+    project_logs: Dict[str, List[str]],
+    trigger: str = "Compaction",
+    date_str: Optional[str] = None,
+    dry_run: bool = False,
+) -> Dict[str, int]:
+    """Append project log bullets to per-project PROJECT.md files.
+
+    Project logs are written under:
+      ## Project Log
+      <!-- BEGIN:PROJECT_LOG -->
+      - YYYY-MM-DD [Trigger] note
+      <!-- END:PROJECT_LOG -->
+    """
+    metrics = {
+        "projects_seen": 0,
+        "projects_updated": 0,
+        "entries_seen": 0,
+        "entries_written": 0,
+        "projects_unknown": 0,
+        "projects_missing_file": 0,
+    }
+    if not isinstance(project_logs, dict) or not project_logs:
+        return metrics
+
+    cfg = get_config()
+    today = date_str or datetime.now().strftime("%Y-%m-%d")
+    marker_begin = "<!-- BEGIN:PROJECT_LOG -->"
+    marker_end = "<!-- END:PROJECT_LOG -->"
+
+    for project_name, raw_entries in project_logs.items():
+        metrics["projects_seen"] += 1
+        entries = [str(e).strip() for e in (raw_entries or []) if str(e).strip()]
+        metrics["entries_seen"] += len(entries)
+        if not entries:
+            continue
+
+        defn = cfg.projects.definitions.get(project_name)
+        if not defn:
+            metrics["projects_unknown"] += 1
+            print(f"[project-log] unknown project: {project_name}")
+            continue
+
+        project_md = _resolve_path(defn.home_dir) / "PROJECT.md"
+        if not project_md.exists():
+            metrics["projects_missing_file"] += 1
+            print(f"[project-log] missing PROJECT.md: {project_md}")
+            continue
+
+        lines = [f"- {today} [{trigger}] {entry}" for entry in entries]
+        content = project_md.read_text()
+        if marker_begin in content and marker_end in content:
+            pattern = re.compile(
+                re.escape(marker_begin) + r"(.*?)" + re.escape(marker_end),
+                flags=re.DOTALL,
+            )
+            m = pattern.search(content)
+            existing = (m.group(1) if m else "").strip()
+            body = existing + ("\n" if existing else "") + "\n".join(lines)
+            replacement = f"{marker_begin}\n{body}\n{marker_end}"
+            updated = pattern.sub(lambda _m: replacement, content, count=1)
+        else:
+            updated = (
+                content.rstrip()
+                + "\n\n## Project Log\n"
+                + f"{marker_begin}\n"
+                + "\n".join(lines)
+                + f"\n{marker_end}\n"
+            )
+
+        metrics["entries_written"] += len(lines)
+        metrics["projects_updated"] += 1
+        print(
+            f"[project-log] project={project_name} entries={len(lines)} "
+            f"file={project_md} dry_run={dry_run}"
+        )
+        if not dry_run:
+            project_md.write_text(updated)
+
+    return metrics
+
+
 def _notify_user(project_name: str, updates_applied: List[str], trigger: str) -> None:
     """Notify user about project updates."""
     if not updates_applied:

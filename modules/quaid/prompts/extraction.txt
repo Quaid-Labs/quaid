@@ -123,6 +123,10 @@ Respond with JSON only:
     "SOUL.md": "paragraph text or empty string",
     "USER.md": "",
     "MEMORY.md": ""
+  },
+  "project_logs": {
+    "recipe-app": ["short note 1", "short note 2"],
+    "portfolio-site": []
   }
 }
 
@@ -171,4 +175,15 @@ Include a "journal_entries" object in your response. Each key is a filename, eac
 
 IMPORTANT: Journal entries are OPTIONAL. Most conversations warrant ZERO entries. Only write when something genuinely moved you or taught you something new. When in doubt, leave it empty.
 
-If nothing worth capturing, respond: {"facts": []}
+=== PROJECT LOGS ===
+
+Include a "project_logs" object for concise project-context notes that belong in PROJECT.md.
+- Keys are project ids (for example "recipe-app", "portfolio-site")
+- Values are arrays of short strings (1-2 lines each)
+- Use only concrete state/context from this conversation: decisions, blockers, scope updates, follow-ups
+- If no project context exists, return {}
+
+Update output JSON format:
+- Add: "project_logs": {"project-id": ["note 1", "note 2"]}
+
+If nothing worth capturing, respond: {"facts": [], "project_logs": {}}

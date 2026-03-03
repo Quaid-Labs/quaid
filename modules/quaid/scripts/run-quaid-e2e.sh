@@ -9,6 +9,7 @@ ENV_FILE="${QUAID_E2E_ENV_FILE:-${PLUGIN_ROOT}/.env.e2e}"
 E2E_WS="${HOME}/quaid/test"
 DEV_WS="${HOME}/quaid/dev"
 OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
+OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-}"
 
 PROFILE_TEST="${QUAID_E2E_PROFILE_TEST:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
 PROFILE_SRC="${QUAID_E2E_PROFILE_SRC:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
@@ -16,7 +17,7 @@ TMP_PROFILE_BASE="$(mktemp /tmp/quaid-e2e-profile.XXXXXX)"
 TMP_PROFILE="${TMP_PROFILE_BASE}.json"
 mv "$TMP_PROFILE_BASE" "$TMP_PROFILE"
 
-AUTH_PATH="openai-oauth"
+AUTH_PATH="openai-api"
 KEEP_ON_SUCCESS=false
 RUN_JANITOR=true
 RUN_LLM_SMOKE=true
@@ -105,7 +106,7 @@ usage() {
 Usage: $(basename "$0") [options]
 
 Options:
-  --auth-path <id>       Auth path for bootstrap profile (openai-oauth|openai-api|anthropic-oauth|anthropic-api; default: openai-oauth)
+  --auth-path <id>       Auth path for bootstrap profile (openai-oauth|openai-api|anthropic-oauth|anthropic-api; default: openai-api)
   --keep-on-success      Do not delete ~/quaid/test after successful run
   --skip-janitor         Skip janitor phase
   --skip-llm-smoke       Skip gateway LLM smoke call
@@ -122,6 +123,7 @@ Options:
   --runtime-budget-seconds <n>  Explicit runtime budget override in seconds (0 disables override)
   --env-file <path>      Optional .env file to source before running (default: modules/quaid/.env.e2e)
   --openclaw-source <p>  OpenClaw source repo path (default: ~/quaid/openclaw-source)
+  --openclaw-ref <ref>   OpenClaw git ref/tag/sha to test (default: env QUAID_E2E_OPENCLAW_REF)
   --quick-bootstrap      Skip OpenClaw source refresh/install during bootstrap (faster local loops)
   --reuse-workspace      Reuse existing ~/quaid/test workspace when possible (fast path)
   -h, --help             Show this help
@@ -173,6 +175,7 @@ while [[ $# -gt 0 ]]; do
     --runtime-budget-seconds) RUNTIME_BUDGET_SECONDS="$2"; shift 2 ;;
     --env-file) ENV_FILE="$2"; shift 2 ;;
     --openclaw-source) OPENCLAW_SOURCE="$2"; shift 2 ;;
+    --openclaw-ref) OPENCLAW_REF="$2"; shift 2 ;;
     --quick-bootstrap) QUICK_BOOTSTRAP=true; shift ;;
     --reuse-workspace) REUSE_WORKSPACE=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -749,13 +752,46 @@ enable_required_openclaw_hooks() {
   fi
 
   local hook_pairs=(
-    "bootstrap-extra-files:bot-strap-extra-files"
-    "session-memory:session-memoey"
+    "bootstrap-extra-files:bot-strap-extra-files:required"
+    "session-memory:session-memoey:required"
+    "quaid-workflow::optional"
+    "quaid-session-workflow::optional"
+    "quaid-reset-signal::optional"
+    "quaid-workspace-workflow::optional"
+    "quaid-workspace-hooks::optional"
   )
-  local pair canonical alias out out_file
+  local pair canonical alias mode out out_file
+  force_enable_hook() {
+    local hook_name="$1"
+    python3 - "$hook_name" <<'PY'
+import json
+import os
+import sys
+
+hook = sys.argv[1]
+cfg = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    with open(cfg, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    raise SystemExit(1)
+hooks = data.setdefault("hooks", {})
+internal = hooks.setdefault("internal", {})
+entries = internal.setdefault("entries", {})
+entry = entries.setdefault(hook, {})
+entry["enabled"] = True
+tmp = f"{cfg}.tmp.{os.getpid()}"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, cfg)
+PY
+  }
   for pair in "${hook_pairs[@]}"; do
     canonical="${pair%%:*}"
     alias="${pair#*:}"
+    alias="${alias%%:*}"
+    mode="${pair##*:}"
     if [[ "$alias" == "$canonical" ]]; then
       alias=""
     fi
@@ -780,9 +816,22 @@ enable_required_openclaw_hooks() {
       rm -f "$out_file"
     fi
 
-    echo "[e2e] WARN: failed to enable hook '${canonical}' via ${cli}; continuing." >&2
-    if [[ -n "${out:-}" ]]; then
-      echo "[e2e] WARN: ${out}" >&2
+    if force_enable_hook "$canonical"; then
+      echo "[e2e] Hook force-enabled in config: ${canonical}"
+      continue
+    fi
+
+    if [[ "$mode" == "required" ]]; then
+      echo "[e2e] WARN: failed to enable required hook '${canonical}' via ${cli}; continuing." >&2
+      if [[ -n "${out:-}" ]]; then
+        echo "[e2e] WARN: ${out}" >&2
+      fi
+    else
+      if [[ -n "${out:-}" ]] && [[ "$out" != *"not found"* ]] && [[ "$out" != *"unknown"* ]]; then
+        echo "[e2e] WARN: optional hook '${canonical}' enable error: ${out}" >&2
+      else
+        echo "[e2e] Hook optional/missing: ${canonical}"
+      fi
     fi
   done
 }
@@ -1015,7 +1064,13 @@ run_bootstrap() {
   local do_wipe="$1"
   local -a args
   local bootstrap_log=""
+  local provider_override=""
   local rc=0
+  case "$AUTH_PATH" in
+    openai-oauth|openai-api) provider_override="openai" ;;
+    anthropic-oauth|anthropic-api) provider_override="anthropic" ;;
+    *) provider_override="" ;;
+  esac
   args=(
     "${BOOTSTRAP_ROOT}/scripts/bootstrap-local.sh"
     --profile "$TMP_PROFILE"
@@ -1024,6 +1079,9 @@ run_bootstrap() {
     --worktree-source "$DEV_WS"
     --worktree-test-branch "e2e-runtime"
   )
+  if [[ -n "$OPENCLAW_REF" ]]; then
+    args+=(--openclaw-ref "$OPENCLAW_REF")
+  fi
   if [[ "$do_wipe" == "true" ]]; then
     args+=(--wipe)
   fi
@@ -1031,7 +1089,7 @@ run_bootstrap() {
     args+=(--no-openclaw-refresh --no-openclaw-install)
   fi
   bootstrap_log="$(mktemp -t quaid-e2e-bootstrap.log.XXXXXX)"
-  if "${args[@]}" 2>&1 | tee "$bootstrap_log"; then
+  if QUAID_INSTALL_PROVIDER="$provider_override" "${args[@]}" 2>&1 | tee "$bootstrap_log"; then
     rc=0
   else
     rc=$?
@@ -1049,7 +1107,7 @@ run_bootstrap() {
     if git -C "$DEV_WS" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       git -C "$DEV_WS" worktree prune >/dev/null 2>&1 || true
     fi
-    if "${args[@]}" 2>&1 | tee "$bootstrap_log"; then
+    if QUAID_INSTALL_PROVIDER="$provider_override" "${args[@]}" 2>&1 | tee "$bootstrap_log"; then
       rm -f "$bootstrap_log"
       return 0
     fi
@@ -1182,8 +1240,13 @@ if ! wait_for_gateway_listen 40; then
   exit 1
 fi
 
-if [[ ! -e "${E2E_WS}/plugins/quaid" ]] && [[ -d "${E2E_WS}/modules/quaid" ]]; then
+if [[ -d "${E2E_WS}/modules/quaid" ]] && [[ -f "${E2E_WS}/modules/quaid/package.json" ]]; then
   mkdir -p "${E2E_WS}/plugins"
+  if [[ -d "${E2E_WS}/plugins/quaid" ]] && [[ ! -L "${E2E_WS}/plugins/quaid" ]] && [[ ! -f "${E2E_WS}/plugins/quaid/package.json" ]]; then
+    stale_backup="${E2E_WS}/plugins/quaid.stale.$(date +%Y%m%d-%H%M%S)"
+    mv "${E2E_WS}/plugins/quaid" "${stale_backup}"
+    echo "[e2e] Moved stale plugin shim dir: ${E2E_WS}/plugins/quaid -> ${stale_backup}"
+  fi
   ln -sfn ../modules/quaid "${E2E_WS}/plugins/quaid"
 fi
 
@@ -1225,16 +1288,54 @@ timeout_wait = int(sys.argv[2])
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
 notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
 pending_signal_dir = os.path.join(ws, "data", "pending-extraction-signals")
-session_id = f"quaid-e2e-live-{uuid.uuid4().hex[:12]}"
+session_id = ""
+session_key = "agent:main:main"
 
-def run_agent(message: str) -> None:
-    cmd = ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", "180", "--json"]
+def run_agent(message: str, sid: str = "") -> None:
+    cmd = ["openclaw", "agent", "--agent", "main"]
+    if sid:
+        cmd.extend(["--session-id", sid])
+    cmd.extend(["--message", message, "--timeout", "30", "--json"])
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
     except subprocess.TimeoutExpired:
-        raise SystemExit(f"[e2e] ERROR: openclaw agent timed out for message={message!r}")
+        print(f"[e2e] WARN: openclaw agent timed out for message={message!r}", flush=True)
+        return False
     if proc.returncode != 0:
-        raise SystemExit(f"[e2e] ERROR: openclaw agent failed for message={message!r}: {proc.stderr.strip()[:400]}")
+        err = (proc.stderr or "").strip()[:400]
+        print(f"[e2e] WARN: openclaw agent failed for message={message!r}: {err}", flush=True)
+        return False
+    return True
+
+def gateway_call(method: str, params: dict, timeout_sec: int = 30) -> bool:
+    cmd = [
+        "openclaw",
+        "gateway",
+        "call",
+        method,
+        "--json",
+        "--params",
+        json.dumps(params),
+        "--timeout",
+        str(timeout_sec * 1000),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec + 10)
+    except subprocess.TimeoutExpired:
+        print(f"[e2e] WARN: gateway call timed out method={method!r}", flush=True)
+        return False
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()[:500]
+        print(f"[e2e] WARN: gateway call failed method={method!r}: {err}", flush=True)
+        return False
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except Exception:
+        payload = {}
+    if not payload.get("ok"):
+        print(f"[e2e] WARN: gateway call non-ok method={method!r}: {(proc.stdout or '').strip()[:500]}", flush=True)
+        return False
+    return True
 
 def line_count(path: str) -> int:
     if not os.path.exists(path):
@@ -1270,6 +1371,19 @@ def resolve_runtime_session_id(marker_text: str, fallback_session_id: str, secon
         time.sleep(1)
     return fallback_session_id
 
+def resolve_session_id_from_key(session_key: str, fallback_session_id: str) -> str:
+    sessions_path = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
+    try:
+        with open(sessions_path, "r", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+        entry = data.get(session_key) or {}
+        sid = str(entry.get("sessionId") or "").strip()
+        if sid:
+            return sid
+    except Exception:
+        pass
+    return fallback_session_id
+
 def wait_for(predicate, seconds: int, label: str, start_line: int):
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -1280,6 +1394,41 @@ def wait_for(predicate, seconds: int, label: str, start_line: int):
     lines = read_tail_since(events_path, start_line)
     preview = "\n".join(lines[-30:])
     raise SystemExit(f"[e2e] ERROR: timed out waiting for {label}\n[e2e] recent events:\n{preview}")
+
+def queue_signal_fallback(session_id: str, label: str) -> None:
+    if not str(session_id or "").strip():
+        raise SystemExit(f"[e2e] ERROR: cannot queue fallback {label}; runtime session id is empty")
+    script = r"""
+import { SessionTimeoutManager } from "./modules/quaid/core/session-timeout.js";
+const workspace = process.argv[1];
+const sessionId = process.argv[2];
+const signalLabel = process.argv[3];
+const tm = new SessionTimeoutManager({
+  workspace,
+  timeoutMinutes: 60,
+  isBootstrapOnly: false,
+  logger: console,
+  extract: async () => {},
+  readSessionMessages: () => [{ role: "user", content: "e2e-fallback", timestamp: new Date().toISOString() }],
+  listSessionActivity: () => [{ sessionId, lastActivityMs: Date.now() }],
+});
+tm.queueExtractionSignal(sessionId, signalLabel, { source: "e2e_live_fallback" });
+console.log(`[e2e] queued fallback ${signalLabel} for ${sessionId}`);
+"""
+    proc = subprocess.run(
+        ["node", "-e", script, ws, session_id, label],
+        cwd=ws,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[e2e] ERROR: failed to queue fallback signal {label} for {session_id}: {proc.stderr.strip()[:400]}"
+        )
+    out = proc.stdout.strip()
+    if out:
+        print(out)
 
 def assert_notify_worker_healthy(start_line: int) -> None:
     lines = read_tail_since(notify_log_path, start_line)
@@ -1301,16 +1450,57 @@ def assert_notify_worker_healthy(start_line: int) -> None:
             f"[e2e] notify-worker excerpts:\n{preview}"
         )
 
-print(f"[e2e] Live events session: {session_id}")
+print(f"[e2e] Live events session key: {session_key}")
 notify_start = line_count(notify_log_path)
+stage_start = line_count(events_path)
+fallback_used = False
 
 compact_marker = f"E2E_COMPACT_{uuid.uuid4().hex[:10]}"
-run_agent(f"E2E marker before compact: {compact_marker}")
-runtime_session_id = resolve_runtime_session_id(compact_marker, session_id)
+marker_ok = run_agent(f"E2E marker before compact: {compact_marker}")
+runtime_session_id = resolve_session_id_from_key(session_key, "main-session")
+if marker_ok:
+    runtime_session_id = resolve_runtime_session_id(compact_marker, runtime_session_id)
+else:
+    print("[e2e] WARN: marker message failed; using synthetic live session id for fallback checks.", flush=True)
+if not runtime_session_id:
+    raise SystemExit("[e2e] ERROR: could not resolve runtime session id for live event checks")
 print(f"[e2e] Live runtime session_id: {runtime_session_id}")
 start = line_count(events_path)
-run_agent("/compact")
-try:
+compact_ok = run_agent("/compact")
+if compact_ok:
+    try:
+        wait_for(
+            lambda lines: any(
+                f'"session_id":"{runtime_session_id}"' in ln
+                and '"label":"CompactionSignal"' in ln
+                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                for ln in lines
+            ),
+            45,
+            "compaction signal processing",
+            start,
+        )
+        print("[e2e] Live compact hook path OK.")
+    except SystemExit as err:
+        print(f"[e2e] WARN: compact hook path not observed ({err}). Falling back to direct signal queue.")
+        fallback_used = True
+        queue_signal_fallback(runtime_session_id, "CompactionSignal")
+        wait_for(
+            lambda lines: any(
+                f'"session_id":"{runtime_session_id}"' in ln
+                and '"label":"CompactionSignal"' in ln
+                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                for ln in lines
+            ),
+            35,
+            "compaction fallback signal processing",
+            start,
+        )
+        print("[e2e] Live compact fallback path OK.")
+else:
+    print("[e2e] WARN: compact command did not complete; using direct signal queue fallback.", flush=True)
+    fallback_used = True
+    queue_signal_fallback(runtime_session_id, "CompactionSignal")
     wait_for(
         lambda lines: any(
             f'"session_id":"{runtime_session_id}"' in ln
@@ -1318,49 +1508,109 @@ try:
             and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
             for ln in lines
         ),
-        45,
-        "compaction signal processing",
+        35,
+        "compaction fallback signal processing",
         start,
     )
-    print("[e2e] Live compact hook path OK.")
-except SystemExit as err:
-    # Some OpenClaw surfaces process /compact without emitting before_compaction.
-    # Keep this as best-effort coverage and continue with reset/new hard assertions.
-    print(f"[e2e] WARN: compact hook path not observed ({err}). Continuing with reset/new validation.")
+    print("[e2e] Live compact fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
 # Reset can race session teardown, so validate by event window (not marker lookup).
 start = line_count(events_path)
 run_agent("E2E baseline message before reset.")
-run_agent("/reset")
-wait_for(
-    lambda lines: any(
-        '"label":"ResetSignal"' in ln
-        and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-        for ln in lines
-    ),
-    45,
-    "reset signal processing",
-    start,
-)
-print("[e2e] Live reset hook path OK.")
+reset_ok = run_agent("/reset")
+if reset_ok:
+    try:
+        wait_for(
+            lambda lines: any(
+                '"label":"ResetSignal"' in ln
+                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                for ln in lines
+            ),
+            45,
+            "reset signal processing",
+            start,
+        )
+        print("[e2e] Live reset hook path OK.")
+    except SystemExit as err:
+        print(f"[e2e] WARN: reset hook path not observed ({err}). Falling back to direct signal queue.")
+        fallback_used = True
+        queue_signal_fallback(runtime_session_id, "ResetSignal")
+        wait_for(
+            lambda lines: any(
+                '"label":"ResetSignal"' in ln
+                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                for ln in lines
+            ),
+            35,
+            "reset fallback signal processing",
+            start,
+        )
+        print("[e2e] Live reset fallback path OK.")
+else:
+    print("[e2e] WARN: reset command did not complete; using direct signal queue fallback.", flush=True)
+    fallback_used = True
+    queue_signal_fallback(runtime_session_id, "ResetSignal")
+    wait_for(
+        lambda lines: any(
+            '"label":"ResetSignal"' in ln
+            and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+            for ln in lines
+        ),
+        35,
+        "reset fallback signal processing",
+        start,
+    )
+    print("[e2e] Live reset fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
 # /new path uses same reset signal semantics; validate by event window.
 start = line_count(events_path)
 run_agent("E2E baseline message before new.")
-run_agent("/new")
-wait_for(
-    lambda lines: any(
-        '"label":"ResetSignal"' in ln
-        and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-        for ln in lines
-    ),
-    45,
-    "new command signal processing",
-    start,
-)
-print("[e2e] Live new hook path OK.")
+new_ok = run_agent("/new")
+if new_ok:
+    try:
+        wait_for(
+            lambda lines: any(
+                '"label":"ResetSignal"' in ln
+                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                for ln in lines
+            ),
+            45,
+            "new command signal processing",
+            start,
+        )
+        print("[e2e] Live new hook path OK.")
+    except SystemExit as err:
+        print(f"[e2e] WARN: new hook path not observed ({err}). Falling back to direct signal queue.")
+        fallback_used = True
+        queue_signal_fallback(runtime_session_id, "ResetSignal")
+        wait_for(
+            lambda lines: any(
+                '"label":"ResetSignal"' in ln
+                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                for ln in lines
+            ),
+            35,
+            "new fallback signal processing",
+            start,
+        )
+        print("[e2e] Live new fallback path OK.")
+else:
+    print("[e2e] WARN: new command did not complete; using direct signal queue fallback.", flush=True)
+    fallback_used = True
+    queue_signal_fallback(runtime_session_id, "ResetSignal")
+    wait_for(
+        lambda lines: any(
+            '"label":"ResetSignal"' in ln
+            and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+            for ln in lines
+        ),
+        35,
+        "new fallback signal processing",
+        start,
+    )
+    print("[e2e] Live new fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
 # Ensure session cursor bookkeeping is active for replay safety.
@@ -1389,6 +1639,33 @@ if str(cursor_payload.get("sessionId") or "") != runtime_session_id:
 if not cursor_payload.get("lastMessageKey"):
     raise SystemExit("[e2e] ERROR: session cursor missing lastMessageKey")
 print("[e2e] Live session cursor progression OK.")
+
+stage_lines = read_tail_since(events_path, stage_start)
+extract_lines = []
+for raw in stage_lines:
+    try:
+        evt = json.loads(raw)
+    except Exception:
+        continue
+    if str(evt.get("event") or "") == "extract_begin":
+        extract_lines.append(evt)
+if len(extract_lines) >= 12:
+    by_sid = {}
+    for evt in extract_lines:
+        sid = str(evt.get("session_id") or "")
+        by_sid[sid] = by_sid.get(sid, 0) + 1
+    duplicate_sids = [sid for sid, count in by_sid.items() if count > 2 and sid]
+    if duplicate_sids or len(by_sid) >= 8:
+        raise SystemExit(
+            "[e2e] ERROR: extraction-storm signature detected in live events "
+            f"(extract_begin={len(extract_lines)}, unique_sessions={len(by_sid)}, duplicate_sessions={duplicate_sids[:8]})."
+        )
+
+if fallback_used:
+    raise SystemExit(
+        "[e2e] ERROR: lifecycle command hook path failed (/compact|/reset|/new did not produce native hook extraction). "
+        "Fallback was used for diagnostics but this is a blocker regression."
+    )
 
 # Postconditions: no stale lock claims and no internal extraction prompts
 # persisted as session messages in a clean e2e workspace.
@@ -1997,7 +2274,9 @@ import uuid
 ws = sys.argv[1]
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
 db_path = os.path.join(ws, "data", "memory.db")
+cfg_path = os.path.join(ws, "config", "memory.json")
 seed_session_id = f"quaid-e2e-memory-seed-{uuid.uuid4().hex[:10]}"
+session_key = "agent:main:main"
 
 def line_count(path: str) -> int:
     if not os.path.exists(path):
@@ -2015,44 +2294,64 @@ def read_tail_since(path: str, start: int):
                 out.append(line.strip())
     return out
 
-def run_agent(message: str, timeout_sec: int = 220, sid: str = seed_session_id) -> str:
+def run_agent(message: str, timeout_sec: int = 30, sid: str = "") -> bool:
+    cmd = ["openclaw", "agent", "--agent", "main"]
+    if sid:
+        cmd.extend(["--session-id", sid])
+    cmd.extend(["--message", message, "--timeout", str(timeout_sec), "--json"])
     try:
         proc = subprocess.run(
-            ["openclaw", "agent", "--session-id", sid, "--message", message, "--timeout", str(timeout_sec), "--json"],
+            cmd,
             capture_output=True,
             text=True,
-            timeout=max(timeout_sec + 60, 180),
+            timeout=max(timeout_sec + 5, 35),
         )
     except subprocess.TimeoutExpired:
-        raise SystemExit(
-            f"[e2e] ERROR: openclaw agent timed out message={message!r}"
-        )
+        print(f"[e2e] WARN: openclaw agent timed out message={message!r}", flush=True)
+        return False
     if proc.returncode != 0:
-        raise SystemExit(
-            f"[e2e] ERROR: openclaw agent failed message={message!r}: {proc.stderr.strip()[:500]}"
+        print(
+            f"[e2e] WARN: openclaw agent failed message={message!r}: {proc.stderr.strip()[:500]}",
+            flush=True,
         )
-    out = proc.stdout.strip()
-    if not out:
-        return ""
-    # Keep parser permissive: output can be non-JSON in some gateway fallback paths.
-    try:
-        parsed = json.loads(out)
-    except Exception:
-        return out
-    if isinstance(parsed, dict):
-        if isinstance(parsed.get("response"), str):
-            return parsed["response"]
-        if isinstance(parsed.get("output"), str):
-            return parsed["output"]
-    return out
+        return False
+    return True
 
-def wait_for_extraction(start_line: int, sid: str, seconds: int = 90) -> bool:
+def gateway_call(method: str, params: dict, timeout_sec: int = 35) -> bool:
+    cmd = [
+        "openclaw",
+        "gateway",
+        "call",
+        method,
+        "--json",
+        "--params",
+        json.dumps(params),
+        "--timeout",
+        str(timeout_sec * 1000),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec + 10)
+    except subprocess.TimeoutExpired:
+        print(f"[e2e] WARN: gateway call timed out method={method!r}", flush=True)
+        return False
+    if proc.returncode != 0:
+        print(
+            f"[e2e] WARN: gateway call failed method={method!r}: {(proc.stderr or proc.stdout).strip()[:500]}",
+            flush=True,
+        )
+        return False
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except Exception:
+        payload = {}
+    return bool(payload.get("ok"))
+
+def wait_for_extraction(start_line: int, seconds: int = 90) -> bool:
     deadline = time.time() + seconds
     while time.time() < deadline:
         lines = read_tail_since(events_path, start_line)
         if any(
-            f'"session_id":"{sid}"' in ln
-            and (
+            (
                 '"event":"extract_begin"' in ln
                 or '"event":"signal_process_begin"' in ln
                 or '"event":"timer_fired"' in ln
@@ -2069,11 +2368,17 @@ def wait_for_extraction(start_line: int, sid: str, seconds: int = 90) -> bool:
     return False
 
 # Seed facts and trigger lifecycle extraction.
-run_agent("Please remember this exactly: my mother is Wendy and my father is Kent.", sid=seed_session_id)
+seed_text = "Please remember this exactly: my mother is Wendy and my father is Kent."
+seed_ok = run_agent(seed_text, timeout_sec=35)
 start_line = line_count(events_path)
-run_agent("/compact", timeout_sec=260, sid=seed_session_id)
-run_agent("/new", timeout_sec=260, sid=seed_session_id)
-if not wait_for_extraction(start_line, seed_session_id, 90):
+compact_ok = run_agent("/compact", timeout_sec=30)
+new_ok = run_agent("/new", timeout_sec=30)
+if not (seed_ok and compact_ok and new_ok):
+    raise SystemExit(
+        "[e2e] ERROR: memory-flow lifecycle command path failed "
+        f"(seed_ok={seed_ok}, compact_ok={compact_ok}, new_ok={new_ok})."
+    )
+if not wait_for_extraction(start_line, 45):
     preview = "\n".join(read_tail_since(events_path, start_line)[-40:])
     raise SystemExit(
         "[e2e] ERROR: timed out waiting for extraction after compact/new in memory flow\n"
@@ -2083,17 +2388,34 @@ if not wait_for_extraction(start_line, seed_session_id, 90):
 deadline = time.time() + 45
 found_wendy = False
 found_kent = False
+owner_id = "maya"
+memory_text_col = "text"
+try:
+    cfg = json.loads(open(cfg_path, "r", encoding="utf-8").read())
+    owner_id = str(((cfg.get("users") or {}).get("defaultOwner")) or owner_id)
+except Exception:
+    pass
 while time.time() < deadline:
     try:
         with sqlite3.connect(db_path) as conn:
+            cols = {
+                str(row[1]).strip().lower()
+                for row in conn.execute("PRAGMA table_info(nodes)").fetchall()
+            }
+            if "name" in cols:
+                memory_text_col = "name"
+            elif "text" in cols:
+                memory_text_col = "text"
+            else:
+                raise RuntimeError("nodes table has neither 'name' nor 'text' column")
             rows = conn.execute(
-                "SELECT text FROM nodes WHERE owner_id = ? AND lower(text) LIKE ?",
-                ("maya", "%wendy%"),
+                f"SELECT {memory_text_col} FROM nodes WHERE owner_id = ? AND lower({memory_text_col}) LIKE ?",
+                (owner_id, "%wendy%"),
             ).fetchall()
             found_wendy = len(rows) > 0
             rows = conn.execute(
-                "SELECT text FROM nodes WHERE owner_id = ? AND lower(text) LIKE ?",
-                ("maya", "%kent%"),
+                f"SELECT {memory_text_col} FROM nodes WHERE owner_id = ? AND lower({memory_text_col}) LIKE ?",
+                (owner_id, "%kent%"),
             ).fetchall()
             found_kent = len(rows) > 0
     except Exception:
@@ -2105,7 +2427,7 @@ while time.time() < deadline:
 if not (found_wendy and found_kent):
     raise SystemExit(
         "[e2e] ERROR: extraction completed but expected facts were not stored in DB "
-        f"(wendy={found_wendy}, kent={found_kent})"
+        f"(owner={owner_id}, column={memory_text_col}, wendy={found_wendy}, kent={found_kent})"
     )
 
 print("[e2e] Memory flow regression checks passed.")
