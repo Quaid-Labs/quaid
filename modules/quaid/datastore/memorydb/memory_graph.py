@@ -4665,6 +4665,15 @@ def create_edge(
         Dict with edge_id, status, and any created entity IDs
     """
     graph = get_graph()
+    telemetry_enabled = str(
+        os.environ.get("QUAID_EDGE_TELEMETRY") or os.environ.get("BENCHMARK_EDGE_TELEMETRY") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    edge_t0 = time.perf_counter() if telemetry_enabled else 0.0
+    phase_ms: Dict[str, float] = {}
+
+    def _mark_phase(name: str, start_t: float) -> None:
+        if telemetry_enabled:
+            phase_ms[name] = round((time.perf_counter() - start_t) * 1000.0, 2)
     relation = (relation or "").strip().lower().replace(" ", "_")
     if not relation:
         return {"status": "error", "message": "Relation is required"}
@@ -4850,32 +4859,41 @@ def create_edge(
     conn_ctx = nullcontext(_conn) if _conn is not None else graph._get_conn()
     with conn_ctx as conn:
         # Find or create subject entity
+        p0 = time.perf_counter() if telemetry_enabled else 0.0
         subject = _find_entity(conn, subject_name)
+        _mark_phase("find_subject", p0)
         subject_created = False
         if not subject and create_missing_entities:
+            p0 = time.perf_counter() if telemetry_enabled else 0.0
             inferred_type = _infer_entity_type(subject_name, relation, is_subject=True)
             subject = Node.create(type=inferred_type, name=subject_name)
             subject.owner_id = owner_id
             subject.status = "active"  # Entity nodes are structural, not claims needing review
             _insert_entity(conn, subject)
             subject_created = True
+            _mark_phase("create_subject", p0)
         elif not subject:
             return {"status": "error", "message": f"Subject entity '{subject_name}' not found"}
 
         # Find or create object entity
+        p0 = time.perf_counter() if telemetry_enabled else 0.0
         obj = _find_entity(conn, object_name)
+        _mark_phase("find_object", p0)
         object_created = False
         if not obj and create_missing_entities:
+            p0 = time.perf_counter() if telemetry_enabled else 0.0
             inferred_type = _infer_entity_type(object_name, relation, is_subject=False)
             obj = Node.create(type=inferred_type, name=object_name)
             obj.owner_id = owner_id
             obj.status = "active"  # Entity nodes are structural, not claims needing review
             _insert_entity(conn, obj)
             object_created = True
+            _mark_phase("create_object", p0)
         elif not obj:
             return {"status": "error", "message": f"Object entity '{object_name}' not found"}
 
         # Create edge in same transaction as any new entities.
+        p0 = time.perf_counter() if telemetry_enabled else 0.0
         edge = Edge.create(
             source_id=subject.id,
             target_id=obj.id,
@@ -4895,8 +4913,9 @@ def create_edge(
             edge.created_at or datetime.now().isoformat(),
             edge.source_fact_id,
         ))
+        _mark_phase("insert_edge", p0)
 
-        return {
+        result = {
             "edge_id": edge.id,
             "status": "created",
             "subject_id": subject.id,
@@ -4904,6 +4923,19 @@ def create_edge(
             "subject_created": subject_created,
             "object_created": object_created
         }
+        if telemetry_enabled:
+            total_ms = round((time.perf_counter() - edge_t0) * 1000.0, 2)
+            result["timing_ms"] = {"total": total_ms, **phase_ms}
+            try:
+                print(
+                    f"[edge_telemetry] relation={relation} "
+                    f"subject_created={subject_created} object_created={object_created} "
+                    f"timing_ms={json.dumps(result['timing_ms'], sort_keys=True)}",
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass
+        return result
 
 
 def delete_edges_by_source_fact(source_fact_id: str) -> int:
