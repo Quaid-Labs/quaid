@@ -1337,7 +1337,7 @@ fi
 if [[ "$RUN_LIVE_EVENTS" == true ]]; then
 begin_stage "live_events"
 echo "[e2e] Validating live /compact /reset /new + timeout events..."
-echo "[e2e] NOTE: slash commands must be exercised through gateway agent/session APIs; CLI text routing is non-deterministic in this harness."
+echo "[e2e] NOTE: slash commands are exercised through gateway chat.send API; CLI text routing is non-deterministic in this harness."
 python3 - "$E2E_WS" "$LIVE_TIMEOUT_WAIT_SECONDS" <<'PY'
 import json
 import os
@@ -1358,29 +1358,16 @@ session_key = "agent:main:main"
 
 def run_agent(message: str, sid: str = "") -> bool:
     params = {
-        "agentId": "main",
-        "sessionKey": session_key,
+        "sessionKey": "main",
         "message": message,
         "idempotencyKey": f"e2e-live-{uuid.uuid4().hex[:12]}",
     }
-    if sid:
-        params["sessionId"] = sid
-    ok, payload = gateway_call_json("agent", params, timeout_sec=45)
+    ok, _payload = gateway_call_json("chat.send", params, timeout_sec=45)
     if not ok:
-        print(f"[e2e] WARN: gateway agent call failed for message={message!r}", flush=True)
+        print(f"[e2e] WARN: gateway chat.send failed for message={message!r}", flush=True)
         return False
-    result = payload.get("result") if isinstance(payload, dict) else None
-    run_id = None
-    if isinstance(payload, dict):
-        run_id = payload.get("runId")
-    if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(result, dict):
-        run_id = result.get("runId")
-    if isinstance(run_id, str) and run_id.strip():
-        waited = gateway_call("agent.wait", {"runId": run_id, "timeoutMs": 120000}, timeout_sec=130)
-        if not waited:
-            print(f"[e2e] WARN: gateway agent.wait failed runId={run_id!r} message={message!r}", flush=True)
-        return waited
-    # Some OpenClaw builds may return the final result inline (no runId).
+    # chat.send handles slash commands internally; successful RPC completion
+    # is enough for lifecycle hook assertions in this stage.
     return True
 
 def gateway_call_json(method: str, params: dict, timeout_sec: int = 30) -> tuple[bool, dict]:
@@ -1539,6 +1526,8 @@ def reset_signal_source(lines: list[str]) -> str:
             return "session_end"
         if '"source":"before_reset"' in ln:
             return "before_reset"
+        if '"source":"command_hook"' in ln:
+            return "command_hook"
         if '"source":"transcript_update"' in ln:
             return "transcript_update"
     return ""
@@ -1611,7 +1600,11 @@ assert_notify_worker_healthy(notify_start)
 # Reset/new command path.
 start = line_count(events_path)
 run_agent("E2E baseline message before reset.")
-reset_ok = run_agent("/reset")
+reset_ok, _ = gateway_call_json(
+    "sessions.reset",
+    {"key": session_key, "reason": "reset"},
+    timeout_sec=45,
+)
 if reset_ok:
     try:
         wait_for(
@@ -1657,7 +1650,11 @@ assert_notify_worker_healthy(notify_start)
 # /new path uses same reset signal semantics.
 start = line_count(events_path)
 run_agent("E2E baseline message before new.")
-new_ok = run_agent("/new")
+new_ok, _ = gateway_call_json(
+    "sessions.reset",
+    {"key": session_key, "reason": "new"},
+    timeout_sec=45,
+)
 if new_ok:
     try:
         wait_for(

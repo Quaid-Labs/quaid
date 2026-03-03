@@ -863,6 +863,27 @@ function resolveMemoryStoreSessionId(ctx) {
   }
   return "unknown";
 }
+function resolveLifecycleHookSessionId(event, ctx, messages) {
+  const direct = String(event?.sessionId || ctx?.sessionId || "").trim();
+  if (direct) {
+    return direct;
+  }
+  const fromEventEntry = String(event?.sessionEntry?.sessionId || event?.previousSessionEntry?.sessionId || "").trim();
+  if (fromEventEntry) {
+    return fromEventEntry;
+  }
+  const eventSessionKey = String(event?.sessionKey || event?.targetSessionKey || "").trim();
+  const fromEventKey = resolveSessionIdFromSessionKey(eventSessionKey);
+  if (fromEventKey) {
+    return fromEventKey;
+  }
+  const ctxSessionKey = String(ctx?.sessionKey || "").trim();
+  const fromCtxKey = resolveSessionIdFromSessionKey(ctxSessionKey);
+  if (fromCtxKey) {
+    return fromCtxKey;
+  }
+  return extractSessionId(messages, ctx);
+}
 function getAllConversationMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
   return messages.filter((msg) => {
@@ -4213,6 +4234,45 @@ notify_memory_extraction(
       name: "compaction-memory-extraction",
       priority: 10
     });
+    for (const commandAction of ["reset", "new"]) {
+      registerInternalHookChecked(`command:${commandAction}`, async (event, ctx) => {
+        try {
+          const messages = event?.messages || [];
+          const sessionId = resolveLifecycleHookSessionId(event, ctx, messages);
+          if (!sessionId || isInternalQuaidSession(sessionId)) {
+            return;
+          }
+          if (!isSystemEnabled("memory")) {
+            return;
+          }
+          const signature = `hook:command_${commandAction}`;
+          if (!shouldProcessLifecycleSignal(sessionId, {
+            label: "ResetSignal",
+            source: "hook",
+            signature
+          })) {
+            console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${sessionId} source=command:${commandAction}`);
+            return;
+          }
+          markLifecycleSignalFromHook(sessionId, "ResetSignal");
+          timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
+            source: "command_hook",
+            command: commandAction,
+            hook_session_id: sessionId,
+            hook_session_key: String(event?.sessionKey || ctx?.sessionKey || "")
+          });
+          console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:${commandAction}`);
+        } catch (err) {
+          if (isFailHardEnabled()) {
+            throw err;
+          }
+          console.error(`[quaid] command:${commandAction} hook failed:`, err);
+        }
+      }, {
+        name: `command-${commandAction}-memory-extraction`,
+        priority: 10
+      });
+    }
     registerInternalHookChecked("before_reset", async (event, ctx) => {
       try {
         if (isInternalQuaidSession(ctx?.sessionId)) {
@@ -4222,14 +4282,19 @@ notify_memory_extraction(
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
         const conversationMessages = getAllConversationMessages(messages);
-        if (conversationMessages.length === 0) {
-          console.log(`[quaid] before_reset: skip empty/internal transcript session=${sessionId || "unknown"}`);
+        const extractionSessionId = resolveLifecycleHookSessionId(event, ctx, conversationMessages);
+        if (!extractionSessionId) {
+          console.log(`[quaid] before_reset: skip unresolved session id session=${sessionId || "unknown"}`);
           return;
+        }
+        if (conversationMessages.length === 0) {
+          console.log(
+            `[quaid] before_reset: empty/internal transcript; queueing ResetSignal from source session session=${extractionSessionId}`
+          );
         }
         console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
         const doExtraction = async () => {
           if (isSystemEnabled("memory")) {
-            const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
             if (shouldProcessLifecycleSignal(extractionSessionId, {
               label: "ResetSignal",
               source: "hook",
@@ -4252,21 +4317,23 @@ notify_memory_extraction(
             console.log("[quaid] Reset: memory extraction skipped \u2014 memory system disabled");
           }
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
-          try {
-            await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);
-          } catch (err) {
-            if (isFailHardEnabled()) {
-              throw err;
+          if (conversationMessages.length > 0) {
+            try {
+              await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);
+            } catch (err) {
+              if (isFailHardEnabled()) {
+                throw err;
+              }
+              console.error("[quaid] Reset doc update failed:", err.message);
             }
-            console.error("[quaid] Reset doc update failed:", err.message);
-          }
-          try {
-            await emitProjectEvent(conversationMessages, "reset", uniqueSessionId);
-          } catch (err) {
-            if (isFailHardEnabled()) {
-              throw err;
+            try {
+              await emitProjectEvent(conversationMessages, "reset", uniqueSessionId);
+            } catch (err) {
+              if (isFailHardEnabled()) {
+                throw err;
+              }
+              console.error("[quaid] Reset project event failed:", err.message);
             }
-            console.error("[quaid] Reset project event failed:", err.message);
           }
           console.log(`[quaid][reset] extraction_end session=${sessionId || "unknown"}`);
         };
