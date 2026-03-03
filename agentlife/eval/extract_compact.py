@@ -38,11 +38,13 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 _DEFAULT_OWNER_ID = os.environ.get("BENCH_OWNER_ID", "maya").strip() or "maya"
+_PROJECT_UPDATER_ENV_LOCK = threading.Lock()
 
 
 def read_session_messages(session_file: str) -> list[dict]:
@@ -134,10 +136,11 @@ def build_extraction_prompt(
     user_name: str,
     agent_name: str = "Assistant",
     focus: str = "all",
+    allowed_domains: list[str] | None = None,
 ) -> str:
     """Build the extraction system prompt, parameterized for the benchmark persona.
 
-    Includes facts, edges, soul_snippets, AND journal_entries — matching
+    Includes facts, edges, soul_snippets, journal_entries, AND project_logs — matching
     the production Quaid plugin's full extraction output.
     """
     if focus == "user":
@@ -160,6 +163,16 @@ def build_extraction_prompt(
             "- Extract both user-originated and agent-originated facts.\n"
             "- For every fact, set `source` to `user`, `agent`, or `both`.\n\n"
         )
+
+    domain_line = ""
+    if allowed_domains:
+        cleaned = [str(d).strip().lower() for d in allowed_domains if str(d).strip()]
+        if cleaned:
+            domain_line = (
+                "\nAllowed domain ids for `domains` field: "
+                + ", ".join(dict.fromkeys(cleaned))
+                + ".\n"
+            )
 
     return f"""You are a memory extraction system. You will receive a full conversation transcript that is about to be lost. Your job is to extract personal facts, relationship edges, soul snippets, and journal entries from this conversation.
 
@@ -254,6 +267,7 @@ DOMAIN TAGGING (per fact):
 - "project": Name of the project this fact is about, or null if not project-specific.
   Use the project name as discussed in conversation (e.g. "recipe-app", "portfolio-site").
   null for personal facts not tied to a specific project.
+{domain_line}
 
 === EDGE EXTRACTION ===
 
@@ -349,6 +363,14 @@ For each target file, provide a single multi-paragraph string (or empty string i
 
 Be generous here too. If something meaningful happened, write about it.
 
+=== PROJECT LOGS ===
+
+If a fact or observation is clearly relevant to a registered project, include a concise
+project log note. Keep notes short and factual. These are folded into PROJECT.md during janitor.
+
+Use project names as discussed in conversation (examples: "recipe-app", "portfolio-site", "quaid").
+If no project context exists, return an empty object for project_logs.
+
 === OUTPUT FORMAT ===
 
 Respond with JSON only:
@@ -379,10 +401,15 @@ Respond with JSON only:
     "SOUL.md": "",
     "USER.md": "",
     "MEMORY.md": ""
+  }},
+  "project_logs": {{
+    "recipe-app": [],
+    "portfolio-site": [],
+    "quaid": []
   }}
 }}
 
-If nothing worth capturing, respond: {{"facts": [], "soul_snippets": {{"SOUL.md": [], "USER.md": [], "MEMORY.md": []}}, "journal_entries": {{"SOUL.md": "", "USER.md": "", "MEMORY.md": ""}}}}"""
+If nothing worth capturing, respond: {{"facts": [], "soul_snippets": {{"SOUL.md": [], "USER.md": [], "MEMORY.md": []}}, "journal_entries": {{"SOUL.md": "", "USER.md": "", "MEMORY.md": ""}}, "project_logs": {{}}}}"""
 
 
 def call_anthropic(
@@ -437,7 +464,7 @@ def parse_extraction_response(raw: str) -> dict:
                 return json.loads(match.group(0))
             except json.JSONDecodeError:
                 pass
-    return {"facts": [], "soul_snippets": {}, "journal_entries": {}}
+    return {"facts": [], "soul_snippets": {}, "journal_entries": {}, "project_logs": {}}
 
 
 def _resolve_quaid_dir(workspace: str) -> str:
@@ -703,6 +730,108 @@ def write_journal_entry(
     return True
 
 
+def write_project_logs(
+    workspace: str,
+    project_logs: dict,
+    trigger: str = "Compaction",
+    date_str: str | None = None,
+) -> dict:
+    """Append project logs to PROJECT.md via core project_updater."""
+    if not isinstance(project_logs, dict) or not project_logs:
+        return {}
+
+    normalized = {}
+    for raw_name, raw_entries in project_logs.items():
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        entries = raw_entries if isinstance(raw_entries, list) else [raw_entries]
+        cleaned = []
+        for entry in entries:
+            text = str(entry).strip()
+            if text:
+                cleaned.append(text)
+        if cleaned:
+            normalized[name] = list(dict.fromkeys(cleaned))
+    if not normalized:
+        return {}
+
+    quaid_dir = ""
+    explicit = os.environ.get("BENCHMARK_PLUGIN_DIR", "").strip()
+    if explicit and Path(explicit).exists():
+        quaid_dir = explicit
+    if not quaid_dir:
+        clawd_ws = os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
+        candidates = [
+            Path(workspace) / "modules" / "quaid",
+            Path(workspace) / "plugins" / "quaid",
+            Path(workspace) / "benchmark-checkpoint" / "modules" / "quaid",
+            Path(workspace) / "benchmark-checkpoint" / "plugins" / "quaid",
+            Path(clawd_ws) / "modules" / "quaid" if clawd_ws else None,
+            Path(clawd_ws) / "plugins" / "quaid" if clawd_ws else None,
+            Path(clawd_ws) / "benchmark-checkpoint" / "modules" / "quaid" if clawd_ws else None,
+            Path(clawd_ws) / "benchmark-checkpoint" / "plugins" / "quaid" if clawd_ws else None,
+            Path(__file__).resolve().parents[2] / "modules" / "quaid",
+            Path(__file__).resolve().parents[2] / "plugins" / "quaid",
+            Path(__file__).resolve().parents[3] / "modules" / "quaid",
+            Path(__file__).resolve().parents[3] / "plugins" / "quaid",
+            Path(__file__).resolve().parents[3] / "benchmark-checkpoint" / "modules" / "quaid",
+            Path(__file__).resolve().parents[3] / "benchmark-checkpoint" / "plugins" / "quaid",
+        ]
+        for candidate in candidates:
+            if candidate and candidate.exists():
+                quaid_dir = str(candidate)
+                break
+    if not quaid_dir:
+        print("  Project log append failed: unable to resolve quaid module path", file=sys.stderr)
+        return {}
+
+    quaid_pkg_root = str(Path(quaid_dir))
+    if quaid_pkg_root not in sys.path:
+        sys.path.insert(0, quaid_pkg_root)
+
+    with _PROJECT_UPDATER_ENV_LOCK:
+        prev_workspace = os.environ.get("CLAWDBOT_WORKSPACE")
+        try:
+            os.environ["CLAWDBOT_WORKSPACE"] = workspace
+            import datastore.docsdb.project_updater as _project_updater  # type: ignore
+
+            append_fn = getattr(_project_updater, "append_project_logs", None)
+            if callable(append_fn):
+                metrics = append_fn(
+                    normalized,
+                    trigger=trigger,
+                    date_str=date_str,
+                    dry_run=False,
+                )
+                return metrics if isinstance(metrics, dict) else {}
+
+            legacy_append_fn = getattr(_project_updater, "append_project_log_entries", None)
+            if callable(legacy_append_fn):
+                # Legacy helper signature may vary by checkpoint cut.
+                metrics = legacy_append_fn(
+                    normalized,
+                    trigger=trigger,
+                    date_str=date_str,
+                    dry_run=False,
+                )
+                return metrics if isinstance(metrics, dict) else {}
+
+            print(
+                "  Project log append failed: no append_project_logs/append_project_log_entries symbol",
+                file=sys.stderr,
+            )
+            return {}
+        except Exception as e:
+            print(f"  Project log append failed: {e}", file=sys.stderr)
+            return {}
+        finally:
+            if prev_workspace is None:
+                os.environ.pop("CLAWDBOT_WORKSPACE", None)
+            else:
+                os.environ["CLAWDBOT_WORKSPACE"] = prev_workspace
+
+
 def truncate_session(session_file: str, summary: str | None = None):
     """Truncate the session JSONL, optionally keeping a summary message."""
     lines = []
@@ -925,6 +1054,22 @@ def main():
             journals_written += 1
             print(f"  Journal: {filename}.journal.md updated")
 
+    project_log_metrics = write_project_logs(
+        workspace,
+        result.get("project_logs", {}),
+        trigger=args.trigger,
+        date_str=sim_date,
+    )
+    if project_log_metrics:
+        print(
+            "  Project logs: "
+            f"seen={project_log_metrics.get('entries_seen', 0)} "
+            f"written={project_log_metrics.get('entries_written', 0)} "
+            f"projects_updated={project_log_metrics.get('projects_updated', 0)} "
+            f"unknown={project_log_metrics.get('projects_unknown', 0)} "
+            f"missing={project_log_metrics.get('projects_missing_file', 0)}"
+        )
+
     # Truncate session file
     if not args.no_truncate:
         summary = None
@@ -941,6 +1086,7 @@ def main():
         "edge_errors": edge_errors,
         "snippets_written": snippets_written,
         "journals_written": journals_written,
+        "project_log_metrics": project_log_metrics,
         "total_candidates": len(facts),
         "extraction_usage": {
             "input_tokens": extraction_usage.get("input_tokens", 0),

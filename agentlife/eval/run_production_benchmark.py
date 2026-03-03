@@ -118,7 +118,7 @@ from dataset import (
 )
 from extract_compact import (
     build_extraction_prompt, parse_extraction_response,
-    write_snippet_entry, write_journal_entry,
+    write_snippet_entry, write_journal_entry, write_project_logs,
 )
 from metrics import score_results, retrieval_metrics, format_report
 
@@ -292,6 +292,27 @@ def _load_active_domains(workspace: Path) -> List[Tuple[str, str]]:
     if not domains:
         raise RuntimeError("No active domains found in domain_registry")
     return domains
+
+
+def _normalize_project_logs(project_logs: object) -> dict:
+    """Normalize extracted project logs to {project_name: [entry, ...]}."""
+    if not isinstance(project_logs, dict):
+        return {}
+    normalized = {}
+    for raw_name, raw_entries in project_logs.items():
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        entries = raw_entries if isinstance(raw_entries, list) else [raw_entries]
+        cleaned = []
+        for item in entries:
+            text = str(item).strip()
+            if text:
+                cleaned.append(text)
+        if cleaned:
+            # Preserve order while deduplicating.
+            normalized[name] = list(dict.fromkeys(cleaned))
+    return normalized
 
 
 def _domain_block_markdown(domains: List[Tuple[str, str]]) -> str:
@@ -684,230 +705,12 @@ def setup_workspace(workspace: Path) -> None:
 
 
 def _enrich_project_docs(workspace: Path) -> None:
-    """Populate PROJECT.md and TOOLS.md from source files.
+    """No-op in harness purity mode.
 
-    Simulates the janitor doc_updater by reading actual source code and
-    generating structured documentation. In production, the janitor reads
-    git diffs and updates these files; here we read the source directly.
+    Project doc intelligence belongs in checkpoint runtime (janitor/doc updaters),
+    not in benchmark orchestration code.
     """
-    import json as _json
-
-    recipe_dir = workspace / "projects" / "recipe-app"
-    readme = recipe_dir / "README.md"
-    if readme.exists():
-        readme_content = readme.read_text()
-
-        # --- PROJECT.md: comprehensive reference from README + source files ---
-        project_sections = [
-            f"# Project: Recipe App\n",
-            f"## Overview\n"
-            f"Maya's recipe organizer app. Motivated by her mom Linda's diabetes diagnosis.\n\n"
-            f"{readme_content}\n",
-        ]
-
-        # Dependencies from package.json
-        pkg = recipe_dir / "package.json"
-        version = "unknown"
-        if pkg.exists():
-            try:
-                p = _json.loads(pkg.read_text())
-                deps = ", ".join(p.get("dependencies", {}).keys())
-                version = p.get("version", "unknown")
-                project_sections.append(
-                    f"## Package Info\n"
-                    f"**Version:** {version}\n"
-                    f"**Dependencies:** {deps}\n"
-                )
-            except Exception:
-                pass
-
-        # Architecture
-        project_sections.append(
-            "## Architecture\n"
-            "- **Entry point:** server.js (Express + Apollo Server)\n"
-            "- **GraphQL schema:** schema.js (types: Recipe, Ingredient, MealPlan, "
-            "MealPlanItem, GroceryItem, ShareLink, User)\n"
-            "- **Resolvers:** resolvers.js (queries + mutations)\n"
-            "- **Database:** database.js + src/db/queries.js (SQLite via better-sqlite3)\n"
-            "- **Seeds:** seeds/seed.js with sample recipes in seeds/sample-recipes.json\n"
-        )
-
-        # Middleware — read actual file headers for descriptions
-        mw_dir = recipe_dir / "src" / "middleware"
-        if mw_dir.exists():
-            mw_items = []
-            for mw_file in sorted(mw_dir.glob("*.js")):
-                content = mw_file.read_text()
-                name = mw_file.stem
-                desc = ""
-                if name == "rateLimiter":
-                    desc = "In-memory rate limiter: 100 requests per 15 minutes per IP on /api routes. Returns 429 with Retry-After header."
-                elif name == "errorHandler":
-                    desc = "Centralized error handling. AppError class with status codes. Hides stack traces in production, shows them in development."
-                elif name == "logging":
-                    desc = "Request logger: logs every HTTP request with method, URL, status code, response time, and content length. Color-coded in TTY."
-                elif name == "auth":
-                    desc = "JWT authentication via jsonwebtoken. requireAuth() verifies Bearer tokens. requireRole() restricts by role. Known gap: no requireOwnership() — any authenticated user can update/delete any recipe."
-                elif name == "validation":
-                    desc = "Input validation middleware for request bodies."
-                mw_items.append(f"- **{name}.js** — {desc}")
-            project_sections.append(
-                "## Middleware (src/middleware/)\n" + "\n".join(mw_items) + "\n"
-            )
-
-        # Tests
-        test_dir = recipe_dir / "tests"
-        if test_dir.exists():
-            test_files = sorted(f.name for f in test_dir.glob("*.test.js"))
-            test_items = []
-            for tf in test_files:
-                desc = ""
-                if tf == "recipe.test.js":
-                    desc = "Recipe CRUD, dietary filtering, safe-for-mom flag, search"
-                elif tf == "auth.test.js":
-                    desc = "Authentication and authorization"
-                elif tf == "dietary.test.js":
-                    desc = "Dietary label filtering"
-                elif tf == "graphql.test.js":
-                    desc = "GraphQL queries and mutations"
-                elif tf == "mealplan.test.js":
-                    desc = "Meal plan CRUD and grocery list aggregation"
-                elif tf == "sharing.test.js":
-                    desc = "Recipe sharing via generated links"
-                test_items.append(f"- **{tf}** — {desc}")
-            helpers = [f.name for f in test_dir.glob("*.js") if ".test." not in f.name]
-            project_sections.append(
-                "## Test Suites (tests/, Jest)\n"
-                + "\n".join(test_items) + "\n"
-                + f"Helpers: {', '.join(helpers)}\n"
-            )
-
-        # Seed recipes
-        seeds_file = recipe_dir / "seeds" / "sample-recipes.json"
-        if seeds_file.exists():
-            try:
-                recipes = _json.loads(seeds_file.read_text())
-                safe_for_mom = [
-                    r["title"] for r in recipes
-                    if "diabetic-friendly" in r.get("dietary_tags", [])
-                    and "low-sodium" in r.get("dietary_tags", [])
-                ]
-                all_tags = set()
-                for r in recipes:
-                    all_tags.update(r.get("dietary_tags", []))
-                project_sections.append(
-                    f"## Seed Data\n"
-                    f"**{len(recipes)} sample recipes** in seeds/sample-recipes.json\n"
-                    f"**Dietary tags available:** {', '.join(sorted(all_tags))}\n"
-                    f"**Safe for Mom (diabetic-friendly + low-sodium):** {', '.join(safe_for_mom)}\n"
-                )
-            except Exception:
-                pass
-
-        # Database
-        queries_file = recipe_dir / "src" / "db" / "queries.js"
-        if queries_file.exists():
-            project_sections.append(
-                "## Database\n"
-                "SQLite via better-sqlite3. Key tables:\n"
-                "- **recipes** — id, title, ingredients, instructions, dietary_tags, image_url (TEXT), prep_time (INTEGER minutes)\n"
-                "- **recipe_ingredients** — structured/normalized ingredient data with amounts, units, categories\n"
-                "- **meal_plans** — weekly plans with day/meal slots\n"
-                "- **meal_plan_items** — links recipes to meal plan day/meal\n"
-                "- **share_links** — generated share codes for recipes\n"
-                "- **users** — user accounts for authentication\n\n"
-                "Grocery list aggregation uses SQL GROUP BY across all recipes in a meal plan.\n"
-                "'Safe for Mom' = diabetic-friendly AND low-sodium dietary tag filter.\n"
-            )
-
-        # Frontend
-        public_dir = recipe_dir / "public"
-        if public_dir.exists():
-            project_sections.append(
-                "## Frontend\n"
-                "CSS grid card layout (redesigned from list layout). Each card shows:\n"
-                "- Recipe name\n"
-                "- Prep time in minutes\n"
-                "- Color-coded dietary tag pills for visual scanning\n"
-            )
-
-        # Deployment
-        dockerfile = recipe_dir / "Dockerfile"
-        if dockerfile.exists():
-            project_sections.append(
-                "## Deployment\n"
-                "- **Dockerfile** — Node 18 Alpine, production-only dependencies\n"
-                "- **docker-compose.yml** — container orchestration\n"
-                "- **Makefile** — common commands (build, dev, test, seed)\n"
-            )
-
-        # Config
-        config_dir = recipe_dir / "config"
-        if config_dir.exists():
-            config_files = [f.name for f in config_dir.glob("*")]
-            project_sections.append(
-                f"## Config\n"
-                f"Files: {', '.join(sorted(config_files))}\n"
-                f"- auth.js — JWT settings (secret, algorithm, token expiry)\n"
-            )
-
-        (recipe_dir / "PROJECT.md").write_text("\n".join(project_sections))
-
-        # --- TOOLS.md: small, API-only reference ---
-        (recipe_dir / "TOOLS.md").write_text(
-            "# Recipe App - API Reference\n\n"
-            "## REST Endpoints\n"
-            "- `GET /api/recipes` — List recipes (supports dietary tag filtering)\n"
-            "- `POST /api/recipes` — Create recipe\n"
-            "- `PUT /api/recipes/:id` — Update recipe\n"
-            "- `DELETE /api/recipes/:id` — Delete recipe\n"
-            "- `POST /api/recipes/:id/share` — Generate share code\n"
-            "- `GET /api/shared/:code` — View shared recipe (no auth)\n"
-            "- `POST /api/auth/register` — Create user account\n"
-            "- `POST /api/auth/login` — Login, returns JWT\n"
-            "- `GET /api/auth/me` — Current user profile (requires auth)\n"
-            "- `GET /api/meal-plans` — List meal plans\n"
-            "- `POST /api/meal-plans` — Create meal plan\n"
-            "- `GET /api/meal-plans/:id/grocery-list` — Aggregated grocery list\n"
-            "- `GET /health` — Health check\n\n"
-            "## GraphQL\n"
-            "- Endpoint: `/graphql` (Apollo Server)\n"
-            "- Queries: recipes, recipe, mealPlans, mealPlan, sharedRecipe\n"
-            "- Mutations: createRecipe, updateRecipe, deleteRecipe, shareRecipe, "
-            "createMealPlan, addMealPlanItem\n\n"
-            f"## Version\n{version}\n"
-        )
-        print(f"    Enriched recipe-app PROJECT.md + TOOLS.md from source files")
-
-    # --- Portfolio Site ---
-    portfolio_dir = workspace / "projects" / "portfolio-site"
-    index_html = portfolio_dir / "index.html"
-    if index_html.exists():
-        (portfolio_dir / "PROJECT.md").write_text(
-            "# Project: Portfolio Site\n\n"
-            "## Overview\n"
-            "Maya's personal portfolio website. Static HTML/CSS site showcasing "
-            "projects and professional experience.\n\n"
-            "## Content\n"
-            "- Title: Maya Chen — Product Manager\n"
-            "- Sections: About, Projects, Contact\n"
-            "- Currently lists: Senior Product Manager at Stripe\n"
-            "- Projects showcased: Recipe App\n\n"
-            "## Files\n"
-            "- `index.html` — main page\n"
-            "- `styles.css` — responsive styling\n"
-        )
-
-        (portfolio_dir / "TOOLS.md").write_text(
-            "# Portfolio Site - Reference\n\n"
-            "## Structure\n"
-            "Static HTML/CSS site. No build tools, no server, no JavaScript.\n"
-            "Clean, minimal design with system fonts, warm gray background.\n\n"
-            "## Source Files\n"
-            "- `index.html` — main page with About, Projects, Contact sections\n"
-            "- `styles.css` — responsive styling with CSS grid\n"
-        )
-        print(f"    Enriched portfolio-site PROJECT.md + TOOLS.md from source files")
+    print("    project docs: harness enrichment disabled (purity mode)")
 
 
 def _enrich_project_docs_with_session(
@@ -919,130 +722,13 @@ def _enrich_project_docs_with_session(
     session_num: int = 0,
     no_cache: bool = False,
 ) -> None:
-    """Update PROJECT.md/TOOLS.md using session transcript for context.
+    """No-op in harness purity mode.
 
-    Like _enrich_project_docs() but uses an LLM to write docs informed by
-    the conversation that caused the file changes — captures *why* things
-    changed, not just *what* changed. Mirrors what a session-end doc update
-    would do in production (vs the janitor which only sees git diffs).
+    Session-aware project-doc reasoning belongs in checkpoint runtime logic,
+    not in benchmark orchestration code.
     """
-    import json as _json
-
-    project_dir = workspace / "projects" / project
-
-    # Check cache
-    cache_dir = workspace / "doc_enrichment_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / f"{project}-session-{session_num}.json"
-    if not no_cache and cache_path.exists():
-        cached = _json.loads(cache_path.read_text())
-        pm = project_dir / "PROJECT.md"
-        tm = project_dir / "TOOLS.md"
-        if cached.get("project_md"):
-            pm.write_text(cached["project_md"])
-        if cached.get("tools_md"):
-            tm.write_text(cached["tools_md"])
-        print(f"    Doc enrichment ({project} s{session_num}): cached")
-        return
-
-    # Read current docs (if they exist)
-    current_project_md = ""
-    current_tools_md = ""
-    pm = project_dir / "PROJECT.md"
-    tm = project_dir / "TOOLS.md"
-    if pm.exists():
-        current_project_md = pm.read_text()
-    if tm.exists():
-        current_tools_md = tm.read_text()
-
-    # Read key source files for context
-    source_context_parts = []
-    for pattern in ["*.js", "*.json", "*.html", "*.css"]:
-        for f in sorted(project_dir.rglob(pattern)):
-            rel = f.relative_to(project_dir)
-            if any(skip in str(rel) for skip in [
-                "node_modules", ".git", "package-lock",
-                "PROJECT.md", "TOOLS.md",
-            ]):
-                continue
-            try:
-                content = f.read_text()
-                # Only include file headers/structure, not full content
-                lines = content.split("\n")
-                if len(lines) > 40:
-                    preview = "\n".join(lines[:40]) + f"\n... ({len(lines)} lines total)"
-                else:
-                    preview = content
-                source_context_parts.append(f"--- {rel} ---\n{preview}")
-            except Exception:
-                continue
-
-    source_context = "\n\n".join(source_context_parts[:20])  # Cap at 20 files
-
-    system_prompt = (
-        "You update project documentation files based on session transcripts. "
-        "You have access to the conversation where the user worked on this project, "
-        "plus the current source files. Update the docs to reflect what was built and why.\n\n"
-        "Output TWO sections separated by '===TOOLS.md===' marker:\n"
-        "1. First section = PROJECT.md content — the MAIN documentation. Include: "
-        "overview, motivation, features, architecture, tech stack, database schema, "
-        "test coverage, deployment, known bugs, version history. This is the comprehensive reference.\n"
-        "2. After the marker = TOOLS.md content — KEEP THIS SMALL (under 30 lines). "
-        "ONLY include: API endpoint list (REST + GraphQL), CLI commands, environment variables. "
-        "TOOLS.md is loaded into every agent session, so it must be concise. "
-        "Do NOT put features, architecture, data models, or test coverage here.\n\n"
-        "Rules:\n"
-        "- Preserve existing accurate information, add new details from this session\n"
-        "- Include specific details in PROJECT.md: middleware descriptions, test coverage, config, "
-        "seed data details, database fields, security features\n"
-        "- Write factual reference docs, not narrative\n"
-        "- Include version numbers, counts, specific config values when mentioned\n"
-        "- Note known bugs, security gaps, and TODOs mentioned in conversation"
-    )
-
-    user_message = (
-        f"Project: {project}\n\n"
-        f"Current PROJECT.md:\n{current_project_md}\n\n"
-        f"Current TOOLS.md:\n{current_tools_md}\n\n"
-        f"Source files:\n{source_context}\n\n"
-        f"Session transcript (what was discussed/built):\n{session_transcript}"
-    )
-
-    try:
-        raw, usage = _call_anthropic_cached(
-            system_prompt, user_message, model, api_key, max_tokens=4096,
-        )
-        in_tok = usage.get("input_tokens", 0)
-        out_tok = usage.get("output_tokens", 0)
-
-        if "===TOOLS.md===" in raw:
-            parts = raw.split("===TOOLS.md===", 1)
-            new_project_md = parts[0].strip()
-            new_tools_md = parts[1].strip()
-        else:
-            # If no marker, treat entire output as TOOLS.md update
-            new_project_md = current_project_md
-            new_tools_md = raw.strip()
-
-        if new_project_md:
-            pm.write_text(new_project_md + "\n")
-        if new_tools_md:
-            tm.write_text(new_tools_md + "\n")
-
-        # Cache for re-runs
-        cache_path.write_text(_json.dumps({
-            "project_md": new_project_md + "\n" if new_project_md else "",
-            "tools_md": new_tools_md + "\n" if new_tools_md else "",
-            "model": model,
-            "session_num": session_num,
-            "in_tokens": in_tok,
-            "out_tokens": out_tok,
-        }, indent=2))
-
-        print(f"    Doc enrichment ({project} s{session_num}): {in_tok}in+{out_tok}out tokens")
-    except Exception as e:
-        print(f"    Doc enrichment ({project} s{session_num}) failed: {e} — falling back to mechanical")
-        _enrich_project_docs(workspace)
+    _ = (workspace, project, session_transcript, api_key, model, session_num, no_cache)
+    print(f"    project docs ({project} s{session_num}): harness enrichment disabled (purity mode)")
 
 
 # ---------------------------------------------------------------------------
@@ -1105,10 +791,8 @@ def add_project_files(workspace: Path, max_session: Optional[int] = None) -> Non
                 print(f"    {task} failed: {result.stderr[:200]}")
         print(f"    RAG reindexed + workspace/journal processed")
 
-    # Enrich PROJECT.md and TOOLS.md from actual source files
-    # In production, the janitor doc_updater does this from git diffs.
-    # Here we simulate it by reading key source files.
-    _enrich_project_docs(workspace)
+    # Harness purity: no project-doc intelligence here.
+    # Project docs are seeded mechanically; checkpoint janitor owns updates.
 
     # Verify
     print("\n  Verification:")
@@ -1254,6 +938,7 @@ def run_extraction(
                     "facts": parsed.get("facts", []),
                     "soul_snippets": parsed.get("soul_snippets", {}),
                     "journal_entries": parsed.get("journal_entries", {}),
+                    "project_logs": parsed.get("project_logs", {}),
                 }
 
             chunk_results = []
@@ -1324,6 +1009,7 @@ def run_extraction(
             merged_facts = []
             merged_snippets = {}
             merged_journals = {}
+            merged_project_logs = {}
             usage_total = {"input_tokens": 0, "output_tokens": 0}
             for c in chunk_results:
                 usage_total["input_tokens"] += c["usage"].get("input_tokens", 0)
@@ -1345,11 +1031,16 @@ def run_extraction(
                         pieces = []
                     if pieces:
                         merged_journals.setdefault(filename, []).extend(pieces)
+                for project_name, entries in _normalize_project_logs(c.get("project_logs", {})).items():
+                    merged = merged_project_logs.setdefault(project_name, [])
+                    merged.extend(entries)
+                    merged_project_logs[project_name] = list(dict.fromkeys(merged))
 
             cached = {
                 "facts": merged_facts,
                 "soul_snippets": merged_snippets,
                 "journal_entries": {k: "\n\n".join(v) for k, v in merged_journals.items()},
+                "project_logs": merged_project_logs,
                 "usage": usage_total,
                 "model": model,
                 "sessions": [r.session_num for r in reviews],
@@ -1411,6 +1102,7 @@ def run_extraction(
                 "facts": result.get("facts", []),
                 "soul_snippets": result.get("soul_snippets", {}),
                 "journal_entries": result.get("journal_entries", {}),
+                "project_logs": _normalize_project_logs(result.get("project_logs", {})),
                 "usage": usage,
                 "model": model,
                 "sessions": [r.session_num for r in reviews],
@@ -1429,6 +1121,7 @@ def run_extraction(
     ws = str(workspace)
     total_snippets = 0
     total_journals = 0
+    project_log_metrics = {}
 
     for filename, bullets in cached.get("soul_snippets", {}).items():
         if isinstance(bullets, str):
@@ -1441,6 +1134,16 @@ def run_extraction(
             content = "\n\n".join(str(c) for c in content if c)
         if content and write_journal_entry(ws, filename, content, "Compaction", last_date):
             total_journals += 1
+
+    try:
+        project_log_metrics = write_project_logs(
+            ws,
+            cached.get("project_logs", {}),
+            trigger="Compaction",
+            date_str=last_date,
+        )
+    except Exception as e:
+        print(f"    WARN: project log append failed: {e}")
 
     # DB verify
     db_path = workspace / "data" / "memory.db"
@@ -1456,6 +1159,15 @@ def run_extraction(
     print(f"    Total extracted: {len(facts)} facts")
     print(f"    Stored: {stored} facts, {edges} edges")
     print(f"    Snippets: {total_snippets} bullets, Journal: {total_journals} entries")
+    if project_log_metrics:
+        print(
+            "    Project logs: "
+            f"seen={project_log_metrics.get('entries_seen', 0)} "
+            f"written={project_log_metrics.get('entries_written', 0)} "
+            f"projects_updated={project_log_metrics.get('projects_updated', 0)} "
+            f"unknown={project_log_metrics.get('projects_unknown', 0)} "
+            f"missing={project_log_metrics.get('projects_missing_file', 0)}"
+        )
     print(f"    DB: {db_nodes} nodes, {db_edges} edges, status={status_counts}")
 
     return {"total_facts": len(facts), "stored": stored, "edges": edges}
@@ -1651,6 +1363,9 @@ def run_per_day_extraction(
     total_edges = 0
     total_snippets = 0
     total_journals = 0
+    total_project_logs_written = 0
+    total_project_logs_seen = 0
+    total_project_logs_projects_updated = 0
     janitor_runs = 0
 
     for day_idx, (date, day_reviews) in enumerate(days):
@@ -1684,19 +1399,8 @@ def run_per_day_extraction(
                         )
                         projects_changed.add((project, snum))
 
-        # Session-aware doc enrichment — only when project files changed
-        if projects_changed:
-            for project, snum in projects_changed:
-                # Find the review for this session to get the transcript
-                review_for_session = next(
-                    (r for r in day_reviews if r.session_num == snum), None
-                )
-                if review_for_session:
-                    session_transcript = format_transcript_for_extraction(review_for_session)
-                    _enrich_project_docs_with_session(
-                        workspace, project, session_transcript, api_key,
-                        session_num=snum, no_cache=no_cache,
-                    )
+        # Harness purity: do not run session-aware project doc enrichment here.
+        # Project documentation intelligence belongs in checkpoint runtime/janitor.
 
         # Cache key for this day's extraction
         cache_path = cache_dir / f"day-{date}.json"
@@ -1742,6 +1446,7 @@ def run_per_day_extraction(
                 "facts": result.get("facts", []),
                 "soul_snippets": result.get("soul_snippets", {}),
                 "journal_entries": result.get("journal_entries", {}),
+                "project_logs": _normalize_project_logs(result.get("project_logs", {})),
                 "usage": usage,
                 "model": model,
                 "sessions": snums,
@@ -1773,6 +1478,28 @@ def run_per_day_extraction(
             if content and write_journal_entry(ws, filename, content, "Compaction", date):
                 total_journals += 1
 
+        try:
+            pl_metrics = write_project_logs(
+                ws,
+                cached.get("project_logs", {}),
+                trigger="Compaction",
+                date_str=date,
+            )
+            if isinstance(pl_metrics, dict) and pl_metrics:
+                total_project_logs_written += int(pl_metrics.get("entries_written", 0))
+                total_project_logs_seen += int(pl_metrics.get("entries_seen", 0))
+                total_project_logs_projects_updated += int(pl_metrics.get("projects_updated", 0))
+                print(
+                    "  Project logs: "
+                    f"seen={pl_metrics.get('entries_seen', 0)} "
+                    f"written={pl_metrics.get('entries_written', 0)} "
+                    f"projects_updated={pl_metrics.get('projects_updated', 0)} "
+                    f"unknown={pl_metrics.get('projects_unknown', 0)} "
+                    f"missing={pl_metrics.get('projects_missing_file', 0)}"
+                )
+        except Exception as e:
+            print(f"    WARN: project log append failed: {e}")
+
         print(f"  Stored: {stored} facts, {edges} edges")
 
         # Run lightweight janitor after each day
@@ -1790,14 +1517,7 @@ def run_per_day_extraction(
         janitor_runs += 1
         print(f"  Janitor (lightweight) complete")
 
-    # Final mechanical enrichment for any projects NOT touched by sessions
-    # (session-aware enrichment already ran for projects that changed)
-    for proj_name in ["recipe-app", "portfolio-site"]:
-        tools_md = workspace / "projects" / proj_name / "TOOLS.md"
-        # Only enrich if TOOLS.md is still the bare seed (< 200 bytes)
-        if tools_md.exists() and tools_md.stat().st_size < 200:
-            _enrich_project_docs(workspace)
-            break
+    # Harness purity: no post-extraction project-doc enrichment in harness.
 
     # DB verification
     db_path = workspace / "data" / "memory.db"
@@ -1814,6 +1534,13 @@ def run_per_day_extraction(
     print(f"    Total extracted: {total_facts} facts")
     print(f"    Stored: {total_stored} facts, {total_edges} edges")
     print(f"    Snippets: {total_snippets} bullets, Journal: {total_journals} entries")
+    if total_project_logs_seen or total_project_logs_written:
+        print(
+            "    Project logs: "
+            f"seen={total_project_logs_seen} "
+            f"written={total_project_logs_written} "
+            f"projects_updated={total_project_logs_projects_updated}"
+        )
     print(f"    Janitor runs: {janitor_runs}")
     print(f"    DB: {db_nodes} nodes, {db_edges} edges, status={status_counts}")
 
@@ -3981,8 +3708,8 @@ def main():
 
         verify_post_janitor(workspace)
 
-        # Post-hoc project tagging (keyword-based, applied to final DB state)
-        apply_posthoc_tags(workspace)
+        # Harness purity: skip post-hoc semantic tagging in benchmark harness.
+        # Any tagging intelligence must live in checkpoint runtime.
 
         # Evaluation
         results = run_eval(workspace, api_key, max_sessions=args.max_sessions,

@@ -31,6 +31,8 @@ RUN_RESILIENCE=false
 RUN_JANITOR_STRESS=false
 RUN_PREBENCH_GUARDS=false
 RUN_JANITOR_PARALLEL_BENCH=false
+INGEST_ALLOW_FALLBACK="${QUAID_E2E_INGEST_ALLOW_FALLBACK:-false}"
+INGEST_MAX_COMPACTION_SESSIONS="${QUAID_E2E_INGEST_MAX_COMPACTION_SESSIONS:-4}"
 JANITOR_TIMEOUT_SECONDS=480
 JANITOR_MODE="apply"
 NOTIFY_LEVEL="debug"
@@ -320,6 +322,14 @@ if [[ "$NIGHTLY_PROFILE" != "quick" && "$NIGHTLY_PROFILE" != "deep" ]]; then
 fi
 if [[ "$RUNTIME_BUDGET_PROFILE" != "auto" && "$RUNTIME_BUDGET_PROFILE" != "off" && "$RUNTIME_BUDGET_PROFILE" != "quick" && "$RUNTIME_BUDGET_PROFILE" != "deep" ]]; then
   echo "Invalid --runtime-budget-profile: $RUNTIME_BUDGET_PROFILE (expected auto|off|quick|deep)" >&2
+  exit 1
+fi
+if [[ "$INGEST_ALLOW_FALLBACK" != "true" && "$INGEST_ALLOW_FALLBACK" != "false" ]]; then
+  echo "Invalid QUAID_E2E_INGEST_ALLOW_FALLBACK: $INGEST_ALLOW_FALLBACK (expected true|false)" >&2
+  exit 1
+fi
+if ! [[ "$INGEST_MAX_COMPACTION_SESSIONS" =~ ^[0-9]+$ ]] || [[ "$INGEST_MAX_COMPACTION_SESSIONS" -lt 1 ]]; then
+  echo "Invalid QUAID_E2E_INGEST_MAX_COMPACTION_SESSIONS: $INGEST_MAX_COMPACTION_SESSIONS (expected integer >= 1)" >&2
   exit 1
 fi
 if [[ -n "$STAGE_BUDGETS_JSON" ]]; then
@@ -2771,6 +2781,8 @@ fi
 if [[ "$RUN_INGEST_STRESS" == true ]]; then
 begin_stage "ingest_stress"
 echo "[e2e] Running ingestion stress checks (facts/snippets/journal/projects)..."
+INGEST_ALLOW_FALLBACK="$INGEST_ALLOW_FALLBACK" \
+INGEST_MAX_COMPACTION_SESSIONS="$INGEST_MAX_COMPACTION_SESSIONS" \
 python3 - "$E2E_WS" <<'PY'
 import json
 import os
@@ -2782,6 +2794,8 @@ import uuid
 from pathlib import Path
 
 ws = Path(sys.argv[1])
+allow_fallback = os.environ.get("INGEST_ALLOW_FALLBACK", "false").lower() == "true"
+max_compaction_sessions = int(os.environ.get("INGEST_MAX_COMPACTION_SESSIONS", "4"))
 db_path = ws / "data" / "memory.db"
 events_path = ws / "logs" / "quaid" / "session-timeout-events.jsonl"
 project_staging = ws / "projects" / "staging"
@@ -2975,17 +2989,46 @@ def extraction_seen() -> bool:
         for ln in lines
     )
 
+def compaction_signal_session_ids() -> set[str]:
+    session_ids = set()
+    lines = read_tail_since(events_path, start_line)
+    for ln in lines:
+        if '"label":"CompactionSignal"' not in ln:
+            continue
+        if '"event":"signal_process_begin"' not in ln and '"event":"extract_begin"' not in ln:
+            continue
+        marker = '"session_id":"'
+        if marker not in ln:
+            continue
+        try:
+            sid = ln.split(marker, 1)[1].split('"', 1)[0].strip().lower()
+        except Exception:
+            sid = ""
+        if sid:
+            session_ids.add(sid)
+    return session_ids
+
 extraction_deadline = time.time() + 90
 while time.time() < extraction_deadline and not extraction_seen():
     time.sleep(1)
 if not extraction_seen():
     target_sid = runtime_session_id or session_id
+    if not allow_fallback:
+        raise SystemExit(
+            f"[e2e] ERROR: ingest extraction not observed via /compact for {target_sid}"
+        )
     print(
         f"[e2e] WARN: ingest extraction not observed via /compact; queuing fallback CompactionSignal for {target_sid}",
         flush=True,
     )
     queue_signal_fallback(target_sid, "CompactionSignal")
     wait_for(extraction_seen, 60, "ingestion extraction completion (fallback)")
+
+compaction_sessions = compaction_signal_session_ids()
+if len(compaction_sessions) > max_compaction_sessions:
+    raise SystemExit(
+        f"[e2e] ERROR: compaction fan-out detected ({len(compaction_sessions)} sessions > {max_compaction_sessions})"
+    )
 
 with sqlite3.connect(db_path) as conn:
     after_nodes = count_nodes(conn)
@@ -3014,6 +3057,11 @@ if not project_activity_observed:
         flush=True,
     )
 
+if after_nodes <= baseline_nodes:
+    raise SystemExit(
+        f"[e2e] ERROR: ingestion produced no net memory growth (before={baseline_nodes}, after={after_nodes})"
+    )
+
 print(
     json.dumps(
         {
@@ -3028,6 +3076,7 @@ print(
             "project_log_size_before": baseline_project_log_size,
             "project_log_size_after": project_log_size(),
             "project_activity_observed": project_activity_observed,
+            "compaction_session_count": len(compaction_sessions),
         },
         indent=2,
     )
