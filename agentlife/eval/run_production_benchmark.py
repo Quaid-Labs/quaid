@@ -86,6 +86,19 @@ def _resolve_quaid_script(*relative_paths: str) -> Path:
 
 _QUAID_DIR = _resolve_quaid_dir()
 _MEMORY_GRAPH_SCRIPT = _resolve_quaid_script("memory_graph.py", "datastore/memorydb/memory_graph.py")
+_JANITOR_SCRIPT = _resolve_quaid_script("janitor.py", "core/lifecycle/janitor.py")
+_DOCS_RAG_SCRIPT = _resolve_quaid_script("docs_rag.py", "datastore/docsdb/rag.py")
+
+
+def _python_cmd_for_quaid_script(script_path: Path) -> List[str]:
+    """Execute Quaid scripts via module path when nested under Quaid root."""
+    try:
+        rel = script_path.resolve().relative_to(_QUAID_DIR.resolve())
+        if rel.suffix == ".py":
+            return [sys.executable, "-m", ".".join(rel.with_suffix("").parts)]
+    except Exception:
+        pass
+    return [sys.executable, str(script_path)]
 
 
 def _resolve_assets_dir() -> Path:
@@ -1084,8 +1097,8 @@ def add_project_files(workspace: Path, max_session: Optional[int] = None) -> Non
         for task in ["rag", "workspace", "snippets", "journal"]:
             extra = ["--force-distill"] if task == "journal" else []
             result = subprocess.run(
-                [sys.executable, str(_QUAID_DIR / "janitor.py"),
-                 "--task", task, "--apply"] + extra,
+                _python_cmd_for_quaid_script(_JANITOR_SCRIPT) +
+                ["--task", task, "--apply"] + extra,
                 env=env, cwd=str(_QUAID_DIR), capture_output=True, text=True, timeout=120,
             )
             if result.returncode != 0:
@@ -1479,8 +1492,8 @@ def _store_facts(
         keywords = fact.get("keywords", "")
         knowledge_type = "preference" if category == "preference" else "fact"
 
-        cmd = [
-            sys.executable, str(_MEMORY_GRAPH_SCRIPT), "store",
+        cmd = _python_cmd_for_quaid_script(_MEMORY_GRAPH_SCRIPT) + [
+            "store",
             text,
             "--category", category,
             "--owner", "maya",
@@ -1543,8 +1556,7 @@ def _store_facts(
                     rel = edge.get("relation", "")
                     obj = edge.get("object", "")
                     if subj and rel and obj:
-                        edge_cmd = [
-                            sys.executable, str(_MEMORY_GRAPH_SCRIPT),
+                        edge_cmd = _python_cmd_for_quaid_script(_MEMORY_GRAPH_SCRIPT) + [
                             "create-edge", subj, rel, obj,
                             "--create-missing", "--json",
                             "--source-fact-id", fact_id,
@@ -1765,10 +1777,10 @@ def run_per_day_extraction(
 
         # Run lightweight janitor after each day
         # (embeddings, review, dedup — skip heavy tasks like workspace audit)
-        janitor_path = str(_QUAID_DIR / "janitor.py")
+        janitor_cmd = _python_cmd_for_quaid_script(_JANITOR_SCRIPT)
         for task in ["embeddings", "review", "duplicates", "rag"]:
             result = subprocess.run(
-                [sys.executable, janitor_path, "--task", task, "--apply"],
+                janitor_cmd + ["--task", task, "--apply"],
                 env=env, cwd=str(_QUAID_DIR),
                 capture_output=True, text=True, timeout=300,
             )
@@ -1825,14 +1837,14 @@ def run_janitor(workspace: Path) -> None:
     print("=" * 60)
 
     env = _make_env(workspace)
-    janitor_path = str(_QUAID_DIR / "janitor.py")
+    janitor_cmd = _python_cmd_for_quaid_script(_JANITOR_SCRIPT)
 
     print("  Running: janitor --task all --apply --force-distill")
     print("  (This will take several minutes — Opus review + workspace audit + snippets + journal)")
 
     t0 = time.time()
     result = subprocess.run(
-        [sys.executable, janitor_path, "--task", "all", "--apply", "--force-distill"],
+        janitor_cmd + ["--task", "all", "--apply", "--force-distill"],
         env=env, cwd=str(_QUAID_DIR),
         capture_output=True, text=True, timeout=900,
     )
@@ -2720,8 +2732,7 @@ def _tool_memory_recall(
     """
     # Request extra results when filtering so we still get enough after post-filter
     limit = 20 if max_session else 10
-    cmd = [
-        sys.executable, str(_MEMORY_GRAPH_SCRIPT),
+    cmd = _python_cmd_for_quaid_script(_MEMORY_GRAPH_SCRIPT) + [
         "search", query, "--owner", "maya", "--limit", str(limit),
     ]
     if date_from:
@@ -2827,8 +2838,7 @@ def _tool_search_project_docs(
 
     # 3. RAG search as supplemental (only if no docs found)
     if not doc_parts:
-        cmd = [
-            sys.executable, str(_QUAID_DIR / "docs_rag.py"),
+        cmd = _python_cmd_for_quaid_script(_DOCS_RAG_SCRIPT) + [
             "search", query,
         ]
         if project:
