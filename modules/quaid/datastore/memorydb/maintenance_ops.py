@@ -88,6 +88,7 @@ def _get_config_value(getter, default):
 _cfg = get_config()
 DUPLICATE_MIN_SIM = _cfg.janitor.dedup.similarity_threshold  # Lower bound for "might be duplicate"
 DUPLICATE_MAX_SIM = _cfg.janitor.dedup.high_similarity_threshold  # Upper bound (auto-reject above)
+CONTRADICTION_ENABLED = bool(getattr(_cfg.janitor.contradiction, "enabled", True))
 CONTRADICTION_MIN_SIM = _cfg.janitor.contradiction.min_similarity  # Minimum similarity for contradiction checks
 CONTRADICTION_MAX_SIM = _cfg.janitor.contradiction.max_similarity  # Maximum similarity for contradiction checks
 CONFIDENCE_DECAY_DAYS = _cfg.decay.threshold_days  # Start decaying after this many days unused
@@ -373,9 +374,9 @@ def _is_benchmark_mode() -> bool:
 
 
 def _diag_logging_enabled() -> bool:
-    """Enable verbose janitor diagnostics only in benchmark/debug lanes."""
+    """Enable verbose janitor diagnostics only when explicitly enabled."""
     debug_flag = str(os.environ.get("QUAID_JANITOR_DEBUG_DIAGNOSTICS", "")).strip().lower()
-    return _is_benchmark_mode() or debug_flag in {"1", "true", "yes", "on"}
+    return debug_flag in {"1", "true", "yes", "on"}
 
 
 def _diag_truncate(value: Any, limit: int = 220) -> str:
@@ -404,27 +405,16 @@ def _diag_log_decision(event: str, **payload: Any) -> None:
 
 
 def _record_llm_batch_issue(metrics: "JanitorMetrics", message: str) -> None:
-    """Record transient LLM batch issues.
-
-    In benchmark mode, these are treated as warnings so one bad JSON/provider
-    response does not invalidate the whole run.
-    """
-    if is_benchmark_mode():
-        print(f"    WARN: {message} (non-fatal in benchmark mode)")
-        return
+    """Record transient LLM batch issues as real errors."""
     metrics.add_error(message)
 
 
 def _lr_batch_timeout() -> int:
-    """Timeout for batched fast-reasoning calls.
-
-    Benchmark lanes can be slower under vLLM; default higher there unless
-    explicitly overridden by env.
-    """
+    """Timeout for batched fast-reasoning calls."""
     env_val = str(os.environ.get("QUAID_LR_BATCH_TIMEOUT", "")).strip()
     if env_val.isdigit():
         return int(env_val)
-    return 300 if _is_benchmark_mode() else 120
+    return 120
 
 
 def _parallel_key(task_name: str) -> str:
@@ -1301,7 +1291,8 @@ def recall_similar_pairs(
                 })
 
             # Contradiction range (Facts only — let LLM decide, no negation heuristic)
-            if (CONTRADICTION_MIN_SIM <= sim < CONTRADICTION_MAX_SIM
+            if (CONTRADICTION_ENABLED
+                    and CONTRADICTION_MIN_SIM <= sim < CONTRADICTION_MAX_SIM
                     and new_node.type == 'Fact' and cand.type == 'Fact'):
                 contradiction_candidates.append({
                     "id_a": new_node.id,
@@ -1451,6 +1442,9 @@ def find_contradictions_from_pairs(contradiction_candidates: List[Dict[str, Any]
                                    metrics: JanitorMetrics,
                                    dry_run: bool = False) -> List[Dict[str, Any]]:
     """Run batched LLM contradiction checks on pre-built candidate pairs."""
+    if not CONTRADICTION_ENABLED:
+        print("  Contradiction checks disabled in config")
+        return []
     metrics.start_task("contradictions")
     contradictions = []
     task_start_time = time.time()
@@ -1597,6 +1591,9 @@ def resolve_contradictions_with_opus(
     llm_timeout_seconds: Optional[float] = None,
 ) -> Dict[str, int]:
     """Resolve pending contradictions using Opus for deep-reasoning decisions."""
+    if not CONTRADICTION_ENABLED:
+        print("  Contradiction resolution disabled in config")
+        return {"resolved": 0, "false_positive": 0, "merged": 0, "decisions": [], "carryover": 0}
     metrics.start_task("contradiction_resolution")
     results = {"resolved": 0, "false_positive": 0, "merged": 0, "decisions": [], "carryover": 0}
 
@@ -2899,13 +2896,6 @@ Respond with a JSON array only, no markdown fencing:
     covered_ids = set()
     missing_ids_overall = []
 
-    def _synthesize_keep_decisions(ids: List[str]) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        for mid in ids:
-            if isinstance(mid, str) and mid:
-                out.append({"id": mid, "action": "KEEP"})
-        return out
-
     def _normalize_review_decisions(payload: Any) -> List[Dict[str, Any]]:
         """Normalize wrapped/aliased review payloads into decision dicts."""
         cur = payload
@@ -3027,33 +3017,16 @@ Respond with a JSON array only, no markdown fencing:
             decisions_raw = parse_json_response(response_text)
             decisions = _normalize_review_decisions(decisions_raw)
             if not decisions:
-                if _is_benchmark_mode():
-                    fallback_msg = (
-                        f"Review batch {batch_num}: invalid JSON response; "
-                        "benchmark-mode fallback applying KEEP to all batch ids"
-                    )
-                    print(f"    WARNING: {fallback_msg}")
-                    _diag_log_decision(
-                        "review_batch_fallback_keep",
-                        batch_num=batch_num,
-                        reason="invalid_json",
-                        response_preview=(response_text or "")[:220],
-                        fallback_ids=[str(r["id"]) for r in batch_rows],
-                    )
-                    if metrics:
-                        metrics.add_warning(fallback_msg)
-                    decisions = _synthesize_keep_decisions([str(r["id"]) for r in batch_rows])
-                else:
-                    print(f"    Failed to parse response as JSON array, skipping batch")
-                    _diag_log_decision(
-                        "review_batch_failed",
-                        batch_num=batch_num,
-                        reason="invalid_json",
-                        response_preview=(response_text or "")[:220],
-                    )
-                    if metrics:
-                        _record_llm_batch_issue(metrics, f"Review batch {batch_num}: invalid JSON response")
-                    continue
+                print(f"    Failed to parse response as JSON array, skipping batch")
+                _diag_log_decision(
+                    "review_batch_failed",
+                    batch_num=batch_num,
+                    reason="invalid_json",
+                    response_preview=(response_text or "")[:220],
+                )
+                if metrics:
+                    _record_llm_batch_issue(metrics, f"Review batch {batch_num}: invalid JSON response")
+                continue
 
             batch_ids = {str(r["id"]) for r in batch_rows}
             batch_covered = _collect_covered_ids(decisions)
@@ -3106,42 +3079,15 @@ Respond with a JSON array only, no markdown fencing:
 
             if missing:
                 missing_ids_overall.extend(missing)
-                if _is_benchmark_mode():
-                    msg = (
-                        f"Review batch {batch_num}: incomplete coverage after retry; "
-                        f"benchmark-mode fallback applying KEEP for missing_ids={missing}"
-                    )
-                    print(f"    WARNING: {msg}")
-                    _diag_log_decision(
-                        "review_batch_fallback_keep",
-                        batch_num=batch_num,
-                        reason="coverage_missing_after_retry",
-                        missing_ids=missing,
-                    )
-                    if metrics:
-                        metrics.add_warning(msg)
-                    decisions.extend(_synthesize_keep_decisions(missing))
-                    batch_covered = _collect_covered_ids(decisions)
-                    missing = sorted(batch_ids - batch_covered)
-                    if missing:
-                        msg2 = (
-                            f"Review batch {batch_num}: benchmark fallback failed to cover "
-                            f"missing_ids={missing}"
-                        )
-                        if metrics:
-                            metrics.add_error(msg2)
-                        raise RuntimeError(msg2)
-                    missing_ids_overall = [mid for mid in missing_ids_overall if mid not in batch_ids]
-                else:
-                    msg = (
-                        f"Review batch {batch_num}: incomplete decision coverage after retry; "
-                        f"missing_ids={missing}"
-                    )
-                    if metrics:
-                        metrics.add_error(msg)
-                    if retry_cause is not None:
-                        raise RuntimeError(msg) from retry_cause
-                    raise RuntimeError(msg)
+                msg = (
+                    f"Review batch {batch_num}: incomplete decision coverage after retry; "
+                    f"missing_ids={missing}"
+                )
+                if metrics:
+                    metrics.add_error(msg)
+                if retry_cause is not None:
+                    raise RuntimeError(msg) from retry_cause
+                raise RuntimeError(msg)
 
             print(f"    Received {len(decisions)} decisions in {duration:.1f}s")
             covered_ids.update(batch_ids)
@@ -3175,31 +3121,6 @@ Respond with a JSON array only, no markdown fencing:
             continue
 
     uncovered_ids = sorted(reviewed_ids - covered_ids)
-    if uncovered_ids and _is_benchmark_mode():
-        # Benchmark reliability guard: if any batch failed to yield decisions,
-        # force deterministic KEEP decisions so review coverage cannot collapse to 0%.
-        msg = (
-            "Review finalization fallback: applying KEEP for uncovered IDs "
-            f"in benchmark mode (count={len(uncovered_ids)})"
-        )
-        print(f"    WARNING: {msg}")
-        _diag_log_decision(
-            "review_finalize_fallback_keep",
-            uncovered_count=len(uncovered_ids),
-            uncovered_ids=uncovered_ids,
-        )
-        if metrics:
-            metrics.add_warning(msg)
-        fallback_result = apply_review_decisions_from_list(
-            graph, _synthesize_keep_decisions(uncovered_ids), dry_run
-        )
-        totals["kept"] += int(fallback_result.get("kept", 0) or 0)
-        totals["deleted"] += int(fallback_result.get("deleted", 0) or 0)
-        totals["fixed"] += int(fallback_result.get("fixed", 0) or 0)
-        totals["merged"] += int(fallback_result.get("merged", 0) or 0)
-        covered_ids.update(uncovered_ids)
-        missing_ids_overall = [mid for mid in missing_ids_overall if mid not in covered_ids]
-        uncovered_ids = []
 
     print(f"\n  Review complete: {totals['kept']} kept, {totals['deleted']} deleted, "
           f"{totals['fixed']} fixed, {totals['merged']} merged")
