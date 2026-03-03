@@ -1001,7 +1001,7 @@ if openai_api_key:
     openai_profile["key"] = openai_api_key
     openai_profile.pop("token", None)
     creds["openai:default"] = openai_profile
-    auth_profiles["openai:default"] = {"provider": "openai", "mode": "token"}
+    auth_profiles["openai:default"] = {"provider": "openai", "mode": "api_key"}
     if not isinstance(auth_order.get("openai"), list):
         auth_order["openai"] = []
     if "openai:default" not in auth_order["openai"]:
@@ -1034,6 +1034,24 @@ if anthropic_api_key:
     profile["key"] = anthropic_api_key
     profile.pop("token", None)
     creds["anthropic:default"] = profile
+    auth_profiles["anthropic:default"] = {"provider": "anthropic", "mode": "api_key"}
+    if not isinstance(auth_order.get("anthropic"), list):
+        auth_order["anthropic"] = []
+    if "anthropic:default" not in auth_order["anthropic"]:
+        auth_order["anthropic"].insert(0, "anthropic:default")
+
+    # For anthropic-api path, pin default agent model to Anthropic so the
+    # gateway does not fail over to OpenAI when OPENAI_API_KEY is absent.
+    if auth_path == "anthropic-api":
+        openclaw.setdefault("agentDefaults", {})["modelPrimary"] = "anthropic/claude-opus-4-6"
+        provider_defaults = openclaw.setdefault("providerDefaults", {})
+        anthropic_defaults = provider_defaults.setdefault("anthropic", {})
+        anthropic_defaults["modelPrimary"] = "anthropic/claude-opus-4-6"
+        if not isinstance(anthropic_defaults.get("modelFallbacks"), list) or not anthropic_defaults["modelFallbacks"]:
+            anthropic_defaults["modelFallbacks"] = ["anthropic/claude-haiku-4-5"]
+        for agent in openclaw.get("agentList", []):
+            if isinstance(agent, dict):
+                agent["modelPrimary"] = "anthropic/claude-opus-4-6"
 
 with open(out, "w", encoding="utf-8") as f:
     json.dump(obj, f, indent=2)
