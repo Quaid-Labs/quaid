@@ -1,0 +1,1 @@
+../../modules/quaid/datastore/memorydb/schema.sql
