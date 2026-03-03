@@ -251,7 +251,7 @@ def _repair_non_json_extraction_payload(
         "- If no content fits, use empty arrays/objects.\n"
         "- Do not add markdown fences.\n\n"
         "Assistant output to normalize:\n"
-        f"{response_text}"
+        f"{response_text[:4000]}"
     )
     try:
         repaired_text, repair_duration = call_fast_reasoning(
