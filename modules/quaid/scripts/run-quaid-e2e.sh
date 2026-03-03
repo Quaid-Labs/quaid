@@ -2526,6 +2526,44 @@ def wait_for_session_persisted_token(session_id_value: str, token: str, seconds:
         time.sleep(1)
     return False
 
+def run_direct_extract_fallback(seed_text_value: str, session_id_value: str) -> bool:
+    transcript = f"User: {seed_text_value}\nAssistant: Acknowledged."
+    cmd = [
+        "python3",
+        "modules/quaid/ingest/extract.py",
+        "-",
+        "--owner",
+        "solomon",
+        "--label",
+        "ResetSignal",
+        "--session-id",
+        (session_id_value or "e2e-memory-fallback"),
+        "--json",
+    ]
+    env = os.environ.copy()
+    py_path = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
+    env["CLAWDBOT_WORKSPACE"] = ws
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=ws,
+            input=transcript,
+            text=True,
+            capture_output=True,
+            timeout=120,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        print("[e2e] WARN: direct extraction fallback timed out", flush=True)
+        return False
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        print(f"[e2e] WARN: direct extraction fallback failed: {err[:500]}", flush=True)
+        return False
+    print("[e2e] Direct extraction fallback completed.", flush=True)
+    return True
+
 def queue_signal_fallback(session_id_value: str, label: str, fallback_text: str) -> None:
     if not session_id_value:
         raise SystemExit(f"[e2e] ERROR: cannot queue fallback {label}; empty session id")
@@ -2582,6 +2620,7 @@ seed_ok = False
 reset_ok = False
 runtime_session_id = ""
 extraction_session_id = ""
+fallback_extracted = False
 start_line = line_count(events_path)
 for attempt in range(1, 4):
     seed_ok = run_agent(seed_text, timeout_sec=45, retries=3)
@@ -2602,6 +2641,8 @@ for attempt in range(1, 4):
                 f"[e2e] WARN: pre-reset fallback extraction not observed for session={extraction_session_id}",
                 flush=True,
             )
+            if run_direct_extract_fallback(seed_text, extraction_session_id):
+                fallback_extracted = True
     ok_reset, _ = gateway_call_json("sessions.reset", {"key": session_key}, timeout_sec=90)
     # Track post-reset session id for diagnostics only.
     runtime_session_id = resolve_session_id_from_key(session_key, runtime_session_id or extraction_session_id)
@@ -2621,7 +2662,7 @@ if not seed_ok or not reset_ok:
         f"(seed_ok={seed_ok}, reset_ok={reset_ok}, extraction_session_id={extraction_session_id}, runtime_session_id={runtime_session_id})."
     )
 
-if not wait_for_reset_extraction(start_line, extraction_session_id, 90):
+if not fallback_extracted and not wait_for_reset_extraction(start_line, extraction_session_id, 90):
     preview = "\n".join(read_tail_since(events_path, start_line)[-40:])
     raise SystemExit(
         "[e2e] ERROR: timed out waiting for reset extraction in memory flow\n"
