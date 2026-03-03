@@ -782,6 +782,32 @@ function _ensureOpenClawPluginsAllowQuaid() {
   }
 }
 
+function _removeOpenClawPluginsAllowQuaid() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const plugins = parsed.plugins;
+    if (!plugins || typeof plugins !== "object") return false;
+    const allow = Array.isArray(plugins.allow) ? plugins.allow : [];
+    const nextAllow = allow
+      .map((entry) => String(entry || "").trim())
+      .filter((entry) => entry && entry !== "quaid");
+    if (allow.length === nextAllow.length) return false;
+    plugins.allow = nextAllow;
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
 function _ensureOpenClawCompactionModeDefault() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -814,12 +840,82 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   const cli = canRun("openclaw") ? "openclaw" : (canRun("clawdbot") ? "clawdbot" : "");
   if (!cli) return { ok: false, reason: "OpenClaw CLI not found" };
   const normalize = (s) => String(s || "").toLowerCase();
+  const extensionDir = path.join(os.homedir(), ".openclaw", "extensions", "quaid");
+  const stagedPluginPath = path.join(
+    os.tmpdir(),
+    `quaid-plugin-stage-${process.pid}-${Date.now()}`,
+  );
+  const removeStaleExtensionDir = () => {
+    try {
+      if (!fs.existsSync(extensionDir)) return false;
+      fs.rmSync(extensionDir, { recursive: true, force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
-  const installRes = spawnSync(cli, ["plugins", "install", pluginPath], { encoding: "utf8", stdio: "pipe" });
+  // Force-refresh plugin install to avoid stale extension code lingering at ~/.openclaw/extensions/quaid.
+  // Some OpenClaw builds report "already installed" and keep old files instead of replacing contents.
+  try {
+    fs.cpSync(pluginPath, stagedPluginPath, { recursive: true, dereference: true });
+  } catch (err) {
+    return { ok: false, reason: `failed to stage plugin source: ${String(err)}` };
+  }
+  try {
+    // OpenClaw beta rejects symlinked manifests, even when links stay inside plugin root.
+    // Normalize the staged manifest to a regular file before install.
+    const stagedManifestPath = path.join(stagedPluginPath, "openclaw.plugin.json");
+    const manifestStat = fs.lstatSync(stagedManifestPath);
+    if (manifestStat.isSymbolicLink()) {
+      const resolvedManifestPath = fs.realpathSync(stagedManifestPath);
+      const manifestRaw = fs.readFileSync(resolvedManifestPath, "utf8");
+      fs.unlinkSync(stagedManifestPath);
+      fs.writeFileSync(stagedManifestPath, manifestRaw, "utf8");
+    }
+  } catch (err) {
+    return { ok: false, reason: `failed to normalize staged plugin manifest: ${String(err)}` };
+  }
+
+  // Pre-clean stale extension/config so plugin CLI can run even when previous state is invalid.
+  removeStaleExtensionDir();
+  _sanitizeOpenClawQuaidPluginEntry();
+  _removeOpenClawPluginsAllowQuaid();
+  _sanitizeOpenClawMemorySlot();
+
+  const uninstallRes = spawnSync(cli, ["plugins", "uninstall", "quaid", "--force"], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (uninstallRes.status !== 0) {
+    const msg = `${uninstallRes.stderr || ""}\n${uninstallRes.stdout || ""}`;
+    const norm = normalize(msg);
+    const unmanaged = norm.includes("not managed by plugins config/install records");
+    if (!norm.includes("not installed") && !norm.includes("not found") && !norm.includes("missing") && !unmanaged) {
+      return { ok: false, reason: `plugins uninstall failed: ${msg.trim() || "unknown error"}` };
+    }
+    if (unmanaged) removeStaleExtensionDir();
+  }
+
+  const installRes = spawnSync(cli, ["plugins", "install", stagedPluginPath], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
   if (installRes.status !== 0) {
     const msg = `${installRes.stderr || ""}\n${installRes.stdout || ""}`;
     const norm = normalize(msg);
-    if (!norm.includes("already installed") && !norm.includes("already exists")) {
+    if ((norm.includes("already installed") || norm.includes("already exists")) && removeStaleExtensionDir()) {
+      const retry = spawnSync(cli, ["plugins", "install", stagedPluginPath], {
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      if (retry.status === 0) {
+        // continue
+      } else {
+        const retryMsg = `${retry.stderr || ""}\n${retry.stdout || ""}`;
+        return { ok: false, reason: `plugins install failed after stale-dir cleanup: ${retryMsg.trim() || "unknown error"}` };
+      }
+    } else {
       return { ok: false, reason: `plugins install failed: ${msg.trim() || "unknown error"}` };
     }
   }
@@ -856,6 +952,10 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     const msg = `${restartRes.stderr || ""}\n${restartRes.stdout || ""}`.trim();
     return { ok: false, reason: `gateway restart failed: ${msg || "unknown error"}` };
   }
+
+  try {
+    fs.rmSync(stagedPluginPath, { recursive: true, force: true });
+  } catch {}
 
   return { ok: true, reason: "" };
 }
@@ -1056,8 +1156,8 @@ async function step1_preflight() {
     if (_sanitizeOpenClawQuaidPluginEntry()) {
       log.info("Removed invalid plugins.entries.quaid.workspace from ~/.openclaw/openclaw.json");
     }
-    if (_ensureOpenClawPluginsAllowQuaid()) {
-      log.info("Ensured plugins.allow includes: quaid");
+    if (_removeOpenClawPluginsAllowQuaid()) {
+      log.info("Removed stale plugins.allow entry for quaid before plugin registration");
     }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
