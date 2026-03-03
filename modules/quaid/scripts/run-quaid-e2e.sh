@@ -1526,6 +1526,8 @@ def reset_signal_source(lines: list[str]) -> str:
             return "session_end"
         if '"source":"before_reset"' in ln:
             return "before_reset"
+        if '"source":"command_hook"' in ln:
+            return "command_hook"
         if '"source":"transcript_update"' in ln:
             return "transcript_update"
     return ""
