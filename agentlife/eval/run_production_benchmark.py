@@ -47,7 +47,45 @@ from typing import List, Optional, Tuple
 _DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _DIR.parent
 _CLAWD = Path(os.environ.get("CLAWDBOT_WORKSPACE", Path.home() / "clawd"))
-_QUAID_DIR = _CLAWD / "plugins" / "quaid"
+
+
+def _resolve_quaid_dir() -> Path:
+    """Resolve Quaid root across dev/checkpoint/plugin layouts."""
+    explicit = os.environ.get("BENCHMARK_PLUGIN_DIR", "").strip()
+    if explicit:
+        p = Path(explicit).expanduser()
+        if p.exists():
+            return p
+
+    candidates = [
+        _CLAWD / "modules" / "quaid",
+        _CLAWD / "plugins" / "quaid",
+        _CLAWD / "benchmark-checkpoint" / "modules" / "quaid",
+        _CLAWD / "benchmark-checkpoint" / "plugins" / "quaid",
+        _CLAWD / "dev" / "modules" / "quaid",
+    ]
+    for c in candidates:
+        if (
+            (c / "quaid").exists()
+            or (c / "schema.sql").exists()
+            or (c / "memory_graph.py").exists()
+            or (c / "datastore" / "memorydb" / "memory_graph.py").exists()
+        ):
+            return c
+    return candidates[0]
+
+
+def _resolve_quaid_script(*relative_paths: str) -> Path:
+    for rel in relative_paths:
+        p = _QUAID_DIR / rel
+        if p.exists():
+            return p
+    # Return first candidate for clearer downstream error messages.
+    return _QUAID_DIR / relative_paths[0]
+
+
+_QUAID_DIR = _resolve_quaid_dir()
+_MEMORY_GRAPH_SCRIPT = _resolve_quaid_script("memory_graph.py", "datastore/memorydb/memory_graph.py")
 
 
 def _resolve_assets_dir() -> Path:
@@ -1426,6 +1464,9 @@ def _store_facts(
     except Exception:
         active_domains = ["personal", "project", "work", "technical"]
 
+    store_failures = 0
+    store_failure_samples: list[str] = []
+
     for fact in facts:
         text = fact.get("text", "").strip()
         if not text or len(text.split()) < 3:
@@ -1439,7 +1480,7 @@ def _store_facts(
         knowledge_type = "preference" if category == "preference" else "fact"
 
         cmd = [
-            sys.executable, str(_QUAID_DIR / "memory_graph.py"), "store",
+            sys.executable, str(_MEMORY_GRAPH_SCRIPT), "store",
             text,
             "--category", category,
             "--owner", "maya",
@@ -1482,8 +1523,18 @@ def _store_facts(
                 cmd, capture_output=True, text=True, timeout=30,
                 cwd=quaid_dir, env=env,
             )
+            if result.returncode != 0:
+                store_failures += 1
+                detail = (result.stderr or result.stdout or "").strip().replace("\n", " ")
+                sample = (
+                    f"rc={result.returncode} text={text[:80]!r} "
+                    f"err={detail[:240]!r} cmd={str(_MEMORY_GRAPH_SCRIPT)!r}"
+                )
+                if len(store_failure_samples) < 5:
+                    store_failure_samples.append(sample)
+                continue
             output = result.stdout.strip()
-            stored_match = re.match(r"Stored: (.+)", output)
+            stored_match = re.search(r"Stored:\s+([^\s]+)", output)
             if stored_match:
                 stored += 1
                 fact_id = stored_match.group(1)
@@ -1493,7 +1544,7 @@ def _store_facts(
                     obj = edge.get("object", "")
                     if subj and rel and obj:
                         edge_cmd = [
-                            sys.executable, str(_QUAID_DIR / "memory_graph.py"),
+                            sys.executable, str(_MEMORY_GRAPH_SCRIPT),
                             "create-edge", subj, rel, obj,
                             "--create-missing", "--json",
                             "--source-fact-id", fact_id,
@@ -1504,10 +1555,22 @@ def _store_facts(
                         )
                         if edge_result.returncode == 0:
                             edges_created += 1
-            elif re.match(r"Updated existing: (.+)", output):
+            elif re.search(r"Updated existing:\s+([^\s]+)", output):
                 stored += 1
         except Exception as e:
-            print(f"      Store error: {e}", file=sys.stderr)
+            store_failures += 1
+            if len(store_failure_samples) < 5:
+                store_failure_samples.append(f"exception text={text[:80]!r} err={str(e)[:240]!r}")
+
+    if facts and stored == 0 and store_failures > 0:
+        sample_blob = "\n        ".join(store_failure_samples) if store_failure_samples else "(no stderr captured)"
+        raise RuntimeError(
+            "Store phase wrote zero facts with non-zero store failures. "
+            f"memory_graph={_MEMORY_GRAPH_SCRIPT}\n"
+            f"        {sample_blob}"
+        )
+    if store_failures > 0:
+        print(f"      WARN: store failures during extraction: {store_failures}", file=sys.stderr)
 
     return stored, edges_created
 
@@ -2658,7 +2721,7 @@ def _tool_memory_recall(
     # Request extra results when filtering so we still get enough after post-filter
     limit = 20 if max_session else 10
     cmd = [
-        sys.executable, str(_QUAID_DIR / "memory_graph.py"),
+        sys.executable, str(_MEMORY_GRAPH_SCRIPT),
         "search", query, "--owner", "maya", "--limit", str(limit),
     ]
     if date_from:
@@ -3691,7 +3754,7 @@ def _tool_use_loop_claude_code(
 
     # Build system prompt
     db_path = workspace / "data" / "memory.db"
-    mg_path = _QUAID_DIR / "memory_graph.py"
+    mg_path = _MEMORY_GRAPH_SCRIPT
     quaid_root = str(_QUAID_DIR.resolve())
     date_filter = f" --date-to {date_to}" if date_to else ""
 
