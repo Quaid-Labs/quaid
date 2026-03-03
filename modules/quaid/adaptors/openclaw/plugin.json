@@ -64,9 +64,7 @@
           "agent_end",
           "before_compaction",
           "before_reset",
-          "session_end",
-          "command:new",
-          "command:reset"
+          "session_end"
         ]
       },
       "ingest_triggers": {
