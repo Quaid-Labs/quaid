@@ -312,6 +312,122 @@ class TestExclusionPatterns:
         assert "cached.md" not in file_names
 
 
+class TestAppendProjectLogs:
+    def test_normalizes_session_prefix_and_dedupes_entries(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+
+        metrics = append_project_logs(
+            {
+                "test-project": [
+                    "Session 3 (compact): Updated README links",
+                    "- Session 8: Updated README links",
+                    "  * Session 9 (reset): Added API docs  ",
+                ]
+            },
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        assert metrics["projects_seen"] == 1
+        assert metrics["projects_updated"] == 1
+        assert metrics["entries_seen"] == 2
+        assert metrics["entries_written"] == 2
+
+        content = project_md.read_text()
+        assert "- 2026-03-03 [Compaction] Updated README links" in content
+        assert "- 2026-03-03 [Compaction] Added API docs" in content
+
+    def test_appends_into_existing_project_log_block(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_md.write_text(
+            project_md.read_text()
+            + "\n## Project Log\n"
+            + "<!-- BEGIN:PROJECT_LOG -->\n"
+            + "- 2026-03-01 [Compaction] Existing entry\n"
+            + "<!-- END:PROJECT_LOG -->\n"
+        )
+
+        metrics = append_project_logs(
+            {"test-project": ["Session 2: Added retry logic"]},
+            trigger="Reset",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        assert metrics["entries_seen"] == 1
+        assert metrics["entries_written"] == 1
+        content = project_md.read_text()
+        assert "- 2026-03-01 [Compaction] Existing entry" in content
+        assert "- 2026-03-03 [Reset] Added retry logic" in content
+
+    def test_dry_run_reports_metrics_without_writing(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        before = project_md.read_text()
+
+        metrics = append_project_logs(
+            {"test-project": ["Session 4: Dry run only"]},
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=True,
+        )
+
+        assert metrics["projects_updated"] == 1
+        assert metrics["entries_written"] == 1
+        assert project_md.read_text() == before
+
+    def test_unknown_project_is_reported_and_skipped(self, setup_env, capsys):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        metrics = append_project_logs(
+            {"does-not-exist": ["Session 1: ignore"]},
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        assert metrics["projects_seen"] == 1
+        assert metrics["projects_unknown"] == 1
+        assert metrics["projects_updated"] == 0
+        out = capsys.readouterr().out
+        assert "[project-log] unknown project: does-not-exist" in out
+
+    def test_missing_project_md_is_reported_and_skipped(self, setup_env, capsys):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        tmp_path = setup_env
+        project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_md.unlink()
+
+        metrics = append_project_logs(
+            {"test-project": ["Session 1: missing file"]},
+            trigger="Compaction",
+            date_str="2026-03-03",
+            dry_run=False,
+        )
+
+        assert metrics["projects_seen"] == 1
+        assert metrics["projects_missing_file"] == 1
+        assert metrics["projects_updated"] == 0
+        out = capsys.readouterr().out
+        assert "[project-log] missing PROJECT.md:" in out
+
+    def test_empty_or_invalid_payload_is_noop(self, setup_env):
+        from datastore.docsdb.project_updater import append_project_logs
+
+        assert append_project_logs({}, dry_run=False)["projects_seen"] == 0
+        assert append_project_logs(None, dry_run=False)["projects_seen"] == 0
+
+
 class TestCascade:
     """Cascade was removed as dead code — tests verify removal."""
     def test_cascade_function_removed(self, setup_env):

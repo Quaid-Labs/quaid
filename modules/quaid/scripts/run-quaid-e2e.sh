@@ -4016,6 +4016,22 @@ before_project_doc_updates = sum(
     if isinstance(e, dict)
     and str(e.get("doc_path", "")) == "projects/quaid/PROJECT.md"
 )
+project_md_path = os.path.join(ws, "projects", "quaid", "PROJECT.md")
+
+def _project_log_line_count(path: str) -> int:
+    begin = "<!-- BEGIN:PROJECT_LOG -->"
+    end = "<!-- END:PROJECT_LOG -->"
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except Exception:
+        return 0
+    if begin not in raw or end not in raw:
+        return 0
+    segment = raw.split(begin, 1)[1].split(end, 1)[0]
+    lines = [line.strip() for line in segment.splitlines() if line.strip()]
+    return sum(1 for line in lines if line.startswith("- "))
+
+before_project_log_lines = _project_log_line_count(project_md_path)
 before_staging = len([x for x in os.listdir(staging_dir) if x.endswith(".json")]) if os.path.isdir(staging_dir) else 0
 before_seeded_staging = len([x for x in os.listdir(staging_dir) if x.endswith("-e2e-seed.json")]) if os.path.isdir(staging_dir) else 0
 snippet_exists_before = os.path.exists(snippet_path)
@@ -4372,6 +4388,7 @@ after_project_doc_updates = sum(
     if isinstance(e, dict)
     and str(e.get("doc_path", "")) == "projects/quaid/PROJECT.md"
 )
+after_project_log_lines = _project_log_line_count(project_md_path)
 after_staging = len([x for x in os.listdir(staging_dir) if x.endswith(".json")]) if os.path.isdir(staging_dir) else 0
 after_seeded_staging = len([x for x in os.listdir(staging_dir) if x.endswith("-e2e-seed.json")]) if os.path.isdir(staging_dir) else 0
 janitor_stats = _load_json_obj(janitor_stats_path)
@@ -4514,6 +4531,8 @@ summary = {
     "registry_last_indexed_abs_after": after_registry_last_indexed_abs,
     "project_doc_updates_before": before_project_doc_updates,
     "project_doc_updates_after": after_project_doc_updates,
+    "project_log_lines_before": before_project_log_lines,
+    "project_log_lines_after": after_project_log_lines,
     "snippet_exists_before": snippet_exists_before,
     "snippet_exists_after": snippet_exists_after,
     "journal_exists_before": journal_exists_before,
@@ -4637,6 +4656,13 @@ if mode == "apply":
             print(
                 "[e2e] ERROR: project artifact assertion failed; no new PROJECT.md update log entry "
                 f"(before={before_project_doc_updates}, after={after_project_doc_updates})",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if (not janitor_parallel_bench) and after_project_log_lines <= before_project_log_lines:
+            print(
+                "[e2e] ERROR: project log assertion failed; PROJECT.md project-log block did not gain entries "
+                f"(before={before_project_log_lines}, after={after_project_log_lines})",
                 file=sys.stderr,
             )
             raise SystemExit(1)

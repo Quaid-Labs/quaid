@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import io
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -142,6 +143,53 @@ class TestAnthropicLLMProvider:
         with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp):
             with pytest.raises(RuntimeError, match="non-object JSON"):
                 p.llm_call([{"role": "user", "content": "hi"}])
+
+    def test_llm_call_retries_on_retryable_http_error(self, monkeypatch):
+        p = AnthropicLLMProvider(api_key="sk-test-key")
+        monkeypatch.setenv("ANTHROPIC_RETRY_ATTEMPTS", "2")
+        monkeypatch.setenv("ANTHROPIC_RETRY_BACKOFF_S", "0")
+        monkeypatch.setenv("ANTHROPIC_RETRY_BACKOFF_CAP_S", "0")
+
+        first_err = urllib.error.HTTPError(
+            url="https://api.anthropic.com/v1/messages",
+            code=529,
+            msg="overloaded",
+            hdrs={},
+            fp=io.BytesIO(b'{"type":"error","error":{"type":"overloaded_error"}}'),
+        )
+        response_data = {
+            "content": [{"type": "text", "text": "Recovered"}],
+            "usage": {"input_tokens": 10, "output_tokens": 4},
+            "model": "claude-haiku-4-5-20251001",
+            "stop_reason": "end_turn",
+        }
+        ok_resp = MagicMock()
+        ok_resp.read.return_value = json.dumps(response_data).encode()
+        ok_resp.__enter__ = lambda s: s
+        ok_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", side_effect=[first_err, ok_resp]) as mock_open:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
+        assert result.text == "Recovered"
+        assert mock_open.call_count == 2
+
+    def test_llm_call_does_not_retry_on_non_retryable_http_error(self, monkeypatch):
+        p = AnthropicLLMProvider(api_key="sk-test-key")
+        monkeypatch.setenv("ANTHROPIC_RETRY_ATTEMPTS", "3")
+        monkeypatch.setenv("ANTHROPIC_RETRY_BACKOFF_S", "0")
+        monkeypatch.setenv("ANTHROPIC_RETRY_BACKOFF_CAP_S", "0")
+
+        bad_req = urllib.error.HTTPError(
+            url="https://api.anthropic.com/v1/messages",
+            code=400,
+            msg="bad_request",
+            hdrs={},
+            fp=io.BytesIO(b'{"type":"error","error":{"type":"invalid_request_error"}}'),
+        )
+        with patch("lib.providers.urllib.request.urlopen", side_effect=bad_req) as mock_open:
+            with pytest.raises(RuntimeError, match="HTTPError code=400"):
+                p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
+        assert mock_open.call_count == 1
 
 
 # ---------------------------------------------------------------------------

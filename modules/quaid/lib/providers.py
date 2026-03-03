@@ -197,92 +197,131 @@ class AnthropicLLMProvider(LLMProvider):
             "messages": [{"role": "user", "content": user_message}],
         }
 
+        retry_attempts = max(1, int(os.environ.get("ANTHROPIC_RETRY_ATTEMPTS", "1") or "1"))
+        backoff_s = max(0.0, float(os.environ.get("ANTHROPIC_RETRY_BACKOFF_S", "2") or "2"))
+        backoff_cap_s = max(backoff_s, float(os.environ.get("ANTHROPIC_RETRY_BACKOFF_CAP_S", "60") or "60"))
+        retryable_http_codes = {408, 429, 500, 502, 503, 504, 529}
         start_time = time.time()
-        try:
-            data_bytes = json.dumps(body).encode()
-            req = urllib.request.Request(self._base_url, data=data_bytes,
-                                        headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode())
-                if not isinstance(data, dict):
-                    raise RuntimeError(
-                        f"Anthropic API returned non-object JSON for model={model}: {type(data).__name__}"
-                    )
-                duration = time.time() - start_time
 
-                usage = data.get("usage", {})
-                if not isinstance(usage, dict):
-                    usage = {}
-                in_tok = usage.get("input_tokens", 0)
-                out_tok = usage.get("output_tokens", 0)
-                cache_read = usage.get("cache_read_input_tokens", 0)
-                cache_create = usage.get("cache_creation_input_tokens", 0)
-                truncated = data.get("stop_reason", "") == "max_tokens"
-
-                content_blocks = data.get("content", [])
-                if not isinstance(content_blocks, list):
-                    raise RuntimeError(
-                        f"Anthropic API returned invalid content payload for model={model}"
-                    )
-                text_parts = [
-                    b["text"]
-                    for b in content_blocks
-                    if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
-                ]
-                text = "\n".join(text_parts).strip()
-
-                return LLMResult(
-                    text=text,
-                    duration=duration,
-                    input_tokens=in_tok,
-                    output_tokens=out_tok,
-                    cache_read_tokens=cache_read,
-                    cache_creation_tokens=cache_create,
-                    model=data.get("model", model),
-                    truncated=truncated,
-                )
-        except urllib.error.HTTPError as e:
-            duration = time.time() - start_time
-            body_preview = ""
+        for attempt in range(1, retry_attempts + 1):
             try:
-                body_preview = (e.read() or b"").decode("utf-8", errors="ignore")
-            except Exception:
+                data_bytes = json.dumps(body).encode()
+                req = urllib.request.Request(self._base_url, data=data_bytes,
+                                            headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    data = json.loads(resp.read().decode())
+                    if not isinstance(data, dict):
+                        raise RuntimeError(
+                            f"Anthropic API returned non-object JSON for model={model}: {type(data).__name__}"
+                        )
+                    duration = time.time() - start_time
+
+                    usage = data.get("usage", {})
+                    if not isinstance(usage, dict):
+                        usage = {}
+                    in_tok = usage.get("input_tokens", 0)
+                    out_tok = usage.get("output_tokens", 0)
+                    cache_read = usage.get("cache_read_input_tokens", 0)
+                    cache_create = usage.get("cache_creation_input_tokens", 0)
+                    truncated = data.get("stop_reason", "") == "max_tokens"
+
+                    content_blocks = data.get("content", [])
+                    if not isinstance(content_blocks, list):
+                        raise RuntimeError(
+                            f"Anthropic API returned invalid content payload for model={model}"
+                        )
+                    text_parts = [
+                        b["text"]
+                        for b in content_blocks
+                        if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+                    ]
+                    text = "\n".join(text_parts).strip()
+
+                    return LLMResult(
+                        text=text,
+                        duration=duration,
+                        input_tokens=in_tok,
+                        output_tokens=out_tok,
+                        cache_read_tokens=cache_read,
+                        cache_creation_tokens=cache_create,
+                        model=data.get("model", model),
+                        truncated=truncated,
+                    )
+            except urllib.error.HTTPError as e:
                 body_preview = ""
-            body_preview = body_preview.replace("\n", " ")[:400]
-            headers_lc = {}
-            try:
-                headers_lc = {str(k).lower(): str(v) for k, v in (e.headers.items() if e.headers else [])}
-            except Exception:
+                try:
+                    body_preview = (e.read() or b"").decode("utf-8", errors="ignore")
+                except Exception:
+                    body_preview = ""
+                body_preview = body_preview.replace("\n", " ")[:400]
                 headers_lc = {}
-            request_id = (
-                headers_lc.get("anthropic-request-id")
-                or headers_lc.get("request-id")
-                or headers_lc.get("x-request-id")
-                or ""
-            )
-            ratelimit_headers = {
-                k: v for k, v in headers_lc.items() if "ratelimit" in k
-            }
-            logger.error(
-                "Anthropic API HTTPError code=%s model=%s tier=%s request_id=%s "
-                "ratelimit=%s body_preview=%s",
-                getattr(e, "code", "unknown"),
-                model,
-                model_tier,
-                request_id,
-                ratelimit_headers,
-                body_preview,
-            )
-            raise RuntimeError(
-                "Anthropic API HTTPError "
-                f"code={getattr(e, 'code', 'unknown')} "
-                f"model={model} tier={model_tier} request_id={request_id} "
-                f"ratelimit={ratelimit_headers} body={body_preview}"
-            ) from e
-        except Exception as e:
-            duration = time.time() - start_time
-            logger.error("Anthropic API error: %s", e)
-            raise
+                try:
+                    headers_lc = {str(k).lower(): str(v) for k, v in (e.headers.items() if e.headers else [])}
+                except Exception:
+                    headers_lc = {}
+                request_id = (
+                    headers_lc.get("anthropic-request-id")
+                    or headers_lc.get("request-id")
+                    or headers_lc.get("x-request-id")
+                    or ""
+                )
+                ratelimit_headers = {
+                    k: v for k, v in headers_lc.items() if "ratelimit" in k
+                }
+                retriable = getattr(e, "code", None) in retryable_http_codes
+                if retriable and attempt < retry_attempts:
+                    delay = min(backoff_cap_s, backoff_s * (2 ** (attempt - 1)))
+                    logger.warning(
+                        "Anthropic API retryable HTTPError code=%s model=%s tier=%s "
+                        "attempt=%s/%s request_id=%s ratelimit=%s delay=%.1fs",
+                        getattr(e, "code", "unknown"),
+                        model,
+                        model_tier,
+                        attempt,
+                        retry_attempts,
+                        request_id,
+                        ratelimit_headers,
+                        delay,
+                    )
+                    if delay > 0:
+                        time.sleep(delay)
+                    continue
+                logger.error(
+                    "Anthropic API HTTPError code=%s model=%s tier=%s request_id=%s "
+                    "ratelimit=%s body_preview=%s",
+                    getattr(e, "code", "unknown"),
+                    model,
+                    model_tier,
+                    request_id,
+                    ratelimit_headers,
+                    body_preview,
+                )
+                raise RuntimeError(
+                    "Anthropic API HTTPError "
+                    f"code={getattr(e, 'code', 'unknown')} "
+                    f"model={model} tier={model_tier} request_id={request_id} "
+                    f"ratelimit={ratelimit_headers} body={body_preview}"
+                ) from e
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+                if attempt < retry_attempts:
+                    delay = min(backoff_cap_s, backoff_s * (2 ** (attempt - 1)))
+                    logger.warning(
+                        "Anthropic API transient error=%s model=%s tier=%s attempt=%s/%s delay=%.1fs",
+                        type(e).__name__,
+                        model,
+                        model_tier,
+                        attempt,
+                        retry_attempts,
+                        delay,
+                    )
+                    if delay > 0:
+                        time.sleep(delay)
+                    continue
+                logger.error("Anthropic API error: %s", e)
+                raise
+            except Exception as e:
+                logger.error("Anthropic API error: %s", e)
+                raise
 
     def get_profiles(self):
         return {
