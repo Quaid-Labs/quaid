@@ -42,7 +42,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 _DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _DIR.parent
@@ -1191,6 +1191,10 @@ def _store_facts(
 
     store_failures = 0
     store_failure_samples: list[str] = []
+    edge_timeout_s = max(30, int(os.environ.get("BENCHMARK_EDGE_TIMEOUT_SECONDS", "90")))
+    edge_retries = max(0, int(os.environ.get("BENCHMARK_EDGE_RETRIES", "1")))
+    edge_retry_backoff_s = max(0.0, float(os.environ.get("BENCHMARK_EDGE_RETRY_BACKOFF_SECONDS", "1.5")))
+    edge_slow_log_s = max(0.0, float(os.environ.get("BENCHMARK_EDGE_SLOW_LOG_SECONDS", "10.0")))
 
     for fact in facts:
         text = fact.get("text", "").strip()
@@ -1273,12 +1277,57 @@ def _store_facts(
                             "--create-missing", "--json",
                             "--source-fact-id", fact_id,
                         ]
-                        edge_result = subprocess.run(
-                            edge_cmd, capture_output=True, text=True,
-                            timeout=30, cwd=quaid_dir, env=env,
-                        )
-                        if edge_result.returncode == 0:
-                            edges_created += 1
+                        edge_ok = False
+                        edge_last_err = ""
+                        for attempt in range(edge_retries + 1):
+                            t_edge = time.time()
+                            try:
+                                edge_result = subprocess.run(
+                                    edge_cmd,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=edge_timeout_s,
+                                    cwd=quaid_dir,
+                                    env=env,
+                                )
+                                edge_elapsed = time.time() - t_edge
+                                if edge_elapsed >= edge_slow_log_s:
+                                    print(
+                                        f"      EDGE_SLOW: {edge_elapsed:.2f}s rc={edge_result.returncode} "
+                                        f"attempt={attempt + 1}/{edge_retries + 1} rel={rel!r} obj={obj!r}",
+                                        file=sys.stderr,
+                                    )
+                                if edge_result.returncode == 0:
+                                    edges_created += 1
+                                    edge_ok = True
+                                    break
+                                detail = (edge_result.stderr or edge_result.stdout or "").strip().replace("\n", " ")
+                                edge_last_err = (
+                                    f"edge rc={edge_result.returncode} elapsed={edge_elapsed:.2f}s "
+                                    f"attempt={attempt + 1}/{edge_retries + 1} rel={rel!r} obj={obj!r} "
+                                    f"err={detail[:220]!r}"
+                                )
+                            except subprocess.TimeoutExpired:
+                                edge_elapsed = time.time() - t_edge
+                                edge_last_err = (
+                                    f"edge timeout elapsed={edge_elapsed:.2f}s timeout={edge_timeout_s}s "
+                                    f"attempt={attempt + 1}/{edge_retries + 1} rel={rel!r} obj={obj!r}"
+                                )
+                            except Exception as e:
+                                edge_elapsed = time.time() - t_edge
+                                edge_last_err = (
+                                    f"edge exception elapsed={edge_elapsed:.2f}s "
+                                    f"attempt={attempt + 1}/{edge_retries + 1} rel={rel!r} obj={obj!r} "
+                                    f"err={str(e)[:220]!r}"
+                                )
+                            if attempt < edge_retries and edge_retry_backoff_s > 0:
+                                time.sleep(edge_retry_backoff_s * (attempt + 1))
+                        if not edge_ok:
+                            store_failures += 1
+                            if len(store_failure_samples) < 5:
+                                store_failure_samples.append(
+                                    f"edge failure text={text[:80]!r} {edge_last_err}"
+                                )
             elif re.search(r"Updated existing:\s+([^\s]+)", output):
                 stored += 1
         except Exception as e:
@@ -1286,11 +1335,12 @@ def _store_facts(
             if len(store_failure_samples) < 5:
                 store_failure_samples.append(f"exception text={text[:80]!r} err={str(e)[:240]!r}")
 
-    if facts and stored == 0 and store_failures > 0:
+    fail_on_store_failures = str(os.environ.get("BENCHMARK_FAIL_ON_STORE_FAILURE", "1")).strip().lower() not in {"0", "false", "no"}
+    if store_failures > 0 and fail_on_store_failures:
         sample_blob = "\n        ".join(store_failure_samples) if store_failure_samples else "(no stderr captured)"
         raise RuntimeError(
-            "Store phase wrote zero facts with non-zero store failures. "
-            f"memory_graph={_MEMORY_GRAPH_SCRIPT}\n"
+            "Store phase encountered failures and is configured fail-hard. "
+            f"stored={stored} failures={store_failures} memory_graph={_MEMORY_GRAPH_SCRIPT}\n"
             f"        {sample_blob}"
         )
     if store_failures > 0:
@@ -2244,6 +2294,20 @@ def _tool_use_loop(
                         "type": "string",
                         "description": "Only return memories up to this date (YYYY-MM-DD)",
                     },
+                    "domain_filter": {
+                        "description": "Optional domain filter. Object (preferred) or list/string shorthand.",
+                    },
+                    "domain_boost": {
+                        "description": "Optional domain boost. Object/list/string shorthand.",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project/domain label filter (e.g. recipe-app, portfolio-site, quaid).",
+                    },
+                    "options": {
+                        "type": "object",
+                        "description": "Compatibility envelope; options.filters.domain/domainBoost/project are supported.",
+                    },
                 },
                 "required": ["query"],
             },
@@ -2393,7 +2457,7 @@ def _tool_use_loop(
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_id,
-                        "content": result_text[:4000],  # Truncate long results
+                        "content": result_text,
                     })
 
             messages.append({"role": "user", "content": tool_results})
@@ -2431,11 +2495,36 @@ def _execute_tool(
     query = tool_input.get("query", "")
 
     if tool_name == "memory_recall":
+        options = tool_input.get("options", {})
+        if not isinstance(options, dict):
+            options = {}
+        filters = options.get("filters", {})
+        if not isinstance(filters, dict):
+            filters = {}
         date_from = tool_input.get("date_from")
         model_date_to = tool_input.get("date_to")
+        domain_filter = (
+            tool_input.get("domain_filter")
+            or tool_input.get("domainFilter")
+            or tool_input.get("domains")
+            or filters.get("domain")
+            or filters.get("domains")
+        )
+        domain_boost = (
+            tool_input.get("domain_boost")
+            or tool_input.get("domainBoost")
+            or filters.get("domainBoost")
+            or filters.get("domain_boost")
+        )
+        project_filter = (
+            tool_input.get("project")
+            or filters.get("project")
+        )
         return _tool_memory_recall(
             query, workspace, env,
             date_from=date_from, date_to=model_date_to,
+            domain_filter=domain_filter, domain_boost=domain_boost,
+            project=project_filter,
             max_session=max_session,
         )
     elif tool_name == "search_project_docs":
@@ -2448,6 +2537,9 @@ def _execute_tool(
 def _tool_memory_recall(
     query: str, workspace: Path, env: dict,
     date_from: Optional[str] = None, date_to: Optional[str] = None,
+    domain_filter: Optional[Any] = None,
+    domain_boost: Optional[Any] = None,
+    project: Optional[str] = None,
     max_session: Optional[int] = None,
 ) -> str:
     """Execute memory_recall via subprocess.
@@ -2462,10 +2554,79 @@ def _tool_memory_recall(
     cmd = _python_cmd_for_quaid_script(_MEMORY_GRAPH_SCRIPT) + [
         "search", query, "--owner", "maya", "--limit", str(limit),
     ]
+    if project:
+        cmd.extend(["--project", str(project)])
     if date_from:
         cmd.extend(["--date-from", date_from])
     if date_to:
         cmd.extend(["--date-to", date_to])
+
+    def _normalize_domain_filter(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                parsed = json.loads(raw)
+                value = parsed
+            except Exception:
+                # Comma-separated or single domain shorthand.
+                parts = [p.strip() for p in raw.split(",") if p.strip()]
+                if not parts:
+                    return None
+                value = {p: True for p in parts}
+        if isinstance(value, list):
+            mapped = {str(v).strip(): True for v in value if str(v).strip()}
+            return json.dumps(mapped) if mapped else None
+        if isinstance(value, dict):
+            mapped = {}
+            for k, v in value.items():
+                key = str(k).strip()
+                if not key:
+                    continue
+                mapped[key] = bool(v)
+            return json.dumps(mapped) if mapped else None
+        return None
+
+    def _normalize_domain_boost(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                parsed = json.loads(raw)
+                value = parsed
+            except Exception:
+                parts = [p.strip() for p in raw.split(",") if p.strip()]
+                if not parts:
+                    return None
+                value = parts
+        if isinstance(value, list):
+            clean = [str(v).strip() for v in value if str(v).strip()]
+            return json.dumps(clean) if clean else None
+        if isinstance(value, dict):
+            clean = {}
+            for k, v in value.items():
+                key = str(k).strip()
+                if not key:
+                    continue
+                try:
+                    clean[key] = float(v)
+                except Exception:
+                    continue
+            return json.dumps(clean) if clean else None
+        return None
+
+    domain_filter_json = _normalize_domain_filter(domain_filter)
+    if domain_filter_json:
+        cmd.extend(["--domain-filter", domain_filter_json])
+    domain_boost_json = _normalize_domain_boost(domain_boost)
+    if domain_boost_json:
+        cmd.extend(["--domain-boost", domain_boost_json])
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=30,
@@ -2542,7 +2703,7 @@ def _tool_search_project_docs(
         for doc_name in ["PROJECT.md", "TOOLS.md"]:
             doc_path = pdir / doc_name
             if doc_path.exists():
-                doc_parts.append(f"--- {p}/{doc_name} ---\n{doc_path.read_text()[:2000]}")
+                doc_parts.append(f"--- {p}/{doc_name} ---\n{doc_path.read_text()}")
 
     # 2. Search source files by content match (not just filename)
     query_lower = query.lower()
@@ -2559,7 +2720,7 @@ def _tool_search_project_docs(
                     # Match if any query word appears in file content
                     if any(w in content_lower for w in query_words):
                         rel = f.relative_to(workspace)
-                        doc_parts.append(f"--- {rel} ---\n{content[:1500]}")
+                        doc_parts.append(f"--- {rel} ---\n{content}")
                 except Exception:
                     pass
 

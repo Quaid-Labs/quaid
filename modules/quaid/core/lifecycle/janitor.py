@@ -871,6 +871,9 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     def _system_enabled_or_skip(task_name: str, task_label: str) -> bool:
         """Check if the system gate for a task is enabled. Prints skip message if disabled."""
+        if task_name == "contradictions" and not bool(getattr(_cfg.janitor.contradiction, "enabled", True)):
+            print(f"[{task_label}] SKIPPED — contradictions disabled in janitor config\n")
+            return False
         system = _TASK_SYSTEM_GATE.get(task_name)
         if not system:
             return True  # Infrastructure tasks always run

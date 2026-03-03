@@ -7,6 +7,9 @@ import unicodedata
 from typing import Optional
 
 _DOMAIN_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+_DOMAIN_ALIASES = {
+    "projects": "project",
+}
 _BLOCKED_DESC_PATTERNS = [
     re.compile(r"ignore\s+(all|any|previous|prior)\s+(instructions?|prompts?)", re.IGNORECASE),
     re.compile(r"system\s+prompt", re.IGNORECASE),
@@ -21,6 +24,7 @@ def normalize_domain_id(value: object) -> Optional[str]:
         return None
     norm = re.sub(r"[^a-z0-9_]+", "_", raw)
     norm = re.sub(r"_{2,}", "_", norm).strip("_")
+    norm = _DOMAIN_ALIASES.get(norm, norm)
     if not norm or not _DOMAIN_ID_RE.match(norm):
         return None
     return norm
