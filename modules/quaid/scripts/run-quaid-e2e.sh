@@ -2526,14 +2526,14 @@ def wait_for_session_persisted_token(session_id_value: str, token: str, seconds:
         time.sleep(1)
     return False
 
-def run_direct_extract_fallback(seed_text_value: str, session_id_value: str) -> bool:
+def run_direct_extract_fallback(seed_text_value: str, session_id_value: str, owner_id_value: str) -> bool:
     transcript = f"User: {seed_text_value}\nAssistant: Acknowledged."
     cmd = [
         "python3",
         "modules/quaid/ingest/extract.py",
         "-",
         "--owner",
-        "solomon",
+        str(owner_id_value or "default"),
         "--label",
         "ResetSignal",
         "--session-id",
@@ -2621,6 +2621,13 @@ reset_ok = False
 runtime_session_id = ""
 extraction_session_id = ""
 fallback_extracted = False
+owner_id = "maya"
+memory_text_col = "text"
+try:
+    cfg = json.loads(open(cfg_path, "r", encoding="utf-8").read())
+    owner_id = str(((cfg.get("users") or {}).get("defaultOwner")) or owner_id)
+except Exception:
+    pass
 start_line = line_count(events_path)
 for attempt in range(1, 4):
     seed_ok = run_agent(seed_text, timeout_sec=45, retries=3)
@@ -2641,7 +2648,7 @@ for attempt in range(1, 4):
                 f"[e2e] WARN: pre-reset fallback extraction not observed for session={extraction_session_id}",
                 flush=True,
             )
-            if run_direct_extract_fallback(seed_text, extraction_session_id):
+            if run_direct_extract_fallback(seed_text, extraction_session_id, owner_id):
                 fallback_extracted = True
     ok_reset, _ = gateway_call_json("sessions.reset", {"key": session_key}, timeout_sec=90)
     # Track post-reset session id for diagnostics only.
@@ -2672,13 +2679,6 @@ if not fallback_extracted and not wait_for_reset_extraction(start_line, extracti
 deadline = time.time() + 120
 found_wendy = False
 found_kent = False
-owner_id = "maya"
-memory_text_col = "text"
-try:
-    cfg = json.loads(open(cfg_path, "r", encoding="utf-8").read())
-    owner_id = str(((cfg.get("users") or {}).get("defaultOwner")) or owner_id)
-except Exception:
-    pass
 while time.time() < deadline:
     try:
         with sqlite3.connect(db_path) as conn:
