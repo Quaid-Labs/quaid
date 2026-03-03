@@ -3306,7 +3306,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
     // Lifecycle extraction is hook-driven:
     // - before_compaction => CompactionSignal
-    // - command:reset|command:new => ResetSignal (primary gateway path)
     // - session_end => ResetSignal (session replacement path)
     // - before_reset => ResetSignal (compat fallback)
     // We intentionally do NOT enqueue extraction from agent_end.
@@ -4799,47 +4798,6 @@ notify_memory_extraction(
       name: "compaction-memory-extraction",
       priority: 10
     });
-
-    // Primary reset/new capture path for gateway-driven resets.
-    for (const commandAction of ["reset", "new"] as const) {
-      registerInternalHookChecked(`command:${commandAction}`, async (event: any, ctx: any) => {
-        try {
-          const messages: any[] = event?.messages || [];
-          const sessionId = resolveLifecycleHookSessionId(event, ctx, messages);
-          if (!sessionId || isInternalQuaidSession(sessionId)) {
-            return;
-          }
-          if (!isSystemEnabled("memory")) {
-            return;
-          }
-          const signature = `hook:command_${commandAction}`;
-          if (!shouldProcessLifecycleSignal(sessionId, {
-            label: "ResetSignal",
-            source: "hook",
-            signature,
-          })) {
-            console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${sessionId} source=command:${commandAction}`);
-            return;
-          }
-          markLifecycleSignalFromHook(sessionId, "ResetSignal");
-          timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
-            source: "command_hook",
-            command: commandAction,
-            hook_session_id: sessionId,
-            hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
-          });
-          console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:${commandAction}`);
-        } catch (err: unknown) {
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-          console.error(`[quaid] command:${commandAction} hook failed:`, err);
-        }
-      }, {
-        name: `command-${commandAction}-memory-extraction`,
-        priority: 10,
-      });
-    }
 
     // Register reset hook — compatibility fallback for older runtimes.
     // Primary reset/new boundary path is session_end below.
