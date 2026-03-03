@@ -1,0 +1,137 @@
+{
+  "runtime": {
+    "workspace": "~/quaid/test",
+    "createDirs": [
+      "config",
+      "data",
+      "logs",
+      "projects",
+      "journal",
+      "plugins",
+      "memory",
+      "backups",
+      "scripts",
+      "docs",
+      "assets"
+    ],
+    "coreMarkdown": {
+      "IDENTITY.md": "# Identity\n\nName: Bert\nRole: Local testbed runtime assistant.\n",
+      "SOUL.md": "# Soul\n\nYou are a testbed bot for validating in-development code and system behavior. Be explicit about what you are doing, why, and what you observe. Prioritize debugging clarity, reproducibility, and actionable diagnostics over polish.\n",
+      "USER.md": "# User\n\nPrimary operator: Solomon Steadman. Solomon is a software developer.\n",
+      "MEMORY.md": "# Memory\n\nCore durable facts.\n",
+      "TOOLS.md": "# Tools\n\nRuntime tool references.\n",
+      "AGENTS.md": "# Agents\n\nRuntime operating instructions.\n",
+      "HEARTBEAT.md": "# HEARTBEAT.md\n\nPeriodic checks \u2014 the bot reads this on each heartbeat wake.\n\n## Quaid Janitor (04:00 daily)\n\n**Schedule:** Check if current time is between 04:00-05:00 and janitor hasn't run today.\n\n**IMPORTANT:** The janitor requires your LLM API key. It must be run through\nthe bot's heartbeat \u2014 NOT from a standalone cron job or launchd agent.\nThe bot passes its API key to the janitor subprocess at runtime.\n\n**To run:** `./quaid janitor --apply --task all`\n\n**Logic:**\n- If time is between 04:00 and 05:00 AND janitor hasn't run today:\n  - Run: `./quaid janitor --apply --task all`\n  - Log completion status\n- Otherwise: skip (already ran or not time yet)\n\n**Timeout:** 60 minutes max. Typical: 5-30 minutes.\n",
+      "TODO.md": "# TODO\n\n- Install OpenClaw\n- Install Quaid\n"
+    }
+  },
+  "openclaw": {
+    "configPath": "~/.openclaw/openclaw.json",
+    "agentDefaults": {
+      "workspace": "~/quaid/test",
+      "modelPrimary": "anthropic/claude-opus-4-6"
+    },
+    "agentList": [
+      {
+        "id": "main",
+        "name": "Bert",
+        "workspace": "~/quaid/test",
+        "modelPrimary": "anthropic/claude-opus-4-6",
+        "default": true
+      }
+    ],
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "groupPolicy": "allowlist",
+      "streamMode": "partial",
+      "botToken": "REPLACE_ME",
+      "allowFrom": [
+        "<telegram-id>"
+      ]
+    },
+    "authProfiles": {
+      "openai:manual": {
+        "provider": "openai",
+        "mode": "oauth"
+      },
+      "openai:default": {
+        "provider": "openai",
+        "mode": "api_key"
+      },
+      "anthropic:manual": {
+        "provider": "anthropic",
+        "mode": "oauth"
+      },
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "api_key"
+      }
+    },
+    "gateway": {
+      "mode": "local",
+      "bind": "loopback",
+      "port": 18789
+    },
+    "commands": {
+      "native": true,
+      "nativeSkills": true
+    }
+  },
+  "quaid": {
+    "enabled": true,
+    "configPath": "~/quaid/test/config/memory.json",
+    "templatePath": "~/quaid/dev/modules/quaid/config/memory.json",
+    "adapterType": "openclaw",
+    "models": {
+      "llmProvider": "default",
+      "embeddingsProvider": "ollama",
+      "fastReasoning": "default",
+      "deepReasoning": "default",
+      "providerModelClasses": [
+        {
+          "provider": "openai",
+          "fastReasoning": "gpt-5.1-codex-mini",
+          "deepReasoning": "gpt-5.3-codex"
+        },
+        {
+          "provider": "anthropic",
+          "fastReasoning": "claude-haiku-4-5",
+          "deepReasoning": "claude-opus-4-6"
+        }
+      ]
+    },
+    "ollama": {
+      "url": "http://localhost:11434",
+      "embeddingModel": "nomic-embed-text",
+      "embeddingDim": 768
+    },
+    "users": {
+      "defaultOwner": "solomon",
+      "identities": {
+        "solomon": {
+          "channels": {
+            "telegram": [
+              "<telegram-id>"
+            ],
+            "cli": [
+              "*"
+            ]
+          },
+          "speakers": [
+            "Solomon",
+            "Solomon Steadman"
+          ]
+        }
+      }
+    }
+  },
+  "secrets": {
+    "writeEnvFile": "~/quaid/test/.env",
+    "env": {
+      "ANTHROPIC_API_KEY": "REPLACE_ME",
+      "OPENAI_API_KEY": "REPLACE_ME",
+      "TELEGRAM_BOT_TOKEN": "REPLACE_ME"
+    }
+  }
+}

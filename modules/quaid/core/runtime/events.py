@@ -128,6 +128,7 @@ _EVENT_NAME_ALIASES: Dict[str, str] = {
     # OpenClaw typed hook names map to canonical Quaid runtime events.
     "before_agent_start": "session.agent_start",
     "agent_end": "session.agent_end",
+    "session_end": "session.reset",
     "before_compaction": "session.compaction",
     "before_reset": "session.reset",
 }

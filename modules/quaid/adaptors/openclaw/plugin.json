@@ -63,7 +63,8 @@
           "before_agent_start",
           "agent_end",
           "before_compaction",
-          "before_reset"
+          "before_reset",
+          "session_end"
         ]
       },
       "ingest_triggers": {

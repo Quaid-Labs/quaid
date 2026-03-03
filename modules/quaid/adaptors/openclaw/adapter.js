@@ -943,7 +943,7 @@ function isBacklogLifecycleReplay(messages, trigger, nowMs = Date.now()) {
 }
 function detectLifecycleSignal(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
-  const tail = messages.slice(-2);
+  const tail = messages.slice(-8);
   for (let i = tail.length - 1; i >= 0; i--) {
     const msg = tail[i];
     const text = getMessageText(msg).trim();
@@ -2565,9 +2565,25 @@ const quaidPlugin = {
       }
       timeoutManager.onAgentStart();
       try {
-        const lifecycleMessages = Array.isArray(event?.messages) ? event.messages : Array.isArray(ctx?.conversationMessages) ? ctx.conversationMessages : [];
+        const lifecycleCandidates = [];
+        if (Array.isArray(event?.messages)) lifecycleCandidates.push(...event.messages);
+        if (Array.isArray(event?.conversationMessages)) lifecycleCandidates.push(...event.conversationMessages);
+        if (Array.isArray(ctx?.conversationMessages)) lifecycleCandidates.push(...ctx.conversationMessages);
+        if (Array.isArray(ctx?.messages)) lifecycleCandidates.push(...ctx.messages);
+        const lifecycleMessages = lifecycleCandidates;
         const signal = detectLifecycleSignal(lifecycleMessages);
-        if (signal && isSystemEnabled("memory")) {
+        if (!signal) {
+          const probeTail = lifecycleMessages.slice(-8);
+          const probeText = probeTail.map((m) => getMessageText(m)).join("\n");
+          if (/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)|\bcompacted\b/i.test(probeText)) {
+            const probeSummary = probeTail.map((m) => ({
+              role: String(m?.role || "unknown"),
+              text: getMessageText(m).slice(0, 120)
+            }));
+            console.log(`[quaid][signal] lifecycle probe saw command-like text but no signal match: ${JSON.stringify(probeSummary)}`);
+          }
+        }
+        if (signal && signal.label === "CompactionSignal" && isSystemEnabled("memory")) {
           const extractionSessionId = extractSessionId(lifecycleMessages, ctx);
           if (extractionSessionId && !isInternalQuaidSession(extractionSessionId) && shouldProcessLifecycleSignal(extractionSessionId, signal)) {
             const sourceMessages = getAllConversationMessages(lifecycleMessages);
@@ -2576,8 +2592,7 @@ const quaidPlugin = {
               messages: sourceMessages.length ? sourceMessages : void 0
             });
             console.log(
-              `[quaid][signal] queued ${signal.label} session=${extractionSessionId} ` +
-              `source=before_agent_start_fallback (${signal.source})`
+              `[quaid][signal] queued ${signal.label} session=${extractionSessionId} source=before_agent_start_fallback (${signal.source})`
             );
           }
         }
@@ -2766,7 +2781,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       name: "memory-injection",
       priority: 10
     });
-    console.log("[quaid] agent_end auto-capture disabled; using lifecycle hooks only");
+    console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");
     if (isSystemEnabled("memory")) {
       registerToolChecked(
         () => ({
@@ -4029,18 +4044,26 @@ notify_memory_extraction(
         const doExtraction = async () => {
           if (isSystemEnabled("memory")) {
             if (conversationMessages.length > 0) {
-              markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
-              timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal", {
-                source: "before_compaction",
-                hook_session_id: String(sessionId || ""),
-                extraction_session_id: String(extractionSessionId || ""),
-                event_message_count: messages.length,
-                conversation_message_count: conversationMessages.length,
-                has_system_compacted_notice: conversationMessages.some(
-                  (m) => String(getMessageText(m) || "").toLowerCase().includes("compacted (")
-                )
-              });
-              console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
+              if (shouldProcessLifecycleSignal(extractionSessionId, {
+                label: "CompactionSignal",
+                source: "hook",
+                signature: "hook:before_compaction"
+              })) {
+                markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
+                timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal", {
+                  source: "before_compaction",
+                  hook_session_id: String(sessionId || ""),
+                  extraction_session_id: String(extractionSessionId || ""),
+                  event_message_count: messages.length,
+                  conversation_message_count: conversationMessages.length,
+                  has_system_compacted_notice: conversationMessages.some(
+                    (m) => String(getMessageText(m) || "").toLowerCase().includes("compacted (")
+                  )
+                });
+                console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
+              } else {
+                console.log(`[quaid][signal] suppressed duplicate CompactionSignal session=${extractionSessionId}`);
+              }
             } else {
               const extracted = await timeoutManager.extractSessionFromLog(
                 extractionSessionId,
@@ -4121,16 +4144,24 @@ notify_memory_extraction(
         const doExtraction = async () => {
           if (isSystemEnabled("memory")) {
             const extractionSessionId = sessionId || extractSessionId(conversationMessages, ctx);
-            markLifecycleSignalFromHook(extractionSessionId, "ResetSignal");
-            timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal", {
-              source: "before_reset",
-              hook_session_id: String(sessionId || ""),
-              extraction_session_id: String(extractionSessionId || ""),
-              reason: String(reason || "unknown"),
-              event_message_count: messages.length,
-              conversation_message_count: conversationMessages.length
-            });
-            console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
+            if (shouldProcessLifecycleSignal(extractionSessionId, {
+              label: "ResetSignal",
+              source: "hook",
+              signature: "hook:before_reset"
+            })) {
+              markLifecycleSignalFromHook(extractionSessionId, "ResetSignal");
+              timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal", {
+                source: "before_reset",
+                hook_session_id: String(sessionId || ""),
+                extraction_session_id: String(extractionSessionId || ""),
+                reason: String(reason || "unknown"),
+                event_message_count: messages.length,
+                conversation_message_count: conversationMessages.length
+              });
+              console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
+            } else {
+              console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${extractionSessionId}`);
+            }
           } else {
             console.log("[quaid] Reset: memory extraction skipped \u2014 memory system disabled");
           }
@@ -4168,6 +4199,45 @@ notify_memory_extraction(
       }
     }, {
       name: "reset-memory-extraction",
+      priority: 10
+    });
+    onChecked("session_end", async (event, ctx) => {
+      try {
+        const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
+        const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();
+        const messageCount = Number(event?.messageCount || 0);
+        if (!sessionId || isInternalQuaidSession(sessionId)) {
+          return;
+        }
+        if (!isSystemEnabled("memory")) {
+          return;
+        }
+        if (!shouldProcessLifecycleSignal(sessionId, {
+          label: "ResetSignal",
+          source: "hook",
+          signature: "hook:session_end"
+        })) {
+          console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${sessionId} source=session_end`);
+          return;
+        }
+        markLifecycleSignalFromHook(sessionId, "ResetSignal");
+        timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
+          source: "session_end",
+          hook_session_id: sessionId,
+          hook_session_key: sessionKey,
+          message_count: Number.isFinite(messageCount) ? messageCount : 0
+        });
+        console.log(
+          `[quaid][signal] queued ResetSignal session=${sessionId} source=session_end key=${sessionKey || "unknown"}`
+        );
+      } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+        console.error("[quaid] session_end hook failed:", err);
+      }
+    }, {
+      name: "session-end-memory-extraction",
       priority: 10
     });
     registerHttpRouteChecked({

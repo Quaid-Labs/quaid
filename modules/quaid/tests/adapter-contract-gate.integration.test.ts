@@ -105,6 +105,11 @@ describe("adapter contract gate integration", () => {
     const api = makeFakeApi();
     expect(() => plugin.register(api as any)).not.toThrow();
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/undeclared (events|tools) registration/));
+    expect(api.on).toHaveBeenCalledWith(
+      "session_end",
+      expect.any(Function),
+      expect.objectContaining({ name: "session-end-memory-extraction" }),
+    );
     warn.mockRestore();
   });
 

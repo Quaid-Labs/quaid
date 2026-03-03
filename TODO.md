@@ -57,6 +57,9 @@
   - detect OpenClaw hook/tool lifecycle API changes at install/bootstrap time
   - run a focused compatibility test suite against detected version before gateway enable
   - fail loudly with actionable diagnostics instead of introducing adapter-level soft fallbacks
+- [ ] CI auth-lane secret wiring:
+  - add/update GitHub repo secrets for E2E auth lanes (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`)
+  - set strict matrix mode in CI (`QUAID_E2E_MATRIX_FAIL_ON_SKIP=true`) once secrets are present so auth-lane skips fail builds
 
 - [ ] Plugin runtime migration (foundation seeded in phase 1):
   - [x] enforce plugin manifest + slot/type preflight at config boot (`plugins.strict` hard-fail, non-strict loud diagnostics)

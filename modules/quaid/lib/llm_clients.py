@@ -20,7 +20,10 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Optional, Tuple
+import urllib.error
 
 from lib.fail_policy import is_fail_hard_enabled
 from lib.llm_pool import acquire_llm_slot
@@ -39,6 +42,7 @@ _models_loaded: bool = False
 _fast_reasoning_model: str = ""
 _deep_reasoning_model: str = ""
 _model_config_lock = threading.Lock()
+_trace_lock = threading.Lock()
 
 
 def _load_model_config():
@@ -220,6 +224,113 @@ _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 1.0  # seconds, doubled each retry
 
 
+def _trace_enabled() -> bool:
+    """Benchmark-gated trace switch for per-call LLM diagnostics."""
+    raw = str(os.environ.get("BENCHMARK_LLM_TRACE", "")).strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    workspace = str(os.environ.get("CLAWDBOT_WORKSPACE", "")).strip()
+    return "/runs/quaid-" in workspace
+
+
+def _trace_path() -> Optional[Path]:
+    workspace = str(os.environ.get("CLAWDBOT_WORKSPACE", "")).strip()
+    if not workspace:
+        return None
+    return Path(workspace) / "logs" / "llm-call-trace.jsonl"
+
+
+def _preview(text: Optional[str], limit: int = 30) -> str:
+    if not text:
+        return ""
+    first = str(text).splitlines()[0].strip()
+    if len(first) <= limit:
+        return first
+    return first[:limit]
+
+
+def _error_code(exc: BaseException) -> str:
+    code = getattr(exc, "code", None)
+    if code is not None:
+        return str(code)
+    return type(exc).__name__
+
+
+def _rate_limit_headers(exc: BaseException) -> Dict[str, str]:
+    if not isinstance(exc, urllib.error.HTTPError):
+        return {}
+    try:
+        headers = getattr(exc, "headers", None)
+        if headers is None:
+            return {}
+        out: Dict[str, str] = {}
+        for k, v in headers.items():
+            key = str(k or "").strip().lower()
+            if not key:
+                continue
+            if key == "retry-after" or key.startswith("anthropic-ratelimit-"):
+                out[key] = str(v)
+        return out
+    except Exception:
+        return {}
+
+
+def _retry_delay_for_error(exc: BaseException, fallback_delay: float) -> float:
+    delay = max(0.0, float(fallback_delay))
+    if not isinstance(exc, urllib.error.HTTPError):
+        return delay
+    if int(getattr(exc, "code", 0) or 0) != 429:
+        return delay
+    hdrs = _rate_limit_headers(exc)
+    retry_after_raw = str(hdrs.get("retry-after", "")).strip()
+    if retry_after_raw:
+        try:
+            return max(delay, float(retry_after_raw))
+        except Exception:
+            pass
+    reset_candidates = []
+    for key, value in hdrs.items():
+        if key.endswith("-reset"):
+            try:
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                reset_candidates.append(max(0.0, (dt - datetime.now(timezone.utc)).total_seconds()))
+            except Exception:
+                continue
+    if reset_candidates:
+        return max(delay, min(reset_candidates))
+    return delay
+
+
+def _key_fp() -> str:
+    """Return short fingerprint for active auth env (never the raw secret)."""
+    token = (
+        str(os.environ.get("ANTHROPIC_API_KEY", "")).strip()
+        or str(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")).strip()
+    )
+    if not token:
+        return "missing"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def _append_trace(payload: Dict[str, object]) -> None:
+    """Best-effort append of per-call trace payload."""
+    if not _trace_enabled():
+        return
+    path = _trace_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        row = dict(payload or {})
+        row["ts"] = datetime.now(timezone.utc).isoformat()
+        with _trace_lock:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+    except Exception:
+        # Never let tracing alter runtime behavior.
+        return
+
+
 def _track_usage(result: LLMResult) -> None:
     """Accumulate token usage from an LLMResult into module-level counters."""
     global _usage_input_tokens, _usage_output_tokens, _usage_calls
@@ -339,10 +450,10 @@ def call_llm(system_prompt: str, user_message: str,
     retries = _MAX_RETRIES if max_retries is None else max_retries
     last_error = None
 
-    import urllib.error
     _RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504, 529}
 
     for attempt in range(retries + 1):
+        attempt_started = time.monotonic()
         try:
             timeout_for_attempt = timeout
             if deadline is not None:
@@ -368,9 +479,43 @@ def call_llm(system_prompt: str, user_message: str,
                     f"(provider={provider_name}, tier={resolved_tier}, model={result.model or model}, "
                     f"timeout={timeout_for_attempt})"
                 )
+            _append_trace({
+                "status": "ok",
+                "provider": provider_name,
+                "tier": resolved_tier,
+                "requested_model": str(model or ""),
+                "resolved_model": str(model or ""),
+                "returned_model": str(result.model or ""),
+                "attempt": int(attempt + 1),
+                "duration_ms": int(max(0.0, float(result.duration or 0.0)) * 1000),
+                "timeout_s": float(timeout_for_attempt if timeout_for_attempt is not None else 0.0),
+                "request_preview": _preview(user_message, 30),
+                "system_preview": _preview(system_prompt, 30),
+                "response_preview": _preview(result.text, 30),
+                "error_code": "",
+                "key_fp": _key_fp(),
+            })
             return result.text, result.duration
         except Exception as e:
             last_error = e
+            _append_trace({
+                "status": "error",
+                "provider": provider_name,
+                "tier": resolved_tier,
+                "requested_model": str(model or ""),
+                "resolved_model": str(model or ""),
+                "returned_model": "",
+                "attempt": int(attempt + 1),
+                "duration_ms": int((time.monotonic() - attempt_started) * 1000),
+                "timeout_s": float(timeout if timeout is not None else 0.0),
+                "request_preview": _preview(user_message, 30),
+                "system_preview": _preview(system_prompt, 30),
+                "response_preview": "",
+                "error_code": _error_code(e),
+                "error": str(e)[:200],
+                "rate_limits": _rate_limit_headers(e),
+                "key_fp": _key_fp(),
+            })
             # Only retry on transient errors (rate limit, server errors, timeouts)
             import subprocess as _sp
             retryable = isinstance(e, (TimeoutError, ConnectionError, OSError,
@@ -379,6 +524,7 @@ def call_llm(system_prompt: str, user_message: str,
                 retryable = e.code in _RETRYABLE_HTTP_CODES
             if retryable and attempt < retries:
                 delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                delay = _retry_delay_for_error(e, delay)
                 if deadline is not None:
                     remaining = deadline - time.time()
                     if remaining <= 0:
