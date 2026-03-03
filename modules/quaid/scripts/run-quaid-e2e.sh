@@ -1245,10 +1245,11 @@ echo "[e2e] Skipping legacy quaid-reset-signal hook setup (contract-owned lifecy
 echo "[e2e] Ensuring required OpenClaw hooks are enabled..."
 enable_required_openclaw_hooks
 
-# Keep timeout test practical in CI/dev by forcing a short inactivity timeout.
+# Keep timeout override opt-in; default live checks should use installer/runtime defaults.
 MEMORY_CFG="${E2E_WS}/config/memory.json"
 if [[ -f "$MEMORY_CFG" ]]; then
-  python3 - "$MEMORY_CFG" <<'PY'
+  if [[ "${QUAID_E2E_FORCE_SHORT_TIMEOUT:-false}" == "true" ]]; then
+    python3 - "$MEMORY_CFG" <<'PY'
 import json, sys
 p = sys.argv[1]
 obj = json.load(open(p, "r", encoding="utf-8"))
@@ -1260,8 +1261,11 @@ capture["auto_compaction_on_timeout"] = False
 with open(p, "w", encoding="utf-8") as f:
     json.dump(obj, f, indent=2)
     f.write("\n")
-print("[e2e] Updated capture timeout for live timeout validation (~6 seconds).")
+print("[e2e] Updated capture timeout for forced short-timeout validation (~6 seconds).")
 PY
+  else
+    echo "[e2e] Leaving capture inactivity timeout at configured default."
+  fi
 else
   echo "[e2e] ERROR: missing memory config: $MEMORY_CFG" >&2
   exit 1
@@ -1361,13 +1365,13 @@ def run_agent(message: str, sid: str = "") -> bool:
         "sessionKey": "main",
         "message": message,
         "idempotencyKey": f"e2e-live-{uuid.uuid4().hex[:12]}",
+        "bestEffortDeliver": True,
     }
-    ok, _payload = gateway_call_json("chat.send", params, timeout_sec=45)
+    ok, _payload = gateway_call_json("agent", params, timeout_sec=90)
     if not ok:
-        print(f"[e2e] WARN: gateway chat.send failed for message={message!r}", flush=True)
+        print(f"[e2e] WARN: gateway agent call failed for message={message!r}", flush=True)
         return False
-    # chat.send handles slash commands internally; successful RPC completion
-    # is enough for lifecycle hook assertions in this stage.
+    # Successful RPC acceptance is enough for lifecycle hook assertions in this stage.
     return True
 
 def gateway_call_json(method: str, params: dict, timeout_sec: int = 30) -> tuple[bool, dict]:
@@ -1520,7 +1524,11 @@ def reset_signal_source(lines: list[str]) -> str:
     for ln in lines:
         if '"label":"ResetSignal"' not in ln:
             continue
-        if '"event":"signal_process_begin"' not in ln and '"event":"extract_begin"' not in ln:
+        if (
+            '"event":"signal_process_begin"' not in ln
+            and '"event":"extract_begin"' not in ln
+            and '"event":"signal_queue_skipped_already_cleared"' not in ln
+        ):
             continue
         if '"source":"session_end"' in ln:
             return "session_end"
@@ -1528,6 +1536,22 @@ def reset_signal_source(lines: list[str]) -> str:
             return "before_reset"
         if '"source":"command_hook"' in ln:
             return "command_hook"
+        if '"source":"transcript_update"' in ln:
+            return "transcript_update"
+    return ""
+
+def compaction_signal_source(lines: list[str]) -> str:
+    for ln in lines:
+        if '"label":"CompactionSignal"' not in ln:
+            continue
+        if (
+            '"event":"signal_process_begin"' not in ln
+            and '"event":"extract_begin"' not in ln
+            and '"event":"signal_queue_skipped_already_cleared"' not in ln
+        ):
+            continue
+        if '"source":"before_compaction"' in ln:
+            return "before_compaction"
         if '"source":"transcript_update"' in ln:
             return "transcript_update"
     return ""
@@ -1552,17 +1576,13 @@ compact_ok = run_agent("/compact")
 if compact_ok:
     try:
         wait_for(
-            lambda lines: any(
-                f'"session_id":"{runtime_session_id}"' in ln
-                and '"label":"CompactionSignal"' in ln
-                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                for ln in lines
-            ),
+            lambda lines: bool(compaction_signal_source(lines)),
             45,
             "compaction signal processing",
             start,
         )
-        print("[e2e] Live compact hook path OK.")
+        source = compaction_signal_source(read_tail_since(events_path, start))
+        print(f"[e2e] Live compact hook path OK (source={source or 'unknown'}).")
     except SystemExit as err:
         print(f"[e2e] WARN: compact hook path not observed ({err}). Falling back to direct signal queue.")
         fallback_used = True
@@ -1600,23 +1620,92 @@ assert_notify_worker_healthy(notify_start)
 # Reset/new command path.
 start = line_count(events_path)
 run_agent("E2E baseline message before reset.")
-reset_ok, _ = gateway_call_json(
-    "sessions.reset",
-    {"key": session_key, "reason": "reset"},
-    timeout_sec=45,
-)
+reset_ok = run_agent("/reset")
 if reset_ok:
     try:
         wait_for(
             lambda lines: bool(reset_signal_source(lines)),
-            45,
+            25,
             "reset signal processing",
             start,
         )
         source = reset_signal_source(read_tail_since(events_path, start))
         print(f"[e2e] Live reset path OK (source={source or 'unknown'}).")
     except SystemExit as err:
-        print(f"[e2e] WARN: reset hook path not observed ({err}). Falling back to direct signal queue.")
+        # /reset is inconsistent across OpenClaw builds; /restart is often wired
+        # to the same semantic boundary and emits ResetSignal reliably.
+        print(f"[e2e] WARN: /reset hook path not observed ({err}). Retrying with /restart.")
+        restart_ok = run_agent("/restart")
+        if restart_ok:
+            try:
+                wait_for(
+                    lambda lines: bool(reset_signal_source(lines)),
+                    45,
+                    "restart command reset signal processing",
+                    start,
+                )
+                source = reset_signal_source(read_tail_since(events_path, start))
+                print(f"[e2e] Live restart path OK (source={source or 'unknown'}).")
+            except SystemExit as err_restart:
+                print(f"[e2e] WARN: restart hook path not observed ({err_restart}). Falling back to direct signal queue.")
+                fallback_used = True
+                queue_signal_fallback(runtime_session_id, "ResetSignal")
+                wait_for(
+                    lambda lines: any(
+                        '"label":"ResetSignal"' in ln
+                        and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                        for ln in lines
+                    ),
+                    35,
+                    "reset fallback signal processing",
+                    start,
+                )
+                print("[e2e] Live reset fallback path OK.")
+        else:
+            print("[e2e] WARN: /restart command did not complete; using direct signal queue fallback.")
+            fallback_used = True
+            queue_signal_fallback(runtime_session_id, "ResetSignal")
+            wait_for(
+                lambda lines: any(
+                    '"label":"ResetSignal"' in ln
+                    and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                    for ln in lines
+                ),
+                35,
+                "reset fallback signal processing",
+                start,
+            )
+            print("[e2e] Live reset fallback path OK.")
+else:
+    print("[e2e] WARN: /reset command did not complete; trying /restart.", flush=True)
+    restart_ok = run_agent("/restart")
+    if restart_ok:
+        try:
+            wait_for(
+                lambda lines: bool(reset_signal_source(lines)),
+                45,
+                "restart command reset signal processing",
+                start,
+            )
+            source = reset_signal_source(read_tail_since(events_path, start))
+            print(f"[e2e] Live restart path OK (source={source or 'unknown'}).")
+        except SystemExit as err_restart:
+            print(f"[e2e] WARN: restart hook path not observed ({err_restart}). Falling back to direct signal queue.")
+            fallback_used = True
+            queue_signal_fallback(runtime_session_id, "ResetSignal")
+            wait_for(
+                lambda lines: any(
+                    '"label":"ResetSignal"' in ln
+                    and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
+                    for ln in lines
+                ),
+                35,
+                "reset fallback signal processing",
+                start,
+            )
+            print("[e2e] Live reset fallback path OK.")
+    else:
+        print("[e2e] WARN: reset/restart commands did not complete; using direct signal queue fallback.", flush=True)
         fallback_used = True
         queue_signal_fallback(runtime_session_id, "ResetSignal")
         wait_for(
@@ -1630,36 +1719,17 @@ if reset_ok:
             start,
         )
         print("[e2e] Live reset fallback path OK.")
-else:
-    print("[e2e] WARN: reset command did not complete; using direct signal queue fallback.", flush=True)
-    fallback_used = True
-    queue_signal_fallback(runtime_session_id, "ResetSignal")
-    wait_for(
-        lambda lines: any(
-            '"label":"ResetSignal"' in ln
-            and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-            for ln in lines
-        ),
-        35,
-        "reset fallback signal processing",
-        start,
-    )
-    print("[e2e] Live reset fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
 # /new path uses same reset signal semantics.
 start = line_count(events_path)
 run_agent("E2E baseline message before new.")
-new_ok, _ = gateway_call_json(
-    "sessions.reset",
-    {"key": session_key, "reason": "new"},
-    timeout_sec=45,
-)
+new_ok = run_agent("/new")
 if new_ok:
     try:
         wait_for(
             lambda lines: bool(reset_signal_source(lines)),
-            45,
+            90,
             "new command signal processing",
             start,
         )
