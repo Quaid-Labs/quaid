@@ -3690,6 +3690,12 @@ ${factsOutput || "No facts found."}` }],
         await extractionPromise;
       }
     });
+    const signalWorkerHeartbeatSecRaw = Number(process.env.QUAID_SIGNAL_WORKER_HEARTBEAT_SECONDS || "30");
+    const signalWorkerHeartbeatSec = Number.isFinite(signalWorkerHeartbeatSecRaw) && signalWorkerHeartbeatSecRaw > 0 ? Math.floor(signalWorkerHeartbeatSecRaw) : 30;
+    const signalWorkerStarted = timeoutManager.startWorker(signalWorkerHeartbeatSec);
+    console.log(
+      `[quaid][timeout] signal worker ${signalWorkerStarted ? "started" : "leader_exists"} heartbeat_seconds=${signalWorkerHeartbeatSec}`
+    );
     async function recallMemories(opts) {
       const {
         query,
@@ -3965,10 +3971,16 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
         console.error(`[quaid] ${label} extraction failed: ${msg}`);
         return;
       }
+      const factDetails = Array.isArray(extracted?.facts) ? extracted.facts : [];
       const stored = Number(extracted?.facts_stored || 0);
       const skipped = Number(extracted?.facts_skipped || 0);
       const edgesCreated = Number(extracted?.edges_created || 0);
-      const factDetails = Array.isArray(extracted?.facts) ? extracted.facts : [];
+      const firstFactStatus = factDetails.length > 0 ? String(factDetails[0]?.status || "unknown") : "none";
+      console.log(
+        `[quaid][extract] payload label=${label} session=${sessionId || "unknown"} ` +
+        `facts_len=${factDetails.length} first_status=${firstFactStatus} ` +
+        `stored=${stored} skipped=${skipped} edges=${edgesCreated}`
+      );
       console.log(`[quaid] ${label} extraction complete: ${stored} stored, ${skipped} skipped, ${edgesCreated} edges`);
       console.log(`[quaid][extract] done label=${label} session=${sessionId || "unknown"} stored=${stored} skipped=${skipped} edges=${edgesCreated}`);
       let snippetDetails = {};

@@ -4187,6 +4187,15 @@ notify_user(f"📁 Project registered: {project_label}")
         await extractionPromise;
       },
     });
+    const signalWorkerHeartbeatSecRaw = Number(process.env.QUAID_SIGNAL_WORKER_HEARTBEAT_SECONDS || "30");
+    const signalWorkerHeartbeatSec = Number.isFinite(signalWorkerHeartbeatSecRaw) && signalWorkerHeartbeatSecRaw > 0
+      ? Math.floor(signalWorkerHeartbeatSecRaw)
+      : 30;
+    const signalWorkerStarted = timeoutManager.startWorker(signalWorkerHeartbeatSec);
+    console.log(
+      `[quaid][timeout] signal worker ${signalWorkerStarted ? "started" : "leader_exists"} `
+      + `heartbeat_seconds=${signalWorkerHeartbeatSec}`,
+    );
 
     // Shared recall abstraction — used by both memory_recall tool and auto-inject
     async function recallMemories(opts: RecallOptions): Promise<MemoryResult[]> {
@@ -4492,12 +4501,18 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         return;
       }
 
-      const stored = Number(extracted?.facts_stored || 0);
-      const skipped = Number(extracted?.facts_skipped || 0);
-      const edgesCreated = Number(extracted?.edges_created || 0);
       const factDetails: Array<{ text: string; status: string; reason?: string; edges?: string[] }> = Array.isArray(extracted?.facts)
         ? extracted.facts
         : [];
+      const stored = Number(extracted?.facts_stored || 0);
+      const skipped = Number(extracted?.facts_skipped || 0);
+      const edgesCreated = Number(extracted?.edges_created || 0);
+      const firstFactStatus = factDetails.length > 0 ? String(factDetails[0]?.status || "unknown") : "none";
+      console.log(
+        `[quaid][extract] payload label=${label} session=${sessionId || "unknown"} ` +
+        `facts_len=${factDetails.length} first_status=${firstFactStatus} ` +
+        `stored=${stored} skipped=${skipped} edges=${edgesCreated}`,
+      );
       console.log(`[quaid] ${label} extraction complete: ${stored} stored, ${skipped} skipped, ${edgesCreated} edges`);
       console.log(`[quaid][extract] done label=${label} session=${sessionId || "unknown"} stored=${stored} skipped=${skipped} edges=${edgesCreated}`);
 

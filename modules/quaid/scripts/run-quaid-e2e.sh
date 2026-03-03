@@ -2492,8 +2492,15 @@ def resolve_session_id_from_key(session_key_value: str, fallback_session_id: str
         pass
     return fallback_session_id
 
-def wait_for_reset_extraction(start_line: int, runtime_session_id: str, seconds: int = 90) -> bool:
+def wait_for_reset_extraction(
+    start_line: int,
+    runtime_session_id: str,
+    seconds: int = 90,
+    queued_signal_path: str = "",
+) -> bool:
     deadline = time.time() + seconds
+    pending_drained_since = None
+    processing_prefix = f"{queued_signal_path}.processing." if queued_signal_path else ""
     while time.time() < deadline:
         lines = read_tail_since(events_path, start_line)
         if any(
@@ -2506,6 +2513,26 @@ def wait_for_reset_extraction(start_line: int, runtime_session_id: str, seconds:
             for ln in lines
         ):
             return True
+        if queued_signal_path:
+            queued_exists = os.path.exists(queued_signal_path)
+            queued_processing = False
+            try:
+                if processing_prefix:
+                    parent = os.path.dirname(queued_signal_path) or "."
+                    base = os.path.basename(processing_prefix)
+                    queued_processing = any(
+                        name.startswith(base) for name in os.listdir(parent)
+                    )
+            except Exception:
+                queued_processing = False
+            if not queued_exists and not queued_processing:
+                if pending_drained_since is None:
+                    pending_drained_since = time.time()
+                # Require a short stable window so we don't count transient races.
+                if (time.time() - pending_drained_since) >= 1.5:
+                    return True
+            else:
+                pending_drained_since = None
         time.sleep(1)
     return False
 
@@ -2643,7 +2670,8 @@ for attempt in range(1, 4):
             )
         # Queue deterministic fallback while the pre-reset transcript still exists.
         queue_signal_fallback(extraction_session_id, "ResetSignal", seed_text)
-        if not wait_for_reset_extraction(start_line, extraction_session_id, 30):
+        queued_signal_path = os.path.join(ws, "data", "pending-extraction-signals", f"{extraction_session_id}.json")
+        if not wait_for_reset_extraction(start_line, extraction_session_id, 45, queued_signal_path):
             print(
                 f"[e2e] WARN: pre-reset fallback extraction not observed for session={extraction_session_id}",
                 flush=True,
