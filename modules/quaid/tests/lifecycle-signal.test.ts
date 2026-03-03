@@ -18,6 +18,26 @@ describe("lifecycle signal detection", () => {
     expect(signal).toBe("CompactionSignal");
   });
 
+  it("detects timestamp-prefixed compact command lines", () => {
+    const signal = __test.detectLifecycleCommandSignal([
+      { role: "assistant", content: "ok" },
+      { role: "user", content: "[Tue 2026-03-03 16:08 GMT+8] /compact" },
+    ]);
+    expect(signal).toBe("CompactionSignal");
+  });
+
+  it("does not treat quoted transcript compact mentions as live commands", () => {
+    const signal = __test.detectLifecycleCommandSignal([
+      { role: "assistant", content: "ok" },
+      {
+        role: "user",
+        content:
+          "Extract from this chunk:\\nUser: [Tue 2026-03-03 16:08 GMT+8] /compact\\nAssistant: NO_REPLY",
+      },
+    ]);
+    expect(signal).toBe(null);
+  });
+
   it("detects OpenClaw auto-compaction system notices", () => {
     const signal = __test.detectLifecycleCommandSignal([
       { role: "assistant", content: "working..." },

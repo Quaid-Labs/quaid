@@ -34,6 +34,7 @@ export type RoutedRecallPlan = {
   query: string;
   datastores: KnowledgeDatastore[];
   project?: string;
+  domainBoost?: Record<string, number>;
 };
 
 type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: number; id?: string; category: string; via?: string; sourceType?: string }> = {
@@ -253,12 +254,13 @@ Return JSON only: {"datastores":["vector_basic","graph"]}`;
       : "- (none)";
     const allowedProjectNames = new Set(projectCatalog.map((p) => p.name));
 
-    const systemPrompt = `You optimize a memory recall request.
+const systemPrompt = `You optimize a memory recall request.
 Return JSON only with:
 {
   "query": "cleaned query for retrieval",
   "datastores": ["vector_basic","graph"],
-  "project": "project_name_or_null"
+  "project": "project_name_or_null",
+  "domainBoost": {"work": 1.3}
 }
 Rules:
 - Keep the same user intent; do NOT add new facts.
@@ -271,6 +273,14 @@ Rules:
   4) broader historical/session retrieval only if prior stores are insufficient
 - Set project when query clearly maps to one known project.
 - If project detail is asked but project is uncertain, still include datastore "project" and leave project=null.
+- Prefer domainBoost for known-scope recall instead of strict filtering.
+  - Example single-domain: {"personal": 1.3}
+  - Example multi-domain: {"work": 1.3, "technical": 1.3}
+  - If scope is unclear, return {}.
+- Temporal anchoring:
+  - Preserve explicit dates/times in the cleaned query.
+  - If the user asks "current/latest/now/as of", include those terms in the cleaned query.
+  - Never invent dates.
 - intent facet:
   - general: broad/default
   - agent_actions: prioritize records of what assistant/agent suggested or did
@@ -312,11 +322,25 @@ ${projectHints}
         const routedProject = routedProjectRaw && allowedProjectNames.has(routedProjectRaw)
           ? routedProjectRaw
           : undefined;
-        return {
+        const routedDomainBoostRaw = payload?.domainBoost;
+        const routedDomainBoost: Record<string, number> = {};
+        if (routedDomainBoostRaw && typeof routedDomainBoostRaw === "object" && !Array.isArray(routedDomainBoostRaw)) {
+          for (const [k, v] of Object.entries(routedDomainBoostRaw as Record<string, unknown>)) {
+            const key = String(k || "").trim().toLowerCase();
+            const factor = Number(v);
+            if (!key || !Number.isFinite(factor)) continue;
+            routedDomainBoost[key] = Math.max(1.0, Math.min(2.0, factor));
+          }
+        }
+        const plan: RoutedRecallPlan = {
           query: cleaned,
           datastores,
           project: routedProject,
         };
+        if (Object.keys(routedDomainBoost).length) {
+          plan.domainBoost = routedDomainBoost;
+        }
+        return plan;
       },
       "routeRecallPlan",
     );
@@ -474,6 +498,7 @@ ${projectHints}
         ...opts,
         datastores: plan.datastores,
         project: plan.project,
+        domainBoost: opts.domainBoost ?? plan.domainBoost,
       });
       return sanitizeRecallResults(routed).slice(0, limit);
     } catch (err) {

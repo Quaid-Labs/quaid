@@ -499,10 +499,21 @@ def append_project_logs(
     today = date_str or datetime.now().strftime("%Y-%m-%d")
     marker_begin = "<!-- BEGIN:PROJECT_LOG -->"
     marker_end = "<!-- END:PROJECT_LOG -->"
+    session_prefix_re = re.compile(r"^\s*Session\s+\d+\s*(?:\([^)]*\))?\s*:\s*", flags=re.IGNORECASE)
+
+    def _normalize_log_entry(raw: object) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        text = re.sub(r"^\s*[-*+]\s*", "", text)
+        text = session_prefix_re.sub("", text)
+        return re.sub(r"\s+", " ", text).strip()
 
     for project_name, raw_entries in project_logs.items():
         metrics["projects_seen"] += 1
-        entries = [str(e).strip() for e in (raw_entries or []) if str(e).strip()]
+        entries = [_normalize_log_entry(e) for e in (raw_entries or [])]
+        entries = [e for e in entries if e]
+        entries = list(dict.fromkeys(entries))
         metrics["entries_seen"] += len(entries)
         if not entries:
             continue

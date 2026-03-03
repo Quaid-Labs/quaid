@@ -9,6 +9,8 @@ from typing import Optional
 _DOMAIN_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 _DOMAIN_ALIASES = {
     "projects": "project",
+    "family": "personal",
+    "families": "personal",
 }
 _BLOCKED_DESC_PATTERNS = [
     re.compile(r"ignore\s+(all|any|previous|prior)\s+(instructions?|prompts?)", re.IGNORECASE),

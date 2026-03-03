@@ -129,6 +129,9 @@ Recommended usage patterns:
 - Known technical query: target `vector_technical` + `project`
 - Ambiguous query: use routed recall (`total_recall` path)
 - Agent-action query: use routed recall with `agent_actions` intent
+- Known-scope query (work/technical/health/project/etc.): add `options.filters.domainBoost` first (preferred over strict `domain` filter).
+- Multi-domain query: include all relevant domains in `domainBoost` (for example `{"work": 1.3, "technical": 1.3}`).
+- Use strict `options.filters.domain` only when non-target domains must be excluded.
 
 ### `session_recall`
 Use this for recent-session discovery and transcript retrieval.
@@ -244,10 +247,12 @@ Parameter map:
 ### Personal relationship question
 1. Recall from `vector_basic` + `graph`.
 2. If low confidence, broaden to routed recall.
+3. For scoped relationship/life areas, add `domainBoost` (for example `{"personal": 1.3, "household": 1.3}`) before broadening.
 
 ### Technical status question
 1. Recall from `vector_technical` + `project`.
 2. If still ambiguous, run `projects_search` scoped to the project.
+3. For project/work-specific prompts, add `domainBoost` first (for example `{"technical": 1.3, "project": 1.3, "work": 1.3}`).
 
 ### Previous-session reference looks missing
 1. Run `memory_recall` first with specific entities.

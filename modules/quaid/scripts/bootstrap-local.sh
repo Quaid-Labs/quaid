@@ -15,6 +15,7 @@ WORKTREE_TEST_BRANCH="test-runtime"
 WORKTREE_DETACH=false
 WORKTREE_REMOTE="origin"
 BACKUP_ROOT="${HOME}/quaid/backups"
+PREBOOTSTRAP_MAX_BACKUPS="${QUAID_PREBOOTSTRAP_MAX_BACKUPS:-3}"
 OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
 OPENCLAW_REPO_URL="${OPENCLAW_REPO_URL:-https://github.com/openclaw/openclaw.git}"
 OPENCLAW_REF="${OPENCLAW_REF:-}"
@@ -54,6 +55,31 @@ ensure_worktree_local_excludes() {
     fi
   done
   echo "Ensured worktree-local excludes in: $exclude_file"
+}
+
+prune_prebootstrap_backups() {
+  local pre_dir="${BACKUP_ROOT}/prebootstrap"
+  [[ -d "$pre_dir" ]] || return 0
+  local keep_count="$PREBOOTSTRAP_MAX_BACKUPS"
+  if ! [[ "$keep_count" =~ ^[0-9]+$ ]]; then
+    keep_count=3
+  fi
+  if [[ "$keep_count" -lt 1 ]]; then
+    keep_count=1
+  fi
+  backup_dirs=()
+  while IFS= read -r line; do
+    backup_dirs+=("$line")
+  done < <(find "$pre_dir" -mindepth 1 -maxdepth 1 -type d -print | sort)
+  local total="${#backup_dirs[@]}"
+  if [[ "$total" -le "$keep_count" ]]; then
+    return 0
+  fi
+  local delete_n=$((total - keep_count))
+  for ((i=0; i<delete_n; i++)); do
+    rm -rf "${backup_dirs[$i]}"
+  done
+  echo "Pruned prebootstrap backups: removed ${delete_n}, kept ${keep_count}"
 }
 
 usage() {
@@ -166,6 +192,7 @@ if [[ "$WIPE" == true ]] && [[ -d "$WORKSPACE" ]]; then
   TS="$(date +%Y%m%d-%H%M%S)"
   BKP="${BACKUP_ROOT}/prebootstrap/${TS}"
   mkdir -p "$(dirname "$BKP")"
+  prune_prebootstrap_backups
   mv "$WORKSPACE" "$BKP"
   if [[ "$USE_WORKTREE" != true ]]; then
     mkdir -p "$WORKSPACE"

@@ -871,7 +871,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     def _system_enabled_or_skip(task_name: str, task_label: str) -> bool:
         """Check if the system gate for a task is enabled. Prints skip message if disabled."""
-        if task_name == "contradictions" and not bool(getattr(_cfg.janitor.contradiction, "enabled", True)):
+        if task_name == "contradictions" and not bool(getattr(_cfg.janitor.contradiction, "enabled", False)):
             print(f"[{task_label}] SKIPPED — contradictions disabled in janitor config\n")
             return False
         system = _TASK_SYSTEM_GATE.get(task_name)
@@ -1119,52 +1119,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 metrics.end_task("duplicates")
                 print(f"Task completed in {metrics.task_duration('duplicates'):.2f}s\n")
 
-        if task in ("contradictions", "all") and _system_enabled_or_skip("contradictions", "Task 4: Contradictions"):
-            if task == "all" and not memory_pipeline_ok:
-                print("[Task 4: Verify Contradictions] SKIPPED — pipeline aborted\n")
-            else:
-                print("[Task 4: Verify Contradictions]")
-                metrics.start_task("contradictions")
-                lifecycle_result = _run_memory_stage("contradictions", dry_run)
-                for err in lifecycle_result.errors:
-                    print(f"  {err}")
-                    metrics.add_error(err)
-                    memory_pipeline_ok = False
-                applied_changes["contradictions_found"] = lifecycle_result.metrics.get("contradictions_found", 0)
-                if lifecycle_result.data.get("contradiction_findings"):
-                    applied_changes["contradiction_findings"] = lifecycle_result.data.get("contradiction_findings")
-                print(f"  Found: {applied_changes['contradictions_found']}")
-                metrics.end_task("contradictions")
-                print(f"Task completed in {metrics.task_duration('contradictions'):.2f}s\n")
-
-                # --- Task 4b: Resolve Contradictions (Opus) ---
-                if not memory_pipeline_ok:
-                    print("[Task 4b: Resolve Contradictions] SKIPPED — pipeline aborted\n")
-                else:
-                    print("[Task 4b: Resolve Contradictions]")
-                    contradiction_apply_allowed = _can_apply_scope(
-                        "destructive_memory_ops",
-                        "contradiction resolution operations"
-                    )
-                    metrics.start_task("contradiction_resolution")
-                    lifecycle_result = _run_memory_stage(
-                        "contradictions_resolve",
-                        dry_run or (not contradiction_apply_allowed),
-                    )
-                    for err in lifecycle_result.errors:
-                        print(f"  {err}")
-                        metrics.add_error(err)
-                        memory_pipeline_ok = False
-                    applied_changes["contradictions_resolved"] = lifecycle_result.metrics.get("contradictions_resolved", 0)
-                    applied_changes["contradictions_false_positive"] = lifecycle_result.metrics.get("contradictions_false_positive", 0)
-                    applied_changes["contradictions_merged"] = lifecycle_result.metrics.get("contradictions_merged", 0)
-                    if lifecycle_result.data.get("contradiction_decisions"):
-                        applied_changes["contradiction_decisions"] = lifecycle_result.data.get("contradiction_decisions")
-                    print(f"  Resolved: {applied_changes['contradictions_resolved']}, "
-                          f"False positives: {applied_changes['contradictions_false_positive']}, "
-                          f"Merged: {applied_changes['contradictions_merged']}")
-                    metrics.end_task("contradiction_resolution")
-                    print(f"Task completed in {metrics.task_duration('contradiction_resolution'):.2f}s\n")
+        if task == "contradictions":
+            print("[Task 4: Contradictions] DECOMMISSIONED — skipped\n")
 
         # --- Task 5: Confidence Decay (no LLM) ---
         if task in ("decay", "all") and _system_enabled_or_skip("decay", "Task 5: Decay") and not _skip_if_over_budget("Task 5: Decay", 10):
@@ -1656,16 +1612,10 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
     # Performance warning (adjusted for time-bounded execution)
     if final_metrics['total_duration_seconds'] > MAX_EXECUTION_TIME:  # Check CRITICAL first
         print(f"\nCRITICAL: Janitor exceeded time limit ({final_metrics['total_duration_seconds']/60:.1f}min > {MAX_EXECUTION_TIME/60:.1f}min)")
-        print("Time-bounded execution may have missed some contradictions!")
+        print("Time-bounded execution may have missed some maintenance tasks!")
     elif final_metrics['total_duration_seconds'] > 600:  # 10 minutes
         print(f"\nWARNING: Janitor took {final_metrics['total_duration_seconds']/60:.1f}min (>10min)")
         print("Consider running with --incremental or checking for performance issues")
-    
-    # Coverage warning for contradiction checks
-    if 'contradictions_coverage' in applied_changes:
-        coverage = applied_changes['contradictions_coverage']
-        if coverage < 1.0:
-            print(f"\n📊 INFO: Contradiction check coverage: {coverage*100:.1f}% due to time constraints")
     
     # Log completion with metrics
     success = final_metrics['errors'] == 0

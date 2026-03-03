@@ -3265,9 +3265,11 @@ def _normalize_domain_filter(value: Any, allowed_domains: Optional[set[str]] = N
     }
     registered = set(allowed_domains) if allowed_domains is not None else set(_registered_domains().keys())
     include = {d for d in requested if d in registered}
-    unknown = sorted(d for d in requested if d not in registered)
-    if unknown:
-        raise ValueError(f"Unknown domain filters requested: {unknown}")
+    # Fail open for unknown-only inputs so callers from older prompt/schema
+    # variants do not hard-fail recall.
+    if requested and not include:
+        include_all = bool(value.get("all", True))
+        return include_all, set()
 
     if include:
         return False, include
@@ -4666,7 +4668,7 @@ def create_edge(
     """
     graph = get_graph()
     telemetry_enabled = str(
-        os.environ.get("QUAID_EDGE_TELEMETRY") or os.environ.get("BENCHMARK_EDGE_TELEMETRY") or ""
+        os.environ.get("BENCHMARK_EDGE_TELEMETRY") or ""
     ).strip().lower() in {"1", "true", "yes", "on"}
     edge_t0 = time.perf_counter() if telemetry_enabled else 0.0
     phase_ms: Dict[str, float] = {}

@@ -355,8 +355,8 @@ class ClaudeCodeLLMProvider(LLMProvider):
     def llm_call(self, messages, model_tier="deep",
                  max_tokens=4000, timeout=600):
         # Allow environment overrides for claude-code subprocess timeout.
-        # Useful for benchmark/LoCoMo lanes where fast-tier dedup/review calls
-        # may exceed conservative defaults.
+        # Useful in slower or heavily loaded environments where fast-tier
+        # dedup/review calls may exceed conservative defaults.
         try:
             global_timeout = float(os.environ.get("CLAUDE_CODE_TIMEOUT_S", "0") or 0)
         except ValueError:

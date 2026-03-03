@@ -136,7 +136,7 @@ class DedupConfig:
 
 @dataclass
 class ContradictionConfig:
-    enabled: bool = True
+    enabled: bool = False
     timeout_minutes: int = 60
     min_similarity: float = 0.6
     max_similarity: float = 0.85
@@ -928,7 +928,7 @@ def _load_config_inner() -> MemoryConfig:
     )
     
     contradiction = ContradictionConfig(
-        enabled=config_data.get('janitor', {}).get('contradiction', {}).get('enabled', True),
+        enabled=config_data.get('janitor', {}).get('contradiction', {}).get('enabled', False),
         timeout_minutes=config_data.get('janitor', {}).get('contradiction', {}).get('timeout_minutes', 60),
         min_similarity=config_data.get('janitor', {}).get('contradiction', {}).get('min_similarity', 0.6),
         max_similarity=config_data.get('janitor', {}).get('contradiction', {}).get('max_similarity', 0.85)
