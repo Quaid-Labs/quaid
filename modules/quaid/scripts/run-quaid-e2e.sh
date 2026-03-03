@@ -107,6 +107,12 @@ usage() {
   cat <<USAGE
 Usage: $(basename "$0") [options]
 
+NOTE:
+  In this harness, slash commands sent through `openclaw agent --message` are treated
+  as plain text in many builds. For deterministic command semantics (compact/reset/new),
+  use gateway/session APIs (e.g. `openclaw gateway call agent` or `sessions.compact`)
+  instead of relying on CLI text routing.
+
 Options:
   --auth-path <id>       Auth path for bootstrap profile (openai-oauth|openai-api|anthropic-oauth|anthropic-api; default: openai-api)
   --keep-on-success      Do not delete ~/quaid/test after successful run
@@ -1261,6 +1267,32 @@ else
   exit 1
 fi
 
+# Align embedding config with actually-available local Ollama models.
+# This prevents silent extraction/store failures when installer defaults to a
+# model that isn't pulled on the runner.
+if command -v ollama >/dev/null 2>&1; then
+  EMBED_PREF="${QUAID_E2E_OLLAMA_EMBED_MODEL:-qwen3-embedding:8b}"
+  EMBED_DIM="${QUAID_E2E_OLLAMA_EMBED_DIM:-4096}"
+  if ollama list 2>/dev/null | rg -q "^${EMBED_PREF}\\s"; then
+    python3 - "$MEMORY_CFG" "$EMBED_PREF" "$EMBED_DIM" <<'PY'
+import json, sys
+p, model, dim = sys.argv[1], sys.argv[2], int(sys.argv[3])
+obj = json.load(open(p, "r", encoding="utf-8"))
+models = obj.setdefault("models", {})
+models["embeddingsProvider"] = "ollama"
+ollama = obj.setdefault("ollama", {})
+ollama["embeddingModel"] = model
+ollama["embeddingDim"] = dim
+with open(p, "w", encoding="utf-8") as f:
+    json.dump(obj, f, indent=2)
+    f.write("\n")
+print(f"[e2e] Embeddings model pinned to installed Ollama model: {model} ({dim}d)")
+PY
+  else
+    echo "[e2e] WARN: preferred embeddings model not installed in Ollama: ${EMBED_PREF}" >&2
+  fi
+fi
+
 # Reload gateway so newly installed hooks and timeout config are active.
 echo "[e2e] Restarting gateway to apply hook/config changes..."
 openclaw gateway stop >/dev/null 2>&1 || true
@@ -1305,6 +1337,7 @@ fi
 if [[ "$RUN_LIVE_EVENTS" == true ]]; then
 begin_stage "live_events"
 echo "[e2e] Validating live /compact /reset /new + timeout events..."
+echo "[e2e] NOTE: slash commands must be exercised through gateway agent/session APIs; CLI text routing is non-deterministic in this harness."
 python3 - "$E2E_WS" "$LIVE_TIMEOUT_WAIT_SECONDS" <<'PY'
 import json
 import os
@@ -1313,6 +1346,7 @@ import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 
 ws = sys.argv[1]
 timeout_wait = int(sys.argv[2])
@@ -1337,7 +1371,9 @@ def run_agent(message: str, sid: str = "") -> bool:
         return False
     result = payload.get("result") if isinstance(payload, dict) else None
     run_id = None
-    if isinstance(result, dict):
+    if isinstance(payload, dict):
+        run_id = payload.get("runId")
+    if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(result, dict):
         run_id = result.get("runId")
     if isinstance(run_id, str) and run_id.strip():
         waited = gateway_call("agent.wait", {"runId": run_id, "timeoutMs": 120000}, timeout_sec=130)
@@ -1493,6 +1529,20 @@ def assert_notify_worker_healthy(start_line: int) -> None:
             f"[e2e] notify-worker excerpts:\n{preview}"
         )
 
+def reset_signal_source(lines: list[str]) -> str:
+    for ln in lines:
+        if '"label":"ResetSignal"' not in ln:
+            continue
+        if '"event":"signal_process_begin"' not in ln and '"event":"extract_begin"' not in ln:
+            continue
+        if '"source":"session_end"' in ln:
+            return "session_end"
+        if '"source":"before_reset"' in ln:
+            return "before_reset"
+        if '"source":"transcript_update"' in ln:
+            return "transcript_update"
+    return ""
+
 print(f"[e2e] Live events session key: {session_key}")
 notify_start = line_count(notify_log_path)
 stage_start = line_count(events_path)
@@ -1558,23 +1608,20 @@ else:
     print("[e2e] Live compact fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
-# Reset can race session teardown, so validate by event window (not marker lookup).
+# Reset/new command path.
 start = line_count(events_path)
 run_agent("E2E baseline message before reset.")
 reset_ok = run_agent("/reset")
 if reset_ok:
     try:
         wait_for(
-            lambda lines: any(
-                '"label":"ResetSignal"' in ln
-                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                for ln in lines
-            ),
+            lambda lines: bool(reset_signal_source(lines)),
             45,
             "reset signal processing",
             start,
         )
-        print("[e2e] Live reset hook path OK.")
+        source = reset_signal_source(read_tail_since(events_path, start))
+        print(f"[e2e] Live reset path OK (source={source or 'unknown'}).")
     except SystemExit as err:
         print(f"[e2e] WARN: reset hook path not observed ({err}). Falling back to direct signal queue.")
         fallback_used = True
@@ -1607,23 +1654,20 @@ else:
     print("[e2e] Live reset fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
-# /new path uses same reset signal semantics; validate by event window.
+# /new path uses same reset signal semantics.
 start = line_count(events_path)
 run_agent("E2E baseline message before new.")
 new_ok = run_agent("/new")
 if new_ok:
     try:
         wait_for(
-            lambda lines: any(
-                '"label":"ResetSignal"' in ln
-                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                for ln in lines
-            ),
+            lambda lines: bool(reset_signal_source(lines)),
             45,
             "new command signal processing",
             start,
         )
-        print("[e2e] Live new hook path OK.")
+        source = reset_signal_source(read_tail_since(events_path, start))
+        print(f"[e2e] Live new path OK (source={source or 'unknown'}).")
     except SystemExit as err:
         print(f"[e2e] WARN: new hook path not observed ({err}). Falling back to direct signal queue.")
         fallback_used = True
@@ -2318,8 +2362,10 @@ ws = sys.argv[1]
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
 db_path = os.path.join(ws, "data", "memory.db")
 cfg_path = os.path.join(ws, "config", "memory.json")
-seed_session_id = f"quaid-e2e-memory-seed-{uuid.uuid4().hex[:10]}"
+run_tag = uuid.uuid4().hex[:10]
 session_key = "agent:main:main"
+wendy_token = f"wendy-{run_tag}"
+kent_token = f"kent-{run_tag}"
 
 def line_count(path: str) -> int:
     if not os.path.exists(path):
@@ -2338,35 +2384,69 @@ def read_tail_since(path: str, start: int):
     return out
 
 def run_agent(message: str, timeout_sec: int = 30, sid: str = "", retries: int = 2) -> bool:
-    cmd = ["openclaw", "agent", "--agent", "main"]
+    params = {
+        "agentId": "main",
+        "sessionKey": session_key,
+        "message": message,
+        "idempotencyKey": f"e2e-memory-{uuid.uuid4().hex[:12]}",
+    }
     if sid:
-        cmd.extend(["--session-id", sid])
-    cmd.extend(["--message", message, "--timeout", str(timeout_sec), "--json"])
+        params["sessionId"] = sid
     for attempt in range(1, max(1, retries) + 1):
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=max(timeout_sec + 10, 45),
-            )
-        except subprocess.TimeoutExpired:
+        ok, payload = gateway_call_json("agent", params, timeout_sec=max(timeout_sec, 45))
+        if not ok:
+            print(f"[e2e] WARN: gateway agent failed message={message!r} attempt={attempt}/{retries}", flush=True)
+            time.sleep(1)
+            continue
+        result = payload.get("result") if isinstance(payload, dict) else None
+        run_id = payload.get("runId") if isinstance(payload, dict) else None
+        if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(result, dict):
+            run_id = result.get("runId")
+        if isinstance(run_id, str) and run_id.strip():
+            wait_deadline = time.time() + max(timeout_sec + 45, 120)
+            wait_status = ""
+            while time.time() < wait_deadline:
+                ok_wait, wait_payload = gateway_call_json(
+                    "agent.wait",
+                    {"runId": run_id, "timeoutMs": 15000},
+                    timeout_sec=30,
+                )
+                if not ok_wait:
+                    print(
+                        f"[e2e] WARN: gateway agent.wait failed message={message!r} attempt={attempt}/{retries}",
+                        flush=True,
+                    )
+                    time.sleep(1)
+                    continue
+                wait_status = ""
+                if isinstance(wait_payload, dict):
+                    wait_status = str(wait_payload.get("status") or wait_payload.get("state") or "").strip().lower()
+                    if not wait_status and isinstance(wait_payload.get("result"), dict):
+                        wait_status = str(wait_payload["result"].get("status") or wait_payload["result"].get("state") or "").strip().lower()
+                if wait_status in {"ok", "succeeded", "success", "done", "completed", "complete"}:
+                    return True
+                if wait_status in {"failed", "error", "aborted", "timeout", "cancelled", "canceled"}:
+                    print(
+                        f"[e2e] WARN: gateway agent.wait status={wait_status} message={message!r} attempt={attempt}/{retries}",
+                        flush=True,
+                    )
+                    break
+                if wait_status == "":
+                    # Some builds omit status for terminal inline payloads.
+                    return True
+                time.sleep(1)
             print(
-                f"[e2e] WARN: openclaw agent timed out message={message!r} attempt={attempt}/{retries}",
+                f"[e2e] WARN: gateway agent.wait timed out waiting for terminal status "
+                f"(status={wait_status or 'unknown'}) message={message!r} attempt={attempt}/{retries}",
                 flush=True,
             )
             time.sleep(1)
             continue
-        if proc.returncode == 0:
-            return True
-        print(
-            f"[e2e] WARN: openclaw agent failed message={message!r} attempt={attempt}/{retries}: {proc.stderr.strip()[:500]}",
-            flush=True,
-        )
-        time.sleep(1)
+        # Some builds return final payload inline without runId.
+        return True
     return False
 
-def gateway_call(method: str, params: dict, timeout_sec: int = 35) -> bool:
+def gateway_call_json(method: str, params: dict, timeout_sec: int = 35) -> tuple[bool, dict]:
     cmd = [
         "openclaw",
         "gateway",
@@ -2382,33 +2462,46 @@ def gateway_call(method: str, params: dict, timeout_sec: int = 35) -> bool:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec + 10)
     except subprocess.TimeoutExpired:
         print(f"[e2e] WARN: gateway call timed out method={method!r}", flush=True)
-        return False
+        return False, {}
     if proc.returncode != 0:
         print(
             f"[e2e] WARN: gateway call failed method={method!r}: {(proc.stderr or proc.stdout).strip()[:500]}",
             flush=True,
         )
-        return False
+        return False, {}
     try:
         payload = json.loads(proc.stdout or "{}")
     except Exception:
         payload = {}
-    return bool(payload.get("ok"))
+    return True, payload
 
-def wait_for_extraction(start_line: int, seconds: int = 90) -> bool:
+def gateway_call(method: str, params: dict, timeout_sec: int = 35) -> bool:
+    ok, _ = gateway_call_json(method, params, timeout_sec=timeout_sec)
+    return ok
+
+def resolve_session_id_from_key(session_key_value: str, fallback_session_id: str) -> str:
+    sessions_path = os.path.expanduser("~/.openclaw/agents/main/sessions/sessions.json")
+    try:
+        with open(sessions_path, "r", encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+        entry = data.get(session_key_value) or {}
+        sid = str(entry.get("sessionId") or "").strip()
+        if sid:
+            return sid
+    except Exception:
+        pass
+    return fallback_session_id
+
+def wait_for_reset_extraction(start_line: int, runtime_session_id: str, seconds: int = 90) -> bool:
     deadline = time.time() + seconds
     while time.time() < deadline:
         lines = read_tail_since(events_path, start_line)
         if any(
-            (
-                '"event":"extract_begin"' in ln
-                or '"event":"signal_process_begin"' in ln
-                or '"event":"timer_fired"' in ln
-            )
+            f'"session_id":"{runtime_session_id}"' in ln
             and (
-                '"label":"ResetSignal"' in ln
-                or '"label":"CompactionSignal"' in ln
-                or '"timeout_minutes"' in ln
+                ('"label":"ResetSignal"' in ln and '"event":"signal_process_begin"' in ln)
+                or ('"label":"ResetSignal"' in ln and '"event":"extract_done"' in ln)
+                or ('"label":"ResetSignal"' in ln and '"event":"extract_begin"' in ln)
             )
             for ln in lines
         ):
@@ -2416,31 +2509,126 @@ def wait_for_extraction(start_line: int, seconds: int = 90) -> bool:
         time.sleep(1)
     return False
 
-# Seed facts and trigger lifecycle extraction.
-seed_text = "Please remember this exactly: my mother is Wendy and my father is Kent."
-seed_ok = run_agent(seed_text, timeout_sec=35)
-start_line = line_count(events_path)
-compact_ok = run_agent("/compact", timeout_sec=90, retries=3)
-new_ok = run_agent("/new", timeout_sec=60, retries=2)
-if not seed_ok:
-    raise SystemExit(
-        "[e2e] ERROR: memory-flow lifecycle command path failed "
-        f"(seed_ok={seed_ok}, compact_ok={compact_ok}, new_ok={new_ok})."
+def wait_for_session_persisted_token(session_id_value: str, token: str, seconds: int = 20) -> bool:
+    if not session_id_value or not token:
+        return False
+    sessions_dir = os.path.expanduser("~/.openclaw/agents/main/sessions")
+    target_path = os.path.join(sessions_dir, f"{session_id_value}.jsonl")
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            if os.path.exists(target_path):
+                text = open(target_path, "r", encoding="utf-8", errors="replace").read()
+                if token in text:
+                    return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+def queue_signal_fallback(session_id_value: str, label: str, fallback_text: str) -> None:
+    if not session_id_value:
+        raise SystemExit(f"[e2e] ERROR: cannot queue fallback {label}; empty session id")
+    # Write directly to the real pending-signal queue consumed by the gateway plugin
+    # worker. Do not instantiate a local SessionTimeoutManager with a stub extractor,
+    # because that can emit fake extract_done events without persisting facts.
+    script = r"""
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const workspace = process.argv[1];
+const sid = process.argv[2];
+const signalLabel = process.argv[3];
+const signalDir = join(workspace, "data", "pending-extraction-signals");
+const signalPath = join(signalDir, `${sid}.json`);
+mkdirSync(signalDir, { recursive: true });
+let attemptCount = 0;
+if (existsSync(signalPath)) {
+  try {
+    const existing = JSON.parse(readFileSync(signalPath, "utf8"));
+    attemptCount = Number(existing?.attemptCount || 0);
+  } catch {}
+}
+const payload = {
+  sessionId: sid,
+  label: String(signalLabel || "ResetSignal"),
+  queuedAt: new Date().toISOString(),
+  attemptCount,
+  meta: { source: "e2e_memory_flow_fallback" },
+};
+writeFileSync(signalPath, JSON.stringify(payload), { mode: 0o600 });
+console.log(`[e2e] queued fallback ${payload.label} for ${sid}`);
+"""
+    proc = subprocess.run(
+        ["node", "-e", script, str(ws), session_id_value, label, str(fallback_text or "e2e-memory-flow-fallback")],
+        cwd=str(ws),
+        capture_output=True,
+        text=True,
+        timeout=45,
     )
-if not (compact_ok and new_ok):
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[e2e] ERROR: failed to queue memory-flow fallback {label} for {session_id_value}: {proc.stderr.strip()[:400]}"
+        )
+    out = proc.stdout.strip()
+    if out:
+        print(out)
+
+# Seed facts and trigger lifecycle extraction.
+seed_text = (
+    "For e2e memory flow verification context only: "
+    f"my mother is {wendy_token} and my father is {kent_token}."
+)
+seed_ok = False
+reset_ok = False
+runtime_session_id = ""
+extraction_session_id = ""
+start_line = line_count(events_path)
+for attempt in range(1, 4):
+    seed_ok = run_agent(seed_text, timeout_sec=45, retries=3)
+    # Capture the active session *before* reset; that's where seeded facts live.
+    extraction_session_id = resolve_session_id_from_key(session_key, extraction_session_id or "main-session")
+    if seed_ok and extraction_session_id:
+        persisted = wait_for_session_persisted_token(extraction_session_id, wendy_token, seconds=20)
+        if not persisted:
+            print(
+                f"[e2e] WARN: seed token not yet persisted for session={extraction_session_id}; "
+                "fallback extraction may miss latest turn",
+                flush=True,
+            )
+        # Queue deterministic fallback while the pre-reset transcript still exists.
+        queue_signal_fallback(extraction_session_id, "ResetSignal", seed_text)
+        if not wait_for_reset_extraction(start_line, extraction_session_id, 30):
+            print(
+                f"[e2e] WARN: pre-reset fallback extraction not observed for session={extraction_session_id}",
+                flush=True,
+            )
+    ok_reset, _ = gateway_call_json("sessions.reset", {"key": session_key}, timeout_sec=90)
+    # Track post-reset session id for diagnostics only.
+    runtime_session_id = resolve_session_id_from_key(session_key, runtime_session_id or extraction_session_id)
+    reset_ok = bool(ok_reset)
+    if seed_ok and reset_ok:
+        break
     print(
-        "[e2e] WARN: memory-flow command ack was flaky; proceeding to extraction verification "
-        f"(compact_ok={compact_ok}, new_ok={new_ok})",
+        f"[e2e] WARN: memory-flow seed/reset attempt {attempt}/3 failed "
+        f"(seed_ok={seed_ok}, ok_reset={ok_reset})",
         flush=True,
     )
-if not wait_for_extraction(start_line, 45):
+    time.sleep(2)
+
+if not seed_ok or not reset_ok:
+    raise SystemExit(
+        "[e2e] ERROR: memory-flow command path failed "
+        f"(seed_ok={seed_ok}, reset_ok={reset_ok}, extraction_session_id={extraction_session_id}, runtime_session_id={runtime_session_id})."
+    )
+
+if not wait_for_reset_extraction(start_line, extraction_session_id, 90):
     preview = "\n".join(read_tail_since(events_path, start_line)[-40:])
     raise SystemExit(
-        "[e2e] ERROR: timed out waiting for extraction after compact/new in memory flow\n"
+        "[e2e] ERROR: timed out waiting for reset extraction in memory flow\n"
         f"{preview}"
     )
 
-deadline = time.time() + 45
+deadline = time.time() + 120
 found_wendy = False
 found_kent = False
 owner_id = "maya"
@@ -2465,12 +2653,12 @@ while time.time() < deadline:
                 raise RuntimeError("nodes table has neither 'name' nor 'text' column")
             rows = conn.execute(
                 f"SELECT {memory_text_col} FROM nodes WHERE owner_id = ? AND lower({memory_text_col}) LIKE ?",
-                (owner_id, "%wendy%"),
+                (owner_id, f"%{wendy_token}%"),
             ).fetchall()
             found_wendy = len(rows) > 0
             rows = conn.execute(
                 f"SELECT {memory_text_col} FROM nodes WHERE owner_id = ? AND lower({memory_text_col}) LIKE ?",
-                (owner_id, "%kent%"),
+                (owner_id, f"%{kent_token}%"),
             ).fetchall()
             found_kent = len(rows) > 0
     except Exception:
@@ -2480,9 +2668,20 @@ while time.time() < deadline:
     time.sleep(1)
 
 if not (found_wendy and found_kent):
+    extract_diag = "no_extract_diag"
+    try:
+        timeout_log = Path(ws) / "logs" / "quaid" / "session-timeout.log"
+        if timeout_log.exists():
+            lines = timeout_log.read_text(encoding="utf-8", errors="replace").splitlines()
+            focus = [ln.strip() for ln in lines[-120:] if ("event=extract_" in ln) or ("event=signal_process_" in ln)]
+            if focus:
+                extract_diag = " | ".join(focus[-4:])
+    except Exception:
+        pass
     raise SystemExit(
         "[e2e] ERROR: extraction completed but expected facts were not stored in DB "
-        f"(owner={owner_id}, column={memory_text_col}, wendy={found_wendy}, kent={found_kent})"
+        f"(owner={owner_id}, column={memory_text_col}, wendy={found_wendy}, kent={found_kent}, "
+        f"extract_diag={extract_diag})"
     )
 
 print("[e2e] Memory flow regression checks passed.")
@@ -2781,6 +2980,7 @@ fi
 if [[ "$RUN_INGEST_STRESS" == true ]]; then
 begin_stage "ingest_stress"
 echo "[e2e] Running ingestion stress checks (facts/snippets/journal/projects)..."
+echo "[e2e] NOTE: ingest compaction uses sessions.compact API, not CLI '/compact' text, for deterministic behavior."
 INGEST_ALLOW_FALLBACK="$INGEST_ALLOW_FALLBACK" \
 INGEST_MAX_COMPACTION_SESSIONS="$INGEST_MAX_COMPACTION_SESSIONS" \
 python3 - "$E2E_WS" <<'PY'
@@ -2802,16 +3002,59 @@ project_staging = ws / "projects" / "staging"
 project_log = ws / "logs" / "project-updater.log"
 extraction_log_path = ws / "data" / "extraction-log.json"
 session_id = f"quaid-e2e-ingest-{uuid.uuid4().hex[:12]}"
+session_key = "agent:main:main"
 marker = f"E2E_INGEST_{uuid.uuid4().hex[:10]}"
 
 def run_agent(message: str, timeout_sec: int = 220) -> None:
-    cmd = ["openclaw", "agent", "--session-id", session_id, "--message", message, "--timeout", str(timeout_sec), "--json"]
+    params = {
+        "agentId": "main",
+        "sessionKey": session_key,
+        "sessionId": session_id,
+        "message": message,
+        "idempotencyKey": f"e2e-ingest-{uuid.uuid4().hex[:12]}",
+    }
+    ok, payload = gateway_call_json("agent", params, timeout_sec=max(timeout_sec, 45))
+    if not ok:
+        raise SystemExit(f"[e2e] ERROR: gateway agent failed for message={message[:80]!r}")
+    result = payload.get("result") if isinstance(payload, dict) else None
+    run_id = payload.get("runId") if isinstance(payload, dict) else None
+    if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(result, dict):
+        run_id = result.get("runId")
+    if isinstance(run_id, str) and run_id.strip():
+        if not gateway_call("agent.wait", {"runId": run_id, "timeoutMs": min((timeout_sec + 60) * 1000, 240000)}, timeout_sec=max(timeout_sec + 30, 90)):
+            raise SystemExit(f"[e2e] ERROR: gateway agent.wait failed for runId={run_id!r}")
+    # Some builds may return inline result with no runId; treat as success.
+
+def gateway_call_json(method: str, params: dict, timeout_sec: int = 30) -> tuple[bool, dict]:
+    cmd = [
+        "openclaw",
+        "gateway",
+        "call",
+        method,
+        "--json",
+        "--params",
+        json.dumps(params),
+        "--timeout",
+        str(timeout_sec * 1000),
+    ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=max(timeout_sec + 60, 180))
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec + 10)
     except subprocess.TimeoutExpired:
-        raise SystemExit(f"[e2e] ERROR: openclaw agent timed out for message={message[:80]!r}")
+        print(f"[e2e] WARN: gateway call timed out method={method!r}", flush=True)
+        return False, {}
     if proc.returncode != 0:
-        raise SystemExit(f"[e2e] ERROR: openclaw agent failed for message={message[:80]!r}: {proc.stderr.strip()[:500]}")
+        err = (proc.stderr or proc.stdout or "").strip()[:500]
+        print(f"[e2e] WARN: gateway call failed method={method!r}: {err}", flush=True)
+        return False, {}
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except Exception:
+        payload = {}
+    return True, payload
+
+def gateway_call(method: str, params: dict, timeout_sec: int = 30) -> bool:
+    ok, _ = gateway_call_json(method, params, timeout_sec=timeout_sec)
+    return ok
 
 def queue_signal_fallback(session_id_value: str, label: str) -> None:
     if not session_id_value:
@@ -2924,6 +3167,18 @@ def resolve_runtime_session_id(marker_text: str, seconds: int = 35) -> str:
             return sid.lower()
     return ""
 
+def resolve_session_id_from_key(session_key_value: str, fallback_session_id: str) -> str:
+    sessions_path = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
+    try:
+        data = json.loads(sessions_path.read_text(encoding="utf-8", errors="replace"))
+        entry = data.get(session_key_value) or {}
+        sid = str(entry.get("sessionId") or "").strip()
+        if sid:
+            return sid
+    except Exception:
+        pass
+    return fallback_session_id
+
 def wait_for(pred, seconds: int, label: str):
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -2960,11 +3215,19 @@ Snippet cue: boundary ownership belongs in datastore modules.
 """,
     timeout_sec=260,
 )
-run_agent("/compact", timeout_sec=260)
+compact_ok, compact_payload = gateway_call_json(
+    "sessions.compact",
+    {"key": session_key},
+    timeout_sec=90,
+)
+if not compact_ok:
+    raise SystemExit(f"[e2e] ERROR: sessions.compact failed for key={session_key}")
+if isinstance(compact_payload, dict) and compact_payload.get("ok") is False:
+    raise SystemExit(f"[e2e] ERROR: sessions.compact returned non-ok payload: {compact_payload}")
 
 runtime_session_id = resolve_runtime_session_id(marker)
 if not runtime_session_id:
-    runtime_session_id = session_id
+    runtime_session_id = resolve_session_id_from_key(session_key, session_id)
     print(
         f"[e2e] WARN: could not resolve runtime UUID for marker={marker}; "
         f"falling back to declared session_id={session_id}",

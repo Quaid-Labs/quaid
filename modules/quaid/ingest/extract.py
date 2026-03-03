@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 # Ensure plugin root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.llm_clients import call_deep_reasoning, parse_json_response
+from lib.llm_clients import call_deep_reasoning, call_fast_reasoning, parse_json_response
 from config import get_config
 from core.services.memory_service import get_memory_service
 from core.lifecycle import soul_snippets as soul_snippets_runtime
@@ -215,6 +215,83 @@ def _build_chunk_carry_context(
     return "\n".join(selected)
 
 
+def _repair_non_json_extraction_payload(
+    *,
+    response_text: str,
+    chunk_index: int,
+    label: str,
+) -> Optional[Dict[str, Any]]:
+    """Best-effort one-pass repair when extractor LLM returns prose.
+
+    Some gateway/model combinations occasionally return plain text despite the
+    JSON-only contract. Try a single fast-model normalization pass before
+    giving up on the chunk.
+    """
+    prompt = (
+        "Convert the following assistant output into STRICT JSON with this shape:\n"
+        "{\n"
+        '  "facts": [\n'
+        "    {\n"
+        '      "text": string,\n'
+        '      "category": string,\n'
+        '      "domains": [string],\n'
+        '      "extraction_confidence": "high"|"medium"|"low",\n'
+        '      "keywords": string,\n'
+        '      "privacy": "shared"|"private",\n'
+        '      "confidence_reason": string,\n'
+        '      "edges": [{"subject": string, "relation": string, "object": string}]\n'
+        "    }\n"
+        "  ],\n"
+        '  "soul_snippets": {"SOUL.md": [string], "USER.md": [string], "MEMORY.md": [string]},\n'
+        '  "journal_entries": {"SOUL.md": string, "USER.md": string, "MEMORY.md": string},\n'
+        '  "project_logs": {string: [string]}\n'
+        "}\n"
+        "Rules:\n"
+        "- Return JSON only.\n"
+        "- If no content fits, use empty arrays/objects.\n"
+        "- Do not add markdown fences.\n\n"
+        "Assistant output to normalize:\n"
+        f"{response_text}"
+    )
+    try:
+        repaired_text, repair_duration = call_fast_reasoning(
+            prompt=prompt,
+            system_prompt="Return valid JSON only. No markdown. No prose.",
+            max_tokens=2048,
+            timeout=120.0,
+        )
+        if not repaired_text:
+            logger.warning(
+                "[extract] %s chunk %s: JSON repair call returned empty output",
+                label,
+                chunk_index,
+            )
+            return None
+        repaired = parse_json_response(repaired_text)
+        if isinstance(repaired, dict):
+            logger.info(
+                "[extract] %s chunk %s: JSON repair succeeded in %.1fs",
+                label,
+                chunk_index,
+                repair_duration,
+            )
+            return repaired
+        logger.warning(
+            "[extract] %s chunk %s: JSON repair output still invalid",
+            label,
+            chunk_index,
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "[extract] %s chunk %s: JSON repair failed: %s",
+            label,
+            chunk_index,
+            exc,
+        )
+        return None
+
+
 def extract_from_transcript(
     transcript: str,
     owner_id: str,
@@ -373,7 +450,14 @@ def extract_from_transcript(
         parsed = parse_json_response(response_text)
         if not parsed or not isinstance(parsed, dict):
             logger.error(f"[extract] {label} chunk {ci + 1}: could not parse Opus response: {response_text[:200]}")
-            continue
+            repaired = _repair_non_json_extraction_payload(
+                response_text=response_text,
+                chunk_index=ci + 1,
+                label=label,
+            )
+            if not repaired:
+                continue
+            parsed = repaired
 
         parsed_facts = parsed.get("facts", []) or []
         if isinstance(parsed_facts, list):

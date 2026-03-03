@@ -385,6 +385,36 @@ class TestExtractFromTranscript:
 
         assert result["facts_stored"] == 0
 
+    @patch("ingest.extract.call_fast_reasoning")
+    @patch("ingest.extract.call_deep_reasoning")
+    @patch("ingest.extract._memory.store")
+    def test_unparseable_response_uses_json_repair(self, mock_store, mock_llm, mock_fast):
+        from ingest.extract import extract_from_transcript
+
+        mock_llm.return_value = ("I remembered that your mother is Wendy.", 1.0)
+        mock_fast.return_value = (json.dumps({
+            "facts": [
+                {
+                    "text": "User's mother is Wendy",
+                    "category": "fact",
+                    "domains": ["personal"],
+                    "extraction_confidence": "high",
+                }
+            ],
+            "soul_snippets": {},
+            "journal_entries": {},
+            "project_logs": {},
+        }), 0.5)
+        mock_store.return_value = {"id": "n1", "status": "created"}
+
+        result = extract_from_transcript(
+            transcript="User: my mother is Wendy\n\nAssistant: got it",
+            owner_id="test",
+        )
+
+        assert result["facts_stored"] == 1
+        mock_fast.assert_called_once()
+
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     def test_skips_short_facts(self, mock_store, mock_llm):
