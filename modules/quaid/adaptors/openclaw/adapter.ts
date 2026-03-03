@@ -2971,52 +2971,6 @@ const quaidPlugin = {
       // Cancel inactivity timer — agent is active again
       timeoutManager.onAgentStart();
 
-      // Fallback lifecycle detection for runtimes where before_reset/before_compaction
-      // hooks are not emitted consistently in non-interactive flows.
-      try {
-        const lifecycleCandidates: any[] = [];
-        if (Array.isArray(event?.messages)) lifecycleCandidates.push(...event.messages);
-        if (Array.isArray(event?.conversationMessages)) lifecycleCandidates.push(...event.conversationMessages);
-        if (Array.isArray(ctx?.conversationMessages)) lifecycleCandidates.push(...ctx.conversationMessages);
-        if (Array.isArray(ctx?.messages)) lifecycleCandidates.push(...ctx.messages);
-        const lifecycleMessages = lifecycleCandidates;
-        const signal = detectLifecycleSignal(lifecycleMessages);
-        if (!signal) {
-          const probeTail = lifecycleMessages.slice(-8);
-          const probeText = probeTail.map((m: any) => getMessageText(m)).join("\n");
-          if (/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)|\bcompacted\b/i.test(probeText)) {
-            const probeSummary = probeTail.map((m: any) => ({
-              role: String(m?.role || "unknown"),
-              text: getMessageText(m).slice(0, 120),
-            }));
-            console.log(`[quaid][signal] lifecycle probe saw command-like text but no signal match: ${JSON.stringify(probeSummary)}`);
-          }
-        }
-        if (signal && signal.label === "CompactionSignal" && isSystemEnabled("memory")) {
-          const extractionSessionId = extractSessionId(lifecycleMessages, ctx);
-          if (
-            extractionSessionId &&
-            !isInternalQuaidSession(extractionSessionId) &&
-            shouldProcessLifecycleSignal(extractionSessionId, signal)
-          ) {
-            const sourceMessages = getAllConversationMessages(lifecycleMessages);
-            timeoutManager.queueExtractionSignal(extractionSessionId, signal.label, {
-              source: "before_agent_start_fallback",
-              messages: sourceMessages.length ? sourceMessages : undefined,
-            });
-            console.log(
-              `[quaid][signal] queued ${signal.label} session=${extractionSessionId} ` +
-              `source=before_agent_start_fallback (${signal.source})`
-            );
-          }
-        }
-      } catch (err: unknown) {
-        if (isFailHardEnabled()) {
-          throw err;
-        }
-        console.warn(`[quaid] before_agent_start lifecycle fallback failed: ${String((err as Error)?.message || err)}`);
-      }
-
       // Journal injection (full soul mode) — gated by journal system
       if (!isSystemEnabled("journal")) {
         // Skip journal injection entirely
