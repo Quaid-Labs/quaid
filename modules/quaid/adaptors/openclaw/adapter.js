@@ -798,6 +798,71 @@ function extractSessionId(messages, ctx) {
   const timestampHash = createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
   return timestampHash;
 }
+function resolveSessionIdFromSessionKey(sessionKey) {
+  const key = String(sessionKey || "").trim();
+  if (!key) {
+    return "";
+  }
+  try {
+    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    if (!fs.existsSync(sessionsPath)) {
+      return "";
+    }
+    const raw = fs.readFileSync(sessionsPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const entry = parsed?.[key];
+    const sid = String(entry?.sessionId || "").trim();
+    if (sid) {
+      return sid;
+    }
+  } catch {
+  }
+  return "";
+}
+function resolveMostRecentSessionId() {
+  try {
+    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    if (!fs.existsSync(sessionsPath)) {
+      return "";
+    }
+    const raw = fs.readFileSync(sessionsPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const entries = Object.values(parsed || {});
+    let bestId = "";
+    let bestUpdated = -1;
+    for (const entry of entries) {
+      const sid = String(entry?.sessionId || "").trim();
+      if (!sid) continue;
+      const updatedAt = Number(entry?.updatedAt || 0);
+      if (Number.isFinite(updatedAt) && updatedAt >= bestUpdated) {
+        bestUpdated = updatedAt;
+        bestId = sid;
+      }
+    }
+    return bestId;
+  } catch {
+  }
+  return "";
+}
+function resolveMemoryStoreSessionId(ctx) {
+  const direct = String(ctx?.sessionId || "").trim();
+  if (direct) {
+    return direct;
+  }
+  const fromKey = resolveSessionIdFromSessionKey(String(ctx?.sessionKey || ""));
+  if (fromKey) {
+    return fromKey;
+  }
+  const mainFallback = resolveSessionIdFromSessionKey("agent:main:main");
+  if (mainFallback) {
+    return mainFallback;
+  }
+  const recentFallback = resolveMostRecentSessionId();
+  if (recentFallback) {
+    return recentFallback;
+  }
+  return "unknown";
+}
 function getAllConversationMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
   return messages.filter((msg) => {
@@ -927,11 +992,21 @@ function hasExplicitLifecycleUserCommand(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return false;
   for (const msg of messages) {
     if (msg?.role !== "user") continue;
-    const text = getMessageText(msg).trim().toLowerCase();
+    const text = getMessageText(msg);
     if (!text) continue;
-    if (/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/.test(text)) return true;
+    if (detectExplicitLifecycleUserCommand(text)) return true;
   }
   return false;
+}
+function detectExplicitLifecycleUserCommand(text) {
+  if (!text) return null;
+  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+  if (lines.length > 1) return null;
+  const normalized = lines[0].replace(/\[\[[^\]]+\]\]\s*/g, "").trim();
+  const m = normalized.match(/^(?:\[[^\]]+\]\s*)?\/(new|reset|restart|compact)(?=\s|$)/i);
+  if (!m) return null;
+  return `/${m[1].toLowerCase()}`;
 }
 function isBacklogLifecycleReplay(messages, trigger, nowMs = Date.now()) {
   if (trigger !== "reset" && trigger !== "new" && trigger !== "recovery") return false;
@@ -951,15 +1026,12 @@ function detectLifecycleSignal(messages) {
     const normalized = text.replace(/\[\[[^\]]+\]\]\s*/g, "").replace(/^\[[^\]]+\]\s*/, "").trim();
     const lower = normalized.toLowerCase();
     if (msg?.role === "user") {
-      const m = lower.match(/(?:^|\s)\/(new|reset|restart|compact)(?=\s|$)/);
-      if (m) {
-        const command = `/${m[1]}`;
-        if (command === "/new" || command === "/reset" || command === "/restart") {
-          return { label: "ResetSignal", source: "user_command", signature: `cmd:${command}` };
-        }
-        if (command === "/compact") {
-          return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}` };
-        }
+      const command = detectExplicitLifecycleUserCommand(text);
+      if (command === "/new" || command === "/reset" || command === "/restart") {
+        return { label: "ResetSignal", source: "user_command", signature: `cmd:${command}` };
+      }
+      if (command === "/compact") {
+        return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}` };
       }
     }
     if (msg?.role === "system") {
@@ -3106,7 +3178,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
           async execute(_toolCallId, params, ctx) {
             try {
               const { text, category = "fact" } = params || {};
-              const sessionId = ctx?.sessionId || "unknown";
+              const sessionId = resolveMemoryStoreSessionId(ctx);
               addMemoryNote(sessionId, text, category);
               console.log(`[quaid] memory_store: queued note for session ${sessionId}: "${text.slice(0, 60)}..."`);
               return {
@@ -4244,6 +4316,7 @@ notify_memory_extraction(
     });
     registerHttpRouteChecked({
       path: "/plugins/quaid/llm",
+      auth: "gateway",
       handler: async (req, res) => {
         if (req.method !== "POST") {
           res.writeHead(405, { "Content-Type": "application/json" });
@@ -4305,6 +4378,7 @@ notify_memory_extraction(
     });
     registerHttpRouteChecked({
       path: "/memory/injected",
+      auth: "gateway",
       handler: async (req, res) => {
         try {
           const url = new URL(req.url, "http://localhost");
