@@ -1291,23 +1291,32 @@ pending_signal_dir = os.path.join(ws, "data", "pending-extraction-signals")
 session_id = ""
 session_key = "agent:main:main"
 
-def run_agent(message: str, sid: str = "") -> None:
-    cmd = ["openclaw", "agent", "--agent", "main"]
+def run_agent(message: str, sid: str = "") -> bool:
+    params = {
+        "agentId": "main",
+        "sessionKey": session_key,
+        "message": message,
+        "idempotencyKey": f"e2e-live-{uuid.uuid4().hex[:12]}",
+    }
     if sid:
-        cmd.extend(["--session-id", sid])
-    cmd.extend(["--message", message, "--timeout", "30", "--json"])
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
-    except subprocess.TimeoutExpired:
-        print(f"[e2e] WARN: openclaw agent timed out for message={message!r}", flush=True)
+        params["sessionId"] = sid
+    ok, payload = gateway_call_json("agent", params, timeout_sec=45)
+    if not ok:
+        print(f"[e2e] WARN: gateway agent call failed for message={message!r}", flush=True)
         return False
-    if proc.returncode != 0:
-        err = (proc.stderr or "").strip()[:400]
-        print(f"[e2e] WARN: openclaw agent failed for message={message!r}: {err}", flush=True)
-        return False
+    result = payload.get("result") if isinstance(payload, dict) else None
+    run_id = None
+    if isinstance(result, dict):
+        run_id = result.get("runId")
+    if isinstance(run_id, str) and run_id.strip():
+        waited = gateway_call("agent.wait", {"runId": run_id, "timeoutMs": 120000}, timeout_sec=130)
+        if not waited:
+            print(f"[e2e] WARN: gateway agent.wait failed runId={run_id!r} message={message!r}", flush=True)
+        return waited
+    # Some OpenClaw builds may return the final result inline (no runId).
     return True
 
-def gateway_call(method: str, params: dict, timeout_sec: int = 30) -> bool:
+def gateway_call_json(method: str, params: dict, timeout_sec: int = 30) -> tuple[bool, dict]:
     cmd = [
         "openclaw",
         "gateway",
@@ -1323,19 +1332,22 @@ def gateway_call(method: str, params: dict, timeout_sec: int = 30) -> bool:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec + 10)
     except subprocess.TimeoutExpired:
         print(f"[e2e] WARN: gateway call timed out method={method!r}", flush=True)
-        return False
+        return False, {}
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()[:500]
         print(f"[e2e] WARN: gateway call failed method={method!r}: {err}", flush=True)
-        return False
+        return False, {}
     try:
         payload = json.loads(proc.stdout or "{}")
     except Exception:
         payload = {}
-    if not payload.get("ok"):
-        print(f"[e2e] WARN: gateway call non-ok method={method!r}: {(proc.stdout or '').strip()[:500]}", flush=True)
-        return False
-    return True
+    # openclaw gateway call returns bare JSON results on success (no `ok` wrapper).
+    # command-level failures already return non-zero exit status above.
+    return True, payload
+
+def gateway_call(method: str, params: dict, timeout_sec: int = 30) -> bool:
+    ok, _ = gateway_call_json(method, params, timeout_sec=timeout_sec)
+    return ok
 
 def line_count(path: str) -> int:
     if not os.path.exists(path):

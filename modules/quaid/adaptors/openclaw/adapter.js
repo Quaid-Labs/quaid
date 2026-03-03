@@ -2495,6 +2495,12 @@ const quaidPlugin = {
       }
       return api.on(eventName, handler, options);
     };
+    const registerInternalHookChecked = (eventName, handler, options) => {
+      if (contractDecl.enabled) {
+        assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
+      }
+      return api.registerHook(eventName, handler, options);
+    };
     const registerToolChecked = (factory) => {
       const spec = factory();
       const toolName = String(spec?.name || "").trim();
@@ -4163,6 +4169,66 @@ notify_memory_extraction(
       name: "reset-memory-extraction",
       priority: 10
     });
+    registerInternalHookChecked("command:new", async (event) => {
+      try {
+        const sessionKey = String(event?.sessionKey || "").trim();
+        const prev = event?.context?.previousSessionEntry;
+        const current = event?.context?.sessionEntry;
+        const sessionId = String(prev?.sessionId || current?.sessionId || "").trim();
+        if (!sessionId || isInternalQuaidSession(sessionId) || !isSystemEnabled("memory")) {
+          return;
+        }
+        if (!shouldProcessLifecycleSignal(sessionId, {
+          label: "ResetSignal",
+          source: "hook",
+          signature: "hook:command:new"
+        })) {
+          return;
+        }
+        markLifecycleSignalFromHook(sessionId, "ResetSignal");
+        timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
+          source: "command_new",
+          hook_session_key: sessionKey,
+          command_source: String(event?.context?.commandSource || "unknown")
+        });
+        console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:new key=${sessionKey || "unknown"}`);
+      } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+        console.error("[quaid] command:new hook failed:", err);
+      }
+    }, { name: "command-new-memory-extraction" });
+    registerInternalHookChecked("command:reset", async (event) => {
+      try {
+        const sessionKey = String(event?.sessionKey || "").trim();
+        const prev = event?.context?.previousSessionEntry;
+        const current = event?.context?.sessionEntry;
+        const sessionId = String(prev?.sessionId || current?.sessionId || "").trim();
+        if (!sessionId || isInternalQuaidSession(sessionId) || !isSystemEnabled("memory")) {
+          return;
+        }
+        if (!shouldProcessLifecycleSignal(sessionId, {
+          label: "ResetSignal",
+          source: "hook",
+          signature: "hook:command:reset"
+        })) {
+          return;
+        }
+        markLifecycleSignalFromHook(sessionId, "ResetSignal");
+        timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
+          source: "command_reset",
+          hook_session_key: sessionKey,
+          command_source: String(event?.context?.commandSource || "unknown")
+        });
+        console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:reset key=${sessionKey || "unknown"}`);
+      } catch (err) {
+        if (isFailHardEnabled()) {
+          throw err;
+        }
+        console.error("[quaid] command:reset hook failed:", err);
+      }
+    }, { name: "command-reset-memory-extraction" });
     onChecked("session_end", async (event, ctx) => {
       try {
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
