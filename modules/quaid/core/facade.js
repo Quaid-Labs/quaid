@@ -107,7 +107,7 @@ function createQuaidFacade(deps) {
     const now = Date.now();
     if (_cachedNodeCount !== null && (now - _nodeCountTimestamp) < NODE_COUNT_CACHE_MS) return _cachedNodeCount;
     const stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
-    const active = Number(stats?.by_status?.active ?? 0);
+    const active = Number(stats?.active_nodes ?? stats?.by_status?.active ?? 0);
     if (Number.isFinite(active) && active > 0) {
       _cachedNodeCount = active;
       _nodeCountTimestamp = now;
@@ -120,6 +120,12 @@ function createQuaidFacade(deps) {
   }
 
   function computeDynamicK() {
+    const stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
+    const recommended = Number(stats?.recommended_recall_k);
+    if (Number.isFinite(recommended) && recommended > 0) {
+      return Math.max(5, Math.min(Math.round(recommended), 40));
+    }
+    // Backward-compatible fallback for older datastore versions.
     const nodeCount = getActiveNodeCount();
     if (nodeCount < 10) return 5;
     const k = Math.round(11.5 * Math.log(nodeCount) - 61.7);

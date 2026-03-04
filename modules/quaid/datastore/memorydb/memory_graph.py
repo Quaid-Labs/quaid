@@ -1836,11 +1836,22 @@ class MemoryGraph:
             except Exception:
                 pass
 
+        active_count = int(status_counts.get("active") or 0)
+        # Datastore-owned default retrieval budget:
+        # K = 11.5 * ln(N) - 61.7, clamped to [5, 40], using active node count.
+        # This keeps retrieval policy with the store scale characteristics.
+        if active_count < 10:
+            recommended_k = 5
+        else:
+            recommended_k = max(5, min(int(round(11.5 * math.log(active_count) - 61.7)), 40))
+
         return {
             "total_nodes": total_count,
             "edges": edge_count,
             "by_type": type_counts,
             "by_status": status_counts,
+            "active_nodes": active_count,
+            "recommended_recall_k": recommended_k,
             "verified": verified_count,
             "unverified": total_count - verified_count,
             "last_janitor_completed_at": last_janitor_completed_at,
