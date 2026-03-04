@@ -311,43 +311,6 @@ function getCaptureTimeoutMinutes(): number {
   return Number.isFinite(num) ? Math.max(0, num) : 120;
 }
 
-function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retrieval"): string {
-  const notifications = getMemoryConfig().notifications || {};
-  const featureConfig = notifications[feature];
-  if (featureConfig && typeof featureConfig === "object" && typeof featureConfig.verbosity === "string") {
-    return featureConfig.verbosity.trim().toLowerCase();
-  }
-  const level = String(notifications.level || "normal").trim().toLowerCase();
-  const defaults: Record<string, Record<string, string>> = {
-    quiet: { janitor: "off", extraction: "off", retrieval: "off" },
-    normal: { janitor: "summary", extraction: "summary", retrieval: "off" },
-    verbose: { janitor: "full", extraction: "summary", retrieval: "summary" },
-    debug: { janitor: "full", extraction: "full", retrieval: "full" },
-  };
-  const levelDefaults = defaults[level] || defaults.normal;
-  return String(levelDefaults[feature] || "off").toLowerCase();
-}
-
-function shouldNotifyFeature(feature: "janitor" | "extraction" | "retrieval", detail: "summary" | "full" = "summary"): boolean {
-  const effective = effectiveNotificationLevel(feature);
-  if (effective === "off") return false;
-  if (detail === "summary") return effective === "summary" || effective === "full";
-  return effective === "full";
-}
-
-function shouldNotifyProjectCreate(): boolean {
-  const notifications = getMemoryConfig().notifications || {};
-  const snake = notifications.project_create;
-  if (snake && typeof snake === "object" && typeof snake.enabled === "boolean") {
-    return snake.enabled;
-  }
-  const camel = notifications.projectCreate;
-  if (camel && typeof camel === "object" && typeof camel.enabled === "boolean") {
-    return camel.enabled;
-  }
-  return true;
-}
-
 type ModelTier = "deep" | "fast";
 type ExtractionTrigger = "compaction" | "reset" | "new" | "recovery" | "timeout" | "unknown";
 
@@ -1941,7 +1904,7 @@ const quaidPlugin = {
 
         // Best-effort user notification for auto-injected recalls.
         try {
-          if (shouldNotifyFeature("retrieval", "summary")) {
+              if (facade.shouldNotifyFeature("retrieval", "summary")) {
             const vectorInjected = toInject.filter((m) => m.via === "vector" || (!m.via && m.category !== "graph"));
             const graphInjected = toInject.filter((m) => m.via === "graph" || m.category === "graph");
             const dataFile = path.join(QUAID_TMP_DIR, `auto-inject-recall-${Date.now()}.json`);
@@ -2295,7 +2258,7 @@ ${recallStoreGuidance}`,
 
             // Notify user about what memories were retrieved (if enabled)
             try {
-              if (shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
+              if (facade.shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
                 const memoryData = results.map(m => ({
                   text: m.text,
                   similarity: Math.round((m.similarity || 0) * 100),
@@ -2524,7 +2487,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
 
             // Notify user about what docs were searched (if enabled)
             try {
-              if (shouldNotifyFeature("retrieval", "summary") && results) {
+              if (facade.shouldNotifyFeature("retrieval", "summary") && results) {
                 // Parse results to extract doc names and scores
                 const docResults: Array<{doc: string, section: string, score: number}> = [];
                 const lines = results.split('\n');
@@ -2690,7 +2653,7 @@ notify_docs_search(data['query'], data['results'])
             if (params.description) { args.push("--description", params.description); }
             if (params.source_roots) { args.push("--source-roots", ...params.source_roots); }
             const output = await facade.docsCreateProject(args);
-            if (shouldNotifyProjectCreate()) {
+            if (facade.shouldNotifyProjectCreate()) {
               try {
                 const notifyPayload = JSON.stringify({
                   name: params.name,
@@ -3140,7 +3103,7 @@ notify_user(f"📁 Project registered: {project_label}")
         : fullTranscript;
       console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${transcriptForExtraction.length} chars`);
 
-      if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
+      if (getMemoryConfig().notifications?.showProcessingStart !== false && facade.shouldNotifyFeature("extraction", "summary")) {
         const triggerType = facade.resolveExtractionTrigger(label);
         const suppressBacklogNotify = facade.isBacklogLifecycleReplay(
           messages,
@@ -3254,11 +3217,11 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       );
       const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
         && hasMeaningfulUserContent
-        && shouldNotifyFeature("extraction", "summary");
+        && facade.shouldNotifyFeature("extraction", "summary");
       const dedupeSession = sessionId || extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
       if (!suppressBacklogNotify
-        && shouldNotifyFeature("extraction", "summary")
+        && facade.shouldNotifyFeature("extraction", "summary")
         && triggerType === "compaction") {
         // OpenClaw may emit many compaction-related micro-sessions in bursts.
         // Batch notification output so one user-triggered compact does not spam.
@@ -3266,7 +3229,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       } else if (triggerType !== "recovery"
         && !suppressBacklogNotify
         && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
-        && shouldNotifyFeature("extraction", "summary")
+        && facade.shouldNotifyFeature("extraction", "summary")
         && shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;

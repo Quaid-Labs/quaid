@@ -254,40 +254,6 @@ function getCaptureTimeoutMinutes() {
   const num = Number(raw);
   return Number.isFinite(num) ? Math.max(0, num) : 120;
 }
-function effectiveNotificationLevel(feature) {
-  const notifications = getMemoryConfig().notifications || {};
-  const featureConfig = notifications[feature];
-  if (featureConfig && typeof featureConfig === "object" && typeof featureConfig.verbosity === "string") {
-    return featureConfig.verbosity.trim().toLowerCase();
-  }
-  const level = String(notifications.level || "normal").trim().toLowerCase();
-  const defaults = {
-    quiet: { janitor: "off", extraction: "off", retrieval: "off" },
-    normal: { janitor: "summary", extraction: "summary", retrieval: "off" },
-    verbose: { janitor: "full", extraction: "summary", retrieval: "summary" },
-    debug: { janitor: "full", extraction: "full", retrieval: "full" }
-  };
-  const levelDefaults = defaults[level] || defaults.normal;
-  return String(levelDefaults[feature] || "off").toLowerCase();
-}
-function shouldNotifyFeature(feature, detail = "summary") {
-  const effective = effectiveNotificationLevel(feature);
-  if (effective === "off") return false;
-  if (detail === "summary") return effective === "summary" || effective === "full";
-  return effective === "full";
-}
-function shouldNotifyProjectCreate() {
-  const notifications = getMemoryConfig().notifications || {};
-  const snake = notifications.project_create;
-  if (snake && typeof snake === "object" && typeof snake.enabled === "boolean") {
-    return snake.enabled;
-  }
-  const camel = notifications.projectCreate;
-  if (camel && typeof camel === "object" && typeof camel.enabled === "boolean") {
-    return camel.enabled;
-  }
-  return true;
-}
 function normalizeProvider(provider) {
   return String(provider || "").trim().toLowerCase();
 }
@@ -1600,7 +1566,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
 ${formatted}` : formatted;
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
         try {
-          if (shouldNotifyFeature("retrieval", "summary")) {
+          if (facade.shouldNotifyFeature("retrieval", "summary")) {
             const vectorInjected = toInject.filter((m) => m.via === "vector" || !m.via && m.category !== "graph");
             const graphInjected = toInject.filter((m) => m.via === "graph" || m.category === "graph");
             const dataFile = path.join(QUAID_TMP_DIR, `auto-inject-recall-${Date.now()}.json`);
@@ -1931,7 +1897,7 @@ ${recallStoreGuidance}`,
                 });
               }
               try {
-                if (shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
+                if (facade.shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
                   const memoryData = results.map((m) => ({
                     text: m.text,
                     similarity: Math.round((m.similarity || 0) * 100),
@@ -2152,7 +2118,7 @@ ${projectMdContent}
 --- Search Results ---
 ${results || "No results."}${stalenessWarning}` : results ? results + stalenessWarning : "No results found." + stalenessWarning;
             try {
-              if (shouldNotifyFeature("retrieval", "summary") && results) {
+              if (facade.shouldNotifyFeature("retrieval", "summary") && results) {
                 const docResults = [];
                 const lines = results.split("\n");
                 for (const line of lines) {
@@ -2327,7 +2293,7 @@ notify_docs_search(data['query'], data['results'])
               args.push("--source-roots", ...params.source_roots);
             }
             const output = await facade.docsCreateProject(args);
-            if (shouldNotifyProjectCreate()) {
+            if (facade.shouldNotifyProjectCreate()) {
               try {
                 const notifyPayload = JSON.stringify({
                   name: params.name,
@@ -2737,7 +2703,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
 
 ` + fullTranscript : fullTranscript;
       console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${transcriptForExtraction.length} chars`);
-      if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
+      if (getMemoryConfig().notifications?.showProcessingStart !== false && facade.shouldNotifyFeature("extraction", "summary")) {
         const triggerType2 = facade.resolveExtractionTrigger(label);
         const suppressBacklogNotify2 = facade.isBacklogLifecycleReplay(
           messages,
@@ -2825,12 +2791,12 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
         ADAPTER_BOOT_TIME_MS,
         BACKLOG_NOTIFY_STALE_MS
       );
-      const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new") && hasMeaningfulUserContent && shouldNotifyFeature("extraction", "summary");
+      const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new") && hasMeaningfulUserContent && facade.shouldNotifyFeature("extraction", "summary");
       const dedupeSession = sessionId || extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
-      if (!suppressBacklogNotify && shouldNotifyFeature("extraction", "summary") && triggerType === "compaction") {
+      if (!suppressBacklogNotify && facade.shouldNotifyFeature("extraction", "summary") && triggerType === "compaction") {
         queueCompactionNotificationBatch(dedupeSession, stored, skipped, edgesCreated);
-      } else if (triggerType !== "recovery" && !suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && shouldNotifyFeature("extraction", "summary") && shouldEmitExtractionNotify(completionDedupeKey)) {
+      } else if (triggerType !== "recovery" && !suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && facade.shouldNotifyFeature("extraction", "summary") && shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
           const mergedDetails = {};
