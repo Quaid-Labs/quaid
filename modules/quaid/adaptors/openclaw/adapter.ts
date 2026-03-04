@@ -1564,12 +1564,8 @@ function queueDelayedLlmRequest(message: string, kind: string = "janitor", prior
   );
 }
 
-function getJanitorHealthIssue(): string | null {
-  return facade.getJanitorHealthIssue();
-}
-
 function maybeQueueJanitorHealthAlert(): void {
-  const issue = getJanitorHealthIssue();
+  const issue = facade.getJanitorHealthIssue();
   if (!issue) return;
   const now = Date.now();
   const state = _loadJanitorNudgeState();
