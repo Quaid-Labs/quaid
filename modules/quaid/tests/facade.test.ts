@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQuaidFacade } from "../core/facade.js";
 import type { QuaidFacadeDeps, LLMCallResult } from "../core/facade.js";
+import { readFile, unlink } from "node:fs/promises";
 
 const { mockExecFileSync } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
@@ -487,6 +488,58 @@ describe("QuaidFacade", () => {
     expect(facade.isVectorRecallResult({ text: "a", category: "fact", similarity: 0.5, via: "vector" })).toBe(true);
     expect(facade.isVectorRecallResult({ text: "a", category: "fact", similarity: 0.5, via: "vector_technical" })).toBe(true);
     expect(facade.isVectorRecallResult({ text: "a", category: "graph", similarity: 0.5, via: "graph" })).toBe(false);
+  });
+
+  it("updateDocsFromTranscript emits docs.ingest_transcript event when enabled", async () => {
+    const execEvents = vi.fn(async () => JSON.stringify({
+      processed: { details: [{ result: { result: { status: "updated", updatedDocs: 2, staleDocs: 3 } } }] },
+    }));
+    const facade = createQuaidFacade(makeMockDeps({
+      execEvents,
+      isSystemEnabled: vi.fn((system: string) => system === "workspace") as any,
+      getMemoryConfig: vi.fn(() => ({ docs: { autoUpdateOnCompact: true } })),
+    }));
+    await facade.updateDocsFromTranscript(
+      [{ role: "user", content: "please update docs for src/main.ts" }],
+      "Compaction",
+      "sess-1",
+      "/tmp",
+    );
+    expect(execEvents).toHaveBeenCalledTimes(1);
+    expect(execEvents).toHaveBeenCalledWith(
+      "emit",
+      expect.arrayContaining(["--name", "docs.ingest_transcript", "--dispatch", "immediate"]),
+    );
+  });
+
+  it("stageProjectEvent writes event payload when projects are enabled", async () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      isSystemEnabled: vi.fn((system: string) => system === "projects") as any,
+      getMemoryConfig: vi.fn(() => ({ projects: { enabled: true } })),
+      callLLM: vi.fn(async () => ({
+        text: '{"project_name":"quaid","text":"session summary"}',
+        model: "test-model",
+        input_tokens: 10,
+        output_tokens: 20,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        truncated: false,
+      })),
+    }));
+    const staged = await facade.stageProjectEvent(
+      [{ role: "user", content: "edited src/main.ts in quaid" }],
+      "compact",
+      "sess-2",
+      "/tmp",
+      1000,
+    );
+    expect(staged).not.toBeNull();
+    const payload = JSON.parse(await readFile(staged!.eventPath, "utf8"));
+    expect(payload.project_hint).toBe("quaid");
+    expect(payload.trigger).toBe("compact");
+    expect(payload.session_id).toBe("sess-2");
+    expect(Array.isArray(payload.files_touched)).toBe(true);
+    await unlink(staged!.eventPath);
   });
 
   // -----------------------------------------------------------------------

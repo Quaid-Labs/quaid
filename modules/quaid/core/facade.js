@@ -303,6 +303,108 @@ ${transcript.slice(0, 4e3)}`,
     const nonBootstrapUserTexts = userTexts.filter((text) => !text.startsWith(bootstrapPrompt));
     return nonBootstrapUserTexts.length === 0;
   }
+  async function updateDocsFromTranscript(messages, label, sessionId, tempDir = path.join(deps.workspace, ".quaid", "tmp")) {
+    if (!deps.isSystemEnabled("workspace")) {
+      return;
+    }
+    const memConfig = deps.getMemoryConfig();
+    if (!memConfig.docs?.autoUpdateOnCompact) {
+      return;
+    }
+    const fullTranscript = buildTranscript(messages);
+    if (!fullTranscript.trim()) {
+      console.log(`[quaid][facade] ${label}: no transcript for doc update`);
+      return;
+    }
+    const tmpPath = path.join(
+      tempDir,
+      `docs-ingest-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`
+    );
+    fs.writeFileSync(tmpPath, fullTranscript, { mode: 384 });
+    try {
+      console.log(`[quaid][facade] ${label}: dispatching docs ingest event...`);
+      const startTime = Date.now();
+      const out = await deps.execEvents("emit", [
+        "--name",
+        "docs.ingest_transcript",
+        "--payload",
+        JSON.stringify({
+          transcript_path: tmpPath,
+          label,
+          session_id: sessionId || null
+        }),
+        "--source",
+        "openclaw_adapter",
+        "--dispatch",
+        "immediate"
+      ]);
+      let parsed = {};
+      try {
+        const candidate = JSON.parse(out || "{}");
+        if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+          parsed = candidate;
+        }
+      } catch {
+      }
+      const processed = parsed.processed;
+      const details = Array.isArray(processed?.details) ? processed?.details : [];
+      const first = details[0] && typeof details[0] === "object" ? details[0] : {};
+      const resultObj = first.result && typeof first.result === "object" ? first.result : {};
+      const nested = resultObj.result && typeof resultObj.result === "object" ? resultObj.result : resultObj;
+      const status = String(nested.status || "").trim();
+      const elapsed = ((Date.now() - startTime) / 1e3).toFixed(1);
+      if (status === "up_to_date") {
+        console.log(`[quaid][facade] ${label}: all docs up-to-date (${elapsed}s)`);
+        return;
+      }
+      if (status === "updated") {
+        const updatedDocs = Number(nested.updatedDocs || 0);
+        const staleDocs = Number(nested.staleDocs || 0);
+        console.log(`[quaid][facade] ${label}: docs updated (${updatedDocs}/${staleDocs}) (${elapsed}s)`);
+        return;
+      }
+      if (status === "disabled" || status === "skipped") {
+        console.log(`[quaid][facade] ${label}: docs ingest skipped (${String(nested.message || "disabled")})`);
+        return;
+      }
+      console.log(`[quaid][facade] ${label}: docs ingest finished (${elapsed}s)`);
+    } catch (err) {
+      console.error(`[quaid][facade] ${label} doc update failed:`, err.message);
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+    } finally {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+      }
+    }
+  }
+  async function stageProjectEvent(messages, trigger, sessionId, stagingDirOverride, summaryTimeoutMs = FAST_ROUTER_TIMEOUT_MS) {
+    if (!deps.isSystemEnabled("projects")) {
+      return null;
+    }
+    const memConfig = deps.getMemoryConfig();
+    if (!memConfig.projects?.enabled) {
+      return null;
+    }
+    const summary = await summarizeProjectSession(messages, summaryTimeoutMs);
+    const event = {
+      project_hint: summary.project_name || null,
+      files_touched: extractFilePaths(messages),
+      summary: summary.text,
+      trigger,
+      session_id: sessionId,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    const stagingDir = stagingDirOverride ? path.resolve(stagingDirOverride) : path.join(deps.workspace, memConfig.projects.stagingDir || "projects/staging/");
+    if (!fs.existsSync(stagingDir)) {
+      fs.mkdirSync(stagingDir, { recursive: true });
+    }
+    const eventPath = path.join(stagingDir, `${Date.now()}-${trigger}.json`);
+    fs.writeFileSync(eventPath, JSON.stringify(event, null, 2));
+    return { eventPath, projectHint: summary.project_name || null };
+  }
   function detectExplicitLifecycleUserCommand(text) {
     if (!text) return null;
     const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -986,6 +1088,8 @@ ${lines.join("\n")}
     summarizeProjectSession,
     isResetBootstrapOnlyConversation,
     isVectorRecallResult,
+    updateDocsFromTranscript,
+    stageProjectEvent,
     // Stubs
     detectLifecycleSignal,
     latestMessageTimestampMs,

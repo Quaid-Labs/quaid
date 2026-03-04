@@ -1631,44 +1631,20 @@ notify_user("Quaid has ${pendingCount} pending approval request(s). Review pendi
 // ============================================================================
 
 async function emitProjectEvent(messages: any[], trigger: string, sessionId?: string): Promise<void> {
-  if (!isSystemEnabled("projects")) {
-    return;
-  }
-  const memConfig = getMemoryConfig();
-  if (!memConfig.projects?.enabled) {
-    return;
-  }
-
   try {
-    // 1. Quick LLM summary
-    const summary = await facade.summarizeProjectSession(messages, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
-
-    // 2. Write event file
-    const event = {
-      project_hint: summary.project_name || null,
-      files_touched: facade.extractFilePaths(messages),
-      summary: summary.text,
-      trigger,
-      session_id: sessionId,
-      timestamp: new Date().toISOString(),
-    };
-
-    const stagingDir = path.join(WORKSPACE, memConfig.projects.stagingDir || "projects/staging/");
-    if (!fs.existsSync(stagingDir)) {
-      fs.mkdirSync(stagingDir, { recursive: true });
+    const staged = await facade.stageProjectEvent(messages, trigger, sessionId, undefined, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
+    if (!staged) {
+      return;
     }
 
-    const eventPath = path.join(stagingDir, `${Date.now()}-${trigger}.json`);
-    fs.writeFileSync(eventPath, JSON.stringify(event, null, 2));
-
-    // 3. Spawn background processor (detached) — gateway-managed credential only
+    // Spawn background processor (detached) — gateway-managed credential only
     const bgApiKey = _getAnthropicCredential();
     const logFile = path.join(WORKSPACE, "logs/project-updater.log");
     const logDir = path.dirname(logFile);
     if (!fs.existsSync(logDir)) { fs.mkdirSync(logDir, { recursive: true }); }
     const logFd = fs.openSync(logFile, "a");
     try {
-      const proc = spawn("python3", [PROJECT_UPDATER, "process-event", eventPath], {
+      const proc = spawn("python3", [PROJECT_UPDATER, "process-event", staged.eventPath], {
         detached: true,
         stdio: ["ignore", logFd, logFd],
         cwd: WORKSPACE,
@@ -1680,7 +1656,7 @@ async function emitProjectEvent(messages: any[], trigger: string, sessionId?: st
       fs.closeSync(logFd);
     }
 
-    console.log(`[quaid] Emitted project event: ${trigger} -> ${summary.project_name || "unknown"}`);
+    console.log(`[quaid] Emitted project event: ${trigger} -> ${staged.projectHint || "unknown"}`);
   } catch (err: unknown) {
     console.error("[quaid] Failed to emit project event:", (err as Error).message);
     if (isFailHardEnabled()) {
@@ -1700,57 +1676,6 @@ async function emitProjectEvent(messages: any[], trigger: string, sessionId?: st
 // ============================================================================
 // Doc Auto-Update from Transcript
 // ============================================================================
-
-async function updateDocsFromTranscript(messages: any[], label: string, sessionId?: string): Promise<void> {
-  if (!isSystemEnabled("workspace")) {
-    return;
-  }
-  // Check if auto-update is enabled
-  const memConfig = getMemoryConfig();
-  if (!memConfig.docs?.autoUpdateOnCompact) {
-    return;
-  }
-
-  const fullTranscript = facade.buildTranscript(messages);
-  if (!fullTranscript.trim()) {
-    console.log(`[quaid] ${label}: no transcript for doc update`);
-    return;
-  }
-  const tmpPath = path.join(QUAID_TMP_DIR, `docs-ingest-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-  fs.writeFileSync(tmpPath, fullTranscript, { mode: 0o600 });
-  try {
-    console.log(`[quaid] ${label}: dispatching docs ingest event...`);
-    const startTime = Date.now();
-    const out = await facade.emitEvent(
-      "docs.ingest_transcript",
-      {
-        transcript_path: tmpPath,
-        label,
-        session_id: sessionId || null,
-      },
-      "immediate",
-    );
-    const result = out?.processed?.details?.[0]?.result?.result || out?.processed?.details?.[0]?.result || {};
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    if (result.status === "up_to_date") {
-      console.log(`[quaid] ${label}: all docs up-to-date (${elapsed}s)`);
-      return;
-    }
-    if (result.status === "updated") {
-      console.log(`[quaid] ${label}: docs updated (${result.updatedDocs || 0}/${result.staleDocs || 0}) (${elapsed}s)`);
-      return;
-    }
-    if (result.status === "disabled" || result.status === "skipped") {
-      console.log(`[quaid] ${label}: docs ingest skipped (${result.message || "disabled"})`);
-      return;
-    }
-    console.log(`[quaid] ${label}: docs ingest finished (${elapsed}s)`);
-  } catch (err: unknown) {
-    console.error(`[quaid] ${label} doc update failed:`, (err as Error).message);
-  } finally {
-    try { fs.unlinkSync(tmpPath); } catch {}
-  }
-}
 
 // ============================================================================
 // Memory Operations
@@ -3615,7 +3540,7 @@ notify_memory_extraction(
           const uniqueSessionId = extractSessionId(conversationMessages, ctx);
 
           try {
-            await updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId);
+            await facade.updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId, QUAID_TMP_DIR);
           } catch (err: unknown) {
             if (isFailHardEnabled()) {
               throw err;
@@ -3764,7 +3689,7 @@ notify_memory_extraction(
 
           if (conversationMessages.length > 0) {
             try {
-              await updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId);
+              await facade.updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId, QUAID_TMP_DIR);
             } catch (err: unknown) {
               if (isFailHardEnabled()) {
                 throw err;
