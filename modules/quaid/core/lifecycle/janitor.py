@@ -1654,8 +1654,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         except Exception as e:
             print(f"  Warning: Failed to record janitor run: {e}")
 
-    # Queue user notifications through lifecycle event bus (only for full runs, not dry-run)
-    if task == "all" and not dry_run:
+    # Queue user notifications through lifecycle event bus (only for full runs, not dry-run).
+    # E2E lanes can disable this to avoid external channel/gateway hangs affecting
+    # janitor maintenance validation.
+    skip_notify = str(os.environ.get("QUAID_JANITOR_SKIP_NOTIFY", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if task == "all" and not dry_run and not skip_notify:
         try:
             from core.runtime.events import emit_event, process_events
 
@@ -1681,6 +1684,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
         except Exception as e:
             print(f"[notify] Failed to dispatch janitor completion event: {e}")
+    elif task == "all" and not dry_run and skip_notify:
+        print("[notify] Skipping janitor completion event dispatch (QUAID_JANITOR_SKIP_NOTIFY=1)")
 
     # Return metrics for programmatic use
     # WAL checkpoint at end of run to reclaim WAL file space

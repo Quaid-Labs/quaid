@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.llm_clients import call_deep_reasoning, call_fast_reasoning, parse_json_response
 from config import get_config
 from core.services.memory_service import get_memory_service
+from core.docs.updater import append_project_logs
 from core.lifecycle import soul_snippets as soul_snippets_runtime
 from lib.runtime_context import (
     parse_session_jsonl as runtime_parse_session_jsonl,
@@ -690,8 +691,6 @@ def extract_from_transcript(
             "Reset" if "reset" in label.lower() else "CLI"
         )
         try:
-            from datastore.docsdb.project_updater import append_project_logs
-
             log_metrics = append_project_logs(
                 result["project_logs"],
                 trigger=trigger,

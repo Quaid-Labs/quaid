@@ -34,8 +34,9 @@ from prompt_sets import get_prompt
 logger = logging.getLogger(__name__)
 
 # Timeouts (seconds)
-DEEP_REASONING_TIMEOUT = 600
-FAST_REASONING_TIMEOUT = 120
+# Allow runtime overrides for bounded e2e/CI lanes without changing defaults.
+DEEP_REASONING_TIMEOUT = float(os.environ.get("QUAID_DEEP_REASONING_TIMEOUT", "600"))
+FAST_REASONING_TIMEOUT = float(os.environ.get("QUAID_FAST_REASONING_TIMEOUT", "120"))
 
 # Model names — loaded from config on first use (lazy to avoid circular imports)
 _models_loaded: bool = False
@@ -220,7 +221,7 @@ def get_token_budget_usage() -> Tuple[int, int]:
 
 
 # Retry config
-_MAX_RETRIES = 3
+_MAX_RETRIES = max(0, int(os.environ.get("QUAID_LLM_MAX_RETRIES", "3") or "3"))
 _RETRY_BASE_DELAY = 1.0  # seconds, doubled each retry
 
 

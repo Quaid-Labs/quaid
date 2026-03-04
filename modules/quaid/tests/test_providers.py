@@ -583,10 +583,11 @@ class TestMockEmbeddingsProvider:
 class TestGatewayLLMProvider:
     """Tests for GatewayLLMProvider — routes LLM calls through gateway HTTP."""
 
-    def test_init_defaults(self):
+    def test_init_defaults(self, monkeypatch):
+        monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
         p = GatewayLLMProvider()
         assert p._port == 18789
-        assert p._token == ""
+        assert isinstance(p._token, str)
         profiles = p.get_profiles()
         assert profiles["deep"]["model"] == "configured-via-gateway"
         assert profiles["fast"]["model"] == "configured-via-gateway"

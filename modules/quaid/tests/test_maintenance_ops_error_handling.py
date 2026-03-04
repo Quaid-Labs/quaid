@@ -122,6 +122,7 @@ def test_fix_vec_nodes_insert_error_respects_fail_hard():
 
 
 def test_contradiction_keep_a_uses_atomic_sql_path(monkeypatch):
+    monkeypatch.setattr(maintenance_ops, "CONTRADICTION_ENABLED", True)
     metrics = maintenance_ops.JanitorMetrics()
     pending = [{
         "id": "c1",

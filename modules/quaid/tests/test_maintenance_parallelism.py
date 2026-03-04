@@ -207,6 +207,7 @@ def test_janitor_metrics_prunes_stale_thread_task_entries():
 
 
 def test_find_contradictions_applies_remaining_budget_to_parallel_timeout(monkeypatch):
+    monkeypatch.setattr(ops, "CONTRADICTION_ENABLED", True)
     captured = {}
 
     def _fake_parallel(batches, task_name, runner, overall_timeout_seconds=None):

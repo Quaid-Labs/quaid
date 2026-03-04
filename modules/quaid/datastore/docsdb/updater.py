@@ -884,11 +884,12 @@ def update_doc_from_diffs(
     )
 
     print(f"  Calling Opus to update {doc_path}...")
+    doc_update_timeout = float(os.environ.get("QUAID_DOCS_UPDATE_TIMEOUT_SECONDS", "300") or "300")
     response, duration = call_deep_reasoning(
         prompt=user_message,
         system_prompt=system_prompt,
         max_tokens=8000,
-        timeout=300.0,  # 5 min - doc updates are large
+        timeout=doc_update_timeout,
     )
 
     if not response:
@@ -1039,11 +1040,12 @@ def update_doc_from_transcript(
     )
 
     print(f"  Calling LLM to analyze changes for {doc_path}...")
+    transcript_update_timeout = float(os.environ.get("QUAID_DOCS_TRANSCRIPT_TIMEOUT_SECONDS", "120") or "120")
     response, duration = call_deep_reasoning(
         prompt=user_message,
         system_prompt=system_prompt,
         max_tokens=4000,  # Edits are smaller than full doc
-        timeout=120.0,
+        timeout=transcript_update_timeout,
     )
 
     if not response:

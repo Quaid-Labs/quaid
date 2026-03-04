@@ -12,6 +12,7 @@ class _Graph:
 
 
 def test_contradictions_carryover_counts_pending_status(monkeypatch):
+    monkeypatch.setattr("datastore.memorydb.maintenance_ops.CONTRADICTION_ENABLED", True)
     conn = sqlite3.connect(":memory:")
     try:
         conn.execute(
