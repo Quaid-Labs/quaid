@@ -89,8 +89,6 @@ const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-app
 const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
-const LIFECYCLE_SIGNAL_SUPPRESS_MS = 15_000;
-const LIFECYCLE_SIGNAL_RETENTION_MS = 10 * 60_000;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
 const COMPACTION_NOTIFY_BATCH_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MS", 45_000);
 const COMPACTION_NOTIFY_BATCH_MAX_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MAX_MS", 120_000);
@@ -108,11 +106,6 @@ type CompactionNotifyBatchState = {
 let compactionNotifyBatchState: CompactionNotifyBatchState | null = null;
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 90_000;
-const lifecycleSignalHistory = new Map<string, {
-  source: "user_command" | "system_notice" | "hook";
-  signature: string;
-  seenAt: number;
-}>();
 
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
@@ -932,44 +925,6 @@ notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extra
   if (typeof (state.timer as any).unref === "function") {
     (state.timer as any).unref();
   }
-}
-
-function lifecycleSignalKey(sessionId: string, label: "ResetSignal" | "CompactionSignal"): string {
-  return `${sessionId}:${label}`;
-}
-
-function shouldProcessLifecycleSignal(
-  sessionId: string,
-  signal: {
-    label: "ResetSignal" | "CompactionSignal";
-    source: "user_command" | "system_notice" | "hook";
-    signature: string;
-  }
-): boolean {
-  const now = Date.now();
-  for (const [k, v] of lifecycleSignalHistory.entries()) {
-    if ((now - v.seenAt) > LIFECYCLE_SIGNAL_RETENTION_MS) {
-      lifecycleSignalHistory.delete(k);
-    }
-  }
-  const key = lifecycleSignalKey(sessionId, signal.label);
-  const prior = lifecycleSignalHistory.get(key);
-  lifecycleSignalHistory.set(key, { source: signal.source, signature: signal.signature, seenAt: now });
-  if (!prior) return true;
-  const ageMs = now - prior.seenAt;
-  if (prior.signature === signal.signature && ageMs < LIFECYCLE_SIGNAL_SUPPRESS_MS) return false;
-  if (ageMs < LIFECYCLE_SIGNAL_SUPPRESS_MS && prior.source === "hook" && signal.source === "system_notice") {
-    return false;
-  }
-  return true;
-}
-
-function markLifecycleSignalFromHook(sessionId: string, label: "ResetSignal" | "CompactionSignal"): void {
-  lifecycleSignalHistory.set(lifecycleSignalKey(sessionId, label), {
-    source: "hook",
-    signature: `hook:${label}`,
-    seenAt: Date.now(),
-  });
 }
 
 function isInternalMaintenancePrompt(text: string): boolean {
@@ -2169,7 +2124,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             console.log(`[quaid][signal] transcript_update missing session id file=${sessionFile}`);
             return;
           }
-          if (!shouldProcessLifecycleSignal(sessionId, detail)) {
+          if (!facade.shouldProcessLifecycleSignal(sessionId, detail)) {
             console.log(`[quaid][signal] suppressed duplicate ${detail.label} session=${sessionId} source=transcript_update`);
             return;
           }
@@ -3515,12 +3470,12 @@ notify_memory_extraction(
           // before_compaction hook is unreliable async-wise; queue signal for worker tick.
           if (isSystemEnabled("memory")) {
             if (conversationMessages.length > 0) {
-              if (shouldProcessLifecycleSignal(extractionSessionId, {
+              if (facade.shouldProcessLifecycleSignal(extractionSessionId, {
                 label: "CompactionSignal",
                 source: "hook",
                 signature: "hook:before_compaction",
               })) {
-                markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
+                facade.markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
                 timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal", {
                   source: "before_compaction",
                   hook_session_id: String(sessionId || ""),
@@ -3625,7 +3580,7 @@ notify_memory_extraction(
             return;
           }
           const signature = `hook:command_${commandAction}`;
-          if (!shouldProcessLifecycleSignal(sessionId, {
+          if (!facade.shouldProcessLifecycleSignal(sessionId, {
             label: "ResetSignal",
             source: "hook",
             signature,
@@ -3633,7 +3588,7 @@ notify_memory_extraction(
             console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${sessionId} source=command:${commandAction}`);
             return;
           }
-          markLifecycleSignalFromHook(sessionId, "ResetSignal");
+          facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
           timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
             source: "command_hook",
             command: commandAction,
@@ -3679,12 +3634,12 @@ notify_memory_extraction(
         const doExtraction = async () => {
           // before_reset can race with session teardown; queue signal for worker tick.
           if (isSystemEnabled("memory")) {
-            if (shouldProcessLifecycleSignal(extractionSessionId, {
+            if (facade.shouldProcessLifecycleSignal(extractionSessionId, {
               label: "ResetSignal",
               source: "hook",
               signature: "hook:before_reset",
             })) {
-              markLifecycleSignalFromHook(extractionSessionId, "ResetSignal");
+              facade.markLifecycleSignalFromHook(extractionSessionId, "ResetSignal");
               timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal", {
                 source: "before_reset",
                 hook_session_id: String(sessionId || ""),
@@ -3760,7 +3715,7 @@ notify_memory_extraction(
         if (!isSystemEnabled("memory")) {
           return;
         }
-        if (!shouldProcessLifecycleSignal(sessionId, {
+        if (!facade.shouldProcessLifecycleSignal(sessionId, {
           label: "ResetSignal",
           source: "hook",
           signature: "hook:session_end",
@@ -3768,7 +3723,7 @@ notify_memory_extraction(
           console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${sessionId} source=session_end`);
           return;
         }
-        markLifecycleSignalFromHook(sessionId, "ResetSignal");
+        facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
         timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
           source: "session_end",
           hook_session_id: sessionId,
@@ -3948,7 +3903,10 @@ export default quaidPlugin;
 export const __test = {
   detectLifecycleCommandSignal,
   detectLifecycleSignal: (messages: any[]) => facade.detectLifecycleSignal(messages),
-  shouldProcessLifecycleSignal,
+  shouldProcessLifecycleSignal: (
+    sessionId: string,
+    signal: { label: "ResetSignal" | "CompactionSignal"; source: "user_command" | "system_notice" | "hook"; signature: string },
+  ) => facade.shouldProcessLifecycleSignal(sessionId, signal),
   shouldEmitExtractionNotify,
   latestMessageTimestampMs: (messages: any[]) => facade.latestMessageTimestampMs(messages),
   hasExplicitLifecycleUserCommand: (messages: any[]) => facade.hasExplicitLifecycleUserCommand(messages),
@@ -3960,7 +3918,8 @@ export const __test = {
       ADAPTER_BOOT_TIME_MS,
       BACKLOG_NOTIFY_STALE_MS,
     ),
-  markLifecycleSignalFromHook,
-  clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
+  markLifecycleSignalFromHook: (sessionId: string, label: "ResetSignal" | "CompactionSignal") =>
+    facade.markLifecycleSignalFromHook(sessionId, label),
+  clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
   clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
 };
