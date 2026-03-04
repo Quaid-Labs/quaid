@@ -820,7 +820,7 @@ function getAllConversationMessages(messages: any[]): any[] {
   if (!Array.isArray(messages) || messages.length === 0) return [];
   return messages.filter((msg: any) => {
     if (!msg || (msg.role !== "user" && msg.role !== "assistant")) return false;
-    const text = getMessageText(msg).trim();
+    const text = facade.getMessageText(msg).trim();
     if (!text) return false;
     // Filter synthetic internal extraction traffic that can leak into event.messages.
     if (text.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
@@ -1630,63 +1630,6 @@ notify_user("Quaid has ${pendingCount} pending approval request(s). Review pendi
 // Project Event Emitter (compact/reset → background processor)
 // ============================================================================
 
-function extractFilePaths(messages: any[]): string[] {
-  const paths = new Set<string>();
-  for (const msg of messages) {
-    const text = typeof msg.content === "string"
-      ? msg.content
-      : (msg.content as any[])?.map((c: any) => c.text || "").join(" ") || "";
-    // Match common file path patterns
-    const matches = text.match(/(?:^|\s)((?:\/[\w.-]+)+|(?:[\w.-]+\/)+[\w.-]+)/gm);
-    if (matches) {
-      for (const m of matches) {
-        const p = m.trim();
-        if (p.includes("/") && !p.startsWith("http") && p.length < 200) {
-          paths.add(p);
-        }
-      }
-    }
-  }
-  return Array.from(paths);
-}
-
-async function getQuickProjectSummary(messages: any[]): Promise<{project_name: string | null, text: string}> {
-  const transcript = buildTranscript(messages);
-  if (!transcript || transcript.length < 20) {
-    return { project_name: null, text: "" };
-  }
-
-  try {
-    const llm = await callConfiguredLLM(
-      `You summarize coding sessions. Given a conversation, identify: 1) What project was being worked on (use one of the available project names, or null if unclear), 2) Brief summary of what changed/was discussed. Available projects: ${getProjectNames().join(", ")}. Use these EXACT names. Respond with JSON only: {"project_name": "name-or-null", "text": "brief summary"}`,
-      `Summarize this session:\n\n${transcript.slice(0, 4000)}`,
-      "fast",
-      300,
-      QUICK_PROJECT_SUMMARY_TIMEOUT_MS,
-    );
-    const output = (llm.text || "").trim();
-    const jsonMatch = output.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          return {
-            project_name: typeof parsed.project_name === "string" ? parsed.project_name : null,
-            text: typeof parsed.text === "string" ? parsed.text : "",
-          };
-        } catch (err: unknown) {
-          console.warn(`[quaid] Quick project summary JSON parse failed: ${String((err as Error)?.message || err)}`);
-        }
-      }
-  } catch (err: unknown) {
-    console.error("[quaid] Quick project summary failed:", (err as Error).message);
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-  }
-
-  return { project_name: null, text: transcript.slice(0, 500) };
-}
-
 async function emitProjectEvent(messages: any[], trigger: string, sessionId?: string): Promise<void> {
   if (!isSystemEnabled("projects")) {
     return;
@@ -1698,12 +1641,12 @@ async function emitProjectEvent(messages: any[], trigger: string, sessionId?: st
 
   try {
     // 1. Quick LLM summary
-    const summary = await getQuickProjectSummary(messages);
+    const summary = await facade.summarizeProjectSession(messages, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
 
     // 2. Write event file
     const event = {
       project_hint: summary.project_name || null,
-      files_touched: extractFilePaths(messages),
+      files_touched: facade.extractFilePaths(messages),
       summary: summary.text,
       trigger,
       session_id: sessionId,
@@ -1750,47 +1693,6 @@ async function emitProjectEvent(messages: any[], trigger: string, sessionId?: st
 // Transcript Builder (shared by memory extraction + doc update)
 // ============================================================================
 
-function buildTranscript(messages: any[]): string {
-  const transcript: string[] = [];
-  for (const msg of messages) {
-    if (msg.role !== "user" && msg.role !== "assistant") { continue; }
-    let text = typeof msg.content === "string"
-      ? msg.content
-      : (msg.content as any[])?.map((c: any) => c.text || "").join(" ");
-    if (!text) { continue; }
-    text = text.replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "");
-    text = text.replace(/\n?\[message_id:\s*\d+\]/gi, "").trim();
-    if (text.startsWith("GatewayRestart:") || text.startsWith("System:")) { continue; }
-    if (text.includes('"kind": "restart"')) { continue; }
-    if (text.includes("HEARTBEAT") && text.includes("HEARTBEAT_OK")) { continue; }
-    if (text.replace(/[*_<>\/b\s]/g, '').startsWith("HEARTBEAT_OK")) { continue; }
-    if (!text) { continue; }
-    transcript.push(`${msg.role === "user" ? "User" : "Alfie"}: ${text}`);
-  }
-  return transcript.join("\n\n");
-}
-
-function getMessageText(msg: any): string {
-  if (!msg) { return ""; }
-  if (typeof msg.content === "string") { return msg.content; }
-  if (Array.isArray(msg.content)) {
-    return msg.content.map((c: any) => c?.text || "").join(" ");
-  }
-  return "";
-}
-
-function isResetBootstrapOnlyConversation(messages: any[]): boolean {
-  const RESET_BOOTSTRAP_PROMPT = "A new session was started via /new or /reset.";
-  const userTexts = messages
-    .filter((m: any) => m?.role === "user")
-    .map((m: any) => getMessageText(m).trim())
-    .filter(Boolean);
-  if (userTexts.length === 0) { return false; }
-
-  const nonBootstrapUserTexts = userTexts.filter((t: string) => !t.startsWith(RESET_BOOTSTRAP_PROMPT));
-  return nonBootstrapUserTexts.length === 0;
-}
-
 // ============================================================================
 // Session Status for User Notification
 // ============================================================================
@@ -1809,7 +1711,7 @@ async function updateDocsFromTranscript(messages: any[], label: string, sessionI
     return;
   }
 
-  const fullTranscript = buildTranscript(messages);
+  const fullTranscript = facade.buildTranscript(messages);
   if (!fullTranscript.trim()) {
     console.log(`[quaid] ${label}: no transcript for doc update`);
     return;
@@ -1874,155 +1776,9 @@ type MemoryResult = {
   via?: string; // "vector" | "graph" | "journal" | "project"
 };
 
-function getConfiguredDomainIds(): string[] {
-  try {
-    const defs = getMemoryConfig()?.retrieval?.domains;
-    if (defs && typeof defs === "object" && !Array.isArray(defs)) {
-      return Object.keys(defs).map((k) => String(k).trim()).filter(Boolean).sort();
-    }
-  } catch {}
-  return [];
-}
-
 type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
 type DomainFilter = Record<string, boolean>;
 
-function isLowInformationEntityNode(result: MemoryResult): boolean {
-  if ((result.via || "vector") === "graph" || result.category === "graph") return false;
-  const category = String(result.category || "").toLowerCase();
-  if (!["person", "concept", "event", "entity"].includes(category)) return false;
-  const text = String(result.text || "").trim();
-  if (!text) return true;
-  const words = text.split(/\s+/).filter(Boolean);
-  // Entity stub: bare name/token without relational/factual structure.
-  if (words.length <= 2 && /^[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?$/.test(text)) return true;
-  return false;
-}
-
-const RECALL_RETRY_STOPWORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
-  "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
-  "this", "to", "was", "we", "what", "when", "where", "which", "who", "why", "with", "you", "your",
-]);
-
-function normalizeToken(raw: string): string {
-  return String(raw || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
-function stemToken(token: string): string {
-  if (token.length > 6 && token.endsWith("ing")) return token.slice(0, -3);
-  if (token.length > 5 && token.endsWith("ed")) return token.slice(0, -2);
-  if (token.length > 4 && token.endsWith("s")) return token.slice(0, -1);
-  return token;
-}
-
-function tokenizeQuery(query: string): string[] {
-  return String(query || "")
-    .split(/\s+/)
-    .map((part) => normalizeToken(part))
-    .map((token) => stemToken(token))
-    .filter((token) => token.length >= 3 && !RECALL_RETRY_STOPWORDS.has(token));
-}
-
-function temporalCuePresent(query: string): boolean {
-  const lowered = String(query || "").toLowerCase();
-  const cues = ["latest", "current", "currently", "still", "now", "as of", "when", "last", "updated"];
-  return cues.some((cue) => lowered.includes(cue));
-}
-
-function attributionCuePresent(query: string): boolean {
-  const lowered = String(query || "").toLowerCase();
-  const cues = ["who", "whose", "did", "does", "said", "asked", "told", "mentioned", "attributed"];
-  return cues.some((cue) => lowered.includes(cue));
-}
-
-function isVectorRecallResult(result: MemoryResult): boolean {
-  const via = String(result.via || "").toLowerCase();
-  return via === "vector" || via === "vector_basic" || via === "vector_technical";
-}
-
-function computeEntityCoverage(query: string, results: MemoryResult[]): number {
-  const resultBlob = results
-    .map((r) => `${String(r.text || "").toLowerCase()} ${String(r.sourceName || "").toLowerCase()}`)
-    .join(" ");
-  const tokens = tokenizeQuery(query);
-  if (!tokens.length) return 1;
-  const matched = tokens.filter((token) => resultBlob.includes(token)).length;
-  return matched / tokens.length;
-}
-
-function buildExpandedRecallQuery(query: string): string {
-  const tokens = tokenizeQuery(query);
-  const expanded = new Set(tokens);
-  for (const token of tokens) {
-    expanded.add(stemToken(token));
-  }
-  if (temporalCuePresent(query)) {
-    ["latest", "current", "timeline", "asof", "status"].forEach((t) => expanded.add(t));
-  }
-  if (attributionCuePresent(query)) {
-    ["person", "speaker", "attribution"].forEach((t) => expanded.add(t));
-  }
-  const expansionTail = Array.from(expanded).slice(0, 16).join(" ");
-  if (!expansionTail) return query;
-  return `${query} ${expansionTail}`;
-}
-
-function shouldRetryRecall(query: string, results: MemoryResult[]): { retry: boolean; reasons: string[] } {
-  const reasons: string[] = [];
-  if (!results.length) {
-    reasons.push("no_results");
-    return { retry: true, reasons };
-  }
-
-  const vectorResults = results.filter((r) => {
-    return isVectorRecallResult(r);
-  });
-  if (!vectorResults.length) {
-    reasons.push("no_vector_hits");
-    return { retry: true, reasons };
-  }
-
-  const avgSimilarity = vectorResults.reduce((sum, r) => sum + Number(r.similarity || 0), 0) / vectorResults.length;
-  const maxSimilarity = Math.max(...vectorResults.map((r) => Number(r.similarity || 0)));
-  if (avgSimilarity < 0.48 && maxSimilarity < 0.62) {
-    reasons.push("low_similarity");
-  }
-
-  const coverage = computeEntityCoverage(query, results);
-  if (coverage < 0.35) {
-    reasons.push("low_entity_coverage");
-  }
-
-  if (temporalCuePresent(query)) {
-    const hasTemporalFields = results.some((r) => Boolean(r.createdAt || r.validFrom || r.validUntil));
-    if (!hasTemporalFields) reasons.push("missing_temporal_context");
-  }
-
-  return { retry: reasons.length > 0, reasons };
-}
-
-function mergeRecallResults(primary: MemoryResult[], secondary: MemoryResult[], limit: number): MemoryResult[] {
-  const merged = new Map<string, MemoryResult>();
-  const upsert = (row: MemoryResult) => {
-    const key = String(row.id || `${row.category}:${row.text}`).trim();
-    const current = merged.get(key);
-    if (!current) {
-      merged.set(key, row);
-      return;
-    }
-    if (Number(row.similarity || 0) > Number(current.similarity || 0)) {
-      merged.set(key, row);
-    }
-  };
-  primary.forEach(upsert);
-  secondary.forEach(upsert);
-  return Array.from(merged.values())
-    .sort((a, b) => Number(b.similarity || 0) - Number(a.similarity || 0))
-    .slice(0, Math.max(1, limit));
-}
 
 // ============================================================================
 // Adapter-facing Facade
@@ -2097,51 +1853,6 @@ interface RecallOptions {
 // defined below inside register() as well, so it has access to it.
 // (Moved into register() closure when used)
 
-function formatMemories(memories: MemoryResult[]): string {
-  if (!memories.length) { return ""; }
-
-  // Sort by created_at ascending (oldest first, most recent last = closest to prompt)
-  const sorted = [...memories].sort((a, b) => {
-    if (!a.createdAt && !b.createdAt) { return 0; }
-    if (!a.createdAt) { return -1; }
-    if (!b.createdAt) { return 1; }
-    return a.createdAt.localeCompare(b.createdAt);
-  });
-
-  const graphNodeHits = sorted.filter((m) => isLowInformationEntityNode(m));
-  const regularMemories = sorted.filter((m) => !isLowInformationEntityNode(m));
-
-  const lines = regularMemories.map((m) => {
-    const conf = m.extractionConfidence ?? 0.5;
-    const timestamp = m.createdAt ? ` (${m.createdAt.split("T")[0]})` : "";
-    const domainLabel = Array.isArray(m.domains) && m.domains.length
-      ? ` [domains:${m.domains.join(",")}]`
-      : "";
-    if (conf < 0.4) {
-      return `- [${m.category}]${timestamp}${domainLabel} (uncertain) ${m.text}`;
-    }
-    return `- [${m.category}]${timestamp}${domainLabel} ${m.text}`;
-  });
-
-  if (graphNodeHits.length > 0) {
-    const packed = graphNodeHits
-      .slice(0, 8)
-      .map((m) => `${m.text} (${Math.round((m.similarity || 0) * 100)}%)`)
-      .join(", ");
-    lines.push(`- [graph-node-hits] Entity node references (not standalone facts): ${packed}`);
-  }
-
-  const configuredDomains = getConfiguredDomainIds();
-  const domainGuidance = configuredDomains.length
-    ? `\nDOMAIN RECALL RULE: Use memory_recall options.filters.domain (map of domain->bool). Example: {"technical": true}. Use domain filters only.\nAVAILABLE_DOMAINS: ${configuredDomains.join(", ")}`
-    : "";
-
-  return `<injected_memories>
-AUTOMATED MEMORY SYSTEM: The following memories were automatically retrieved from past conversations. The user did not request this recall and is unaware these are being shown to you. Use them as background context only. Items marked (uncertain) have lower extraction confidence. Dates shown are when the fact was recorded.
-INJECTOR CONFIDENCE RULE: Treat injected memories as hints, not final truth. If the answer depends on personal details and the match is not exact/high-confidence, run memory_recall before answering.${domainGuidance}
-${lines.join("\n")}
-</injected_memories>`;
-}
 
 // ============================================================================
 // Plugin Definition
@@ -2415,7 +2126,7 @@ const quaidPlugin = {
         const toInject = newMemories.slice(0, injectLimit);
         if (!toInject.length) return;
 
-        const formatted = formatMemories(toInject);
+        const formatted = facade.formatMemoriesForInjection(toInject);
         event.prependContext = event.prependContext
           ? `${event.prependContext}\n\n${formatted}`
           : formatted;
@@ -2718,7 +2429,7 @@ ${recallStoreGuidance}`,
             }
 
             // Group by source type for better formatting
-            const vectorResults = results.filter((r) => isVectorRecallResult(r));
+            const vectorResults = results.filter((r) => facade.isVectorRecallResult(r));
             const graphResults = results.filter(r => (r.via || "") === "graph" || r.category === "graph");
             const journalResults = results.filter(r => (r.via || "") === "journal");
             const projectResults = results.filter(r => (r.via || "") === "project");
@@ -3302,7 +3013,7 @@ notify_user(f"📁 Project registered: {project_label}")
               if (fs.existsSync(sessionPath)) {
                 try {
                   const messages = readMessagesFromSessionFile(sessionPath);
-                  const transcript = buildTranscript(messages);
+                  const transcript = facade.buildTranscript(messages);
                   // Return last 10k chars (most recent part of conversation)
                   const truncated = transcript.length > 10000
                     ? "...[truncated]...\n\n" + transcript.slice(-10000)
@@ -3368,7 +3079,7 @@ notify_user(f"📁 Project registered: {project_label}")
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       timeoutMinutes: getCaptureTimeoutMinutes(),
-      isBootstrapOnly: isResetBootstrapOnlyConversation,
+      isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),
       readSessionMessages: (sessionId: string) => readMessagesForTimeoutSession(sessionId),
       listSessionActivity: () => listSessionActivityForTimeout(),
       logger: (msg: string) => {
@@ -3429,46 +3140,28 @@ notify_user(f"📁 Project registered: {project_label}")
         }
       }
 
-      const runRecall = (q: string): Promise<MemoryResult[]> => {
-        return facade.recall({
-          query: q,
-          limit,
-          expandGraph,
-          graphDepth,
-          datastores: selectedStores,
-          routeStores,
-          reasoning,
-          intent,
-          ranking,
-          domain,
-          domainBoost,
-          project,
-          dateFrom,
-          dateTo,
-          docs,
-          datastoreOptions,
-          failOpen: opts.failOpen,
-        });
+      const recallOpts = {
+        query,
+        limit,
+        expandGraph,
+        graphDepth,
+        datastores: selectedStores,
+        routeStores,
+        reasoning,
+        intent,
+        ranking,
+        domain,
+        domainBoost,
+        project,
+        dateFrom,
+        dateTo,
+        docs,
+        datastoreOptions,
+        failOpen: opts.failOpen,
       };
-
-      const primary = await runRecall(query);
-      if (sourceTag !== "tool") {
-        return primary;
-      }
-      const retryDecision = shouldRetryRecall(query, primary);
-      if (!retryDecision.retry) {
-        return primary;
-      }
-      const expanded = buildExpandedRecallQuery(query);
-      if (expanded === query) {
-        return primary;
-      }
-
-      console.log(
-        `[quaid][recall] retry source=${sourceTag} reasons=${retryDecision.reasons.join(",")} expanded="${expanded.slice(0, 160)}"`
-      );
-      const secondary = await runRecall(expanded);
-      return mergeRecallResults(primary, secondary, limit);
+      return sourceTag === "tool"
+        ? facade.recallWithToolRetry(recallOpts)
+        : facade.recall(recallOpts);
     }
 
     // Read messages from a session JSONL file
@@ -3616,7 +3309,7 @@ notify_user(f"📁 Project registered: {project_label}")
         console.log(`[quaid] ${label}: prepend ${allNotes.length} queued memory note(s)`);
       }
 
-      const fullTranscript = buildTranscript(messages);
+      const fullTranscript = facade.buildTranscript(messages);
       if (!fullTranscript.trim() && allNotes.length === 0) {
         console.log(`[quaid] ${label}: empty transcript after filtering`);
         return;
@@ -3624,7 +3317,7 @@ notify_user(f"📁 Project registered: {project_label}")
 
       const hasMeaningfulUserContent = messages.some((m: any) => {
         if (m?.role !== "user") return false;
-        const text = getMessageText(m).trim();
+        const text = facade.getMessageText(m).trim();
         if (!text) return false;
         if (text.startsWith("GatewayRestart:")) return false;
         if (text.startsWith("System:")) return false;
@@ -3832,7 +3525,7 @@ notify_memory_extraction(
         let topicHint = "";
         for (const m of messages) {
           if (m?.role === "user") {
-            const cleaned = getMessageText(m).trim();
+            const cleaned = facade.getMessageText(m).trim();
             if (cleaned && !cleaned.startsWith("GatewayRestart:") && !cleaned.startsWith("System:")) {
               topicHint = cleaned.slice(0, 120);
               break;
@@ -3893,7 +3586,7 @@ notify_memory_extraction(
                   event_message_count: messages.length,
                   conversation_message_count: conversationMessages.length,
                   has_system_compacted_notice: conversationMessages.some(
-                    (m: any) => String(getMessageText(m) || "").toLowerCase().includes("compacted (")
+                    (m: any) => String(facade.getMessageText(m) || "").toLowerCase().includes("compacted (")
                   ),
                 });
                 console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);

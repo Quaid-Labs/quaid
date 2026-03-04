@@ -139,6 +139,8 @@ export type QuaidFacade = {
 
   // --- Recall (routed via orchestrator) ---
   recall: (opts: FacadeRecallOptions) => Promise<MemoryResult[]>;
+  recallWithToolRetry: (opts: FacadeRecallOptions) => Promise<MemoryResult[]>;
+  formatMemoriesForInjection: (memories: MemoryResult[]) => string;
 
   // --- Dynamic K ---
   computeDynamicK: () => number;
@@ -163,6 +165,17 @@ export type QuaidFacade = {
 
   // --- Guidance rendering ---
   renderDatastoreGuidance: () => string;
+
+  // --- Transcript/message utilities ---
+  getMessageText: (message: unknown) => string;
+  buildTranscript: (messages: unknown[]) => string;
+  extractFilePaths: (messages: unknown[]) => string[];
+  summarizeProjectSession: (
+    messages: unknown[],
+    timeoutMs?: number,
+  ) => Promise<{ project_name: string | null; text: string }>;
+  isResetBootstrapOnlyConversation: (messages: unknown[], bootstrapPrompt?: string) => boolean;
+  isVectorRecallResult: (result: MemoryResult) => boolean;
 
   // --- Stubs (typed, not yet implemented) ---
   detectLifecycleSignal: (messages: unknown[]) => LifecycleSignal | null;
@@ -191,6 +204,11 @@ const NODE_COUNT_CACHE_MS = 120_000;
 const DATASTORE_STATS_TIMEOUT_MS = 30_000;
 const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_MEMORY_NOTE_SESSIONS = 200;
+const RECALL_RETRY_STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
+  "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
+  "this", "to", "was", "we", "what", "when", "where", "which", "who", "why", "with", "you", "your",
+]);
 
 export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   // -------------------------------------------------------------------------
@@ -361,7 +379,104 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const candidate = (msg as Record<string, unknown>).content
       ?? (msg as Record<string, unknown>).text
       ?? (msg as Record<string, unknown>).message;
-    return typeof candidate === "string" ? candidate : "";
+    if (typeof candidate === "string") return candidate;
+    if (Array.isArray(candidate)) {
+      return candidate
+        .map((part) => {
+          if (!part || typeof part !== "object") return "";
+          const text = (part as Record<string, unknown>).text;
+          return typeof text === "string" ? text : "";
+        })
+        .join(" ");
+    }
+    return "";
+  }
+
+  function buildTranscript(messages: unknown[]): string {
+    const transcript: string[] = [];
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      const rec = msg as Record<string, unknown>;
+      const role = String(rec.role || "");
+      if (role !== "user" && role !== "assistant") continue;
+      let text = getMessageText(msg);
+      if (!text) continue;
+      text = text.replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "");
+      text = text.replace(/\n?\[message_id:\s*\d+\]/gi, "").trim();
+      if (text.startsWith("GatewayRestart:") || text.startsWith("System:")) continue;
+      if (text.includes('"kind": "restart"')) continue;
+      if (text.includes("HEARTBEAT") && text.includes("HEARTBEAT_OK")) continue;
+      if (text.replace(/[*_<>\/b\s]/g, "").startsWith("HEARTBEAT_OK")) continue;
+      if (!text) continue;
+      transcript.push(`${role === "user" ? "User" : "Alfie"}: ${text}`);
+    }
+    return transcript.join("\n\n");
+  }
+
+  function extractFilePaths(messages: unknown[]): string[] {
+    const paths = new Set<string>();
+    for (const msg of messages) {
+      const text = getMessageText(msg);
+      if (!text) continue;
+      const matches = text.match(/(?:^|\s)((?:\/[\w.-]+)+|(?:[\w.-]+\/)+[\w.-]+)/gm);
+      if (!matches) continue;
+      for (const match of matches) {
+        const candidate = match.trim();
+        if (candidate.includes("/") && !candidate.startsWith("http") && candidate.length < 200) {
+          paths.add(candidate);
+        }
+      }
+    }
+    return Array.from(paths);
+  }
+
+  async function summarizeProjectSession(
+    messages: unknown[],
+    timeoutMs: number = FAST_ROUTER_TIMEOUT_MS,
+  ): Promise<{ project_name: string | null; text: string }> {
+    const transcript = buildTranscript(messages);
+    if (!transcript || transcript.length < 20) {
+      return { project_name: null, text: "" };
+    }
+    try {
+      const llm = await deps.callLLM(
+        `You summarize coding sessions. Given a conversation, identify: 1) What project was being worked on (use one of the available project names, or null if unclear), 2) Brief summary of what changed/was discussed. Available projects: ${projectCatalogReader.getProjectNames().join(", ")}. Use these EXACT names. Respond with JSON only: {"project_name": "name-or-null", "text": "brief summary"}`,
+        `Summarize this session:\n\n${transcript.slice(0, 4000)}`,
+        "fast",
+        300,
+        timeoutMs,
+      );
+      const output = String(llm?.text || "").trim();
+      const jsonMatch = output.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          return {
+            project_name: typeof parsed.project_name === "string" ? parsed.project_name : null,
+            text: typeof parsed.text === "string" ? parsed.text : "",
+          };
+        } catch {}
+      }
+    } catch (err: unknown) {
+      console.error("[quaid][facade] Quick project summary failed:", (err as Error).message);
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+    }
+    return { project_name: null, text: transcript.slice(0, 500) };
+  }
+
+  function isResetBootstrapOnlyConversation(
+    messages: unknown[],
+    bootstrapPrompt: string = "A new session was started via /new or /reset.",
+  ): boolean {
+    const userTexts = messages
+      .filter((msg) => msg && typeof msg === "object" && String((msg as Record<string, unknown>).role || "") === "user")
+      .map((msg) => getMessageText(msg).trim())
+      .filter(Boolean);
+    if (userTexts.length === 0) return false;
+    const nonBootstrapUserTexts = userTexts.filter((text) => !text.startsWith(bootstrapPrompt));
+    return nonBootstrapUserTexts.length === 0;
   }
 
   function detectExplicitLifecycleUserCommand(text: string): "/new" | "/reset" | "/restart" | "/compact" | null {
@@ -846,6 +961,198 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return runRecall(query);
   }
 
+  function isLowInformationEntityNode(result: MemoryResult): boolean {
+    if ((result.via || "vector") === "graph" || result.category === "graph") return false;
+    const category = String(result.category || "").toLowerCase();
+    if (!["person", "concept", "event", "entity"].includes(category)) return false;
+    const text = String(result.text || "").trim();
+    if (!text) return true;
+    const words = text.split(/\s+/).filter(Boolean);
+    if (words.length <= 2 && /^[A-Za-z][A-Za-z0-9'_-]*(?:\s+[A-Za-z][A-Za-z0-9'_-]*)?$/.test(text)) return true;
+    return false;
+  }
+
+  function getConfiguredDomainIds(): string[] {
+    try {
+      const defs = deps.getMemoryConfig()?.retrieval?.domains;
+      if (defs && typeof defs === "object" && !Array.isArray(defs)) {
+        return Object.keys(defs).map((k) => String(k).trim()).filter(Boolean).sort();
+      }
+    } catch {}
+    return [];
+  }
+
+  function normalizeToken(raw: string): string {
+    return String(raw || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+  }
+
+  function stemToken(token: string): string {
+    if (token.length > 6 && token.endsWith("ing")) return token.slice(0, -3);
+    if (token.length > 5 && token.endsWith("ed")) return token.slice(0, -2);
+    if (token.length > 4 && token.endsWith("s")) return token.slice(0, -1);
+    return token;
+  }
+
+  function tokenizeQuery(query: string): string[] {
+    return String(query || "")
+      .split(/\s+/)
+      .map((part) => normalizeToken(part))
+      .map((token) => stemToken(token))
+      .filter((token) => token.length >= 3 && !RECALL_RETRY_STOPWORDS.has(token));
+  }
+
+  function temporalCuePresent(query: string): boolean {
+    const lowered = String(query || "").toLowerCase();
+    const cues = ["latest", "current", "currently", "still", "now", "as of", "when", "last", "updated"];
+    return cues.some((cue) => lowered.includes(cue));
+  }
+
+  function attributionCuePresent(query: string): boolean {
+    const lowered = String(query || "").toLowerCase();
+    const cues = ["who", "whose", "did", "does", "said", "asked", "told", "mentioned", "attributed"];
+    return cues.some((cue) => lowered.includes(cue));
+  }
+
+  function isVectorRecallResult(result: MemoryResult): boolean {
+    const via = String(result.via || "").toLowerCase();
+    return via === "vector" || via === "vector_basic" || via === "vector_technical";
+  }
+
+  function computeEntityCoverage(query: string, results: MemoryResult[]): number {
+    const resultBlob = results
+      .map((r) => `${String(r.text || "").toLowerCase()} ${String(r.sourceName || "").toLowerCase()}`)
+      .join(" ");
+    const tokens = tokenizeQuery(query);
+    if (!tokens.length) return 1;
+    const matched = tokens.filter((token) => resultBlob.includes(token)).length;
+    return matched / tokens.length;
+  }
+
+  function buildExpandedRecallQuery(query: string): string {
+    const tokens = tokenizeQuery(query);
+    const expanded = new Set(tokens);
+    for (const token of tokens) {
+      expanded.add(stemToken(token));
+    }
+    if (temporalCuePresent(query)) {
+      ["latest", "current", "timeline", "asof", "status"].forEach((t) => expanded.add(t));
+    }
+    if (attributionCuePresent(query)) {
+      ["person", "speaker", "attribution"].forEach((t) => expanded.add(t));
+    }
+    const expansionTail = Array.from(expanded).slice(0, 16).join(" ");
+    if (!expansionTail) return query;
+    return `${query} ${expansionTail}`;
+  }
+
+  function shouldRetryRecall(query: string, results: MemoryResult[]): { retry: boolean; reasons: string[] } {
+    const reasons: string[] = [];
+    if (!results.length) {
+      reasons.push("no_results");
+      return { retry: true, reasons };
+    }
+
+    const vectorResults = results.filter((r) => isVectorRecallResult(r));
+    if (!vectorResults.length) {
+      reasons.push("no_vector_hits");
+      return { retry: true, reasons };
+    }
+
+    const avgSimilarity = vectorResults.reduce((sum, r) => sum + Number(r.similarity || 0), 0) / vectorResults.length;
+    const maxSimilarity = Math.max(...vectorResults.map((r) => Number(r.similarity || 0)));
+    if (avgSimilarity < 0.48 && maxSimilarity < 0.62) {
+      reasons.push("low_similarity");
+    }
+
+    const coverage = computeEntityCoverage(query, results);
+    if (coverage < 0.35) {
+      reasons.push("low_entity_coverage");
+    }
+
+    if (temporalCuePresent(query)) {
+      const hasTemporalFields = results.some((r) => Boolean(r.createdAt || r.validFrom || r.validUntil));
+      if (!hasTemporalFields) reasons.push("missing_temporal_context");
+    }
+
+    return { retry: reasons.length > 0, reasons };
+  }
+
+  function mergeRecallResults(primary: MemoryResult[], secondary: MemoryResult[], limit: number): MemoryResult[] {
+    const merged = new Map<string, MemoryResult>();
+    const upsert = (row: MemoryResult) => {
+      const key = String(row.id || `${row.category}:${row.text}`).trim();
+      const current = merged.get(key);
+      if (!current) {
+        merged.set(key, row);
+        return;
+      }
+      if (Number(row.similarity || 0) > Number(current.similarity || 0)) {
+        merged.set(key, row);
+      }
+    };
+    primary.forEach(upsert);
+    secondary.forEach(upsert);
+    return Array.from(merged.values())
+      .sort((a, b) => Number(b.similarity || 0) - Number(a.similarity || 0))
+      .slice(0, Math.max(1, limit));
+  }
+
+  async function recallWithToolRetry(opts: FacadeRecallOptions): Promise<MemoryResult[]> {
+    const primary = await recall(opts);
+    const query = String(opts.query || "");
+    const limit = Math.max(1, Number(opts.limit || 10));
+    const retryDecision = shouldRetryRecall(query, primary);
+    if (!retryDecision.retry) return primary;
+    const expanded = buildExpandedRecallQuery(query);
+    if (expanded === query) return primary;
+    console.log(
+      `[quaid][facade][recall] retry reasons=${retryDecision.reasons.join(",")} expanded="${expanded.slice(0, 160)}"`,
+    );
+    const secondary = await recall({ ...opts, query: expanded });
+    return mergeRecallResults(primary, secondary, limit);
+  }
+
+  function formatMemoriesForInjection(memories: MemoryResult[]): string {
+    if (!memories.length) return "";
+    const sorted = [...memories].sort((a, b) => {
+      if (!a.createdAt && !b.createdAt) return 0;
+      if (!a.createdAt) return -1;
+      if (!b.createdAt) return 1;
+      return a.createdAt.localeCompare(b.createdAt);
+    });
+    const graphNodeHits = sorted.filter((m) => isLowInformationEntityNode(m));
+    const regularMemories = sorted.filter((m) => !isLowInformationEntityNode(m));
+    const lines = regularMemories.map((m) => {
+      const conf = m.extractionConfidence ?? 0.5;
+      const timestamp = m.createdAt ? ` (${m.createdAt.split("T")[0]})` : "";
+      const domainLabel = Array.isArray(m.domains) && m.domains.length
+        ? ` [domains:${m.domains.join(",")}]`
+        : "";
+      if (conf < 0.4) {
+        return `- [${m.category}]${timestamp}${domainLabel} (uncertain) ${m.text}`;
+      }
+      return `- [${m.category}]${timestamp}${domainLabel} ${m.text}`;
+    });
+    if (graphNodeHits.length > 0) {
+      const packed = graphNodeHits
+        .slice(0, 8)
+        .map((m) => `${m.text} (${Math.round((m.similarity || 0) * 100)}%)`)
+        .join(", ");
+      lines.push(`- [graph-node-hits] Entity node references (not standalone facts): ${packed}`);
+    }
+    const configuredDomains = getConfiguredDomainIds();
+    const domainGuidance = configuredDomains.length
+      ? `\nDOMAIN RECALL RULE: Use memory_recall options.filters.domain (map of domain->bool). Example: {"technical": true}. Use domain filters only.\nAVAILABLE_DOMAINS: ${configuredDomains.join(", ")}`
+      : "";
+    return `<injected_memories>
+AUTOMATED MEMORY SYSTEM: The following memories were automatically retrieved from past conversations. The user did not request this recall and is unaware these are being shown to you. Use them as background context only. Items marked (uncertain) have lower extraction confidence. Dates shown are when the fact was recorded.
+INJECTOR CONFIDENCE RULE: Treat injected memories as hints, not final truth. If the answer depends on personal details and the match is not exact/high-confidence, run memory_recall before answering.${domainGuidance}
+${lines.join("\n")}
+</injected_memories>`;
+  }
+
   // -------------------------------------------------------------------------
   // Stub helper
   // -------------------------------------------------------------------------
@@ -907,6 +1214,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
     // Recall
     recall,
+    recallWithToolRetry,
+    formatMemoriesForInjection,
 
     // Dynamic K
     computeDynamicK,
@@ -931,6 +1240,12 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
     // Guidance
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
+    getMessageText,
+    buildTranscript,
+    extractFilePaths,
+    summarizeProjectSession,
+    isResetBootstrapOnlyConversation,
+    isVectorRecallResult,
 
     // Stubs
     detectLifecycleSignal,
