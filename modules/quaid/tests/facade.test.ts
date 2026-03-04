@@ -576,6 +576,12 @@ describe("QuaidFacade", () => {
     expect(facade.shouldProcessLifecycleSignal(sessionId, signal, 60_000, 60_000)).toBe(true);
   });
 
+  it("isInternalMaintenancePrompt detects janitor/review internal prompts", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(facade.isInternalMaintenancePrompt("Review batch #42 and respond with a JSON array only:")).toBe(true);
+    expect(facade.isInternalMaintenancePrompt("Please remember my dog is Pixel")).toBe(false);
+  });
+
   // -----------------------------------------------------------------------
   // Stubs throw "not implemented"
   // -----------------------------------------------------------------------

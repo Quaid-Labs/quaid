@@ -817,7 +817,7 @@ function getAllConversationMessages(messages: any[]): any[] {
     if (!text) return false;
     // Filter synthetic internal extraction traffic that can leak into event.messages.
     if (text.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
-    if (isInternalMaintenancePrompt(text)) return false;
+    if (facade.isInternalMaintenancePrompt(text)) return false;
     if (msg.role === "assistant") {
       const compact = text.replace(/\s+/g, " ").trim();
       if (/^\{\s*"facts"\s*:\s*\[/.test(compact)) {
@@ -925,31 +925,6 @@ notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extra
   if (typeof (state.timer as any).unref === "function") {
     (state.timer as any).unref();
   }
-}
-
-function isInternalMaintenancePrompt(text: string): boolean {
-  const t = String(text || "").trim();
-  if (!t) return false;
-  const s = t.toLowerCase();
-  const markers = [
-    "review batch",
-    "review the following",
-    "you are reviewing",
-    "you are checking",
-    "respond with a json array",
-    "json array only:",
-    "fact a:",
-    "fact b:",
-    "log id:",
-    "similarity:",
-    "llm_reasoning",
-    "candidate duplicate pairs",
-    "dedup rejections",
-    "journal entries to decide",
-    "pending soul snippets",
-    "are these two statements the same fact",
-  ];
-  return markers.some((m) => s.includes(m));
 }
 
 function resolveSessionKeyForCompaction(sessionId?: string): string | null {
@@ -1951,7 +1926,7 @@ const quaidPlugin = {
           return;
         }
         // Skip janitor/reviewer internal prompts so maintenance flows never trigger auto-injection.
-        if (isInternalMaintenancePrompt(query)) {
+        if (facade.isInternalMaintenancePrompt(query)) {
           return;
         }
 

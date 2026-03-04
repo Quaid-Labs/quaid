@@ -712,7 +712,7 @@ function getAllConversationMessages(messages) {
     const text = facade.getMessageText(msg).trim();
     if (!text) return false;
     if (text.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
-    if (isInternalMaintenancePrompt(text)) return false;
+    if (facade.isInternalMaintenancePrompt(text)) return false;
     if (msg.role === "assistant") {
       const compact = text.replace(/\s+/g, " ").trim();
       if (/^\{\s*"facts"\s*:\s*\[/.test(compact)) {
@@ -812,30 +812,6 @@ notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extra
   if (typeof state.timer.unref === "function") {
     state.timer.unref();
   }
-}
-function isInternalMaintenancePrompt(text) {
-  const t = String(text || "").trim();
-  if (!t) return false;
-  const s = t.toLowerCase();
-  const markers = [
-    "review batch",
-    "review the following",
-    "you are reviewing",
-    "you are checking",
-    "respond with a json array",
-    "json array only:",
-    "fact a:",
-    "fact b:",
-    "log id:",
-    "similarity:",
-    "llm_reasoning",
-    "candidate duplicate pairs",
-    "dedup rejections",
-    "journal entries to decide",
-    "pending soul snippets",
-    "are these two statements the same fact"
-  ];
-  return markers.some((m) => s.includes(m));
 }
 function resolveSessionKeyForCompaction(sessionId) {
   try {
@@ -1637,7 +1613,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
           return;
         }
-        if (isInternalMaintenancePrompt(query)) {
+        if (facade.isInternalMaintenancePrompt(query)) {
           return;
         }
         const ACKNOWLEDGMENTS = /^(ok|okay|yes|no|sure|thanks|thank you|got it|sounds good|perfect|great|cool|alright|yep|nope|right|correct|agreed|absolutely|definitely|nice|good|fine|hm+|ah+|oh+)\s*[.!?]?$/i;

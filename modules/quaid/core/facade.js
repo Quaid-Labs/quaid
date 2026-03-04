@@ -516,6 +516,29 @@ ${transcript.slice(0, 4e3)}`,
       seenAt: Date.now()
     });
   }
+  function isInternalMaintenancePrompt(text) {
+    const normalized = String(text || "").trim().toLowerCase();
+    if (!normalized) return false;
+    const markers = [
+      "review batch",
+      "review the following",
+      "you are reviewing",
+      "you are checking",
+      "respond with a json array",
+      "json array only:",
+      "fact a:",
+      "fact b:",
+      "log id:",
+      "similarity:",
+      "llm_reasoning",
+      "candidate duplicate pairs",
+      "dedup rejections",
+      "journal entries to decide",
+      "pending soul snippets",
+      "are these two statements the same fact"
+    ];
+    return markers.some((marker) => normalized.includes(marker));
+  }
   function computeDynamicK() {
     const nodeCount = getActiveNodeCount();
     if (nodeCount < 10) return 5;
@@ -1147,7 +1170,8 @@ ${lines.join("\n")}
       }
       return null;
     },
-    queueDelayedRequest: () => notImplemented("queueDelayedRequest")
+    queueDelayedRequest: () => notImplemented("queueDelayedRequest"),
+    isInternalMaintenancePrompt
   };
 }
 export {

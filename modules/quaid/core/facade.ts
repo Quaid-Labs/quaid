@@ -219,6 +219,7 @@ export type QuaidFacade = {
   maybeRunMaintenance: (sessionId: string) => never;
   getJanitorHealthIssue: () => string | null;
   queueDelayedRequest: (request: unknown) => never;
+  isInternalMaintenancePrompt: (text: string) => boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -764,6 +765,30 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       signature: `hook:${label}`,
       seenAt: Date.now(),
     });
+  }
+
+  function isInternalMaintenancePrompt(text: string): boolean {
+    const normalized = String(text || "").trim().toLowerCase();
+    if (!normalized) return false;
+    const markers = [
+      "review batch",
+      "review the following",
+      "you are reviewing",
+      "you are checking",
+      "respond with a json array",
+      "json array only:",
+      "fact a:",
+      "fact b:",
+      "log id:",
+      "similarity:",
+      "llm_reasoning",
+      "candidate duplicate pairs",
+      "dedup rejections",
+      "journal entries to decide",
+      "pending soul snippets",
+      "are these two statements the same fact",
+    ];
+    return markers.some((marker) => normalized.includes(marker));
   }
 
   function computeDynamicK(): number {
@@ -1465,5 +1490,6 @@ ${lines.join("\n")}
       return null;
     },
     queueDelayedRequest: () => notImplemented("queueDelayedRequest"),
+    isInternalMaintenancePrompt,
   };
 }
