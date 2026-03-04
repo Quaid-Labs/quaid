@@ -334,6 +334,7 @@ function createQuaidFacade(deps) {
     stats: () => datastoreBridge.stats(),
     store: (args) => datastoreBridge.store(args),
     forget: (args) => datastoreBridge.forget(args),
+    searchBySession: (sessionId, limit = 20) => datastoreBridge.search(["*", "--session-id", sessionId, "--owner", deps.resolveOwner(), "--limit", String(limit)]),
     emitEvent: (command, args) => deps.execEvents(command, args),
     recall,
     computeDynamicK,

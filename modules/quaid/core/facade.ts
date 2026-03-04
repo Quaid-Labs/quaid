@@ -115,6 +115,7 @@ export type QuaidFacade = {
   // --- Write / delete ---
   store: (args: string[]) => Promise<string>;
   forget: (args: string[]) => Promise<string>;
+  searchBySession: (sessionId: string, limit?: number) => Promise<string>;
 
   // --- Events ---
   emitEvent: (command: string, args: string[]) => Promise<string>;
@@ -693,6 +694,15 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     stats: () => datastoreBridge.stats(),
     store: (args) => datastoreBridge.store(args),
     forget: (args) => datastoreBridge.forget(args),
+    searchBySession: (sessionId, limit = 20) => datastoreBridge.search([
+      "*",
+      "--session-id",
+      sessionId,
+      "--owner",
+      deps.resolveOwner(),
+      "--limit",
+      String(limit),
+    ]),
 
     // Events
     emitEvent: (command, args) => deps.execEvents(command, args),
