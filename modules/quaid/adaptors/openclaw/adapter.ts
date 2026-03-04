@@ -551,17 +551,6 @@ function runStartupSelfCheck(): void {
   }
 }
 
-function resolveExtractionTrigger(label: string): ExtractionTrigger {
-  const normalized = String(label || "").trim().toLowerCase();
-  if (!normalized) { return "unknown"; }
-  if (normalized.includes("compact")) { return "compaction"; }
-  if (normalized.includes("recover")) { return "recovery"; }
-  if (normalized.includes("timeout")) { return "timeout"; }
-  if (normalized.includes("new")) { return "new"; }
-  if (normalized.includes("reset")) { return "reset"; }
-  return "unknown";
-}
-
 // Config schema
 const configSchema = Type.Object({
   autoCapture: Type.Optional(Type.Boolean({ default: false })),
@@ -3207,7 +3196,7 @@ notify_user(f"📁 Project registered: {project_label}")
       console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${transcriptForExtraction.length} chars`);
 
       if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
-        const triggerType = resolveExtractionTrigger(label);
+        const triggerType = facade.resolveExtractionTrigger(label);
         const suppressBacklogNotify = facade.isBacklogLifecycleReplay(
           messages,
           triggerType,
@@ -3240,7 +3229,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const journalConfig = getMemoryConfig().docs?.journal || {};
       const journalEnabled = isSystemEnabled("journal") && journalConfig.enabled !== false;
       const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
-      const triggerLabel = resolveExtractionTrigger(label);
+      const triggerLabel = facade.resolveExtractionTrigger(label);
       let extracted: any;
       try {
         extracted = await callExtractPipeline({
@@ -3310,7 +3299,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
 
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
-      const triggerType = resolveExtractionTrigger(label);
+      const triggerType = facade.resolveExtractionTrigger(label);
       const suppressBacklogNotify = facade.isBacklogLifecycleReplay(
         messages,
         triggerType,

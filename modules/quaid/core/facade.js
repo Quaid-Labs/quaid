@@ -539,6 +539,16 @@ ${transcript.slice(0, 4e3)}`,
     ];
     return markers.some((marker) => normalized.includes(marker));
   }
+  function resolveExtractionTrigger(label) {
+    const normalized = String(label || "").trim().toLowerCase();
+    if (!normalized) return "unknown";
+    if (normalized.includes("compact")) return "compaction";
+    if (normalized.includes("recover")) return "recovery";
+    if (normalized.includes("timeout")) return "timeout";
+    if (normalized.includes("new")) return "new";
+    if (normalized.includes("reset")) return "reset";
+    return "unknown";
+  }
   function computeDynamicK() {
     const nodeCount = getActiveNodeCount();
     if (nodeCount < 10) return 5;
@@ -1171,7 +1181,8 @@ ${lines.join("\n")}
       return null;
     },
     queueDelayedRequest: () => notImplemented("queueDelayedRequest"),
-    isInternalMaintenancePrompt
+    isInternalMaintenancePrompt,
+    resolveExtractionTrigger
   };
 }
 export {
