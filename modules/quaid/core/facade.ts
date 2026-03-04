@@ -151,7 +151,7 @@ export type QuaidFacade = {
   detectLifecycleSignal: (messages: unknown[]) => never;
   processLifecycleEvent: (signal: unknown, context: unknown) => never;
   maybeRunMaintenance: (sessionId: string) => never;
-  getJanitorHealthIssue: () => never;
+  getJanitorHealthIssue: () => string | null;
   queueDelayedRequest: (request: unknown) => never;
 };
 
@@ -740,7 +740,23 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     detectLifecycleSignal: () => notImplemented("detectLifecycleSignal"),
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
-    getJanitorHealthIssue: () => notImplemented("getJanitorHealthIssue"),
+    getJanitorHealthIssue: () => {
+      const stats = getDatastoreStatsSync(60 * 1000);
+      const completedAt = String(stats?.last_janitor_completed_at || "").trim();
+      if (!completedAt) {
+        return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
+      }
+      const ts = Date.parse(completedAt);
+      if (Number.isNaN(ts)) return null;
+      const hours = (Date.now() - ts) / (1000 * 60 * 60);
+      if (hours > 72) {
+        return `[Quaid] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
+      }
+      if (hours > 48) {
+        return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
+      }
+      return null;
+    },
     queueDelayedRequest: () => notImplemented("queueDelayedRequest"),
   };
 }

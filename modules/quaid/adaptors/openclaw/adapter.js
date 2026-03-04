@@ -89,11 +89,6 @@ for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECT
     console.error(`[quaid][startup] failed to create runtime dir: ${p}`, err?.message || String(err));
   }
 }
-let _cachedNodeCount = null;
-let _nodeCountTimestamp = 0;
-const NODE_COUNT_CACHE_MS = 5 * 60 * 1e3;
-let _cachedDatastoreStats = null;
-let _datastoreStatsTimestamp = 0;
 let _memoryConfigErrorLogged = false;
 let _memoryConfigMtimeMs = -1;
 let _memoryConfigPath = "";
@@ -107,9 +102,6 @@ function _envTimeoutMs(name, fallbackMs) {
 const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOUT_MS", 3e5);
 const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 3e5);
 const QUICK_PROJECT_SUMMARY_TIMEOUT_MS = _envTimeoutMs("QUAID_PROJECT_SUMMARY_TIMEOUT_MS", 6e4);
-const FAST_ROUTER_TIMEOUT_MS = _envTimeoutMs("QUAID_ROUTER_FAST_TIMEOUT_MS", 45e3);
-const DEEP_ROUTER_TIMEOUT_MS = _envTimeoutMs("QUAID_ROUTER_DEEP_TIMEOUT_MS", 6e4);
-const DATASTORE_STATS_TIMEOUT_MS = _envTimeoutMs("QUAID_DATASTORE_STATS_TIMEOUT_MS", 5e3);
 function buildPythonEnv(extra = {}) {
   const sep = process.platform === "win32" ? ";" : ":";
   const existing = String(process.env.PYTHONPATH || "").trim();
@@ -122,61 +114,6 @@ function buildPythonEnv(extra = {}) {
     PYTHONPATH: pyPath,
     ...extra
   };
-}
-function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
-  const now = Date.now();
-  if (now - _datastoreStatsTimestamp < maxAgeMs) {
-    return _cachedDatastoreStats;
-  }
-  try {
-    const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
-      encoding: "utf-8",
-      timeout: DATASTORE_STATS_TIMEOUT_MS,
-      env: buildPythonEnv()
-    });
-    const parsed = JSON.parse(output);
-    if (!parsed || typeof parsed !== "object") {
-      _cachedDatastoreStats = null;
-      _datastoreStatsTimestamp = now;
-      return null;
-    }
-    _cachedDatastoreStats = parsed;
-    _datastoreStatsTimestamp = now;
-    return parsed;
-  } catch (err) {
-    const msg = `[quaid] datastore stats read failed: ${err?.message || String(err)}`;
-    if (isFailHardEnabled()) {
-      const cause = err instanceof Error ? err : new Error(String(err));
-      throw new Error(msg, { cause });
-    }
-    _cachedDatastoreStats = null;
-    _datastoreStatsTimestamp = now;
-    console.warn(msg);
-    return null;
-  }
-}
-function getActiveNodeCount() {
-  const now = Date.now();
-  if (_cachedNodeCount !== null && now - _nodeCountTimestamp < NODE_COUNT_CACHE_MS) {
-    return _cachedNodeCount;
-  }
-  const stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
-  const active = Number(stats?.by_status?.active ?? 0);
-  if (Number.isFinite(active) && active > 0) {
-    _cachedNodeCount = active;
-    _nodeCountTimestamp = now;
-    return _cachedNodeCount;
-  }
-  if (_cachedNodeCount === null && isFailHardEnabled()) {
-    throw new Error("[quaid] unable to derive active node count under failHard");
-  }
-  return _cachedNodeCount ?? 100;
-}
-function computeDynamicK() {
-  const nodeCount = getActiveNodeCount();
-  if (nodeCount < 10) return 5;
-  const k = Math.round(11.5 * Math.log(nodeCount) - 61.7);
-  return Math.max(5, Math.min(k, 40));
 }
 let _memoryConfig = null;
 function _memoryConfigCandidates() {
@@ -1530,29 +1467,7 @@ function queueDelayedLlmRequest(message, kind = "janitor", priority = "normal") 
   );
 }
 function getJanitorHealthIssue() {
-  try {
-    const stats = getDatastoreStatsSync(60 * 1e3);
-    const completedAt = String(stats?.last_janitor_completed_at || "").trim();
-    if (!completedAt) {
-      return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
-    }
-    const ts = Date.parse(completedAt);
-    if (Number.isNaN(ts)) return null;
-    const hours = (Date.now() - ts) / (1e3 * 60 * 60);
-    if (hours > 72) {
-      return `[Quaid] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
-    }
-    if (hours > 48) {
-      return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
-    }
-    return null;
-  } catch (err) {
-    if (isFailHardEnabled()) {
-      throw new Error("[quaid] Failed to evaluate janitor health under failHard", { cause: err });
-    }
-    console.warn(`[quaid] Failed to evaluate janitor health: ${String(err?.message || err)}`);
-    return null;
-  }
+  return facade.getJanitorHealthIssue();
 }
 function maybeQueueJanitorHealthAlert() {
   const issue = getJanitorHealthIssue();

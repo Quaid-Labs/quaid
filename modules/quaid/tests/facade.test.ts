@@ -288,9 +288,10 @@ describe("QuaidFacade", () => {
     expect(() => facade.maybeRunMaintenance("sess1")).toThrow("not yet implemented");
   });
 
-  it("getJanitorHealthIssue throws not implemented", () => {
+  it("getJanitorHealthIssue returns null/string status", () => {
     const facade = createQuaidFacade(makeMockDeps());
-    expect(() => facade.getJanitorHealthIssue()).toThrow("not yet implemented");
+    const result = facade.getJanitorHealthIssue();
+    expect(result === null || typeof result === "string").toBe(true);
   });
 
   it("queueDelayedRequest throws not implemented", () => {
