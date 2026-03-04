@@ -843,7 +843,7 @@ function getAllConversationMessages(messages: any[]): any[] {
 }
 
 function detectLifecycleCommandSignal(messages: any[]): "ResetSignal" | "CompactionSignal" | null {
-  const signal = detectLifecycleSignal(messages);
+  const signal = facade.detectLifecycleSignal(messages);
   return signal?.label || null;
 }
 
@@ -989,49 +989,6 @@ function isBacklogLifecycleReplay(
     return !hasExplicitLifecycleUserCommand(messages);
   }
   return latestTs < (Math.min(nowMs, ADAPTER_BOOT_TIME_MS) - BACKLOG_NOTIFY_STALE_MS);
-}
-
-function detectLifecycleSignal(messages: any[]): {
-  label: "ResetSignal" | "CompactionSignal";
-  source: "user_command" | "system_notice" | "hook";
-  signature: string;
-} | null {
-  if (!Array.isArray(messages) || messages.length === 0) return null;
-  // Scan a wider tail window because before_agent_start may arrive after
-  // additional system/assistant messages and push the lifecycle command back.
-  const tail = messages.slice(-8);
-  for (let i = tail.length - 1; i >= 0; i--) {
-    const msg = tail[i];
-    const text = getMessageText(msg).trim();
-    if (!text) continue;
-    const normalized = text
-      .replace(/\[\[[^\]]+\]\]\s*/g, "")
-      .replace(/^\[[^\]]+\]\s*/, "")
-      .trim();
-    const lower = normalized.toLowerCase();
-
-    if (msg?.role === "user") {
-      const command = detectExplicitLifecycleUserCommand(text);
-      if (command === "/new" || command === "/reset" || command === "/restart") {
-        return { label: "ResetSignal", source: "user_command", signature: `cmd:${command}` };
-      }
-      if (command === "/compact") {
-        return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}` };
-      }
-    }
-
-    // OpenClaw auto-compaction notice (no slash command is emitted).
-    // Example: "[... GMT+8] Compacted (37k → 5.0k) • Context 5.0k/200k (2%)"
-    if (msg?.role === "system") {
-      const hasCompacted = /\bcompacted\b/i.test(normalized);
-      const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
-      const hasContext = /\bcontext\b/i.test(normalized);
-      if (hasCompacted && (hasDelta || hasContext)) {
-        return { label: "CompactionSignal", source: "system_notice", signature: `system:${normalized.toLowerCase()}` };
-      }
-    }
-  }
-  return null;
 }
 
 function lifecycleSignalKey(sessionId: string, label: "ResetSignal" | "CompactionSignal"): string {
@@ -2607,7 +2564,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
           const messages = readMessagesFromSessionFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
-          const detail = detectLifecycleSignal(messages);
+          const detail = facade.detectLifecycleSignal(messages);
           if (!detail) return;
           const sessionId =
             parseSessionIdFromTranscriptPath(sessionFile) ||
@@ -4400,7 +4357,7 @@ notify_memory_extraction(
 export default quaidPlugin;
 export const __test = {
   detectLifecycleCommandSignal,
-  detectLifecycleSignal,
+  detectLifecycleSignal: (messages: any[]) => facade.detectLifecycleSignal(messages),
   shouldProcessLifecycleSignal,
   shouldEmitExtractionNotify,
   latestMessageTimestampMs,

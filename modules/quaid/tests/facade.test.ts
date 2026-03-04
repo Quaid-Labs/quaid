@@ -319,9 +319,28 @@ describe("QuaidFacade", () => {
   // Stubs throw "not implemented"
   // -----------------------------------------------------------------------
 
-  it("detectLifecycleSignal throws not implemented", () => {
+  it("detectLifecycleSignal identifies reset user command", () => {
     const facade = createQuaidFacade(makeMockDeps());
-    expect(() => facade.detectLifecycleSignal([])).toThrow("not yet implemented");
+    const signal = facade.detectLifecycleSignal([
+      { role: "user", content: "/new" },
+    ]);
+    expect(signal).toEqual({
+      label: "ResetSignal",
+      source: "user_command",
+      signature: "cmd:/new",
+    });
+  });
+
+  it("detectLifecycleSignal identifies system compaction notice", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const signal = facade.detectLifecycleSignal([
+      { role: "system", content: "Compacted (37k -> 5.0k) Context 5.0k/200k" },
+    ]);
+    expect(signal).toEqual({
+      label: "CompactionSignal",
+      source: "system_notice",
+      signature: "system:compacted (37k -> 5.0k) context 5.0k/200k",
+    });
   });
 
   it("processLifecycleEvent throws not implemented", () => {
