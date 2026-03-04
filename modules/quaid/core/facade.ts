@@ -296,12 +296,6 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   }
 
   function computeDynamicK(): number {
-    const stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
-    const recommended = Number(stats?.recommended_recall_k);
-    if (Number.isFinite(recommended) && recommended > 0) {
-      return Math.max(5, Math.min(Math.round(recommended), 40));
-    }
-    // Backward-compatible fallback for older datastore versions.
     const nodeCount = getActiveNodeCount();
     if (nodeCount < 10) return 5;
     const k = Math.round(11.5 * Math.log(nodeCount) - 61.7);
