@@ -1358,34 +1358,6 @@ async function callExtractPipeline(opts) {
     }
   }
 }
-async function emitEvent(name, payload, dispatch = "auto") {
-  const args = [
-    "emit",
-    "--name",
-    name,
-    "--payload",
-    JSON.stringify(payload || {}),
-    "--source",
-    "openclaw_adapter",
-    "--dispatch",
-    dispatch
-  ];
-  const out = await _spawnWithTimeout(EVENTS_SCRIPT, "emit", args.slice(1), "events", {
-    QUAID_HOME: WORKSPACE,
-    CLAWDBOT_WORKSPACE: WORKSPACE
-  }, EVENTS_EMIT_TIMEOUT_MS);
-  let parsed = null;
-  try {
-    parsed = JSON.parse(out || "{}");
-  } catch (err) {
-    const msg = String(err?.message || err);
-    throw new Error(`[quaid] events emit returned invalid JSON: ${msg}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("[quaid] events emit returned non-object payload");
-  }
-  return parsed;
-}
 function spawnNotifyScript(scriptBody) {
   const tmpFile = path.join(QUAID_NOTIFY_DIR, `notify-${Date.now()}-${Math.random().toString(36).slice(2)}.py`);
   const notifyLogFile = path.join(QUAID_LOGS_DIR, "notify-worker.log");
@@ -1693,7 +1665,7 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
   try {
     console.log(`[quaid] ${label}: dispatching docs ingest event...`);
     const startTime = Date.now();
-    const out = await emitEvent(
+    const out = await facade.emitEvent(
       "docs.ingest_transcript",
       {
         transcript_path: tmpPath,

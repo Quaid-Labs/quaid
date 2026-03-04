@@ -335,7 +335,21 @@ function createQuaidFacade(deps) {
     store: (args) => datastoreBridge.store(args),
     forget: (args) => datastoreBridge.forget(args),
     searchBySession: (sessionId, limit = 20) => datastoreBridge.search(["*", "--session-id", sessionId, "--owner", deps.resolveOwner(), "--limit", String(limit)]),
-    emitEvent: (command, args) => deps.execEvents(command, args),
+    emitEvent: async (name, payload, dispatch = "auto") => {
+      const args = ["--name", name, "--payload", JSON.stringify(payload || {}), "--source", "openclaw_adapter", "--dispatch", dispatch];
+      const out = await deps.execEvents("emit", args);
+      let parsed = null;
+      try {
+        parsed = JSON.parse(out || "{}");
+      } catch (err) {
+        const msg = String(err?.message || err);
+        throw new Error(`[quaid][facade] events emit returned invalid JSON: ${msg}`);
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("[quaid][facade] events emit returned non-object payload");
+      }
+      return parsed;
+    },
     recall,
     computeDynamicK,
     getActiveNodeCount,
