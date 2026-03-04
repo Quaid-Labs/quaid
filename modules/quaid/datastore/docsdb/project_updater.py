@@ -28,6 +28,7 @@ from datastore.docsdb.updater import update_doc_from_diffs, update_doc_from_tran
 from lib.delayed_requests import queue_delayed_request
 from lib.runtime_context import get_workspace_dir
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
+PROJECT_HISTORY_FILENAME = "PROJECT.log"
 
 def _workspace() -> Path:
     return get_workspace_dir()
@@ -509,6 +510,19 @@ def append_project_logs(
         text = session_prefix_re.sub("", text)
         return re.sub(r"\s+", " ", text).strip()
 
+    def _append_project_history_log(project_md_path: Path, entries: List[str]) -> int:
+        """Append normalized project log entries to PROJECT.log (no dedupe/folding)."""
+        normalized = [_normalize_log_entry(x) for x in entries]
+        normalized = [x for x in normalized if x]
+        if not normalized:
+            return 0
+        log_path = project_md_path.with_name(PROJECT_HISTORY_FILENAME)
+        ts = datetime.now().isoformat(timespec="seconds")
+        lines = [f"- [{ts}] {item}" for item in normalized]
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        return len(lines)
+
     for project_name, raw_entries in project_logs.items():
         metrics["projects_seen"] += 1
         entries = [_normalize_log_entry(e) for e in (raw_entries or [])]
@@ -529,6 +543,9 @@ def append_project_logs(
             metrics["projects_missing_file"] += 1
             print(f"[project-log] missing PROJECT.md: {project_md}")
             continue
+
+        if not dry_run:
+            _append_project_history_log(project_md, raw_entries or [])
 
         lines = [f"- {today} [{trigger}] {entry}" for entry in entries]
         content = project_md.read_text()

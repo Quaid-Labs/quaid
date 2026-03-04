@@ -318,6 +318,7 @@ class TestAppendProjectLogs:
 
         tmp_path = setup_env
         project_md = tmp_path / "projects" / "test-project" / "PROJECT.md"
+        project_log = tmp_path / "projects" / "test-project" / "PROJECT.log"
 
         metrics = append_project_logs(
             {
@@ -340,6 +341,10 @@ class TestAppendProjectLogs:
         content = project_md.read_text()
         assert "- 2026-03-03 [Compaction] Updated README links" in content
         assert "- 2026-03-03 [Compaction] Added API docs" in content
+        # PROJECT.log keeps full append-only history (including duplicates).
+        history = project_log.read_text()
+        assert history.count("Updated README links") == 2
+        assert "Added API docs" in history
 
     def test_appends_into_existing_project_log_block(self, setup_env):
         from datastore.docsdb.project_updater import append_project_logs

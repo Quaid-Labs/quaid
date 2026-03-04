@@ -2767,7 +2767,7 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
           if (homeDir) {
             const projectMdPath = path.join(WORKSPACE, homeDir, "PROJECT.md");
             if (fs.existsSync(projectMdPath)) {
-              const md = fs.readFileSync(projectMdPath, "utf-8").replace(/\s+/g, " ").trim().slice(0, 500);
+              const md = fs.readFileSync(projectMdPath, "utf-8").trim();
               if (md) {
                 results.unshift({
                   text: `PROJECT.md (${inferredProject}): ${md}`,
@@ -2784,7 +2784,7 @@ const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
       }
       if (results.length === 0) {
         results.push({
-          text: out.replace(/\s+/g, " ").slice(0, 280),
+          text: out.trim(),
           category: "project",
           similarity: 0.55,
           via: "project",
