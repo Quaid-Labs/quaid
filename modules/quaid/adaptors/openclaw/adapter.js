@@ -1448,10 +1448,22 @@ async function emitProjectEvent(messages, trigger, sessionId) {
     }
   }
 }
+function preprocessTranscriptText(text) {
+  return String(text || "").replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "").replace(/\n?\[message_id:\s*\d+\]/gi, "").trim();
+}
+function shouldSkipTranscriptText(_role, text) {
+  if (!text) return true;
+  if (text.startsWith("GatewayRestart:") || text.startsWith("System:")) return true;
+  if (text.includes('"kind": "restart"')) return true;
+  if (text.includes("HEARTBEAT") && text.includes("HEARTBEAT_OK")) return true;
+  if (text.replace(/[*_<>\/b\s]/g, "").startsWith("HEARTBEAT_OK")) return true;
+  return false;
+}
 const facade = createQuaidFacade({
   workspace: WORKSPACE,
   pluginRoot: PYTHON_PLUGIN_ROOT,
   dbPath: DB_PATH,
+  eventSource: "openclaw_adapter",
   execPython: createPythonBridgeExecutor({
     scriptPath: PYTHON_SCRIPT,
     dbPath: DB_PATH,
@@ -1483,7 +1495,12 @@ const facade = createQuaidFacade({
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
-  resolveOwner: () => resolveOwner()
+  resolveOwner: () => resolveOwner(),
+  transcriptFormat: {
+    preprocessText: preprocessTranscriptText,
+    shouldSkipText: shouldSkipTranscriptText,
+    speakerLabel: (role) => role === "user" ? "User" : "Alfie"
+  }
 });
 const recallStoreGuidance = facade.renderDatastoreGuidance();
 const getProjectNames = () => facade.getProjectNames();

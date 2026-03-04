@@ -1700,6 +1700,21 @@ type MemoryResult = {
 type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
 type DomainFilter = Record<string, boolean>;
 
+function preprocessTranscriptText(text: string): string {
+  return String(text || "")
+    .replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "")
+    .replace(/\n?\[message_id:\s*\d+\]/gi, "")
+    .trim();
+}
+
+function shouldSkipTranscriptText(_role: "user" | "assistant", text: string): boolean {
+  if (!text) return true;
+  if (text.startsWith("GatewayRestart:") || text.startsWith("System:")) return true;
+  if (text.includes('"kind": "restart"')) return true;
+  if (text.includes("HEARTBEAT") && text.includes("HEARTBEAT_OK")) return true;
+  if (text.replace(/[*_<>\/b\s]/g, "").startsWith("HEARTBEAT_OK")) return true;
+  return false;
+}
 
 // ============================================================================
 // Adapter-facing Facade
@@ -1711,6 +1726,7 @@ const facade = createQuaidFacade({
   workspace: WORKSPACE,
   pluginRoot: PYTHON_PLUGIN_ROOT,
   dbPath: DB_PATH,
+  eventSource: "openclaw_adapter",
   execPython: createPythonBridgeExecutor({
     scriptPath: PYTHON_SCRIPT,
     dbPath: DB_PATH,
@@ -1743,6 +1759,11 @@ const facade = createQuaidFacade({
   isSystemEnabled,
   isFailHardEnabled,
   resolveOwner: () => resolveOwner(),
+  transcriptFormat: {
+    preprocessText: preprocessTranscriptText,
+    shouldSkipText: shouldSkipTranscriptText,
+    speakerLabel: (role: "user" | "assistant") => role === "user" ? "User" : "Alfie",
+  },
 });
 const recallStoreGuidance = facade.renderDatastoreGuidance();
 const getProjectNames = () => facade.getProjectNames();

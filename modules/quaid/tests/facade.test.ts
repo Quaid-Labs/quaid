@@ -24,6 +24,7 @@ function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps
     workspace: "/tmp/test-workspace",
     pluginRoot: "/tmp/test-workspace/modules/quaid",
     dbPath: "/tmp/test-memory.db",
+    eventSource: "openclaw_adapter",
     execPython: vi.fn(async () => "{}"),
     execExtractPipeline: vi.fn(async () => "{}"),
     execDocsRag: vi.fn(async () => ""),
@@ -43,6 +44,21 @@ function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps
     isSystemEnabled: vi.fn(() => false),
     isFailHardEnabled: vi.fn(() => false),
     resolveOwner: vi.fn(() => "test-owner"),
+    transcriptFormat: {
+      preprocessText: (text: string) => String(text || "")
+        .replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "")
+        .replace(/\n?\[message_id:\s*\d+\]/gi, "")
+        .trim(),
+      shouldSkipText: (_role: "user" | "assistant", text: string) => {
+        if (!text) return true;
+        if (text.startsWith("GatewayRestart:") || text.startsWith("System:")) return true;
+        if (text.includes('"kind": "restart"')) return true;
+        if (text.includes("HEARTBEAT") && text.includes("HEARTBEAT_OK")) return true;
+        if (text.replace(/[*_<>\/b\s]/g, "").startsWith("HEARTBEAT_OK")) return true;
+        return false;
+      },
+      speakerLabel: (role: "user" | "assistant") => role === "user" ? "User" : "Alfie",
+    },
     ...overrides,
   };
 }

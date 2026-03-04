@@ -235,14 +235,15 @@ function createQuaidFacade(deps) {
       if (role !== "user" && role !== "assistant") continue;
       let text = getMessageText(msg);
       if (!text) continue;
-      text = text.replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "");
-      text = text.replace(/\n?\[message_id:\s*\d+\]/gi, "").trim();
-      if (text.startsWith("GatewayRestart:") || text.startsWith("System:")) continue;
-      if (text.includes('"kind": "restart"')) continue;
-      if (text.includes("HEARTBEAT") && text.includes("HEARTBEAT_OK")) continue;
-      if (text.replace(/[*_<>\/b\s]/g, "").startsWith("HEARTBEAT_OK")) continue;
+      if (typeof deps.transcriptFormat?.preprocessText === "function") {
+        text = deps.transcriptFormat.preprocessText(text);
+      }
+      const shouldSkip = deps.transcriptFormat?.shouldSkipText;
+      if (typeof shouldSkip === "function" && shouldSkip(role, text)) continue;
       if (!text) continue;
-      transcript.push(`${role === "user" ? "User" : "Alfie"}: ${text}`);
+      const speakerLabel = deps.transcriptFormat?.speakerLabel;
+      const speaker = typeof speakerLabel === "function" ? speakerLabel(role) : role === "user" ? "User" : "Assistant";
+      transcript.push(`${speaker}: ${text}`);
     }
     return transcript.join("\n\n");
   }
@@ -334,7 +335,7 @@ ${transcript.slice(0, 4e3)}`,
           session_id: sessionId || null
         }),
         "--source",
-        "openclaw_adapter",
+        String(deps.eventSource || "adapter"),
         "--dispatch",
         "immediate"
       ]);
@@ -1042,7 +1043,7 @@ ${lines.join("\n")}
         "--payload",
         JSON.stringify(payload || {}),
         "--source",
-        "openclaw_adapter",
+        String(deps.eventSource || "adapter"),
         "--dispatch",
         dispatch
       ];
