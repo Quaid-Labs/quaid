@@ -288,29 +288,30 @@ class DocsRAG:
         return None
 
     def scan_docs_directory(self, docs_dir: str) -> List[str]:
-        """Recursively find all .md files in directory."""
-        md_files = []
+        """Recursively find indexable docs in directory."""
+        doc_files = []
         docs_path = Path(docs_dir)
         
         if not docs_path.exists():
             print(f"Directory does not exist: {docs_dir}")
             return []
         
-        for md_file in docs_path.rglob('*.md'):
-            md_files.append(str(md_file.absolute()))
-        
-        return sorted(md_files)
+        for pattern in ('*.md', 'PROJECT.log'):
+            for doc_file in docs_path.rglob(pattern):
+                doc_files.append(str(doc_file.absolute()))
+
+        return sorted(set(doc_files))
 
     def reindex_all(self, docs_dir: str, force: bool = False) -> Dict[str, int]:
         """Scan and index all documentation, optionally forcing full reindex."""
-        print(f"Scanning for .md files in {docs_dir}")
+        print(f"Scanning for docs (.md + PROJECT.log) in {docs_dir}")
         md_files = self.scan_docs_directory(docs_dir)
         
         if not md_files:
-            print(f"No .md files found in {docs_dir}")
+            print(f"No indexable docs found in {docs_dir}")
             return {"total_files": 0, "indexed_files": 0, "total_chunks": 0}
         
-        print(f"Found {len(md_files)} .md files")
+        print(f"Found {len(md_files)} docs")
         
         indexed_files = 0
         total_chunks = 0
@@ -679,11 +680,10 @@ def main():
             
             print(f"{i}. {source_short}{header_str} (similarity: {result['similarity']})")
             
-            # Show first few lines of content
+            # Print full chunk content (no truncation) so callers can consume complete context.
             content_lines = result["content"].split('\n')
-            preview_lines = [line for line in content_lines[:4] if line.strip()]
-            for line in preview_lines:
-                print(f"   {line[:80]}{'...' if len(line) > 80 else ''}")
+            for line in content_lines:
+                print(f"   {line}")
             print()
     
     elif args.command == 'stats':

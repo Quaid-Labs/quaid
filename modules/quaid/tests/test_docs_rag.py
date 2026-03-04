@@ -124,6 +124,25 @@ class TestNeedsReindex:
 
 
 # ---------------------------------------------------------------------------
+# scan_docs_directory
+# ---------------------------------------------------------------------------
+
+class TestScanDocsDirectory:
+    def test_includes_project_log_and_markdown(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        docs = tmp_path / "projects" / "demo"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "PROJECT.md").write_text("# Demo\n")
+        (docs / "PROJECT.log").write_text("- [2026-01-01T00:00:00] entry\n")
+        (docs / "ignore.txt").write_text("nope")
+
+        out = rag.scan_docs_directory(str(tmp_path))
+        assert str((docs / "PROJECT.md").absolute()) in out
+        assert str((docs / "PROJECT.log").absolute()) in out
+        assert str((docs / "ignore.txt").absolute()) not in out
+
+
+# ---------------------------------------------------------------------------
 # stats
 # ---------------------------------------------------------------------------
 
