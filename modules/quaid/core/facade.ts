@@ -207,6 +207,14 @@ export type QuaidFacade = {
     bootTimeMs: number,
     staleMs: number,
   ) => boolean;
+  shouldProcessLifecycleSignal: (
+    sessionId: string,
+    signal: LifecycleSignal,
+    suppressMs?: number,
+    retentionMs?: number,
+  ) => boolean;
+  markLifecycleSignalFromHook: (sessionId: string, label: "ResetSignal" | "CompactionSignal") => void;
+  clearLifecycleSignalHistory: () => void;
   processLifecycleEvent: (signal: unknown, context: unknown) => never;
   maybeRunMaintenance: (sessionId: string) => never;
   getJanitorHealthIssue: () => string | null;
@@ -296,6 +304,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   let _datastoreStatsTimestamp = 0;
   let _cachedNodeCount: number | null = null;
   let _nodeCountTimestamp = 0;
+  const lifecycleSignalHistory = new Map<string, {
+    source: "user_command" | "system_notice" | "hook";
+    signature: string;
+    seenAt: number;
+  }>();
 
   function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<string, any> | null {
     const now = Date.now();
@@ -715,6 +728,42 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       }
     }
     return null;
+  }
+
+  function lifecycleSignalKey(sessionId: string, label: "ResetSignal" | "CompactionSignal"): string {
+    return `${sessionId}:${label}`;
+  }
+
+  function shouldProcessLifecycleSignal(
+    sessionId: string,
+    signal: LifecycleSignal,
+    suppressMs: number = 15_000,
+    retentionMs: number = 10 * 60_000,
+  ): boolean {
+    const now = Date.now();
+    for (const [key, value] of lifecycleSignalHistory.entries()) {
+      if ((now - value.seenAt) > retentionMs) {
+        lifecycleSignalHistory.delete(key);
+      }
+    }
+    const key = lifecycleSignalKey(sessionId, signal.label);
+    const prior = lifecycleSignalHistory.get(key);
+    lifecycleSignalHistory.set(key, { source: signal.source, signature: signal.signature, seenAt: now });
+    if (!prior) return true;
+    const ageMs = now - prior.seenAt;
+    if (prior.signature === signal.signature && ageMs < suppressMs) return false;
+    if (ageMs < suppressMs && prior.source === "hook" && signal.source === "system_notice") {
+      return false;
+    }
+    return true;
+  }
+
+  function markLifecycleSignalFromHook(sessionId: string, label: "ResetSignal" | "CompactionSignal"): void {
+    lifecycleSignalHistory.set(lifecycleSignalKey(sessionId, label), {
+      source: "hook",
+      signature: `hook:${label}`,
+      seenAt: Date.now(),
+    });
   }
 
   function computeDynamicK(): number {
@@ -1393,6 +1442,9 @@ ${lines.join("\n")}
     latestMessageTimestampMs,
     hasExplicitLifecycleUserCommand,
     isBacklogLifecycleReplay,
+    shouldProcessLifecycleSignal,
+    markLifecycleSignalFromHook,
+    clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue: () => {

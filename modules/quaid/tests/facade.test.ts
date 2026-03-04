@@ -558,6 +558,24 @@ describe("QuaidFacade", () => {
     await unlink(staged!.eventPath);
   });
 
+  it("shouldProcessLifecycleSignal suppresses duplicate signatures in cooldown window", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const sessionId = "sess-a";
+    const signal = { label: "ResetSignal" as const, source: "user_command" as const, signature: "cmd:/reset" };
+    expect(facade.shouldProcessLifecycleSignal(sessionId, signal, 60_000, 60_000)).toBe(true);
+    expect(facade.shouldProcessLifecycleSignal(sessionId, signal, 60_000, 60_000)).toBe(false);
+  });
+
+  it("markLifecycleSignalFromHook suppresses immediate system_notice for same label", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const sessionId = "sess-b";
+    facade.markLifecycleSignalFromHook(sessionId, "CompactionSignal");
+    const signal = { label: "CompactionSignal" as const, source: "system_notice" as const, signature: "system:compacted..." };
+    expect(facade.shouldProcessLifecycleSignal(sessionId, signal, 60_000, 60_000)).toBe(false);
+    facade.clearLifecycleSignalHistory();
+    expect(facade.shouldProcessLifecycleSignal(sessionId, signal, 60_000, 60_000)).toBe(true);
+  });
+
   // -----------------------------------------------------------------------
   // Stubs throw "not implemented"
   // -----------------------------------------------------------------------

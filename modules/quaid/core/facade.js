@@ -121,6 +121,7 @@ function createQuaidFacade(deps) {
   let _datastoreStatsTimestamp = 0;
   let _cachedNodeCount = null;
   let _nodeCountTimestamp = 0;
+  const lifecycleSignalHistory = /* @__PURE__ */ new Map();
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     const now = Date.now();
     if (now - _datastoreStatsTimestamp < maxAgeMs) {
@@ -486,6 +487,34 @@ ${transcript.slice(0, 4e3)}`,
       }
     }
     return null;
+  }
+  function lifecycleSignalKey(sessionId, label) {
+    return `${sessionId}:${label}`;
+  }
+  function shouldProcessLifecycleSignal(sessionId, signal, suppressMs = 15e3, retentionMs = 10 * 6e4) {
+    const now = Date.now();
+    for (const [key2, value] of lifecycleSignalHistory.entries()) {
+      if (now - value.seenAt > retentionMs) {
+        lifecycleSignalHistory.delete(key2);
+      }
+    }
+    const key = lifecycleSignalKey(sessionId, signal.label);
+    const prior = lifecycleSignalHistory.get(key);
+    lifecycleSignalHistory.set(key, { source: signal.source, signature: signal.signature, seenAt: now });
+    if (!prior) return true;
+    const ageMs = now - prior.seenAt;
+    if (prior.signature === signal.signature && ageMs < suppressMs) return false;
+    if (ageMs < suppressMs && prior.source === "hook" && signal.source === "system_notice") {
+      return false;
+    }
+    return true;
+  }
+  function markLifecycleSignalFromHook(sessionId, label) {
+    lifecycleSignalHistory.set(lifecycleSignalKey(sessionId, label), {
+      source: "hook",
+      signature: `hook:${label}`,
+      seenAt: Date.now()
+    });
   }
   function computeDynamicK() {
     const nodeCount = getActiveNodeCount();
@@ -1096,6 +1125,9 @@ ${lines.join("\n")}
     latestMessageTimestampMs,
     hasExplicitLifecycleUserCommand,
     isBacklogLifecycleReplay,
+    shouldProcessLifecycleSignal,
+    markLifecycleSignalFromHook,
+    clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue: () => {
