@@ -17,6 +17,7 @@ import { queueDelayedRequest } from "./delayed-requests.js";
 import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
 import { createProjectCatalogReader } from "../../core/project-catalog.js";
 import { createDatastoreBridge } from "../../core/datastore-bridge.js";
+import { createQuaidFacade } from "../../core/facade.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import {
   assertDeclaredRegistration,
@@ -2806,6 +2807,50 @@ function normalizeKnowledgeDatastores(datastores: unknown, expandGraph: boolean)
 }
 const recallStoreGuidance = knowledgeEngine.renderKnowledgeDatastoreGuidanceForAgents();
 
+// ============================================================================
+// Adapter-facing Facade
+// ============================================================================
+// Single entry point for all core operations. Tool handlers should route
+// through the facade instead of reaching directly into bridges/scripts.
+
+const facade = createQuaidFacade({
+  workspace: WORKSPACE,
+  pluginRoot: PYTHON_PLUGIN_ROOT,
+  dbPath: DB_PATH,
+  execPython: createPythonBridgeExecutor({
+    scriptPath: PYTHON_SCRIPT,
+    dbPath: DB_PATH,
+    workspace: WORKSPACE,
+    pluginRoot: PYTHON_PLUGIN_ROOT,
+  }),
+  execExtractPipeline: (tmpPath, args) =>
+    _spawnWithTimeout(EXTRACT_SCRIPT, tmpPath, args, "extract", {}, EXTRACT_PIPELINE_TIMEOUT_MS),
+  execDocsRag: (cmd, args) =>
+    _spawnWithTimeout(DOCS_RAG, cmd, args, "docs_rag", {
+      QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+    }),
+  execDocsRegistry: (cmd, args) =>
+    _spawnWithTimeout(DOCS_REGISTRY, cmd, args, "docs_registry", {
+      QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+    }),
+  execDocsUpdater: (cmd, args) => {
+    const apiKey = _getAnthropicCredential();
+    return _spawnWithTimeout(DOCS_UPDATER, cmd, args, "docs_updater", {
+      QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+      ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
+    });
+  },
+  execEvents: (cmd, args) =>
+    _spawnWithTimeout(EVENTS_SCRIPT, cmd, args, "events", {
+      QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
+    }, EVENTS_EMIT_TIMEOUT_MS),
+  callLLM: callConfiguredLLM,
+  getMemoryConfig,
+  isSystemEnabled,
+  isFailHardEnabled,
+  resolveOwner: () => resolveOwner(),
+});
+
 async function totalRecall(
   query: string,
   limit: number,
@@ -3485,7 +3530,7 @@ ${recallStoreGuidance}`,
               console.warn(`[quaid] memory_recall maxLimit config read failed: ${String((err as Error)?.message || err)}`);
             }
 
-            const dynamicK = computeDynamicK();
+            const dynamicK = facade.computeDynamicK();
             const { query, options = {} } = params || {};
             const requestedLimit = options.limit;
             const expandGraph = options.graph?.expand ?? true;
@@ -3523,7 +3568,7 @@ ${recallStoreGuidance}`,
             const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
             const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
 
-            console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
+            console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${facade.getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
             const results = await recallMemories({
               query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, domain, domainBoost,
               project, datastoreOptions,
@@ -3687,7 +3732,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             const { text, category = "fact" } = params || {};
             // Resolve session ID from context
             const sessionId = resolveMemoryStoreSessionId(ctx);
-            addMemoryNote(sessionId, text, category);
+            facade.addMemoryNote(sessionId, text, category);
             console.log(`[quaid] memory_store: queued note for session ${sessionId}: "${text.slice(0, 60)}..."`);
             return {
               content: [{ type: "text", text: `Noted for memory extraction: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" — will be processed with full quality review at next compaction.` }],
@@ -3723,13 +3768,13 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
           try {
             const { query, memoryId } = params || {};
             if (memoryId) {
-              await datastoreBridge.forget(["--id", memoryId]);
+              await facade.forget(["--id", memoryId]);
               return {
                 content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
                 details: { action: "deleted", id: memoryId },
               };
             } else if (query) {
-              await datastoreBridge.forget([query]);
+              await facade.forget([query]);
               return {
                 content: [{ type: "text", text: `Deleted memories matching: "${query}"` }],
                 details: { action: "deleted", query },
@@ -3775,11 +3820,11 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
           try {
             const { query, limit = 5, project, docs } = params || {};
 
-            // RAG search with optional project filter
-            const searchArgs = [query, "--limit", String(limit)];
+            // RAG search with optional project filter (via facade)
+            const searchArgs: string[] = ["--limit", String(limit)];
             if (project) { searchArgs.push("--project", project); }
             if (Array.isArray(docs) && docs.length > 0) { searchArgs.push("--docs", docs.join(",")); }
-            const results = await callDocsRag("search", searchArgs);
+            const results = await facade.docsSearch(query, searchArgs);
 
             // If project specified, prepend full PROJECT.md for context
             let projectMdContent = "";
@@ -3801,7 +3846,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             // Staleness check (lightweight mtime comparison)
             let stalenessWarning = "";
             try {
-              const stalenessJson = await callDocsUpdater("check", ["--json"]);
+              const stalenessJson = await facade.docsCheckStaleness();
               const staleRaw = JSON.parse(stalenessJson || "{}");
               const staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw)
                 ? (staleRaw as Record<string, any>)
@@ -3895,7 +3940,7 @@ notify_docs_search(data['query'], data['results'])
         async execute(_toolCallId, params) {
           try {
             const { identifier } = params || {};
-            const output = await callDocsRegistry("read", [identifier]);
+            const output = await facade.docsRead(identifier);
             return {
               content: [{ type: "text", text: output || "Document not found." }],
               details: { identifier },
@@ -3924,7 +3969,7 @@ notify_docs_search(data['query'], data['results'])
             const args: string[] = ["--json"];
             if (params?.project) { args.push("--project", params.project); }
             if (params?.type) { args.push("--type", params.type); }
-            const output = await callDocsRegistry("list", args);
+            const output = await facade.docsList(args);
             return {
               content: [{ type: "text", text: output || "No documents found." }],
               details: { project: params?.project },
@@ -4253,27 +4298,14 @@ notify_user(f"📁 Project registered: {project_label}")
       }
 
       const runRecall = (q: string): Promise<MemoryResult[]> => {
-        if (routeStores) {
-          return total_recall(q, limit, {
-            datastores: selectedStores,
-            expandGraph,
-            graphDepth,
-            reasoning,
-            intent,
-            ranking,
-            domain,
-            domainBoost,
-            project,
-            dateFrom,
-            dateTo,
-            docs,
-            datastoreOptions,
-          });
-        }
-        return totalRecall(q, limit, {
-          datastores: selectedStores,
+        return facade.recall({
+          query: q,
+          limit,
           expandGraph,
           graphDepth,
+          datastores: selectedStores,
+          routeStores,
+          reasoning,
           intent,
           ranking,
           domain,
@@ -4283,6 +4315,7 @@ notify_user(f"📁 Project registered: {project_label}")
           dateTo,
           docs,
           datastoreOptions,
+          failOpen: opts.failOpen,
         });
       };
 
