@@ -6,9 +6,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { queueDelayedRequest } from "./delayed-requests.js";
-import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
-import { createProjectCatalogReader } from "../../core/project-catalog.js";
-import { createDatastoreBridge } from "../../core/datastore-bridge.js";
+import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
+import { createQuaidFacade } from "../../core/facade.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import {
   assertDeclaredRegistration,
@@ -619,60 +618,9 @@ function isInternalQuaidSession(sessionId) {
   if (!sid) return false;
   return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
 }
-const datastoreBridge = createDatastoreBridge(
-  createPythonBridgeExecutor({
-    scriptPath: PYTHON_SCRIPT,
-    dbPath: DB_PATH,
-    workspace: WORKSPACE,
-    pluginRoot: PYTHON_PLUGIN_ROOT
-  })
-);
-const _memoryNotes = /* @__PURE__ */ new Map();
-const _memoryNotesTouchedAt = /* @__PURE__ */ new Map();
-const MAX_MEMORY_NOTE_SESSIONS = 200;
-const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_INJECTION_LOG_FILES = 400;
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
 const MAX_EXTRACTION_LOG_ENTRIES = 800;
-const NOTES_DIR = QUAID_NOTES_DIR;
-function getNotesPath(sessionId) {
-  return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
-}
-function _sleepMs(ms) {
-  const i32 = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(i32, 0, 0, Math.max(1, Math.floor(ms)));
-}
-function withNotesLock(sessionId, fn) {
-  const lockPath = `${getNotesPath(sessionId)}.lock`;
-  let fd;
-  let lastErr;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      fd = fs.openSync(lockPath, "wx", 384);
-      break;
-    } catch (err) {
-      const code = err?.code;
-      if (code !== "EEXIST") throw err;
-      lastErr = err;
-      _sleepMs(10);
-    }
-  }
-  if (fd === void 0) {
-    throw new Error(`failed to acquire memory-notes lock for session=${sessionId}: ${String(lastErr?.message || lastErr)}`);
-  }
-  try {
-    return fn();
-  } finally {
-    try {
-      fs.closeSync(fd);
-    } catch {
-    }
-    try {
-      fs.unlinkSync(lockPath);
-    } catch {
-    }
-  }
-}
 function getInjectionLogPath(sessionId) {
   return path.join(QUAID_INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
 }
@@ -697,67 +645,6 @@ function trimExtractionLogEntries(log, maxEntries = MAX_EXTRACTION_LOG_ENTRIES) 
   }
   const sorted = entries.map(([sid, payload]) => ({ sid, payload, ts: Date.parse(String(payload?.last_extracted_at || "")) || 0 })).sort((a, b) => b.ts - a.ts).slice(0, maxEntries);
   return Object.fromEntries(sorted.map((row) => [row.sid, row.payload]));
-}
-function addMemoryNote(sessionId, text, category) {
-  _memoryNotesTouchedAt.set(sessionId, Date.now());
-  if (_memoryNotes.size >= MAX_MEMORY_NOTE_SESSIONS && !_memoryNotes.has(sessionId)) {
-    const oldest = Array.from(_memoryNotesTouchedAt.entries()).sort((a, b) => a[1] - b[1])[0]?.[0];
-    if (oldest) {
-      _memoryNotes.delete(oldest);
-      _memoryNotesTouchedAt.delete(oldest);
-    }
-  }
-  if (!_memoryNotes.has(sessionId)) {
-    _memoryNotes.set(sessionId, []);
-  }
-  const noteList = _memoryNotes.get(sessionId);
-  noteList.push(`[${category}] ${text}`);
-  if (noteList.length > MAX_MEMORY_NOTES_PER_SESSION) {
-    noteList.splice(0, noteList.length - MAX_MEMORY_NOTES_PER_SESSION);
-  }
-  try {
-    withNotesLock(sessionId, () => {
-      const notesPath = getNotesPath(sessionId);
-      let existing = [];
-      try {
-        existing = JSON.parse(fs.readFileSync(notesPath, "utf8"));
-      } catch (err) {
-        const msg = String(err?.message || err);
-        if (!msg.includes("ENOENT") && isFailHardEnabled()) {
-          throw err;
-        }
-        console.warn(`[quaid] memory note read failed for ${notesPath}: ${msg}`);
-      }
-      existing.push(`[${category}] ${text}`);
-      fs.writeFileSync(notesPath, JSON.stringify(existing), { mode: 384 });
-    });
-  } catch (err) {
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-    console.warn(`[quaid] memory note write failed for session ${sessionId}: ${String(err?.message || err)}`);
-  }
-}
-function getAndClearMemoryNotes(sessionId) {
-  return withNotesLock(sessionId, () => {
-    const inMemory = _memoryNotes.get(sessionId) || [];
-    let onDisk = [];
-    const notesPath = getNotesPath(sessionId);
-    try {
-      onDisk = JSON.parse(fs.readFileSync(notesPath, "utf8"));
-    } catch (err) {
-      console.warn(`[quaid] memory note load failed for ${notesPath}: ${String(err?.message || err)}`);
-    }
-    const all = Array.from(/* @__PURE__ */ new Set([...inMemory, ...onDisk]));
-    _memoryNotes.delete(sessionId);
-    _memoryNotesTouchedAt.delete(sessionId);
-    try {
-      fs.unlinkSync(notesPath);
-    } catch (err) {
-      console.warn(`[quaid] memory note cleanup failed for ${notesPath}: ${String(err?.message || err)}`);
-    }
-    return all;
-  });
 }
 function extractSessionId(messages, ctx) {
   if (ctx?.sessionId) {
@@ -1582,14 +1469,6 @@ async function callDocsRegistry(command, args = []) {
     CLAWDBOT_WORKSPACE: WORKSPACE
   });
 }
-const projectCatalogReader = createProjectCatalogReader({
-  workspace: WORKSPACE,
-  fs,
-  path,
-  isFailHardEnabled
-});
-const getProjectNames = () => projectCatalogReader.getProjectNames();
-const getProjectCatalog = () => projectCatalogReader.getProjectCatalog();
 function spawnNotifyScript(scriptBody) {
   const tmpFile = path.join(QUAID_NOTIFY_DIR, `notify-${Date.now()}-${Math.random().toString(36).slice(2)}.py`);
   const notifyLogFile = path.join(QUAID_LOGS_DIR, "notify-worker.log");
@@ -2125,366 +2004,46 @@ function mergeRecallResults(primary, secondary, limit) {
   secondary.forEach(upsert);
   return Array.from(merged.values()).sort((a, b) => Number(b.similarity || 0) - Number(a.similarity || 0)).slice(0, Math.max(1, limit));
 }
-async function recall(query, limit = 5, currentSessionId, compactionTime, expandGraph = true, graphDepth = 1, domain = { all: true }, domainBoost, project, dateFrom, dateTo) {
-  try {
-    const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
-    args.push("--domain-filter", JSON.stringify(domain || { all: true }));
-    if (domainBoost && (Array.isArray(domainBoost) && domainBoost.length > 0 || !Array.isArray(domainBoost) && Object.keys(domainBoost).length > 0)) {
-      args.push("--domain-boost", JSON.stringify(domainBoost));
-    }
-    if (project && String(project).trim()) {
-      args.push("--project", String(project).trim());
-    }
-    if (!expandGraph) {
-      args.push("--json");
-      if (currentSessionId) {
-        args.push("--current-session-id", currentSessionId);
-      }
-      if (compactionTime) {
-        args.push("--compaction-time", compactionTime);
-      }
-      if (dateFrom) {
-        args.push("--date-from", dateFrom);
-      }
-      if (dateTo) {
-        args.push("--date-to", dateTo);
-      }
-      const output2 = await datastoreBridge.search(args);
-      try {
-        const parsed = JSON.parse(output2);
-        if (!Array.isArray(parsed)) {
-          throw new Error("search output JSON must be an array");
-        }
-        const results2 = [];
-        for (const row of parsed) {
-          if (!row || typeof row !== "object") continue;
-          const text = typeof row.text === "string" ? row.text.trim() : "";
-          const category = typeof row.category === "string" ? row.category : "fact";
-          const similarity = typeof row.similarity === "number" ? row.similarity : Number(row.similarity ?? 0);
-          if (!text || !Number.isFinite(similarity)) continue;
-          const extractionConfidenceRaw = row.extraction_confidence ?? row.extractionConfidence;
-          const extractionConfidence = typeof extractionConfidenceRaw === "number" ? extractionConfidenceRaw : Number(extractionConfidenceRaw ?? 0.5);
-          results2.push({
-            text,
-            category,
-            similarity,
-            domains: parseDomainsValue(row.domains),
-            extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
-            id: typeof row.id === "string" ? row.id : void 0,
-            createdAt: typeof row.created_at === "string" ? row.created_at : void 0,
-            validFrom: typeof row.valid_from === "string" ? row.valid_from : void 0,
-            validUntil: typeof row.valid_until === "string" ? row.valid_until : void 0,
-            privacy: typeof row.privacy === "string" ? row.privacy : "shared",
-            ownerId: typeof row.owner_id === "string" ? row.owner_id : void 0,
-            sourceType: typeof row.source_type === "string" ? row.source_type : void 0,
-            via: "vector"
-          });
-        }
-        return results2.slice(0, limit);
-      } catch (err) {
-        throw new Error(`Failed to parse datastore search JSON output: ${err.message}`);
-      }
-    }
-    if (graphDepth > 1) {
-      args.push("--depth", String(graphDepth));
-    }
-    args.push("--json");
-    const output = await datastoreBridge.searchGraphAware(args);
-    const results = [];
-    try {
-      const parsedRaw = JSON.parse(output);
-      if (!parsedRaw || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
-        throw new Error("graph-aware search output must be a JSON object");
-      }
-      const parsed = parsedRaw;
-      const directResults = Array.isArray(parsed.direct_results) ? parsed.direct_results : [];
-      const graphResults = Array.isArray(parsed.graph_results) ? parsed.graph_results : [];
-      for (const row of directResults) {
-        if (!row || typeof row !== "object") continue;
-        const r = row;
-        const text = typeof r.text === "string" ? r.text.trim() : "";
-        const category = typeof r.category === "string" ? r.category : "fact";
-        const similarity = typeof r.similarity === "number" ? r.similarity : Number(r.similarity ?? 0);
-        if (!text || !Number.isFinite(similarity)) continue;
-        const extractionConfidence = typeof r.extraction_confidence === "number" ? r.extraction_confidence : Number(r.extraction_confidence ?? 0.5);
-        results.push({
-          text,
-          category,
-          similarity,
-          domains: parseDomainsValue(r.domains),
-          id: typeof r.id === "string" ? r.id : void 0,
-          extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
-          createdAt: typeof r.created_at === "string" ? r.created_at : void 0,
-          validFrom: typeof r.valid_from === "string" ? r.valid_from : void 0,
-          validUntil: typeof r.valid_until === "string" ? r.valid_until : void 0,
-          privacy: typeof r.privacy === "string" ? r.privacy : void 0,
-          ownerId: typeof r.owner_id === "string" ? r.owner_id : void 0,
-          sourceType: typeof r.source_type === "string" ? r.source_type : void 0,
-          verified: typeof r.verified === "boolean" ? r.verified : void 0,
-          via: "vector"
-        });
-      }
-      for (const row of graphResults) {
-        if (!row || typeof row !== "object") continue;
-        const r = row;
-        const id = typeof r.id === "string" ? r.id : "";
-        const name = typeof r.name === "string" ? r.name : "";
-        const relation = typeof r.relation === "string" ? r.relation : "";
-        const direction = typeof r.direction === "string" ? r.direction : "out";
-        const sourceName = typeof r.source_name === "string" ? r.source_name : "";
-        if (!id || !name || !relation || !sourceName) continue;
-        const text = direction === "in" ? `${name} --${relation}--> ${sourceName}` : `${sourceName} --${relation}--> ${name}`;
-        results.push({
-          text,
-          category: "graph",
-          similarity: 0.75,
-          // Graph results get a fixed medium-high similarity
-          id,
-          relation,
-          direction,
-          sourceName,
-          via: "graph"
-        });
-      }
-    } catch (_parseErr) {
-      console.warn(`[quaid] JSON parse failed, trying line format: ${String(_parseErr?.message || _parseErr)}`);
-      for (const line of output.split("\n")) {
-        if (line.startsWith("[direct]")) {
-          const match = line.match(/\[direct\]\s+\[(\d+\.\d+)\]\s+\[(\w+)\]\s+(.+)/);
-          if (match) {
-            results.push({
-              text: match[3].trim(),
-              category: match[2],
-              similarity: parseFloat(match[1]),
-              via: "vector"
-            });
-          }
-        } else if (line.startsWith("[graph]")) {
-          const content = line.substring(7).trim();
-          results.push({
-            text: content,
-            category: "graph",
-            similarity: 0.75,
-            via: "graph"
-          });
-        }
-      }
-    }
-    return results;
-  } catch (err) {
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-    console.error("[quaid] recall error:", err.message);
-    return [];
-  }
-}
-const knowledgeEngine = createKnowledgeEngine({
+const facade = createQuaidFacade({
   workspace: WORKSPACE,
+  pluginRoot: PYTHON_PLUGIN_ROOT,
+  dbPath: DB_PATH,
+  execPython: createPythonBridgeExecutor({
+    scriptPath: PYTHON_SCRIPT,
+    dbPath: DB_PATH,
+    workspace: WORKSPACE,
+    pluginRoot: PYTHON_PLUGIN_ROOT
+  }),
+  execExtractPipeline: (tmpPath, args) => _spawnWithTimeout(EXTRACT_SCRIPT, tmpPath, args, "extract", {}, EXTRACT_PIPELINE_TIMEOUT_MS),
+  execDocsRag: (cmd, args) => _spawnWithTimeout(DOCS_RAG, cmd, args, "docs_rag", {
+    QUAID_HOME: WORKSPACE,
+    CLAWDBOT_WORKSPACE: WORKSPACE
+  }),
+  execDocsRegistry: (cmd, args) => _spawnWithTimeout(DOCS_REGISTRY, cmd, args, "docs_registry", {
+    QUAID_HOME: WORKSPACE,
+    CLAWDBOT_WORKSPACE: WORKSPACE
+  }),
+  execDocsUpdater: (cmd, args) => {
+    const apiKey = _getAnthropicCredential();
+    return _spawnWithTimeout(DOCS_UPDATER, cmd, args, "docs_updater", {
+      QUAID_HOME: WORKSPACE,
+      CLAWDBOT_WORKSPACE: WORKSPACE,
+      ...apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}
+    });
+  },
+  execEvents: (cmd, args) => _spawnWithTimeout(EVENTS_SCRIPT, cmd, args, "events", {
+    QUAID_HOME: WORKSPACE,
+    CLAWDBOT_WORKSPACE: WORKSPACE
+  }, EVENTS_EMIT_TIMEOUT_MS),
+  callLLM: callConfiguredLLM,
   getMemoryConfig,
   isSystemEnabled,
-  getProjectCatalog,
-  callFastRouter: async (systemPrompt, userPrompt) => {
-    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, FAST_ROUTER_TIMEOUT_MS);
-    return String(llm?.text || "");
-  },
-  callDeepRouter: async (systemPrompt, userPrompt) => {
-    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
-    return String(llm?.text || "");
-  },
-  recallVector: async (query, limit, scope, domainBoost, project, dateFrom, dateTo) => {
-    const memoryResults = await recall(
-      query,
-      limit,
-      void 0,
-      void 0,
-      false,
-      1,
-      scope,
-      domainBoost,
-      project,
-      dateFrom,
-      dateTo
-    );
-    return memoryResults.map((r) => ({ ...r, via: "vector" }));
-  },
-  recallGraph: async (query, limit, depth, scope, domainBoost, project, dateFrom, dateTo) => {
-    const graphResults = await recall(
-      query,
-      limit,
-      void 0,
-      void 0,
-      true,
-      depth,
-      scope,
-      domainBoost,
-      project,
-      dateFrom,
-      dateTo
-    );
-    return graphResults.filter((r) => (r.via || "") === "graph" || r.category === "graph").map((r) => ({ ...r, via: "graph" }));
-  },
-  recallJournalStore: async (query, limit) => {
-    const journalConfig = getMemoryConfig().docs?.journal || {};
-    const journalDir = path.join(WORKSPACE, journalConfig.journalDir || "journal");
-    const stop = /* @__PURE__ */ new Set([
-      "the",
-      "and",
-      "for",
-      "with",
-      "that",
-      "this",
-      "from",
-      "have",
-      "has",
-      "was",
-      "were",
-      "what",
-      "when",
-      "where",
-      "which",
-      "who",
-      "how",
-      "why",
-      "about",
-      "tell",
-      "me",
-      "your",
-      "my",
-      "our",
-      "their",
-      "his",
-      "her",
-      "its",
-      "into",
-      "onto",
-      "than",
-      "then"
-    ]);
-    const tokens = Array.from(new Set(
-      String(query || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).map((t) => t.trim()).filter((t) => t.length >= 3 && !stop.has(t))
-    )).slice(0, 16);
-    if (!tokens.length) return [];
-    let files = [];
-    try {
-      files = fs.readdirSync(journalDir).filter((f) => f.endsWith(".journal.md"));
-    } catch (err) {
-      if (isFailHardEnabled()) {
-        throw new Error("[quaid] Journal recall listing failed under failHard", { cause: err });
-      }
-      console.warn(`[quaid] Journal recall listing failed: ${String(err?.message || err)}`);
-      return [];
-    }
-    const scored = [];
-    for (const file of files) {
-      try {
-        const fullPath = path.join(journalDir, file);
-        const content = fs.readFileSync(fullPath, "utf8");
-        const lc = content.toLowerCase();
-        let hits = 0;
-        for (const t of tokens) {
-          if (lc.includes(t)) hits += 1;
-        }
-        if (hits === 0) continue;
-        const excerpt = content.replace(/\s+/g, " ").trim().slice(0, 220);
-        const similarity = Math.min(0.95, 0.45 + hits / Math.max(tokens.length, 1) * 0.5);
-        scored.push({
-          text: `${file}: ${excerpt}${content.length > 220 ? "..." : ""}`,
-          category: "journal",
-          similarity,
-          via: "journal"
-        });
-      } catch (err) {
-        if (isFailHardEnabled()) {
-          throw new Error(`[quaid] Journal recall read failed for ${file} under failHard`, { cause: err });
-        }
-        console.warn(`[quaid] Journal recall read failed for ${file}: ${String(err?.message || err)}`);
-      }
-    }
-    scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
-    return scored.slice(0, limit);
-  },
-  recallProjectStore: async (query, limit, project, docs) => {
-    try {
-      const args = [query, "--limit", String(limit)];
-      if (project) args.push("--project", project);
-      if (Array.isArray(docs) && docs.length > 0) {
-        args.push("--docs", docs.join(","));
-      }
-      const out = await callDocsRag("search", args);
-      if (!out || !out.trim()) return [];
-      const results = [];
-      const projectVotes = /* @__PURE__ */ new Map();
-      const lines = out.split("\n");
-      for (const line of lines) {
-        const m = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
-        if (!m) continue;
-        const sourcePath = m[1];
-        const section = m[2].trim();
-        const sim = Number.parseFloat(m[3]) || 0.6;
-        const parts = sourcePath.split("/");
-        const projIdx = parts.findIndex((p) => p === "projects");
-        if (projIdx >= 0 && projIdx + 1 < parts.length) {
-          const p = parts[projIdx + 1];
-          if (p) {
-            projectVotes.set(p, (projectVotes.get(p) || 0) + sim);
-          }
-        }
-        results.push({
-          text: `${sourcePath} > ${section}`,
-          category: "project",
-          similarity: sim,
-          via: "project"
-        });
-      }
-      let inferredProject = project;
-      if (!inferredProject && projectVotes.size > 0) {
-        inferredProject = Array.from(projectVotes.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
-      }
-      if (inferredProject) {
-        try {
-          const cfg = JSON.parse(fs.readFileSync(path.join(WORKSPACE, "config/memory.json"), "utf-8"));
-          const homeDir = cfg?.projects?.definitions?.[inferredProject]?.homeDir;
-          if (homeDir) {
-            const projectMdPath = path.join(WORKSPACE, homeDir, "PROJECT.md");
-            if (fs.existsSync(projectMdPath)) {
-              const md = fs.readFileSync(projectMdPath, "utf-8").replace(/\s+/g, " ").trim().slice(0, 500);
-              if (md) {
-                results.unshift({
-                  text: `PROJECT.md (${inferredProject}): ${md}`,
-                  category: "project",
-                  similarity: 0.95,
-                  via: "project"
-                });
-              }
-            }
-          }
-        } catch (err) {
-          console.warn(`[quaid] PROJECT.md context preload failed for ${inferredProject}: ${String(err?.message || err)}`);
-        }
-      }
-      if (results.length === 0) {
-        results.push({
-          text: out.replace(/\s+/g, " ").slice(0, 280),
-          category: "project",
-          similarity: 0.55,
-          via: "project"
-        });
-      }
-      return results.slice(0, limit);
-    } catch (err) {
-      if (isFailHardEnabled()) {
-        throw err;
-      }
-      console.warn("[quaid] project recall bridge error:", err?.message || String(err));
-      return [];
-    }
-  }
+  isFailHardEnabled,
+  resolveOwner: () => resolveOwner()
 });
-function normalizeKnowledgeDatastores(datastores, expandGraph) {
-  return knowledgeEngine.normalizeKnowledgeDatastores(datastores, expandGraph);
-}
-const recallStoreGuidance = knowledgeEngine.renderKnowledgeDatastoreGuidanceForAgents();
+const recallStoreGuidance = facade.renderDatastoreGuidance();
+const getProjectNames = () => facade.getProjectNames();
+const getProjectCatalog = () => facade.getProjectCatalog();
 async function totalRecall(query, limit, opts) {
   return knowledgeEngine.totalRecall(query, limit, opts);
 }
@@ -2516,7 +2075,7 @@ function parseDatastoreStats(raw) {
 }
 async function getStats() {
   try {
-    const output = await datastoreBridge.stats();
+    const output = await facade.stats();
     return parseDatastoreStats(output);
   } catch (err) {
     console.error("[quaid] stats error:", err.message);
@@ -3007,7 +2566,7 @@ ${recallStoreGuidance}`,
               } catch (err) {
                 console.warn(`[quaid] memory_recall maxLimit config read failed: ${String(err?.message || err)}`);
               }
-              const dynamicK = computeDynamicK();
+              const dynamicK = facade.computeDynamicK();
               const { query, options = {} } = params || {};
               const requestedLimit = options.limit;
               const expandGraph = options.graph?.expand ?? true;
@@ -3037,7 +2596,7 @@ ${recallStoreGuidance}`,
               const depth = Math.min(Math.max(graphDepth, 1), 3);
               const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
               const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
-              console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
+              console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${facade.getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
               const results = await recallMemories({
                 query,
                 limit,
@@ -3200,7 +2759,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             try {
               const { text, category = "fact" } = params || {};
               const sessionId = resolveMemoryStoreSessionId(ctx);
-              addMemoryNote(sessionId, text, category);
+              facade.addMemoryNote(sessionId, text, category);
               console.log(`[quaid] memory_store: queued note for session ${sessionId}: "${text.slice(0, 60)}..."`);
               return {
                 content: [{ type: "text", text: `Noted for memory extraction: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}" \u2014 will be processed with full quality review at next compaction.` }],
@@ -3235,13 +2794,13 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             try {
               const { query, memoryId } = params || {};
               if (memoryId) {
-                await datastoreBridge.forget(["--id", memoryId]);
+                await facade.forget(["--id", memoryId]);
                 return {
                   content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
                   details: { action: "deleted", id: memoryId }
                 };
               } else if (query) {
-                await datastoreBridge.forget([query]);
+                await facade.forget([query]);
                 return {
                   content: [{ type: "text", text: `Deleted memories matching: "${query}"` }],
                   details: { action: "deleted", query }
@@ -3284,14 +2843,14 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
         async execute(_toolCallId, params) {
           try {
             const { query, limit = 5, project, docs } = params || {};
-            const searchArgs = [query, "--limit", String(limit)];
+            const searchArgs = ["--limit", String(limit)];
             if (project) {
               searchArgs.push("--project", project);
             }
             if (Array.isArray(docs) && docs.length > 0) {
               searchArgs.push("--docs", docs.join(","));
             }
-            const results = await callDocsRag("search", searchArgs);
+            const results = await facade.docsSearch(query, searchArgs);
             let projectMdContent = "";
             if (project) {
               try {
@@ -3309,7 +2868,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             }
             let stalenessWarning = "";
             try {
-              const stalenessJson = await callDocsUpdater("check", ["--json"]);
+              const stalenessJson = await facade.docsCheckStaleness();
               const staleRaw = JSON.parse(stalenessJson || "{}");
               const staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw) ? staleRaw : {};
               const staleKeys = Object.keys(staleDocs);
@@ -3399,7 +2958,7 @@ notify_docs_search(data['query'], data['results'])
         async execute(_toolCallId, params) {
           try {
             const { identifier } = params || {};
-            const output = await callDocsRegistry("read", [identifier]);
+            const output = await facade.docsRead(identifier);
             return {
               content: [{ type: "text", text: output || "Document not found." }],
               details: { identifier }
@@ -3430,7 +2989,7 @@ notify_docs_search(data['query'], data['results'])
             if (params?.type) {
               args.push("--type", params.type);
             }
-            const output = await callDocsRegistry("list", args);
+            const output = await facade.docsList(args);
             return {
               content: [{ type: "text", text: output || "No documents found." }],
               details: { project: params?.project }
@@ -3637,15 +3196,7 @@ ${truncated}` }],
                 }
               }
               try {
-                const factsOutput = await datastoreBridge.search([
-                  "*",
-                  "--session-id",
-                  sid,
-                  "--owner",
-                  resolveOwner(),
-                  "--limit",
-                  "20"
-                ]);
+                const factsOutput = await facade.searchBySession(sid, 20);
                 return {
                   content: [{ type: "text", text: `Session file not available. Facts extracted from session ${sid}:
 ${factsOutput || "No facts found."}` }],
@@ -3763,27 +3314,14 @@ ${factsOutput || "No facts found."}` }],
         }
       }
       const runRecall = (q) => {
-        if (routeStores) {
-          return total_recall(q, limit, {
-            datastores: selectedStores,
-            expandGraph,
-            graphDepth,
-            reasoning,
-            intent,
-            ranking,
-            domain,
-            domainBoost,
-            project,
-            dateFrom,
-            dateTo,
-            docs,
-            datastoreOptions
-          });
-        }
-        return totalRecall(q, limit, {
-          datastores: selectedStores,
+        return facade.recall({
+          query: q,
+          limit,
           expandGraph,
           graphDepth,
+          datastores: selectedStores,
+          routeStores,
+          reasoning,
           intent,
           ranking,
           domain,
@@ -3792,7 +3330,8 @@ ${factsOutput || "No facts found."}` }],
           dateFrom,
           dateTo,
           docs,
-          datastoreOptions
+          datastoreOptions,
+          failOpen: opts.failOpen
         });
       };
       const primary = await runRecall(query);
@@ -3936,7 +3475,7 @@ ${factsOutput || "No facts found."}` }],
         console.log(`[quaid] ${label}: no messages to analyze`);
         return;
       }
-      const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
+      const sessionNotes = sessionId ? facade.getAndClearMemoryNotes(sessionId) : [];
       const allNotes = Array.from(/* @__PURE__ */ new Set([...sessionNotes]));
       if (allNotes.length > 0) {
         console.log(`[quaid] ${label}: prepend ${allNotes.length} queued memory note(s)`);

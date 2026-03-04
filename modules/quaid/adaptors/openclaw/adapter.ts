@@ -14,9 +14,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { queueDelayedRequest } from "./delayed-requests.js";
-import { createKnowledgeEngine } from "../../core/knowledge-engine.js";
-import { createProjectCatalogReader } from "../../core/project-catalog.js";
-import { createDatastoreBridge } from "../../core/datastore-bridge.js";
+import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
 import { createQuaidFacade } from "../../core/facade.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import {
@@ -714,68 +712,12 @@ function isInternalQuaidSession(sessionId: unknown): boolean {
 }
 
 // ============================================================================
-// Python Bridge
-// ============================================================================
-
-const datastoreBridge = createDatastoreBridge(
-  createPythonBridgeExecutor({
-    scriptPath: PYTHON_SCRIPT,
-    dbPath: DB_PATH,
-    workspace: WORKSPACE,
-    pluginRoot: PYTHON_PLUGIN_ROOT,
-  })
-);
-
-// ============================================================================
 // Memory Notes — queued for extraction at compaction/reset
 // ============================================================================
 
-// Session-scoped notes: memory_store writes here instead of directly to DB.
-// At compaction/reset, these are prepended to the transcript so Opus extracts
-// them with full context, edges, and quality review.
-const _memoryNotes = new Map<string, string[]>();
-const _memoryNotesTouchedAt = new Map<string, number>();
-const MAX_MEMORY_NOTE_SESSIONS = 200;
-const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_INJECTION_LOG_FILES = 400;
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
 const MAX_EXTRACTION_LOG_ENTRIES = 800;
-const NOTES_DIR = QUAID_NOTES_DIR;
-
-function getNotesPath(sessionId: string): string {
-  return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
-}
-
-function _sleepMs(ms: number): void {
-  const i32 = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(i32, 0, 0, Math.max(1, Math.floor(ms)));
-}
-
-function withNotesLock<T>(sessionId: string, fn: () => T): T {
-  const lockPath = `${getNotesPath(sessionId)}.lock`;
-  let fd: number | undefined;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      fd = fs.openSync(lockPath, "wx", 0o600);
-      break;
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code !== "EEXIST") throw err;
-      lastErr = err;
-      _sleepMs(10);
-    }
-  }
-  if (fd === undefined) {
-    throw new Error(`failed to acquire memory-notes lock for session=${sessionId}: ${String((lastErr as Error)?.message || lastErr)}`);
-  }
-  try {
-    return fn();
-  } finally {
-    try { fs.closeSync(fd); } catch {}
-    try { fs.unlinkSync(lockPath); } catch {}
-  }
-}
 
 function getInjectionLogPath(sessionId: string): string {
   return path.join(QUAID_INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
@@ -809,80 +751,6 @@ function trimExtractionLogEntries(log: Record<string, any>, maxEntries: number =
     .sort((a, b) => b.ts - a.ts)
     .slice(0, maxEntries);
   return Object.fromEntries(sorted.map((row) => [row.sid, row.payload]));
-}
-
-function addMemoryNote(sessionId: string, text: string, category: string): void {
-  // Bound in-memory session cache (disk persistence remains source of truth).
-  _memoryNotesTouchedAt.set(sessionId, Date.now());
-  if (_memoryNotes.size >= MAX_MEMORY_NOTE_SESSIONS && !_memoryNotes.has(sessionId)) {
-    const oldest = Array.from(_memoryNotesTouchedAt.entries()).sort((a, b) => a[1] - b[1])[0]?.[0];
-    if (oldest) {
-      _memoryNotes.delete(oldest);
-      _memoryNotesTouchedAt.delete(oldest);
-    }
-  }
-
-  // In-memory
-  if (!_memoryNotes.has(sessionId)) {
-    _memoryNotes.set(sessionId, []);
-  }
-  const noteList = _memoryNotes.get(sessionId)!;
-  noteList.push(`[${category}] ${text}`);
-  if (noteList.length > MAX_MEMORY_NOTES_PER_SESSION) {
-    noteList.splice(0, noteList.length - MAX_MEMORY_NOTES_PER_SESSION);
-  }
-
-  // Persist to disk (survives gateway restart)
-  try {
-    withNotesLock(sessionId, () => {
-      const notesPath = getNotesPath(sessionId);
-      let existing: string[] = [];
-      try {
-        existing = JSON.parse(fs.readFileSync(notesPath, "utf8"));
-      } catch (err: unknown) {
-        const msg = String((err as Error)?.message || err);
-        if (!msg.includes("ENOENT") && isFailHardEnabled()) {
-          throw err;
-        }
-        console.warn(`[quaid] memory note read failed for ${notesPath}: ${msg}`);
-      }
-      existing.push(`[${category}] ${text}`);
-      fs.writeFileSync(notesPath, JSON.stringify(existing), { mode: 0o600 });
-    });
-  } catch (err: unknown) {
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-    console.warn(`[quaid] memory note write failed for session ${sessionId}: ${String((err as Error)?.message || err)}`);
-  }
-}
-
-function getAndClearMemoryNotes(sessionId: string): string[] {
-  // Merge in-memory + disk
-  return withNotesLock(sessionId, () => {
-    const inMemory = _memoryNotes.get(sessionId) || [];
-    let onDisk: string[] = [];
-    const notesPath = getNotesPath(sessionId);
-    try {
-      onDisk = JSON.parse(fs.readFileSync(notesPath, "utf8"));
-    } catch (err: unknown) {
-      console.warn(`[quaid] memory note load failed for ${notesPath}: ${String((err as Error)?.message || err)}`);
-    }
-
-    // Deduplicate (in case both sources have the same note)
-    const all = Array.from(new Set([...inMemory, ...onDisk]));
-
-    // Clear both
-    _memoryNotes.delete(sessionId);
-    _memoryNotesTouchedAt.delete(sessionId);
-    try {
-      fs.unlinkSync(notesPath);
-    } catch (err: unknown) {
-      console.warn(`[quaid] memory note cleanup failed for ${notesPath}: ${String((err as Error)?.message || err)}`);
-    }
-
-    return all;
-  });
 }
 
 // ============================================================================
@@ -1825,19 +1693,6 @@ async function callDocsRegistry(command: string, args: string[] = []): Promise<s
   });
 }
 
-// ============================================================================
-// Project Helpers
-// ============================================================================
-
-const projectCatalogReader = createProjectCatalogReader({
-  workspace: WORKSPACE,
-  fs,
-  path,
-  isFailHardEnabled,
-});
-const getProjectNames = () => projectCatalogReader.getProjectNames();
-const getProjectCatalog = () => projectCatalogReader.getProjectCatalog();
-
 /**
  * Spawn a fire-and-forget Python notification script safely.
  * Writes code to a temp file to avoid shell injection via inline -c strings.
@@ -2259,25 +2114,6 @@ type MemoryResult = {
   via?: string; // "vector" | "graph" | "journal" | "project"
 };
 
-function parseDomainsValue(raw: unknown): string[] {
-  if (Array.isArray(raw)) {
-    return raw.map((d) => String(d || "").trim()).filter(Boolean);
-  }
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    if (!trimmed) return [];
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) {
-        return parsed.map((d) => String(d || "").trim()).filter(Boolean);
-      }
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-
 function getConfiguredDomainIds(): string[] {
   try {
     const defs = getMemoryConfig()?.retrieval?.domains;
@@ -2428,385 +2264,6 @@ function mergeRecallResults(primary: MemoryResult[], secondary: MemoryResult[], 
     .slice(0, Math.max(1, limit));
 }
 
-async function recall(
-  query: string,
-  limit: number = 5,
-  currentSessionId?: string,
-  compactionTime?: string,
-  expandGraph: boolean = true,
-  graphDepth: number = 1,
-  domain: DomainFilter = { all: true },
-  domainBoost?: Record<string, number> | string[],
-  project?: string,
-  dateFrom?: string,
-  dateTo?: string
-): Promise<MemoryResult[]> {
-  try {
-    const args = [query, "--limit", String(limit), "--owner", resolveOwner()];
-    args.push("--domain-filter", JSON.stringify(domain || { all: true }));
-    if (domainBoost && ((Array.isArray(domainBoost) && domainBoost.length > 0) || (!Array.isArray(domainBoost) && Object.keys(domainBoost).length > 0))) {
-      args.push("--domain-boost", JSON.stringify(domainBoost));
-    }
-    if (project && String(project).trim()) {
-      args.push("--project", String(project).trim());
-    }
-
-    // Use search-graph-aware for enhanced graph traversal, or basic search
-    if (!expandGraph) {
-      // Basic search without graph expansion — accepts --current-session-id, --compaction-time
-      args.push("--json");
-      if (currentSessionId) {
-        args.push("--current-session-id", currentSessionId);
-      }
-      if (compactionTime) {
-        args.push("--compaction-time", compactionTime);
-      }
-      if (dateFrom) {
-        args.push("--date-from", dateFrom);
-      }
-      if (dateTo) {
-        args.push("--date-to", dateTo);
-      }
-      const output = await datastoreBridge.search(args);
-      try {
-        const parsed = JSON.parse(output);
-        if (!Array.isArray(parsed)) {
-          throw new Error("search output JSON must be an array");
-        }
-        const results: MemoryResult[] = [];
-        for (const row of parsed) {
-          if (!row || typeof row !== "object") continue;
-          const text = typeof row.text === "string" ? row.text.trim() : "";
-          const category = typeof row.category === "string" ? row.category : "fact";
-          const similarity = typeof row.similarity === "number" ? row.similarity : Number(row.similarity ?? 0);
-          if (!text || !Number.isFinite(similarity)) continue;
-          const extractionConfidenceRaw = row.extraction_confidence ?? row.extractionConfidence;
-          const extractionConfidence = typeof extractionConfidenceRaw === "number"
-            ? extractionConfidenceRaw
-            : Number(extractionConfidenceRaw ?? 0.5);
-          results.push({
-            text,
-            category,
-            similarity,
-            domains: parseDomainsValue((row as Record<string, unknown>).domains),
-            extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
-            id: typeof row.id === "string" ? row.id : undefined,
-            createdAt: typeof row.created_at === "string" ? row.created_at : undefined,
-            validFrom: typeof row.valid_from === "string" ? row.valid_from : undefined,
-            validUntil: typeof row.valid_until === "string" ? row.valid_until : undefined,
-            privacy: typeof row.privacy === "string" ? row.privacy : "shared",
-            ownerId: typeof row.owner_id === "string" ? row.owner_id : undefined,
-            sourceType: typeof row.source_type === "string" ? row.source_type : undefined,
-            via: "vector",
-          });
-        }
-        return results.slice(0, limit);
-      } catch (err) {
-        throw new Error(`Failed to parse datastore search JSON output: ${(err as Error).message}`);
-      }
-    }
-
-    // Use graph-aware search with JSON output — accepts --depth
-    if (graphDepth > 1) {
-      args.push("--depth", String(graphDepth));
-    }
-    args.push("--json");
-    const output = await datastoreBridge.searchGraphAware(args);
-    const results: MemoryResult[] = [];
-
-    try {
-      const parsedRaw = JSON.parse(output);
-      if (!parsedRaw || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
-        throw new Error("graph-aware search output must be a JSON object");
-      }
-      const parsed = parsedRaw as Record<string, unknown>;
-      const directResults = Array.isArray(parsed.direct_results) ? parsed.direct_results : [];
-      const graphResults = Array.isArray(parsed.graph_results) ? parsed.graph_results : [];
-
-      // Add direct (vector) results
-      for (const row of directResults) {
-        if (!row || typeof row !== "object") continue;
-        const r = row as Record<string, unknown>;
-        const text = typeof r.text === "string" ? r.text.trim() : "";
-        const category = typeof r.category === "string" ? r.category : "fact";
-        const similarity = typeof r.similarity === "number" ? r.similarity : Number(r.similarity ?? 0);
-        if (!text || !Number.isFinite(similarity)) continue;
-        const extractionConfidence = typeof r.extraction_confidence === "number"
-          ? r.extraction_confidence
-          : Number(r.extraction_confidence ?? 0.5);
-        results.push({
-          text,
-          category,
-          similarity,
-          domains: parseDomainsValue(r.domains),
-          id: typeof r.id === "string" ? r.id : undefined,
-          extractionConfidence: Number.isFinite(extractionConfidence) ? extractionConfidence : 0.5,
-          createdAt: typeof r.created_at === "string" ? r.created_at : undefined,
-          validFrom: typeof r.valid_from === "string" ? r.valid_from : undefined,
-          validUntil: typeof r.valid_until === "string" ? r.valid_until : undefined,
-          privacy: typeof r.privacy === "string" ? r.privacy : undefined,
-          ownerId: typeof r.owner_id === "string" ? r.owner_id : undefined,
-          sourceType: typeof r.source_type === "string" ? r.source_type : undefined,
-          verified: typeof r.verified === "boolean" ? r.verified : undefined,
-          via: "vector",
-        });
-      }
-
-      // Add graph results
-      for (const row of graphResults) {
-        if (!row || typeof row !== "object") continue;
-        const r = row as Record<string, unknown>;
-        const id = typeof r.id === "string" ? r.id : "";
-        const name = typeof r.name === "string" ? r.name : "";
-        const relation = typeof r.relation === "string" ? r.relation : "";
-        const direction = typeof r.direction === "string" ? r.direction : "out";
-        const sourceName = typeof r.source_name === "string" ? r.source_name : "";
-        if (!id || !name || !relation || !sourceName) continue;
-
-        // Format: "Source --relation--> Target" or reversed for inbound
-        const text = direction === "in"
-          ? `${name} --${relation}--> ${sourceName}`
-          : `${sourceName} --${relation}--> ${name}`;
-
-        results.push({
-          text,
-          category: "graph",
-          similarity: 0.75, // Graph results get a fixed medium-high similarity
-          id,
-          relation,
-          direction,
-          sourceName,
-          via: "graph",
-        });
-      }
-    } catch (_parseErr: unknown) {
-      // Fallback: parse line-by-line output format if JSON parsing fails
-      console.warn(`[quaid] JSON parse failed, trying line format: ${String((_parseErr as Error)?.message || _parseErr)}`);
-      for (const line of output.split("\n")) {
-        // [direct] format
-        if (line.startsWith("[direct]")) {
-          const match = line.match(/\[direct\]\s+\[(\d+\.\d+)\]\s+\[(\w+)\]\s+(.+)/);
-          if (match) {
-            results.push({
-              text: match[3].trim(),
-              category: match[2],
-              similarity: parseFloat(match[1]),
-              via: "vector",
-            });
-          }
-        }
-        // [graph] format
-        else if (line.startsWith("[graph]")) {
-          const content = line.substring(7).trim();
-          results.push({
-            text: content,
-            category: "graph",
-            similarity: 0.75,
-            via: "graph",
-          });
-        }
-      }
-    }
-
-    return results;
-  } catch (err: unknown) {
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-    console.error("[quaid] recall error:", (err as Error).message);
-    return [];
-  }
-}
-
-const knowledgeEngine = createKnowledgeEngine<MemoryResult>({
-  workspace: WORKSPACE,
-  getMemoryConfig,
-  isSystemEnabled,
-  getProjectCatalog,
-  callFastRouter: async (systemPrompt: string, userPrompt: string) => {
-    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "fast", 120, FAST_ROUTER_TIMEOUT_MS);
-    return String(llm?.text || "");
-  },
-  callDeepRouter: async (systemPrompt: string, userPrompt: string) => {
-    const llm = await callConfiguredLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
-    return String(llm?.text || "");
-  },
-  recallVector: async (query, limit, scope, domainBoost, project, dateFrom, dateTo) => {
-    const memoryResults = await recall(
-      query,
-      limit,
-      undefined,
-      undefined,
-      false,
-      1,
-      scope,
-      domainBoost,
-      project,
-      dateFrom,
-      dateTo
-    );
-    return memoryResults.map((r) => ({ ...r, via: "vector" as const }));
-  },
-  recallGraph: async (query, limit, depth, scope, domainBoost, project, dateFrom, dateTo) => {
-    const graphResults = await recall(
-      query,
-      limit,
-      undefined,
-      undefined,
-      true,
-      depth,
-      scope,
-      domainBoost,
-      project,
-      dateFrom,
-      dateTo
-    );
-    return graphResults
-      .filter((r) => (r.via || "") === "graph" || r.category === "graph")
-      .map((r) => ({ ...r, via: "graph" as const }));
-  },
-  recallJournalStore: async (query, limit) => {
-    const journalConfig = getMemoryConfig().docs?.journal || {};
-    const journalDir = path.join(WORKSPACE, journalConfig.journalDir || "journal");
-    const stop = new Set([
-      "the", "and", "for", "with", "that", "this", "from", "have", "has", "was", "were",
-      "what", "when", "where", "which", "who", "how", "why", "about", "tell", "me", "your",
-      "my", "our", "their", "his", "her", "its", "into", "onto", "than", "then",
-    ]);
-    const tokens = Array.from(new Set(
-      String(query || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .split(/\s+/)
-        .map((t) => t.trim())
-        .filter((t) => t.length >= 3 && !stop.has(t))
-    )).slice(0, 16);
-    if (!tokens.length) return [];
-    let files: string[] = [];
-    try {
-      files = fs.readdirSync(journalDir).filter((f: string) => f.endsWith(".journal.md"));
-    } catch (err: unknown) {
-      if (isFailHardEnabled()) {
-        throw new Error("[quaid] Journal recall listing failed under failHard", { cause: err as Error });
-      }
-      console.warn(`[quaid] Journal recall listing failed: ${String((err as Error)?.message || err)}`);
-      return [];
-    }
-    const scored: MemoryResult[] = [];
-    for (const file of files) {
-      try {
-        const fullPath = path.join(journalDir, file);
-        const content = fs.readFileSync(fullPath, "utf8");
-        const lc = content.toLowerCase();
-        let hits = 0;
-        for (const t of tokens) {
-          if (lc.includes(t)) hits += 1;
-        }
-        if (hits === 0) continue;
-        const excerpt = content.replace(/\s+/g, " ").trim().slice(0, 220);
-        const similarity = Math.min(0.95, 0.45 + (hits / Math.max(tokens.length, 1)) * 0.5);
-        scored.push({
-          text: `${file}: ${excerpt}${content.length > 220 ? "..." : ""}`,
-          category: "journal",
-          similarity,
-          via: "journal",
-        });
-      } catch (err: unknown) {
-        if (isFailHardEnabled()) {
-          throw new Error(`[quaid] Journal recall read failed for ${file} under failHard`, { cause: err as Error });
-        }
-        console.warn(`[quaid] Journal recall read failed for ${file}: ${String((err as Error)?.message || err)}`);
-      }
-    }
-    scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
-    return scored.slice(0, limit);
-  },
-  recallProjectStore: async (query, limit, project, docs) => {
-    try {
-      const args = [query, "--limit", String(limit)];
-      if (project) args.push("--project", project);
-      if (Array.isArray(docs) && docs.length > 0) {
-        args.push("--docs", docs.join(","));
-      }
-      const out = await callDocsRag("search", args);
-      if (!out || !out.trim()) return [];
-      const results: MemoryResult[] = [];
-      const projectVotes = new Map<string, number>();
-      const lines = out.split("\n");
-      for (const line of lines) {
-        const m = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
-        if (!m) continue;
-        const sourcePath = m[1];
-        const section = m[2].trim();
-        const sim = Number.parseFloat(m[3]) || 0.6;
-        const parts = sourcePath.split("/");
-        const projIdx = parts.findIndex((p) => p === "projects");
-        if (projIdx >= 0 && projIdx + 1 < parts.length) {
-          const p = parts[projIdx + 1];
-          if (p) {
-            projectVotes.set(p, (projectVotes.get(p) || 0) + sim);
-          }
-        }
-        results.push({
-          text: `${sourcePath} > ${section}`,
-          category: "project",
-          similarity: sim,
-          via: "project",
-        });
-      }
-      // If project was not specified, infer it from strongest RAG hits and pull PROJECT.md
-      // so downstream answer synthesis has higher-level architecture context.
-      let inferredProject = project;
-      if (!inferredProject && projectVotes.size > 0) {
-        inferredProject = Array.from(projectVotes.entries())
-          .sort((a, b) => b[1] - a[1])[0]?.[0];
-      }
-      if (inferredProject) {
-        try {
-          const cfg = JSON.parse(fs.readFileSync(path.join(WORKSPACE, "config/memory.json"), "utf-8"));
-          const homeDir = cfg?.projects?.definitions?.[inferredProject]?.homeDir;
-          if (homeDir) {
-            const projectMdPath = path.join(WORKSPACE, homeDir, "PROJECT.md");
-            if (fs.existsSync(projectMdPath)) {
-              const md = fs.readFileSync(projectMdPath, "utf-8").trim();
-              if (md) {
-                results.unshift({
-                  text: `PROJECT.md (${inferredProject}): ${md}`,
-                  category: "project",
-                  similarity: 0.95,
-                  via: "project",
-                });
-              }
-            }
-          }
-        } catch (err: unknown) {
-          console.warn(`[quaid] PROJECT.md context preload failed for ${inferredProject}: ${String((err as Error)?.message || err)}`);
-        }
-      }
-      if (results.length === 0) {
-        results.push({
-          text: out.trim(),
-          category: "project",
-          similarity: 0.55,
-          via: "project",
-        });
-      }
-      return results.slice(0, limit);
-    } catch (err: unknown) {
-      if (isFailHardEnabled()) {
-        throw err;
-      }
-      console.warn("[quaid] project recall bridge error:", (err as Error)?.message || String(err));
-      return [];
-    }
-  },
-});
-
-function normalizeKnowledgeDatastores(datastores: unknown, expandGraph: boolean): KnowledgeDatastore[] {
-  return knowledgeEngine.normalizeKnowledgeDatastores(datastores, expandGraph);
-}
-const recallStoreGuidance = knowledgeEngine.renderKnowledgeDatastoreGuidanceForAgents();
-
 // ============================================================================
 // Adapter-facing Facade
 // ============================================================================
@@ -2850,49 +2307,8 @@ const facade = createQuaidFacade({
   isFailHardEnabled,
   resolveOwner: () => resolveOwner(),
 });
-
-async function totalRecall(
-  query: string,
-  limit: number,
-  opts: {
-    datastores: KnowledgeDatastore[];
-    expandGraph: boolean;
-    graphDepth: number;
-    intent?: "general" | "agent_actions" | "relationship" | "technical";
-    ranking?: { sourceTypeBoosts?: Record<string, number> };
-    domain: DomainFilter;
-    domainBoost?: Record<string, number> | string[];
-    project?: string;
-    dateFrom?: string;
-    dateTo?: string;
-    docs?: string[];
-    datastoreOptions?: Partial<Record<KnowledgeDatastore, Record<string, unknown>>>;
-  }
-): Promise<MemoryResult[]> {
-  return knowledgeEngine.totalRecall(query, limit, opts);
-}
-
-async function total_recall(
-  query: string,
-  limit: number,
-  opts: {
-    datastores: KnowledgeDatastore[];
-    expandGraph: boolean;
-    graphDepth: number;
-    reasoning?: "fast" | "deep";
-    intent?: "general" | "agent_actions" | "relationship" | "technical";
-    ranking?: { sourceTypeBoosts?: Record<string, number> };
-    domain: DomainFilter;
-    domainBoost?: Record<string, number> | string[];
-    project?: string;
-    dateFrom?: string;
-    dateTo?: string;
-    docs?: string[];
-    datastoreOptions?: Partial<Record<KnowledgeDatastore, Record<string, unknown>>>;
-  }
-): Promise<MemoryResult[]> {
-  return knowledgeEngine.total_recall(query, limit, opts);
-}
+const recallStoreGuidance = facade.renderDatastoreGuidance();
+const getProjectNames = () => facade.getProjectNames();
 
 // Shared recall abstraction — used by both memory_recall tool and auto-inject
 interface RecallOptions {
@@ -2952,7 +2368,7 @@ function parseDatastoreStats(raw: string): DatastoreStats | null {
 
 async function getStats(): Promise<DatastoreStats | null> {
   try {
-    const output = await datastoreBridge.stats();
+    const output = await facade.stats();
     return parseDatastoreStats(output);
   } catch (err: unknown) {
     console.error("[quaid] stats error:", (err as Error).message);
@@ -4184,9 +3600,7 @@ notify_user(f"📁 Project registered: {project_label}")
 
               // Fallback: return facts extracted from this session
               try {
-                const factsOutput = await datastoreBridge.search([
-                  "*", "--session-id", sid, "--owner", resolveOwner(), "--limit", "20"
-                ]);
+                const factsOutput = await facade.searchBySession(sid, 20);
                 return {
                   content: [{ type: "text", text: `Session file not available. Facts extracted from session ${sid}:\n${factsOutput || "No facts found."}` }],
                   details: { session_id: sid, fallback: true },
@@ -4477,7 +3891,7 @@ notify_user(f"📁 Project registered: {project_label}")
         return;
       }
 
-      const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
+      const sessionNotes = sessionId ? facade.getAndClearMemoryNotes(sessionId) : [];
       // Avoid cross-session leakage: extraction only consumes notes for the active session.
       const allNotes = Array.from(new Set([...sessionNotes]));
       if (allNotes.length > 0) {
