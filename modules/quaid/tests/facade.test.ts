@@ -343,6 +343,30 @@ describe("QuaidFacade", () => {
     });
   });
 
+  it("hasExplicitLifecycleUserCommand detects slash lifecycle input", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(
+      facade.hasExplicitLifecycleUserCommand([
+        { role: "user", content: "/compact" },
+      ]),
+    ).toBe(true);
+  });
+
+  it("isBacklogLifecycleReplay suppresses stale implicit reset replay", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const bootTime = Date.parse("2026-03-04T00:00:00Z");
+    const stale = 90_000;
+    expect(
+      facade.isBacklogLifecycleReplay(
+        [{ role: "system", content: "session resumed", timestamp: bootTime - stale - 1 }],
+        "reset",
+        bootTime + 1_000,
+        bootTime,
+        stale,
+      ),
+    ).toBe(true);
+  });
+
   it("processLifecycleEvent throws not implemented", () => {
     const facade = createQuaidFacade(makeMockDeps());
     expect(() => facade.processLifecycleEvent({}, {})).toThrow("not yet implemented");

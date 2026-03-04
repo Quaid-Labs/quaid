@@ -181,6 +181,46 @@ function createQuaidFacade(deps) {
     return `/${m[1].toLowerCase()}`;
   }
 
+  function latestMessageTimestampMs(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return null;
+    let latest = null;
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      const raw = msg.timestamp ?? msg.createdAt ?? msg.time ?? null;
+      if (raw == null) continue;
+      let ts = null;
+      if (typeof raw === "number" && Number.isFinite(raw)) ts = raw;
+      else {
+        const parsed = Date.parse(String(raw));
+        if (Number.isFinite(parsed)) ts = parsed;
+      }
+      if (ts == null) continue;
+      latest = latest == null ? ts : Math.max(latest, ts);
+    }
+    return latest;
+  }
+
+  function hasExplicitLifecycleUserCommand(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return false;
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      if (String(msg.role || "") !== "user") continue;
+      const text = getMessageText(msg);
+      if (!text) continue;
+      if (detectExplicitLifecycleUserCommand(text)) return true;
+    }
+    return false;
+  }
+
+  function isBacklogLifecycleReplay(messages, trigger, nowMs, bootTimeMs, staleMs) {
+    if (trigger !== "reset" && trigger !== "new" && trigger !== "recovery") return false;
+    const latestTs = latestMessageTimestampMs(messages);
+    if (latestTs == null) {
+      return !hasExplicitLifecycleUserCommand(messages);
+    }
+    return latestTs < Math.min(nowMs, bootTimeMs) - staleMs;
+  }
+
   function detectLifecycleSignal(messages) {
     if (!Array.isArray(messages) || messages.length === 0) return null;
     const tail = messages.slice(-8);
@@ -453,6 +493,9 @@ function createQuaidFacade(deps) {
     getProjectNames: () => projectCatalogReader.getProjectNames(),
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
     detectLifecycleSignal,
+    latestMessageTimestampMs,
+    hasExplicitLifecycleUserCommand,
+    isBacklogLifecycleReplay,
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue: () => {

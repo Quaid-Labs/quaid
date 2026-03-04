@@ -816,51 +816,6 @@ notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extra
     state.timer.unref();
   }
 }
-function latestMessageTimestampMs(messages) {
-  if (!Array.isArray(messages) || messages.length === 0) return null;
-  let latest = null;
-  for (const msg of messages) {
-    const raw = msg?.timestamp ?? msg?.createdAt ?? msg?.time ?? null;
-    if (raw == null) continue;
-    let ts = null;
-    if (typeof raw === "number" && Number.isFinite(raw)) ts = raw;
-    else {
-      const parsed = Date.parse(String(raw));
-      if (Number.isFinite(parsed)) ts = parsed;
-    }
-    if (ts == null) continue;
-    latest = latest == null ? ts : Math.max(latest, ts);
-  }
-  return latest;
-}
-function hasExplicitLifecycleUserCommand(messages) {
-  if (!Array.isArray(messages) || messages.length === 0) return false;
-  for (const msg of messages) {
-    if (msg?.role !== "user") continue;
-    const text = getMessageText(msg);
-    if (!text) continue;
-    if (detectExplicitLifecycleUserCommand(text)) return true;
-  }
-  return false;
-}
-function detectExplicitLifecycleUserCommand(text) {
-  if (!text) return null;
-  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length === 0) return null;
-  if (lines.length > 1) return null;
-  const normalized = lines[0].replace(/\[\[[^\]]+\]\]\s*/g, "").trim();
-  const m = normalized.match(/^(?:\[[^\]]+\]\s*)?\/(new|reset|restart|compact)(?=\s|$)/i);
-  if (!m) return null;
-  return `/${m[1].toLowerCase()}`;
-}
-function isBacklogLifecycleReplay(messages, trigger, nowMs = Date.now()) {
-  if (trigger !== "reset" && trigger !== "new" && trigger !== "recovery") return false;
-  const latestTs = latestMessageTimestampMs(messages);
-  if (latestTs == null) {
-    return !hasExplicitLifecycleUserCommand(messages);
-  }
-  return latestTs < Math.min(nowMs, ADAPTER_BOOT_TIME_MS) - BACKLOG_NOTIFY_STALE_MS;
-}
 function lifecycleSignalKey(sessionId, label) {
   return `${sessionId}:${label}`;
 }
@@ -3279,7 +3234,13 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${transcriptForExtraction.length} chars`);
       if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
         const triggerType2 = resolveExtractionTrigger(label);
-        const suppressBacklogNotify2 = isBacklogLifecycleReplay(messages, triggerType2);
+        const suppressBacklogNotify2 = facade.isBacklogLifecycleReplay(
+          messages,
+          triggerType2,
+          Date.now(),
+          ADAPTER_BOOT_TIME_MS,
+          BACKLOG_NOTIFY_STALE_MS
+        );
         const dedupeSession2 = sessionId || extractSessionId(messages, {});
         const dedupeKey = `start:${dedupeSession2}:${triggerType2}`;
         const triggerDesc = triggerType2 === "compaction" ? "compaction" : triggerType2 === "recovery" ? "recovery" : triggerType2 === "timeout" ? "timeout" : triggerType2 === "new" ? "/new" : "reset";
@@ -3352,7 +3313,13 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
       const triggerType = resolveExtractionTrigger(label);
-      const suppressBacklogNotify = isBacklogLifecycleReplay(messages, triggerType);
+      const suppressBacklogNotify = facade.isBacklogLifecycleReplay(
+        messages,
+        triggerType,
+        Date.now(),
+        ADAPTER_BOOT_TIME_MS,
+        BACKLOG_NOTIFY_STALE_MS
+      );
       const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new") && hasMeaningfulUserContent && shouldNotifyFeature("extraction", "summary");
       const dedupeSession = sessionId || extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
@@ -3845,9 +3812,15 @@ const __test = {
   detectLifecycleSignal: (messages) => facade.detectLifecycleSignal(messages),
   shouldProcessLifecycleSignal,
   shouldEmitExtractionNotify,
-  latestMessageTimestampMs,
-  hasExplicitLifecycleUserCommand,
-  isBacklogLifecycleReplay,
+  latestMessageTimestampMs: (messages) => facade.latestMessageTimestampMs(messages),
+  hasExplicitLifecycleUserCommand: (messages) => facade.hasExplicitLifecycleUserCommand(messages),
+  isBacklogLifecycleReplay: (messages, trigger, nowMs) => facade.isBacklogLifecycleReplay(
+    messages,
+    trigger,
+    nowMs ?? Date.now(),
+    ADAPTER_BOOT_TIME_MS,
+    BACKLOG_NOTIFY_STALE_MS
+  ),
   markLifecycleSignalFromHook,
   clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
   clearExtractionNotifyHistory: () => extractionNotifyHistory.clear()

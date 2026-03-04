@@ -934,63 +934,6 @@ notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extra
   }
 }
 
-function latestMessageTimestampMs(messages: any[]): number | null {
-  if (!Array.isArray(messages) || messages.length === 0) return null;
-  let latest: number | null = null;
-  for (const msg of messages) {
-    const raw = msg?.timestamp ?? msg?.createdAt ?? msg?.time ?? null;
-    if (raw == null) continue;
-    let ts: number | null = null;
-    if (typeof raw === "number" && Number.isFinite(raw)) ts = raw;
-    else {
-      const parsed = Date.parse(String(raw));
-      if (Number.isFinite(parsed)) ts = parsed;
-    }
-    if (ts == null) continue;
-    latest = latest == null ? ts : Math.max(latest, ts);
-  }
-  return latest;
-}
-
-function hasExplicitLifecycleUserCommand(messages: any[]): boolean {
-  if (!Array.isArray(messages) || messages.length === 0) return false;
-  for (const msg of messages) {
-    if (msg?.role !== "user") continue;
-    const text = getMessageText(msg);
-    if (!text) continue;
-    if (detectExplicitLifecycleUserCommand(text)) return true;
-  }
-  return false;
-}
-
-function detectExplicitLifecycleUserCommand(text: string): "/new" | "/reset" | "/restart" | "/compact" | null {
-  if (!text) return null;
-  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length === 0) return null;
-  if (lines.length > 1) return null;
-  const normalized = lines[0]
-    .replace(/\[\[[^\]]+\]\]\s*/g, "")
-    .trim();
-  const m = normalized.match(/^(?:\[[^\]]+\]\s*)?\/(new|reset|restart|compact)(?=\s|$)/i);
-  if (!m) return null;
-  return `/${m[1].toLowerCase()}` as "/new" | "/reset" | "/restart" | "/compact";
-}
-
-function isBacklogLifecycleReplay(
-  messages: any[],
-  trigger: ExtractionTrigger,
-  nowMs: number = Date.now(),
-): boolean {
-  if (trigger !== "reset" && trigger !== "new" && trigger !== "recovery") return false;
-  const latestTs = latestMessageTimestampMs(messages);
-  if (latestTs == null) {
-    // Old session replays often arrive without timestamps. Keep explicit user commands
-    // live, but suppress noisy implicit reset/recovery backlog notifications.
-    return !hasExplicitLifecycleUserCommand(messages);
-  }
-  return latestTs < (Math.min(nowMs, ADAPTER_BOOT_TIME_MS) - BACKLOG_NOTIFY_STALE_MS);
-}
-
 function lifecycleSignalKey(sessionId: string, label: "ResetSignal" | "CompactionSignal"): string {
   return `${sessionId}:${label}`;
 }
@@ -3700,7 +3643,13 @@ notify_user(f"📁 Project registered: {project_label}")
 
       if (getMemoryConfig().notifications?.showProcessingStart !== false && shouldNotifyFeature("extraction", "summary")) {
         const triggerType = resolveExtractionTrigger(label);
-        const suppressBacklogNotify = isBacklogLifecycleReplay(messages, triggerType);
+        const suppressBacklogNotify = facade.isBacklogLifecycleReplay(
+          messages,
+          triggerType,
+          Date.now(),
+          ADAPTER_BOOT_TIME_MS,
+          BACKLOG_NOTIFY_STALE_MS,
+        );
         const dedupeSession = sessionId || extractSessionId(messages, {});
         const dedupeKey = `start:${dedupeSession}:${triggerType}`;
         const triggerDesc = triggerType === "compaction"
@@ -3797,7 +3746,13 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
       const triggerType = resolveExtractionTrigger(label);
-      const suppressBacklogNotify = isBacklogLifecycleReplay(messages, triggerType);
+      const suppressBacklogNotify = facade.isBacklogLifecycleReplay(
+        messages,
+        triggerType,
+        Date.now(),
+        ADAPTER_BOOT_TIME_MS,
+        BACKLOG_NOTIFY_STALE_MS,
+      );
       const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
         && hasMeaningfulUserContent
         && shouldNotifyFeature("extraction", "summary");
@@ -4360,9 +4315,16 @@ export const __test = {
   detectLifecycleSignal: (messages: any[]) => facade.detectLifecycleSignal(messages),
   shouldProcessLifecycleSignal,
   shouldEmitExtractionNotify,
-  latestMessageTimestampMs,
-  hasExplicitLifecycleUserCommand,
-  isBacklogLifecycleReplay,
+  latestMessageTimestampMs: (messages: any[]) => facade.latestMessageTimestampMs(messages),
+  hasExplicitLifecycleUserCommand: (messages: any[]) => facade.hasExplicitLifecycleUserCommand(messages),
+  isBacklogLifecycleReplay: (messages: any[], trigger: ExtractionTrigger, nowMs?: number) =>
+    facade.isBacklogLifecycleReplay(
+      messages,
+      trigger,
+      nowMs ?? Date.now(),
+      ADAPTER_BOOT_TIME_MS,
+      BACKLOG_NOTIFY_STALE_MS,
+    ),
   markLifecycleSignalFromHook,
   clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
   clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),

@@ -166,6 +166,15 @@ export type QuaidFacade = {
 
   // --- Stubs (typed, not yet implemented) ---
   detectLifecycleSignal: (messages: unknown[]) => LifecycleSignal | null;
+  latestMessageTimestampMs: (messages: unknown[]) => number | null;
+  hasExplicitLifecycleUserCommand: (messages: unknown[]) => boolean;
+  isBacklogLifecycleReplay: (
+    messages: unknown[],
+    trigger: string,
+    nowMs: number,
+    bootTimeMs: number,
+    staleMs: number,
+  ) => boolean;
   processLifecycleEvent: (signal: unknown, context: unknown) => never;
   maybeRunMaintenance: (sessionId: string) => never;
   getJanitorHealthIssue: () => string | null;
@@ -365,6 +374,53 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const m = normalized.match(/^(?:\[[^\]]+\]\s*)?\/(new|reset|restart|compact)(?=\s|$)/i);
     if (!m) return null;
     return `/${m[1].toLowerCase()}` as "/new" | "/reset" | "/restart" | "/compact";
+  }
+
+  function latestMessageTimestampMs(messages: unknown[]): number | null {
+    if (!Array.isArray(messages) || messages.length === 0) return null;
+    let latest: number | null = null;
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      const rec = msg as Record<string, unknown>;
+      const raw = rec.timestamp ?? rec.createdAt ?? rec.time ?? null;
+      if (raw == null) continue;
+      let ts: number | null = null;
+      if (typeof raw === "number" && Number.isFinite(raw)) ts = raw;
+      else {
+        const parsed = Date.parse(String(raw));
+        if (Number.isFinite(parsed)) ts = parsed;
+      }
+      if (ts == null) continue;
+      latest = latest == null ? ts : Math.max(latest, ts);
+    }
+    return latest;
+  }
+
+  function hasExplicitLifecycleUserCommand(messages: unknown[]): boolean {
+    if (!Array.isArray(messages) || messages.length === 0) return false;
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      if (String((msg as Record<string, unknown>).role || "") !== "user") continue;
+      const text = getMessageText(msg);
+      if (!text) continue;
+      if (detectExplicitLifecycleUserCommand(text)) return true;
+    }
+    return false;
+  }
+
+  function isBacklogLifecycleReplay(
+    messages: unknown[],
+    trigger: string,
+    nowMs: number,
+    bootTimeMs: number,
+    staleMs: number,
+  ): boolean {
+    if (trigger !== "reset" && trigger !== "new" && trigger !== "recovery") return false;
+    const latestTs = latestMessageTimestampMs(messages);
+    if (latestTs == null) {
+      return !hasExplicitLifecycleUserCommand(messages);
+    }
+    return latestTs < (Math.min(nowMs, bootTimeMs) - staleMs);
   }
 
   function detectLifecycleSignal(messages: unknown[]): LifecycleSignal | null {
@@ -878,6 +934,9 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
     // Stubs
     detectLifecycleSignal,
+    latestMessageTimestampMs,
+    hasExplicitLifecycleUserCommand,
+    isBacklogLifecycleReplay,
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue: () => {
