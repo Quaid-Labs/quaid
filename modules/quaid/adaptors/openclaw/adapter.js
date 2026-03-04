@@ -72,10 +72,8 @@ const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-app
 const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
-const EXTRACTION_NOTIFY_DEDUPE_MS = 9e4;
 const COMPACTION_NOTIFY_BATCH_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MS", 45e3);
 const COMPACTION_NOTIFY_BATCH_MAX_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MAX_MS", 12e4);
-const extractionNotifyHistory = /* @__PURE__ */ new Map();
 let compactionNotifyBatchState = null;
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 9e4;
@@ -633,17 +631,6 @@ function getAllConversationMessages(messages) {
 function detectLifecycleCommandSignal(messages) {
   const signal = facade.detectLifecycleSignal(messages);
   return signal?.label || null;
-}
-function shouldEmitExtractionNotify(key, now = Date.now()) {
-  for (const [k, ts] of extractionNotifyHistory.entries()) {
-    if (now - ts > EXTRACTION_NOTIFY_DEDUPE_MS) {
-      extractionNotifyHistory.delete(k);
-    }
-  }
-  const prior = extractionNotifyHistory.get(key);
-  extractionNotifyHistory.set(key, now);
-  if (!prior) return true;
-  return now - prior > EXTRACTION_NOTIFY_DEDUPE_MS;
 }
 function queueCompactionNotificationBatch(sessionId, stored, skipped, edges) {
   const now = Date.now();
@@ -2715,7 +2702,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
         const dedupeSession2 = sessionId || extractSessionId(messages, {});
         const dedupeKey = `start:${dedupeSession2}:${triggerType2}`;
         const triggerDesc = triggerType2 === "compaction" ? "compaction" : triggerType2 === "recovery" ? "recovery" : triggerType2 === "timeout" ? "timeout" : triggerType2 === "new" ? "/new" : "reset";
-        if (triggerType2 !== "recovery" && !suppressBacklogNotify2 && hasMeaningfulUserContent && shouldEmitExtractionNotify(dedupeKey)) {
+        if (triggerType2 !== "recovery" && !suppressBacklogNotify2 && hasMeaningfulUserContent && facade.shouldEmitExtractionNotify(dedupeKey)) {
           spawnNotifyScript(`
 from core.runtime.notify import notify_user
 notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
@@ -2796,7 +2783,7 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
       if (!suppressBacklogNotify && facade.shouldNotifyFeature("extraction", "summary") && triggerType === "compaction") {
         queueCompactionNotificationBatch(dedupeSession, stored, skipped, edgesCreated);
-      } else if (triggerType !== "recovery" && !suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && facade.shouldNotifyFeature("extraction", "summary") && shouldEmitExtractionNotify(completionDedupeKey)) {
+      } else if (triggerType !== "recovery" && !suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && facade.shouldNotifyFeature("extraction", "summary") && facade.shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
           const mergedDetails = {};
@@ -3282,7 +3269,7 @@ const __test = {
   detectLifecycleCommandSignal,
   detectLifecycleSignal: (messages) => facade.detectLifecycleSignal(messages),
   shouldProcessLifecycleSignal: (sessionId, signal) => facade.shouldProcessLifecycleSignal(sessionId, signal),
-  shouldEmitExtractionNotify,
+  shouldEmitExtractionNotify: (key, now) => facade.shouldEmitExtractionNotify(key, now),
   latestMessageTimestampMs: (messages) => facade.latestMessageTimestampMs(messages),
   hasExplicitLifecycleUserCommand: (messages) => facade.hasExplicitLifecycleUserCommand(messages),
   isBacklogLifecycleReplay: (messages, trigger, nowMs) => facade.isBacklogLifecycleReplay(
@@ -3294,7 +3281,7 @@ const __test = {
   ),
   markLifecycleSignalFromHook: (sessionId, label) => facade.markLifecycleSignalFromHook(sessionId, label),
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
-  clearExtractionNotifyHistory: () => extractionNotifyHistory.clear()
+  clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory()
 };
 export {
   __test,

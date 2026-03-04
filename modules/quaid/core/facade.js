@@ -14,6 +14,7 @@ const NODE_COUNT_CACHE_MS = 12e4;
 const DATASTORE_STATS_TIMEOUT_MS = 3e4;
 const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_MEMORY_NOTE_SESSIONS = 200;
+const EXTRACTION_NOTIFY_DEDUPE_MS = 9e4;
 const RECALL_RETRY_STOPWORDS = /* @__PURE__ */ new Set([
   "a",
   "an",
@@ -122,6 +123,7 @@ function createQuaidFacade(deps) {
   let _cachedNodeCount = null;
   let _nodeCountTimestamp = 0;
   const lifecycleSignalHistory = /* @__PURE__ */ new Map();
+  const extractionNotifyHistory = /* @__PURE__ */ new Map();
   function resolveOwner(speaker, channel) {
     const usersCfg = deps.getMemoryConfig()?.users;
     const config = usersCfg && typeof usersCfg === "object" && !Array.isArray(usersCfg) ? usersCfg : { defaultOwner: "quaid", identities: {} };
@@ -177,6 +179,17 @@ function createQuaidFacade(deps) {
       return camel.enabled;
     }
     return true;
+  }
+  function shouldEmitExtractionNotify(key, now = Date.now()) {
+    for (const [k, ts] of extractionNotifyHistory.entries()) {
+      if (now - ts > EXTRACTION_NOTIFY_DEDUPE_MS) {
+        extractionNotifyHistory.delete(k);
+      }
+    }
+    const prior = extractionNotifyHistory.get(key);
+    extractionNotifyHistory.set(key, now);
+    if (!prior) return true;
+    return now - prior > EXTRACTION_NOTIFY_DEDUPE_MS;
   }
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     const now = Date.now();
@@ -1142,6 +1155,8 @@ ${lines.join("\n")}
     resolveOwner,
     shouldNotifyFeature,
     shouldNotifyProjectCreate,
+    shouldEmitExtractionNotify,
+    clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
     // Datastore
     stats: () => datastoreBridge.stats(),
     getStatsParsed,
