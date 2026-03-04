@@ -4,7 +4,7 @@
 
 *Created: 2026-01-31*
 *Updated: 2026-02-08*
-*Status: Phase 6 complete — search batches 1-4, Ebbinghaus decay, projects system*
+*Status: Phase 6 complete — search batches 1-4, Ebbinghaus decay, projects system, append-only project logs*
 
 ## Overview
 
@@ -15,7 +15,7 @@ The knowledge layer is a graph-based personal knowledge base using SQLite + Olla
 - Graph structure: nodes (facts, people, preferences) + edges (relationships)
 - Hybrid search: semantic similarity + full-text keyword search with proper noun boosting
 - Privacy-aware: per-fact privacy tiers (private/shared/public) with owner-based filtering
-- Nightly maintenance: automated janitor pipeline for dedup, contradiction detection, decay
+- Nightly maintenance: automated janitor pipeline for dedup, decay, docs/project upkeep
 - Config-driven: all model IDs, paths, and settings in `config/memory.json`
 
 ---
@@ -194,7 +194,7 @@ Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 1. **Token budget:** Dynamic K based on node count (clamped by config); optional LLM reranker for relevance
 2. **Capture quality:** Opus extraction at compaction/reset events with strict personal-facts-only criteria. Nightly janitor cleans any remaining noise.
 3. **Graph initialization:** Database schema is initialized by `memory_graph.py` startup/migration paths, then continuously enriched by event-based extraction
-4. **Contradiction handling:** Janitor Task 4 detects contradictions via token recall + Haiku, stores in `contradictions` table for resolution
+4. **Stale-fact handling:** Supersession + temporal normalization + recency-weighted retrieval are the active conflict controls; contradiction task name remains as a compatibility no-op in current janitor runs
 
 ---
 
@@ -209,6 +209,7 @@ Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
 - **Ebbinghaus decay**: `R = 2^(-t/half_life)` with access-scaled half-life (frequently accessed = slower decay)
 - **Token-based batching**: `TokenBatchBuilder` dynamically packs items based on model context window
 - **Projects system**: Registry CRUD, event-driven updates, auto-discover, 5 projects
+- **Project history indexing**: append-only `PROJECT.log` per project is indexed by RAG (no truncation) for searchable change context
 - **Mock embeddings**: `MOCK_EMBEDDINGS=1` env var for testing without Ollama
 - **1400+ tests in default gate**: 1224 selected pytest + 222 vitest, all passing
 - **Journal system**: Diary-style entries written to `journal/*.journal.md`, distilled into core markdown themes by janitor, archived monthly to `journal/archive/`. Two modes: `distilled` (default, token-efficient) and `full` (richer self-awareness)

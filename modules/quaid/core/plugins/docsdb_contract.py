@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from core.contracts.plugin_contract import PluginContractBase
 from core.runtime.plugins import PluginHookContext
 
 
+def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
+    root = Path(ctx.workspace_root)
+    for rel in ("projects", "temp", "scratch"):
+        (root / rel).mkdir(parents=True, exist_ok=True)
+
+
 class DocsDbPluginContract(PluginContractBase):
     def on_init(self, ctx: PluginHookContext) -> None:
-        _ = ctx
+        _ensure_project_workspace_dirs(ctx)
 
     def on_config(self, ctx: PluginHookContext) -> None:
-        _ = ctx
+        _ensure_project_workspace_dirs(ctx)
 
     def on_status(self, ctx: PluginHookContext) -> dict:
         _ = ctx

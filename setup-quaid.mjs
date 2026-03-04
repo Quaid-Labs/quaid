@@ -2076,35 +2076,26 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Create directories
   s.start("Creating directories...");
-  for (const dir of [CONFIG_DIR, DATA_DIR, JOURNAL_DIR, LOGS_DIR, PROJECTS_DIR, TEMP_DIR, SCRATCH_DIR, path.join(JOURNAL_DIR, "archive")]) {
+  for (const dir of [CONFIG_DIR, DATA_DIR, JOURNAL_DIR, LOGS_DIR, path.join(JOURNAL_DIR, "archive")]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   s.stop(C.green("Directories created"));
 
-  // Scratch is intentionally workspace-visible and can hold ad-hoc drafts.
-  // Initialize a local git repo there so users can recover intermediate states.
-  if (!fs.existsSync(path.join(SCRATCH_DIR, ".git"))) {
-    const scratchGitInit = spawnSync("git", ["init"], {
-      cwd: SCRATCH_DIR,
-      stdio: "pipe",
-      encoding: "utf8",
-    });
-    if (scratchGitInit.status === 0) {
-      log.info("Initialized scratch/ local git history");
-    } else {
-      const detail = String(scratchGitInit.stderr || scratchGitInit.stdout || "").trim();
-      log.warn(`Could not initialize scratch/ git history${detail ? `: ${detail}` : ""}`);
-    }
+  // Copy/sync plugin source
+  const pluginDirEmpty = !fs.existsSync(PLUGIN_DIR) || fs.readdirSync(PLUGIN_DIR).length === 0;
+  let samePluginTree = false;
+  try {
+    samePluginTree = fs.realpathSync(pluginSrc) === fs.realpathSync(PLUGIN_DIR);
+  } catch {
+    samePluginTree = false;
   }
-
-  // Copy plugin source
-  if (!fs.existsSync(PLUGIN_DIR) || fs.readdirSync(PLUGIN_DIR).length === 0) {
-    s.start("Installing plugin source...");
+  if (samePluginTree) {
+    log.info("Plugin source already in place");
+  } else {
+    s.start(pluginDirEmpty ? "Installing plugin source..." : "Syncing plugin source...");
     fs.mkdirSync(PLUGIN_DIR, { recursive: true });
     copyDirSync(pluginSrc, PLUGIN_DIR);
-    s.stop(C.green("Plugin installed"));
-  } else {
-    log.info("Plugin source already in place");
+    s.stop(C.green(pluginDirEmpty ? "Plugin installed" : "Plugin synced"));
   }
 
   // Install Node dependencies (typebox etc.)
@@ -2190,8 +2181,8 @@ print(int(row[0] if row else 0))
   writeConfig(owner, models, embeddings, systems, janitorPolicies);
   s.stop(C.green("Config written"));
 
-  // Installer-owned memorydb bootstrap: load config once so plugin init/config
-  // hooks run exactly once (including MemoryDB domain sync + TOOLS sync).
+  // Installer-owned contract bootstrap: load config once so datastore init/config
+  // hooks run exactly once (for all enabled datastores).
   const domainInitScript = `
 import os, sys
 ${PY_ENV_SETUP}
@@ -2199,7 +2190,7 @@ os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from config import get_config
 _cfg = get_config()
-print('[+] MemoryDB domain init complete')
+print('[+] Datastore init hooks complete')
 `;
   const domainInitResult = spawnSync("python3", ["-c", domainInitScript], {
     cwd: PLUGIN_DIR,
@@ -2208,7 +2199,41 @@ print('[+] MemoryDB domain init complete')
   });
   if (domainInitResult.status !== 0) {
     const detail = String(domainInitResult.stderr || domainInitResult.stdout || "").trim();
-    log.warn(`MemoryDB domain bootstrap failed during install; continuing. ${detail || ""}`.trim());
+    log.warn(`Datastore init hook bootstrap failed during install; continuing. ${detail || ""}`.trim());
+  }
+
+  // Contract-owned project workspace dirs should exist after datastore init hooks.
+  // Some runtime profiles trim plugin slots during bootstrap; guard here so
+  // install always yields expected workspace shape.
+  const contractOwnedDirs = [PROJECTS_DIR, TEMP_DIR, SCRATCH_DIR];
+  const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
+  if (missingContractOwnedDirs.length > 0) {
+    for (const dir of missingContractOwnedDirs) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    log.warn(
+      `Datastore init did not materialize ${missingContractOwnedDirs.length} contract-owned workspace dir(s); `
+      + "installer created them as fallback."
+    );
+  }
+
+  // Scratch is intentionally workspace-visible and can hold ad-hoc drafts.
+  // The directory is contract-owned (docsdb init); installer only bootstraps
+  // local history after contract init has run.
+  if (fs.existsSync(SCRATCH_DIR) && !fs.existsSync(path.join(SCRATCH_DIR, ".git"))) {
+    const scratchGitInit = spawnSync("git", ["init"], {
+      cwd: SCRATCH_DIR,
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    if (scratchGitInit.status === 0) {
+      log.info("Initialized scratch/ local git history");
+    } else {
+      const detail = String(scratchGitInit.stderr || scratchGitInit.stdout || "").trim();
+      log.warn(`Could not initialize scratch/ git history${detail ? `: ${detail}` : ""}`);
+    }
+  } else if (!fs.existsSync(SCRATCH_DIR)) {
+    log.warn("scratch/ directory missing after datastore init hooks; skipping scratch history bootstrap.");
   }
 
   // Create workspace files
@@ -2925,14 +2950,15 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       // Include module path explicitly; pathlib rglob does not reliably recurse
       // into symlinked plugin dirs across environments.
       paths: ["modules/quaid", "plugins"],
-      allowList: ["memorydb.core", "core.extract", "openclaw.adapter"],
+      allowList: ["memorydb.core", "docsdb.core", "core.extract", "openclaw.adapter"],
       slots: {
         adapter: resolvedAdapterType === "openclaw" ? "openclaw.adapter" : "",
         ingest: ["core.extract"],
-        dataStores: ["memorydb.core"],
+        dataStores: ["memorydb.core", "docsdb.core"],
       },
       config: {
         "memorydb.core": {},
+        "docsdb.core": {},
         "core.extract": {},
       },
     },
@@ -3093,6 +3119,8 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
 function copyDirSync(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (entry.name === "node_modules") continue;
+    if (entry.name === ".git") continue;
     if (entry.name === "__pycache__") continue;
     if (entry.name.endsWith(".pyc")) continue;
     const srcPath = path.join(src, entry.name);

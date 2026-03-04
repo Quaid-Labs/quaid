@@ -35,11 +35,15 @@ Use this as the go/no-go gate for prelaunch and release candidates.
   - run with `janitor.applyMode=auto` (and `janitor.approvalPolicies.*=auto` as needed) for the e2e workspace profile.
 - E2E summary integrity checks:
   - no stage remains `running` in a `success` summary.
+- Lane progression policy:
+  - execute one provider/auth lane at a time when fixing failures;
+  - on failure, fix and re-run that lane before moving to the next lane.
 
 ## 4) Provider Matrix Smoke
 
 - At least one smoke lane each for `openai` and `anthropic`.
 - No auth fallback surprises in logs (all credential paths explicit).
+- Do not count contradiction-task output as a release gate signal; stale-fact validation is supersession/recency based in current janitor flow.
 
 ## 5) Operational Readiness
 

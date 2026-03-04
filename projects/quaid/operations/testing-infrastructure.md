@@ -7,6 +7,7 @@ This document defines the current test stack, execution commands, and pass/fail 
 - Keep live-provider behavior checked via e2e smoke flows.
 - Separate model-drift risk from blocking correctness checks.
 - Prevent single hanging test from stalling the entire suite.
+- Keep e2e debugging deterministic by isolating failures to one auth/provider lane at a time.
 
 ## Test Layers
 
@@ -61,6 +62,7 @@ This document defines the current test stack, execution commands, and pass/fail 
   - `modules/quaid/scripts/run-quaid-e2e-matrix.sh`
 - Scope:
   - Gateway stop/start, e2e workspace bootstrap, integration tests, janitor run, restore to `~/quaid/test`.
+  - Bootstrap path executes canonical installer (`setup-quaid.mjs`), including datastore-init hooks and workspace dir initialization.
 - Bootstrap coupling:
   - E2E runners live in `modules/quaid/scripts` and call bootstrap scripts via `QUAID_BOOTSTRAP_ROOT` (default `~/quaid/bootstrap`).
   - Optional local env file: `modules/quaid/.env.e2e` (template: `modules/quaid/scripts/e2e.env.example`).
@@ -151,6 +153,11 @@ cd ~/quaid/test/modules/quaid
 ./scripts/run-quaid-e2e-matrix.sh --paths openai-oauth,openai-api,anthropic-api -- --skip-janitor
 ```
 Per-path timeout defaults to `1200` seconds. Override with `QUAID_E2E_PATH_TIMEOUT_SEC=<seconds>` when needed.
+
+Matrix failure policy (required):
+- Run one lane at a time when diagnosing failures.
+- On first lane failure, stop matrix progression, fix that lane, rerun that same lane, then continue to next lane.
+- Do not parallelize fallback/fix attempts across multiple failing lanes.
 
 Default full-suite matrix lanes intentionally exclude `anthropic-oauth` (known unstable refresh behavior).
 Current default lanes in `run-all-tests.sh`:

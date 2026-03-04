@@ -8,7 +8,7 @@ Priority items covered:
 1. Graph edge creation reliability
 2. Empty prediction elimination
 3. Agent-action memory capture
-4. Stale fact handling (contradictions/supersession)
+4. Stale fact handling (supersession/temporal recency)
 
 ## P1: Graph Edge Creation Reliability
 
@@ -72,24 +72,25 @@ Capture what the assistant did/suggested/built as first-class memory facts.
 - Run targeted extraction on sessions with known agent contributions.
 - Query DB for action-like facts and verify source/session attribution.
 
-## P5: Stale Fact Handling (Contradictions/Supersession)
+## P5: Stale Fact Handling (Supersession/Temporal Recency)
 
 ### Goal
 Promote current facts and suppress stale/conflicting facts.
 
 ### Required work
-- Confirm janitor contradiction/review tasks execute in benchmark runtime.
-- Verify contradiction detection identifies known benchmark stale cases.
+- Confirm janitor review/dedup/decay tasks execute in benchmark runtime.
 - Verify supersession metadata/flags are applied and respected in recall.
+- Verify temporal-current queries prefer newest valid facts in spot checks.
 
 ### Acceptance criteria
 - Known contested/stale facts are marked superseded/flagged after janitor.
-- `contradictions_found > 0` and/or equivalent supersession activity appears when stale data exists.
+- Supersession activity appears when stale data exists (for example: newer facts win in recall; stale facts lose ranking or are suppressed by status/validity).
 - Retrieval for temporal-current queries prefers latest facts in validation spot-checks.
 
 ### Validation commands
 - `python3 modules/quaid/core/lifecycle/janitor.py --task review --apply`
-- `python3 modules/quaid/core/lifecycle/janitor.py --task contradictions --apply`
+- `python3 modules/quaid/core/lifecycle/janitor.py --task duplicates --apply`
+- `python3 modules/quaid/core/lifecycle/janitor.py --task decay_review --apply`
 - Query DB for stale/superseded markers and verify recall behavior on contested prompts.
 
 ## Exit Criteria For Next Benchmark Pass
@@ -98,5 +99,5 @@ All must be true before accepting a new AL-S/AL-L comparison run:
 - P1 acceptance criteria pass
 - P2 acceptance criteria pass
 - P4 has extraction + spot-check evidence
-- P5 contradiction/supersession checks pass
+- P5 supersession/temporal recency checks pass
 - Full run artifacts generated without debug-mode contamination

@@ -166,6 +166,7 @@ Use cases:
 Notes:
 - `projects_search` is docs-focused and project-aware.
 - `memory_recall` can include `project` store, but `projects_search` is still the better doc workflow for broad doc lookup.
+- Project history is append-only in `projects/<project>/PROJECT.log`; Docs/RAG indexes `PROJECT.log` alongside Markdown docs.
 
 ### `memory_store`
 Use this only for explicit/manual memory insertion when needed.
@@ -232,6 +233,7 @@ Project placement policy:
 - Temporary or scratch files are the exception: place them in workspace-visible `temp/` or `scratch/`.
 - When creating files in `temp/` or `scratch/`, explicitly tell the user these are temporary/untracked project artifacts.
 - If a temp/scratch file becomes durable, move it into a tracked project.
+- `projects/`, `temp/`, and `scratch/` are datastore-contract-owned workspace dirs (`docsdb` init/config hooks); installer keeps a fallback guard to create them if hook execution is bypassed.
 
 ## Knowledge Stores
 

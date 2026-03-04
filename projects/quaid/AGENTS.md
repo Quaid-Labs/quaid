@@ -60,6 +60,7 @@
 - Treat `~/quaid/benchmark-checkpoint` as a cut artifact, not a dev workspace.
 - Keep benchmark/checkpoint operations in their own runbooks under `operations/`.
 - Keep `npm run check:boundaries` green; dynamic imports (`__import__`, `importlib.import_module`) are boundary-checked the same as static imports.
+- E2E failure policy: work one lane at a time. If a lane fails, fix and rerun that lane before moving to any other lane in the matrix.
 - Before creating any non-temporary file, first decide project ownership:
   - Prefer placing the file under an existing tracked project.
   - If no project fits, create/register a new project first, then place the file there.
@@ -73,6 +74,7 @@
 - Declared contract surfaces: `tools`, `api`, `events`, `ingest_triggers`, `auth_requirements`, `migrations`, `notifications`.
 - In strict mode (`config/memory.json -> plugins.strict=true`), undeclared tool/event registrations must fail fast.
 - Datastore-specific behavior (for example domains/schema sync) belongs in datastore plugin contracts, not core one-offs.
+- Workspace ownership belongs with datastore init surfaces where relevant (for example `docsdb` owns `projects/`, `temp/`, and `scratch/` directory initialization).
 - Core prepass timeout tuning lives under `core.parallel.lifecyclePrepassTimeoutSeconds` /
   `core.parallel.lifecyclePrepassTimeoutRetries` (snake_case aliases also supported).
 

@@ -18,10 +18,11 @@ and the systems you operate. Without it, every conversation starts from zero.
 
 ### Memory Lifecycle
 
-Facts flow: **capture -> pending -> review (Opus) -> approved -> dedup/edges -> active**
+Facts flow: **capture -> pending -> review (Opus) -> approved -> dedup/decay -> active**
 
 - Capture runs at compaction/reset from full transcript extraction.
-- Nightly janitor handles dedup, contradiction handling, decay, docs upkeep, snippets, and journal tasks.
+- Nightly janitor handles dedup, decay, docs upkeep, snippets, and journal tasks.
+- `--task contradictions` remains as a compatibility surface but is decommissioned in the active `--task all` pipeline.
 - Decay uses Ebbinghaus-style confidence drop; pinned facts never decay.
 
 ### Documentation Auto-Update
@@ -31,6 +32,10 @@ Docs stay current through three paths:
 1. **Compact/Reset**: changed monitored files can trigger doc updates using session context.
 2. **On-demand staleness check**: `projects_search` can flag stale docs.
 3. **Nightly janitor**: compares source vs doc mtimes and applies updates from git diffs.
+
+Project documentation history:
+- Each project keeps append-only change history in `projects/<project>/PROJECT.log`.
+- `PROJECT.log` is indexed by Docs/RAG alongside Markdown docs so recent project changes are searchable without truncation.
 
 Source mappings live in `config/memory.json -> docs.sourceMapping`.
 

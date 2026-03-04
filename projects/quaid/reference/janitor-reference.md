@@ -2,7 +2,7 @@
 <!-- PURPOSE: Complete reference for nightly janitor pipeline: task list, schedule, thresholds, fail-fast, edge normalization, cost tracking -->
 <!-- SOURCES: core/lifecycle/janitor.py, core/lifecycle/workspace_audit.py, adaptors/openclaw/adapter.ts, lib/adapter.py, lib/providers.py -->
 
-Nightly memory maintenance pipeline. Cleans, decays, deduplicates, detects contradictions, and maintains memory quality.
+Nightly memory maintenance pipeline. Cleans, decays, deduplicates, processes docs/project updates, and maintains memory quality.
 
 ## Schedule
 - **Cron name:** `sandman`
@@ -44,7 +44,7 @@ The janitor is decoupled from the host platform (OpenClaw/ClawdBot) via an adapt
 
 ## Security
 
-The janitor requires LLM access for review/dedup/contradiction tasks. Provider/model routing is resolved through the adapter/provider layer and `config/memory.json` model tier settings; core janitor logic is provider-agnostic.
+The janitor requires LLM access for review/dedup/docs tasks. Provider/model routing is resolved through the adapter/provider layer and `config/memory.json` model tier settings; core janitor logic is provider-agnostic.
 
 **Personal data sanitization:** Prompts reference the configured owner generically rather than embedding hardcoded personal identifiers.
 
@@ -62,8 +62,7 @@ The janitor requires LLM access for review/dedup/contradiction tasks. Provider/m
 | 2a | **temporal** | None | Memory | Resolve relative dates (tomorrow, yesterday) to absolute |
 | 2b | **dedup_review** | Opus | Memory | Auto-confirm hash_exact entries, review embedding-based rejections (catch false positives) |
 | 3 | **duplicates** | Haiku | Memory | Token-recall + batched dedup detection |
-| 4 | **contradictions** | Haiku | Memory | Token-recall + batched detection, stored to DB |
-| 4b | **contradictions (resolve)** | Opus | Memory | Resolve pending contradictions (keep_a/keep_b/merge/keep_both) |
+| 4 | **contradictions** | None | Memory | **Decommissioned** in active janitor path (task name retained as no-op compatibility surface) |
 | 5 | **decay** | None | Memory | Confidence decay on old unused memories |
 | 5b | **decay_review** | Opus | Memory | Review decayed facts (DELETE/EXTEND/PIN) |
 | 7 | **rag** | None | Infra | RAG reindex + project discovery + event processing |
@@ -160,22 +159,13 @@ Token-recall + batched LLM dedup detection:
 
 **FK constraint handling:** Merge operations can encounter foreign key constraint errors when the target node has dependent records (e.g., edges referencing it). These FK violations are caught specifically and logged as warnings rather than errors, preventing a single constraint issue from disrupting the dedup pass. The merge is skipped and the pair is recorded for potential manual review.
 
-### Task 4: Contradictions (Haiku)
-Same token-recall approach as duplicates, but looking for conflicting facts:
-- Example: "Owner lives in Bali" vs "Owner lives in Seattle"
-- Confirmed contradictions are persisted to the `contradictions` table via `store_contradiction()`
-- Status tracking: pending → resolved/false_positive
+### Task 4: Contradictions (Decommissioned Compatibility Surface)
+`--task contradictions` is retained for CLI/backward compatibility, but the active janitor pipeline now skips contradiction detection/resolution work in normal `--task all` execution.
 
-**Temporal awareness:** Candidate pairs now include temporal metadata (`created_at`, `valid_from`, `valid_until`) which is passed to the LLM prompt. The prompt explicitly instructs that facts from different time periods are **not contradictions** — they represent temporal succession (e.g., "lives in Austin" recorded 2024 and "lives in Bali" recorded 2025 is a life change, not a contradiction). Only facts that cannot both be true at the same time are flagged as true contradictions. This prevents false positives from natural life changes like relocations, job changes, or evolving preferences.
-
-**Contradiction resolution — MERGE:** When contradictions are resolved via MERGE, the merged memory is stored with `status: "approved"` (not immediately active) so it still passes through the normal graduation pipeline. A `resolution_summary` node is also created (type `resolution_summary`, status `archived`) and linked to the surviving merged node via a `resolved_from` edge. This preserves provenance — you can trace from the resolution summary back to the merged result, and from there to the original contradicting facts. Resolution summary creation is best-effort; failures are silently ignored to avoid disrupting the merge flow.
-
-### Task 4b: Resolve Contradictions (Opus)
-Resolves pending contradictions detected by Task 4:
-- **Decisions:** `keep_a`, `keep_b`, `keep_both`, `merge`
-- **MERGE resolution:** Creates a `resolution_summary` node (type `resolution_summary`, status `archived`) linked to the surviving merged node via a `resolved_from` edge. Preserves provenance.
-- **Merged status:** Merged memory stored with `status: "approved"` (not immediately active) — passes through normal graduation pipeline.
-- **Fail-fast:** Skipped if `memory_pipeline_ok` is `False` (i.e., earlier memory task failed).
+Current stale-fact posture is **supersession-first**:
+- review + dedup + temporal normalization + recency-weighted retrieval are the active mechanisms for conflict/staleness handling;
+- contradictory-memory tables/maintenance helpers remain in schema/code for compatibility and historical data access;
+- contradiction-specific quality checks should not be treated as active release gates unless explicitly re-enabled in a dedicated maintenance lane.
 
 ### Task 5: Decay (Ebbinghaus Exponential)
 Uses the Ebbinghaus forgetting curve with access-scaled half-life:
@@ -218,7 +208,7 @@ Runs the vitest test suite. Output parser handles both vitest format (`Tests X f
 
 The janitor uses a `memory_pipeline_ok` boolean to protect memory quality:
 
-- **Memory tasks** (2, 2a, 2b, 3, 4, 4b, 5, 5b): If any fails, the flag is set to `False`. Remaining memory tasks are **skipped** and graduation is **blocked**.
+- **Memory tasks** (2, 2a, 2b, 3, 5, 5b): If any fails, the flag is set to `False`. Remaining memory tasks are **skipped** and graduation is **blocked**.
 - **Infrastructure tasks** (0, 0b, 1, 1b, 1c, 1d-snippets, 1d-journal, 7, 8, 9): Always run regardless of pipeline health.
 - **Graduation** (`approved → active`): Only happens at the end of `--task all --apply` when `memory_pipeline_ok` is `True`. If blocked, facts remain as `approved/pending` and will be reprocessed next run.
 
@@ -275,7 +265,7 @@ When new relation types are created during edge extraction, search keywords are 
 
 ---
 
-## Scalable Dedup & Contradiction Detection
+## Scalable Dedup Candidate Detection
 
 **Problem:** O(n²) pairwise comparison doesn't scale. At 467 memories, 214K vector comparisons; at 24K memories (1 year), 576M.
 
@@ -296,11 +286,10 @@ When new relation types are created during edge extraction, search keywords are 
 
 ## Prompt Versioning
 
-All LLM decisions in the janitor are tagged with a prompt version hash for reproducibility. A SHA256 hash of the system prompt template is computed at call time via `_prompt_hash()` (first 12 hex chars of SHA256), and a prefix `[prompt:abc123def456]` is prepended to the decision text stored in the relevant table (dedup_log, contradictions, decay_review_queue).
+All LLM decisions in the janitor are tagged with a prompt version hash for reproducibility. A SHA256 hash of the system prompt template is computed at call time via `_prompt_hash()` (first 12 hex chars of SHA256), and a prefix `[prompt:abc123def456]` is prepended to decision text stored in operational tables (for example `dedup_log`, `decay_review_queue`).
 
 **Tagged tasks:**
 - **Task 3 (Duplicates):** Dedup review reasons are prefixed with the prompt hash
-- **Task 4 (Contradictions):** Contradiction explanations and resolution reasons are prefixed with the prompt hash
 - **Task 2b (Dedup Review):** Dedup rejection review reasons are prefixed with the prompt hash
 - **Task 5b (Decay Review):** Decay review reasons are prefixed with the prompt hash
 
@@ -392,12 +381,10 @@ Task 2a: Temporal resolution (regex) → fix relative dates
     ↓
 Task 3: Dedup (pending/approved vs all)
     ↓
-Task 4: Contradictions (pending/approved vs all)
-    ↓
 Final: Graduate approved → active (only if pipeline_ok on --task all --apply)
 ```
 
-Once `active`, a fact is never reprocessed by review, dedup, or contradiction detection. Only decay (Task 5) touches active facts. Nightly runs only process the day's new pending/approved facts.
+Once `active`, a fact is never reprocessed by review or dedup. Only decay (Task 5) touches active facts. Nightly runs only process the day's new pending/approved facts.
 
 Graduation is **blocked** if any memory task failed during the run (fail-fast guard). Facts remain as `approved/pending` and will be reprocessed next run.
 
@@ -418,7 +405,7 @@ Settings are driven by `config/memory.json`. Key sections used by the janitor:
 | Config Section | Used By | Settings |
 |----------------|---------|----------|
 | `models.deep_reasoning` | review, workspace | High-tier reasoning model (explicit or `default`) |
-| `models.fast_reasoning` | duplicates, contradictions | Fast-tier reasoning model ID |
+| `models.fast_reasoning` | duplicates | Fast-tier reasoning model ID |
 | `database.path` | all tasks | Main DB path |
 | `docs.docs_dir` | rag task | Docs directory to index |
 | `decay` | decay task | Decay rates, thresholds |

@@ -181,6 +181,20 @@ Every modification to core files (SOUL.md, USER.md, MEMORY.md, TOOLS.md, AGENTS.
 
 Implementation: wrap file writes in the snippet/journal/workspace systems with `git add <file> && git commit -m "<source>: <summary>"`. Keep commits atomic (one per file per janitor pass). The git log becomes the ground truth for the agent's evolution timeline.
 
+### TODO 6: Contract-Owned Nightly Backup Service (Optional)
+
+Add an optional nightly backup service driven by datastore contracts, not janitor path hardcoding.
+
+Design constraints:
+
+1. Backup resource ownership belongs to datastores/plugins via a declared contract surface (for example `backup_resources`), where each datastore advertises what it owns (paths/artifacts, sensitivity, restore order, exclusions).
+2. Janitor backup orchestration consumes only declared backup resources; it must not hardcode datastore file paths.
+3. Feature is opt-in via config (for example: backup directory + retention policy such as copies-to-keep).
+4. Temporary/scratch areas (`temp/`, `scratch/`) are excluded by default unless explicitly advertised/configured.
+5. Backups must emit manifest + integrity metadata for restore validation.
+
+Rationale: backups are launch-critical safety work, but containment boundaries matter more than speed. Ship only with a clean contract implementation.
+
 ---
 
 ## PART 5: BENCHMARK FINDINGS
