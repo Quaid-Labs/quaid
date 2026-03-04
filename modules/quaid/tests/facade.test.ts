@@ -92,12 +92,21 @@ describe("QuaidFacade", () => {
   // Events
   // -----------------------------------------------------------------------
 
-  it("emitEvent delegates to execEvents", async () => {
-    const execEvents = vi.fn(async () => "emitted");
+  it("emitEvent delegates to execEvents with normalized args", async () => {
+    const execEvents = vi.fn(async () => '{"ok":true}');
     const facade = createQuaidFacade(makeMockDeps({ execEvents }));
-    const result = await facade.emitEvent("session_end", ["--id", "s1"]);
-    expect(result).toBe("emitted");
-    expect(execEvents).toHaveBeenCalledWith("session_end", ["--id", "s1"]);
+    const result = await facade.emitEvent("session_end", { id: "s1" }, "queued");
+    expect(result).toEqual({ ok: true });
+    expect(execEvents).toHaveBeenCalledWith("emit", [
+      "--name",
+      "session_end",
+      "--payload",
+      '{"id":"s1"}',
+      "--source",
+      "openclaw_adapter",
+      "--dispatch",
+      "queued",
+    ]);
   });
 
   // -----------------------------------------------------------------------

@@ -118,7 +118,11 @@ export type QuaidFacade = {
   searchBySession: (sessionId: string, limit?: number) => Promise<string>;
 
   // --- Events ---
-  emitEvent: (command: string, args: string[]) => Promise<string>;
+  emitEvent: (
+    name: string,
+    payload: Record<string, unknown>,
+    dispatch?: "auto" | "immediate" | "queued",
+  ) => Promise<Record<string, unknown>>;
 
   // --- Recall (routed via orchestrator) ---
   recall: (opts: FacadeRecallOptions) => Promise<MemoryResult[]>;
@@ -707,7 +711,30 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     ]),
 
     // Events
-    emitEvent: (command, args) => deps.execEvents(command, args),
+    emitEvent: async (name, payload, dispatch = "auto") => {
+      const args = [
+        "--name",
+        name,
+        "--payload",
+        JSON.stringify(payload || {}),
+        "--source",
+        "openclaw_adapter",
+        "--dispatch",
+        dispatch,
+      ];
+      const out = await deps.execEvents("emit", args);
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(out || "{}");
+      } catch (err: unknown) {
+        const msg = String((err as Error)?.message || err);
+        throw new Error(`[quaid][facade] events emit returned invalid JSON: ${msg}`);
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("[quaid][facade] events emit returned non-object payload");
+      }
+      return parsed as Record<string, unknown>;
+    },
 
     // Recall
     recall,
