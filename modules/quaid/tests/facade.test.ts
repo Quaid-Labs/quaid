@@ -582,6 +582,14 @@ describe("QuaidFacade", () => {
     expect(facade.isInternalMaintenancePrompt("Please remember my dog is Pixel")).toBe(false);
   });
 
+  it("resolveExtractionTrigger normalizes lifecycle labels", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(facade.resolveExtractionTrigger("CompactionSignal")).toBe("compaction");
+    expect(facade.resolveExtractionTrigger("timeout event")).toBe("timeout");
+    expect(facade.resolveExtractionTrigger("recovery-run")).toBe("recovery");
+    expect(facade.resolveExtractionTrigger("")).toBe("unknown");
+  });
+
   // -----------------------------------------------------------------------
   // Stubs throw "not implemented"
   // -----------------------------------------------------------------------

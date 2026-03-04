@@ -99,6 +99,8 @@ export type LifecycleSignal = {
   signature: string;
 };
 
+export type ExtractionTrigger = "compaction" | "reset" | "new" | "recovery" | "timeout" | "unknown";
+
 /** Options for facade-level recall. */
 export type FacadeRecallOptions = {
   query: string;
@@ -220,6 +222,7 @@ export type QuaidFacade = {
   getJanitorHealthIssue: () => string | null;
   queueDelayedRequest: (request: unknown) => never;
   isInternalMaintenancePrompt: (text: string) => boolean;
+  resolveExtractionTrigger: (label: string) => ExtractionTrigger;
 };
 
 // ---------------------------------------------------------------------------
@@ -789,6 +792,17 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       "are these two statements the same fact",
     ];
     return markers.some((marker) => normalized.includes(marker));
+  }
+
+  function resolveExtractionTrigger(label: string): ExtractionTrigger {
+    const normalized = String(label || "").trim().toLowerCase();
+    if (!normalized) return "unknown";
+    if (normalized.includes("compact")) return "compaction";
+    if (normalized.includes("recover")) return "recovery";
+    if (normalized.includes("timeout")) return "timeout";
+    if (normalized.includes("new")) return "new";
+    if (normalized.includes("reset")) return "reset";
+    return "unknown";
   }
 
   function computeDynamicK(): number {
@@ -1491,5 +1505,6 @@ ${lines.join("\n")}
     },
     queueDelayedRequest: () => notImplemented("queueDelayedRequest"),
     isInternalMaintenancePrompt,
+    resolveExtractionTrigger,
   };
 }
