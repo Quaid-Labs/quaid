@@ -165,6 +165,53 @@ function createQuaidFacade(deps) {
     }
   }
 
+  function getMessageText(msg) {
+    if (!msg || typeof msg !== "object") return "";
+    const candidate = msg.content ?? msg.text ?? msg.message;
+    return typeof candidate === "string" ? candidate : "";
+  }
+
+  function detectExplicitLifecycleUserCommand(text) {
+    if (!text) return null;
+    const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length !== 1) return null;
+    const normalized = lines[0].replace(/\[\[[^\]]+\]\]\s*/g, "").trim();
+    const m = normalized.match(/^(?:\[[^\]]+\]\s*)?\/(new|reset|restart|compact)(?=\s|$)/i);
+    if (!m) return null;
+    return `/${m[1].toLowerCase()}`;
+  }
+
+  function detectLifecycleSignal(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return null;
+    const tail = messages.slice(-8);
+    for (let i = tail.length - 1; i >= 0; i--) {
+      const msg = tail[i];
+      if (!msg || typeof msg !== "object") continue;
+      const role = String(msg.role || "").trim();
+      const text = getMessageText(msg).trim();
+      if (!text) continue;
+      const normalized = text.replace(/\[\[[^\]]+\]\]\s*/g, "").replace(/^\[[^\]]+\]\s*/, "").trim();
+      if (role === "user") {
+        const command = detectExplicitLifecycleUserCommand(text);
+        if (command === "/new" || command === "/reset" || command === "/restart") {
+          return { label: "ResetSignal", source: "user_command", signature: `cmd:${command}` };
+        }
+        if (command === "/compact") {
+          return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}` };
+        }
+      }
+      if (role === "system") {
+        const hasCompacted = /\bcompacted\b/i.test(normalized);
+        const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
+        const hasContext = /\bcontext\b/i.test(normalized);
+        if (hasCompacted && (hasDelta || hasContext)) {
+          return { label: "CompactionSignal", source: "system_notice", signature: `system:${normalized.toLowerCase()}` };
+        }
+      }
+    }
+    return null;
+  }
+
   async function recallFromBridge(query, limit, expandGraph, graphDepth, domain, domainBoost, project, dateFrom, dateTo) {
     try {
       const args = [query, "--limit", String(limit), "--json"];
@@ -405,7 +452,7 @@ function createQuaidFacade(deps) {
     getProjectCatalog: () => projectCatalogReader.getProjectCatalog(),
     getProjectNames: () => projectCatalogReader.getProjectNames(),
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
-    detectLifecycleSignal: () => notImplemented("detectLifecycleSignal"),
+    detectLifecycleSignal,
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue: () => {

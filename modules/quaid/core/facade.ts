@@ -87,6 +87,12 @@ export type DatastoreStats = {
   active_nodes?: number;
 };
 
+export type LifecycleSignal = {
+  label: "ResetSignal" | "CompactionSignal";
+  source: "user_command" | "system_notice" | "hook";
+  signature: string;
+};
+
 /** Options for facade-level recall. */
 export type FacadeRecallOptions = {
   query: string;
@@ -159,7 +165,7 @@ export type QuaidFacade = {
   renderDatastoreGuidance: () => string;
 
   // --- Stubs (typed, not yet implemented) ---
-  detectLifecycleSignal: (messages: unknown[]) => never;
+  detectLifecycleSignal: (messages: unknown[]) => LifecycleSignal | null;
   processLifecycleEvent: (signal: unknown, context: unknown) => never;
   maybeRunMaintenance: (sessionId: string) => never;
   getJanitorHealthIssue: () => string | null;
@@ -339,6 +345,66 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       }
       return null;
     }
+  }
+
+  function getMessageText(msg: unknown): string {
+    if (!msg || typeof msg !== "object") return "";
+    const candidate = (msg as Record<string, unknown>).content
+      ?? (msg as Record<string, unknown>).text
+      ?? (msg as Record<string, unknown>).message;
+    return typeof candidate === "string" ? candidate : "";
+  }
+
+  function detectExplicitLifecycleUserCommand(text: string): "/new" | "/reset" | "/restart" | "/compact" | null {
+    if (!text) return null;
+    const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length !== 1) return null;
+    const normalized = lines[0]
+      .replace(/\[\[[^\]]+\]\]\s*/g, "")
+      .trim();
+    const m = normalized.match(/^(?:\[[^\]]+\]\s*)?\/(new|reset|restart|compact)(?=\s|$)/i);
+    if (!m) return null;
+    return `/${m[1].toLowerCase()}` as "/new" | "/reset" | "/restart" | "/compact";
+  }
+
+  function detectLifecycleSignal(messages: unknown[]): LifecycleSignal | null {
+    if (!Array.isArray(messages) || messages.length === 0) return null;
+    const tail = messages.slice(-8);
+    for (let i = tail.length - 1; i >= 0; i--) {
+      const msg = tail[i];
+      if (!msg || typeof msg !== "object") continue;
+      const role = String((msg as Record<string, unknown>).role || "").trim();
+      const text = getMessageText(msg).trim();
+      if (!text) continue;
+      const normalized = text
+        .replace(/\[\[[^\]]+\]\]\s*/g, "")
+        .replace(/^\[[^\]]+\]\s*/, "")
+        .trim();
+
+      if (role === "user") {
+        const command = detectExplicitLifecycleUserCommand(text);
+        if (command === "/new" || command === "/reset" || command === "/restart") {
+          return { label: "ResetSignal", source: "user_command", signature: `cmd:${command}` };
+        }
+        if (command === "/compact") {
+          return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}` };
+        }
+      }
+
+      if (role === "system") {
+        const hasCompacted = /\bcompacted\b/i.test(normalized);
+        const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
+        const hasContext = /\bcontext\b/i.test(normalized);
+        if (hasCompacted && (hasDelta || hasContext)) {
+          return {
+            label: "CompactionSignal",
+            source: "system_notice",
+            signature: `system:${normalized.toLowerCase()}`,
+          };
+        }
+      }
+    }
+    return null;
   }
 
   function computeDynamicK(): number {
@@ -811,7 +877,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
 
     // Stubs
-    detectLifecycleSignal: () => notImplemented("detectLifecycleSignal"),
+    detectLifecycleSignal,
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue: () => {
