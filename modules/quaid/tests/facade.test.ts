@@ -249,10 +249,10 @@ describe("QuaidFacade", () => {
     expect(k).toBe(5);
   });
 
-  it("computeDynamicK prefers datastore recommended_recall_k when present", () => {
-    mockExecFileSync.mockReturnValueOnce('{"active_nodes":500,"recommended_recall_k":15}');
+  it("computeDynamicK derives K from datastore active_nodes stats", () => {
+    mockExecFileSync.mockReturnValueOnce('{"active_nodes":500}');
     const facade = createQuaidFacade(makeMockDeps());
-    expect(facade.computeDynamicK()).toBe(15);
+    expect(facade.computeDynamicK()).toBe(10);
   });
 
   // -----------------------------------------------------------------------
