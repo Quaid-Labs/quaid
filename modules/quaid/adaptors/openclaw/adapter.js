@@ -1364,11 +1364,8 @@ function queueDelayedLlmRequest(message, kind = "janitor", priority = "normal") 
     isFailHardEnabled()
   );
 }
-function getJanitorHealthIssue() {
-  return facade.getJanitorHealthIssue();
-}
 function maybeQueueJanitorHealthAlert() {
-  const issue = getJanitorHealthIssue();
+  const issue = facade.getJanitorHealthIssue();
   if (!issue) return;
   const now = Date.now();
   const state = _loadJanitorNudgeState();
