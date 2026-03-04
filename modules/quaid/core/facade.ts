@@ -58,7 +58,6 @@ export type QuaidFacadeDeps = {
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
-  resolveOwner: () => string;
   transcriptFormat?: {
     preprocessText?: (text: string) => string;
     shouldSkipText?: (role: "user" | "assistant", text: string) => boolean;
@@ -128,6 +127,7 @@ export type QuaidFacade = {
   getConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
+  resolveOwner: (speaker?: string, channel?: string) => string;
 
   // --- Datastore stats ---
   stats: () => Promise<string>;
@@ -313,6 +313,39 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     signature: string;
     seenAt: number;
   }>();
+
+  function resolveOwner(speaker?: string, channel?: string): string {
+    const usersCfg = deps.getMemoryConfig()?.users;
+    const config = usersCfg && typeof usersCfg === "object" && !Array.isArray(usersCfg)
+      ? usersCfg as Record<string, any>
+      : { defaultOwner: "quaid", identities: {} };
+    const identities = config.identities && typeof config.identities === "object" && !Array.isArray(config.identities)
+      ? config.identities as Record<string, any>
+      : {};
+    const defaultOwner = typeof config.defaultOwner === "string" && config.defaultOwner.trim()
+      ? config.defaultOwner.trim()
+      : "quaid";
+
+    for (const [userId, identity] of Object.entries(identities)) {
+      if (!identity || typeof identity !== "object") continue;
+      const speakers = Array.isArray(identity.speakers) ? identity.speakers : [];
+      if (speaker && speakers.some((s: unknown) => String(s || "").toLowerCase() === speaker.toLowerCase())) {
+        return userId;
+      }
+
+      const channels = identity.channels && typeof identity.channels === "object"
+        ? identity.channels as Record<string, unknown>
+        : {};
+      if (channel && Array.isArray(channels[channel])) {
+        const allowed = channels[channel] as unknown[];
+        if (allowed.some((a: unknown) => String(a || "") === "*")) return userId;
+        if (speaker && allowed.some((a: unknown) => String(a || "").toLowerCase() === speaker.toLowerCase())) {
+          return userId;
+        }
+      }
+    }
+    return defaultOwner;
+  }
 
   function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<string, any> | null {
     const now = Date.now();
@@ -1397,6 +1430,7 @@ ${lines.join("\n")}
     getConfig: deps.getMemoryConfig,
     isSystemEnabled: deps.isSystemEnabled,
     isFailHardEnabled: deps.isFailHardEnabled,
+    resolveOwner,
 
     // Datastore
     stats: () => datastoreBridge.stats(),
@@ -1408,7 +1442,7 @@ ${lines.join("\n")}
       "--session-id",
       sessionId,
       "--owner",
-      deps.resolveOwner(),
+      resolveOwner(),
       "--limit",
       String(limit),
     ]),

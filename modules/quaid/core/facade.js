@@ -122,6 +122,28 @@ function createQuaidFacade(deps) {
   let _cachedNodeCount = null;
   let _nodeCountTimestamp = 0;
   const lifecycleSignalHistory = /* @__PURE__ */ new Map();
+  function resolveOwner(speaker, channel) {
+    const usersCfg = deps.getMemoryConfig()?.users;
+    const config = usersCfg && typeof usersCfg === "object" && !Array.isArray(usersCfg) ? usersCfg : { defaultOwner: "quaid", identities: {} };
+    const identities = config.identities && typeof config.identities === "object" && !Array.isArray(config.identities) ? config.identities : {};
+    const defaultOwner = typeof config.defaultOwner === "string" && config.defaultOwner.trim() ? config.defaultOwner.trim() : "quaid";
+    for (const [userId, identity] of Object.entries(identities)) {
+      if (!identity || typeof identity !== "object") continue;
+      const speakers = Array.isArray(identity.speakers) ? identity.speakers : [];
+      if (speaker && speakers.some((s) => String(s || "").toLowerCase() === speaker.toLowerCase())) {
+        return userId;
+      }
+      const channels = identity.channels && typeof identity.channels === "object" ? identity.channels : {};
+      if (channel && Array.isArray(channels[channel])) {
+        const allowed = channels[channel];
+        if (allowed.some((a) => String(a || "") === "*")) return userId;
+        if (speaker && allowed.some((a) => String(a || "").toLowerCase() === speaker.toLowerCase())) {
+          return userId;
+        }
+      }
+    }
+    return defaultOwner;
+  }
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     const now = Date.now();
     if (now - _datastoreStatsTimestamp < maxAgeMs) {
@@ -1083,6 +1105,7 @@ ${lines.join("\n")}
     getConfig: deps.getMemoryConfig,
     isSystemEnabled: deps.isSystemEnabled,
     isFailHardEnabled: deps.isFailHardEnabled,
+    resolveOwner,
     // Datastore
     stats: () => datastoreBridge.stats(),
     getStatsParsed,
@@ -1093,7 +1116,7 @@ ${lines.join("\n")}
       "--session-id",
       sessionId,
       "--owner",
-      deps.resolveOwner(),
+      resolveOwner(),
       "--limit",
       String(limit)
     ]),
