@@ -60,6 +60,12 @@
 - Treat `~/quaid/benchmark-checkpoint` as a cut artifact, not a dev workspace.
 - Keep benchmark/checkpoint operations in their own runbooks under `operations/`.
 - Keep `npm run check:boundaries` green; dynamic imports (`__import__`, `importlib.import_module`) are boundary-checked the same as static imports.
+- Before creating any non-temporary file, first decide project ownership:
+  - Prefer placing the file under an existing tracked project.
+  - If no project fits, create/register a new project first, then place the file there.
+  - Temporary or scratch files are the exception: place them in workspace-visible `temp/` or `scratch/`.
+  - When using `temp/` or `scratch/`, explicitly tell the user those files are temporary/untracked project artifacts.
+  - If a temp/scratch file becomes durable, move it into a tracked project.
 
 ### Plugin Contract Discipline
 - Plugin runtime surfaces are contract-owned and manifest-declared.

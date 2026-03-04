@@ -226,6 +226,13 @@ Parameter map:
 - `project_list`
   - no parameters.
 
+Project placement policy:
+- Before creating any non-temporary file, an agent should first place it inside an existing tracked project whenever possible.
+- If no existing project fits, the agent should create/register a project (via `project_create`) and place the file there so Quaid can track/index it.
+- Temporary or scratch files are the exception: place them in workspace-visible `temp/` or `scratch/`.
+- When creating files in `temp/` or `scratch/`, explicitly tell the user these are temporary/untracked project artifacts.
+- If a temp/scratch file becomes durable, move it into a tracked project.
+
 ## Knowledge Stores
 
 - `vector_basic`: personal/life facts, preferences, relationships

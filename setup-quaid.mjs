@@ -249,6 +249,8 @@ const DATA_DIR = path.join(WORKSPACE, "data");
 const JOURNAL_DIR = path.join(WORKSPACE, "journal");
 const LOGS_DIR = path.join(WORKSPACE, "logs");
 const PROJECTS_DIR = path.join(WORKSPACE, "projects");
+const TEMP_DIR = path.join(WORKSPACE, "temp");
+const SCRATCH_DIR = path.join(WORKSPACE, "scratch");
 const OLLAMA_BASE_URL = (process.env.OLLAMA_URL || "http://localhost:11434")
   .replace(/\/v1\/?$/, "")
   .replace(/\/+$/, "");
@@ -2074,10 +2076,26 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Create directories
   s.start("Creating directories...");
-  for (const dir of [CONFIG_DIR, DATA_DIR, JOURNAL_DIR, LOGS_DIR, PROJECTS_DIR, path.join(JOURNAL_DIR, "archive")]) {
+  for (const dir of [CONFIG_DIR, DATA_DIR, JOURNAL_DIR, LOGS_DIR, PROJECTS_DIR, TEMP_DIR, SCRATCH_DIR, path.join(JOURNAL_DIR, "archive")]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   s.stop(C.green("Directories created"));
+
+  // Scratch is intentionally workspace-visible and can hold ad-hoc drafts.
+  // Initialize a local git repo there so users can recover intermediate states.
+  if (!fs.existsSync(path.join(SCRATCH_DIR, ".git"))) {
+    const scratchGitInit = spawnSync("git", ["init"], {
+      cwd: SCRATCH_DIR,
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    if (scratchGitInit.status === 0) {
+      log.info("Initialized scratch/ local git history");
+    } else {
+      const detail = String(scratchGitInit.stderr || scratchGitInit.stdout || "").trim();
+      log.warn(`Could not initialize scratch/ git history${detail ? `: ${detail}` : ""}`);
+    }
+  }
 
   // Copy plugin source
   if (!fs.existsSync(PLUGIN_DIR) || fs.readdirSync(PLUGIN_DIR).length === 0) {
@@ -2224,6 +2242,8 @@ print('[+] MemoryDB domain init complete')
       "data/*.db",
       "data/*.db-*",
       "logs/",
+      "temp/",
+      "scratch/",
       ".env",
       ".env.*",
       "",
