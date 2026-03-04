@@ -2197,48 +2197,6 @@ interface RecallOptions {
 // defined below inside register() as well, so it has access to it.
 // (Moved into register() closure when used)
 
-type DatastoreStats = {
-  total_nodes: number;
-  edges: number;
-};
-
-function parseDatastoreStats(raw: string): DatastoreStats | null {
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(raw || "{}");
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const totalNodes = Number((parsed as Record<string, unknown>).total_nodes);
-  const edges = Number((parsed as Record<string, unknown>).edges);
-  if (!Number.isFinite(totalNodes) || totalNodes < 0) {
-    return null;
-  }
-  if (!Number.isFinite(edges) || edges < 0) {
-    return null;
-  }
-  return {
-    total_nodes: totalNodes,
-    edges,
-  };
-}
-
-async function getStats(): Promise<DatastoreStats | null> {
-  try {
-    const output = await facade.stats();
-    return parseDatastoreStats(output);
-  } catch (err: unknown) {
-    console.error("[quaid] stats error:", (err as Error).message);
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-    return null;
-  }
-}
-
 function formatMemories(memories: MemoryResult[]): string {
   if (!memories.length) { return ""; }
 
@@ -2362,7 +2320,7 @@ const quaidPlugin = {
     }
 
     // Log stats
-    void getStats()
+    void facade.getStatsParsed()
       .then((stats) => {
         if (stats) {
           console.log(

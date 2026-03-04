@@ -82,6 +82,21 @@ describe("QuaidFacade", () => {
     expect(execPython).toHaveBeenCalledWith("stats", []);
   });
 
+  it("getStatsParsed returns typed datastore stats", async () => {
+    const execPython = vi.fn(async () => '{"total_nodes":42,"edges":9,"active_nodes":7}');
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    const result = await facade.getStatsParsed();
+    expect(result).toEqual({ total_nodes: 42, edges: 9, active_nodes: 7 });
+    expect(execPython).toHaveBeenCalledWith("stats", []);
+  });
+
+  it("getStatsParsed returns null on invalid stats payload", async () => {
+    const execPython = vi.fn(async () => '{"total_nodes":"bad","edges":9}');
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    const result = await facade.getStatsParsed();
+    expect(result).toBeNull();
+  });
+
   it("store calls execPython with 'store'", async () => {
     const execPython = vi.fn(async () => "ok");
     const facade = createQuaidFacade(makeMockDeps({ execPython }));

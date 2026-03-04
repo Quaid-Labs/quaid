@@ -1892,41 +1892,6 @@ const facade = createQuaidFacade({
 });
 const recallStoreGuidance = facade.renderDatastoreGuidance();
 const getProjectNames = () => facade.getProjectNames();
-function parseDatastoreStats(raw) {
-  let parsed = null;
-  try {
-    parsed = JSON.parse(raw || "{}");
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const totalNodes = Number(parsed.total_nodes);
-  const edges = Number(parsed.edges);
-  if (!Number.isFinite(totalNodes) || totalNodes < 0) {
-    return null;
-  }
-  if (!Number.isFinite(edges) || edges < 0) {
-    return null;
-  }
-  return {
-    total_nodes: totalNodes,
-    edges
-  };
-}
-async function getStats() {
-  try {
-    const output = await facade.stats();
-    return parseDatastoreStats(output);
-  } catch (err) {
-    console.error("[quaid] stats error:", err.message);
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-    return null;
-  }
-}
 function formatMemories(memories) {
   if (!memories.length) {
     return "";
@@ -2032,7 +1997,7 @@ const quaidPlugin = {
         }
       }
     }
-    void getStats().then((stats) => {
+    void facade.getStatsParsed().then((stats) => {
       if (stats) {
         console.log(
           `[quaid] Database ready: ${stats.total_nodes} nodes, ${stats.edges} edges`

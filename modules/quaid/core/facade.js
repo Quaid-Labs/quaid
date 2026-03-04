@@ -126,6 +126,45 @@ function createQuaidFacade(deps) {
     return Math.max(5, Math.min(k, 40));
   }
 
+  function parseDatastoreStats(raw) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw || "{}");
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const totalNodes = Number(parsed.total_nodes);
+    const edges = Number(parsed.edges);
+    const activeNodes = Number(parsed.active_nodes);
+    if (!Number.isFinite(totalNodes) || totalNodes < 0) {
+      return null;
+    }
+    if (!Number.isFinite(edges) || edges < 0) {
+      return null;
+    }
+    return {
+      total_nodes: totalNodes,
+      edges,
+      ...(Number.isFinite(activeNodes) && activeNodes >= 0 ? { active_nodes: activeNodes } : {}),
+    };
+  }
+
+  async function getStatsParsed() {
+    try {
+      const output = await datastoreBridge.stats();
+      return parseDatastoreStats(output);
+    } catch (err) {
+      console.error("[quaid][facade] stats error:", err?.message);
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      return null;
+    }
+  }
+
   async function recallFromBridge(query, limit, expandGraph, graphDepth, domain, domainBoost, project, dateFrom, dateTo) {
     try {
       const args = [query, "--limit", String(limit), "--json"];
@@ -332,6 +371,7 @@ function createQuaidFacade(deps) {
     isSystemEnabled: deps.isSystemEnabled,
     isFailHardEnabled: deps.isFailHardEnabled,
     stats: () => datastoreBridge.stats(),
+    getStatsParsed,
     store: (args) => datastoreBridge.store(args),
     forget: (args) => datastoreBridge.forget(args),
     searchBySession: (sessionId, limit = 20) => datastoreBridge.search(["*", "--session-id", sessionId, "--owner", deps.resolveOwner(), "--limit", String(limit)]),

@@ -81,6 +81,12 @@ export type MemoryResult = {
   via?: string;
 };
 
+export type DatastoreStats = {
+  total_nodes: number;
+  edges: number;
+  active_nodes?: number;
+};
+
 /** Options for facade-level recall. */
 export type FacadeRecallOptions = {
   query: string;
@@ -111,6 +117,7 @@ export type QuaidFacade = {
 
   // --- Datastore stats ---
   stats: () => Promise<string>;
+  getStatsParsed: () => Promise<DatastoreStats | null>;
 
   // --- Write / delete ---
   store: (args: string[]) => Promise<string>;
@@ -293,6 +300,45 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       throw new Error("[quaid][facade] unable to derive active node count under failHard");
     }
     return _cachedNodeCount ?? 100;
+  }
+
+  function parseDatastoreStats(raw: string): DatastoreStats | null {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(raw || "{}");
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const totalNodes = Number((parsed as Record<string, unknown>).total_nodes);
+    const edges = Number((parsed as Record<string, unknown>).edges);
+    const activeNodes = Number((parsed as Record<string, unknown>).active_nodes);
+    if (!Number.isFinite(totalNodes) || totalNodes < 0) {
+      return null;
+    }
+    if (!Number.isFinite(edges) || edges < 0) {
+      return null;
+    }
+    return {
+      total_nodes: totalNodes,
+      edges,
+      ...(Number.isFinite(activeNodes) && activeNodes >= 0 ? { active_nodes: activeNodes } : {}),
+    };
+  }
+
+  async function getStatsParsed(): Promise<DatastoreStats | null> {
+    try {
+      const output = await datastoreBridge.stats();
+      return parseDatastoreStats(output);
+    } catch (err: unknown) {
+      console.error("[quaid][facade] stats error:", (err as Error).message);
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      return null;
+    }
   }
 
   function computeDynamicK(): number {
@@ -698,6 +744,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
     // Datastore
     stats: () => datastoreBridge.stats(),
+    getStatsParsed,
     store: (args) => datastoreBridge.store(args),
     forget: (args) => datastoreBridge.forget(args),
     searchBySession: (sessionId, limit = 20) => datastoreBridge.search([
