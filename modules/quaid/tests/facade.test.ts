@@ -43,7 +43,6 @@ function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps
     getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
     isSystemEnabled: vi.fn(() => false),
     isFailHardEnabled: vi.fn(() => false),
-    resolveOwner: vi.fn(() => "test-owner"),
     transcriptFormat: {
       preprocessText: (text: string) => String(text || "")
         .replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "")
@@ -130,10 +129,33 @@ describe("QuaidFacade", () => {
 
   it("searchBySession calls execPython with scoped search args", async () => {
     const execPython = vi.fn(async () => "[]");
-    const resolveOwner = vi.fn(() => "owner-123");
-    const facade = createQuaidFacade(makeMockDeps({ execPython, resolveOwner }));
+    const getMemoryConfig = vi.fn(() => ({
+      retrieval: { failHard: false },
+      users: { defaultOwner: "owner-123", identities: {} },
+    }));
+    const facade = createQuaidFacade(makeMockDeps({ execPython, getMemoryConfig }));
     await facade.searchBySession("sess-1", 7);
     expect(execPython).toHaveBeenCalledWith("search", ["*", "--session-id", "sess-1", "--owner", "owner-123", "--limit", "7"]);
+  });
+
+  it("resolveOwner uses users config speaker/channel mapping", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        users: {
+          defaultOwner: "quaid",
+          identities: {
+            solomon: {
+              speakers: ["Solomon"],
+              channels: { telegram: ["*"] },
+            },
+          },
+        },
+      })),
+    }));
+    expect(facade.resolveOwner("Solomon", "discord")).toBe("solomon");
+    expect(facade.resolveOwner("AnyUser", "telegram")).toBe("solomon");
+    expect(facade.resolveOwner("Unknown", "discord")).toBe("quaid");
   });
 
   // -----------------------------------------------------------------------

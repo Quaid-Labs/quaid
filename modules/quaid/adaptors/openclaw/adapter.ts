@@ -562,60 +562,6 @@ type PluginConfig = {
   autoRecall?: boolean;
 };
 
-// User identity mapping (loaded from config/memory.json)
-type UsersConfig = {
-  defaultOwner: string;
-  identities: Record<string, {
-    channels: Record<string, string[]>;
-    speakers: string[];
-  }>;
-};
-
-let _usersConfig: UsersConfig | null = null;
-let _usersConfigMtimeMs = -1;
-
-function getUsersConfig(): UsersConfig {
-  const configPath = path.join(WORKSPACE, "config/memory.json");
-  let mtimeMs = -1;
-  try {
-    mtimeMs = fs.statSync(configPath).mtimeMs;
-  } catch {
-    mtimeMs = -1;
-  }
-  if (_usersConfig && _usersConfigMtimeMs === mtimeMs) {
-    return _usersConfig;
-  }
-  try {
-    const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    _usersConfig = raw.users || { defaultOwner: "quaid", identities: {} };
-    _usersConfigMtimeMs = mtimeMs;
-  } catch (err: unknown) {
-    console.error("[quaid] failed to load users config from config/memory.json:", (err as Error)?.message || String(err));
-    _usersConfig = { defaultOwner: "quaid", identities: {} };
-    _usersConfigMtimeMs = mtimeMs;
-  }
-  return _usersConfig!;
-}
-
-function resolveOwner(speaker?: string, channel?: string): string {
-  const config = getUsersConfig();
-  for (const [userId, identity] of Object.entries(config.identities)) {
-    // Match by speaker name
-    if (speaker && identity.speakers.some(s =>
-      s.toLowerCase() === speaker.toLowerCase()
-    )) {
-      return userId;
-    }
-    // Match by channel
-    if (channel && identity.channels[channel]) {
-      const allowed = identity.channels[channel];
-      if (allowed.includes("*")) { return userId; }
-      if (speaker && allowed.some(a => a.toLowerCase() === speaker.toLowerCase())) { return userId; }
-    }
-  }
-  return config.defaultOwner;
-}
-
 function isInternalQuaidSession(sessionId: unknown): boolean {
   const sid = typeof sessionId === "string" ? sessionId.trim() : "";
   if (!sid) return false;
@@ -1677,7 +1623,6 @@ const facade = createQuaidFacade({
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
-  resolveOwner: () => resolveOwner(),
   transcriptFormat: {
     preprocessText: preprocessTranscriptText,
     shouldSkipText: shouldSkipTranscriptText,
@@ -1960,7 +1905,7 @@ const quaidPlugin = {
 
         // Privacy filter — allow through if: not private, or owned by current user, or no owner set
         // Note: Python serializes None as string "None", not JSON null
-        const currentOwner = resolveOwner();
+        const currentOwner = facade.resolveOwner();
         const filtered = allMemories.filter(m =>
           !(m.privacy === "private" && m.ownerId && m.ownerId !== "None" && m.ownerId !== currentOwner)
         );
@@ -3234,7 +3179,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       try {
         extracted = await callExtractPipeline({
           transcript: transcriptForExtraction,
-          owner: resolveOwner(),
+          owner: facade.resolveOwner(),
           label: triggerLabel,
           sessionId,
           writeSnippets: snippetsEnabled,
