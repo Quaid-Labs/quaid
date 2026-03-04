@@ -158,6 +158,23 @@ describe("QuaidFacade", () => {
     expect(facade.resolveOwner("Unknown", "discord")).toBe("quaid");
   });
 
+  it("shouldNotifyFeature and shouldNotifyProjectCreate respect notifications config", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        notifications: {
+          level: "verbose",
+          retrieval: { verbosity: "full" },
+          projectCreate: { enabled: false },
+        },
+      })),
+    }));
+    expect(facade.shouldNotifyFeature("retrieval", "summary")).toBe(true);
+    expect(facade.shouldNotifyFeature("retrieval", "full")).toBe(true);
+    expect(facade.shouldNotifyFeature("janitor", "full")).toBe(true);
+    expect(facade.shouldNotifyProjectCreate()).toBe(false);
+  });
+
   // -----------------------------------------------------------------------
   // Events
   // -----------------------------------------------------------------------

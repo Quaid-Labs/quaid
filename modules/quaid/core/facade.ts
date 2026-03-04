@@ -128,6 +128,11 @@ export type QuaidFacade = {
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
   resolveOwner: (speaker?: string, channel?: string) => string;
+  shouldNotifyFeature: (
+    feature: "janitor" | "extraction" | "retrieval",
+    detail?: "summary" | "full",
+  ) => boolean;
+  shouldNotifyProjectCreate: () => boolean;
 
   // --- Datastore stats ---
   stats: () => Promise<string>;
@@ -345,6 +350,43 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       }
     }
     return defaultOwner;
+  }
+
+  function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retrieval"): string {
+    const notifications = deps.getMemoryConfig().notifications || {};
+    const featureConfig = notifications[feature];
+    if (featureConfig && typeof featureConfig === "object" && typeof featureConfig.verbosity === "string") {
+      return featureConfig.verbosity.trim().toLowerCase();
+    }
+    const level = String(notifications.level || "normal").trim().toLowerCase();
+    const defaults: Record<string, Record<string, string>> = {
+      quiet: { janitor: "off", extraction: "off", retrieval: "off" },
+      normal: { janitor: "summary", extraction: "summary", retrieval: "off" },
+      verbose: { janitor: "full", extraction: "summary", retrieval: "summary" },
+      debug: { janitor: "full", extraction: "full", retrieval: "full" },
+    };
+    const levelDefaults = defaults[level] || defaults.normal;
+    return String(levelDefaults[feature] || "off").toLowerCase();
+  }
+
+  function shouldNotifyFeature(feature: "janitor" | "extraction" | "retrieval", detail: "summary" | "full" = "summary"): boolean {
+    const effective = effectiveNotificationLevel(feature);
+    if (effective === "off") return false;
+    if (detail === "summary") return effective === "summary" || effective === "full";
+    return effective === "full";
+  }
+
+  function shouldNotifyProjectCreate(): boolean {
+    const notifications = deps.getMemoryConfig().notifications || {};
+    const snake = notifications.project_create;
+    if (snake && typeof snake === "object" && typeof snake.enabled === "boolean") {
+      return snake.enabled;
+    }
+    const camel = notifications.projectCreate;
+    if (camel && typeof camel === "object" && typeof camel.enabled === "boolean") {
+      return camel.enabled;
+    }
+    return true;
   }
 
   function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<string, any> | null {
@@ -1431,6 +1473,8 @@ ${lines.join("\n")}
     isSystemEnabled: deps.isSystemEnabled,
     isFailHardEnabled: deps.isFailHardEnabled,
     resolveOwner,
+    shouldNotifyFeature,
+    shouldNotifyProjectCreate,
 
     // Datastore
     stats: () => datastoreBridge.stats(),

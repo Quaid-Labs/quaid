@@ -144,6 +144,40 @@ function createQuaidFacade(deps) {
     }
     return defaultOwner;
   }
+  function effectiveNotificationLevel(feature) {
+    const notifications = deps.getMemoryConfig().notifications || {};
+    const featureConfig = notifications[feature];
+    if (featureConfig && typeof featureConfig === "object" && typeof featureConfig.verbosity === "string") {
+      return featureConfig.verbosity.trim().toLowerCase();
+    }
+    const level = String(notifications.level || "normal").trim().toLowerCase();
+    const defaults = {
+      quiet: { janitor: "off", extraction: "off", retrieval: "off" },
+      normal: { janitor: "summary", extraction: "summary", retrieval: "off" },
+      verbose: { janitor: "full", extraction: "summary", retrieval: "summary" },
+      debug: { janitor: "full", extraction: "full", retrieval: "full" }
+    };
+    const levelDefaults = defaults[level] || defaults.normal;
+    return String(levelDefaults[feature] || "off").toLowerCase();
+  }
+  function shouldNotifyFeature(feature, detail = "summary") {
+    const effective = effectiveNotificationLevel(feature);
+    if (effective === "off") return false;
+    if (detail === "summary") return effective === "summary" || effective === "full";
+    return effective === "full";
+  }
+  function shouldNotifyProjectCreate() {
+    const notifications = deps.getMemoryConfig().notifications || {};
+    const snake = notifications.project_create;
+    if (snake && typeof snake === "object" && typeof snake.enabled === "boolean") {
+      return snake.enabled;
+    }
+    const camel = notifications.projectCreate;
+    if (camel && typeof camel === "object" && typeof camel.enabled === "boolean") {
+      return camel.enabled;
+    }
+    return true;
+  }
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     const now = Date.now();
     if (now - _datastoreStatsTimestamp < maxAgeMs) {
@@ -1106,6 +1140,8 @@ ${lines.join("\n")}
     isSystemEnabled: deps.isSystemEnabled,
     isFailHardEnabled: deps.isFailHardEnabled,
     resolveOwner,
+    shouldNotifyFeature,
+    shouldNotifyProjectCreate,
     // Datastore
     stats: () => datastoreBridge.stats(),
     getStatsParsed,
