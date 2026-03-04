@@ -133,6 +133,8 @@ export type QuaidFacade = {
     detail?: "summary" | "full",
   ) => boolean;
   shouldNotifyProjectCreate: () => boolean;
+  shouldEmitExtractionNotify: (key: string, now?: number) => boolean;
+  clearExtractionNotifyHistory: () => void;
 
   // --- Datastore stats ---
   stats: () => Promise<string>;
@@ -240,6 +242,7 @@ const NODE_COUNT_CACHE_MS = 120_000;
 const DATASTORE_STATS_TIMEOUT_MS = 30_000;
 const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_MEMORY_NOTE_SESSIONS = 200;
+const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
 const RECALL_RETRY_STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
   "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
@@ -318,6 +321,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     signature: string;
     seenAt: number;
   }>();
+  const extractionNotifyHistory = new Map<string, number>();
 
   function resolveOwner(speaker?: string, channel?: string): string {
     const usersCfg = deps.getMemoryConfig()?.users;
@@ -387,6 +391,18 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       return camel.enabled;
     }
     return true;
+  }
+
+  function shouldEmitExtractionNotify(key: string, now: number = Date.now()): boolean {
+    for (const [k, ts] of extractionNotifyHistory.entries()) {
+      if ((now - ts) > EXTRACTION_NOTIFY_DEDUPE_MS) {
+        extractionNotifyHistory.delete(k);
+      }
+    }
+    const prior = extractionNotifyHistory.get(key);
+    extractionNotifyHistory.set(key, now);
+    if (!prior) return true;
+    return (now - prior) > EXTRACTION_NOTIFY_DEDUPE_MS;
   }
 
   function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<string, any> | null {
@@ -1475,6 +1491,8 @@ ${lines.join("\n")}
     resolveOwner,
     shouldNotifyFeature,
     shouldNotifyProjectCreate,
+    shouldEmitExtractionNotify,
+    clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
 
     // Datastore
     stats: () => datastoreBridge.stats(),

@@ -175,6 +175,16 @@ describe("QuaidFacade", () => {
     expect(facade.shouldNotifyProjectCreate()).toBe(false);
   });
 
+  it("shouldEmitExtractionNotify dedupes keys within cooldown", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const t0 = 1_700_000_000_000;
+    expect(facade.shouldEmitExtractionNotify("done:sess:reset:1:0:0", t0)).toBe(true);
+    expect(facade.shouldEmitExtractionNotify("done:sess:reset:1:0:0", t0 + 250)).toBe(false);
+    expect(facade.shouldEmitExtractionNotify("done:sess:reset:1:0:0", t0 + 95_000)).toBe(true);
+    facade.clearExtractionNotifyHistory();
+    expect(facade.shouldEmitExtractionNotify("done:sess:reset:1:0:0", t0 + 95_100)).toBe(true);
+  });
+
   // -----------------------------------------------------------------------
   // Events
   // -----------------------------------------------------------------------
