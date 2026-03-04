@@ -252,6 +252,84 @@ describe("QuaidFacade", () => {
     expect(results.length).toBeGreaterThan(0);
   });
 
+  it("recallWithToolRetry returns primary results when retry heuristics do not trigger", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command !== "search") return "{}";
+      return JSON.stringify([
+        { text: "Alice project plan is current and active", category: "fact", similarity: 0.91 },
+      ]);
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    const results = await facade.recallWithToolRetry({
+      query: "alice project plan",
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      limit: 5,
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0].text).toContain("Alice project plan");
+    expect(execPython).toHaveBeenCalledTimes(1);
+  });
+
+  it("recallWithToolRetry retries with expanded query and merges results", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command !== "search") return "{}";
+      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "search").length;
+      if (callCount === 1) {
+        return JSON.stringify([
+          { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
+        ]);
+      }
+      return JSON.stringify([
+        { text: "Alice leads the project alpha roadmap", category: "fact", similarity: 0.84 },
+      ]);
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    const results = await facade.recallWithToolRetry({
+      query: "who leads project alpha",
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      limit: 5,
+    });
+    expect(results.length).toBeGreaterThanOrEqual(2);
+    expect(results[0].text).toContain("Alice");
+    expect(execPython).toHaveBeenCalledTimes(2);
+  });
+
+  it("formatMemoriesForInjection sorts by date and includes domain/confidence markers", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { domains: { technical: {}, personal: {} } },
+      })),
+    }));
+    const out = facade.formatMemoriesForInjection([
+      { text: "Alice", category: "person", similarity: 0.52 },
+      {
+        text: "Older fact",
+        category: "fact",
+        similarity: 0.7,
+        createdAt: "2026-01-01T00:00:00Z",
+        domains: ["technical"],
+      },
+      {
+        text: "New uncertain fact",
+        category: "fact",
+        similarity: 0.65,
+        createdAt: "2026-01-02T00:00:00Z",
+        extractionConfidence: 0.2,
+        domains: ["personal"],
+      },
+    ]);
+    expect(out).toContain("<injected_memories>");
+    expect(out).toContain("AVAILABLE_DOMAINS: personal, technical");
+    expect(out).toContain("- [fact] (2026-01-01) [domains:technical] Older fact");
+    expect(out).toContain("- [fact] (2026-01-02) [domains:personal] (uncertain) New uncertain fact");
+    expect(out).toContain("[graph-node-hits] Entity node references");
+    expect(out.indexOf("Older fact")).toBeLessThan(out.indexOf("New uncertain fact"));
+  });
+
   // -----------------------------------------------------------------------
   // computeDynamicK
   // -----------------------------------------------------------------------
@@ -313,6 +391,102 @@ describe("QuaidFacade", () => {
     expect(guidance).toContain("Knowledge datastores:");
     expect(guidance).toContain("vector_basic");
     expect(guidance).toContain("project");
+  });
+
+  it("getMessageText supports content arrays", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(
+      facade.getMessageText({
+        role: "assistant",
+        content: [{ text: "alpha" }, { text: "beta" }],
+      }),
+    ).toBe("alpha beta");
+  });
+
+  it("buildTranscript filters system noise and formats user/assistant messages", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const transcript = facade.buildTranscript([
+      { role: "system", content: "ignored" },
+      { role: "user", content: "[Telegram bob] hello there" },
+      { role: "assistant", content: "HEARTBEAT_OK" },
+      { role: "assistant", content: "working on /tmp/test/file.ts" },
+    ]);
+    expect(transcript).toContain("User: hello there");
+    expect(transcript).toContain("Alfie: working on /tmp/test/file.ts");
+    expect(transcript).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("extractFilePaths returns deduplicated non-http path candidates", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const paths = facade.extractFilePaths([
+      { role: "user", content: "edit /tmp/a.ts and src/main.ts" },
+      { role: "assistant", content: "see also https://example.com/a.ts and src/main.ts" },
+    ]);
+    expect(paths).toEqual(expect.arrayContaining(["/tmp/a.ts", "src/main.ts"]));
+    expect(paths.some((p) => p.startsWith("http"))).toBe(false);
+  });
+
+  it("summarizeProjectSession parses JSON from LLM output", async () => {
+    const callLLM = vi.fn(async () => ({
+      text: '{"project_name":"quaid","text":"worked on adapter boundary"}',
+      model: "test-model",
+      input_tokens: 10,
+      output_tokens: 20,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      truncated: false,
+    } satisfies LLMCallResult));
+    const facade = createQuaidFacade(makeMockDeps({ callLLM }));
+    const out = await facade.summarizeProjectSession([
+      { role: "user", content: "please refactor adapter boundary in quaid" },
+      { role: "assistant", content: "done with facade extraction" },
+    ]);
+    expect(out).toEqual({
+      project_name: "quaid",
+      text: "worked on adapter boundary",
+    });
+  });
+
+  it("summarizeProjectSession falls back to transcript snippet on non-JSON output", async () => {
+    const callLLM = vi.fn(async () => ({
+      text: "not-json",
+      model: "test-model",
+      input_tokens: 10,
+      output_tokens: 20,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      truncated: false,
+    } satisfies LLMCallResult));
+    const facade = createQuaidFacade(makeMockDeps({ callLLM }));
+    const out = await facade.summarizeProjectSession([
+      { role: "user", content: "first line" },
+      { role: "assistant", content: "second line" },
+    ]);
+    expect(out.project_name).toBeNull();
+    expect(out.text).toContain("User: first line");
+  });
+
+  it("isResetBootstrapOnlyConversation detects bootstrap-only user prompts", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(
+      facade.isResetBootstrapOnlyConversation([
+        { role: "user", content: "A new session was started via /new or /reset." },
+        { role: "assistant", content: "How can I help?" },
+      ]),
+    ).toBe(true);
+    expect(
+      facade.isResetBootstrapOnlyConversation([
+        { role: "user", content: "A new session was started via /new or /reset." },
+        { role: "user", content: "real question" },
+      ]),
+    ).toBe(false);
+  });
+
+  it("isVectorRecallResult matches vector datastore variants only", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(facade.isVectorRecallResult({ text: "a", category: "fact", similarity: 0.5, via: "vector" })).toBe(true);
+    expect(facade.isVectorRecallResult({ text: "a", category: "fact", similarity: 0.5, via: "vector_technical" })).toBe(true);
+    expect(facade.isVectorRecallResult({ text: "a", category: "graph", similarity: 0.5, via: "graph" })).toBe(false);
   });
 
   // -----------------------------------------------------------------------
