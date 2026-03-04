@@ -2,6 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import { createQuaidFacade } from "../core/facade.js";
 import type { QuaidFacadeDeps, LLMCallResult } from "../core/facade.js";
 
+const { mockExecFileSync } = vi.hoisted(() => ({
+  mockExecFileSync: vi.fn(),
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFileSync: (...args: any[]) => {
+      const mocked = mockExecFileSync(...args);
+      if (mocked !== undefined) return mocked;
+      return actual.execFileSync(...(args as Parameters<typeof actual.execFileSync>));
+    },
+  };
+});
+
 function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps {
   return {
     workspace: "/tmp/test-workspace",
@@ -231,6 +247,12 @@ describe("QuaidFacade", () => {
     const k = facade.computeDynamicK();
     // 11.5 * Math.log(100) - 61.7 ≈ 11.5 * 4.605 - 61.7 ≈ -8.74 → floor=5
     expect(k).toBe(5);
+  });
+
+  it("computeDynamicK prefers datastore recommended_recall_k when present", () => {
+    mockExecFileSync.mockReturnValueOnce('{"active_nodes":500,"recommended_recall_k":15}');
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(facade.computeDynamicK()).toBe(15);
   });
 
   // -----------------------------------------------------------------------
