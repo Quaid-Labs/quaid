@@ -343,6 +343,8 @@ function createQuaidFacade(deps) {
     docsRead: (identifier) => deps.execDocsRegistry("read", [identifier]),
     docsList: (args) => deps.execDocsRegistry("list", args),
     docsRegister: (args) => deps.execDocsRegistry("register", args),
+    docsCreateProject: (args) => deps.execDocsRegistry("create-project", args),
+    docsListProjects: (args = ["--json"]) => deps.execDocsRegistry("list-projects", args),
     docsCheckStaleness: () => deps.execDocsUpdater("check", ["--json"]),
     addMemoryNote,
     getAndClearMemoryNotes,

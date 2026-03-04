@@ -132,6 +132,8 @@ export type QuaidFacade = {
   docsRead: (identifier: string) => Promise<string>;
   docsList: (args: string[]) => Promise<string>;
   docsRegister: (args: string[]) => Promise<string>;
+  docsCreateProject: (args: string[]) => Promise<string>;
+  docsListProjects: (args?: string[]) => Promise<string>;
   docsCheckStaleness: () => Promise<string>;
 
   // --- Memory notes (state management) ---
@@ -719,6 +721,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     docsRead: (identifier) => deps.execDocsRegistry("read", [identifier]),
     docsList: (args) => deps.execDocsRegistry("list", args),
     docsRegister: (args) => deps.execDocsRegistry("register", args),
+    docsCreateProject: (args) => deps.execDocsRegistry("create-project", args),
+    docsListProjects: (args = ["--json"]) => deps.execDocsRegistry("list-projects", args),
     docsCheckStaleness: () => deps.execDocsUpdater("check", ["--json"]),
 
     // Memory notes

@@ -1421,14 +1421,6 @@ async function callExtractPipeline(opts) {
     }
   }
 }
-async function callDocsUpdater(command, args = []) {
-  const apiKey = _getAnthropicCredential();
-  return _spawnWithTimeout(DOCS_UPDATER, command, args, "docs_updater", {
-    QUAID_HOME: WORKSPACE,
-    CLAWDBOT_WORKSPACE: WORKSPACE,
-    ...apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}
-  });
-}
 async function emitEvent(name, payload, dispatch = "auto") {
   const args = [
     "emit",
@@ -1456,18 +1448,6 @@ async function emitEvent(name, payload, dispatch = "auto") {
     throw new Error("[quaid] events emit returned non-object payload");
   }
   return parsed;
-}
-async function callDocsRag(command, args = []) {
-  return _spawnWithTimeout(DOCS_RAG, command, args, "docs_rag", {
-    QUAID_HOME: WORKSPACE,
-    CLAWDBOT_WORKSPACE: WORKSPACE
-  });
-}
-async function callDocsRegistry(command, args = []) {
-  return _spawnWithTimeout(DOCS_REGISTRY, command, args, "docs_registry", {
-    QUAID_HOME: WORKSPACE,
-    CLAWDBOT_WORKSPACE: WORKSPACE
-  });
 }
 function spawnNotifyScript(scriptBody) {
   const tmpFile = path.join(QUAID_NOTIFY_DIR, `notify-${Date.now()}-${Math.random().toString(36).slice(2)}.py`);
@@ -1831,24 +1811,6 @@ async function updateDocsFromTranscript(messages, label, sessionId) {
     }
   }
 }
-function parseDomainsValue(raw) {
-  if (Array.isArray(raw)) {
-    return raw.map((d) => String(d || "").trim()).filter(Boolean);
-  }
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    if (!trimmed) return [];
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) {
-        return parsed.map((d) => String(d || "").trim()).filter(Boolean);
-      }
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
 function getConfiguredDomainIds() {
   try {
     const defs = getMemoryConfig()?.retrieval?.domains;
@@ -2043,13 +2005,6 @@ const facade = createQuaidFacade({
 });
 const recallStoreGuidance = facade.renderDatastoreGuidance();
 const getProjectNames = () => facade.getProjectNames();
-const getProjectCatalog = () => facade.getProjectCatalog();
-async function totalRecall(query, limit, opts) {
-  return knowledgeEngine.totalRecall(query, limit, opts);
-}
-async function total_recall(query, limit, opts) {
-  return knowledgeEngine.total_recall(query, limit, opts);
-}
 function parseDatastoreStats(raw) {
   let parsed = null;
   try {
@@ -2298,7 +2253,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
         if (words.length < 3 || ACKNOWLEDGMENTS.test(query.trim())) {
           return;
         }
-        const autoInjectK = computeDynamicK();
+        const autoInjectK = facade.computeDynamicK();
         const useTotalRecallForInject = isPreInjectionPassEnabled();
         const routerFailOpen = Boolean(
           getMemoryConfig().retrieval?.routerFailOpen ?? getMemoryConfig().retrieval?.router_fail_open ?? true
@@ -3034,7 +2989,7 @@ notify_docs_search(data['query'], data['results'])
               args.push("--source-files", ...params.source_files);
             }
             args.push("--json");
-            const output = await callDocsRegistry("register", args);
+            const output = await facade.docsRegister(args);
             return {
               content: [{ type: "text", text: output || "Registered." }],
               details: { file_path: params.file_path }
@@ -3070,7 +3025,7 @@ notify_docs_search(data['query'], data['results'])
             if (params.source_roots) {
               args.push("--source-roots", ...params.source_roots);
             }
-            const output = await callDocsRegistry("create-project", args);
+            const output = await facade.docsCreateProject(args);
             if (shouldNotifyProjectCreate()) {
               try {
                 const notifyPayload = JSON.stringify({
@@ -3110,7 +3065,7 @@ notify_user(f"\u{1F4C1} Project registered: {project_label}")
         parameters: Type.Object({}),
         async execute() {
           try {
-            const output = await callDocsRegistry("list-projects", ["--json"]);
+            const output = await facade.docsListProjects(["--json"]);
             return {
               content: [{ type: "text", text: output || "No projects defined." }],
               details: {}

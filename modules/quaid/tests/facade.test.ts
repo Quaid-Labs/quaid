@@ -80,6 +80,14 @@ describe("QuaidFacade", () => {
     expect(execPython).toHaveBeenCalledWith("forget", ["--id", "abc"]);
   });
 
+  it("searchBySession calls execPython with scoped search args", async () => {
+    const execPython = vi.fn(async () => "[]");
+    const resolveOwner = vi.fn(() => "owner-123");
+    const facade = createQuaidFacade(makeMockDeps({ execPython, resolveOwner }));
+    await facade.searchBySession("sess-1", 7);
+    expect(execPython).toHaveBeenCalledWith("search", ["*", "--session-id", "sess-1", "--owner", "owner-123", "--limit", "7"]);
+  });
+
   // -----------------------------------------------------------------------
   // Events
   // -----------------------------------------------------------------------
@@ -125,6 +133,21 @@ describe("QuaidFacade", () => {
     const facade = createQuaidFacade(makeMockDeps({ execDocsRegistry }));
     await facade.docsRegister(["docs/new.md", "--project", "quaid"]);
     expect(execDocsRegistry).toHaveBeenCalledWith("register", ["docs/new.md", "--project", "quaid"]);
+  });
+
+  it("docsCreateProject delegates to execDocsRegistry", async () => {
+    const execDocsRegistry = vi.fn(async () => "created");
+    const facade = createQuaidFacade(makeMockDeps({ execDocsRegistry }));
+    await facade.docsCreateProject(["my-proj", "--label", "My Proj"]);
+    expect(execDocsRegistry).toHaveBeenCalledWith("create-project", ["my-proj", "--label", "My Proj"]);
+  });
+
+  it("docsListProjects delegates to execDocsRegistry", async () => {
+    const execDocsRegistry = vi.fn(async () => '[{"name":"my-proj"}]');
+    const facade = createQuaidFacade(makeMockDeps({ execDocsRegistry }));
+    const result = await facade.docsListProjects(["--json"]);
+    expect(result).toBe('[{"name":"my-proj"}]');
+    expect(execDocsRegistry).toHaveBeenCalledWith("list-projects", ["--json"]);
   });
 
   it("docsCheckStaleness delegates to execDocsUpdater", async () => {

@@ -1646,13 +1646,6 @@ async function callExtractPipeline(opts: {
   }
 }
 
-async function callDocsUpdater(command: string, args: string[] = []): Promise<string> {
-  const apiKey = _getAnthropicCredential();
-  return _spawnWithTimeout(DOCS_UPDATER, command, args, "docs_updater", {
-    QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE, ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
-  });
-}
-
 async function emitEvent(
   name: string,
   payload: Record<string, unknown>,
@@ -1679,18 +1672,6 @@ async function emitEvent(
     throw new Error("[quaid] events emit returned non-object payload");
   }
   return parsed;
-}
-
-async function callDocsRag(command: string, args: string[] = []): Promise<string> {
-  return _spawnWithTimeout(DOCS_RAG, command, args, "docs_rag", {
-    QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
-  });
-}
-
-async function callDocsRegistry(command: string, args: string[] = []): Promise<string> {
-  return _spawnWithTimeout(DOCS_REGISTRY, command, args, "docs_registry", {
-    QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
-  });
 }
 
 /**
@@ -2640,7 +2621,7 @@ const quaidPlugin = {
         // direct datastores. For project/technical prompts, include technical/project
         // sources explicitly so implementation facts are not filtered out.
         // Dynamic K: 2 * log2(nodeCount) — scales with graph size
-        const autoInjectK = computeDynamicK();
+        const autoInjectK = facade.computeDynamicK();
         const useTotalRecallForInject = isPreInjectionPassEnabled();
         const routerFailOpen = Boolean(
           getMemoryConfig().retrieval?.routerFailOpen ??
@@ -3422,7 +3403,7 @@ notify_docs_search(data['query'], data['results'])
             if (params.auto_update) { args.push("--auto-update"); }
             if (params.source_files) { args.push("--source-files", ...params.source_files); }
             args.push("--json");
-            const output = await callDocsRegistry("register", args);
+            const output = await facade.docsRegister(args);
             return {
               content: [{ type: "text", text: output || "Registered." }],
               details: { file_path: params.file_path },
@@ -3454,7 +3435,7 @@ notify_docs_search(data['query'], data['results'])
             if (params.label) { args.push("--label", params.label); }
             if (params.description) { args.push("--description", params.description); }
             if (params.source_roots) { args.push("--source-roots", ...params.source_roots); }
-            const output = await callDocsRegistry("create-project", args);
+            const output = await facade.docsCreateProject(args);
             if (shouldNotifyProjectCreate()) {
               try {
                 const notifyPayload = JSON.stringify({
@@ -3496,7 +3477,7 @@ notify_user(f"📁 Project registered: {project_label}")
         parameters: Type.Object({}),
         async execute() {
           try {
-            const output = await callDocsRegistry("list-projects", ["--json"]);
+            const output = await facade.docsListProjects(["--json"]);
             return {
               content: [{ type: "text", text: output || "No projects defined." }],
               details: {},
