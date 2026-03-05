@@ -301,13 +301,6 @@ function isMissingFileError(err: unknown): boolean {
   return msg.includes("ENOENT");
 }
 
-function getCaptureTimeoutMinutes(): number {
-  const capture = getMemoryConfig().capture || {};
-  const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
-  const num = Number(raw);
-  return Number.isFinite(num) ? Math.max(0, num) : 120;
-}
-
 type ModelTier = "deep" | "fast";
 type ExtractionTrigger = "compaction" | "reset" | "new" | "recovery" | "timeout" | "unknown";
 
@@ -521,12 +514,6 @@ type PluginConfig = {
   autoCapture?: boolean;
   autoRecall?: boolean;
 };
-
-function isInternalQuaidSession(sessionId: unknown): boolean {
-  const sid = typeof sessionId === "string" ? sessionId.trim() : "";
-  if (!sid) return false;
-  return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
-}
 
 // ============================================================================
 // Memory Notes — queued for extraction at compaction/reset
@@ -1615,7 +1602,7 @@ const quaidPlugin = {
 
     // Register lifecycle hooks.
     const beforeAgentStartHandler = async (event: any, ctx: any) => {
-      if (isInternalQuaidSession(ctx?.sessionId)) {
+      if (facade.isInternalQuaidSession(ctx?.sessionId)) {
         return;
       }
       try { maybeSendJanitorNudges(); } catch (err: unknown) {
@@ -2727,7 +2714,7 @@ notify_user(f"📁 Project registered: {project_label}")
     };
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
-      timeoutMinutes: getCaptureTimeoutMinutes(),
+      timeoutMinutes: facade.getCaptureTimeoutMinutes(),
       isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),
       readSessionMessages: (sessionId: string) => readMessagesForTimeoutSession(sessionId),
       listSessionActivity: () => listSessionActivityForTimeout(),
@@ -3169,7 +3156,7 @@ notify_memory_extraction(
     // Source of truth is timeout manager's OpenClaw session reader + local cursor gate.
     registerInternalHookChecked("before_compaction", async (event: any, ctx: any) => {
       try {
-        if (isInternalQuaidSession(ctx?.sessionId)) {
+        if (facade.isInternalQuaidSession(ctx?.sessionId)) {
           return;
         }
         const messages: any[] = event.messages || [];
@@ -3292,7 +3279,7 @@ notify_memory_extraction(
         try {
           const messages: any[] = event?.messages || [];
           const sessionId = resolveLifecycleHookSessionId(event, ctx, messages);
-          if (!sessionId || isInternalQuaidSession(sessionId)) {
+          if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
             return;
           }
           if (!isSystemEnabled("memory")) {
@@ -3331,7 +3318,7 @@ notify_memory_extraction(
     // Primary reset/new boundary path is session_end below.
     registerInternalHookChecked("before_reset", async (event: any, ctx: any) => {
       try {
-        if (isInternalQuaidSession(ctx?.sessionId)) {
+        if (facade.isInternalQuaidSession(ctx?.sessionId)) {
           return;
         }
         const messages: any[] = event.messages || [];
@@ -3428,7 +3415,7 @@ notify_memory_extraction(
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();
         const messageCount = Number(event?.messageCount || 0);
-        if (!sessionId || isInternalQuaidSession(sessionId)) {
+        if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
           return;
         }
         if (!isSystemEnabled("memory")) {
