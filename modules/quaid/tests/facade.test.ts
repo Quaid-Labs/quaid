@@ -637,6 +637,31 @@ describe("QuaidFacade", () => {
     ).toBe("resolved-event-session");
   });
 
+  it("resolveSessionForCompaction prefers matching session then main fallback", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      listCompactionSessions: () => ([
+        { key: "agent:main:other", sessionId: "sess-other" },
+        { key: "agent:main:main", sessionId: "sess-main" },
+      ]),
+    }));
+    expect(facade.resolveSessionForCompaction("sess-main")).toBe("agent:main:main");
+    expect(facade.resolveSessionForCompaction("missing")).toBe("agent:main:main");
+  });
+
+  it("maybeForceCompactionAfterTimeout invokes requestSessionCompaction when enabled", () => {
+    const requestSessionCompaction = vi.fn(() => ({ ok: true, compacted: 2 }));
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        capture: { autoCompactionOnTimeout: true },
+      })),
+      listCompactionSessions: () => [{ key: "agent:main:main", sessionId: "sess-main" }],
+      requestSessionCompaction,
+    }));
+    facade.maybeForceCompactionAfterTimeout("sess-main");
+    expect(requestSessionCompaction).toHaveBeenCalledWith("agent:main:main");
+  });
+
   it("isLowQualityQuery filters acknowledgments and short prompts", () => {
     const facade = createQuaidFacade(makeMockDeps());
     expect(facade.isLowQualityQuery("ok")).toBe(true);

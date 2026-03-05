@@ -383,56 +383,30 @@ function resolveMostRecentSessionId() {
   }
   return "";
 }
-function resolveSessionKeyForCompaction(sessionId) {
+function listCompactionSessions() {
   try {
     const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
     const raw = fs.readFileSync(sessionsPath, "utf8");
     const data = JSON.parse(raw);
-    const entries = Object.entries(data || {}).filter(([_, v]) => v && typeof v === "object");
-    if (!entries.length) return null;
-    if (sessionId) {
-      for (const [key, entry] of entries) {
-        if (String(entry?.sessionId || "").trim() === String(sessionId).trim()) {
-          return key;
-        }
-      }
-    }
-    if (entries.some(([k]) => k === "agent:main:main")) {
-      return "agent:main:main";
-    }
-    return entries[0][0];
+    return Object.entries(data || {}).filter(([_, value]) => value && typeof value === "object").map(([key, value]) => ({
+      key: String(key || "").trim(),
+      sessionId: String(value?.sessionId || "").trim()
+    })).filter((row) => row.key && row.sessionId);
   } catch {
-    return null;
+    return [];
   }
 }
-function maybeForceCompactionAfterTimeout(sessionId) {
-  const captureCfg = getMemoryConfig().capture || {};
-  const enabled = Boolean(
-    captureCfg.autoCompactionOnTimeout ?? captureCfg.auto_compaction_on_timeout ?? true
-  );
-  if (!enabled) return;
-  const key = resolveSessionKeyForCompaction(sessionId);
-  if (!key) {
-    console.warn(`[quaid][timeout] auto-compaction skipped: could not resolve session key (session=${sessionId || "unknown"})`);
-    return;
-  }
+function requestSessionCompaction(sessionKey) {
   try {
     const out = execFileSync(
       "openclaw",
-      ["gateway", "call", "sessions.compact", "--json", "--params", JSON.stringify({ key })],
+      ["gateway", "call", "sessions.compact", "--json", "--params", JSON.stringify({ key: sessionKey })],
       { encoding: "utf-8", timeout: 2e4 }
     );
     const parsed = JSON.parse(String(out || "{}"));
-    if (parsed?.ok) {
-      console.log(`[quaid][timeout] auto-compaction requested for key=${key} (compacted=${String(parsed?.compacted)})`);
-    } else {
-      console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${String(out).slice(0, 300)}`);
-    }
+    return { ok: Boolean(parsed?.ok), compacted: parsed?.compacted, raw: String(out || "") };
   } catch (err) {
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-    console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
+    throw err;
   }
 }
 const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py");
@@ -936,6 +910,8 @@ const facade = createQuaidFacade({
   resolveSessionIdFromSessionKey,
   resolveDefaultSessionId: () => resolveSessionIdFromSessionKey("agent:main:main"),
   resolveMostRecentSessionId,
+  listCompactionSessions,
+  requestSessionCompaction,
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
@@ -2369,7 +2345,7 @@ notify_memory_extraction(
         }
       }
       if (triggerType === "timeout") {
-        maybeForceCompactionAfterTimeout(sessionId);
+        facade.maybeForceCompactionAfterTimeout(sessionId);
       }
       try {
         facade.updateExtractionLog(sessionId || "unknown", messages, label);
