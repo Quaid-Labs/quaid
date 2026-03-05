@@ -637,12 +637,13 @@ describe("QuaidFacade", () => {
     ).toBe("resolved-event-session");
   });
 
-  it("resolveSessionForCompaction prefers matching session then main fallback", () => {
+  it("resolveSessionForCompaction prefers matching session then default-session fallback", () => {
     const facade = createQuaidFacade(makeMockDeps({
       listCompactionSessions: () => ([
         { key: "agent:main:other", sessionId: "sess-other" },
         { key: "agent:main:main", sessionId: "sess-main" },
       ]),
+      resolveDefaultSessionId: () => "sess-main",
     }));
     expect(facade.resolveSessionForCompaction("sess-main")).toBe("agent:main:main");
     expect(facade.resolveSessionForCompaction("missing")).toBe("agent:main:main");

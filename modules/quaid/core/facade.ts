@@ -1236,8 +1236,15 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         }
       }
     }
-    if (rows.some((row) => String(row?.key || "").trim() === "agent:main:main")) {
-      return "agent:main:main";
+    const defaultSessionId = String(deps.resolveDefaultSessionId?.() || "").trim();
+    if (defaultSessionId) {
+      for (const row of rows) {
+        const key = String(row?.key || "").trim();
+        const sid = String(row?.sessionId || "").trim();
+        if (key && sid && sid === defaultSessionId) {
+          return key;
+        }
+      }
     }
     const fallbackKey = String(rows[0]?.key || "").trim();
     return fallbackKey || null;
