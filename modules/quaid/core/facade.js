@@ -97,6 +97,7 @@ export function createQuaidFacade(deps) {
     const extractionNotifyHistory = new Map();
     let compactionNotifyBatchState = null;
     let extractionPromise = null;
+    let timeoutSessionStoreCache = null;
     function queueExtraction(task, source) {
         const prior = extractionPromise || Promise.resolve();
         extractionPromise = prior.then(
@@ -857,6 +858,119 @@ export function createQuaidFacade(deps) {
             return fromCtxKey;
         }
     return extractSessionId(messages, ctx);
+  }
+  function readMessagesFromSessionJsonl(sessionFile) {
+    const content = fs.readFileSync(sessionFile, "utf8");
+    const lines = content.trim().split("\n");
+    const messages = [];
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === "message" && entry.message) {
+          messages.push(entry.message);
+        } else if (entry.role) {
+          messages.push(entry);
+        }
+      } catch (err) {
+        console.warn(`[quaid][facade] session JSONL parse failed: ${String(err?.message || err)}`);
+      }
+    }
+    return messages;
+  }
+  function readTimeoutSessionStore() {
+    const storePath = String(deps.timeoutSessionStorePath?.() || "").trim();
+    if (!storePath) return {};
+    try {
+      if (!fs.existsSync(storePath)) return {};
+      const stat = fs.statSync(storePath);
+      const mtimeMs = Number.isFinite(stat.mtimeMs) ? stat.mtimeMs : 0;
+      if (timeoutSessionStoreCache && timeoutSessionStoreCache.path === storePath && timeoutSessionStoreCache.mtimeMs === mtimeMs) {
+        return timeoutSessionStoreCache.data;
+      }
+      const raw = JSON.parse(fs.readFileSync(storePath, "utf8"));
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+      const data = raw;
+      timeoutSessionStoreCache = { path: storePath, mtimeMs, data };
+      return data;
+    } catch (err) {
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      console.warn(`[quaid][timeout] session store read failed: ${String(err?.message || err)}`);
+      return {};
+    }
+  }
+  function parseTimeoutSessionUpdatedAtMs(entry) {
+    const candidates = [entry?.updatedAt, entry?.updated_at, entry?.lastMessageAt, entry?.last_message_at];
+    for (const raw of candidates) {
+      if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+      if (typeof raw === "string") {
+        const asNum = Number(raw);
+        if (Number.isFinite(asNum)) return asNum;
+        const parsed = Date.parse(raw);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return null;
+  }
+  function resolveTimeoutSessionTranscriptPath(entry, sessionId) {
+    const pathCandidates = [entry?.sessionFile, entry?.session_file];
+    for (const raw of pathCandidates) {
+      const p = String(raw || "").trim();
+      if (!p) continue;
+      if (fs.existsSync(p)) return p;
+    }
+    const fallbackDirs = deps.timeoutSessionTranscriptDirs?.() || [];
+    for (const dirRaw of fallbackDirs) {
+      const dir = String(dirRaw || "").trim();
+      if (!dir) continue;
+      const candidate = path.join(dir, `${sessionId}.jsonl`);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+  function readTimeoutSessionMessages(sessionId) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return [];
+    const store = readTimeoutSessionStore();
+    const entries = Object.entries(store || {});
+    for (const [, entry] of entries) {
+      if (String(entry?.sessionId || "").trim() !== sid) continue;
+      const transcriptPath = resolveTimeoutSessionTranscriptPath(entry, sid);
+      if (!transcriptPath) return [];
+      return deps.readSessionMessagesFile?.(transcriptPath) || readMessagesFromSessionJsonl(transcriptPath);
+    }
+    const fallbackPath = resolveTimeoutSessionTranscriptPath({}, sid);
+    if (!fallbackPath) return [];
+    return deps.readSessionMessagesFile?.(fallbackPath) || readMessagesFromSessionJsonl(fallbackPath);
+  }
+  function listTimeoutSessionActivity() {
+    const store = readTimeoutSessionStore();
+    const rows = [];
+    const entries = Object.entries(store || {});
+    for (const [, entry] of entries) {
+      const sid = String(entry?.sessionId || "").trim();
+      if (!sid) continue;
+      const updatedAtMs = parseTimeoutSessionUpdatedAtMs(entry);
+      if (updatedAtMs !== null) {
+        rows.push({ sessionId: sid, lastActivityMs: updatedAtMs });
+        continue;
+      }
+      const transcriptPath = resolveTimeoutSessionTranscriptPath(entry, sid);
+      if (!transcriptPath) continue;
+      try {
+        const stat = fs.statSync(transcriptPath);
+        if (Number.isFinite(stat.mtimeMs) && stat.mtimeMs > 0) {
+          rows.push({ sessionId: sid, lastActivityMs: stat.mtimeMs });
+        }
+      } catch (err) {
+        if (deps.isFailHardEnabled()) {
+          throw err;
+        }
+        console.warn(`[quaid][timeout] session mtime read failed for ${sid}: ${String(err?.message || err)}`);
+      }
+    }
+    return rows;
   }
   function resolveSessionForCompaction(sessionId) {
     const rows = deps.listCompactionSessions?.() || [];
@@ -2168,6 +2282,8 @@ ${lines.join("\n")}
         extractSessionId,
         resolveMemoryStoreSessionId,
         resolveLifecycleHookSessionId,
+        readTimeoutSessionMessages,
+        listTimeoutSessionActivity,
         resolveSessionForCompaction,
         maybeForceCompactionAfterTimeout,
         filterConversationMessages,

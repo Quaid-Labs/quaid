@@ -637,6 +637,62 @@ describe("QuaidFacade", () => {
     ).toBe("resolved-event-session");
   });
 
+  it("readTimeoutSessionMessages reads from session store + JSONL transcript", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-timeout-read-"));
+    const sessionsDir = path.join(workspace, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "sess-a.jsonl");
+    await writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+        JSON.stringify({ role: "assistant", content: "world" }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeFile(
+      storePath,
+      JSON.stringify({ "agent:main:a": { sessionId: "sess-a", sessionFile: transcriptPath } }),
+      "utf8",
+    );
+    const facade = createQuaidFacade(makeMockDeps({
+      timeoutSessionStorePath: () => storePath,
+      timeoutSessionTranscriptDirs: () => [sessionsDir],
+    }));
+    const rows = facade.readTimeoutSessionMessages("sess-a") as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.role).toBe("user");
+    expect(rows[1]?.role).toBe("assistant");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("listTimeoutSessionActivity prefers updatedAt and falls back to transcript mtime", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-timeout-activity-"));
+    const sessionsDir = path.join(workspace, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "sess-b.jsonl");
+    await writeFile(transcriptPath, JSON.stringify({ role: "user", content: "x" }) + "\n", "utf8");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:a": { sessionId: "sess-a", updatedAt: 1700000000123 },
+        "agent:main:b": { sessionId: "sess-b", sessionFile: transcriptPath },
+      }),
+      "utf8",
+    );
+    const facade = createQuaidFacade(makeMockDeps({
+      timeoutSessionStorePath: () => storePath,
+      timeoutSessionTranscriptDirs: () => [sessionsDir],
+    }));
+    const rows = facade.listTimeoutSessionActivity();
+    const byId = new Map(rows.map((r) => [r.sessionId, r.lastActivityMs]));
+    expect(byId.get("sess-a")).toBe(1700000000123);
+    expect((byId.get("sess-b") || 0) > 0).toBe(true);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("resolveSessionForCompaction prefers matching session then default-session fallback", () => {
     const facade = createQuaidFacade(makeMockDeps({
       listCompactionSessions: () => ([

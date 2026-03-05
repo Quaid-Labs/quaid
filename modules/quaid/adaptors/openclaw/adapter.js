@@ -910,6 +910,12 @@ const facade = createQuaidFacade({
   resolveSessionIdFromSessionKey,
   resolveDefaultSessionId: () => resolveSessionIdFromSessionKey("agent:main:main"),
   resolveMostRecentSessionId,
+  timeoutSessionStorePath: () => path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json"),
+  timeoutSessionTranscriptDirs: () => [
+    path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
+    path.join(os.homedir(), ".openclaw", "sessions")
+  ],
+  readSessionMessagesFile: (sessionFile) => readMessagesFromSessionFile(sessionFile),
   listCompactionSessions,
   requestSessionCompaction,
   getMemoryConfig,
@@ -1202,7 +1208,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         try {
           const sessionFile = String(update?.sessionFile || "").trim();
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
-          const messages = readMessagesFromSessionFile(sessionFile);
+          const messages = readMessagesFromSessionFile2(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
           const detail = facade.detectLifecycleSignal(messages);
           if (!detail) return;
@@ -1910,7 +1916,7 @@ notify_user(f"\u{1F4C1} Project registered: {project_label}")
               const sessionPath = path.join(sessionsDir, `${sid}.jsonl`);
               if (fs.existsSync(sessionPath)) {
                 try {
-                  const messages = readMessagesFromSessionFile(sessionPath);
+                  const messages = readMessagesFromSessionFile2(sessionPath);
                   const transcript = facade.buildTranscript(messages);
                   const truncated = transcript.length > 1e4 ? "...[truncated]...\n\n" + transcript.slice(-1e4) : transcript;
                   return {
@@ -1955,8 +1961,8 @@ ${factsOutput || "No facts found."}` }],
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
       isBootstrapOnly: (messages) => facade.isResetBootstrapOnlyConversation(messages),
       shouldSkipText: (text) => shouldSkipTranscriptText(text),
-      readSessionMessages: (sessionId) => readMessagesForTimeoutSession(sessionId),
-      listSessionActivity: () => listSessionActivityForTimeout(),
+      readSessionMessages: (sessionId) => facade.readTimeoutSessionMessages(sessionId),
+      listSessionActivity: () => facade.listTimeoutSessionActivity(),
       logger: (msg) => {
         const lowered = String(msg || "").toLowerCase();
         if (lowered.includes("fail") || lowered.includes("error")) {
@@ -2046,7 +2052,7 @@ ${factsOutput || "No facts found."}` }],
       };
       return sourceTag === "tool" ? facade.recallWithToolRetry(recallOpts) : facade.recall(recallOpts);
     }
-    function readMessagesFromSessionFile(sessionFile) {
+    function readMessagesFromSessionFile2(sessionFile) {
       const content = fs.readFileSync(sessionFile, "utf8");
       const lines = content.trim().split("\n");
       const messages = [];
@@ -2063,105 +2069,6 @@ ${factsOutput || "No facts found."}` }],
         }
       }
       return messages;
-    }
-    function resolveOpenClawSessionStorePath() {
-      return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
-    }
-    let openClawSessionStoreCache = null;
-    function loadOpenClawSessionStore() {
-      const storePath = resolveOpenClawSessionStorePath();
-      try {
-        if (!fs.existsSync(storePath)) return {};
-        const stat = fs.statSync(storePath);
-        const mtimeMs = Number.isFinite(stat.mtimeMs) ? stat.mtimeMs : 0;
-        if (openClawSessionStoreCache && openClawSessionStoreCache.mtimeMs === mtimeMs) {
-          return openClawSessionStoreCache.data;
-        }
-        const raw = JSON.parse(fs.readFileSync(storePath, "utf8"));
-        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-        const data = raw;
-        openClawSessionStoreCache = { mtimeMs, data };
-        return data;
-      } catch (err) {
-        if (isFailHardEnabled()) {
-          throw err;
-        }
-        console.warn(`[quaid][timeout] session store read failed: ${String(err?.message || err)}`);
-        return {};
-      }
-    }
-    function parseSessionUpdatedAtMs(entry) {
-      const candidates = [entry?.updatedAt, entry?.updated_at, entry?.lastMessageAt, entry?.last_message_at];
-      for (const raw of candidates) {
-        if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-        if (typeof raw === "string") {
-          const asNum = Number(raw);
-          if (Number.isFinite(asNum)) return asNum;
-          const parsed = Date.parse(raw);
-          if (Number.isFinite(parsed)) return parsed;
-        }
-      }
-      return null;
-    }
-    function resolveSessionTranscriptPath(entry, sessionId) {
-      const pathCandidates = [entry?.sessionFile, entry?.session_file];
-      for (const raw of pathCandidates) {
-        const p = String(raw || "").trim();
-        if (!p) continue;
-        if (fs.existsSync(p)) return p;
-      }
-      const fallbackDirs = [
-        path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
-        path.join(os.homedir(), ".openclaw", "sessions")
-      ];
-      for (const dir of fallbackDirs) {
-        const candidate = path.join(dir, `${sessionId}.jsonl`);
-        if (fs.existsSync(candidate)) return candidate;
-      }
-      return null;
-    }
-    function readMessagesForTimeoutSession(sessionId) {
-      const sid = String(sessionId || "").trim();
-      if (!sid) return [];
-      const store = loadOpenClawSessionStore();
-      const entries = Object.entries(store || {});
-      for (const [, entry] of entries) {
-        if (String(entry?.sessionId || "").trim() !== sid) continue;
-        const transcriptPath = resolveSessionTranscriptPath(entry, sid);
-        if (!transcriptPath) return [];
-        return readMessagesFromSessionFile(transcriptPath);
-      }
-      const fallbackPath = resolveSessionTranscriptPath({}, sid);
-      if (!fallbackPath) return [];
-      return readMessagesFromSessionFile(fallbackPath);
-    }
-    function listSessionActivityForTimeout() {
-      const store = loadOpenClawSessionStore();
-      const rows = [];
-      const entries = Object.entries(store || {});
-      for (const [, entry] of entries) {
-        const sid = String(entry?.sessionId || "").trim();
-        if (!sid) continue;
-        const updatedAtMs = parseSessionUpdatedAtMs(entry);
-        if (updatedAtMs !== null) {
-          rows.push({ sessionId: sid, lastActivityMs: updatedAtMs });
-          continue;
-        }
-        const transcriptPath = resolveSessionTranscriptPath(entry, sid);
-        if (!transcriptPath) continue;
-        try {
-          const stat = fs.statSync(transcriptPath);
-          if (Number.isFinite(stat.mtimeMs) && stat.mtimeMs > 0) {
-            rows.push({ sessionId: sid, lastActivityMs: stat.mtimeMs });
-          }
-        } catch (err) {
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-          console.warn(`[quaid][timeout] session mtime read failed for ${sid}: ${String(err?.message || err)}`);
-        }
-      }
-      return rows;
     }
     const extractMemoriesFromMessages = async (messages, label, sessionId) => {
       console.log(`[quaid][extract] start label=${label} session=${sessionId || "unknown"} message_count=${messages.length}`);
