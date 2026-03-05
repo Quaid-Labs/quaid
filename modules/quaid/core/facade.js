@@ -18,6 +18,8 @@ const MAX_MEMORY_NOTE_SESSIONS = 200;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 9e4;
 const MAX_EXTRACTION_LOG_ENTRIES = 800;
 const MAX_INJECTION_LOG_FILES = 400;
+const DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS = 50;
+const DELAYED_REQUESTS_LOCK_SLEEP_MS = 10;
 const RECALL_RETRY_STOPWORDS = /* @__PURE__ */ new Set([
   "a",
   "an",
@@ -405,6 +407,99 @@ function createQuaidFacade(deps) {
         return;
       }
       console.warn(`[quaid][facade] Injection log pruning failed: ${String(err?.message || err)}`);
+    }
+  }
+  function readDelayedRequestsJson(pathname) {
+    try {
+      if (!fs.existsSync(pathname)) return null;
+      return JSON.parse(fs.readFileSync(pathname, "utf8"));
+    } catch (err) {
+      console.warn(`[quaid][facade] delayed requests read failed path=${pathname}: ${String(err?.message || err)}`);
+      return null;
+    }
+  }
+  function writeDelayedRequestsJson(pathname, payload) {
+    const tmpPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 384 });
+    fs.renameSync(tmpPath, pathname);
+  }
+  function withDelayedRequestsLock(requestsPath, fn) {
+    const lockPath = `${requestsPath}.lock`;
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    let fd;
+    let lastErr;
+    for (let attempt = 0; attempt < DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        fd = fs.openSync(lockPath, "wx", 384);
+        break;
+      } catch (err) {
+        const code = err?.code;
+        if (code !== "EEXIST") throw err;
+        lastErr = err;
+        _sleepMs(DELAYED_REQUESTS_LOCK_SLEEP_MS);
+      }
+    }
+    if (fd === void 0) {
+      throw new Error(`failed to acquire delayed-requests lock: ${String(lastErr?.message || lastErr)}`);
+    }
+    try {
+      return fn();
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {
+      }
+      try {
+        fs.unlinkSync(lockPath);
+      } catch {
+      }
+    }
+  }
+  function makeDelayedRequestId(kind, message) {
+    return `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
+  }
+  function queueDelayedRequest(request) {
+    const requestsPath = String(request?.requestsPath || path.join(deps.workspace, ".quaid", "runtime", "notes", "delayed-llm-requests.json"));
+    const message = String(request?.message || "").trim();
+    const kind = String(request?.kind || "janitor");
+    const priority = String(request?.priority || "normal");
+    const source = String(request?.source || "quaid_adapter");
+    if (!message) return false;
+    try {
+      return withDelayedRequestsLock(requestsPath, () => {
+        const loaded = readDelayedRequestsJson(requestsPath);
+        if (loaded === null && deps.isFailHardEnabled() && fs.existsSync(requestsPath)) {
+          throw new Error(`delayed requests file is unreadable or malformed: ${requestsPath}`);
+        }
+        const payload = loaded && typeof loaded === "object" && !Array.isArray(loaded) ? loaded : { version: 1, requests: [] };
+        const requests = Array.isArray(payload.requests) ? payload.requests : [];
+        const id = makeDelayedRequestId(kind, message);
+        if (requests.some((r) => r && String(r.id || "") === id && r.status === "pending")) {
+          return false;
+        }
+        requests.push({
+          id,
+          created_at: (/* @__PURE__ */ new Date()).toISOString(),
+          source,
+          kind,
+          priority,
+          status: "pending",
+          message
+        });
+        payload.version = 1;
+        payload.requests = requests;
+        writeDelayedRequestsJson(requestsPath, payload);
+        return true;
+      });
+    } catch (err) {
+      const detail = `[quaid][facade] delayed requests queue failed path=${requestsPath}: ${String(err?.message || err)}`;
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
+      console.warn(detail);
+      return false;
     }
   }
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
@@ -1578,7 +1673,7 @@ ${lines.join("\n")}
       }
       return null;
     },
-    queueDelayedRequest: () => notImplemented("queueDelayedRequest"),
+    queueDelayedRequest,
     isInternalMaintenancePrompt,
     resolveExtractionTrigger
   };

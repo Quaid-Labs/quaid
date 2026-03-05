@@ -4,7 +4,6 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
-import { queueDelayedRequest } from "./delayed-requests.js";
 import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
 import { createQuaidFacade } from "../../core/facade.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
@@ -68,7 +67,6 @@ const QUAID_LOGS_DIR = path.join(WORKSPACE, "logs");
 const QUAID_JANITOR_DIR = path.join(QUAID_LOGS_DIR, "janitor");
 const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-install-migration.json");
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
-const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 const COMPACTION_NOTIFY_BATCH_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MS", 45e3);
@@ -341,25 +339,7 @@ const configSchema = Type.Object({
   autoCapture: Type.Optional(Type.Boolean({ default: false })),
   autoRecall: Type.Optional(Type.Boolean({ default: true }))
 });
-const MAX_INJECTION_LOG_FILES = 400;
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
-function getInjectionLogPath(sessionId) {
-  return path.join(QUAID_INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
-}
-function pruneInjectionLogFiles() {
-  try {
-    const files = fs.readdirSync(QUAID_INJECTION_LOG_DIR).filter((f) => f.startsWith("memory-injection-") && f.endsWith(".log")).map((f) => ({ name: f, full: path.join(QUAID_INJECTION_LOG_DIR, f), mtimeMs: fs.statSync(path.join(QUAID_INJECTION_LOG_DIR, f)).mtimeMs })).sort((a, b) => b.mtimeMs - a.mtimeMs);
-    for (const stale of files.slice(MAX_INJECTION_LOG_FILES)) {
-      try {
-        fs.unlinkSync(stale.full);
-      } catch (err) {
-        console.warn(`[quaid] Failed pruning stale injection log ${stale.full}: ${String(err?.message || err)}`);
-      }
-    }
-  } catch (err) {
-    console.warn(`[quaid] Injection log pruning failed: ${String(err?.message || err)}`);
-  }
-}
 function resolveSessionIdFromSessionKey(sessionKey) {
   const key = String(sessionKey || "").trim();
   if (!key) {
@@ -960,16 +940,6 @@ function _saveJanitorNudgeState(state) {
     console.warn(`[quaid] Failed to save janitor nudge state: ${String(err?.message || err)}`);
   }
 }
-function queueDelayedLlmRequest(message, kind = "janitor", priority = "normal") {
-  return queueDelayedRequest(
-    DELAYED_LLM_REQUESTS_PATH,
-    message,
-    kind,
-    priority,
-    "quaid_adapter",
-    isFailHardEnabled()
-  );
-}
 function maybeQueueJanitorHealthAlert() {
   const issue = facade.getJanitorHealthIssue();
   if (!issue) return;
@@ -978,7 +948,12 @@ function maybeQueueJanitorHealthAlert() {
   const lastAt = Number(state.lastJanitorHealthAlertAt || 0);
   const cooldown = 6 * 60 * 60 * 1e3;
   if (now - lastAt < cooldown && String(state.lastJanitorHealthIssue || "") === issue) return;
-  if (queueDelayedLlmRequest(issue, "janitor_health", "high")) {
+  if (facade.queueDelayedRequest({
+    message: issue,
+    kind: "janitor_health",
+    priority: "high",
+    source: "quaid_adapter"
+  })) {
     state.lastJanitorHealthAlertAt = now;
     state.lastJanitorHealthIssue = issue;
     _saveJanitorNudgeState(state);
@@ -1311,7 +1286,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
           (m) => !(m.privacy === "private" && m.ownerId && m.ownerId !== "None" && m.ownerId !== currentOwner)
         );
         const uniqueSessionId = facade.extractSessionId(event.messages || [], ctx);
-        const injectionLogPath = getInjectionLogPath(uniqueSessionId);
+        const injectionLogPath = facade.getInjectionLogPath(uniqueSessionId);
         let previouslyInjected = [];
         try {
           const parsed = JSON.parse(fs.readFileSync(injectionLogPath, "utf8"));
@@ -1374,7 +1349,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             injected: mergedIds.slice(-MAX_INJECTION_IDS_PER_SESSION),
             lastInjectedAt: (/* @__PURE__ */ new Date()).toISOString()
           }), { mode: 384 });
-          pruneInjectionLogFiles();
+          facade.pruneInjectionLogFiles();
         } catch (err) {
           console.warn(`[quaid] Injection log write failed for ${injectionLogPath}: ${String(err?.message || err)}`);
         }
@@ -2677,7 +2652,7 @@ notify_memory_extraction(
             console.error("[quaid] Compaction project event failed:", err.message);
           }
           if (isSystemEnabled("memory") && uniqueSessionId) {
-            const logPath = getInjectionLogPath(uniqueSessionId);
+            const logPath = facade.getInjectionLogPath(uniqueSessionId);
             let logData = {};
             try {
               logData = JSON.parse(fs.readFileSync(logPath, "utf8"));
@@ -2940,7 +2915,7 @@ notify_memory_extraction(
             return;
           }
           const enhancedLogPath = path.join(QUAID_LOGS_DIR, "memory-injection", `session-${sessionId}.log`);
-          const tempLogPath = getInjectionLogPath(sessionId);
+          const tempLogPath = facade.getInjectionLogPath(sessionId);
           let logData = null;
           if (fs.existsSync(enhancedLogPath)) {
             try {
