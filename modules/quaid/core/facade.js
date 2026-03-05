@@ -502,6 +502,29 @@ function createQuaidFacade(deps) {
       return false;
     }
   }
+  function readObjectFile(filePath) {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return {};
+      }
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {};
+      }
+      return parsed;
+    } catch (err) {
+      console.warn(`[quaid][facade] failed reading JSON state ${filePath}: ${String(err?.message || err)}`);
+      return {};
+    }
+  }
+  function writeObjectFile(filePath, state) {
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify(state, null, 2), { mode: 384 });
+    } catch (err) {
+      console.warn(`[quaid][facade] failed writing JSON state ${filePath}: ${String(err?.message || err)}`);
+    }
+  }
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     const now = Date.now();
     if (now - _datastoreStatsTimestamp < maxAgeMs) {
@@ -556,6 +579,88 @@ function createQuaidFacade(deps) {
       throw new Error("[quaid][facade] unable to derive active node count under failHard");
     }
     return _cachedNodeCount ?? 100;
+  }
+  function getJanitorHealthIssue() {
+    const stats = getDatastoreStatsSync(60 * 1e3);
+    const completedAt = String(stats?.last_janitor_completed_at || "").trim();
+    if (!completedAt) {
+      return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
+    }
+    const ts = Date.parse(completedAt);
+    if (Number.isNaN(ts)) return null;
+    const hours = (Date.now() - ts) / (1e3 * 60 * 60);
+    if (hours > 72) {
+      return `[Quaid] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
+    }
+    if (hours > 48) {
+      return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
+    }
+    return null;
+  }
+  function maybeQueueJanitorHealthAlert(options) {
+    const issue = getJanitorHealthIssue();
+    if (!issue) return false;
+    const now = Number(options?.nowMs || Date.now());
+    const cooldown = Math.max(1, Number(options?.cooldownMs || 6 * 60 * 60 * 1e3));
+    const statePath = String(options?.statePath || "").trim();
+    if (!statePath) return false;
+    const state = readObjectFile(statePath);
+    const lastAt = Number(state.lastJanitorHealthAlertAt || 0);
+    if (now - lastAt < cooldown && String(state.lastJanitorHealthIssue || "") === issue) {
+      return false;
+    }
+    const queued = queueDelayedRequest({
+      message: issue,
+      kind: "janitor_health",
+      priority: "high",
+      source: "quaid_adapter"
+    });
+    if (!queued) return false;
+    state.lastJanitorHealthAlertAt = now;
+    state.lastJanitorHealthIssue = issue;
+    writeObjectFile(statePath, state);
+    return true;
+  }
+  function collectJanitorNudges(options) {
+    const now = Number(options?.nowMs || Date.now());
+    const cooldown = Math.max(1, Number(options?.cooldownMs || 6 * 60 * 60 * 1e3));
+    const statePath = String(options?.statePath || "").trim();
+    if (!statePath) return [];
+    const state = readObjectFile(statePath);
+    const nudges = [];
+    let changed = false;
+    try {
+      if (fs.existsSync(options.pendingInstallMigrationPath)) {
+        const raw = readObjectFile(options.pendingInstallMigrationPath);
+        const lastInstallNudge = Number(state.lastInstallNudgeAt || 0);
+        if (raw?.status === "pending" && now - lastInstallNudge > cooldown) {
+          nudges.push("Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?");
+          state.lastInstallNudgeAt = now;
+          changed = true;
+        }
+      }
+    } catch (err) {
+      console.warn(`[quaid][facade] install nudge check failed: ${String(err?.message || err)}`);
+    }
+    try {
+      if (fs.existsSync(options.pendingApprovalRequestsPath)) {
+        const raw = readObjectFile(options.pendingApprovalRequestsPath);
+        const requests = Array.isArray(raw?.requests) ? raw.requests : [];
+        const pendingCount = requests.filter((r) => r?.status === "pending").length;
+        const lastApprovalNudge = Number(state.lastApprovalNudgeAt || 0);
+        if (pendingCount > 0 && now - lastApprovalNudge > cooldown) {
+          nudges.push(`Quaid has ${pendingCount} pending approval request(s). Review pending maintenance approvals.`);
+          state.lastApprovalNudgeAt = now;
+          changed = true;
+        }
+      }
+    } catch (err) {
+      console.warn(`[quaid][facade] approval nudge check failed: ${String(err?.message || err)}`);
+    }
+    if (changed) {
+      writeObjectFile(statePath, state);
+    }
+    return nudges;
   }
   function parseDatastoreStats(raw) {
     let parsed = null;
@@ -1656,24 +1761,10 @@ ${lines.join("\n")}
     clearLifecycleSignalHistory: () => lifecycleSignalHistory.clear(),
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
-    getJanitorHealthIssue: () => {
-      const stats = getDatastoreStatsSync(60 * 1e3);
-      const completedAt = String(stats?.last_janitor_completed_at || "").trim();
-      if (!completedAt) {
-        return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
-      }
-      const ts = Date.parse(completedAt);
-      if (Number.isNaN(ts)) return null;
-      const hours = (Date.now() - ts) / (1e3 * 60 * 60);
-      if (hours > 72) {
-        return `[Quaid] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
-      }
-      if (hours > 48) {
-        return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
-      }
-      return null;
-    },
+    getJanitorHealthIssue,
     queueDelayedRequest,
+    maybeQueueJanitorHealthAlert,
+    collectJanitorNudges,
     isInternalMaintenancePrompt,
     resolveExtractionTrigger
   };

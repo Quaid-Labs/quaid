@@ -1073,88 +1073,6 @@ function spawnNotifyScript(scriptBody: string): boolean {
   return launched;
 }
 
-function _loadJanitorNudgeState(): Record<string, any> {
-  try {
-    if (fs.existsSync(JANITOR_NUDGE_STATE_PATH)) {
-      return JSON.parse(fs.readFileSync(JANITOR_NUDGE_STATE_PATH, "utf8")) || {};
-    }
-  } catch (err: unknown) {
-    console.warn(`[quaid] Failed to load janitor nudge state: ${String((err as Error)?.message || err)}`);
-  }
-  return {};
-}
-
-function _saveJanitorNudgeState(state: Record<string, any>): void {
-  try {
-    fs.writeFileSync(JANITOR_NUDGE_STATE_PATH, JSON.stringify(state, null, 2), { mode: 0o600 });
-  } catch (err: unknown) {
-    console.warn(`[quaid] Failed to save janitor nudge state: ${String((err as Error)?.message || err)}`);
-  }
-}
-
-function maybeQueueJanitorHealthAlert(): void {
-  const issue = facade.getJanitorHealthIssue();
-  if (!issue) return;
-  const now = Date.now();
-  const state = _loadJanitorNudgeState();
-  const lastAt = Number(state.lastJanitorHealthAlertAt || 0);
-  const cooldown = 6 * 60 * 60 * 1000;
-  if (now - lastAt < cooldown && String(state.lastJanitorHealthIssue || "") === issue) return;
-  if (facade.queueDelayedRequest({
-    message: issue,
-    kind: "janitor_health",
-    priority: "high",
-    source: "quaid_adapter",
-  })) {
-    state.lastJanitorHealthAlertAt = now;
-    state.lastJanitorHealthIssue = issue;
-    _saveJanitorNudgeState(state);
-  }
-}
-
-function maybeSendJanitorNudges(): void {
-  // Adapter-owned reminders: do not rely on HEARTBEAT for cross-platform behavior.
-  const now = Date.now();
-  const state = _loadJanitorNudgeState();
-  const lastInstallNudge = Number(state.lastInstallNudgeAt || 0);
-  const lastApprovalNudge = Number(state.lastApprovalNudgeAt || 0);
-  const NUDGE_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h
-
-  try {
-    if (fs.existsSync(PENDING_INSTALL_MIGRATION_PATH) && now - lastInstallNudge > NUDGE_COOLDOWN_MS) {
-      const raw = JSON.parse(fs.readFileSync(PENDING_INSTALL_MIGRATION_PATH, "utf8"));
-      if (raw?.status === "pending") {
-        spawnNotifyScript(`
-from core.runtime.notify import notify_user
-notify_user("Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?")
-`);
-        state.lastInstallNudgeAt = now;
-      }
-    }
-  } catch (err: unknown) {
-    console.warn(`[quaid] Install nudge check failed: ${String((err as Error)?.message || err)}`);
-  }
-
-  try {
-    if (fs.existsSync(PENDING_APPROVAL_REQUESTS_PATH) && now - lastApprovalNudge > NUDGE_COOLDOWN_MS) {
-      const raw = JSON.parse(fs.readFileSync(PENDING_APPROVAL_REQUESTS_PATH, "utf8"));
-      const requests = Array.isArray(raw?.requests) ? raw.requests : [];
-      const pendingCount = requests.filter((r: any) => r?.status === "pending").length;
-      if (pendingCount > 0) {
-        spawnNotifyScript(`
-from core.runtime.notify import notify_user
-notify_user("Quaid has ${pendingCount} pending approval request(s). Review pending maintenance approvals.")
-`);
-        state.lastApprovalNudgeAt = now;
-      }
-    }
-  } catch (err: unknown) {
-    console.warn(`[quaid] Approval nudge check failed: ${String((err as Error)?.message || err)}`);
-  }
-
-  _saveJanitorNudgeState(state);
-}
-
 // ============================================================================
 // Project Event Emitter (compact/reset → background processor)
 // ============================================================================
@@ -1427,13 +1345,27 @@ const quaidPlugin = {
       if (facade.isInternalQuaidSession(ctx?.sessionId)) {
         return;
       }
-      try { maybeSendJanitorNudges(); } catch (err: unknown) {
+      try {
+        const messages = facade.collectJanitorNudges({
+          statePath: JANITOR_NUDGE_STATE_PATH,
+          pendingInstallMigrationPath: PENDING_INSTALL_MIGRATION_PATH,
+          pendingApprovalRequestsPath: PENDING_APPROVAL_REQUESTS_PATH,
+        });
+        for (const message of messages) {
+          spawnNotifyScript(`
+from core.runtime.notify import notify_user
+notify_user(${JSON.stringify(message)})
+`);
+        }
+      } catch (err: unknown) {
         if (isFailHardEnabled()) {
           throw err;
         }
         console.warn(`[quaid] Janitor nudge dispatch failed: ${String((err as Error)?.message || err)}`);
       }
-      try { maybeQueueJanitorHealthAlert(); } catch (err: unknown) {
+      try {
+        facade.maybeQueueJanitorHealthAlert({ statePath: JANITOR_NUDGE_STATE_PATH });
+      } catch (err: unknown) {
         if (isFailHardEnabled()) {
           throw err;
         }

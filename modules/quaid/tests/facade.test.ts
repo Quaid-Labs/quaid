@@ -921,4 +921,59 @@ describe("QuaidFacade", () => {
     });
     await rm(workspace, { recursive: true, force: true });
   });
+
+  it("collectJanitorNudges emits install/approval nudges with cooldown persistence", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-janitor-nudges-"));
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const statePath = path.join(workspace, ".quaid", "runtime", "notes", "janitor-nudge-state.json");
+    const pendingInstallMigrationPath = path.join(workspace, ".quaid", "runtime", "pending-install-migration.json");
+    const pendingApprovalRequestsPath = path.join(workspace, ".quaid", "runtime", "notes", "pending-approval-requests.json");
+    await mkdir(path.dirname(pendingInstallMigrationPath), { recursive: true });
+    await mkdir(path.dirname(pendingApprovalRequestsPath), { recursive: true });
+    await writeFile(pendingInstallMigrationPath, JSON.stringify({ status: "pending" }), "utf8");
+    await writeFile(
+      pendingApprovalRequestsPath,
+      JSON.stringify({ requests: [{ status: "pending" }, { status: "resolved" }] }),
+      "utf8",
+    );
+
+    const nudges = facade.collectJanitorNudges({
+      statePath,
+      pendingInstallMigrationPath,
+      pendingApprovalRequestsPath,
+      nowMs: 1_700_000_000_000,
+    });
+    expect(nudges).toHaveLength(2);
+    expect(nudges[0]).toContain("just installed Quaid");
+    expect(nudges[1]).toContain("1 pending approval request");
+
+    const suppressed = facade.collectJanitorNudges({
+      statePath,
+      pendingInstallMigrationPath,
+      pendingApprovalRequestsPath,
+      nowMs: 1_700_000_000_500,
+    });
+    expect(suppressed).toEqual([]);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("maybeQueueJanitorHealthAlert persists cooldown state", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-janitor-health-"));
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const statePath = path.join(workspace, ".quaid", "runtime", "notes", "janitor-nudge-state.json");
+    const first = facade.maybeQueueJanitorHealthAlert({
+      statePath,
+      nowMs: 1_700_000_000_000,
+    });
+    const second = facade.maybeQueueJanitorHealthAlert({
+      statePath,
+      nowMs: 1_700_000_001_000,
+    });
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    expect(typeof state.lastJanitorHealthIssue).toBe("string");
+    expect(Number(state.lastJanitorHealthAlertAt)).toBe(1_700_000_000_000);
+    await rm(workspace, { recursive: true, force: true });
+  });
 });
