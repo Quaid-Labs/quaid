@@ -304,52 +304,6 @@ function isMissingFileError(err: unknown): boolean {
 type ModelTier = "deep" | "fast";
 type ExtractionTrigger = "compaction" | "reset" | "new" | "recovery" | "timeout" | "unknown";
 
-function normalizeProvider(provider: string): string {
-  return String(provider || "").trim().toLowerCase();
-}
-
-function providerClassLookupKey(provider: string): string {
-  const normalized = normalizeProvider(provider);
-  if (normalized === "openai-codex") return "openai";
-  if (normalized === "anthropic-claude-code") return "anthropic";
-  return normalized;
-}
-
-function getConfiguredTierValue(tier: ModelTier): string {
-  const key = tier === "fast" ? "fastReasoning" : "deepReasoning";
-  const configured = getMemoryConfig().models?.[key];
-  if (typeof configured === "string" && configured.trim().length > 0) {
-    return configured.trim();
-  }
-  throw new Error(`Missing models.${key} in config/memory.json`);
-}
-
-function getConfiguredTierProvider(tier: ModelTier): string {
-  const key = tier === "fast" ? "fastReasoningProvider" : "deepReasoningProvider";
-  const configured = getMemoryConfig().models?.[key];
-  if (typeof configured === "string" && configured.trim().length > 0) {
-    return normalizeProvider(configured.trim());
-  }
-  return "default";
-}
-
-function parseTierModelClassMap(tier: ModelTier): Record<string, string> {
-  const models = getMemoryConfig().models || {};
-  const raw = tier === "fast" ? models.fastReasoningModelClasses : models.deepReasoningModelClasses;
-  const out: Record<string, string> = {};
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return out;
-  }
-  for (const [provider, model] of Object.entries(raw)) {
-    const key = providerClassLookupKey(String(provider || "").trim());
-    const value = String(model || "").trim();
-    if (key && value) {
-      out[key] = value;
-    }
-  }
-  return out;
-}
-
 function getGatewayDefaultProvider(): string {
   try {
     const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
@@ -360,7 +314,7 @@ function getGatewayDefaultProvider(): string {
       ).trim();
       if (primaryModel.includes("/")) {
         const provider = primaryModel.split("/", 1)[0];
-        const normalized = normalizeProvider(provider);
+        const normalized = String(provider || "").trim().toLowerCase();
         if (normalized) { return normalized; }
       }
     }
@@ -375,12 +329,12 @@ function getGatewayDefaultProvider(): string {
       const preferred = ["openai-codex", "openai", "anthropic"];
       for (const key of preferred) {
         if (lastGood[key]) {
-          const normalized = normalizeProvider(key);
+          const normalized = String(key || "").trim().toLowerCase();
           if (normalized) { return normalized; }
         }
       }
       for (const key of Object.keys(lastGood)) {
-        const normalized = normalizeProvider(key);
+        const normalized = String(key || "").trim().toLowerCase();
         if (normalized) { return normalized; }
       }
     }
@@ -390,73 +344,11 @@ function getGatewayDefaultProvider(): string {
   return "";
 }
 
-function getEffectiveProvider(): string {
-  const configuredProvider = normalizeProvider(String(getMemoryConfig().models?.llmProvider || ""));
-  if (configuredProvider && configuredProvider !== "default") { return configuredProvider; }
-  const gatewayProvider = getGatewayDefaultProvider();
-  if (gatewayProvider) { return gatewayProvider; }
-  throw new Error(
-    "models.llmProvider is 'default' but no active gateway provider was resolved. " +
-    "Set models.llmProvider explicitly (anthropic/openai/openai-compatible/claude-code), " +
-    "or ensure OpenClaw auth profiles exist and lastGood is set in ~/.openclaw/agents/main/agent/auth-profiles.json."
-  );
-}
-
-function getEffectiveTierProvider(tier: ModelTier): string {
-  const tierProvider = getConfiguredTierProvider(tier);
-  if (tierProvider && tierProvider !== "default") {
-    return tierProvider;
-  }
-  return getEffectiveProvider();
-}
-
-function resolveTierModel(tier: ModelTier): { provider: string; model: string } {
-  const rawTierValue = getConfiguredTierValue(tier);
-  const configuredTierProvider = getConfiguredTierProvider(tier);
-  const effectiveTierProvider = getEffectiveTierProvider(tier);
-  if (rawTierValue !== "default") {
-    if (rawTierValue.includes("/")) {
-      const [provider, ...modelParts] = rawTierValue.split("/");
-      const normalizedProvider = normalizeProvider(provider);
-      if (
-        configuredTierProvider !== "default"
-        && providerClassLookupKey(normalizedProvider) !== providerClassLookupKey(configuredTierProvider)
-      ) {
-        throw new Error(
-          `models.${tier === "fast" ? "fastReasoning" : "deepReasoning"} provider "${normalizedProvider}" does not match models.${tier === "fast" ? "fastReasoningProvider" : "deepReasoningProvider"}="${configuredTierProvider}"`
-        );
-      }
-      return {
-        provider: normalizedProvider,
-        model: modelParts.join("/").trim(),
-      };
-    }
-    if (!effectiveTierProvider) {
-      throw new Error(`Cannot resolve provider for models.${tier === "fast" ? "fastReasoning" : "deepReasoning"}=${rawTierValue}`);
-    }
-    return { provider: effectiveTierProvider, model: rawTierValue };
-  }
-
-  if (!effectiveTierProvider) {
-    throw new Error(`No provider resolved for default ${tier} reasoning model`);
-  }
-
-  const classMap = parseTierModelClassMap(tier);
-  const mappedModel = classMap[providerClassLookupKey(effectiveTierProvider)];
-  if (!mappedModel) {
-    throw new Error(`No ${tier}ReasoningModelClasses entry for provider "${effectiveTierProvider}" while using default ${tier} reasoning model`);
-  }
-  return {
-    provider: effectiveTierProvider,
-    model: mappedModel,
-  };
-}
-
 function runStartupSelfCheck(): void {
   const errors: string[] = [];
 
   try {
-    const deep = resolveTierModel("deep");
+    const deep = facade.resolveTierModel("deep");
     console.log(`[quaid][startup] deep model resolved: provider=${deep.provider} model=${deep.model}`);
     const paidProviders = new Set(["openai-compatible"]);
     if (paidProviders.has(deep.provider)) {
@@ -467,7 +359,7 @@ function runStartupSelfCheck(): void {
   }
 
   try {
-    const fast = resolveTierModel("fast");
+    const fast = facade.resolveTierModel("fast");
     console.log(`[quaid][startup] fast model resolved: provider=${fast.provider} model=${fast.model}`);
     const paidProviders = new Set(["openai-compatible"]);
     if (paidProviders.has(fast.provider)) {
@@ -902,8 +794,8 @@ async function callConfiguredLLM(
   maxTokens: number,
   timeoutMs: number = 600_000,
 ): Promise<LLMProxyResponse> {
-  const resolved = resolveTierModel(modelTier);
-  const provider = normalizeProvider(resolved.provider);
+  const resolved = facade.resolveTierModel(modelTier);
+  const provider = String(resolved.provider || "").trim().toLowerCase();
   const started = Date.now();
   try {
     _ensureGatewaySessionOverride(modelTier, resolved);
@@ -1469,6 +1361,7 @@ const facade = createQuaidFacade({
       QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
     }, EVENTS_EMIT_TIMEOUT_MS),
   callLLM: callConfiguredLLM,
+  getGatewayDefaultProvider,
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
