@@ -17,6 +17,7 @@ import {
 } from "./knowledge-stores.js";
 import type { KnowledgeDatastore, DomainFilter, RecallIntent } from "./knowledge-stores.js";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -191,6 +192,8 @@ export type QuaidFacade = {
 
   // --- Transcript/message utilities ---
   getMessageText: (message: unknown) => string;
+  extractSessionId: (messages: unknown[], ctx?: unknown) => string;
+  filterConversationMessages: (messages: unknown[]) => unknown[];
   buildTranscript: (messages: unknown[]) => string;
   extractFilePaths: (messages: unknown[]) => string[];
   summarizeProjectSession: (
@@ -618,6 +621,63 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         .join(" ");
     }
     return "";
+  }
+
+  function extractSessionId(messages: unknown[], ctx?: unknown): string {
+    const context = ctx && typeof ctx === "object"
+      ? ctx as Record<string, unknown>
+      : {};
+    const direct = String(context.sessionId || "").trim();
+    if (direct) {
+      return direct;
+    }
+    let firstTimestamp = "";
+    const filteredMessages = Array.isArray(messages)
+      ? messages.filter((msg: unknown) => {
+        if (!msg || typeof msg !== "object") return false;
+        if (String((msg as Record<string, unknown>).role || "") !== "user") return false;
+        const content = getMessageText(msg);
+        if (content.startsWith("GatewayRestart:")) return false;
+        if (content.startsWith("System:")) return false;
+        if (content.includes('"kind": "restart"')) return false;
+        return true;
+      })
+      : [];
+    if (filteredMessages.length > 0) {
+      const firstMessage = filteredMessages[0] as Record<string, unknown>;
+      const rawTs = firstMessage.timestamp;
+      firstTimestamp = rawTs ? String(rawTs) : Date.now().toString();
+    } else {
+      firstTimestamp = Date.now().toString();
+    }
+    return createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
+  }
+
+  function filterConversationMessages(messages: unknown[]): unknown[] {
+    if (!Array.isArray(messages) || messages.length === 0) return [];
+    return messages.filter((msg: unknown) => {
+      if (!msg || typeof msg !== "object") return false;
+      const role = String((msg as Record<string, unknown>).role || "");
+      if (role !== "user" && role !== "assistant") return false;
+      const text = getMessageText(msg).trim();
+      if (!text) return false;
+      if (text.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
+      if (isInternalMaintenancePrompt(text)) return false;
+      if (role === "assistant") {
+        const compact = text.replace(/\s+/g, " ").trim();
+        if (/^\{\s*"facts"\s*:\s*\[/.test(compact)) {
+          try {
+            const parsed = JSON.parse(compact);
+            if (parsed && typeof parsed === "object") {
+              const keys = Object.keys(parsed);
+              const onlyExtractionKeys = keys.every((k) => k === "facts" || k === "journal_entries" || k === "soul_snippets");
+              if (onlyExtractionKeys && Array.isArray((parsed as any).facts)) return false;
+            }
+          } catch {}
+        }
+      }
+      return true;
+    });
   }
 
   function buildTranscript(messages: unknown[]): string {
@@ -1667,6 +1727,8 @@ ${lines.join("\n")}
     // Guidance
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
     getMessageText,
+    extractSessionId,
+    filterConversationMessages,
     buildTranscript,
     extractFilePaths,
     summarizeProjectSession,

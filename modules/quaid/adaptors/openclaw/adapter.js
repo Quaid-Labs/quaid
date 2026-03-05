@@ -1,6 +1,5 @@
 import { Type } from "@sinclair/typebox";
 import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -469,45 +468,6 @@ function pruneInjectionLogFiles() {
     console.warn(`[quaid] Injection log pruning failed: ${String(err?.message || err)}`);
   }
 }
-function extractSessionId(messages, ctx) {
-  if (ctx?.sessionId) {
-    return ctx.sessionId;
-  }
-  let firstTimestamp = "";
-  const filteredMessages = messages.filter((m) => {
-    if (m.role !== "user") {
-      return false;
-    }
-    let content = "";
-    if (typeof m.content === "string") {
-      content = m.content;
-    } else if (Array.isArray(m.content)) {
-      content = m.content.map((c) => c.text || "").join(" ");
-    }
-    if (content.startsWith("GatewayRestart:")) {
-      return false;
-    }
-    if (content.startsWith("System:")) {
-      return false;
-    }
-    if (content.includes('"kind": "restart"')) {
-      return false;
-    }
-    return true;
-  });
-  if (filteredMessages.length > 0) {
-    const firstMessage = filteredMessages[0];
-    if (firstMessage.timestamp) {
-      firstTimestamp = String(firstMessage.timestamp);
-    } else {
-      firstTimestamp = Date.now().toString();
-    }
-  } else {
-    firstTimestamp = Date.now().toString();
-  }
-  const timestampHash = createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
-  return timestampHash;
-}
 function resolveSessionIdFromSessionKey(sessionKey) {
   const key = String(sessionKey || "").trim();
   if (!key) {
@@ -592,36 +552,7 @@ function resolveLifecycleHookSessionId(event, ctx, messages) {
   if (fromCtxKey) {
     return fromCtxKey;
   }
-  return extractSessionId(messages, ctx);
-}
-function getAllConversationMessages(messages) {
-  if (!Array.isArray(messages) || messages.length === 0) return [];
-  return messages.filter((msg) => {
-    if (!msg || msg.role !== "user" && msg.role !== "assistant") return false;
-    const text = facade.getMessageText(msg).trim();
-    if (!text) return false;
-    if (text.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
-    if (facade.isInternalMaintenancePrompt(text)) return false;
-    if (msg.role === "assistant") {
-      const compact = text.replace(/\s+/g, " ").trim();
-      if (/^\{\s*"facts"\s*:\s*\[/.test(compact)) {
-        try {
-          const parsed = JSON.parse(compact);
-          if (parsed && typeof parsed === "object") {
-            const keys = Object.keys(parsed);
-            const onlyExtractionKeys = keys.every((k) => k === "facts" || k === "journal_entries" || k === "soul_snippets");
-            if (onlyExtractionKeys && Array.isArray(parsed.facts)) return false;
-          }
-        } catch {
-        }
-      }
-    }
-    return true;
-  });
-}
-function detectLifecycleCommandSignal(messages) {
-  const signal = facade.detectLifecycleSignal(messages);
-  return signal?.label || null;
+  return facade.extractSessionId(messages, ctx);
 }
 function queueCompactionNotificationBatch(sessionId, stored, skipped, edges) {
   const now = Date.now();
@@ -1524,7 +1455,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
         const filtered = allMemories.filter(
           (m) => !(m.privacy === "private" && m.ownerId && m.ownerId !== "None" && m.ownerId !== currentOwner)
         );
-        const uniqueSessionId = extractSessionId(event.messages || [], ctx);
+        const uniqueSessionId = facade.extractSessionId(event.messages || [], ctx);
         const injectionLogPath = getInjectionLogPath(uniqueSessionId);
         let previouslyInjected = [];
         try {
@@ -2676,7 +2607,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
           ADAPTER_BOOT_TIME_MS,
           BACKLOG_NOTIFY_STALE_MS
         );
-        const dedupeSession2 = sessionId || extractSessionId(messages, {});
+        const dedupeSession2 = sessionId || facade.extractSessionId(messages, {});
         const dedupeKey = `start:${dedupeSession2}:${triggerType2}`;
         const triggerDesc = triggerType2 === "compaction" ? "compaction" : triggerType2 === "recovery" ? "recovery" : triggerType2 === "timeout" ? "timeout" : triggerType2 === "new" ? "/new" : "reset";
         if (triggerType2 !== "recovery" && !suppressBacklogNotify2 && hasMeaningfulUserContent && facade.shouldEmitExtractionNotify(dedupeKey)) {
@@ -2756,7 +2687,7 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
         BACKLOG_NOTIFY_STALE_MS
       );
       const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new") && hasMeaningfulUserContent && facade.shouldNotifyFeature("extraction", "summary");
-      const dedupeSession = sessionId || extractSessionId(messages, {});
+      const dedupeSession = sessionId || facade.extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
       if (!suppressBacklogNotify && facade.shouldNotifyFeature("extraction", "summary") && triggerType === "compaction") {
         queueCompactionNotificationBatch(dedupeSession, stored, skipped, edgesCreated);
@@ -2827,8 +2758,8 @@ notify_memory_extraction(
         }
         const messages = event.messages || [];
         const sessionId = ctx?.sessionId;
-        const conversationMessages = getAllConversationMessages(messages);
-        const extractionSessionId = sessionId || extractSessionId(messages, ctx);
+        const conversationMessages = facade.filterConversationMessages(messages);
+        const extractionSessionId = sessionId || facade.extractSessionId(messages, ctx);
         if (conversationMessages.length === 0) {
           console.log(`[quaid] before_compaction: empty/internal hook payload; deferring to timeout source session=${extractionSessionId || "unknown"}`);
         } else {
@@ -2873,7 +2804,7 @@ notify_memory_extraction(
           if (conversationMessages.length === 0) {
             return;
           }
-          const uniqueSessionId = extractSessionId(conversationMessages, ctx);
+          const uniqueSessionId = facade.extractSessionId(conversationMessages, ctx);
           try {
             await facade.updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId, QUAID_TMP_DIR);
           } catch (err) {
@@ -2967,7 +2898,7 @@ notify_memory_extraction(
         const messages = event.messages || [];
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
-        const conversationMessages = getAllConversationMessages(messages);
+        const conversationMessages = facade.filterConversationMessages(messages);
         const extractionSessionId = resolveLifecycleHookSessionId(event, ctx, conversationMessages);
         if (!extractionSessionId) {
           console.log(`[quaid] before_reset: skip unresolved session id session=${sessionId || "unknown"}`);
@@ -3002,7 +2933,7 @@ notify_memory_extraction(
           } else {
             console.log("[quaid] Reset: memory extraction skipped \u2014 memory system disabled");
           }
-          const uniqueSessionId = extractSessionId(conversationMessages, ctx);
+          const uniqueSessionId = facade.extractSessionId(conversationMessages, ctx);
           if (conversationMessages.length > 0) {
             try {
               await facade.updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId, QUAID_TMP_DIR);
@@ -3212,7 +3143,7 @@ notify_memory_extraction(
 };
 var adapter_default = quaidPlugin;
 const __test = {
-  detectLifecycleCommandSignal,
+  detectLifecycleCommandSignal: (messages) => facade.detectLifecycleSignal(messages)?.label || null,
   detectLifecycleSignal: (messages) => facade.detectLifecycleSignal(messages),
   shouldProcessLifecycleSignal: (sessionId, signal) => facade.shouldProcessLifecycleSignal(sessionId, signal),
   shouldEmitExtractionNotify: (key, now) => facade.shouldEmitExtractionNotify(key, now),
