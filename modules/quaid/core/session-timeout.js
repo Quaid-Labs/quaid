@@ -146,6 +146,7 @@ class SessionTimeoutManager {
   logger;
   readSessionMessagesSource;
   listSessionActivitySource;
+  shouldSkipText;
   timer = null;
   pendingFallbackMessages = null;
   pendingSessionId;
@@ -172,6 +173,7 @@ class SessionTimeoutManager {
     this.extract = opts.extract;
     this.isBootstrapOnly = opts.isBootstrapOnly;
     this.logger = opts.logger;
+    this.shouldSkipText = opts.shouldSkipText;
     this.readSessionMessagesSource = (sessionId) => {
       try {
         return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || [], opts.shouldSkipText);
@@ -259,7 +261,7 @@ class SessionTimeoutManager {
   onAgentEnd(messages, sessionId, meta) {
     if (!Array.isArray(messages) || messages.length === 0) return;
     if (!sessionId) return;
-    const incoming = filterEligibleMessages(messages);
+    const incoming = filterEligibleMessages(messages, this.shouldSkipText);
     if (incoming.length === 0) return;
     const gatedIncoming = this.filterReplayedMessages(sessionId, incoming);
     if (gatedIncoming.length === 0) {
@@ -322,7 +324,7 @@ class SessionTimeoutManager {
     if (!sessionId) return false;
     const sourceMessages = this.readSourceSessionMessages(sessionId);
     const sourceUnprocessed = this.filterReplayedMessages(sessionId, sourceMessages);
-    const fallback = this.filterReplayedMessages(sessionId, filterEligibleMessages(fallbackMessages || []));
+    const fallback = this.filterReplayedMessages(sessionId, filterEligibleMessages(fallbackMessages || [], this.shouldSkipText));
     const allowFallback = !this.failHard;
     const source = sourceUnprocessed.length > 0 ? "source_session_messages" : allowFallback && fallback.length > 0 ? "fallback_event_messages" : "none";
     const messages = sourceUnprocessed.length > 0 ? sourceUnprocessed : allowFallback ? fallback : [];
@@ -976,14 +978,14 @@ class SessionTimeoutManager {
   readSourceSessionMessages(sessionId) {
     const rows = this.readSessionMessagesSource(sessionId);
     if (!Array.isArray(rows)) return [];
-    return filterEligibleMessages(rows);
+    return filterEligibleMessages(rows, this.shouldSkipText);
   }
   listSessionActivityRows() {
     return this.listSessionActivitySource();
   }
   hasUnprocessedSessionMessages(sessionId) {
     if (this.pendingSessionId === sessionId && Array.isArray(this.pendingFallbackMessages)) {
-      const pending = this.filterReplayedMessages(sessionId, filterEligibleMessages(this.pendingFallbackMessages));
+      const pending = this.filterReplayedMessages(sessionId, filterEligibleMessages(this.pendingFallbackMessages, this.shouldSkipText));
       if (pending.length > 0) return true;
     }
     const messages = this.readSourceSessionMessages(sessionId);

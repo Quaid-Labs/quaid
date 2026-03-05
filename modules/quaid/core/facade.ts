@@ -298,6 +298,8 @@ export type QuaidFacade = {
   processLifecycleEvent: (signal: unknown, context: unknown) => never;
   maybeRunMaintenance: (sessionId: string) => never;
   getJanitorHealthIssue: () => string | null;
+  queueExtraction: (task: () => Promise<void>, source: string) => Promise<void>;
+  getQueuedExtractionPromise: () => Promise<void> | null;
   queueDelayedRequest: (request: DelayedRequestInput) => boolean;
   maybeQueueJanitorHealthAlert: (options: JanitorHealthAlertOptions) => boolean;
   collectJanitorNudges: (options: JanitorNudgeOptions) => string[];
@@ -411,6 +413,28 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     edges: number;
     timer: NodeJS.Timeout | null;
   } | null = null;
+  let extractionPromise: Promise<void> | null = null;
+
+  function queueExtraction(task: () => Promise<void>, source: string): Promise<void> {
+    const prior = extractionPromise || Promise.resolve();
+    extractionPromise = prior.then(
+      () => task(),
+      async (err: unknown) => {
+        const msg = (err as Error)?.message || String(err);
+        console.error(`[quaid][facade] extraction chain prior failure (${source}): ${msg}`);
+        if (deps.isFailHardEnabled()) {
+          throw err;
+        }
+        await task();
+        return;
+      },
+    );
+    return extractionPromise;
+  }
+
+  function getQueuedExtractionPromise(): Promise<void> | null {
+    return extractionPromise;
+  }
 
   function resolveOwner(speaker?: string, channel?: string): string {
     const usersCfg = deps.getMemoryConfig()?.users;
@@ -2526,6 +2550,8 @@ ${lines.join("\n")}
     processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
     maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
     getJanitorHealthIssue,
+    queueExtraction,
+    getQueuedExtractionPromise,
     queueDelayedRequest,
     maybeQueueJanitorHealthAlert,
     collectJanitorNudges,

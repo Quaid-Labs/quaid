@@ -96,6 +96,26 @@ export function createQuaidFacade(deps) {
     const lifecycleSignalHistory = new Map();
     const extractionNotifyHistory = new Map();
     let compactionNotifyBatchState = null;
+    let extractionPromise = null;
+    function queueExtraction(task, source) {
+        const prior = extractionPromise || Promise.resolve();
+        extractionPromise = prior.then(
+          () => task(),
+          async (err) => {
+              const msg = err?.message || String(err);
+              console.error(`[quaid][facade] extraction chain prior failure (${source}): ${msg}`);
+              if (deps.isFailHardEnabled()) {
+                  throw err;
+              }
+              await task();
+              return;
+          },
+        );
+        return extractionPromise;
+    }
+    function getQueuedExtractionPromise() {
+        return extractionPromise;
+    }
     function resolveOwner(speaker, channel) {
         const usersCfg = deps.getMemoryConfig()?.users;
         const config = usersCfg && typeof usersCfg === "object" && !Array.isArray(usersCfg)
@@ -2108,6 +2128,8 @@ ${lines.join("\n")}
         processLifecycleEvent: () => notImplemented("processLifecycleEvent"),
         maybeRunMaintenance: () => notImplemented("maybeRunMaintenance"),
         getJanitorHealthIssue,
+        queueExtraction,
+        getQueuedExtractionPromise,
         queueDelayedRequest,
         maybeQueueJanitorHealthAlert,
         collectJanitorNudges,

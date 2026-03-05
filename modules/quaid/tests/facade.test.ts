@@ -959,6 +959,37 @@ describe("QuaidFacade", () => {
     expect(result === null || typeof result === "string").toBe(true);
   });
 
+  it("queueExtraction serializes queued tasks", async () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const order: string[] = [];
+    const first = facade.queueExtraction(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      order.push("first");
+    }, "first");
+    const second = facade.queueExtraction(async () => {
+      order.push("second");
+    }, "second");
+    expect(facade.getQueuedExtractionPromise()).not.toBeNull();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["first", "second"]);
+  });
+
+  it("queueExtraction retries next task after prior failure when failHard is disabled", async () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      isFailHardEnabled: vi.fn(() => false),
+    }));
+    const first = facade.queueExtraction(async () => {
+      throw new Error("boom");
+    }, "first");
+    await expect(first).rejects.toThrow("boom");
+
+    let ran = false;
+    await facade.queueExtraction(async () => {
+      ran = true;
+    }, "second");
+    expect(ran).toBe(true);
+  });
+
   it("queueDelayedRequest writes and dedupes pending delayed requests", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-delayed-req-"));
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
