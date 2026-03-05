@@ -833,7 +833,7 @@ export function createQuaidFacade(deps) {
         }
         return "unknown";
     }
-    function resolveLifecycleHookSessionId(event, ctx, messages) {
+  function resolveLifecycleHookSessionId(event, ctx, messages) {
         const eventObj = (event && typeof event === "object") ? event : {};
         const context = (ctx && typeof ctx === "object") ? ctx : {};
         const direct = String(eventObj.sessionId || context.sessionId || "").trim();
@@ -856,9 +856,61 @@ export function createQuaidFacade(deps) {
         if (fromCtxKey) {
             return fromCtxKey;
         }
-        return extractSessionId(messages, ctx);
+    return extractSessionId(messages, ctx);
+  }
+  function resolveSessionForCompaction(sessionId) {
+    const rows = deps.listCompactionSessions?.() || [];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return null;
     }
-    function filterConversationMessages(messages) {
+    const targetSessionId = String(sessionId || "").trim();
+    if (targetSessionId) {
+      for (const row of rows) {
+        const key = String(row?.key || "").trim();
+        const sid = String(row?.sessionId || "").trim();
+        if (key && sid && sid === targetSessionId) {
+          return key;
+        }
+      }
+    }
+    if (rows.some((row) => String(row?.key || "").trim() === "agent:main:main")) {
+      return "agent:main:main";
+    }
+    const fallbackKey = String(rows[0]?.key || "").trim();
+    return fallbackKey || null;
+  }
+  function maybeForceCompactionAfterTimeout(sessionId) {
+    const captureCfg = deps.getMemoryConfig().capture || {};
+    const enabled = Boolean(
+      captureCfg.autoCompactionOnTimeout ?? captureCfg.auto_compaction_on_timeout ?? true
+    );
+    if (!enabled) return;
+    const key = resolveSessionForCompaction(sessionId);
+    if (!key) {
+      console.warn(`[quaid][timeout] auto-compaction skipped: could not resolve session key (session=${sessionId || "unknown"})`);
+      return;
+    }
+    const compact = deps.requestSessionCompaction;
+    if (typeof compact !== "function") {
+      console.warn(`[quaid][timeout] auto-compaction skipped: no requestSessionCompaction callback (key=${key})`);
+      return;
+    }
+    try {
+      const result = compact(key);
+      if (result?.ok) {
+        console.log(`[quaid][timeout] auto-compaction requested for key=${key} (compacted=${String(result?.compacted)})`);
+      } else {
+        const raw = String(result?.raw || "");
+        console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${raw.slice(0, 300)}`);
+      }
+    } catch (err) {
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
+    }
+  }
+  function filterConversationMessages(messages) {
         if (!Array.isArray(messages) || messages.length === 0)
             return [];
         return messages.filter((msg) => {
@@ -2109,6 +2161,8 @@ ${lines.join("\n")}
         extractSessionId,
         resolveMemoryStoreSessionId,
         resolveLifecycleHookSessionId,
+        resolveSessionForCompaction,
+        maybeForceCompactionAfterTimeout,
         filterConversationMessages,
         buildTranscript,
         extractFilePaths,
