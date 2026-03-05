@@ -56,6 +56,7 @@ export type QuaidFacadeDeps = {
     maxTokens: number,
     timeoutMs?: number,
   ) => Promise<LLMCallResult | null>;
+  getGatewayDefaultProvider?: () => string;
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
@@ -130,6 +131,7 @@ export type QuaidFacade = {
   isFailHardEnabled: () => boolean;
   getCaptureTimeoutMinutes: () => number;
   isInternalQuaidSession: (sessionId: unknown) => boolean;
+  resolveTierModel: (tier: ModelTier) => { provider: string; model: string };
   resolveOwner: (speaker?: string, channel?: string) => string;
   shouldNotifyFeature: (
     feature: "janitor" | "extraction" | "retrieval",
@@ -381,6 +383,126 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const sid = typeof sessionId === "string" ? sessionId.trim() : "";
     if (!sid) return false;
     return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
+  }
+
+  function normalizeProvider(provider: string): string {
+    return String(provider || "").trim().toLowerCase();
+  }
+
+  function providerClassLookupKey(provider: string): string {
+    const normalized = normalizeProvider(provider);
+    if (normalized === "openai-codex") return "openai";
+    if (normalized === "anthropic-claude-code") return "anthropic";
+    return normalized;
+  }
+
+  function getConfiguredTierValue(tier: ModelTier): string {
+    const key = tier === "fast" ? "fastReasoning" : "deepReasoning";
+    const configured = deps.getMemoryConfig().models?.[key];
+    if (typeof configured === "string" && configured.trim().length > 0) {
+      return configured.trim();
+    }
+    throw new Error(`Missing models.${key} in config/memory.json`);
+  }
+
+  function getConfiguredTierProvider(tier: ModelTier): string {
+    const key = tier === "fast" ? "fastReasoningProvider" : "deepReasoningProvider";
+    const configured = deps.getMemoryConfig().models?.[key];
+    if (typeof configured === "string" && configured.trim().length > 0) {
+      return normalizeProvider(configured.trim());
+    }
+    return "default";
+  }
+
+  function parseTierModelClassMap(tier: ModelTier): Record<string, string> {
+    const models = deps.getMemoryConfig().models || {};
+    const raw = tier === "fast" ? models.fastReasoningModelClasses : models.deepReasoningModelClasses;
+    const out: Record<string, string> = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return out;
+    }
+    for (const [provider, model] of Object.entries(raw)) {
+      const key = providerClassLookupKey(String(provider || "").trim());
+      const value = String(model || "").trim();
+      if (key && value) {
+        out[key] = value;
+      }
+    }
+    return out;
+  }
+
+  function getGatewayDefaultProvider(): string {
+    try {
+      return normalizeProvider(String(deps.getGatewayDefaultProvider?.() || ""));
+    } catch (err: unknown) {
+      console.warn(`[quaid][facade] gateway default provider callback failed: ${String((err as Error)?.message || err)}`);
+      return "";
+    }
+  }
+
+  function getEffectiveProvider(): string {
+    const configuredProvider = normalizeProvider(String(deps.getMemoryConfig().models?.llmProvider || ""));
+    if (configuredProvider && configuredProvider !== "default") {
+      return configuredProvider;
+    }
+    const gatewayProvider = getGatewayDefaultProvider();
+    if (gatewayProvider) {
+      return gatewayProvider;
+    }
+    throw new Error(
+      "models.llmProvider is 'default' but no active gateway provider was resolved. " +
+      "Set models.llmProvider explicitly (anthropic/openai/openai-compatible/claude-code).",
+    );
+  }
+
+  function getEffectiveTierProvider(tier: ModelTier): string {
+    const tierProvider = getConfiguredTierProvider(tier);
+    if (tierProvider && tierProvider !== "default") {
+      return tierProvider;
+    }
+    return getEffectiveProvider();
+  }
+
+  function resolveTierModel(tier: ModelTier): { provider: string; model: string } {
+    const rawTierValue = getConfiguredTierValue(tier);
+    const configuredTierProvider = getConfiguredTierProvider(tier);
+    const effectiveTierProvider = getEffectiveTierProvider(tier);
+    if (rawTierValue !== "default") {
+      if (rawTierValue.includes("/")) {
+        const [provider, ...modelParts] = rawTierValue.split("/");
+        const normalizedProvider = normalizeProvider(provider);
+        if (
+          configuredTierProvider !== "default"
+          && providerClassLookupKey(normalizedProvider) !== providerClassLookupKey(configuredTierProvider)
+        ) {
+          throw new Error(
+            `models.${tier === "fast" ? "fastReasoning" : "deepReasoning"} provider "${normalizedProvider}" does not match models.${tier === "fast" ? "fastReasoningProvider" : "deepReasoningProvider"}="${configuredTierProvider}"`,
+          );
+        }
+        return {
+          provider: normalizedProvider,
+          model: modelParts.join("/").trim(),
+        };
+      }
+      if (!effectiveTierProvider) {
+        throw new Error(`Cannot resolve provider for models.${tier === "fast" ? "fastReasoning" : "deepReasoning"}=${rawTierValue}`);
+      }
+      return { provider: effectiveTierProvider, model: rawTierValue };
+    }
+
+    if (!effectiveTierProvider) {
+      throw new Error(`No provider resolved for default ${tier} reasoning model`);
+    }
+
+    const classMap = parseTierModelClassMap(tier);
+    const mappedModel = classMap[providerClassLookupKey(effectiveTierProvider)];
+    if (!mappedModel) {
+      throw new Error(`No ${tier}ReasoningModelClasses entry for provider "${effectiveTierProvider}" while using default ${tier} reasoning model`);
+    }
+    return {
+      provider: effectiveTierProvider,
+      model: mappedModel,
+    };
   }
 
   function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retrieval"): string {
@@ -1666,6 +1788,7 @@ ${lines.join("\n")}
     isFailHardEnabled: deps.isFailHardEnabled,
     getCaptureTimeoutMinutes,
     isInternalQuaidSession,
+    resolveTierModel,
     resolveOwner,
     shouldNotifyFeature,
     shouldNotifyProjectCreate,

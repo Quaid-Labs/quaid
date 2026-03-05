@@ -106,6 +106,43 @@ describe("QuaidFacade", () => {
     expect(facade.isInternalQuaidSession("normal-session-id")).toBe(false);
   });
 
+  it("resolveTierModel returns explicit provider/model from tier value", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        models: {
+          llmProvider: "openai",
+          fastReasoning: "anthropic/claude-haiku-4-5",
+          deepReasoning: "openai/gpt-5",
+        },
+      })),
+    }));
+    expect(facade.resolveTierModel("fast")).toEqual({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+    });
+  });
+
+  it("resolveTierModel uses model classes with gateway default provider callback", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getGatewayDefaultProvider: vi.fn(() => "openai-codex"),
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        models: {
+          llmProvider: "default",
+          fastReasoning: "default",
+          deepReasoning: "default",
+          fastReasoningModelClasses: { openai: "gpt-5-mini" },
+          deepReasoningModelClasses: { openai: "gpt-5" },
+        },
+      })),
+    }));
+    expect(facade.resolveTierModel("deep")).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5",
+    });
+  });
+
   // -----------------------------------------------------------------------
   // Datastore bridge delegation
   // -----------------------------------------------------------------------
