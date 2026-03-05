@@ -564,7 +564,7 @@ class TestAdapterSelectionEdgeCases:
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)
         (tmp_path / "config" / "memory.json").write_text('{"adapter":"invalid"}')
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        with pytest.raises(RuntimeError, match="must set adapter type"):
+        with pytest.raises(RuntimeError, match="Unsupported adapter type"):
             get_adapter()
 
 

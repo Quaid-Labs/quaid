@@ -1995,6 +1995,7 @@ ${factsOutput || "No facts found."}` }],
       workspace: WORKSPACE,
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
       isBootstrapOnly: (messages) => facade.isResetBootstrapOnlyConversation(messages),
+      shouldSkipText: (text) => shouldSkipTranscriptText(text),
       readSessionMessages: (sessionId) => readMessagesForTimeoutSession(sessionId),
       listSessionActivity: () => listSessionActivityForTimeout(),
       logger: (msg) => {

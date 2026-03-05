@@ -53,6 +53,7 @@ type SessionTimeoutManagerOptions = {
   logger?: TimeoutLogger;
   readSessionMessages?: (sessionId: string) => any[];
   listSessionActivity?: () => SessionActivityRecord[];
+  shouldSkipText?: (text: string) => boolean;
 };
 type AgentEndMeta = {
   source?: string;
@@ -160,20 +161,19 @@ function isExtractionJsonAssistantPayload(text: string): boolean {
   }
 }
 
-function isEligibleConversationMessage(msg: any): boolean {
+function isEligibleConversationMessage(msg: any, shouldSkipText?: (text: string) => boolean): boolean {
   if (!msg || (msg.role !== "user" && msg.role !== "assistant")) return false;
   const text = messageText(msg).trim();
   if (!text) return false;
-  const lower = text.toLowerCase();
-  if (lower.startsWith("gatewayrestart:") || lower.startsWith("system:")) return false;
+  if (shouldSkipText?.(text)) return false;
   if (isInternalMaintenancePrompt(text)) return false;
   if (msg.role === "assistant" && isExtractionJsonAssistantPayload(text)) return false;
   return true;
 }
 
-function filterEligibleMessages(messages: any[]): any[] {
+function filterEligibleMessages(messages: any[], shouldSkipText?: (text: string) => boolean): any[] {
   if (!Array.isArray(messages) || messages.length === 0) return [];
-  return messages.filter((msg: any) => isEligibleConversationMessage(msg));
+  return messages.filter((msg: any) => isEligibleConversationMessage(msg, shouldSkipText));
 }
 
 function messageDedupKey(msg: any): string {
@@ -246,7 +246,7 @@ export class SessionTimeoutManager {
     this.logger = opts.logger;
     this.readSessionMessagesSource = (sessionId: string) => {
       try {
-        return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || []);
+        return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || [], opts.shouldSkipText);
       } catch (err: unknown) {
         safeLog(this.logger, `[quaid][timeout] source readSessionMessages failed for ${sessionId}: ${String((err as Error)?.message || err)}`);
         if (this.failHard) throw err;

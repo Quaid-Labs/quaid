@@ -95,19 +95,18 @@ function isExtractionJsonAssistantPayload(text) {
     return false;
   }
 }
-function isEligibleConversationMessage(msg) {
+function isEligibleConversationMessage(msg, shouldSkipText) {
   if (!msg || msg.role !== "user" && msg.role !== "assistant") return false;
   const text = messageText(msg).trim();
   if (!text) return false;
-  const lower = text.toLowerCase();
-  if (lower.startsWith("gatewayrestart:") || lower.startsWith("system:")) return false;
+  if (shouldSkipText?.(text)) return false;
   if (isInternalMaintenancePrompt(text)) return false;
   if (msg.role === "assistant" && isExtractionJsonAssistantPayload(text)) return false;
   return true;
 }
-function filterEligibleMessages(messages) {
+function filterEligibleMessages(messages, shouldSkipText) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
-  return messages.filter((msg) => isEligibleConversationMessage(msg));
+  return messages.filter((msg) => isEligibleConversationMessage(msg, shouldSkipText));
 }
 function messageDedupKey(msg) {
   const id = typeof msg?.id === "string" ? msg.id : "";
@@ -175,7 +174,7 @@ class SessionTimeoutManager {
     this.logger = opts.logger;
     this.readSessionMessagesSource = (sessionId) => {
       try {
-        return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || []);
+        return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || [], opts.shouldSkipText);
       } catch (err) {
         safeLog(this.logger, `[quaid][timeout] source readSessionMessages failed for ${sessionId}: ${String(err?.message || err)}`);
         if (this.failHard) throw err;

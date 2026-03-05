@@ -2306,6 +2306,7 @@ notify_user(f"📁 Project registered: {project_label}")
       workspace: WORKSPACE,
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
       isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),
+      shouldSkipText: (text: string) => shouldSkipTranscriptText(text),
       readSessionMessages: (sessionId: string) => readMessagesForTimeoutSession(sessionId),
       listSessionActivity: () => listSessionActivityForTimeout(),
       logger: (msg: string) => {

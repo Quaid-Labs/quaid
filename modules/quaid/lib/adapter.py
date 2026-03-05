@@ -518,9 +518,12 @@ def _adapter_config_paths() -> List[Path]:
     if quaid_home:
         paths.append(Path(quaid_home) / "config" / "memory.json")
 
-    openclaw_workspace = os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
-    if openclaw_workspace:
-        paths.append(Path(openclaw_workspace) / "config" / "memory.json")
+    workspace_root = (
+        os.environ.get("QUAID_WORKSPACE", "").strip()
+        or os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
+    )
+    if workspace_root:
+        paths.append(Path(workspace_root) / "config" / "memory.json")
 
     cwd = Path.cwd()
     paths.append(cwd / "config" / "memory.json")
@@ -568,18 +571,15 @@ def _read_adapter_type_from_config() -> str:
         else:
             kind = ""
 
-        if kind in ("standalone", "openclaw"):
+        if kind:
             return kind
-        raise RuntimeError(
-            f"Config {cfg_path} must set adapter type to 'standalone' or "
-            f"'openclaw' (found: {adapter_cfg!r})."
-        )
+        raise RuntimeError(f"Config {cfg_path} must set adapter.type to a non-empty string (found: {adapter_cfg!r}).")
 
     searched = ", ".join(str(p) for p in _adapter_config_paths())
     if last_existing is None:
         raise RuntimeError(
             "No config file found for adapter selection. Create config/memory.json "
-            "with {\"adapter\": {\"type\": \"standalone\"|\"openclaw\"}}. "
+            "with {\"adapter\": {\"type\": \"<adapter-id>\"}}. "
             f"Searched: {searched}"
         )
     raise RuntimeError("Adapter type could not be resolved from config.")

@@ -264,7 +264,8 @@ def validate_manifest_dict(payload: Dict[str, Any], *, source_path: str = "") ->
 
 def _workspace_root() -> Path:
     env_root = (
-        os.environ.get("QUAID_HOME", "").strip()
+        os.environ.get("QUAID_WORKSPACE", "").strip()
+        or os.environ.get("QUAID_HOME", "").strip()
         or os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
     )
     if env_root:

@@ -230,12 +230,20 @@ def _trace_enabled() -> bool:
     raw = str(os.environ.get("BENCHMARK_LLM_TRACE", "")).strip().lower()
     if raw in {"1", "true", "yes", "on"}:
         return True
-    workspace = str(os.environ.get("CLAWDBOT_WORKSPACE", "")).strip()
+    workspace = str(
+        os.environ.get("QUAID_WORKSPACE", "")
+        or os.environ.get("CLAWDBOT_WORKSPACE", "")
+        or ""
+    ).strip()
     return "/runs/quaid-" in workspace
 
 
 def _trace_path() -> Optional[Path]:
-    workspace = str(os.environ.get("CLAWDBOT_WORKSPACE", "")).strip()
+    workspace = str(
+        os.environ.get("QUAID_WORKSPACE", "")
+        or os.environ.get("CLAWDBOT_WORKSPACE", "")
+        or ""
+    ).strip()
     if not workspace:
         return None
     return Path(workspace) / "logs" / "llm-call-trace.jsonl"
