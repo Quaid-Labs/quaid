@@ -215,7 +215,7 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Could not load coreMarkdown config: {e}")
 
-    # Discover bootstrap files from gateway config (single source of truth)
+    # Discover bootstrap files from adapter config (single source of truth)
     for glob_pattern in get_bootstrap_markdown_globs():
         # Reject absolute paths and traversal patterns to prevent escaping workspace
         if glob_pattern.startswith("/") or ".." in glob_pattern:

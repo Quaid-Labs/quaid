@@ -86,19 +86,6 @@ const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-ins
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
-const COMPACTION_NOTIFY_BATCH_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MS", 45_000);
-const COMPACTION_NOTIFY_BATCH_MAX_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MAX_MS", 120_000);
-type CompactionNotifyBatchState = {
-  startedAtMs: number;
-  lastUpdateMs: number;
-  sessions: Set<string>;
-  sessionsWithFacts: Set<string>;
-  stored: number;
-  skipped: number;
-  edges: number;
-  timer: ReturnType<typeof setTimeout> | null;
-};
-let compactionNotifyBatchState: CompactionNotifyBatchState | null = null;
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 90_000;
 
@@ -459,81 +446,6 @@ function resolveMostRecentSessionId(): string {
     return bestId;
   } catch {}
   return "";
-}
-
-function queueCompactionNotificationBatch(sessionId: string, stored: number, skipped: number, edges: number): void {
-  const now = Date.now();
-  if (!compactionNotifyBatchState) {
-    compactionNotifyBatchState = {
-      startedAtMs: now,
-      lastUpdateMs: now,
-      sessions: new Set<string>(),
-      sessionsWithFacts: new Set<string>(),
-      stored: 0,
-      skipped: 0,
-      edges: 0,
-      timer: null,
-    };
-  }
-  const state = compactionNotifyBatchState;
-  const sid = String(sessionId || "").trim() || `unknown-${now}`;
-  state.sessions.add(sid);
-  if (stored > 0) {
-    state.sessionsWithFacts.add(sid);
-  }
-  state.stored += Math.max(0, Number(stored || 0));
-  state.skipped += Math.max(0, Number(skipped || 0));
-  state.edges += Math.max(0, Number(edges || 0));
-  state.lastUpdateMs = now;
-
-  const batchAgeMs = now - state.startedAtMs;
-  if (batchAgeMs >= COMPACTION_NOTIFY_BATCH_MAX_MS) {
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-    // Force flush now so sustained compaction traffic cannot defer forever.
-    state.startedAtMs = 0;
-    state.lastUpdateMs = now;
-  }
-
-  if (state.timer) {
-    clearTimeout(state.timer);
-    state.timer = null;
-  }
-
-  const flushDelayMs = state.startedAtMs === 0
-    ? 0
-    : Math.max(0, Math.min(COMPACTION_NOTIFY_BATCH_MS, COMPACTION_NOTIFY_BATCH_MAX_MS - (now - state.startedAtMs)));
-  state.timer = setTimeout(() => {
-    const flushState = compactionNotifyBatchState;
-    if (!flushState) return;
-    compactionNotifyBatchState = null;
-    if (flushState.timer) {
-      clearTimeout(flushState.timer);
-      flushState.timer = null;
-    }
-    const sessionCount = flushState.sessions.size;
-    if (sessionCount <= 0) return;
-    const durationSec = Math.max(1, Math.round((flushState.lastUpdateMs - flushState.startedAtMs) / 1000));
-    const summary = [
-      "**[Quaid]** 💾 **Compaction extraction summary:**",
-      "",
-      `• Sessions processed: ${sessionCount}`,
-      `• Facts stored: ${flushState.stored}`,
-      `• Facts skipped: ${flushState.skipped}`,
-      `• Edges created: ${flushState.edges}`,
-      `• Sessions with new facts: ${flushState.sessionsWithFacts.size}`,
-      `• Window: ${durationSec}s`,
-    ].join("\n");
-    spawnNotifyScript(`
-from core.runtime.notify import notify_user, _resolve_channel
-notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extraction"))
-`);
-  }, flushDelayMs);
-  if (typeof (state.timer as any).unref === "function") {
-    (state.timer as any).unref();
-  }
 }
 
 function resolveSessionKeyForCompaction(sessionId?: string): string | null {
@@ -1206,8 +1118,13 @@ const facade = createQuaidFacade({
       QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
     }, EVENTS_EMIT_TIMEOUT_MS),
   callLLM: callConfiguredLLM,
-  getGatewayDefaultProvider,
+  getDefaultLLMProvider: getGatewayDefaultProvider,
+  providerAliases: {
+    "openai-codex": "openai",
+    "anthropic-claude-code": "anthropic",
+  },
   resolveSessionIdFromSessionKey,
+  resolveDefaultSessionId: () => resolveSessionIdFromSessionKey("agent:main:main"),
   resolveMostRecentSessionId,
   getMemoryConfig,
   isSystemEnabled,
@@ -1468,9 +1385,7 @@ notify_user(${JSON.stringify(message)})
         }
 
         // Query quality gate — skip acknowledgments and short messages
-        const ACKNOWLEDGMENTS = /^(ok|okay|yes|no|sure|thanks|thank you|got it|sounds good|perfect|great|cool|alright|yep|nope|right|correct|agreed|absolutely|definitely|nice|good|fine|hm+|ah+|oh+)\s*[.!?]?$/i;
-        const words = query.trim().split(/\s+/).filter(w => w.length > 1);
-        if (words.length < 3 || ACKNOWLEDGMENTS.test(query.trim())) {
+        if (facade.isLowQualityQuery(query)) {
           return;
         }
 
@@ -1506,29 +1421,12 @@ notify_user(${JSON.stringify(message)})
 
         if (!allMemories.length) return;
 
-        // Privacy filter — allow through if: not private, or owned by current user, or no owner set
-        // Note: Python serializes None as string "None", not JSON null
         const currentOwner = facade.resolveOwner();
-        const filtered = allMemories.filter(m =>
-          !(m.privacy === "private" && m.ownerId && m.ownerId !== "None" && m.ownerId !== currentOwner)
-        );
+        const filtered = facade.filterMemoriesByPrivacy(allMemories, currentOwner);
 
         // Session dedup (don't re-inject same facts within a session)
         const uniqueSessionId = facade.extractSessionId(event.messages || [], ctx);
-        const injectionLogPath = facade.getInjectionLogPath(uniqueSessionId);
-        let previouslyInjected: string[] = [];
-        try {
-          const parsed = JSON.parse(fs.readFileSync(injectionLogPath, "utf8"));
-          const logData = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            ? (parsed as Record<string, unknown>)
-            : null;
-          const rawInjected = logData?.injected ?? logData?.memoryTexts;
-          previouslyInjected = Array.isArray(rawInjected)
-            ? rawInjected.map((item) => String(item || "").trim()).filter(Boolean)
-            : [];
-        } catch (err: unknown) {
-          console.warn(`[quaid] Injection log read failed for ${injectionLogPath}: ${String((err as Error)?.message || err)}`);
-        }
+        const previouslyInjected = facade.loadInjectedMemoryKeys(uniqueSessionId);
         const newMemories = filtered.filter(m => !previouslyInjected.includes(m.id || m.text));
 
         // Cap and format — use dynamic K for injection cap too
@@ -1579,18 +1477,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           console.warn(`[quaid] Auto-inject recall notification skipped: ${(notifyErr as Error).message}`);
         }
 
-        // Update injection log
-        try {
-          const newIds = toInject.map(m => m.id || m.text);
-          const mergedIds = [...previouslyInjected, ...newIds];
-          fs.writeFileSync(injectionLogPath, JSON.stringify({
-            injected: mergedIds.slice(-MAX_INJECTION_IDS_PER_SESSION),
-            lastInjectedAt: new Date().toISOString()
-          }), { mode: 0o600 });
-          facade.pruneInjectionLogFiles();
-        } catch (err: unknown) {
-          console.warn(`[quaid] Injection log write failed for ${injectionLogPath}: ${String((err as Error)?.message || err)}`);
-        }
+        facade.saveInjectedMemoryKeys(
+          uniqueSessionId,
+          previouslyInjected,
+          toInject,
+          MAX_INJECTION_IDS_PER_SESSION,
+        );
       } catch (error: unknown) {
         console.error("[quaid] Auto-injection error:", error);
       }
@@ -1837,64 +1729,8 @@ ${recallStoreGuidance}`,
               };
             }
 
-            // Group by source type for better formatting
-            const vectorResults = results.filter((r) => facade.isVectorRecallResult(r));
-            const graphResults = results.filter(r => (r.via || "") === "graph" || r.category === "graph");
-            const journalResults = results.filter(r => (r.via || "") === "journal");
-            const projectResults = results.filter(r => (r.via || "") === "project");
-
-            // Keep low-confidence warnings conservative; avoid warning on clearly useful recalls.
-            const avgSimilarity = vectorResults.length > 0
-              ? vectorResults.reduce((sum, r) => sum + (r.similarity || 0), 0) / vectorResults.length
-              : 0;
-            const maxSimilarity = vectorResults.length > 0
-              ? Math.max(...vectorResults.map((r) => Number(r.similarity || 0)))
-              : 0;
-            const hasHighExtractionConfidence = vectorResults.some((r) => Number(r.extractionConfidence || 0) >= 0.8);
-            const lowQualityWarning = (
-              vectorResults.length > 0
-              && avgSimilarity < 0.45
-              && maxSimilarity < 0.55
-              && !hasHighExtractionConfidence
-            )
-              ? "\n\n⚠️ Low confidence matches - consider refining query with specific names or topics.\n"
-              : "";
-
-            let text = `[MEMORY] Found ${results.length} results:${lowQualityWarning}\n`;
-
-            if (vectorResults.length > 0) {
-              text += "\n**Direct Matches:**\n";
-              vectorResults.forEach((r, i) => {
-                const conf = r.extractionConfidence ? ` [conf:${Math.round(r.extractionConfidence * 100)}%]` : "";
-                const dateStr = r.createdAt ? ` (${r.createdAt.split("T")[0]})` : "";
-                const superseded = r.validUntil ? " [superseded]" : "";
-                text += `${i + 1}. [MEMORY] [${r.category}]${dateStr}${superseded} ${r.text} (${Math.round(r.similarity * 100)}%${conf})\n`;
-              });
-            }
-
-            if (graphResults.length > 0) {
-              if (vectorResults.length > 0) { text += "\n"; }
-              text += "**Graph Discoveries:**\n";
-              graphResults.forEach((r, i) => {
-                text += `${i + 1}. [MEMORY] ${r.text}\n`;
-              });
-            }
-
-            if (journalResults.length > 0) {
-              if (vectorResults.length > 0 || graphResults.length > 0) { text += "\n"; }
-              text += "**Journal Signals:**\n";
-              journalResults.forEach((r, i) => {
-                text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)\n`;
-              });
-            }
-
-            if (projectResults.length > 0) {
-              if (vectorResults.length > 0 || graphResults.length > 0 || journalResults.length > 0) { text += "\n"; }
-              text += "**Project Knowledge:**\n";
-              projectResults.forEach((r, i) => {
-                text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)\n`;
-              });
-            }
+            const recallFormatted = facade.formatRecallToolResponse(results);
+            const text = recallFormatted.text;
 
             // Notify user about what memories were retrieved (if enabled)
             try {
@@ -1907,10 +1743,10 @@ ${recallStoreGuidance}`,
                 }));
                 // Build source breakdown for notification
                 const sourceBreakdown = {
-                  vector_count: vectorResults.length,
-                  graph_count: graphResults.length,
-                  journal_count: journalResults.length,
-                  project_count: projectResults.length,
+                  vector_count: recallFormatted.breakdown.vector_count,
+                  graph_count: recallFormatted.breakdown.graph_count,
+                  journal_count: recallFormatted.breakdown.journal_count,
+                  project_count: recallFormatted.breakdown.project_count,
                   query: query,
                   mode: "tool",
                 };
@@ -1942,10 +1778,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               details: {
                 count: results.length,
                 memories: results,
-                vectorCount: vectorResults.length,
-                graphCount: graphResults.length,
-                journalCount: journalResults.length,
-                projectCount: projectResults.length,
+                vectorCount: recallFormatted.breakdown.vector_count,
+                graphCount: recallFormatted.breakdown.graph_count,
+                journalCount: recallFormatted.breakdown.journal_count,
+                projectCount: recallFormatted.breakdown.project_count,
               },
             };
           } catch (err: unknown) {
@@ -2846,7 +2682,18 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         && triggerType === "compaction") {
         // OpenClaw may emit many compaction-related micro-sessions in bursts.
         // Batch notification output so one user-triggered compact does not spam.
-        queueCompactionNotificationBatch(dedupeSession, stored, skipped, edgesCreated);
+        facade.queueCompactionExtractionSummary(
+          dedupeSession,
+          stored,
+          skipped,
+          edgesCreated,
+          (summary) => {
+            spawnNotifyScript(`
+from core.runtime.notify import notify_user, _resolve_channel
+notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extraction"))
+`);
+          },
+        );
       } else if (triggerType !== "recovery"
         && !suppressBacklogNotify
         && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
@@ -2992,16 +2839,7 @@ notify_memory_extraction(
 
           // Record compaction timestamp and reset injection dedup list (memory system).
           if (isSystemEnabled("memory") && uniqueSessionId) {
-            const logPath = facade.getInjectionLogPath(uniqueSessionId);
-            let logData: any = {};
-            try {
-              logData = JSON.parse(fs.readFileSync(logPath, "utf8"));
-            } catch (err: unknown) {
-              console.warn(`[quaid] compaction injection log read failed for ${logPath}: ${String((err as Error)?.message || err)}`);
-            }
-            logData.lastCompactionAt = new Date().toISOString();
-            logData.memoryTexts = [];  // Reset — all memories eligible for re-injection
-            fs.writeFileSync(logPath, JSON.stringify(logData, null, 2), { mode: 0o600 });
+            facade.resetInjectionDedupAfterCompaction(uniqueSessionId);
             console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
           }
         };

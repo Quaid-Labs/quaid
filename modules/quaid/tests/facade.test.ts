@@ -123,9 +123,10 @@ describe("QuaidFacade", () => {
     });
   });
 
-  it("resolveTierModel uses model classes with gateway default provider callback", () => {
+  it("resolveTierModel uses model classes with default provider callback and alias map", () => {
     const facade = createQuaidFacade(makeMockDeps({
-      getGatewayDefaultProvider: vi.fn(() => "openai-codex"),
+      getDefaultLLMProvider: vi.fn(() => "openai-codex"),
+      providerAliases: { "openai-codex": "openai" },
       getMemoryConfig: vi.fn(() => ({
         retrieval: { failHard: false },
         models: {
@@ -616,10 +617,8 @@ describe("QuaidFacade", () => {
 
   it("resolveMemoryStoreSessionId falls back from context key to main/recent sessions", () => {
     const facade = createQuaidFacade(makeMockDeps({
-      resolveSessionIdFromSessionKey: vi.fn((key: string) => {
-        if (key === "agent:main:main") return "main-session-id";
-        return "";
-      }),
+      resolveSessionIdFromSessionKey: vi.fn(() => ""),
+      resolveDefaultSessionId: vi.fn(() => "main-session-id"),
       resolveMostRecentSessionId: vi.fn(() => "recent-session-id"),
     }));
     expect(facade.resolveMemoryStoreSessionId({ sessionKey: "missing-key" })).toBe("main-session-id");
@@ -636,6 +635,76 @@ describe("QuaidFacade", () => {
         [{ role: "user", content: "hello", timestamp: "2026-01-01T00:00:00.000Z" }],
       ),
     ).toBe("resolved-event-session");
+  });
+
+  it("isLowQualityQuery filters acknowledgments and short prompts", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(facade.isLowQualityQuery("ok")).toBe(true);
+    expect(facade.isLowQualityQuery("sounds good")).toBe(true);
+    expect(facade.isLowQualityQuery("please summarize the migration risks")).toBe(false);
+  });
+
+  it("filterMemoriesByPrivacy keeps visible and owner-matching private memories", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const out = facade.filterMemoriesByPrivacy([
+      { text: "public", category: "fact", similarity: 0.8 },
+      { text: "mine", category: "fact", similarity: 0.9, privacy: "private", ownerId: "quaid" },
+      { text: "other", category: "fact", similarity: 0.95, privacy: "private", ownerId: "alice" },
+    ], "quaid");
+    expect(out.map((m) => m.text)).toEqual(["public", "mine"]);
+  });
+
+  it("load/save/reset injection dedup state round-trips", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-state-"));
+    await mkdir(path.join(workspace, ".quaid", "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    expect(facade.loadInjectedMemoryKeys("sess-1")).toEqual([]);
+    const merged = facade.saveInjectedMemoryKeys(
+      "sess-1",
+      [],
+      [
+        { text: "alpha", category: "fact", similarity: 0.9 },
+        { text: "beta", category: "fact", similarity: 0.8 },
+      ],
+      100,
+    );
+    expect(merged).toEqual(["alpha", "beta"]);
+    expect(facade.loadInjectedMemoryKeys("sess-1")).toEqual(["alpha", "beta"]);
+    facade.resetInjectionDedupAfterCompaction("sess-1");
+    expect(facade.loadInjectedMemoryKeys("sess-1")).toEqual([]);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("formatRecallToolResponse returns grouped text and source breakdown", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const out = facade.formatRecallToolResponse([
+      { text: "vector memory", category: "fact", similarity: 0.7, via: "vector" },
+      { text: "graph memory", category: "graph", similarity: 0.8, via: "graph" },
+      { text: "journal memory", category: "fact", similarity: 0.6, via: "journal" },
+      { text: "project memory", category: "fact", similarity: 0.65, via: "project" },
+    ]);
+    expect(out.text).toContain("Direct Matches");
+    expect(out.text).toContain("Graph Discoveries");
+    expect(out.breakdown).toEqual({
+      vector_count: 1,
+      graph_count: 1,
+      journal_count: 1,
+      project_count: 1,
+    });
+  });
+
+  it("queueCompactionExtractionSummary batches and flushes once", () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    const facade = createQuaidFacade(makeMockDeps());
+    facade.queueCompactionExtractionSummary("s1", 2, 1, 1, notify);
+    facade.queueCompactionExtractionSummary("s2", 3, 0, 2, notify);
+    vi.advanceTimersByTime(11_000);
+    expect(notify).toHaveBeenCalledTimes(1);
+    const msg = String(notify.mock.calls[0]?.[0] || "");
+    expect(msg).toContain("Sessions processed: 2");
+    expect(msg).toContain("Facts stored: 5");
+    vi.useRealTimers();
   });
 
   it("filterConversationMessages drops internal extraction payloads and maintenance prompts", () => {

@@ -56,8 +56,10 @@ export type QuaidFacadeDeps = {
     maxTokens: number,
     timeoutMs?: number,
   ) => Promise<LLMCallResult | null>;
-  getGatewayDefaultProvider?: () => string;
+  getDefaultLLMProvider?: () => string;
+  providerAliases?: Record<string, string>;
   resolveSessionIdFromSessionKey?: (sessionKey: string) => string;
+  resolveDefaultSessionId?: () => string;
   resolveMostRecentSessionId?: () => string;
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
@@ -195,6 +197,32 @@ export type QuaidFacade = {
   recall: (opts: FacadeRecallOptions) => Promise<MemoryResult[]>;
   recallWithToolRetry: (opts: FacadeRecallOptions) => Promise<MemoryResult[]>;
   formatMemoriesForInjection: (memories: MemoryResult[]) => string;
+  formatRecallToolResponse: (results: MemoryResult[]) => {
+    text: string;
+    breakdown: {
+      vector_count: number;
+      graph_count: number;
+      journal_count: number;
+      project_count: number;
+    };
+  };
+  isLowQualityQuery: (query: string) => boolean;
+  filterMemoriesByPrivacy: (memories: MemoryResult[], currentOwner: string) => MemoryResult[];
+  loadInjectedMemoryKeys: (sessionId: string) => string[];
+  saveInjectedMemoryKeys: (
+    sessionId: string,
+    previousKeys: string[],
+    memories: MemoryResult[],
+    maxEntries: number,
+  ) => string[];
+  resetInjectionDedupAfterCompaction: (sessionId: string) => void;
+  queueCompactionExtractionSummary: (
+    sessionId: string,
+    stored: number,
+    skipped: number,
+    edges: number,
+    notify: (summary: string) => void,
+  ) => void;
 
   // --- Dynamic K ---
   computeDynamicK: () => number;
@@ -292,6 +320,8 @@ const MAX_EXTRACTION_LOG_ENTRIES = 800;
 const MAX_INJECTION_LOG_FILES = 400;
 const DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS = 50;
 const DELAYED_REQUESTS_LOCK_SLEEP_MS = 10;
+const COMPACTION_NOTIFY_BATCH_MS = 10_000;
+const COMPACTION_NOTIFY_BATCH_MAX_MS = 45_000;
 const RECALL_RETRY_STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
   "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
@@ -371,6 +401,16 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     seenAt: number;
   }>();
   const extractionNotifyHistory = new Map<string, number>();
+  let compactionNotifyBatchState: {
+    startedAtMs: number;
+    lastUpdateMs: number;
+    sessions: Set<string>;
+    sessionsWithFacts: Set<string>;
+    stored: number;
+    skipped: number;
+    edges: number;
+    timer: NodeJS.Timeout | null;
+  } | null = null;
 
   function resolveOwner(speaker?: string, channel?: string): string {
     const usersCfg = deps.getMemoryConfig()?.users;
@@ -424,8 +464,13 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function providerClassLookupKey(provider: string): string {
     const normalized = normalizeProvider(provider);
-    if (normalized === "openai-codex") return "openai";
-    if (normalized === "anthropic-claude-code") return "anthropic";
+    const aliases = (deps.providerAliases && typeof deps.providerAliases === "object")
+      ? deps.providerAliases
+      : {};
+    const mapped = aliases[normalized];
+    if (typeof mapped === "string" && mapped.trim()) {
+      return normalizeProvider(mapped);
+    }
     return normalized;
   }
 
@@ -464,11 +509,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return out;
   }
 
-  function getGatewayDefaultProvider(): string {
+  function getDefaultLLMProvider(): string {
     try {
-      return normalizeProvider(String(deps.getGatewayDefaultProvider?.() || ""));
+      return normalizeProvider(String(deps.getDefaultLLMProvider?.() || ""));
     } catch (err: unknown) {
-      console.warn(`[quaid][facade] gateway default provider callback failed: ${String((err as Error)?.message || err)}`);
+      console.warn(`[quaid][facade] default provider callback failed: ${String((err as Error)?.message || err)}`);
       return "";
     }
   }
@@ -478,7 +523,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (configuredProvider && configuredProvider !== "default") {
       return configuredProvider;
     }
-    const gatewayProvider = getGatewayDefaultProvider();
+    const gatewayProvider = getDefaultLLMProvider();
     if (gatewayProvider) {
       return gatewayProvider;
     }
@@ -664,7 +709,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       if (!msg || typeof msg !== "object") continue;
       if (String((msg as Record<string, unknown>).role || "") !== "user") continue;
       const cleaned = getMessageText(msg).trim();
-      if (!cleaned || cleaned.startsWith("GatewayRestart:") || cleaned.startsWith("System:")) continue;
+      if (shouldSkipUserText(cleaned)) continue;
       topicHint = cleaned.slice(0, 120);
       break;
     }
@@ -1052,6 +1097,24 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return "";
   }
 
+  function shouldSkipUserText(text: string): boolean {
+    const candidate = String(text || "");
+    if (!candidate.trim()) return true;
+    const skip = deps.transcriptFormat?.shouldSkipText;
+    if (typeof skip === "function") {
+      try {
+        return skip("user", candidate);
+      } catch (err: unknown) {
+        if (deps.isFailHardEnabled()) {
+          throw err;
+        }
+        console.warn(`[quaid][facade] transcript skip callback failed: ${String((err as Error)?.message || err)}`);
+      }
+    }
+    if (candidate.includes('"kind": "restart"')) return true;
+    return false;
+  }
+
   function extractSessionId(messages: unknown[], ctx?: unknown): string {
     const context = ctx && typeof ctx === "object"
       ? ctx as Record<string, unknown>
@@ -1065,11 +1128,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       ? messages.filter((msg: unknown) => {
         if (!msg || typeof msg !== "object") return false;
         if (String((msg as Record<string, unknown>).role || "") !== "user") return false;
-        const content = getMessageText(msg);
-        if (content.startsWith("GatewayRestart:")) return false;
-        if (content.startsWith("System:")) return false;
-        if (content.includes('"kind": "restart"')) return false;
-        return true;
+        const content = getMessageText(msg).trim();
+        return !shouldSkipUserText(content);
       })
       : [];
     if (filteredMessages.length > 0) {
@@ -1094,7 +1154,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (fromKey) {
       return fromKey;
     }
-    const mainFallback = deps.resolveSessionIdFromSessionKey?.("agent:main:main") || "";
+    const mainFallback = deps.resolveDefaultSessionId?.() || "";
     if (mainFallback) {
       return mainFallback;
     }
@@ -1535,6 +1595,158 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (normalized.includes("new")) return "new";
     if (normalized.includes("reset")) return "reset";
     return "unknown";
+  }
+
+  function isLowQualityQuery(query: string): boolean {
+    const ACKNOWLEDGMENTS = /^(ok|okay|yes|no|sure|thanks|thank you|got it|sounds good|perfect|great|cool|alright|yep|nope|right|correct|agreed|absolutely|definitely|nice|good|fine|hm+|ah+|oh+)\s*[.!?]?$/i;
+    const words = String(query || "").trim().split(/\s+/).filter((w) => w.length > 1);
+    return words.length < 3 || ACKNOWLEDGMENTS.test(String(query || "").trim());
+  }
+
+  function filterMemoriesByPrivacy(memories: MemoryResult[], currentOwner: string): MemoryResult[] {
+    return memories.filter((m) =>
+      !(m.privacy === "private" && m.ownerId && m.ownerId !== "None" && m.ownerId !== currentOwner)
+    );
+  }
+
+  function readInjectionLog(sessionId: string): Record<string, unknown> {
+    const injectionLogPath = getInjectionLogPath(sessionId);
+    try {
+      const parsed = JSON.parse(fs.readFileSync(injectionLogPath, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch (err: unknown) {
+      if (!isMissingFileError(err)) {
+        console.warn(`[quaid][facade] Injection log read failed for ${injectionLogPath}: ${String((err as Error)?.message || err)}`);
+      }
+    }
+    return {};
+  }
+
+  function writeInjectionLog(sessionId: string, payload: Record<string, unknown>, pretty: boolean = false): void {
+    const injectionLogPath = getInjectionLogPath(sessionId);
+    try {
+      const encoded = pretty ? JSON.stringify(payload, null, 2) : JSON.stringify(payload);
+      fs.writeFileSync(injectionLogPath, encoded, { mode: 0o600 });
+    } catch (err: unknown) {
+      if (deps.isFailHardEnabled()) {
+        throw new Error(`[quaid][facade] Injection log write failed for ${injectionLogPath}`, { cause: err as Error });
+      }
+      console.warn(`[quaid][facade] Injection log write failed for ${injectionLogPath}: ${String((err as Error)?.message || err)}`);
+    }
+  }
+
+  function loadInjectedMemoryKeys(sessionId: string): string[] {
+    const logData = readInjectionLog(sessionId);
+    const rawInjected = logData.injected ?? logData.memoryTexts;
+    return Array.isArray(rawInjected)
+      ? rawInjected.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+  }
+
+  function saveInjectedMemoryKeys(
+    sessionId: string,
+    previousKeys: string[],
+    memories: MemoryResult[],
+    maxEntries: number,
+  ): string[] {
+    const newKeys = memories.map((m) => m.id || m.text);
+    const merged = [...previousKeys, ...newKeys]
+      .map((k) => String(k || "").trim())
+      .filter(Boolean)
+      .slice(-Math.max(1, Number(maxEntries) || 1));
+    writeInjectionLog(sessionId, {
+      injected: merged,
+      lastInjectedAt: new Date().toISOString(),
+    });
+    pruneInjectionLogFiles();
+    return merged;
+  }
+
+  function resetInjectionDedupAfterCompaction(sessionId: string): void {
+    const current = readInjectionLog(sessionId);
+    writeInjectionLog(sessionId, {
+      ...current,
+      lastCompactionAt: new Date().toISOString(),
+      injected: [],
+      memoryTexts: [],
+    }, true);
+  }
+
+  function queueCompactionExtractionSummary(
+    sessionId: string,
+    stored: number,
+    skipped: number,
+    edges: number,
+    notify: (summary: string) => void,
+  ): void {
+    const now = Date.now();
+    if (!compactionNotifyBatchState) {
+      compactionNotifyBatchState = {
+        startedAtMs: now,
+        lastUpdateMs: now,
+        sessions: new Set<string>(),
+        sessionsWithFacts: new Set<string>(),
+        stored: 0,
+        skipped: 0,
+        edges: 0,
+        timer: null,
+      };
+    }
+    const state = compactionNotifyBatchState;
+    const sid = String(sessionId || "").trim() || `unknown-${now}`;
+    state.sessions.add(sid);
+    if (stored > 0) {
+      state.sessionsWithFacts.add(sid);
+    }
+    state.stored += Math.max(0, Number(stored || 0));
+    state.skipped += Math.max(0, Number(skipped || 0));
+    state.edges += Math.max(0, Number(edges || 0));
+    state.lastUpdateMs = now;
+
+    const batchAgeMs = now - state.startedAtMs;
+    if (batchAgeMs >= COMPACTION_NOTIFY_BATCH_MAX_MS) {
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      state.startedAtMs = 0;
+      state.lastUpdateMs = now;
+    }
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    const flushDelayMs = state.startedAtMs === 0
+      ? 0
+      : Math.max(0, Math.min(COMPACTION_NOTIFY_BATCH_MS, COMPACTION_NOTIFY_BATCH_MAX_MS - (now - state.startedAtMs)));
+    state.timer = setTimeout(() => {
+      const flushState = compactionNotifyBatchState;
+      if (!flushState) return;
+      compactionNotifyBatchState = null;
+      if (flushState.timer) {
+        clearTimeout(flushState.timer);
+        flushState.timer = null;
+      }
+      const sessionCount = flushState.sessions.size;
+      if (sessionCount <= 0) return;
+      const durationSec = Math.max(1, Math.round((flushState.lastUpdateMs - flushState.startedAtMs) / 1000));
+      const summary = [
+        "**[Quaid]** 💾 **Compaction extraction summary:**",
+        "",
+        `• Sessions processed: ${sessionCount}`,
+        `• Facts stored: ${flushState.stored}`,
+        `• Facts skipped: ${flushState.skipped}`,
+        `• Edges created: ${flushState.edges}`,
+        `• Sessions with new facts: ${flushState.sessionsWithFacts.size}`,
+        `• Window: ${durationSec}s`,
+      ].join("\n");
+      notify(summary);
+    }, flushDelayMs);
+    if (typeof (state.timer as any).unref === "function") {
+      (state.timer as any).unref();
+    }
   }
 
   function computeDynamicK(): number {
@@ -2112,6 +2324,78 @@ ${lines.join("\n")}
 </injected_memories>`;
   }
 
+  function formatRecallToolResponse(results: MemoryResult[]): {
+    text: string;
+    breakdown: {
+      vector_count: number;
+      graph_count: number;
+      journal_count: number;
+      project_count: number;
+    };
+  } {
+    const vectorResults = results.filter((r) => isVectorRecallResult(r));
+    const graphResults = results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
+    const journalResults = results.filter((r) => (r.via || "") === "journal");
+    const projectResults = results.filter((r) => (r.via || "") === "project");
+
+    const avgSimilarity = vectorResults.length > 0
+      ? vectorResults.reduce((sum, r) => sum + (r.similarity || 0), 0) / vectorResults.length
+      : 0;
+    const maxSimilarity = vectorResults.length > 0
+      ? Math.max(...vectorResults.map((r) => Number(r.similarity || 0)))
+      : 0;
+    const hasHighExtractionConfidence = vectorResults.some((r) => Number(r.extractionConfidence || 0) >= 0.8);
+    const lowQualityWarning = (
+      vectorResults.length > 0
+      && avgSimilarity < 0.45
+      && maxSimilarity < 0.55
+      && !hasHighExtractionConfidence
+    )
+      ? "\n\n⚠️ Low confidence matches - consider refining query with specific names or topics.\n"
+      : "";
+
+    let text = `[MEMORY] Found ${results.length} results:${lowQualityWarning}\n`;
+    if (vectorResults.length > 0) {
+      text += "\n**Direct Matches:**\n";
+      vectorResults.forEach((r, i) => {
+        const conf = r.extractionConfidence ? ` [conf:${Math.round(r.extractionConfidence * 100)}%]` : "";
+        const dateStr = r.createdAt ? ` (${r.createdAt.split("T")[0]})` : "";
+        const superseded = r.validUntil ? " [superseded]" : "";
+        text += `${i + 1}. [MEMORY] [${r.category}]${dateStr}${superseded} ${r.text} (${Math.round(r.similarity * 100)}%${conf})\n`;
+      });
+    }
+    if (graphResults.length > 0) {
+      if (vectorResults.length > 0) text += "\n";
+      text += "**Graph Discoveries:**\n";
+      graphResults.forEach((r, i) => {
+        text += `${i + 1}. [MEMORY] ${r.text}\n`;
+      });
+    }
+    if (journalResults.length > 0) {
+      if (vectorResults.length > 0 || graphResults.length > 0) text += "\n";
+      text += "**Journal Signals:**\n";
+      journalResults.forEach((r, i) => {
+        text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)\n`;
+      });
+    }
+    if (projectResults.length > 0) {
+      if (vectorResults.length > 0 || graphResults.length > 0 || journalResults.length > 0) text += "\n";
+      text += "**Project Knowledge:**\n";
+      projectResults.forEach((r, i) => {
+        text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)\n`;
+      });
+    }
+    return {
+      text,
+      breakdown: {
+        vector_count: vectorResults.length,
+        graph_count: graphResults.length,
+        journal_count: journalResults.length,
+        project_count: projectResults.length,
+      },
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Stub helper
   // -------------------------------------------------------------------------
@@ -2187,6 +2471,13 @@ ${lines.join("\n")}
     recall,
     recallWithToolRetry,
     formatMemoriesForInjection,
+    formatRecallToolResponse,
+    isLowQualityQuery,
+    filterMemoriesByPrivacy,
+    loadInjectedMemoryKeys,
+    saveInjectedMemoryKeys,
+    resetInjectionDedupAfterCompaction,
+    queueCompactionExtractionSummary,
 
     // Dynamic K
     computeDynamicK,
