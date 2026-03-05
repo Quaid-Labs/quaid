@@ -135,6 +135,14 @@ export type QuaidFacade = {
   shouldNotifyProjectCreate: () => boolean;
   shouldEmitExtractionNotify: (key: string, now?: number) => boolean;
   clearExtractionNotifyHistory: () => void;
+  listRecentSessionsFromExtractionLog: (limit?: number) => Array<{
+    sessionId: string;
+    lastExtractedAt: string;
+    messageCount: number;
+    label: string;
+    topicHint: string;
+  }>;
+  updateExtractionLog: (sessionId: string, messages: unknown[], label: string) => void;
 
   // --- Datastore stats ---
   stats: () => Promise<string>;
@@ -243,6 +251,7 @@ const DATASTORE_STATS_TIMEOUT_MS = 30_000;
 const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_MEMORY_NOTE_SESSIONS = 200;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
+const MAX_EXTRACTION_LOG_ENTRIES = 800;
 const RECALL_RETRY_STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
   "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
@@ -403,6 +412,98 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     extractionNotifyHistory.set(key, now);
     if (!prior) return true;
     return (now - prior) > EXTRACTION_NOTIFY_DEDUPE_MS;
+  }
+
+  function isMissingFileError(err: unknown): boolean {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
+
+  function trimExtractionLogEntries(log: Record<string, any>, maxEntries: number = MAX_EXTRACTION_LOG_ENTRIES): Record<string, any> {
+    const entries = Object.entries(log || {});
+    if (entries.length <= maxEntries) {
+      return log || {};
+    }
+    const sorted = entries
+      .map(([sid, payload]) => ({
+        sid,
+        payload,
+        ts: Date.parse(String((payload as any)?.last_extracted_at || "")) || 0,
+      }))
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, maxEntries);
+    return Object.fromEntries(sorted.map((row) => [row.sid, row.payload]));
+  }
+
+  function listRecentSessionsFromExtractionLog(limit: number = 5): Array<{
+    sessionId: string;
+    lastExtractedAt: string;
+    messageCount: number;
+    label: string;
+    topicHint: string;
+  }> {
+    const extractionLogPath = path.join(deps.workspace, "data", "extraction-log.json");
+    let extractionLog: Record<string, any> = {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("extraction log must be a JSON object");
+      }
+      extractionLog = parsed as Record<string, any>;
+    } catch (err: unknown) {
+      if (deps.isFailHardEnabled() && !isMissingFileError(err)) {
+        throw new Error("[quaid][facade] extraction log read failed under failHard", { cause: err as Error });
+      }
+      console.warn(`[quaid][facade] extraction log read failed: ${String((err as Error)?.message || err)}`);
+      return [];
+    }
+    return Object.entries(extractionLog)
+      .filter(([, v]) => v && v.last_extracted_at)
+      .sort(([, a], [, b]) => (b.last_extracted_at || "").localeCompare(a.last_extracted_at || ""))
+      .slice(0, Math.min(Math.max(Math.floor(Number(limit) || 5), 1), 20))
+      .map(([sessionId, info]) => ({
+        sessionId,
+        lastExtractedAt: String((info as any).last_extracted_at || ""),
+        messageCount: Number((info as any).message_count || 0),
+        label: String((info as any).label || "unknown"),
+        topicHint: String((info as any).topic_hint || ""),
+      }));
+  }
+
+  function updateExtractionLog(sessionId: string, messages: unknown[], label: string): void {
+    const extractionLogPath = path.join(deps.workspace, "data", "extraction-log.json");
+    let extractionLog: Record<string, any> = {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("extraction log must be a JSON object");
+      }
+      extractionLog = parsed as Record<string, any>;
+    } catch (err: unknown) {
+      if (deps.isFailHardEnabled() && !isMissingFileError(err)) {
+        throw new Error("[quaid][facade] extraction log read failed under failHard", { cause: err as Error });
+      }
+      console.warn(`[quaid][facade] extraction log read failed: ${String((err as Error)?.message || err)}`);
+    }
+
+    let topicHint = "";
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      if (String((msg as Record<string, unknown>).role || "") !== "user") continue;
+      const cleaned = getMessageText(msg).trim();
+      if (!cleaned || cleaned.startsWith("GatewayRestart:") || cleaned.startsWith("System:")) continue;
+      topicHint = cleaned.slice(0, 120);
+      break;
+    }
+
+    extractionLog[String(sessionId || "unknown")] = {
+      last_extracted_at: new Date().toISOString(),
+      message_count: Array.isArray(messages) ? messages.length : 0,
+      label,
+      topic_hint: topicHint,
+    };
+    const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
+    fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
   }
 
   function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<string, any> | null {
@@ -1493,6 +1594,8 @@ ${lines.join("\n")}
     shouldNotifyProjectCreate,
     shouldEmitExtractionNotify,
     clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
+    listRecentSessionsFromExtractionLog,
+    updateExtractionLog,
 
     // Datastore
     stats: () => datastoreBridge.stats(),

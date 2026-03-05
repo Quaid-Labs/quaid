@@ -15,6 +15,7 @@ const DATASTORE_STATS_TIMEOUT_MS = 3e4;
 const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_MEMORY_NOTE_SESSIONS = 200;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 9e4;
+const MAX_EXTRACTION_LOG_ENTRIES = 800;
 const RECALL_RETRY_STOPWORDS = /* @__PURE__ */ new Set([
   "a",
   "an",
@@ -190,6 +191,79 @@ function createQuaidFacade(deps) {
     extractionNotifyHistory.set(key, now);
     if (!prior) return true;
     return now - prior > EXTRACTION_NOTIFY_DEDUPE_MS;
+  }
+  function isMissingFileError(err) {
+    const code = err?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
+  function trimExtractionLogEntries(log, maxEntries = MAX_EXTRACTION_LOG_ENTRIES) {
+    const entries = Object.entries(log || {});
+    if (entries.length <= maxEntries) {
+      return log || {};
+    }
+    const sorted = entries.map(([sid, payload]) => ({
+      sid,
+      payload,
+      ts: Date.parse(String(payload?.last_extracted_at || "")) || 0
+    })).sort((a, b) => b.ts - a.ts).slice(0, maxEntries);
+    return Object.fromEntries(sorted.map((row) => [row.sid, row.payload]));
+  }
+  function listRecentSessionsFromExtractionLog(limit = 5) {
+    const extractionLogPath = path.join(deps.workspace, "data", "extraction-log.json");
+    let extractionLog = {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("extraction log must be a JSON object");
+      }
+      extractionLog = parsed;
+    } catch (err) {
+      if (deps.isFailHardEnabled() && !isMissingFileError(err)) {
+        throw new Error("[quaid][facade] extraction log read failed under failHard", { cause: err });
+      }
+      console.warn(`[quaid][facade] extraction log read failed: ${String(err?.message || err)}`);
+      return [];
+    }
+    return Object.entries(extractionLog).filter(([, v]) => v && v.last_extracted_at).sort(([, a], [, b]) => (b.last_extracted_at || "").localeCompare(a.last_extracted_at || "")).slice(0, Math.min(Math.max(Math.floor(Number(limit) || 5), 1), 20)).map(([sessionId, info]) => ({
+      sessionId,
+      lastExtractedAt: String(info?.last_extracted_at || ""),
+      messageCount: Number(info?.message_count || 0),
+      label: String(info?.label || "unknown"),
+      topicHint: String(info?.topic_hint || "")
+    }));
+  }
+  function updateExtractionLog(sessionId, messages, label) {
+    const extractionLogPath = path.join(deps.workspace, "data", "extraction-log.json");
+    let extractionLog = {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("extraction log must be a JSON object");
+      }
+      extractionLog = parsed;
+    } catch (err) {
+      if (deps.isFailHardEnabled() && !isMissingFileError(err)) {
+        throw new Error("[quaid][facade] extraction log read failed under failHard", { cause: err });
+      }
+      console.warn(`[quaid][facade] extraction log read failed: ${String(err?.message || err)}`);
+    }
+    let topicHint = "";
+    for (const msg of messages) {
+      if (!msg || typeof msg !== "object") continue;
+      if (String(msg.role || "") !== "user") continue;
+      const cleaned = getMessageText(msg).trim();
+      if (!cleaned || cleaned.startsWith("GatewayRestart:") || cleaned.startsWith("System:")) continue;
+      topicHint = cleaned.slice(0, 120);
+      break;
+    }
+    extractionLog[String(sessionId || "unknown")] = {
+      last_extracted_at: (/* @__PURE__ */ new Date()).toISOString(),
+      message_count: Array.isArray(messages) ? messages.length : 0,
+      label,
+      topic_hint: topicHint
+    };
+    const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
+    fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 384 });
   }
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     const now = Date.now();
@@ -1157,6 +1231,8 @@ ${lines.join("\n")}
     shouldNotifyProjectCreate,
     shouldEmitExtractionNotify,
     clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
+    listRecentSessionsFromExtractionLog,
+    updateExtractionLog,
     // Datastore
     stats: () => datastoreBridge.stats(),
     getStatsParsed,
