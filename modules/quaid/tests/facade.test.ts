@@ -516,6 +516,35 @@ describe("QuaidFacade", () => {
     ).toBe("alpha beta");
   });
 
+  it("extractSessionId prefers context sessionId and otherwise hashes first user timestamp", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(
+      facade.extractSessionId(
+        [{ role: "user", content: "hello", timestamp: "2026-03-05T00:00:00Z" }],
+        { sessionId: "ctx-session-1" },
+      ),
+    ).toBe("ctx-session-1");
+    expect(
+      facade.extractSessionId([
+        { role: "user", content: "hello", timestamp: "2026-03-05T00:00:00Z" },
+      ]),
+    ).toBe("d06519e2e0ce");
+  });
+
+  it("filterConversationMessages drops internal extraction payloads and maintenance prompts", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const filtered = facade.filterConversationMessages([
+      { role: "user", content: "normal user message" },
+      { role: "assistant", content: "Extract memorable facts and journal entries from this conversation: ..." },
+      { role: "assistant", content: '{"facts":[{"text":"x"}],"journal_entries":[],"soul_snippets":[]}' },
+      { role: "assistant", content: "Review batch #42 and respond with a JSON array only:" },
+      { role: "assistant", content: "normal assistant message" },
+    ]);
+    expect(filtered).toHaveLength(2);
+    expect((filtered[0] as any).content).toBe("normal user message");
+    expect((filtered[1] as any).content).toBe("normal assistant message");
+  });
+
   it("buildTranscript filters system noise and formats user/assistant messages", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const transcript = facade.buildTranscript([

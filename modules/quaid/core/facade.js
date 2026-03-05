@@ -6,6 +6,7 @@ import {
   renderKnowledgeDatastoreGuidanceForAgents
 } from "./knowledge-stores.js";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 const FAST_ROUTER_TIMEOUT_MS = 45e3;
@@ -369,6 +370,58 @@ function createQuaidFacade(deps) {
       }).join(" ");
     }
     return "";
+  }
+  function extractSessionId(messages, ctx) {
+    const context = ctx && typeof ctx === "object" ? ctx : {};
+    const direct = String(context.sessionId || "").trim();
+    if (direct) {
+      return direct;
+    }
+    let firstTimestamp = "";
+    const filteredMessages = Array.isArray(messages) ? messages.filter((msg) => {
+      if (!msg || typeof msg !== "object") return false;
+      if (String(msg.role || "") !== "user") return false;
+      const content = getMessageText(msg);
+      if (content.startsWith("GatewayRestart:")) return false;
+      if (content.startsWith("System:")) return false;
+      if (content.includes('"kind": "restart"')) return false;
+      return true;
+    }) : [];
+    if (filteredMessages.length > 0) {
+      const firstMessage = filteredMessages[0];
+      const rawTs = firstMessage.timestamp;
+      firstTimestamp = rawTs ? String(rawTs) : Date.now().toString();
+    } else {
+      firstTimestamp = Date.now().toString();
+    }
+    return createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
+  }
+  function filterConversationMessages(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return [];
+    return messages.filter((msg) => {
+      if (!msg || typeof msg !== "object") return false;
+      const role = String(msg.role || "");
+      if (role !== "user" && role !== "assistant") return false;
+      const text = getMessageText(msg).trim();
+      if (!text) return false;
+      if (text.startsWith("Extract memorable facts and journal entries from this conversation:")) return false;
+      if (isInternalMaintenancePrompt(text)) return false;
+      if (role === "assistant") {
+        const compact = text.replace(/\s+/g, " ").trim();
+        if (/^\{\s*"facts"\s*:\s*\[/.test(compact)) {
+          try {
+            const parsed = JSON.parse(compact);
+            if (parsed && typeof parsed === "object") {
+              const keys = Object.keys(parsed);
+              const onlyExtractionKeys = keys.every((k) => k === "facts" || k === "journal_entries" || k === "soul_snippets");
+              if (onlyExtractionKeys && Array.isArray(parsed.facts)) return false;
+            }
+          } catch {
+          }
+        }
+      }
+      return true;
+    });
   }
   function buildTranscript(messages) {
     const transcript = [];
@@ -1296,6 +1349,8 @@ ${lines.join("\n")}
     // Guidance
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
     getMessageText,
+    extractSessionId,
+    filterConversationMessages,
     buildTranscript,
     extractFilePaths,
     summarizeProjectSession,
