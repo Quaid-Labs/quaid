@@ -1157,13 +1157,9 @@ interface RecallOptions {
   docs?: string[];
   datastoreOptions?: Partial<Record<KnowledgeDatastore, Record<string, unknown>>>;
   failOpen?: boolean;
-  waitForExtraction?: boolean;  // wait on extractionPromise (tool=yes, inject=no)
+  waitForExtraction?: boolean;  // wait on facade extraction queue (tool=yes, inject=no)
   sourceTag?: "tool" | "auto_inject" | "unknown";
 }
-
-// Note: extractionPromise is declared inside register() — this function is
-// defined below inside register() as well, so it has access to it.
-// (Moved into register() closure when used)
 
 
 // ============================================================================
@@ -2283,25 +2279,7 @@ notify_user(f"📁 Project registered: {project_label}")
       })
     );
 
-    // Extraction promise gate — memory_recall waits on this before querying
-    // so that facts extracted from the just-compacted session are available.
-    let extractionPromise: Promise<void> | null = null;
-    const queueExtractionTask = (task: () => Promise<void>, source: string): Promise<void> => {
-      const prior = extractionPromise || Promise.resolve();
-      extractionPromise = prior.then(
-        () => task(),
-        async (err: unknown) => {
-          const msg = (err as Error)?.message || String(err);
-          console.error(`[quaid] extraction chain prior failure (${source}): ${msg}`);
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-          await task();
-          return;
-        },
-      );
-      return extractionPromise;
-    };
+    // Extraction promise gate is facade-owned so adapters remain swappable.
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
@@ -2318,11 +2296,11 @@ notify_user(f"📁 Project registered: {project_label}")
         console.log(msg);
       },
       extract: async (msgs: any[], sid?: string, label?: string) => {
-        extractionPromise = queueExtractionTask(
+        const queuedExtraction = facade.queueExtraction(
           () => extractMemoriesFromMessages(msgs, label || "Timeout", sid),
           "timeout",
         );
-        await extractionPromise;
+        await queuedExtraction;
       },
     });
     const signalWorkerHeartbeatSecRaw = Number(process.env.QUAID_SIGNAL_WORKER_HEARTBEAT_SECONDS || "30");
@@ -2348,11 +2326,12 @@ notify_user(f"📁 Project registered: {project_label}")
       );
 
       // Wait for in-flight extraction if requested
-      if (waitForExtraction && extractionPromise) {
+      const queuedExtraction = facade.getQueuedExtractionPromise();
+      if (waitForExtraction && queuedExtraction) {
         let raceTimer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
-            extractionPromise,
+            queuedExtraction,
             new Promise<void>((_, rej) => { raceTimer = setTimeout(() => rej(new Error("timeout")), 60_000); })
           ]);
         } catch (err: unknown) {
@@ -2848,7 +2827,7 @@ notify_memory_extraction(
         // Chain onto any in-flight extraction to avoid overwrite race
         // (if compaction and reset overlap, the .finally() from the first
         // extraction would clear the promise while the second is still running)
-        extractionPromise = queueExtractionTask(doExtraction, "compaction")
+        facade.queueExtraction(doExtraction, "compaction")
           .catch((doErr: unknown) => {
             console.error(`[quaid][compaction] extraction_failed session=${sessionId || "unknown"} err=${String((doErr as Error)?.message || doErr)}`);
             if (isFailHardEnabled()) {
@@ -2982,8 +2961,9 @@ notify_memory_extraction(
         };
 
         // Chain onto any in-flight extraction to avoid overwrite race
-        console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${extractionPromise ? "yes" : "no"}`);
-        extractionPromise = queueExtractionTask(doExtraction, "reset")
+        const chainActive = facade.getQueuedExtractionPromise() ? "yes" : "no";
+        console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${chainActive}`);
+        facade.queueExtraction(doExtraction, "reset")
           .catch((doErr: unknown) => {
             console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String((doErr as Error)?.message || doErr)}`);
             if (isFailHardEnabled()) {

@@ -1974,23 +1974,6 @@ ${factsOutput || "No facts found."}` }],
         }
       })
     );
-    let extractionPromise = null;
-    const queueExtractionTask = (task, source) => {
-      const prior = extractionPromise || Promise.resolve();
-      extractionPromise = prior.then(
-        () => task(),
-        async (err) => {
-          const msg = err?.message || String(err);
-          console.error(`[quaid] extraction chain prior failure (${source}): ${msg}`);
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-          await task();
-          return;
-        }
-      );
-      return extractionPromise;
-    };
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
@@ -2007,11 +1990,11 @@ ${factsOutput || "No facts found."}` }],
         console.log(msg);
       },
       extract: async (msgs, sid, label) => {
-        extractionPromise = queueExtractionTask(
+        const queuedExtraction = facade.queueExtraction(
           () => extractMemoriesFromMessages(msgs, label || "Timeout", sid),
           "timeout"
         );
-        await extractionPromise;
+        await queuedExtraction;
       }
     });
     const signalWorkerHeartbeatSecRaw = Number(process.env.QUAID_SIGNAL_WORKER_HEARTBEAT_SECONDS || "30");
@@ -2045,11 +2028,12 @@ ${factsOutput || "No facts found."}` }],
       console.log(
         `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} domain=${JSON.stringify(domain)} domainBoost=${JSON.stringify(domainBoost || {})} project=${project || "any"} waitForExtraction=${waitForExtraction}`
       );
-      if (waitForExtraction && extractionPromise) {
+      const queuedExtraction = facade.getQueuedExtractionPromise();
+      if (waitForExtraction && queuedExtraction) {
         let raceTimer;
         try {
           await Promise.race([
-            extractionPromise,
+            queuedExtraction,
             new Promise((_, rej) => {
               raceTimer = setTimeout(() => rej(new Error("timeout")), 6e4);
             })
@@ -2472,7 +2456,7 @@ notify_memory_extraction(
             console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
           }
         };
-        extractionPromise = queueExtractionTask(doExtraction, "compaction").catch((doErr) => {
+        facade.queueExtraction(doExtraction, "compaction").catch((doErr) => {
           console.error(`[quaid][compaction] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
           if (isFailHardEnabled()) {
             throw doErr;
@@ -2591,8 +2575,9 @@ notify_memory_extraction(
           }
           console.log(`[quaid][reset] extraction_end session=${sessionId || "unknown"}`);
         };
-        console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${extractionPromise ? "yes" : "no"}`);
-        extractionPromise = queueExtractionTask(doExtraction, "reset").catch((doErr) => {
+        const chainActive = facade.getQueuedExtractionPromise() ? "yes" : "no";
+        console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${chainActive}`);
+        facade.queueExtraction(doExtraction, "reset").catch((doErr) => {
           console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
           if (isFailHardEnabled()) {
             throw doErr;
