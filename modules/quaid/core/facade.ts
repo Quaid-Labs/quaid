@@ -150,6 +150,8 @@ export type QuaidFacade = {
     topicHint: string;
   }>;
   updateExtractionLog: (sessionId: string, messages: unknown[], label: string) => void;
+  getInjectionLogPath: (sessionId: string) => string;
+  pruneInjectionLogFiles: () => void;
 
   // --- Datastore stats ---
   stats: () => Promise<string>;
@@ -263,6 +265,7 @@ const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_MEMORY_NOTE_SESSIONS = 200;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
 const MAX_EXTRACTION_LOG_ENTRIES = 800;
+const MAX_INJECTION_LOG_FILES = 400;
 const RECALL_RETRY_STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
   "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
@@ -648,6 +651,37 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     };
     const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
     fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
+  }
+
+  const INJECTION_LOG_DIR = path.join(deps.workspace, ".quaid", "runtime", "injection");
+
+  function getInjectionLogPath(sessionId: string): string {
+    return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
+  }
+
+  function pruneInjectionLogFiles(): void {
+    try {
+      const files = fs.readdirSync(INJECTION_LOG_DIR)
+        .filter((f: string) => f.startsWith("memory-injection-") && f.endsWith(".log"))
+        .map((f: string) => ({
+          full: path.join(INJECTION_LOG_DIR, f),
+          mtimeMs: fs.statSync(path.join(INJECTION_LOG_DIR, f)).mtimeMs,
+        }))
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+      for (const stale of files.slice(MAX_INJECTION_LOG_FILES)) {
+        try {
+          fs.unlinkSync(stale.full);
+        } catch (err: unknown) {
+          console.warn(`[quaid][facade] Failed pruning stale injection log ${stale.full}: ${String((err as Error)?.message || err)}`);
+        }
+      }
+    } catch (err: unknown) {
+      if (isMissingFileError(err)) {
+        return;
+      }
+      console.warn(`[quaid][facade] Injection log pruning failed: ${String((err as Error)?.message || err)}`);
+    }
   }
 
   function getDatastoreStatsSync(maxAgeMs: number = NODE_COUNT_CACHE_MS): Record<string, any> | null {
@@ -1851,6 +1885,8 @@ ${lines.join("\n")}
     clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
     listRecentSessionsFromExtractionLog,
     updateExtractionLog,
+    getInjectionLogPath,
+    pruneInjectionLogFiles,
 
     // Datastore
     stats: () => datastoreBridge.stats(),

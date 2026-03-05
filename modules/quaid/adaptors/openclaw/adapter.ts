@@ -411,30 +411,7 @@ type PluginConfig = {
 // Memory Notes — queued for extraction at compaction/reset
 // ============================================================================
 
-const MAX_INJECTION_LOG_FILES = 400;
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
-
-function getInjectionLogPath(sessionId: string): string {
-  return path.join(QUAID_INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
-}
-
-function pruneInjectionLogFiles(): void {
-  try {
-    const files = fs.readdirSync(QUAID_INJECTION_LOG_DIR)
-      .filter((f: string) => f.startsWith("memory-injection-") && f.endsWith(".log"))
-      .map((f: string) => ({ name: f, full: path.join(QUAID_INJECTION_LOG_DIR, f), mtimeMs: fs.statSync(path.join(QUAID_INJECTION_LOG_DIR, f)).mtimeMs }))
-      .sort((a, b) => b.mtimeMs - a.mtimeMs);
-    for (const stale of files.slice(MAX_INJECTION_LOG_FILES)) {
-      try {
-        fs.unlinkSync(stale.full);
-      } catch (err: unknown) {
-        console.warn(`[quaid] Failed pruning stale injection log ${stale.full}: ${String((err as Error)?.message || err)}`);
-      }
-    }
-  } catch (err: unknown) {
-    console.warn(`[quaid] Injection log pruning failed: ${String((err as Error)?.message || err)}`);
-  }
-}
 
 // ============================================================================
 // Session ID Helper
@@ -1614,7 +1591,7 @@ const quaidPlugin = {
 
         // Session dedup (don't re-inject same facts within a session)
         const uniqueSessionId = facade.extractSessionId(event.messages || [], ctx);
-        const injectionLogPath = getInjectionLogPath(uniqueSessionId);
+        const injectionLogPath = facade.getInjectionLogPath(uniqueSessionId);
         let previouslyInjected: string[] = [];
         try {
           const parsed = JSON.parse(fs.readFileSync(injectionLogPath, "utf8"));
@@ -1686,7 +1663,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             injected: mergedIds.slice(-MAX_INJECTION_IDS_PER_SESSION),
             lastInjectedAt: new Date().toISOString()
           }), { mode: 0o600 });
-          pruneInjectionLogFiles();
+          facade.pruneInjectionLogFiles();
         } catch (err: unknown) {
           console.warn(`[quaid] Injection log write failed for ${injectionLogPath}: ${String((err as Error)?.message || err)}`);
         }
@@ -3091,7 +3068,7 @@ notify_memory_extraction(
 
           // Record compaction timestamp and reset injection dedup list (memory system).
           if (isSystemEnabled("memory") && uniqueSessionId) {
-            const logPath = getInjectionLogPath(uniqueSessionId);
+            const logPath = facade.getInjectionLogPath(uniqueSessionId);
             let logData: any = {};
             try {
               logData = JSON.parse(fs.readFileSync(logPath, "utf8"));
@@ -3390,7 +3367,7 @@ notify_memory_extraction(
 
           // Try to read enhanced log first (NAS), fall back to temp log
           const enhancedLogPath = path.join(QUAID_LOGS_DIR, "memory-injection", `session-${sessionId}.log`);
-          const tempLogPath = getInjectionLogPath(sessionId);
+          const tempLogPath = facade.getInjectionLogPath(sessionId);
           
           let logData: any = null;
           

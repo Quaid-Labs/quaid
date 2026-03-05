@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQuaidFacade } from "../core/facade.js";
 import type { QuaidFacadeDeps, LLMCallResult } from "../core/facade.js";
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -284,6 +284,34 @@ describe("QuaidFacade", () => {
     expect(payload["sess-topic"]).toBeTruthy();
     expect(payload["sess-topic"].label).toBe("CompactionSignal");
     expect(payload["sess-topic"].topic_hint).toContain("Need to fix adapter boundary");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("getInjectionLogPath resolves under workspace runtime injection dir", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-path-"));
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    expect(facade.getInjectionLogPath("session-123")).toBe(
+      path.join(workspace, ".quaid", "runtime", "injection", "memory-injection-session-123.log"),
+    );
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("pruneInjectionLogFiles keeps latest 400 memory-injection logs", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-injection-prune-"));
+    const injectionDir = path.join(workspace, ".quaid", "runtime", "injection");
+    await mkdir(injectionDir, { recursive: true });
+    for (let i = 0; i < 402; i += 1) {
+      await writeFile(path.join(injectionDir, `memory-injection-${i}.log`), String(i), "utf8");
+    }
+    await writeFile(path.join(injectionDir, "keep-me.txt"), "keep", "utf8");
+
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    facade.pruneInjectionLogFiles();
+
+    const files = await readdir(injectionDir);
+    const logFiles = files.filter((f) => f.startsWith("memory-injection-") && f.endsWith(".log"));
+    expect(logFiles).toHaveLength(400);
+    expect(files).toContain("keep-me.txt");
     await rm(workspace, { recursive: true, force: true });
   });
 

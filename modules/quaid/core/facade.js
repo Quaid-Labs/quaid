@@ -17,6 +17,7 @@ const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_MEMORY_NOTE_SESSIONS = 200;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 9e4;
 const MAX_EXTRACTION_LOG_ENTRIES = 800;
+const MAX_INJECTION_LOG_FILES = 400;
 const RECALL_RETRY_STOPWORDS = /* @__PURE__ */ new Set([
   "a",
   "an",
@@ -381,6 +382,30 @@ function createQuaidFacade(deps) {
     };
     const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
     fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 384 });
+  }
+  const INJECTION_LOG_DIR = path.join(deps.workspace, ".quaid", "runtime", "injection");
+  function getInjectionLogPath(sessionId) {
+    return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
+  }
+  function pruneInjectionLogFiles() {
+    try {
+      const files = fs.readdirSync(INJECTION_LOG_DIR).filter((f) => f.startsWith("memory-injection-") && f.endsWith(".log")).map((f) => ({
+        full: path.join(INJECTION_LOG_DIR, f),
+        mtimeMs: fs.statSync(path.join(INJECTION_LOG_DIR, f)).mtimeMs
+      })).sort((a, b) => b.mtimeMs - a.mtimeMs);
+      for (const stale of files.slice(MAX_INJECTION_LOG_FILES)) {
+        try {
+          fs.unlinkSync(stale.full);
+        } catch (err) {
+          console.warn(`[quaid][facade] Failed pruning stale injection log ${stale.full}: ${String(err?.message || err)}`);
+        }
+      }
+    } catch (err) {
+      if (isMissingFileError(err)) {
+        return;
+      }
+      console.warn(`[quaid][facade] Injection log pruning failed: ${String(err?.message || err)}`);
+    }
   }
   function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
     const now = Date.now();
@@ -1450,6 +1475,8 @@ ${lines.join("\n")}
     clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
     listRecentSessionsFromExtractionLog,
     updateExtractionLog,
+    getInjectionLogPath,
+    pruneInjectionLogFiles,
     // Datastore
     stats: () => datastoreBridge.stats(),
     getStatsParsed,
