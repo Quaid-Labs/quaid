@@ -565,7 +565,7 @@ def _register_module_routines(
                 _register_failure(routine_name, msg)
 
 
-def _resolve_adapter_maintenance_module(default_module: str = "adaptors.openclaw.maintenance") -> str:
+def _resolve_adapter_maintenance_module(default_module: str = "") -> str:
     """Resolve adapter maintenance module from active adapter manifest."""
     try:
         from config import get_config  # local import avoids hard dependency at module import
@@ -573,28 +573,42 @@ def _resolve_adapter_maintenance_module(default_module: str = "adaptors.openclaw
 
         cfg = get_config()
         plugins_cfg = getattr(cfg, "plugins", None)
-        if plugins_cfg is None:
-            return default_module
-
-        slots = getattr(plugins_cfg, "slots", None)
-        adapter_id = str(getattr(slots, "adapter", "") or "").strip()
-        if not adapter_id:
-            return default_module
-
-        manifests, _ = discover_plugin_manifests(
-            paths=list(getattr(plugins_cfg, "paths", []) or []),
-            allowlist=list(getattr(plugins_cfg, "allowlist", []) or []),
-            strict=False,
-        )
-        for manifest in manifests:
-            if str(getattr(manifest, "plugin_id", "") or "").strip() != adapter_id:
-                continue
-            module_name = str(getattr(manifest, "module", "") or "").strip()
-            if not module_name or "." not in module_name:
-                return default_module
-            parts = module_name.split(".")
-            parts[-1] = "maintenance"
-            return ".".join(parts)
+        if plugins_cfg is not None:
+            slots = getattr(plugins_cfg, "slots", None)
+            adapter_id = str(getattr(slots, "adapter", "") or "").strip()
+            if adapter_id:
+                manifests, _ = discover_plugin_manifests(
+                    paths=list(getattr(plugins_cfg, "paths", []) or []),
+                    allowlist=list(getattr(plugins_cfg, "allowlist", []) or []),
+                    strict=False,
+                )
+                for manifest in manifests:
+                    if str(getattr(manifest, "plugin_id", "") or "").strip() != adapter_id:
+                        continue
+                    module_name = str(getattr(manifest, "module", "") or "").strip()
+                    if not module_name or "." not in module_name:
+                        break
+                    parts = module_name.split(".")
+                    parts[-1] = "maintenance"
+                    return ".".join(parts)
+    except Exception:
+        pass
+    # Fallback: discover adapter maintenance modules from local tree without
+    # hardcoding any specific adapter identifier.
+    try:
+        adaptors_dir = Path(__file__).resolve().parents[2] / "adaptors"
+        candidates: List[str] = []
+        if adaptors_dir.exists():
+            for child in adaptors_dir.iterdir():
+                if not child.is_dir():
+                    continue
+                maintenance = child / "maintenance.py"
+                if maintenance.exists():
+                    candidates.append(f"adaptors.{child.name}.maintenance")
+        if len(candidates) == 1:
+            return candidates[0]
+        if candidates:
+            return sorted(candidates)[0]
     except Exception:
         pass
     return default_module
@@ -604,14 +618,16 @@ def build_default_registry() -> LifecycleRegistry:
     registry = LifecycleRegistry()
 
     adapter_module = _resolve_adapter_maintenance_module()
-    module_specs: List[tuple[str, List[str]]] = [
-        (adapter_module, ["workspace"]),
+    module_specs: List[tuple[str, List[str]]] = []
+    if adapter_module:
+        module_specs.append((adapter_module, ["workspace"]))
+    module_specs.extend([
         ("datastore.docsdb.updater", ["docs_staleness", "docs_cleanup"]),
         ("datastore.notedb.soul_snippets", ["snippets", "journal"]),
         ("datastore.docsdb.rag", ["rag"]),
         ("datastore.memorydb.maintenance", ["memory_graph_maintenance"]),
         ("datastore.memorydb.memory_graph", ["datastore_cleanup"]),
-    ]
+    ])
 
     # Extension hook for external/plugin datastores:
     # comma-separated module list in env, each module must expose

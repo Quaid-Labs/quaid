@@ -47,6 +47,34 @@ MAX_NOTIFY_CHARS = 3500
 logger = logging.getLogger(__name__)
 
 
+def _resolve_message_cli() -> Optional[str]:
+    """Resolve direct-send message CLI from env configuration."""
+    configured = (
+        os.environ.get("QUAID_NOTIFY_CLI")
+        or os.environ.get("QUAID_MESSAGE_CLI")
+        or ""
+    ).strip()
+    if not configured:
+        return None
+    return shutil.which(configured) or configured
+
+
+def _resolve_direct_target(channel: str, explicit_target: str) -> str:
+    """Resolve direct-send target from explicit arg or channel-specific env vars."""
+    direct_target = (explicit_target or "").strip()
+    if direct_target:
+        return direct_target
+    normalized = str(channel or "").strip().upper()
+    if not normalized:
+        return ""
+    return (
+        os.environ.get(f"QUAID_{normalized}_TARGET")
+        or os.environ.get("QUAID_NOTIFY_TARGET")
+        or os.environ.get(f"{normalized}_TARGET")
+        or ""
+    ).strip()
+
+
 def send_direct_notification(
     message: str,
     *,
@@ -58,9 +86,12 @@ def send_direct_notification(
     """Send via message CLI directly, bypassing adapter/session lookup."""
     if os.environ.get("QUAID_DISABLE_NOTIFICATIONS"):
         return True
-    cli = shutil.which("clawdbot") or shutil.which("openclaw")
+    cli = _resolve_message_cli()
     if not cli:
-        print("[notify] No message CLI found (expected openclaw or clawdbot)", file=sys.stderr)
+        print(
+            "[notify] No message CLI configured. Set QUAID_NOTIFY_CLI or QUAID_MESSAGE_CLI.",
+            file=sys.stderr,
+        )
         return False
     cmd = [
         cli,
@@ -688,16 +719,12 @@ def main():
         parser.error("Message required (or use --check)")
 
     if args.channel:
-        direct_target = args.target
-        if not direct_target and args.channel.lower() == "telegram":
-            direct_target = (
-                os.environ.get("QUAID_TELEGRAM_TARGET")
-                or os.environ.get("QUAID_NOTIFY_TARGET")
-                or os.environ.get("TELEGRAM_TARGET")
-                or ""
-            ).strip()
+        direct_target = _resolve_direct_target(args.channel, args.target or "")
         if not direct_target:
-            parser.error("--target is required for direct sends (or set QUAID_TELEGRAM_TARGET for --channel telegram)")
+            parser.error(
+                "--target is required for direct sends "
+                "(or set QUAID_<CHANNEL>_TARGET / QUAID_NOTIFY_TARGET)"
+            )
         success = send_direct_notification(
             args.message,
             channel=args.channel,

@@ -54,7 +54,7 @@ def store(
         confidence: Initial confidence level, 0.0 to 1.0. Default 0.5.
         verified: Mark as verified (higher trust, skips some review).
         pinned: Pinned memories never decay.
-        source: Where this fact came from (e.g. "telegram", "manual").
+        source: Where this fact came from (e.g. "chat", "manual").
         knowledge_type: "fact", "belief", "preference", or "experience".
         source_type: Who stated it — "user", "assistant", "tool", or "import".
         domains: Optional domain tags (e.g. ["technical", "research"]).

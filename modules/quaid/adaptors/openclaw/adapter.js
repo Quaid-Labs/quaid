@@ -69,9 +69,6 @@ const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-ins
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
-const COMPACTION_NOTIFY_BATCH_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MS", 45e3);
-const COMPACTION_NOTIFY_BATCH_MAX_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MAX_MS", 12e4);
-let compactionNotifyBatchState = null;
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 9e4;
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
@@ -385,74 +382,6 @@ function resolveMostRecentSessionId() {
   } catch {
   }
   return "";
-}
-function queueCompactionNotificationBatch(sessionId, stored, skipped, edges) {
-  const now = Date.now();
-  if (!compactionNotifyBatchState) {
-    compactionNotifyBatchState = {
-      startedAtMs: now,
-      lastUpdateMs: now,
-      sessions: /* @__PURE__ */ new Set(),
-      sessionsWithFacts: /* @__PURE__ */ new Set(),
-      stored: 0,
-      skipped: 0,
-      edges: 0,
-      timer: null
-    };
-  }
-  const state = compactionNotifyBatchState;
-  const sid = String(sessionId || "").trim() || `unknown-${now}`;
-  state.sessions.add(sid);
-  if (stored > 0) {
-    state.sessionsWithFacts.add(sid);
-  }
-  state.stored += Math.max(0, Number(stored || 0));
-  state.skipped += Math.max(0, Number(skipped || 0));
-  state.edges += Math.max(0, Number(edges || 0));
-  state.lastUpdateMs = now;
-  const batchAgeMs = now - state.startedAtMs;
-  if (batchAgeMs >= COMPACTION_NOTIFY_BATCH_MAX_MS) {
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-    state.startedAtMs = 0;
-    state.lastUpdateMs = now;
-  }
-  if (state.timer) {
-    clearTimeout(state.timer);
-    state.timer = null;
-  }
-  const flushDelayMs = state.startedAtMs === 0 ? 0 : Math.max(0, Math.min(COMPACTION_NOTIFY_BATCH_MS, COMPACTION_NOTIFY_BATCH_MAX_MS - (now - state.startedAtMs)));
-  state.timer = setTimeout(() => {
-    const flushState = compactionNotifyBatchState;
-    if (!flushState) return;
-    compactionNotifyBatchState = null;
-    if (flushState.timer) {
-      clearTimeout(flushState.timer);
-      flushState.timer = null;
-    }
-    const sessionCount = flushState.sessions.size;
-    if (sessionCount <= 0) return;
-    const durationSec = Math.max(1, Math.round((flushState.lastUpdateMs - flushState.startedAtMs) / 1e3));
-    const summary = [
-      "**[Quaid]** \u{1F4BE} **Compaction extraction summary:**",
-      "",
-      `\u2022 Sessions processed: ${sessionCount}`,
-      `\u2022 Facts stored: ${flushState.stored}`,
-      `\u2022 Facts skipped: ${flushState.skipped}`,
-      `\u2022 Edges created: ${flushState.edges}`,
-      `\u2022 Sessions with new facts: ${flushState.sessionsWithFacts.size}`,
-      `\u2022 Window: ${durationSec}s`
-    ].join("\n");
-    spawnNotifyScript(`
-from core.runtime.notify import notify_user, _resolve_channel
-notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extraction"))
-`);
-  }, flushDelayMs);
-  if (typeof state.timer.unref === "function") {
-    state.timer.unref();
-  }
 }
 function resolveSessionKeyForCompaction(sessionId) {
   try {
@@ -999,8 +928,13 @@ const facade = createQuaidFacade({
     CLAWDBOT_WORKSPACE: WORKSPACE
   }, EVENTS_EMIT_TIMEOUT_MS),
   callLLM: callConfiguredLLM,
-  getGatewayDefaultProvider,
+  getDefaultLLMProvider: getGatewayDefaultProvider,
+  providerAliases: {
+    "openai-codex": "openai",
+    "anthropic-claude-code": "anthropic"
+  },
   resolveSessionIdFromSessionKey,
+  resolveDefaultSessionId: () => resolveSessionIdFromSessionKey("agent:main:main"),
   resolveMostRecentSessionId,
   getMemoryConfig,
   isSystemEnabled,
@@ -1190,9 +1124,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
         if (facade.isInternalMaintenancePrompt(query)) {
           return;
         }
-        const ACKNOWLEDGMENTS = /^(ok|okay|yes|no|sure|thanks|thank you|got it|sounds good|perfect|great|cool|alright|yep|nope|right|correct|agreed|absolutely|definitely|nice|good|fine|hm+|ah+|oh+)\s*[.!?]?$/i;
-        const words = query.trim().split(/\s+/).filter((w) => w.length > 1);
-        if (words.length < 3 || ACKNOWLEDGMENTS.test(query.trim())) {
+        if (facade.isLowQualityQuery(query)) {
           return;
         }
         const autoInjectK = facade.computeDynamicK();
@@ -1218,20 +1150,9 @@ ${header}${journalContent}` : `${header}${journalContent}`;
         });
         if (!allMemories.length) return;
         const currentOwner = facade.resolveOwner();
-        const filtered = allMemories.filter(
-          (m) => !(m.privacy === "private" && m.ownerId && m.ownerId !== "None" && m.ownerId !== currentOwner)
-        );
+        const filtered = facade.filterMemoriesByPrivacy(allMemories, currentOwner);
         const uniqueSessionId = facade.extractSessionId(event.messages || [], ctx);
-        const injectionLogPath = facade.getInjectionLogPath(uniqueSessionId);
-        let previouslyInjected = [];
-        try {
-          const parsed = JSON.parse(fs.readFileSync(injectionLogPath, "utf8"));
-          const logData = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-          const rawInjected = logData?.injected ?? logData?.memoryTexts;
-          previouslyInjected = Array.isArray(rawInjected) ? rawInjected.map((item) => String(item || "").trim()).filter(Boolean) : [];
-        } catch (err) {
-          console.warn(`[quaid] Injection log read failed for ${injectionLogPath}: ${String(err?.message || err)}`);
-        }
+        const previouslyInjected = facade.loadInjectedMemoryKeys(uniqueSessionId);
         const newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
         const toInject = newMemories.slice(0, injectLimit);
         if (!toInject.length) return;
@@ -1278,17 +1199,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         } catch (notifyErr) {
           console.warn(`[quaid] Auto-inject recall notification skipped: ${notifyErr.message}`);
         }
-        try {
-          const newIds = toInject.map((m) => m.id || m.text);
-          const mergedIds = [...previouslyInjected, ...newIds];
-          fs.writeFileSync(injectionLogPath, JSON.stringify({
-            injected: mergedIds.slice(-MAX_INJECTION_IDS_PER_SESSION),
-            lastInjectedAt: (/* @__PURE__ */ new Date()).toISOString()
-          }), { mode: 384 });
-          facade.pruneInjectionLogFiles();
-        } catch (err) {
-          console.warn(`[quaid] Injection log write failed for ${injectionLogPath}: ${String(err?.message || err)}`);
-        }
+        facade.saveInjectedMemoryKeys(
+          uniqueSessionId,
+          previouslyInjected,
+          toInject,
+          MAX_INJECTION_IDS_PER_SESSION
+        );
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
       }
@@ -1521,56 +1437,8 @@ ${recallStoreGuidance}`,
                   details: { count: 0 }
                 };
               }
-              const vectorResults = results.filter((r) => facade.isVectorRecallResult(r));
-              const graphResults = results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
-              const journalResults = results.filter((r) => (r.via || "") === "journal");
-              const projectResults = results.filter((r) => (r.via || "") === "project");
-              const avgSimilarity = vectorResults.length > 0 ? vectorResults.reduce((sum, r) => sum + (r.similarity || 0), 0) / vectorResults.length : 0;
-              const maxSimilarity = vectorResults.length > 0 ? Math.max(...vectorResults.map((r) => Number(r.similarity || 0))) : 0;
-              const hasHighExtractionConfidence = vectorResults.some((r) => Number(r.extractionConfidence || 0) >= 0.8);
-              const lowQualityWarning = vectorResults.length > 0 && avgSimilarity < 0.45 && maxSimilarity < 0.55 && !hasHighExtractionConfidence ? "\n\n\u26A0\uFE0F Low confidence matches - consider refining query with specific names or topics.\n" : "";
-              let text = `[MEMORY] Found ${results.length} results:${lowQualityWarning}
-`;
-              if (vectorResults.length > 0) {
-                text += "\n**Direct Matches:**\n";
-                vectorResults.forEach((r, i) => {
-                  const conf = r.extractionConfidence ? ` [conf:${Math.round(r.extractionConfidence * 100)}%]` : "";
-                  const dateStr = r.createdAt ? ` (${r.createdAt.split("T")[0]})` : "";
-                  const superseded = r.validUntil ? " [superseded]" : "";
-                  text += `${i + 1}. [MEMORY] [${r.category}]${dateStr}${superseded} ${r.text} (${Math.round(r.similarity * 100)}%${conf})
-`;
-                });
-              }
-              if (graphResults.length > 0) {
-                if (vectorResults.length > 0) {
-                  text += "\n";
-                }
-                text += "**Graph Discoveries:**\n";
-                graphResults.forEach((r, i) => {
-                  text += `${i + 1}. [MEMORY] ${r.text}
-`;
-                });
-              }
-              if (journalResults.length > 0) {
-                if (vectorResults.length > 0 || graphResults.length > 0) {
-                  text += "\n";
-                }
-                text += "**Journal Signals:**\n";
-                journalResults.forEach((r, i) => {
-                  text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)
-`;
-                });
-              }
-              if (projectResults.length > 0) {
-                if (vectorResults.length > 0 || graphResults.length > 0 || journalResults.length > 0) {
-                  text += "\n";
-                }
-                text += "**Project Knowledge:**\n";
-                projectResults.forEach((r, i) => {
-                  text += `${i + 1}. [MEMORY] ${r.text} (${Math.round((r.similarity || 0) * 100)}%)
-`;
-                });
-              }
+              const recallFormatted = facade.formatRecallToolResponse(results);
+              const text = recallFormatted.text;
               try {
                 if (facade.shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
                   const memoryData = results.map((m) => ({
@@ -1580,10 +1448,10 @@ ${recallStoreGuidance}`,
                     category: m.category || ""
                   }));
                   const sourceBreakdown = {
-                    vector_count: vectorResults.length,
-                    graph_count: graphResults.length,
-                    journal_count: journalResults.length,
-                    project_count: projectResults.length,
+                    vector_count: recallFormatted.breakdown.vector_count,
+                    graph_count: recallFormatted.breakdown.graph_count,
+                    journal_count: recallFormatted.breakdown.journal_count,
+                    project_count: recallFormatted.breakdown.project_count,
                     query,
                     mode: "tool"
                   };
@@ -1614,10 +1482,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 details: {
                   count: results.length,
                   memories: results,
-                  vectorCount: vectorResults.length,
-                  graphCount: graphResults.length,
-                  journalCount: journalResults.length,
-                  projectCount: projectResults.length
+                  vectorCount: recallFormatted.breakdown.vector_count,
+                  graphCount: recallFormatted.breakdown.graph_count,
+                  journalCount: recallFormatted.breakdown.journal_count,
+                  projectCount: recallFormatted.breakdown.project_count
                 }
               };
             } catch (err) {
@@ -2456,7 +2324,18 @@ notify_user("\u{1F9E0} Processing memories from ${triggerDesc}...")
       const dedupeSession = sessionId || facade.extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
       if (!suppressBacklogNotify && facade.shouldNotifyFeature("extraction", "summary") && triggerType === "compaction") {
-        queueCompactionNotificationBatch(dedupeSession, stored, skipped, edgesCreated);
+        facade.queueCompactionExtractionSummary(
+          dedupeSession,
+          stored,
+          skipped,
+          edgesCreated,
+          (summary) => {
+            spawnNotifyScript(`
+from core.runtime.notify import notify_user, _resolve_channel
+notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extraction"))
+`);
+          }
+        );
       } else if (triggerType !== "recovery" && !suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && facade.shouldNotifyFeature("extraction", "summary") && facade.shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
           const trigger = triggerType === "unknown" ? "reset" : triggerType;
@@ -2588,16 +2467,7 @@ notify_memory_extraction(
             console.error("[quaid] Compaction project event failed:", err.message);
           }
           if (isSystemEnabled("memory") && uniqueSessionId) {
-            const logPath = facade.getInjectionLogPath(uniqueSessionId);
-            let logData = {};
-            try {
-              logData = JSON.parse(fs.readFileSync(logPath, "utf8"));
-            } catch (err) {
-              console.warn(`[quaid] compaction injection log read failed for ${logPath}: ${String(err?.message || err)}`);
-            }
-            logData.lastCompactionAt = (/* @__PURE__ */ new Date()).toISOString();
-            logData.memoryTexts = [];
-            fs.writeFileSync(logPath, JSON.stringify(logData, null, 2), { mode: 384 });
+            facade.resetInjectionDedupAfterCompaction(uniqueSessionId);
             console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
           }
         };

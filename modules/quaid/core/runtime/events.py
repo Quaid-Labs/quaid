@@ -125,7 +125,7 @@ EVENT_REGISTRY: List[Dict[str, Any]] = [
 ]
 
 _EVENT_NAME_ALIASES: Dict[str, str] = {
-    # OpenClaw typed hook names map to canonical Quaid runtime events.
+    # Adapter hook names map to canonical Quaid runtime events.
     "before_agent_start": "session.agent_start",
     "agent_end": "session.agent_end",
     "session_end": "session.reset",
@@ -138,7 +138,7 @@ def _canonical_event_name(name: str) -> str:
     token = str(name or "").strip()
     if not token:
         return token
-    # OpenClaw command-scoped events are dynamic (`command:<action>`). Canonicalize
+    # Adapter command-scoped events are dynamic (`command:<action>`). Canonicalize
     # known lifecycle actions to runtime event names so adapters can safely declare
     # command hooks in their event contract.
     if token.startswith("command:"):
