@@ -12,7 +12,6 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
-import { queueDelayedRequest } from "./delayed-requests.js";
 import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
 import { createQuaidFacade } from "../../core/facade.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
@@ -85,7 +84,6 @@ const QUAID_LOGS_DIR = path.join(WORKSPACE, "logs");
 const QUAID_JANITOR_DIR = path.join(QUAID_LOGS_DIR, "janitor");
 const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-install-migration.json");
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
-const DELAYED_LLM_REQUESTS_PATH = path.join(QUAID_NOTES_DIR, "delayed-llm-requests.json");
 const JANITOR_NUDGE_STATE_PATH = path.join(QUAID_NOTES_DIR, "janitor-nudge-state.json");
 const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "openclaw", "plugin.json");
 const COMPACTION_NOTIFY_BATCH_MS = _envTimeoutMs("QUAID_COMPACTION_NOTIFY_BATCH_MS", 45_000);
@@ -1094,17 +1092,6 @@ function _saveJanitorNudgeState(state: Record<string, any>): void {
   }
 }
 
-function queueDelayedLlmRequest(message: string, kind: string = "janitor", priority: string = "normal"): boolean {
-  return queueDelayedRequest(
-    DELAYED_LLM_REQUESTS_PATH,
-    message,
-    kind,
-    priority,
-    "quaid_adapter",
-    isFailHardEnabled(),
-  );
-}
-
 function maybeQueueJanitorHealthAlert(): void {
   const issue = facade.getJanitorHealthIssue();
   if (!issue) return;
@@ -1113,7 +1100,12 @@ function maybeQueueJanitorHealthAlert(): void {
   const lastAt = Number(state.lastJanitorHealthAlertAt || 0);
   const cooldown = 6 * 60 * 60 * 1000;
   if (now - lastAt < cooldown && String(state.lastJanitorHealthIssue || "") === issue) return;
-  if (queueDelayedLlmRequest(issue, "janitor_health", "high")) {
+  if (facade.queueDelayedRequest({
+    message: issue,
+    kind: "janitor_health",
+    priority: "high",
+    source: "quaid_adapter",
+  })) {
     state.lastJanitorHealthAlertAt = now;
     state.lastJanitorHealthIssue = issue;
     _saveJanitorNudgeState(state);

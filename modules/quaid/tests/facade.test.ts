@@ -890,8 +890,35 @@ describe("QuaidFacade", () => {
     expect(result === null || typeof result === "string").toBe(true);
   });
 
-  it("queueDelayedRequest throws not implemented", () => {
-    const facade = createQuaidFacade(makeMockDeps());
-    expect(() => facade.queueDelayedRequest({})).toThrow("not yet implemented");
+  it("queueDelayedRequest writes and dedupes pending delayed requests", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-delayed-req-"));
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const queued = facade.queueDelayedRequest({
+      message: "janitor needs follow-up",
+      kind: "janitor_health",
+      priority: "high",
+      source: "test",
+    });
+    const duplicate = facade.queueDelayedRequest({
+      message: "janitor needs follow-up",
+      kind: "janitor_health",
+      priority: "high",
+      source: "test",
+    });
+    expect(queued).toBe(true);
+    expect(duplicate).toBe(false);
+
+    const delayedPath = path.join(workspace, ".quaid", "runtime", "notes", "delayed-llm-requests.json");
+    const payload = JSON.parse(await readFile(delayedPath, "utf8"));
+    expect(Array.isArray(payload.requests)).toBe(true);
+    expect(payload.requests).toHaveLength(1);
+    expect(payload.requests[0]).toMatchObject({
+      kind: "janitor_health",
+      priority: "high",
+      source: "test",
+      status: "pending",
+      message: "janitor needs follow-up",
+    });
+    await rm(workspace, { recursive: true, force: true });
   });
 });

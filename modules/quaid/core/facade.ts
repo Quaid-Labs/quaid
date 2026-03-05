@@ -104,6 +104,14 @@ export type LifecycleSignal = {
 
 export type ExtractionTrigger = "compaction" | "reset" | "new" | "recovery" | "timeout" | "unknown";
 
+export type DelayedRequestInput = {
+  message: string;
+  kind?: string;
+  priority?: string;
+  source?: string;
+  requestsPath?: string;
+};
+
 /** Options for facade-level recall. */
 export type FacadeRecallOptions = {
   query: string;
@@ -248,7 +256,7 @@ export type QuaidFacade = {
   processLifecycleEvent: (signal: unknown, context: unknown) => never;
   maybeRunMaintenance: (sessionId: string) => never;
   getJanitorHealthIssue: () => string | null;
-  queueDelayedRequest: (request: unknown) => never;
+  queueDelayedRequest: (request: DelayedRequestInput) => boolean;
   isInternalMaintenancePrompt: (text: string) => boolean;
   resolveExtractionTrigger: (label: string) => ExtractionTrigger;
 };
@@ -266,6 +274,8 @@ const MAX_MEMORY_NOTE_SESSIONS = 200;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
 const MAX_EXTRACTION_LOG_ENTRIES = 800;
 const MAX_INJECTION_LOG_FILES = 400;
+const DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS = 50;
+const DELAYED_REQUESTS_LOCK_SLEEP_MS = 10;
 const RECALL_RETRY_STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "by", "do", "for", "from", "how", "i",
   "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
@@ -681,6 +691,121 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         return;
       }
       console.warn(`[quaid][facade] Injection log pruning failed: ${String((err as Error)?.message || err)}`);
+    }
+  }
+
+  type DelayedRequestItem = {
+    id: string;
+    created_at: string;
+    source: string;
+    kind: string;
+    priority: string;
+    status: "pending" | "resolved";
+    message: string;
+    resolved_at?: string;
+    resolution_note?: string;
+  };
+
+  type DelayedRequestsPayload = {
+    version: number;
+    requests: DelayedRequestItem[];
+  };
+
+  function readDelayedRequestsJson(pathname: string): unknown {
+    try {
+      if (!fs.existsSync(pathname)) return null;
+      return JSON.parse(fs.readFileSync(pathname, "utf8"));
+    } catch (err: unknown) {
+      console.warn(`[quaid][facade] delayed requests read failed path=${pathname}: ${String((err as Error)?.message || err)}`);
+      return null;
+    }
+  }
+
+  function writeDelayedRequestsJson(pathname: string, payload: unknown): void {
+    const tmpPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    fs.renameSync(tmpPath, pathname);
+  }
+
+  function withDelayedRequestsLock<T>(requestsPath: string, fn: () => T): T {
+    const lockPath = `${requestsPath}.lock`;
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    let fd: number | undefined;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < DELAYED_REQUESTS_LOCK_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        fd = fs.openSync(lockPath, "wx", 0o600);
+        break;
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== "EEXIST") throw err;
+        lastErr = err;
+        _sleepMs(DELAYED_REQUESTS_LOCK_SLEEP_MS);
+      }
+    }
+    if (fd === undefined) {
+      throw new Error(`failed to acquire delayed-requests lock: ${String((lastErr as Error)?.message || lastErr)}`);
+    }
+    try {
+      return fn();
+    } finally {
+      try { fs.closeSync(fd); } catch {}
+      try { fs.unlinkSync(lockPath); } catch {}
+    }
+  }
+
+  function makeDelayedRequestId(kind: string, message: string): string {
+    return `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
+  }
+
+  function queueDelayedRequest(request: DelayedRequestInput): boolean {
+    const requestsPath = String(
+      request?.requestsPath || path.join(deps.workspace, ".quaid", "runtime", "notes", "delayed-llm-requests.json"),
+    );
+    const message = String(request?.message || "").trim();
+    const kind = String(request?.kind || "janitor");
+    const priority = String(request?.priority || "normal");
+    const source = String(request?.source || "quaid_adapter");
+
+    if (!message) return false;
+
+    try {
+      return withDelayedRequestsLock(requestsPath, () => {
+        const loaded = readDelayedRequestsJson(requestsPath);
+        if (loaded === null && deps.isFailHardEnabled() && fs.existsSync(requestsPath)) {
+          throw new Error(`delayed requests file is unreadable or malformed: ${requestsPath}`);
+        }
+        const payload = (loaded && typeof loaded === "object" && !Array.isArray(loaded)
+          ? loaded
+          : { version: 1, requests: [] }) as DelayedRequestsPayload;
+        const requests = Array.isArray(payload.requests) ? payload.requests : [];
+        const id = makeDelayedRequestId(kind, message);
+        if (requests.some((r) => r && String(r.id || "") === id && r.status === "pending")) {
+          return false;
+        }
+        requests.push({
+          id,
+          created_at: new Date().toISOString(),
+          source,
+          kind,
+          priority,
+          status: "pending",
+          message,
+        });
+        payload.version = 1;
+        payload.requests = requests;
+        writeDelayedRequestsJson(requestsPath, payload);
+        return true;
+      });
+    } catch (err: unknown) {
+      const detail = `[quaid][facade] delayed requests queue failed path=${requestsPath}: ${String((err as Error)?.message || err)}`;
+      if (deps.isFailHardEnabled()) {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(detail, { cause });
+      }
+      console.warn(detail);
+      return false;
     }
   }
 
@@ -1997,7 +2122,7 @@ ${lines.join("\n")}
       }
       return null;
     },
-    queueDelayedRequest: () => notImplemented("queueDelayedRequest"),
+    queueDelayedRequest,
     isInternalMaintenancePrompt,
     resolveExtractionTrigger,
   };
