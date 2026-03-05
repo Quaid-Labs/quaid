@@ -535,7 +535,6 @@ function isInternalQuaidSession(sessionId: unknown): boolean {
 
 const MAX_INJECTION_LOG_FILES = 400;
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
-const MAX_EXTRACTION_LOG_ENTRIES = 800;
 
 function getInjectionLogPath(sessionId: string): string {
   return path.join(QUAID_INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
@@ -557,18 +556,6 @@ function pruneInjectionLogFiles(): void {
   } catch (err: unknown) {
     console.warn(`[quaid] Injection log pruning failed: ${String((err as Error)?.message || err)}`);
   }
-}
-
-function trimExtractionLogEntries(log: Record<string, any>, maxEntries: number = MAX_EXTRACTION_LOG_ENTRIES): Record<string, any> {
-  const entries = Object.entries(log || {});
-  if (entries.length <= maxEntries) {
-    return log || {};
-  }
-  const sorted = entries
-    .map(([sid, payload]) => ({ sid, payload, ts: Date.parse(String((payload as any)?.last_extracted_at || "")) || 0 }))
-    .sort((a, b) => b.ts - a.ts)
-    .slice(0, maxEntries);
-  return Object.fromEntries(sorted.map((row) => [row.sid, row.payload]));
 }
 
 // ============================================================================
@@ -2709,27 +2696,8 @@ notify_user(f"📁 Project registered: {project_label}")
           try {
             const { action = "list", session_id: sid, limit: listLimit = 5 } = params || {};
 
-            const extractionLogPath = path.join(WORKSPACE, "data", "extraction-log.json");
-            let extractionLog: Record<string, any> = {};
-            try {
-              const parsed = JSON.parse(fs.readFileSync(extractionLogPath, 'utf8'));
-              if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                throw new Error("extraction log must be a JSON object");
-              }
-              extractionLog = parsed as Record<string, any>;
-            } catch (err: unknown) {
-              if (isFailHardEnabled() && !isMissingFileError(err)) {
-                throw new Error("[quaid] session_recall extraction log read failed under failHard", { cause: err as Error });
-              }
-              console.warn(`[quaid] session_recall extraction log read failed: ${String((err as Error)?.message || err)}`);
-            }
-
             if (action === "list") {
-              // Sort sessions by last_extracted_at descending
-              const sessions = Object.entries(extractionLog)
-                .filter(([, v]) => v && v.last_extracted_at)
-                .sort(([, a], [, b]) => (b.last_extracted_at || '').localeCompare(a.last_extracted_at || ''))
-                .slice(0, Math.min(listLimit, 20));
+              const sessions = facade.listRecentSessionsFromExtractionLog(listLimit);
 
               if (sessions.length === 0) {
                 return {
@@ -2739,12 +2707,12 @@ notify_user(f"📁 Project registered: {project_label}")
               }
 
               let text = "Recent sessions:\n";
-              sessions.forEach(([id, info], i) => {
-                const date = info.last_extracted_at ? new Date(info.last_extracted_at).toLocaleString() : "unknown";
-                const msgCount = info.message_count || "?";
-                const trigger = info.label || "unknown";
-                const topic = info.topic_hint ? ` — "${info.topic_hint}"` : "";
-                text += `${i + 1}. [${date}] ${id} — ${msgCount} messages, extracted via ${trigger}${topic}\n`;
+              sessions.forEach((session, i) => {
+                const date = session.lastExtractedAt ? new Date(session.lastExtractedAt).toLocaleString() : "unknown";
+                const msgCount = session.messageCount || "?";
+                const trigger = session.label || "unknown";
+                const topic = session.topicHint ? ` — "${session.topicHint}"` : "";
+                text += `${i + 1}. [${date}] ${session.sessionId} — ${msgCount} messages, extracted via ${trigger}${topic}\n`;
               });
 
               return {
@@ -3262,40 +3230,7 @@ notify_memory_extraction(
       }
 
       try {
-        const extractionLogPath = path.join(WORKSPACE, "data", "extraction-log.json");
-        let extractionLog: Record<string, any> = {};
-        try {
-          const parsed = JSON.parse(fs.readFileSync(extractionLogPath, "utf8"));
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throw new Error("extraction log must be a JSON object");
-          }
-          extractionLog = parsed as Record<string, any>;
-        } catch (err: unknown) {
-          if (isFailHardEnabled() && !isMissingFileError(err)) {
-            throw new Error("[quaid] extraction log read failed under failHard", { cause: err as Error });
-          }
-          console.warn(`[quaid] Extraction log read failed for ${extractionLogPath}: ${String((err as Error)?.message || err)}`);
-        }
-
-        let topicHint = "";
-        for (const m of messages) {
-          if (m?.role === "user") {
-            const cleaned = facade.getMessageText(m).trim();
-            if (cleaned && !cleaned.startsWith("GatewayRestart:") && !cleaned.startsWith("System:")) {
-              topicHint = cleaned.slice(0, 120);
-              break;
-            }
-          }
-        }
-
-        extractionLog[sessionId || "unknown"] = {
-          last_extracted_at: new Date().toISOString(),
-          message_count: messages.length,
-          label: label,
-          topic_hint: topicHint,
-        };
-        const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
-        fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
+        facade.updateExtractionLog(sessionId || "unknown", messages, label);
       } catch (logErr: unknown) {
         const msg = `[quaid] extraction log update failed: ${(logErr as Error).message}`;
         if (isFailHardEnabled()) {

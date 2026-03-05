@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQuaidFacade } from "../core/facade.js";
 import type { QuaidFacadeDeps, LLMCallResult } from "../core/facade.js";
-import { readFile, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 
 const { mockExecFileSync } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
@@ -183,6 +185,51 @@ describe("QuaidFacade", () => {
     expect(facade.shouldEmitExtractionNotify("done:sess:reset:1:0:0", t0 + 95_000)).toBe(true);
     facade.clearExtractionNotifyHistory();
     expect(facade.shouldEmitExtractionNotify("done:sess:reset:1:0:0", t0 + 95_100)).toBe(true);
+  });
+
+  it("listRecentSessionsFromExtractionLog returns sorted extraction sessions", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-log-list-"));
+    await mkdir(path.join(workspace, "data"), { recursive: true });
+    await writeFile(
+      path.join(workspace, "data", "extraction-log.json"),
+      JSON.stringify({
+        older: { last_extracted_at: "2026-03-01T01:00:00.000Z", message_count: 8, label: "ResetSignal", topic_hint: "older topic" },
+        newer: { last_extracted_at: "2026-03-02T01:00:00.000Z", message_count: 12, label: "CompactionSignal", topic_hint: "newer topic" },
+      }),
+      "utf8",
+    );
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const sessions = facade.listRecentSessionsFromExtractionLog(5);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]).toMatchObject({
+      sessionId: "newer",
+      messageCount: 12,
+      label: "CompactionSignal",
+      topicHint: "newer topic",
+    });
+    expect(sessions[1].sessionId).toBe("older");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("updateExtractionLog writes topic hint from first meaningful user message", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-log-update-"));
+    await mkdir(path.join(workspace, "data"), { recursive: true });
+    await writeFile(path.join(workspace, "data", "extraction-log.json"), "{}", "utf8");
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    facade.updateExtractionLog(
+      "sess-topic",
+      [
+        { role: "user", content: "GatewayRestart: heartbeat" },
+        { role: "assistant", content: "ack" },
+        { role: "user", content: "Need to fix adapter boundary and extract facade logic" },
+      ],
+      "CompactionSignal",
+    );
+    const payload = JSON.parse(await readFile(path.join(workspace, "data", "extraction-log.json"), "utf8"));
+    expect(payload["sess-topic"]).toBeTruthy();
+    expect(payload["sess-topic"].label).toBe("CompactionSignal");
+    expect(payload["sess-topic"].topic_hint).toContain("Need to fix adapter boundary");
+    await rm(workspace, { recursive: true, force: true });
   });
 
   // -----------------------------------------------------------------------
