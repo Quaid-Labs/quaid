@@ -486,48 +486,6 @@ function resolveMostRecentSessionId(): string {
   return "";
 }
 
-function resolveMemoryStoreSessionId(ctx?: any): string {
-  const direct = String(ctx?.sessionId || "").trim();
-  if (direct) {
-    return direct;
-  }
-  const fromKey = resolveSessionIdFromSessionKey(String(ctx?.sessionKey || ""));
-  if (fromKey) {
-    return fromKey;
-  }
-  const mainFallback = resolveSessionIdFromSessionKey("agent:main:main");
-  if (mainFallback) {
-    return mainFallback;
-  }
-  const recentFallback = resolveMostRecentSessionId();
-  if (recentFallback) {
-    return recentFallback;
-  }
-  return "unknown";
-}
-
-function resolveLifecycleHookSessionId(event: any, ctx: any, messages: any[]): string {
-  const direct = String(event?.sessionId || ctx?.sessionId || "").trim();
-  if (direct) {
-    return direct;
-  }
-  const fromEventEntry = String(event?.sessionEntry?.sessionId || event?.previousSessionEntry?.sessionId || "").trim();
-  if (fromEventEntry) {
-    return fromEventEntry;
-  }
-  const eventSessionKey = String(event?.sessionKey || event?.targetSessionKey || "").trim();
-  const fromEventKey = resolveSessionIdFromSessionKey(eventSessionKey);
-  if (fromEventKey) {
-    return fromEventKey;
-  }
-  const ctxSessionKey = String(ctx?.sessionKey || "").trim();
-  const fromCtxKey = resolveSessionIdFromSessionKey(ctxSessionKey);
-  if (fromCtxKey) {
-    return fromCtxKey;
-  }
-  return facade.extractSessionId(messages, ctx);
-}
-
 function queueCompactionNotificationBatch(sessionId: string, stored: number, skipped: number, edges: number): void {
   const now = Date.now();
   if (!compactionNotifyBatchState) {
@@ -1362,6 +1320,8 @@ const facade = createQuaidFacade({
     }, EVENTS_EMIT_TIMEOUT_MS),
   callLLM: callConfiguredLLM,
   getGatewayDefaultProvider,
+  resolveSessionIdFromSessionKey,
+  resolveMostRecentSessionId,
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
@@ -2124,7 +2084,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
           try {
             const { text, category = "fact" } = params || {};
             // Resolve session ID from context
-            const sessionId = resolveMemoryStoreSessionId(ctx);
+            const sessionId = facade.resolveMemoryStoreSessionId(ctx);
             facade.addMemoryNote(sessionId, text, category);
             console.log(`[quaid] memory_store: queued note for session ${sessionId}: "${text.slice(0, 60)}..."`);
             return {
@@ -3171,7 +3131,7 @@ notify_memory_extraction(
       registerInternalHookChecked(`command:${commandAction}`, async (event: any, ctx: any) => {
         try {
           const messages: any[] = event?.messages || [];
-          const sessionId = resolveLifecycleHookSessionId(event, ctx, messages);
+          const sessionId = facade.resolveLifecycleHookSessionId(event, ctx, messages);
           if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
             return;
           }
@@ -3218,7 +3178,7 @@ notify_memory_extraction(
         const reason = event.reason || "unknown";
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
-        const extractionSessionId = resolveLifecycleHookSessionId(event, ctx, conversationMessages);
+        const extractionSessionId = facade.resolveLifecycleHookSessionId(event, ctx, conversationMessages);
         if (!extractionSessionId) {
           console.log(`[quaid] before_reset: skip unresolved session id session=${sessionId || "unknown"}`);
           return;

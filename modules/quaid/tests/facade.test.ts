@@ -586,6 +586,30 @@ describe("QuaidFacade", () => {
     ).toBe("d06519e2e0ce");
   });
 
+  it("resolveMemoryStoreSessionId falls back from context key to main/recent sessions", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      resolveSessionIdFromSessionKey: vi.fn((key: string) => {
+        if (key === "agent:main:main") return "main-session-id";
+        return "";
+      }),
+      resolveMostRecentSessionId: vi.fn(() => "recent-session-id"),
+    }));
+    expect(facade.resolveMemoryStoreSessionId({ sessionKey: "missing-key" })).toBe("main-session-id");
+  });
+
+  it("resolveLifecycleHookSessionId uses event key mapping when available", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      resolveSessionIdFromSessionKey: vi.fn((key: string) => key === "event-key" ? "resolved-event-session" : ""),
+    }));
+    expect(
+      facade.resolveLifecycleHookSessionId(
+        { sessionKey: "event-key" },
+        {},
+        [{ role: "user", content: "hello", timestamp: "2026-01-01T00:00:00.000Z" }],
+      ),
+    ).toBe("resolved-event-session");
+  });
+
   it("filterConversationMessages drops internal extraction payloads and maintenance prompts", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const filtered = facade.filterConversationMessages([

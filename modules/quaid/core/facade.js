@@ -512,6 +512,51 @@ function createQuaidFacade(deps) {
     }
     return createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
   }
+  function resolveMemoryStoreSessionId(ctx) {
+    const context = ctx && typeof ctx === "object" ? ctx : {};
+    const direct = String(context.sessionId || "").trim();
+    if (direct) {
+      return direct;
+    }
+    const fromKey = deps.resolveSessionIdFromSessionKey?.(String(context.sessionKey || "")) || "";
+    if (fromKey) {
+      return fromKey;
+    }
+    const mainFallback = deps.resolveSessionIdFromSessionKey?.("agent:main:main") || "";
+    if (mainFallback) {
+      return mainFallback;
+    }
+    const recentFallback = deps.resolveMostRecentSessionId?.() || "";
+    if (recentFallback) {
+      return recentFallback;
+    }
+    return "unknown";
+  }
+  function resolveLifecycleHookSessionId(event, ctx, messages) {
+    const eventObj = event && typeof event === "object" ? event : {};
+    const context = ctx && typeof ctx === "object" ? ctx : {};
+    const direct = String(eventObj.sessionId || context.sessionId || "").trim();
+    if (direct) {
+      return direct;
+    }
+    const fromEventEntry = String(
+      eventObj.sessionEntry?.sessionId || eventObj.previousSessionEntry?.sessionId || ""
+    ).trim();
+    if (fromEventEntry) {
+      return fromEventEntry;
+    }
+    const eventSessionKey = String(eventObj.sessionKey || eventObj.targetSessionKey || "").trim();
+    const fromEventKey = deps.resolveSessionIdFromSessionKey?.(eventSessionKey) || "";
+    if (fromEventKey) {
+      return fromEventKey;
+    }
+    const ctxSessionKey = String(context.sessionKey || "").trim();
+    const fromCtxKey = deps.resolveSessionIdFromSessionKey?.(ctxSessionKey) || "";
+    if (fromCtxKey) {
+      return fromCtxKey;
+    }
+    return extractSessionId(messages, ctx);
+  }
   function filterConversationMessages(messages) {
     if (!Array.isArray(messages) || messages.length === 0) return [];
     return messages.filter((msg) => {
@@ -1469,6 +1514,8 @@ ${lines.join("\n")}
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
     getMessageText,
     extractSessionId,
+    resolveMemoryStoreSessionId,
+    resolveLifecycleHookSessionId,
     filterConversationMessages,
     buildTranscript,
     extractFilePaths,

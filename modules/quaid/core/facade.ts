@@ -57,6 +57,8 @@ export type QuaidFacadeDeps = {
     timeoutMs?: number,
   ) => Promise<LLMCallResult | null>;
   getGatewayDefaultProvider?: () => string;
+  resolveSessionIdFromSessionKey?: (sessionKey: string) => string;
+  resolveMostRecentSessionId?: () => string;
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
@@ -197,6 +199,8 @@ export type QuaidFacade = {
   // --- Transcript/message utilities ---
   getMessageText: (message: unknown) => string;
   extractSessionId: (messages: unknown[], ctx?: unknown) => string;
+  resolveMemoryStoreSessionId: (ctx?: unknown) => string;
+  resolveLifecycleHookSessionId: (event: unknown, ctx: unknown, messages: unknown[]) => string;
   filterConversationMessages: (messages: unknown[]) => unknown[];
   buildTranscript: (messages: unknown[]) => string;
   extractFilePaths: (messages: unknown[]) => string[];
@@ -788,6 +792,57 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       firstTimestamp = Date.now().toString();
     }
     return createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
+  }
+
+  function resolveMemoryStoreSessionId(ctx?: unknown): string {
+    const context = ctx && typeof ctx === "object"
+      ? ctx as Record<string, unknown>
+      : {};
+    const direct = String(context.sessionId || "").trim();
+    if (direct) {
+      return direct;
+    }
+    const fromKey = deps.resolveSessionIdFromSessionKey?.(String(context.sessionKey || "")) || "";
+    if (fromKey) {
+      return fromKey;
+    }
+    const mainFallback = deps.resolveSessionIdFromSessionKey?.("agent:main:main") || "";
+    if (mainFallback) {
+      return mainFallback;
+    }
+    const recentFallback = deps.resolveMostRecentSessionId?.() || "";
+    if (recentFallback) {
+      return recentFallback;
+    }
+    return "unknown";
+  }
+
+  function resolveLifecycleHookSessionId(event: unknown, ctx: unknown, messages: unknown[]): string {
+    const eventObj = (event && typeof event === "object") ? event as Record<string, unknown> : {};
+    const context = (ctx && typeof ctx === "object") ? ctx as Record<string, unknown> : {};
+    const direct = String(eventObj.sessionId || context.sessionId || "").trim();
+    if (direct) {
+      return direct;
+    }
+    const fromEventEntry = String(
+      (eventObj.sessionEntry as Record<string, unknown> | undefined)?.sessionId
+      || (eventObj.previousSessionEntry as Record<string, unknown> | undefined)?.sessionId
+      || "",
+    ).trim();
+    if (fromEventEntry) {
+      return fromEventEntry;
+    }
+    const eventSessionKey = String(eventObj.sessionKey || eventObj.targetSessionKey || "").trim();
+    const fromEventKey = deps.resolveSessionIdFromSessionKey?.(eventSessionKey) || "";
+    if (fromEventKey) {
+      return fromEventKey;
+    }
+    const ctxSessionKey = String(context.sessionKey || "").trim();
+    const fromCtxKey = deps.resolveSessionIdFromSessionKey?.(ctxSessionKey) || "";
+    if (fromCtxKey) {
+      return fromCtxKey;
+    }
+    return extractSessionId(messages, ctx);
   }
 
   function filterConversationMessages(messages: unknown[]): unknown[] {
@@ -1868,6 +1923,8 @@ ${lines.join("\n")}
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
     getMessageText,
     extractSessionId,
+    resolveMemoryStoreSessionId,
+    resolveLifecycleHookSessionId,
     filterConversationMessages,
     buildTranscript,
     extractFilePaths,
