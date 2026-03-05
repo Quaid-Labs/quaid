@@ -128,6 +128,8 @@ export type QuaidFacade = {
   getConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
+  getCaptureTimeoutMinutes: () => number;
+  isInternalQuaidSession: (sessionId: unknown) => boolean;
   resolveOwner: (speaker?: string, channel?: string) => string;
   shouldNotifyFeature: (
     feature: "janitor" | "extraction" | "retrieval",
@@ -366,6 +368,19 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       }
     }
     return defaultOwner;
+  }
+
+  function getCaptureTimeoutMinutes(): number {
+    const capture = deps.getMemoryConfig().capture || {};
+    const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
+    const num = Number(raw);
+    return Number.isFinite(num) ? Math.max(0, num) : 120;
+  }
+
+  function isInternalQuaidSession(sessionId: unknown): boolean {
+    const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+    if (!sid) return false;
+    return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
   }
 
   function effectiveNotificationLevel(feature: "janitor" | "extraction" | "retrieval"): string {
@@ -1649,6 +1664,8 @@ ${lines.join("\n")}
     getConfig: deps.getMemoryConfig,
     isSystemEnabled: deps.isSystemEnabled,
     isFailHardEnabled: deps.isFailHardEnabled,
+    getCaptureTimeoutMinutes,
+    isInternalQuaidSession,
     resolveOwner,
     shouldNotifyFeature,
     shouldNotifyProjectCreate,

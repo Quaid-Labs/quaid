@@ -182,6 +182,17 @@ function createQuaidFacade(deps) {
     }
     return true;
   }
+  function getCaptureTimeoutMinutes() {
+    const capture = deps.getMemoryConfig().capture || {};
+    const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
+    const num = Number(raw);
+    return Number.isFinite(num) ? Math.max(0, num) : 120;
+  }
+  function isInternalQuaidSession(sessionId) {
+    const sid = typeof sessionId === "string" ? sessionId.trim() : "";
+    if (!sid) return false;
+    return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
+  }
   function shouldEmitExtractionNotify(key, now = Date.now()) {
     for (const [k, ts] of extractionNotifyHistory.entries()) {
       if (now - ts > EXTRACTION_NOTIFY_DEDUPE_MS) {
@@ -1279,6 +1290,8 @@ ${lines.join("\n")}
     getConfig: deps.getMemoryConfig,
     isSystemEnabled: deps.isSystemEnabled,
     isFailHardEnabled: deps.isFailHardEnabled,
+    getCaptureTimeoutMinutes,
+    isInternalQuaidSession,
     resolveOwner,
     shouldNotifyFeature,
     shouldNotifyProjectCreate,

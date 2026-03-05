@@ -88,6 +88,24 @@ describe("QuaidFacade", () => {
     expect(facade.isFailHardEnabled()).toBe(true);
   });
 
+  it("getCaptureTimeoutMinutes reads capture timeout from config", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        capture: { inactivityTimeoutMinutes: 45 },
+      })),
+    }));
+    expect(facade.getCaptureTimeoutMinutes()).toBe(45);
+  });
+
+  it("isInternalQuaidSession identifies internal utility sessions", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    expect(facade.isInternalQuaidSession("quaid-fast-123")).toBe(true);
+    expect(facade.isInternalQuaidSession("quaid-deep-456")).toBe(true);
+    expect(facade.isInternalQuaidSession("agent:main:quaid-llm-fast")).toBe(true);
+    expect(facade.isInternalQuaidSession("normal-session-id")).toBe(false);
+  });
+
   // -----------------------------------------------------------------------
   // Datastore bridge delegation
   // -----------------------------------------------------------------------

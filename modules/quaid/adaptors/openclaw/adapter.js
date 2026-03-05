@@ -245,12 +245,6 @@ function isMissingFileError(err) {
   const msg = String(err?.message || "");
   return msg.includes("ENOENT");
 }
-function getCaptureTimeoutMinutes() {
-  const capture = getMemoryConfig().capture || {};
-  const raw = capture.inactivityTimeoutMinutes ?? capture.inactivity_timeout_minutes ?? 120;
-  const num = Number(raw);
-  return Number.isFinite(num) ? Math.max(0, num) : 120;
-}
 function normalizeProvider(provider) {
   return String(provider || "").trim().toLowerCase();
 }
@@ -444,11 +438,6 @@ const configSchema = Type.Object({
   autoCapture: Type.Optional(Type.Boolean({ default: false })),
   autoRecall: Type.Optional(Type.Boolean({ default: true }))
 });
-function isInternalQuaidSession(sessionId) {
-  const sid = typeof sessionId === "string" ? sessionId.trim() : "";
-  if (!sid) return false;
-  return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
-}
 const MAX_INJECTION_LOG_FILES = 400;
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
 function getInjectionLogPath(sessionId) {
@@ -1333,7 +1322,7 @@ const quaidPlugin = {
       );
     });
     const beforeAgentStartHandler = async (event, ctx) => {
-      if (isInternalQuaidSession(ctx?.sessionId)) {
+      if (facade.isInternalQuaidSession(ctx?.sessionId)) {
         return;
       }
       try {
@@ -2359,7 +2348,7 @@ ${factsOutput || "No facts found."}` }],
     };
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
-      timeoutMinutes: getCaptureTimeoutMinutes(),
+      timeoutMinutes: facade.getCaptureTimeoutMinutes(),
       isBootstrapOnly: (messages) => facade.isResetBootstrapOnlyConversation(messages),
       readSessionMessages: (sessionId) => readMessagesForTimeoutSession(sessionId),
       listSessionActivity: () => listSessionActivityForTimeout(),
@@ -2753,7 +2742,7 @@ notify_memory_extraction(
     };
     registerInternalHookChecked("before_compaction", async (event, ctx) => {
       try {
-        if (isInternalQuaidSession(ctx?.sessionId)) {
+        if (facade.isInternalQuaidSession(ctx?.sessionId)) {
           return;
         }
         const messages = event.messages || [];
@@ -2856,7 +2845,7 @@ notify_memory_extraction(
         try {
           const messages = event?.messages || [];
           const sessionId = resolveLifecycleHookSessionId(event, ctx, messages);
-          if (!sessionId || isInternalQuaidSession(sessionId)) {
+          if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
             return;
           }
           if (!isSystemEnabled("memory")) {
@@ -2892,7 +2881,7 @@ notify_memory_extraction(
     }
     registerInternalHookChecked("before_reset", async (event, ctx) => {
       try {
-        if (isInternalQuaidSession(ctx?.sessionId)) {
+        if (facade.isInternalQuaidSession(ctx?.sessionId)) {
           return;
         }
         const messages = event.messages || [];
@@ -2976,7 +2965,7 @@ notify_memory_extraction(
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();
         const messageCount = Number(event?.messageCount || 0);
-        if (!sessionId || isInternalQuaidSession(sessionId)) {
+        if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
           return;
         }
         if (!isSystemEnabled("memory")) {
