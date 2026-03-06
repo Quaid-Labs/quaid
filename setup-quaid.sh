@@ -159,6 +159,42 @@ confirm() {
     [[ "$REPLY" =~ ^[Yy] ]]
 }
 
+# Run a command with a hard timeout and return combined stdout/stderr.
+# Exit status is preserved; timeout returns 124.
+_run_with_timeout_capture() {
+    local timeout_sec="$1"
+    shift
+    python3 - "$timeout_sec" "$@" <<'PY'
+import subprocess, sys
+
+timeout = float(sys.argv[1])
+cmd = sys.argv[2:]
+if not cmd:
+    raise SystemExit(2)
+
+try:
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    raise SystemExit(proc.returncode)
+except subprocess.TimeoutExpired as err:
+    out = err.stdout or ""
+    stderr = err.stderr or ""
+    if isinstance(out, bytes):
+        out = out.decode("utf-8", errors="replace")
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    if out:
+        sys.stdout.write(out)
+    if stderr:
+        sys.stderr.write(stderr)
+    sys.stderr.write(f"\n[quaid][installer] timeout after {int(timeout)}s: {' '.join(cmd)}\n")
+    raise SystemExit(124)
+PY
+}
+
 # --- Dependency installer helper ---
 # Attempts to install a package via Homebrew. Returns 0 on success, 1 on failure.
 # Usage: _try_brew_install "package-name" "Human-readable label"
@@ -390,17 +426,17 @@ PY
     for pair in "${hook_pairs[@]}"; do
         canonical="${pair%%:*}"
         alias="${pair##*:}"
-        if "$cli" hooks enable "$canonical" >/dev/null 2>&1; then
+        if _run_with_timeout_capture 25 "$cli" hooks enable "$canonical" >/dev/null 2>&1; then
             info "Hook enabled: ${canonical}"
             continue
         fi
-        last_err="$("$cli" hooks enable "$canonical" 2>&1 || true)"
+        last_err="$(_run_with_timeout_capture 25 "$cli" hooks enable "$canonical" 2>&1 || true)"
         if [[ "$last_err" =~ [Nn]ot\ found|[Uu]nknown|[Nn]o\ such\ hook|[Ii]nvalid ]]; then
-            if "$cli" hooks enable "$alias" >/dev/null 2>&1; then
+            if _run_with_timeout_capture 25 "$cli" hooks enable "$alias" >/dev/null 2>&1; then
                 info "Hook enabled: ${canonical}"
                 continue
             fi
-            last_err="$("$cli" hooks enable "$alias" 2>&1 || true)"
+            last_err="$(_run_with_timeout_capture 25 "$cli" hooks enable "$alias" 2>&1 || true)"
         fi
         if _force_enable_openclaw_hook "$canonical"; then
             warn "Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed: ${last_err})"
@@ -410,7 +446,7 @@ PY
         warn "Could not enable hook '${canonical}': ${last_err}"
     done
     if $forced_any; then
-        if "$cli" gateway restart >/dev/null 2>&1; then
+        if _run_with_timeout_capture 30 "$cli" gateway restart >/dev/null 2>&1; then
             info "Restarted OpenClaw gateway to apply forced hook state"
         else
             warn "Could not auto-restart OpenClaw gateway after forced hook enable. Restart manually."
@@ -776,7 +812,7 @@ _register_openclaw_quaid_plugin() {
     fi
 
     local install_out=""
-    if ! install_out="$("$cli" plugins install "$plugin_path" 2>&1)"; then
+    if ! install_out="$(_run_with_timeout_capture 60 "$cli" plugins install "$plugin_path" 2>&1)"; then
         if ! grep -Eiq "already installed|already exists" <<<"$install_out"; then
             warn "OpenClaw plugin install failed: ${install_out}"
             return 1
@@ -784,14 +820,14 @@ _register_openclaw_quaid_plugin() {
     fi
 
     local enable_out=""
-    if ! enable_out="$("$cli" plugins enable quaid 2>&1)"; then
+    if ! enable_out="$(_run_with_timeout_capture 45 "$cli" plugins enable quaid 2>&1)"; then
         if ! grep -Eiq "already enabled" <<<"$enable_out"; then
             warn "OpenClaw plugin enable failed: ${enable_out}"
             return 1
         fi
     fi
 
-    if ! "$cli" gateway restart >/dev/null 2>&1; then
+    if ! _run_with_timeout_capture 30 "$cli" gateway restart >/dev/null 2>&1; then
         warn "OpenClaw gateway restart failed after quaid plugin registration."
         return 1
     fi
