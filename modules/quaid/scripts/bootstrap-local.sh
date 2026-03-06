@@ -344,7 +344,9 @@ if [[ -f "${INSTALLER_MJS}" ]]; then
   echo "Running canonical installer: ${INSTALLER_MJS}"
   (
     cd "$(dirname "${INSTALLER_MJS}")"
-    QUAID_INSTALL_AGENT=1 node "${INSTALLER_MJS}" --agent --workspace "${WORKSPACE}" --owner-name "${INSTALL_OWNER_NAME}"
+    QUAID_INSTALL_AGENT=1 \
+    QUAID_INSTALL_SKIP_BIN_SHIM=1 \
+    node "${INSTALLER_MJS}" --agent --workspace "${WORKSPACE}" --owner-name "${INSTALL_OWNER_NAME}"
   )
 else
   echo "WARN: setup-quaid.mjs not found (source=${WORKTREE_SOURCE}, workspace=${WORKSPACE}); skipping installer run."
