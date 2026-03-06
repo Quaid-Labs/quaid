@@ -311,6 +311,7 @@ export type QuaidFacade = {
   // --- Transcript/message utilities ---
   getMessageText: (message: unknown) => string;
   extractSessionId: (messages: unknown[], ctx?: unknown) => string;
+  parseSessionIdFromTranscriptPath: (sessionFile: string) => string;
   resolveMemoryStoreSessionId: (ctx?: unknown) => string;
   resolveLifecycleHookSessionId: (event: unknown, ctx: unknown, messages: unknown[]) => string;
   readTimeoutSessionMessages: (sessionId: string) => unknown[];
@@ -1257,6 +1258,12 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       firstTimestamp = Date.now().toString();
     }
     return createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
+  }
+
+  function parseSessionIdFromTranscriptPath(sessionFile: string): string {
+    const base = path.basename(String(sessionFile || ""));
+    const match = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    return match ? match[0].toLowerCase() : "";
   }
 
   function resolveMemoryStoreSessionId(ctx?: unknown): string {
@@ -3061,6 +3068,7 @@ ${lines.join("\n")}
     renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
     getMessageText,
     extractSessionId,
+    parseSessionIdFromTranscriptPath,
     resolveMemoryStoreSessionId,
     resolveLifecycleHookSessionId,
     readTimeoutSessionMessages,

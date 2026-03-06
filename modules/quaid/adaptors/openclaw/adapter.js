@@ -959,11 +959,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     });
     console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");
     const runtimeEvents = api?.runtime?.events;
-    const parseSessionIdFromTranscriptPath = (sessionFile) => {
-      const base = path.basename(String(sessionFile || ""));
-      const match = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-      return match ? match[0].toLowerCase() : "";
-    };
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update) => {
         try {
@@ -973,7 +968,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (!Array.isArray(messages) || messages.length === 0) return;
           const detail = facade.detectLifecycleSignal(messages);
           if (!detail) return;
-          const sessionId = parseSessionIdFromTranscriptPath(sessionFile) || String(update?.sessionId || "").trim();
+          const sessionId = facade.parseSessionIdFromTranscriptPath(sessionFile) || String(update?.sessionId || "").trim();
           if (!sessionId) {
             console.log(`[quaid][signal] transcript_update missing session id file=${sessionFile}`);
             return;

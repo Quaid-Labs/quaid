@@ -838,6 +838,11 @@ export function createQuaidFacade(deps) {
         }
         return createHash("md5").update(firstTimestamp).digest("hex").substring(0, 12);
     }
+    function parseSessionIdFromTranscriptPath(sessionFile) {
+        const base = path.basename(String(sessionFile || ""));
+        const match = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+        return match ? match[0].toLowerCase() : "";
+    }
     function resolveMemoryStoreSessionId(ctx) {
         const context = ctx && typeof ctx === "object"
             ? ctx
@@ -2528,6 +2533,7 @@ ${lines.join("\n")}
         renderDatastoreGuidance: renderKnowledgeDatastoreGuidanceForAgents,
         getMessageText,
         extractSessionId,
+        parseSessionIdFromTranscriptPath,
         resolveMemoryStoreSessionId,
         resolveLifecycleHookSessionId,
         readTimeoutSessionMessages,
