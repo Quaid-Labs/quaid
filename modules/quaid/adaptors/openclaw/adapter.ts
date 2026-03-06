@@ -2087,21 +2087,18 @@ notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extra
         && facade.shouldNotifyFeature("extraction", "summary")
         && facade.shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
-          const trigger = triggerType === "unknown" ? "reset" : triggerType;
-          const mergedDetails: Record<string, string[]> = {};
-          for (const [f, items] of Object.entries(snippetDetails)) {
-            mergedDetails[f] = items.map((s) => `[snippet] ${s}`);
-          }
-          for (const [f, items] of Object.entries(journalDetails)) {
-            mergedDetails[f] = [...(mergedDetails[f] || []), ...items.map((s) => `[journal] ${s}`)];
-          }
-          const hasMerged = Object.keys(mergedDetails).length > 0;
+          const payload = facade.buildExtractionCompletionNotificationPayload({
+            stored,
+            skipped,
+            edgesCreated,
+            triggerType: String(triggerType),
+            factDetails,
+            snippetDetails,
+            journalDetails,
+            alwaysNotifyCompletion,
+          });
           const detailsPath = path.join(QUAID_TMP_DIR, `extraction-details-${Date.now()}.json`);
-          fs.writeFileSync(detailsPath, JSON.stringify({
-            stored, skipped, edges_created: edgesCreated, trigger, details: factDetails,
-            snippet_details: hasMerged ? mergedDetails : null,
-            always_notify: alwaysNotifyCompletion,
-          }), { mode: 0o600 });
+          fs.writeFileSync(detailsPath, JSON.stringify(payload), { mode: 0o600 });
           const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_extraction

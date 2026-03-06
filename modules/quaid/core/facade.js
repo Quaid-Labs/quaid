@@ -2465,6 +2465,25 @@ ${lines.join("\n")}
         saveInjectedMemoryKeys(uniqueSessionId, previouslyInjected, toInject, maxInjectionIdsPerSession);
         return { prependContext, toInject, uniqueSessionId };
     }
+    function buildExtractionCompletionNotificationPayload(params) {
+        const mergedDetails = {};
+        for (const [f, items] of Object.entries(params.snippetDetails || {})) {
+            mergedDetails[f] = items.map((s) => `[snippet] ${s}`);
+        }
+        for (const [f, items] of Object.entries(params.journalDetails || {})) {
+            mergedDetails[f] = [...(mergedDetails[f] || []), ...items.map((s) => `[journal] ${s}`)];
+        }
+        const hasMerged = Object.keys(mergedDetails).length > 0;
+        return {
+            stored: Number(params.stored || 0),
+            skipped: Number(params.skipped || 0),
+            edges_created: Number(params.edgesCreated || 0),
+            trigger: String(params.triggerType || "") === "unknown" ? "reset" : String(params.triggerType || "reset"),
+            details: Array.isArray(params.factDetails) ? params.factDetails : [],
+            snippet_details: hasMerged ? mergedDetails : null,
+            always_notify: Boolean(params.alwaysNotifyCompletion),
+        };
+    }
     function injectFullJournalContext(existingContext) {
         let prepend = existingContext;
         if (!deps.isSystemEnabled("journal"))
@@ -2591,6 +2610,7 @@ ${lines.join("\n")}
         formatRecallToolResponse,
         buildRecallNotificationPayload,
         prepareAutoInjectionContext,
+        buildExtractionCompletionNotificationPayload,
         injectFullJournalContext,
         isLowQualityQuery,
         filterMemoriesByPrivacy,

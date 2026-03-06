@@ -3014,6 +3014,43 @@ ${lines.join("\n")}
     return { prependContext, toInject, uniqueSessionId };
   }
 
+  function buildExtractionCompletionNotificationPayload(params: {
+    stored: number;
+    skipped: number;
+    edgesCreated: number;
+    triggerType: string;
+    factDetails: Array<{ text: string; status: string; reason?: string; edges?: string[] }>;
+    snippetDetails: Record<string, string[]>;
+    journalDetails: Record<string, string[]>;
+    alwaysNotifyCompletion: boolean;
+  }): {
+    stored: number;
+    skipped: number;
+    edges_created: number;
+    trigger: string;
+    details: Array<{ text: string; status: string; reason?: string; edges?: string[] }>;
+    snippet_details: Record<string, string[]> | null;
+    always_notify: boolean;
+  } {
+    const mergedDetails: Record<string, string[]> = {};
+    for (const [f, items] of Object.entries(params.snippetDetails || {})) {
+      mergedDetails[f] = items.map((s) => `[snippet] ${s}`);
+    }
+    for (const [f, items] of Object.entries(params.journalDetails || {})) {
+      mergedDetails[f] = [...(mergedDetails[f] || []), ...items.map((s) => `[journal] ${s}`)];
+    }
+    const hasMerged = Object.keys(mergedDetails).length > 0;
+    return {
+      stored: Number(params.stored || 0),
+      skipped: Number(params.skipped || 0),
+      edges_created: Number(params.edgesCreated || 0),
+      trigger: String(params.triggerType || "") === "unknown" ? "reset" : String(params.triggerType || "reset"),
+      details: Array.isArray(params.factDetails) ? params.factDetails : [],
+      snippet_details: hasMerged ? mergedDetails : null,
+      always_notify: Boolean(params.alwaysNotifyCompletion),
+    };
+  }
+
   function injectFullJournalContext(existingContext?: string): string | undefined {
     let prepend = existingContext;
     if (!deps.isSystemEnabled("journal")) return prepend;
@@ -3144,6 +3181,7 @@ ${lines.join("\n")}
     formatRecallToolResponse,
     buildRecallNotificationPayload,
     prepareAutoInjectionContext,
+    buildExtractionCompletionNotificationPayload,
     injectFullJournalContext,
     isLowQualityQuery,
     filterMemoriesByPrivacy,

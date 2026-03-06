@@ -1788,25 +1788,18 @@ notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extra
         );
       } else if (triggerType !== "recovery" && !suppressBacklogNotify && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion) && facade.shouldNotifyFeature("extraction", "summary") && facade.shouldEmitExtractionNotify(completionDedupeKey)) {
         try {
-          const trigger = triggerType === "unknown" ? "reset" : triggerType;
-          const mergedDetails = {};
-          for (const [f, items] of Object.entries(snippetDetails)) {
-            mergedDetails[f] = items.map((s) => `[snippet] ${s}`);
-          }
-          for (const [f, items] of Object.entries(journalDetails)) {
-            mergedDetails[f] = [...mergedDetails[f] || [], ...items.map((s) => `[journal] ${s}`)];
-          }
-          const hasMerged = Object.keys(mergedDetails).length > 0;
-          const detailsPath = path.join(QUAID_TMP_DIR, `extraction-details-${Date.now()}.json`);
-          fs.writeFileSync(detailsPath, JSON.stringify({
+          const payload = facade.buildExtractionCompletionNotificationPayload({
             stored,
             skipped,
-            edges_created: edgesCreated,
-            trigger,
-            details: factDetails,
-            snippet_details: hasMerged ? mergedDetails : null,
-            always_notify: alwaysNotifyCompletion
-          }), { mode: 384 });
+            edgesCreated,
+            triggerType: String(triggerType),
+            factDetails,
+            snippetDetails,
+            journalDetails,
+            alwaysNotifyCompletion
+          });
+          const detailsPath = path.join(QUAID_TMP_DIR, `extraction-details-${Date.now()}.json`);
+          fs.writeFileSync(detailsPath, JSON.stringify(payload), { mode: 384 });
           const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_extraction

@@ -943,6 +943,28 @@ describe("QuaidFacade", () => {
     expect(payload.source_breakdown.mode).toBe("auto_inject");
   });
 
+  it("buildExtractionCompletionNotificationPayload merges snippet and journal details", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const payload = facade.buildExtractionCompletionNotificationPayload({
+      stored: 2,
+      skipped: 1,
+      edgesCreated: 3,
+      triggerType: "unknown",
+      factDetails: [{ text: "fact", status: "stored" }],
+      snippetDetails: { "a.md": ["s1"] },
+      journalDetails: { "a.md": ["j1"], "b.md": ["j2"] },
+      alwaysNotifyCompletion: true,
+    });
+    expect(payload.trigger).toBe("reset");
+    expect(payload.snippet_details).toEqual({
+      "a.md": ["[snippet] s1", "[journal] j1"],
+      "b.md": ["[journal] j2"],
+    });
+    expect(payload.always_notify).toBe(true);
+    expect(payload.stored).toBe(2);
+    expect(payload.edges_created).toBe(3);
+  });
+
   it("queueCompactionExtractionSummary batches and flushes once", () => {
     vi.useFakeTimers();
     const notify = vi.fn();
