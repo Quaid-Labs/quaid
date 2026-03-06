@@ -1108,16 +1108,16 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const stats = getDatastoreStatsSync(60 * 1000);
     const completedAt = String(stats?.last_janitor_completed_at || "").trim();
     if (!completedAt) {
-      return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
+      return "[Memory] Janitor has never run. Please run janitor and ensure schedule is active.";
     }
     const ts = Date.parse(completedAt);
     if (Number.isNaN(ts)) return null;
     const hours = (Date.now() - ts) / (1000 * 60 * 60);
     if (hours > 72) {
-      return `[Quaid] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
+      return `[Memory] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
     }
     if (hours > 48) {
-      return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
+      return `[Memory] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
     }
     return null;
   }
@@ -1161,7 +1161,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         const raw = readObjectFile(options.pendingInstallMigrationPath);
         const lastInstallNudge = Number(state.lastInstallNudgeAt || 0);
         if (raw?.status === "pending" && now - lastInstallNudge > cooldown) {
-          nudges.push("Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?");
+          nudges.push("Hey, I see you just installed the memory system. Want me to help migrate important context into managed memory now?");
           state.lastInstallNudgeAt = now;
           changed = true;
         }
@@ -1177,7 +1177,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         const pendingCount = requests.filter((r: any) => r?.status === "pending").length;
         const lastApprovalNudge = Number(state.lastApprovalNudgeAt || 0);
         if (pendingCount > 0 && now - lastApprovalNudge > cooldown) {
-          nudges.push(`Quaid has ${pendingCount} pending approval request(s). Review pending maintenance approvals.`);
+          nudges.push(`Memory system has ${pendingCount} pending approval request(s). Review pending maintenance approvals.`);
           state.lastApprovalNudgeAt = now;
           changed = true;
         }
@@ -2107,7 +2107,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       if (sessionCount <= 0) return;
       const durationSec = Math.max(1, Math.round((flushState.lastUpdateMs - flushState.startedAtMs) / 1000));
       const summary = [
-        "**[Quaid]** 💾 **Compaction extraction summary:**",
+        "**[Memory]** 💾 **Compaction extraction summary:**",
         "",
         `• Sessions processed: ${sessionCount}`,
         `• Facts stored: ${flushState.stored}`,

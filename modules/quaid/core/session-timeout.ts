@@ -253,11 +253,15 @@ export class SessionTimeoutManager {
     } else {
       this.failHard = true;
     }
-    const configuredTimeoutMs = Number(process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS || "");
+    const configuredTimeoutMs = Number(
+      process.env.SESSION_EXTRACT_TIMEOUT_MS || process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS || "",
+    );
     this.extractTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
       ? Math.floor(configuredTimeoutMs)
       : 600_000;
-    const configuredSignalRetries = Number(process.env.QUAID_SIGNAL_MAX_RETRIES || "");
+    const configuredSignalRetries = Number(
+      process.env.SIGNAL_MAX_RETRIES || process.env.QUAID_SIGNAL_MAX_RETRIES || "",
+    );
     this.maxSignalRetries = Number.isFinite(configuredSignalRetries) && configuredSignalRetries >= 0
       ? Math.floor(configuredSignalRetries)
       : 3;

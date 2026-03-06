@@ -41,8 +41,13 @@ from lib.runtime_context import (
     send_notification as _ctx_send_notification,
 )
 
-# Branding prefix for all notifications
-QUAID_HEADER = "**[Quaid]**"
+# Shared prefix for all notifications (brand-neutral by default)
+SYSTEM_LABEL = (
+    os.environ.get("MEMORY_SYSTEM_NAME")
+    or os.environ.get("QUAID_SYSTEM_NAME")
+    or "Memory"
+).strip()
+SYSTEM_HEADER = f"**[{SYSTEM_LABEL}]**"
 MAX_NOTIFY_CHARS = 3500
 logger = logging.getLogger(__name__)
 
@@ -160,7 +165,7 @@ def _check_janitor_health() -> Optional[str]:
         if hours_ago > 72:
             return (
                 f"⚠️ **Janitor hasn't run in {int(hours_ago)}h!** Memories are piling up.\n"
-                "Check your HEARTBEAT.md schedule and ensure the bot can reach Quaid."
+                "Check your HEARTBEAT.md schedule and ensure the bot can reach the memory system."
             )
         elif hours_ago > 48:
             return (
@@ -284,7 +289,7 @@ def notify_memory_recall(
         return False
 
     # Build notification message
-    msg_parts = [f"{QUAID_HEADER} 🧠 **Memory Context Loaded:**", ""]
+    msg_parts = [f"{SYSTEM_HEADER} 🧠 **Memory Context Loaded:**", ""]
 
     if direct_matches:
         msg_parts.append("**Direct Matches:**")
@@ -358,7 +363,7 @@ def notify_docs_search(
     if not results:
         return False
 
-    msg_parts = [f"{QUAID_HEADER} 📚 **Docs Search Results:**", ""]
+    msg_parts = [f"{SYSTEM_HEADER} 📚 **Docs Search Results:**", ""]
     msg_parts.append(f"_Query: \"{query}\"_")
     msg_parts.append("")
 
@@ -432,13 +437,13 @@ def notify_memory_extraction(
                 "extraction": "extraction",
                 "new": "new",
             }.get(trigger, trigger)
-            message = f"{QUAID_HEADER} 💾 Memory Extraction ({trigger_label}): No facts found."
+            message = f"{SYSTEM_HEADER} 💾 Memory Extraction ({trigger_label}): No facts found."
         else:
-            message = f"{QUAID_HEADER} 💾 Memory Extraction: No facts found."
+            message = f"{SYSTEM_HEADER} 💾 Memory Extraction: No facts found."
         return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("extraction"))
 
     full_text = _notify_full_text()
-    msg_parts = [f"{QUAID_HEADER} 💾 **Memory Extraction:**", ""]
+    msg_parts = [f"{SYSTEM_HEADER} 💾 **Memory Extraction:**", ""]
 
     # Trigger info (full verbosity only)
     if show_trigger:
@@ -532,7 +537,7 @@ def notify_memory_extraction(
     for idx, chunk in enumerate(chunks):
         if idx > 0:
             chunk = (
-                f"{QUAID_HEADER} 💾 **Memory Extraction (cont. {idx + 1}/{len(chunks)}):**\n\n"
+                f"{SYSTEM_HEADER} 💾 **Memory Extraction (cont. {idx + 1}/{len(chunks)}):**\n\n"
                 f"{chunk}"
             )
         if notify_user(chunk, dry_run=dry_run, channel_override=channel):
@@ -542,7 +547,7 @@ def notify_memory_extraction(
 
 def format_janitor_summary_message(metrics: dict, applied_changes: dict) -> str:
     """Format janitor summary content for either direct or delayed delivery."""
-    msg_parts = [f"{QUAID_HEADER} 🧹 **Nightly Janitor Complete:**", ""]
+    msg_parts = [f"{SYSTEM_HEADER} 🧹 **Nightly Janitor Complete:**", ""]
 
     # Duration and stats
     duration = metrics.get("total_duration_seconds", 0)
@@ -624,7 +629,7 @@ def format_daily_memories_message(memories: list) -> Optional[str]:
         return None
 
     full_text = _notify_full_text()
-    msg_parts = [f"{QUAID_HEADER} 📚 **Today's New Memories:**", ""]
+    msg_parts = [f"{SYSTEM_HEADER} 📚 **Today's New Memories:**", ""]
     msg_parts.append(f"_{len(memories)} memories added today_")
     msg_parts.append("")
 
