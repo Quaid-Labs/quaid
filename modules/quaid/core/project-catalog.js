@@ -36,6 +36,12 @@ function getProjectDescriptionFromProjectMd(deps, homeDir) {
   }
 }
 function createProjectCatalogReader(deps) {
+  function getProjectDefinitions() {
+    const config = deps.getMemoryConfig();
+    const defs = config?.projects?.definitions;
+    if (!defs || typeof defs !== "object") return {};
+    return defs;
+  }
   function shouldFailHard() {
     try {
       return deps.isFailHardEnabled?.() === true;
@@ -53,9 +59,7 @@ function createProjectCatalogReader(deps) {
   }
   function getProjectNames() {
     try {
-      const configPath = deps.path.join(deps.workspace, "config", "memory.json");
-      const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
-      return Object.keys(configData?.projects?.definitions || {});
+      return Object.keys(getProjectDefinitions());
     } catch (err) {
       handleCatalogError("failed to load project names", err);
       return [];
@@ -63,9 +67,7 @@ function createProjectCatalogReader(deps) {
   }
   function getProjectCatalog() {
     try {
-      const configPath = deps.path.join(deps.workspace, "config", "memory.json");
-      const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
-      const defs = configData?.projects?.definitions || {};
+      const defs = getProjectDefinitions();
       return Object.entries(defs).map(([name, def]) => {
         const description = String(def?.description || "").trim() || getProjectDescriptionFromToolsMd(deps, String(def?.homeDir || "").trim()) || getProjectDescriptionFromProjectMd(deps, String(def?.homeDir || "").trim()) || "No description";
         return { name, description };

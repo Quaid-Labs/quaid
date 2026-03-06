@@ -420,6 +420,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     workspace: deps.workspace,
     fs,
     path,
+    getMemoryConfig: deps.getMemoryConfig,
     isFailHardEnabled: deps.isFailHardEnabled,
   });
 

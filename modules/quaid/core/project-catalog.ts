@@ -5,6 +5,7 @@ type ProjectCatalogReaderDeps = {
   workspace: string;
   fs: typeof fsType;
   path: typeof pathType;
+  getMemoryConfig: () => any;
   isFailHardEnabled?: () => boolean;
 };
 
@@ -56,6 +57,13 @@ function getProjectDescriptionFromProjectMd(
 }
 
 export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
+  function getProjectDefinitions(): Record<string, any> {
+    const config = deps.getMemoryConfig();
+    const defs = config?.projects?.definitions;
+    if (!defs || typeof defs !== "object") return {};
+    return defs as Record<string, any>;
+  }
+
   function shouldFailHard(): boolean {
     try {
       return deps.isFailHardEnabled?.() === true;
@@ -75,9 +83,7 @@ export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
 
   function getProjectNames(): string[] {
     try {
-      const configPath = deps.path.join(deps.workspace, "config", "memory.json");
-      const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
-      return Object.keys(configData?.projects?.definitions || {});
+      return Object.keys(getProjectDefinitions());
     } catch (err: unknown) {
       handleCatalogError("failed to load project names", err);
       return [];
@@ -86,9 +92,7 @@ export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
 
   function getProjectCatalog(): Array<{ name: string; description: string }> {
     try {
-      const configPath = deps.path.join(deps.workspace, "config", "memory.json");
-      const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
-      const defs = configData?.projects?.definitions || {};
+      const defs = getProjectDefinitions();
       return Object.entries(defs).map(([name, def]: [string, any]) => {
         const description = String(def?.description || "").trim()
           || getProjectDescriptionFromToolsMd(deps, String(def?.homeDir || "").trim())

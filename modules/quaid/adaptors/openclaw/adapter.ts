@@ -1817,13 +1817,10 @@ notify_user(f"📁 Project registered: {project_label}")
                   details: { error: "invalid_session_id" },
                 };
               }
-              // Try to load session JSONL
-              const sessionsDir = path.join(os.homedir(), '.openclaw', 'sessions');
-              const sessionPath = path.join(sessionsDir, `${sid}.jsonl`);
-
-              if (fs.existsSync(sessionPath)) {
-                try {
-                  const messages = parseSessionMessagesJsonl(sessionPath);
+              // Try to load session transcript through facade-owned session source resolution.
+              try {
+                const messages = facade.readTimeoutSessionMessages(sid);
+                if (messages.length > 0) {
                   const transcript = facade.buildTranscript(messages);
                   // Return last 10k chars (most recent part of conversation)
                   const truncated = transcript.length > 10000
@@ -1833,9 +1830,9 @@ notify_user(f"📁 Project registered: {project_label}")
                     content: [{ type: "text", text: `Session ${sid} (${messages.length} messages):\n\n${truncated}` }],
                     details: { session_id: sid, message_count: messages.length, truncated: transcript.length > 10000 },
                   };
-                } catch {
-                  // File disappeared or unreadable — fall through to facts fallback
                 }
+              } catch {
+                // Session file unavailable — fall through to facts fallback.
               }
 
               // Fallback: return facts extracted from this session

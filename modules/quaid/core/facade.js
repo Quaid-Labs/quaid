@@ -41,6 +41,7 @@ export function createQuaidFacade(deps) {
         workspace: deps.workspace,
         fs,
         path,
+        getMemoryConfig: deps.getMemoryConfig,
         isFailHardEnabled: deps.isFailHardEnabled,
     });
     // -------------------------------------------------------------------------
