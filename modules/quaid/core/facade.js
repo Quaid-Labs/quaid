@@ -1631,6 +1631,24 @@ export function createQuaidFacade(deps) {
         });
         return `\n\nSTALENESS WARNING: The following docs may be outdated:\n${warnings.join("\n")}\nConsider running: python3 docs_updater.py update-stale --apply`;
     }
+    function buildDocsSearchNotificationPayload(query, results) {
+        const docResults = [];
+        const lines = String(results || "").split("\n");
+        for (const line of lines) {
+            const match = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
+            if (!match)
+                continue;
+            docResults.push({
+                doc: match[1].split("/").pop() || match[1],
+                section: match[2].trim(),
+                score: parseFloat(match[3]),
+            });
+        }
+        return {
+            query: String(query || ""),
+            results: docResults,
+        };
+    }
     function computeDynamicK() {
         const nodeCount = getActiveNodeCount();
         if (nodeCount < 10)
@@ -2468,6 +2486,7 @@ ${lines.join("\n")}
         docsListProjects: (args = ["--json"]) => deps.execDocsRegistry("list-projects", args),
         docsCheckStaleness: () => deps.execDocsUpdater("check", ["--json"]),
         getDocsStalenessWarning,
+        buildDocsSearchNotificationPayload,
         // Memory notes
         addMemoryNote,
         getAndClearMemoryNotes,

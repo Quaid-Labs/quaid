@@ -426,6 +426,19 @@ describe("QuaidFacade", () => {
     expect(warning).toBe("");
   });
 
+  it("buildDocsSearchNotificationPayload parses doc search lines", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const payload = facade.buildDocsSearchNotificationPayload(
+      "auth flow",
+      "1. ~/docs/ARCH.md > login flow (similarity: 0.82)\n2. docs/API.md > tokens (similarity: 0.73)\nnoise",
+    );
+    expect(payload.query).toBe("auth flow");
+    expect(payload.results).toEqual([
+      { doc: "ARCH.md", section: "login flow", score: 0.82 },
+      { doc: "API.md", section: "tokens", score: 0.73 },
+    ]);
+  });
+
   // -----------------------------------------------------------------------
   // Recall (routes through knowledgeEngine)
   // -----------------------------------------------------------------------
