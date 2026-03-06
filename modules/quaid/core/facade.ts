@@ -2899,10 +2899,19 @@ ${lines.join("\n")}
       mode: "tool" | "auto_inject";
     };
   } {
-    const vectorCount = results.filter((r) => isVectorRecallResult(r)).length;
-    const graphCount = results.filter((r) => (r.via || "") === "graph" || r.category === "graph").length;
-    const journalCount = results.filter((r) => (r.via || "") === "journal").length;
-    const projectCount = results.filter((r) => (r.via || "") === "project").length;
+    const classified = results.map((r) => {
+      const via = String(r.via || "").trim().toLowerCase();
+      const category = String(r.category || "").trim().toLowerCase();
+      if (via === "graph" || category === "graph") return "graph" as const;
+      if (via === "journal") return "journal" as const;
+      if (via === "project") return "project" as const;
+      // Backward-compatible default: missing/unknown via counts as vector.
+      return "vector" as const;
+    });
+    const vectorCount = classified.filter((k) => k === "vector").length;
+    const graphCount = classified.filter((k) => k === "graph").length;
+    const journalCount = classified.filter((k) => k === "journal").length;
+    const projectCount = classified.filter((k) => k === "project").length;
     return {
       memories: results.map((m) => ({
         text: m.text,
