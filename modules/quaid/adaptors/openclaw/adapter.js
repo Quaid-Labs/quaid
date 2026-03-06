@@ -4,8 +4,9 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
-import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
-import { createQuaidFacade } from "../../core/facade.js";
+import {
+  createQuaidFacade
+} from "../../core/facade.js";
 import { createMemoryConfigResolver } from "../../core/memory-config.js";
 import { spawnWithTimeout } from "../../core/spawn-with-timeout.js";
 import { spawnDetachedScript } from "../../core/spawn-detached-script.js";
@@ -124,7 +125,9 @@ function getDatastoreStatsSync() {
     return parsed;
   } catch (err) {
     const msg = `[quaid] datastore stats read failed: ${String(err?.message || err)}`;
-    if (isFailHardEnabled()) {
+    const retrieval = memoryConfigResolver.getMemoryConfig().retrieval || {};
+    const failHard = typeof retrieval.fail_hard === "boolean" ? retrieval.fail_hard : typeof retrieval.failHard === "boolean" ? retrieval.failHard : true;
+    if (failHard) {
       throw new Error(msg, { cause: err });
     }
     console.warn(msg);
@@ -719,6 +722,10 @@ const quaidPlugin = {
       validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
     }
     const registeredApi = /* @__PURE__ */ new Set(["openclaw_adapter_entry"]);
+    const getMemoryConfig2 = () => facade.getConfig();
+    const isSystemEnabled2 = (system) => facade.isSystemEnabled(system);
+    const isFailHardEnabled2 = () => facade.isFailHardEnabled();
+    const readSessionMessagesFile = (sessionFile) => facade.readSessionMessagesFile(sessionFile);
     const onChecked = (eventName, handler, options) => {
       if (contractDecl.enabled) {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
@@ -756,7 +763,7 @@ const quaidPlugin = {
       }
     } catch (err) {
       console.error("[quaid] Datastore initialization failed:", err.message);
-      if (isFailHardEnabled()) {
+      if (isFailHardEnabled2()) {
         throw err;
       }
     }
@@ -788,7 +795,7 @@ notify_user(${JSON.stringify(message)})
 `);
         }
       } catch (err) {
-        if (isFailHardEnabled()) {
+        if (isFailHardEnabled2()) {
           throw err;
         }
         console.warn(`[quaid] Janitor nudge dispatch failed: ${String(err?.message || err)}`);
@@ -796,14 +803,14 @@ notify_user(${JSON.stringify(message)})
       try {
         facade.maybeQueueJanitorHealthAlert({ statePath: JANITOR_NUDGE_STATE_PATH });
       } catch (err) {
-        if (isFailHardEnabled()) {
+        if (isFailHardEnabled2()) {
           throw err;
         }
         console.warn(`[quaid] Janitor health alert dispatch failed: ${String(err?.message || err)}`);
       }
       timeoutManager.onAgentStart();
       event.prependContext = facade.injectFullJournalContext(event.prependContext);
-      const autoInjectEnabled = process.env.MEMORY_AUTO_INJECT === "1" || getMemoryConfig().retrieval?.autoInject === true;
+      const autoInjectEnabled = process.env.MEMORY_AUTO_INJECT === "1" || getMemoryConfig2().retrieval?.autoInject === true;
       if (!autoInjectEnabled) {
         return;
       }
@@ -832,7 +839,7 @@ notify_user(${JSON.stringify(message)})
         const autoInjectK = facade.computeDynamicK();
         const useTotalRecallForInject = facade.isPreInjectionPassEnabled();
         const routerFailOpen = Boolean(
-          getMemoryConfig().retrieval?.routerFailOpen ?? getMemoryConfig().retrieval?.router_fail_open ?? true
+          getMemoryConfig2().retrieval?.routerFailOpen ?? getMemoryConfig2().retrieval?.router_fail_open ?? true
         );
         const injectLimit = autoInjectK;
         const injectIntent = "general";
@@ -902,7 +909,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         try {
           const sessionFile = String(update?.sessionFile || "").trim();
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
-          const messages = parseSessionMessagesJsonl(sessionFile);
+          const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
           const detail = facade.detectLifecycleSignal(messages);
           if (!detail) return;
@@ -925,7 +932,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       });
       console.log("[quaid] Registered runtime.events.onSessionTranscriptUpdate lifecycle fallback");
     }
-    if (isSystemEnabled("memory")) {
+    if (isSystemEnabled2("memory")) {
       registerToolChecked(
         () => ({
           name: "memory_recall",
@@ -1072,7 +1079,7 @@ ${recallStoreGuidance}`,
               const ranking = options.ranking;
               const datastoreOptions = options.datastoreOptions;
               const routerFailOpen = Boolean(
-                options.routing?.failOpen ?? getMemoryConfig().retrieval?.routerFailOpen ?? getMemoryConfig().retrieval?.router_fail_open ?? true
+                options.routing?.failOpen ?? getMemoryConfig2().retrieval?.routerFailOpen ?? getMemoryConfig2().retrieval?.router_fail_open ?? true
               );
               if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
                 return {
@@ -1083,8 +1090,8 @@ ${recallStoreGuidance}`,
               const limit = Math.min(requestedLimit ?? dynamicK, maxLimit);
               const depth = Math.min(Math.max(graphDepth, 1), 3);
               const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-              const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
-              console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${facade.getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
+              const selectedStores = Array.isArray(datastores) ? datastores : void 0;
+              console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${facade.getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${Array.isArray(selectedStores) ? selectedStores.join(",") : "auto"}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
               const results = await recallMemories({
                 query,
                 limit,
@@ -1157,7 +1164,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               };
             } catch (err) {
               console.error("[quaid] memory_recall error:", err);
-              if (isFailHardEnabled()) {
+              if (isFailHardEnabled2()) {
                 throw err;
               }
               const errObj = err instanceof Error ? err : new Error(String(err));
@@ -1199,7 +1206,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
               };
             } catch (err) {
               console.error("[quaid] memory_store error:", err);
-              if (isFailHardEnabled()) {
+              if (isFailHardEnabled2()) {
                 throw err;
               }
               return {
@@ -1244,7 +1251,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
               };
             } catch (err) {
               console.error("[quaid] memory_forget error:", err);
-              if (isFailHardEnabled()) {
+              if (isFailHardEnabled2()) {
                 throw err;
               }
               return {
@@ -1329,7 +1336,7 @@ notify_docs_search(data['query'], data['results'])
             };
           } catch (err) {
             console.error("[quaid] projects_search error:", err);
-            if (isFailHardEnabled()) {
+            if (isFailHardEnabled2()) {
               throw err;
             }
             return {
@@ -1603,7 +1610,7 @@ ${factsOutput || "No facts found."}` }],
       workspace: WORKSPACE,
       logDir: path.join(QUAID_LOGS_DIR, "quaid"),
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
-      failHardEnabled: () => isFailHardEnabled(),
+      failHardEnabled: () => isFailHardEnabled2(),
       isBootstrapOnly: (messages) => facade.isResetBootstrapOnlyConversation(messages),
       shouldSkipText: (text) => shouldSkipTranscriptText(text),
       readSessionMessages: (sessionId) => facade.readTimeoutSessionMessages(sessionId),
@@ -1651,9 +1658,8 @@ ${factsOutput || "No facts found."}` }],
         waitForExtraction = false,
         sourceTag = "unknown"
       } = opts;
-      const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
       console.log(
-        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} domain=${JSON.stringify(domain)} domainBoost=${JSON.stringify(domainBoost || {})} project=${project || "any"} waitForExtraction=${waitForExtraction}`
+        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${Array.isArray(datastores) ? datastores.join(",") : "auto"} routed=${routeStores} reasoning=${reasoning} intent=${intent} domain=${JSON.stringify(domain)} domainBoost=${JSON.stringify(domainBoost || {})} project=${project || "any"} waitForExtraction=${waitForExtraction}`
       );
       const queuedExtraction = facade.getQueuedExtractionPromise();
       if (waitForExtraction && queuedExtraction) {
@@ -1666,7 +1672,7 @@ ${factsOutput || "No facts found."}` }],
             })
           ]);
         } catch (err) {
-          if (isFailHardEnabled()) {
+          if (isFailHardEnabled2()) {
             throw err;
           }
           console.warn(
@@ -1681,7 +1687,7 @@ ${factsOutput || "No facts found."}` }],
         limit,
         expandGraph,
         graphDepth,
-        datastores: selectedStores,
+        datastores,
         routeStores,
         reasoning,
         intent,
@@ -1718,7 +1724,7 @@ ${factsOutput || "No facts found."}` }],
         hasMeaningfulUserContent,
         bootTimeMs: ADAPTER_BOOT_TIME_MS,
         backlogNotifyStaleMs: BACKLOG_NOTIFY_STALE_MS,
-        showProcessingStart: getMemoryConfig().notifications?.showProcessingStart !== false
+        showProcessingStart: getMemoryConfig2().notifications?.showProcessingStart !== false
       });
       if (startNotify) {
         spawnNotifyScript(`
@@ -1825,7 +1831,7 @@ notify_memory_extraction(
         facade.updateExtractionLog(sessionId || "unknown", messages, label);
       } catch (logErr) {
         const msg = `[quaid] extraction log update failed: ${logErr.message}`;
-        if (isFailHardEnabled()) {
+        if (isFailHardEnabled2()) {
           throw new Error(msg);
         }
         console.warn(msg);
@@ -1846,7 +1852,7 @@ notify_memory_extraction(
           console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
         }
         const doExtraction = async () => {
-          if (isSystemEnabled("memory")) {
+          if (isSystemEnabled2("memory")) {
             if (conversationMessages.length > 0) {
               if (facade.shouldProcessLifecycleSignal(extractionSessionId, {
                 label: "CompactionSignal",
@@ -1888,7 +1894,7 @@ notify_memory_extraction(
           try {
             await facade.updateDocsFromTranscript(conversationMessages, "Compaction", uniqueSessionId, QUAID_TMP_DIR);
           } catch (err) {
-            if (isFailHardEnabled()) {
+            if (isFailHardEnabled2()) {
               throw err;
             }
             console.error("[quaid] Compaction doc update failed:", err.message);
@@ -1896,24 +1902,24 @@ notify_memory_extraction(
           try {
             await facade.emitProjectEvent(conversationMessages, "compact", uniqueSessionId, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
           } catch (err) {
-            if (isFailHardEnabled()) {
+            if (isFailHardEnabled2()) {
               throw err;
             }
             console.error("[quaid] Compaction project event failed:", err.message);
           }
-          if (isSystemEnabled("memory") && uniqueSessionId) {
+          if (isSystemEnabled2("memory") && uniqueSessionId) {
             facade.resetInjectionDedupAfterCompaction(uniqueSessionId);
             console.log(`[quaid] Recorded compaction timestamp for session ${uniqueSessionId}, reset injection dedup`);
           }
         };
         facade.queueExtraction(doExtraction, "compaction").catch((doErr) => {
           console.error(`[quaid][compaction] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
-          if (isFailHardEnabled()) {
+          if (isFailHardEnabled2()) {
             throw doErr;
           }
         });
       } catch (err) {
-        if (isFailHardEnabled()) {
+        if (isFailHardEnabled2()) {
           throw err;
         }
         console.error("[quaid] before_compaction hook failed:", err);
@@ -1930,7 +1936,7 @@ notify_memory_extraction(
           if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
             return;
           }
-          if (!isSystemEnabled("memory")) {
+          if (!isSystemEnabled2("memory")) {
             return;
           }
           const signature = `hook:command_${commandAction}`;
@@ -1951,7 +1957,7 @@ notify_memory_extraction(
           });
           console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:${commandAction}`);
         } catch (err) {
-          if (isFailHardEnabled()) {
+          if (isFailHardEnabled2()) {
             throw err;
           }
           console.error(`[quaid] command:${commandAction} hook failed:`, err);
@@ -1982,7 +1988,7 @@ notify_memory_extraction(
         }
         console.log(`[quaid] before_reset hook triggered (reason: ${reason}), ${messages.length} messages, session=${sessionId || "unknown"}`);
         const doExtraction = async () => {
-          if (isSystemEnabled("memory")) {
+          if (isSystemEnabled2("memory")) {
             if (facade.shouldProcessLifecycleSignal(extractionSessionId, {
               label: "ResetSignal",
               source: "hook",
@@ -2009,7 +2015,7 @@ notify_memory_extraction(
             try {
               await facade.updateDocsFromTranscript(conversationMessages, "Reset", uniqueSessionId, QUAID_TMP_DIR);
             } catch (err) {
-              if (isFailHardEnabled()) {
+              if (isFailHardEnabled2()) {
                 throw err;
               }
               console.error("[quaid] Reset doc update failed:", err.message);
@@ -2017,7 +2023,7 @@ notify_memory_extraction(
             try {
               await facade.emitProjectEvent(conversationMessages, "reset", uniqueSessionId, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
             } catch (err) {
-              if (isFailHardEnabled()) {
+              if (isFailHardEnabled2()) {
                 throw err;
               }
               console.error("[quaid] Reset project event failed:", err.message);
@@ -2029,12 +2035,12 @@ notify_memory_extraction(
         console.log(`[quaid][reset] queue_extraction session=${sessionId || "unknown"} chain_active=${chainActive}`);
         facade.queueExtraction(doExtraction, "reset").catch((doErr) => {
           console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String(doErr?.message || doErr)}`);
-          if (isFailHardEnabled()) {
+          if (isFailHardEnabled2()) {
             throw doErr;
           }
         });
       } catch (err) {
-        if (isFailHardEnabled()) {
+        if (isFailHardEnabled2()) {
           throw err;
         }
         console.error("[quaid] before_reset hook failed:", err);
@@ -2051,7 +2057,7 @@ notify_memory_extraction(
         if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
           return;
         }
-        if (!isSystemEnabled("memory")) {
+        if (!isSystemEnabled2("memory")) {
           return;
         }
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
@@ -2073,7 +2079,7 @@ notify_memory_extraction(
           `[quaid][signal] queued ResetSignal session=${sessionId} source=session_end key=${sessionKey || "unknown"}`
         );
       } catch (err) {
-        if (isFailHardEnabled()) {
+        if (isFailHardEnabled2()) {
           throw err;
         }
         console.error("[quaid] session_end hook failed:", err);

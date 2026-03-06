@@ -325,6 +325,7 @@ export type QuaidFacade = {
   parseSessionIdFromTranscriptPath: (sessionFile: string) => string;
   resolveMemoryStoreSessionId: (ctx?: unknown) => string;
   resolveLifecycleHookSessionId: (event: unknown, ctx: unknown, messages: unknown[]) => string;
+  readSessionMessagesFile: (sessionFile: string) => unknown[];
   readTimeoutSessionMessages: (sessionId: string) => unknown[];
   listTimeoutSessionActivity: () => Array<{ sessionId: string; lastActivityMs: number }>;
   resolveSessionForCompaction: (sessionId?: string) => string | null;
@@ -3272,6 +3273,7 @@ ${lines.join("\n")}
     parseSessionIdFromTranscriptPath,
     resolveMemoryStoreSessionId,
     resolveLifecycleHookSessionId,
+    readSessionMessagesFile: (sessionFile) => deps.readSessionMessagesFile(sessionFile),
     readTimeoutSessionMessages,
     listTimeoutSessionActivity,
     resolveSessionForCompaction,

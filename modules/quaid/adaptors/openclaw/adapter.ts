@@ -12,8 +12,17 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
-import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
-import { createQuaidFacade } from "../../core/facade.js";
+import {
+  type DomainFilter,
+  type KnowledgeDatastore,
+} from "../../core/knowledge-stores.js";
+import {
+  createQuaidFacade,
+  type ExtractionTrigger,
+  type FacadeRecallOptions,
+  type MemoryResult,
+  type ModelTier,
+} from "../../core/facade.js";
 import { createMemoryConfigResolver } from "../../core/memory-config.js";
 import { spawnWithTimeout } from "../../core/spawn-with-timeout.js";
 import { spawnDetachedScript } from "../../core/spawn-detached-script.js";
@@ -146,7 +155,13 @@ function getDatastoreStatsSync(): Record<string, any> | null {
     return parsed as Record<string, any>;
   } catch (err: unknown) {
     const msg = `[quaid] datastore stats read failed: ${String((err as Error)?.message || err)}`;
-    if (isFailHardEnabled()) {
+    const retrieval = memoryConfigResolver.getMemoryConfig().retrieval || {};
+    const failHard = typeof retrieval.fail_hard === "boolean"
+      ? retrieval.fail_hard
+      : typeof retrieval.failHard === "boolean"
+        ? retrieval.failHard
+        : true;
+    if (failHard) {
       throw new Error(msg, { cause: err as Error });
     }
     console.warn(msg);
@@ -217,9 +232,6 @@ function isMissingFileError(err: unknown): boolean {
   const msg = String((err as Error | undefined)?.message || "");
   return msg.includes("ENOENT");
 }
-
-type ModelTier = "deep" | "fast";
-type ExtractionTrigger = "compaction" | "reset" | "new" | "recovery" | "timeout" | "unknown";
 
 function getGatewayDefaultProvider(): string {
   try {
@@ -739,29 +751,6 @@ function spawnNotifyScript(scriptBody: string): boolean {
 // Memory Operations
 // ============================================================================
 
-type MemoryResult = {
-  text: string;
-  category: string;
-  similarity: number;
-  domains?: string[];
-  sourceType?: string;
-  verified?: boolean;
-  id?: string;
-  extractionConfidence?: number;
-  createdAt?: string;
-  validFrom?: string;
-  validUntil?: string;
-  privacy?: string;
-  ownerId?: string;
-  relation?: string; // For graph-related nodes
-  direction?: string; // "out" or "in" for graph edges
-  sourceName?: string; // Source node name for graph edges
-  via?: string; // "vector" | "graph" | "journal" | "project"
-};
-
-type KnowledgeDatastore = "vector" | "vector_basic" | "vector_technical" | "graph" | "journal" | "project";
-type DomainFilter = Record<string, boolean>;
-
 function preprocessTranscriptText(text: string): string {
   return String(text || "")
     .replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "")
@@ -876,27 +865,10 @@ const recallStoreGuidance = facade.renderDatastoreGuidance();
 const getProjectNames = () => facade.getProjectNames();
 
 // Shared recall abstraction — used by both memory_recall tool and auto-inject
-interface RecallOptions {
-  query: string;
-  limit?: number;
-  expandGraph?: boolean;
-  graphDepth?: number;
-  domain?: DomainFilter;
-  domainBoost?: Record<string, number> | string[];
-  project?: string;
-  datastores?: KnowledgeDatastore[];
-  routeStores?: boolean;
-  reasoning?: "fast" | "deep";
-  intent?: "general" | "agent_actions" | "relationship" | "technical";
-  ranking?: { sourceTypeBoosts?: Record<string, number> };
-  dateFrom?: string;
-  dateTo?: string;
-  docs?: string[];
-  datastoreOptions?: Partial<Record<KnowledgeDatastore, Record<string, unknown>>>;
-  failOpen?: boolean;
+type RecallOptions = FacadeRecallOptions & {
   waitForExtraction?: boolean;  // wait on facade extraction queue (tool=yes, inject=no)
   sourceTag?: "tool" | "auto_inject" | "unknown";
-}
+};
 
 
 // ============================================================================
@@ -921,6 +893,11 @@ const quaidPlugin = {
       validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
     }
     const registeredApi = new Set<string>(["openclaw_adapter_entry"]);
+    const getMemoryConfig = () => facade.getConfig();
+    const isSystemEnabled = (system: "memory" | "journal" | "projects" | "workspace") =>
+      facade.isSystemEnabled(system);
+    const isFailHardEnabled = () => facade.isFailHardEnabled();
+    const readSessionMessagesFile = (sessionFile: string) => facade.readSessionMessagesFile(sessionFile);
     const onChecked = (eventName: string, handler: any, options?: any) => {
       if (contractDecl.enabled) {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
@@ -1158,7 +1135,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         try {
           const sessionFile = String(update?.sessionFile || "").trim();
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
-          const messages = parseSessionMessagesJsonl(sessionFile);
+          const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
           const detail = facade.detectLifecycleSignal(messages);
           if (!detail) return;
@@ -1352,9 +1329,9 @@ ${recallStoreGuidance}`,
             const limit = Math.min(requestedLimit ?? dynamicK, maxLimit);
             const depth = Math.min(Math.max(graphDepth, 1), 3); // Clamp between 1 and 3
             const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-            const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
+            const selectedStores = Array.isArray(datastores) ? datastores : undefined;
 
-            console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${facade.getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${selectedStores.join(",")}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
+            console.log(`[quaid] memory_recall: query="${query?.slice(0, 50)}...", requestedLimit=${requestedLimit}, dynamicK=${dynamicK} (${facade.getActiveNodeCount()} nodes), maxLimit=${maxLimit}, finalLimit=${limit}, expandGraph=${expandGraph}, graphDepth=${depth}, requestedDatastores=${Array.isArray(selectedStores) ? selectedStores.join(",") : "auto"}, routed=${shouldRouteStores}, reasoning=${reasoning}, intent=${intent}, domain=${JSON.stringify(domain)}, domainBoost=${JSON.stringify(domainBoost || {})}, project=${project || "any"}, dateFrom=${dateFrom}, dateTo=${dateTo}`);
             const results = await recallMemories({
               query, limit, expandGraph, graphDepth: depth, datastores: selectedStores, routeStores: shouldRouteStores, reasoning, intent, ranking, domain, domainBoost,
               project, datastoreOptions,
@@ -1912,10 +1889,8 @@ notify_user(f"📁 Project registered: {project_label}")
         query, limit = 10, expandGraph = false,
         graphDepth = 1, datastores, routeStores = false, reasoning = "fast", intent = "general", ranking, domain = { all: true }, domainBoost, project, dateFrom, dateTo, docs, datastoreOptions, waitForExtraction = false, sourceTag = "unknown"
       } = opts;
-      const selectedStores = normalizeKnowledgeDatastores(datastores, expandGraph);
-
       console.log(
-        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${selectedStores.join(",")} routed=${routeStores} reasoning=${reasoning} intent=${intent} domain=${JSON.stringify(domain)} domainBoost=${JSON.stringify(domainBoost || {})} project=${project || "any"} waitForExtraction=${waitForExtraction}`
+        `[quaid][recall] source=${sourceTag} query="${String(query || "").slice(0, 120)}" limit=${limit} expandGraph=${expandGraph} graphDepth=${graphDepth} datastores=${Array.isArray(datastores) ? datastores.join(",") : "auto"} routed=${routeStores} reasoning=${reasoning} intent=${intent} domain=${JSON.stringify(domain)} domainBoost=${JSON.stringify(domainBoost || {})} project=${project || "any"} waitForExtraction=${waitForExtraction}`
       );
 
       // Wait for in-flight extraction if requested
@@ -1944,7 +1919,7 @@ notify_user(f"📁 Project registered: {project_label}")
         limit,
         expandGraph,
         graphDepth,
-        datastores: selectedStores,
+        datastores,
         routeStores,
         reasoning,
         intent,

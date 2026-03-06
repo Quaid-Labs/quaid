@@ -2687,6 +2687,7 @@ ${lines.join("\n")}
         parseSessionIdFromTranscriptPath,
         resolveMemoryStoreSessionId,
         resolveLifecycleHookSessionId,
+        readSessionMessagesFile: (sessionFile) => deps.readSessionMessagesFile(sessionFile),
         readTimeoutSessionMessages,
         listTimeoutSessionActivity,
         resolveSessionForCompaction,
