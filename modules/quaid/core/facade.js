@@ -221,11 +221,11 @@ export function createQuaidFacade(deps) {
         if (configuredProvider && configuredProvider !== "default") {
             return configuredProvider;
         }
-        const gatewayProvider = getDefaultLLMProvider();
-        if (gatewayProvider) {
-            return gatewayProvider;
+        const defaultProvider = getDefaultLLMProvider();
+        if (defaultProvider) {
+            return defaultProvider;
         }
-        throw new Error("models.llmProvider is 'default' but no active gateway provider was resolved. " +
+        throw new Error("models.llmProvider is 'default' but no active default provider was resolved. " +
             "Set models.llmProvider explicitly (anthropic/openai/openai-compatible/claude-code).");
     }
     function getEffectiveTierProvider(tier) {
@@ -517,7 +517,7 @@ export function createQuaidFacade(deps) {
         const message = String(request?.message || "").trim();
         const kind = String(request?.kind || "janitor");
         const priority = String(request?.priority || "normal");
-        const source = String(request?.source || "quaid_adapter");
+        const source = String(request?.source || deps.adapterName || "adapter");
         if (!message)
             return false;
         try {
@@ -676,7 +676,7 @@ export function createQuaidFacade(deps) {
             message: issue,
             kind: "janitor_health",
             priority: "high",
-            source: "quaid_adapter",
+            source: String(deps.adapterName || "adapter"),
         });
         if (!queued)
             return false;
