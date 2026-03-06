@@ -30,7 +30,17 @@ def write_snippet_entry(
     )
 
 
+def run_soul_snippets_review(*args, **kwargs):
+    return _soul_snippets.run_soul_snippets_review(*args, **kwargs)
+
+
+def run_journal_distillation(*args, **kwargs):
+    return _soul_snippets.run_journal_distillation(*args, **kwargs)
+
+
 __all__ = [
+    "run_journal_distillation",
+    "run_soul_snippets_review",
     "write_journal_entry",
     "write_snippet_entry",
 ]
