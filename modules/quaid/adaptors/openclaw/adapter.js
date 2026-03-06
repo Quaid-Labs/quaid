@@ -1354,14 +1354,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             let projectMdContent = "";
             if (project) {
               try {
-                const cfg = JSON.parse(fs.readFileSync(path.join(WORKSPACE, "config/memory.json"), "utf-8"));
-                const homeDir = cfg?.projects?.definitions?.[project]?.homeDir;
-                if (homeDir) {
-                  const mdPath = path.join(WORKSPACE, homeDir, "PROJECT.md");
-                  if (fs.existsSync(mdPath)) {
-                    projectMdContent = fs.readFileSync(mdPath, "utf-8");
-                  }
-                }
+                projectMdContent = facade.loadProjectMarkdown(project);
               } catch (err) {
                 console.warn(`[quaid] projects_search PROJECT.md preload failed: ${String(err?.message || err)}`);
               }

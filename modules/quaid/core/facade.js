@@ -1649,6 +1649,24 @@ export function createQuaidFacade(deps) {
             results: docResults,
         };
     }
+    function loadProjectMarkdown(project) {
+        const projectName = String(project || "").trim();
+        if (!projectName)
+            return "";
+        try {
+            const cfg = deps.getMemoryConfig();
+            const homeDir = String(cfg?.projects?.definitions?.[projectName]?.homeDir || "").trim();
+            if (!homeDir)
+                return "";
+            const mdPath = path.join(deps.workspace, homeDir, "PROJECT.md");
+            if (!fs.existsSync(mdPath))
+                return "";
+            return fs.readFileSync(mdPath, "utf-8");
+        }
+        catch {
+            return "";
+        }
+    }
     function computeDynamicK() {
         const nodeCount = getActiveNodeCount();
         if (nodeCount < 10)
@@ -2497,6 +2515,7 @@ ${lines.join("\n")}
         docsListProjects: (args = ["--json"]) => deps.execDocsRegistry("list-projects", args),
         docsCheckStaleness: () => deps.execDocsUpdater("check", ["--json"]),
         getDocsStalenessWarning,
+        loadProjectMarkdown,
         buildDocsSearchNotificationPayload,
         // Memory notes
         addMemoryNote,

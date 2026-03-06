@@ -439,6 +439,23 @@ describe("QuaidFacade", () => {
     ]);
   });
 
+  it("loadProjectMarkdown reads PROJECT.md for configured project home", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-md-"));
+    const projectDir = path.join(workspace, "projects", "alpha");
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(path.join(projectDir, "PROJECT.md"), "# Alpha\nproject notes", "utf8");
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        projects: { definitions: { alpha: { homeDir: "projects/alpha" } } },
+      })),
+    }));
+    const projectMd = facade.loadProjectMarkdown("alpha");
+    expect(projectMd).toContain("# Alpha");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   // -----------------------------------------------------------------------
   // Recall (routes through knowledgeEngine)
   // -----------------------------------------------------------------------

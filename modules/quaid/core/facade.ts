@@ -283,6 +283,7 @@ export type QuaidFacade = {
   docsListProjects: (args?: string[]) => Promise<string>;
   docsCheckStaleness: () => Promise<string>;
   getDocsStalenessWarning: () => Promise<string>;
+  loadProjectMarkdown: (project: string) => string;
   buildDocsSearchNotificationPayload: (
     query: string,
     results: string,
@@ -2124,6 +2125,21 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     };
   }
 
+  function loadProjectMarkdown(project: string): string {
+    const projectName = String(project || "").trim();
+    if (!projectName) return "";
+    try {
+      const cfg = deps.getMemoryConfig();
+      const homeDir = String(cfg?.projects?.definitions?.[projectName]?.homeDir || "").trim();
+      if (!homeDir) return "";
+      const mdPath = path.join(deps.workspace, homeDir, "PROJECT.md");
+      if (!fs.existsSync(mdPath)) return "";
+      return fs.readFileSync(mdPath, "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
   function computeDynamicK(): number {
     const nodeCount = getActiveNodeCount();
     if (nodeCount < 10) return 5;
@@ -3029,6 +3045,7 @@ ${lines.join("\n")}
     docsListProjects: (args = ["--json"]) => deps.execDocsRegistry("list-projects", args),
     docsCheckStaleness: () => deps.execDocsUpdater("check", ["--json"]),
     getDocsStalenessWarning,
+    loadProjectMarkdown,
     buildDocsSearchNotificationPayload,
 
     // Memory notes
