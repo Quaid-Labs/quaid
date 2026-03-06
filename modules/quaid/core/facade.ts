@@ -2119,7 +2119,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const staleSources = Array.isArray(entry?.stale_sources) ? entry.stale_sources : [];
       return `  ${k} (${Number.isFinite(gapHours) ? gapHours : 0}h behind: ${staleSources.join(", ")})`;
     });
-    return `\n\nSTALENESS WARNING: The following docs may be outdated:\n${warnings.join("\n")}\nConsider running: python3 docs_updater.py update-stale --apply`;
+    return `\n\nSTALENESS WARNING: The following docs may be outdated:\n${warnings.join("\n")}\nConsider running: docs staleness updater (update-stale --apply)`;
   }
 
   function buildDocsSearchNotificationPayload(

@@ -53,7 +53,7 @@ function createProjectCatalogReader(deps) {
   }
   function getProjectNames() {
     try {
-      const configPath = deps.path.join(deps.workspace, "config/memory.json");
+      const configPath = deps.path.join(deps.workspace, "config", "memory.json");
       const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
       return Object.keys(configData?.projects?.definitions || {});
     } catch (err) {
@@ -63,7 +63,7 @@ function createProjectCatalogReader(deps) {
   }
   function getProjectCatalog() {
     try {
-      const configPath = deps.path.join(deps.workspace, "config/memory.json");
+      const configPath = deps.path.join(deps.workspace, "config", "memory.json");
       const configData = JSON.parse(deps.fs.readFileSync(configPath, "utf-8"));
       const defs = configData?.projects?.definitions || {};
       return Object.entries(defs).map(([name, def]) => {
