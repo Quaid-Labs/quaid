@@ -852,6 +852,40 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("prepareAutoInjectionContext applies privacy filter, dedup, and context merge", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-auto-inject-"));
+    await mkdir(path.join(workspace, ".quaid", "runtime", "injection"), { recursive: true });
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    const baseMemories = [
+      { text: "public fact", category: "fact", similarity: 0.9 },
+      { text: "other private", category: "fact", similarity: 0.8, privacy: "private", ownerId: "alice" },
+    ];
+
+    const first = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto" },
+      existingPrependContext: "seed",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+    expect(first).toBeTruthy();
+    expect(first?.toInject.map((m) => m.text)).toEqual(["public fact"]);
+    expect(first?.prependContext).toContain("seed");
+    expect(first?.prependContext).toContain("public fact");
+
+    const second = facade.prepareAutoInjectionContext({
+      allMemories: baseMemories,
+      eventMessages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+      context: { sessionId: "sess-auto" },
+      existingPrependContext: "seed",
+      injectLimit: 5,
+      maxInjectionIdsPerSession: 100,
+    });
+    expect(second).toBeNull();
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("formatRecallToolResponse returns grouped text and source breakdown", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const out = facade.formatRecallToolResponse([

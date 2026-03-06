@@ -139,6 +139,12 @@ export type JanitorHealthAlertOptions = {
   nowMs?: number;
 };
 
+export type AutoInjectionPreparation = {
+  prependContext: string;
+  toInject: MemoryResult[];
+  uniqueSessionId: string;
+};
+
 export type JanitorNudgeOptions = {
   statePath: string;
   pendingInstallMigrationPath: string;
@@ -2967,6 +2973,47 @@ ${lines.join("\n")}
     };
   }
 
+  function prepareAutoInjectionContext(params: {
+    allMemories: MemoryResult[];
+    eventMessages: any[];
+    context?: any;
+    existingPrependContext?: string;
+    injectLimit: number;
+    maxInjectionIdsPerSession: number;
+  }): AutoInjectionPreparation | null {
+    const {
+      allMemories,
+      eventMessages,
+      context,
+      existingPrependContext,
+      injectLimit,
+      maxInjectionIdsPerSession,
+    } = params;
+    if (!Array.isArray(allMemories) || allMemories.length === 0) return null;
+    const currentOwner = resolveOwner();
+    const filtered = filterMemoriesByPrivacy(allMemories, currentOwner);
+    if (!filtered.length) return null;
+
+    const uniqueSessionId = extractSessionId(eventMessages || [], context);
+    const previouslyInjected = loadInjectedMemoryKeys(uniqueSessionId);
+    const newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
+    const toInject = newMemories.slice(0, injectLimit);
+    if (!toInject.length) return null;
+
+    const formatted = formatMemoriesForInjection(toInject);
+    const prependContext = existingPrependContext
+      ? `${existingPrependContext}\n\n${formatted}`
+      : formatted;
+
+    saveInjectedMemoryKeys(
+      uniqueSessionId,
+      previouslyInjected,
+      toInject,
+      maxInjectionIdsPerSession,
+    );
+    return { prependContext, toInject, uniqueSessionId };
+  }
+
   function injectFullJournalContext(existingContext?: string): string | undefined {
     let prepend = existingContext;
     if (!deps.isSystemEnabled("journal")) return prepend;
@@ -3096,6 +3143,7 @@ ${lines.join("\n")}
     formatMemoriesForInjection,
     formatRecallToolResponse,
     buildRecallNotificationPayload,
+    prepareAutoInjectionContext,
     injectFullJournalContext,
     isLowQualityQuery,
     filterMemoriesByPrivacy,

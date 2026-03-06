@@ -2437,6 +2437,34 @@ ${lines.join("\n")}
             },
         };
     }
+    function prepareAutoInjectionContext(params) {
+        const {
+            allMemories,
+            eventMessages,
+            context,
+            existingPrependContext,
+            injectLimit,
+            maxInjectionIdsPerSession,
+        } = params;
+        if (!Array.isArray(allMemories) || allMemories.length === 0)
+            return null;
+        const currentOwner = resolveOwner();
+        const filtered = filterMemoriesByPrivacy(allMemories, currentOwner);
+        if (!filtered.length)
+            return null;
+        const uniqueSessionId = extractSessionId(eventMessages || [], context);
+        const previouslyInjected = loadInjectedMemoryKeys(uniqueSessionId);
+        const newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
+        const toInject = newMemories.slice(0, injectLimit);
+        if (!toInject.length)
+            return null;
+        const formatted = formatMemoriesForInjection(toInject);
+        const prependContext = existingPrependContext
+            ? `${existingPrependContext}\n\n${formatted}`
+            : formatted;
+        saveInjectedMemoryKeys(uniqueSessionId, previouslyInjected, toInject, maxInjectionIdsPerSession);
+        return { prependContext, toInject, uniqueSessionId };
+    }
     function injectFullJournalContext(existingContext) {
         let prepend = existingContext;
         if (!deps.isSystemEnabled("journal"))
@@ -2562,6 +2590,7 @@ ${lines.join("\n")}
         formatMemoriesForInjection,
         formatRecallToolResponse,
         buildRecallNotificationPayload,
+        prepareAutoInjectionContext,
         injectFullJournalContext,
         isLowQualityQuery,
         filterMemoriesByPrivacy,

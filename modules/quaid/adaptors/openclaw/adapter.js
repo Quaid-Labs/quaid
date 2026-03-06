@@ -844,18 +844,17 @@ notify_user(${JSON.stringify(message)})
           waitForExtraction: false,
           sourceTag: "auto_inject"
         });
-        if (!allMemories.length) return;
-        const currentOwner = facade.resolveOwner();
-        const filtered = facade.filterMemoriesByPrivacy(allMemories, currentOwner);
-        const uniqueSessionId = facade.extractSessionId(event.messages || [], ctx);
-        const previouslyInjected = facade.loadInjectedMemoryKeys(uniqueSessionId);
-        const newMemories = filtered.filter((m) => !previouslyInjected.includes(m.id || m.text));
-        const toInject = newMemories.slice(0, injectLimit);
-        if (!toInject.length) return;
-        const formatted = facade.formatMemoriesForInjection(toInject);
-        event.prependContext = event.prependContext ? `${event.prependContext}
-
-${formatted}` : formatted;
+        const injection = facade.prepareAutoInjectionContext({
+          allMemories,
+          eventMessages: event.messages || [],
+          context: ctx,
+          existingPrependContext: event.prependContext,
+          injectLimit,
+          maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
+        });
+        if (!injection) return;
+        const { toInject, prependContext } = injection;
+        event.prependContext = prependContext;
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
         try {
           if (facade.shouldNotifyFeature("retrieval", "summary")) {
@@ -881,12 +880,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         } catch (notifyErr) {
           console.warn(`[quaid] Auto-inject recall notification skipped: ${notifyErr.message}`);
         }
-        facade.saveInjectedMemoryKeys(
-          uniqueSessionId,
-          previouslyInjected,
-          toInject,
-          MAX_INJECTION_IDS_PER_SESSION
-        );
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
       }
