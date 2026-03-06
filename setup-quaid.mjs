@@ -509,10 +509,12 @@ function runCliWithTimeout(bin, args, timeoutMs = 30_000) {
   });
 }
 
-function renderCliFailure(res) {
+function renderCliFailure(res, timeoutMs = null) {
   const sig = String(res?.signal || "");
   if (sig === "SIGTERM" || sig === "SIGKILL") {
-    return `timed out after ${Number(res?.timeout || 0) || "configured"}ms`;
+    return timeoutMs && Number.isFinite(timeoutMs)
+      ? `timed out after ${Number(timeoutMs)}ms`
+      : "timed out";
   }
   return String(res?.stderr || res?.stdout || "").trim() || "unknown error";
 }
@@ -910,7 +912,7 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
 
   const uninstallRes = runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000);
   if (uninstallRes.status !== 0) {
-    const msg = renderCliFailure(uninstallRes);
+    const msg = renderCliFailure(uninstallRes, 45_000);
     const norm = normalize(msg);
     const unmanaged = norm.includes("not managed by plugins config/install records");
     if (!norm.includes("not installed") && !norm.includes("not found") && !norm.includes("missing") && !unmanaged) {
@@ -921,14 +923,14 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
 
   const installRes = runCliWithTimeout(cli, ["plugins", "install", stagedPluginPath], 60_000);
   if (installRes.status !== 0) {
-    const msg = renderCliFailure(installRes);
+    const msg = renderCliFailure(installRes, 60_000);
     const norm = normalize(msg);
     if ((norm.includes("already installed") || norm.includes("already exists")) && removeStaleExtensionDir()) {
       const retry = runCliWithTimeout(cli, ["plugins", "install", stagedPluginPath], 60_000);
       if (retry.status === 0) {
         // continue
       } else {
-        const retryMsg = renderCliFailure(retry);
+        const retryMsg = renderCliFailure(retry, 60_000);
         return { ok: false, reason: `plugins install failed after stale-dir cleanup: ${retryMsg.trim() || "unknown error"}` };
       }
     } else {
@@ -938,7 +940,7 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
 
   const enableRes = runCliWithTimeout(cli, ["plugins", "enable", "quaid"], 45_000);
   if (enableRes.status !== 0) {
-    const msg = renderCliFailure(enableRes);
+    const msg = renderCliFailure(enableRes, 45_000);
     const norm = normalize(msg);
     if (!norm.includes("already enabled")) {
       return { ok: false, reason: `plugins enable failed: ${msg.trim() || "unknown error"}` };
@@ -949,7 +951,7 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   // Some builds accept install/enable config writes but still do not expose the plugin at runtime.
   const listRes = runCliWithTimeout(cli, ["plugins", "list", "--json"], 20_000);
   if (listRes.status !== 0) {
-    const msg = renderCliFailure(listRes);
+    const msg = renderCliFailure(listRes, 20_000);
     return { ok: false, reason: `plugins list failed after enable: ${msg || "unknown error"}` };
   }
   const listRaw = String(listRes.stdout || "");
@@ -965,7 +967,7 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
 
   const restartRes = runCliWithTimeout(cli, ["gateway", "restart"], 30_000);
   if (restartRes.status !== 0) {
-    const msg = renderCliFailure(restartRes);
+    const msg = renderCliFailure(restartRes, 30_000);
     return { ok: false, reason: `gateway restart failed: ${msg || "unknown error"}` };
   }
 
@@ -2873,7 +2875,7 @@ function enableRequiredOpenClawHooks() {
         enabled = true;
         break;
       }
-      lastErr = renderCliFailure(res);
+      lastErr = renderCliFailure(res, 25_000);
       // Not found or unknown hook name: try alias fallback.
       if (/not found|unknown|no such hook|invalid/i.test(lastErr)) continue;
       // Eligible/state failures should still be surfaced but do not fail install.
