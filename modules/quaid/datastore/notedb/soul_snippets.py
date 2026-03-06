@@ -1221,6 +1221,10 @@ def apply_decisions(
     processed_snippets: Dict[str, List[str]] = {}
     valid_actions = {"FOLD", "REWRITE", "DISCARD"}
 
+    single_target: Optional[str] = None
+    if len(all_snippets) == 1:
+        single_target = next(iter(all_snippets.keys()))
+
     for decision in decisions:
         filename = decision.get("file", "")
         snippet_idx = decision.get("snippet_index", 0) - 1
@@ -1231,12 +1235,20 @@ def apply_decisions(
             action = "DISCARD"
 
         if filename not in all_snippets:
-            logger.warning(
-                "Ignoring snippet decision for unknown file '%s' (known=%s)",
-                filename,
-                ",".join(sorted(all_snippets.keys())),
-            )
-            continue
+            if single_target is not None:
+                logger.warning(
+                    "Remapping snippet decision file '%s' to sole target '%s'",
+                    filename,
+                    single_target,
+                )
+                filename = single_target
+            else:
+                logger.warning(
+                    "Ignoring snippet decision for unknown file '%s' (known=%s)",
+                    filename,
+                    ",".join(sorted(all_snippets.keys())),
+                )
+                continue
 
         file_data = all_snippets[filename]
         snippets = file_data["snippets"]

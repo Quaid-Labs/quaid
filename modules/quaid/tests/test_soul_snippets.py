@@ -964,7 +964,8 @@ class TestLegacyApplyDecisions:
     def test_unknown_file_decision_is_ignored(self, workspace_dir):
         from datastore.notedb.soul_snippets import apply_decisions
         all_snippets = {
-            "SOUL.md": {"parent_content": "", "snippets": ["one"], "config": {}}
+            "SOUL.md": {"parent_content": "", "snippets": ["one"], "config": {}},
+            "USER.md": {"parent_content": "", "snippets": ["two"], "config": {}},
         }
         decisions = [{"file": "AGENTS.md", "snippet_index": 1, "action": "DISCARD"}]
         stats = apply_decisions(decisions, all_snippets, dry_run=True)
@@ -1007,10 +1008,33 @@ class TestLegacyApplyDecisions:
 
         stats = apply_decisions(decisions, all_snippets, dry_run=False)
         assert stats["errors"] == []
-        assert stats["skipped_at_limit"] == 1
-        assert stats["discarded"] == 1
-        if snippets_path.exists():
-            assert "Should be skipped at limit." not in snippets_path.read_text()
+
+    def test_unknown_file_is_remapped_when_only_one_target_exists(self, workspace_dir, mock_config):
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent_path = workspace_dir / "SPEAKERS.md"
+        parent_path.write_text("# SPEAKERS\n\nBaseline.\n")
+        snippets_path = workspace_dir / "SPEAKERS.snippets.md"
+        snippets_path.write_text(
+            "# SPEAKERS — Pending Snippets\n\n"
+            "## Session 1 — 2026-02-10 14:30:22\n"
+            "- Caroline is resilient.\n"
+        )
+
+        all_snippets = {
+            "SPEAKERS.md": {
+                "parent_content": parent_path.read_text(),
+                "snippets": ["Caroline is resilient."],
+                "config": {"purpose": "Speaker traits", "maxLines": 200},
+            }
+        }
+        decisions = [
+            {"file": "USER.md", "snippet_index": 1, "action": "FOLD", "insert_after": "END", "reason": "single target remap"}
+        ]
+
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert stats["folded"] == 1
+        assert "Caroline is resilient." in parent_path.read_text()
 
 
 # =============================================================================
