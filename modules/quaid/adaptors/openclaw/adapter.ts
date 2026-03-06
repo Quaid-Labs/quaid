@@ -1006,57 +1006,7 @@ notify_user(${JSON.stringify(message)})
       // Cancel inactivity timer — agent is active again
       timeoutManager.onAgentStart();
 
-      // Journal injection (full soul mode) — gated by journal system
-      if (!isSystemEnabled("journal")) {
-        // Skip journal injection entirely
-      } else {
-      try {
-        const journalConfig = getMemoryConfig().docs?.journal || {};
-        const journalMode = journalConfig.mode || "distilled";
-
-        if (journalMode === "full") {
-          const journalDir = path.join(WORKSPACE, journalConfig.journalDir || "journal");
-          let journalFiles: string[] = [];
-          try {
-            journalFiles = fs.readdirSync(journalDir).filter((f: string) => f.endsWith('.journal.md')).sort();
-          } catch (err: unknown) {
-            if (isFailHardEnabled()) {
-              throw new Error("[quaid] Journal injection listing failed under failHard", { cause: err as Error });
-            }
-            console.warn(`[quaid] Journal injection listing failed: ${String((err as Error)?.message || err)}`);
-          }
-
-          let journalContent = '';
-          for (const file of journalFiles) {
-            try {
-              const content = fs.readFileSync(path.join(journalDir, file), 'utf8');
-              if (content.trim()) {
-                journalContent += `\n\n--- ${file} ---\n${content}`;
-              }
-            } catch (err: unknown) {
-              if (isFailHardEnabled()) {
-                throw new Error(`[quaid] Journal injection read failed for ${file} under failHard`, { cause: err as Error });
-              }
-              console.warn(`[quaid] Journal injection read failed for ${file}: ${String((err as Error)?.message || err)}`);
-            }
-          }
-
-          if (journalContent) {
-            const header = '[JOURNAL \u2014 Full Soul Mode]\n' +
-              'These are your recent journal reflections. They are part of your inner life.\n';
-            event.prependContext = event.prependContext
-              ? `${event.prependContext}\n\n${header}${journalContent}`
-              : `${header}${journalContent}`;
-            console.log(`[quaid] Full soul mode: injected ${journalFiles.length} journal files`);
-          }
-        }
-      } catch (err: unknown) {
-        if (isFailHardEnabled()) {
-          throw err;
-        }
-        console.warn(`[quaid] Journal injection failed (non-fatal): ${(err as Error).message}`);
-      }
-      } // end journal system gate
+      event.prependContext = facade.injectFullJournalContext(event.prependContext);
 
       // Check if auto-injection is explicitly enabled (opt-in now, not opt-out)
       const autoInjectEnabled = process.env.MEMORY_AUTO_INJECT === "1" ||

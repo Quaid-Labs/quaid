@@ -796,54 +796,7 @@ notify_user(${JSON.stringify(message)})
         console.warn(`[quaid] Janitor health alert dispatch failed: ${String(err?.message || err)}`);
       }
       timeoutManager.onAgentStart();
-      if (!isSystemEnabled("journal")) {
-      } else {
-        try {
-          const journalConfig = getMemoryConfig().docs?.journal || {};
-          const journalMode = journalConfig.mode || "distilled";
-          if (journalMode === "full") {
-            const journalDir = path.join(WORKSPACE, journalConfig.journalDir || "journal");
-            let journalFiles = [];
-            try {
-              journalFiles = fs.readdirSync(journalDir).filter((f) => f.endsWith(".journal.md")).sort();
-            } catch (err) {
-              if (isFailHardEnabled()) {
-                throw new Error("[quaid] Journal injection listing failed under failHard", { cause: err });
-              }
-              console.warn(`[quaid] Journal injection listing failed: ${String(err?.message || err)}`);
-            }
-            let journalContent = "";
-            for (const file of journalFiles) {
-              try {
-                const content = fs.readFileSync(path.join(journalDir, file), "utf8");
-                if (content.trim()) {
-                  journalContent += `
-
---- ${file} ---
-${content}`;
-                }
-              } catch (err) {
-                if (isFailHardEnabled()) {
-                  throw new Error(`[quaid] Journal injection read failed for ${file} under failHard`, { cause: err });
-                }
-                console.warn(`[quaid] Journal injection read failed for ${file}: ${String(err?.message || err)}`);
-              }
-            }
-            if (journalContent) {
-              const header = "[JOURNAL \u2014 Full Soul Mode]\nThese are your recent journal reflections. They are part of your inner life.\n";
-              event.prependContext = event.prependContext ? `${event.prependContext}
-
-${header}${journalContent}` : `${header}${journalContent}`;
-              console.log(`[quaid] Full soul mode: injected ${journalFiles.length} journal files`);
-            }
-          }
-        } catch (err) {
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-          console.warn(`[quaid] Journal injection failed (non-fatal): ${err.message}`);
-        }
-      }
+      event.prependContext = facade.injectFullJournalContext(event.prependContext);
       const autoInjectEnabled = process.env.MEMORY_AUTO_INJECT === "1" || getMemoryConfig().retrieval?.autoInject === true;
       if (!autoInjectEnabled) {
         return;
