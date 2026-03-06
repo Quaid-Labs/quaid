@@ -36,13 +36,17 @@ function _normalizeWorkspacePath(rawPath: string): string {
 }
 
 function _resolveWorkspace(): string {
-  const envWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
-  if (envWorkspace) {
-    return _normalizeWorkspacePath(envWorkspace);
-  }
   const envQuaidHome = String(process.env.QUAID_HOME || "").trim();
   if (envQuaidHome) {
     return _normalizeWorkspacePath(envQuaidHome);
+  }
+  const envQuaidWorkspace = String(process.env.QUAID_WORKSPACE || "").trim();
+  if (envQuaidWorkspace) {
+    return _normalizeWorkspacePath(envQuaidWorkspace);
+  }
+  const envLegacyWorkspace = String(process.env.CLAWDBOT_WORKSPACE || "").trim();
+  if (envLegacyWorkspace) {
+    return _normalizeWorkspacePath(envLegacyWorkspace);
   }
 
   try {
@@ -121,6 +125,7 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
     ...process.env,
     MEMORY_DB_PATH: DB_PATH,
     QUAID_HOME: WORKSPACE,
+    QUAID_WORKSPACE: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE,
     PYTHONPATH: pyPath,
     ...extra,

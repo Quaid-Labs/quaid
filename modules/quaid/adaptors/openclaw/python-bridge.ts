@@ -36,6 +36,7 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
           ...process.env,
           MEMORY_DB_PATH: config.dbPath,
           QUAID_HOME: config.workspace,
+          QUAID_WORKSPACE: config.workspace,
           CLAWDBOT_WORKSPACE: config.workspace,
           PYTHONPATH: pythonPath,
         },

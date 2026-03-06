@@ -991,6 +991,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           ...process.env,
           MEMORY_DB_PATH: deps.dbPath,
           QUAID_HOME: deps.workspace,
+          QUAID_WORKSPACE: deps.workspace,
           CLAWDBOT_WORKSPACE: deps.workspace,
           PYTHONPATH: deps.pluginRoot,
         },
