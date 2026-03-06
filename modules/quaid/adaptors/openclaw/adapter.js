@@ -367,32 +367,13 @@ const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.p
 const PROJECT_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/project_updater.py");
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 function _getGatewayCredential(providers) {
-  try {
-    const profilesPath = path.join(
-      os.homedir(),
-      ".openclaw",
-      "agents",
-      "main",
-      "agent",
-      "auth-profiles.json"
-    );
-    if (fs.existsSync(profilesPath)) {
-      const data = JSON.parse(fs.readFileSync(profilesPath, "utf8"));
-      const profiles = data?.profiles || {};
-      const lastGood = data?.lastGood || {};
-      for (const provider of providers) {
-        const lastGoodId = lastGood[provider];
-        if (lastGoodId && profiles[lastGoodId]) {
-          const cred = profiles[lastGoodId];
-          const key = cred.access || cred.token || cred.key;
-          if (key) return key;
-        }
-      }
-    }
-  } catch (err) {
-    if (isFailHardEnabled()) {
-      throw err;
-    }
+  for (const provider of providers) {
+    const normalized = String(provider || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    if (!normalized) continue;
+    const directKey = String(process.env[`${normalized}_API_KEY`] || "").trim();
+    if (directKey) return directKey;
+    const directToken = String(process.env[`${normalized}_TOKEN`] || "").trim();
+    if (directToken) return directToken;
   }
   return void 0;
 }
@@ -437,37 +418,25 @@ function _getGatewayToken() {
   return void 0;
 }
 function _ensureGatewaySessionOverride(tier, resolved) {
-  const storePath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
   const sessionKey = `agent:main:quaid-llm-${tier}`;
-  const now = Date.now();
-  let store = {};
-  try {
-    if (fs.existsSync(storePath)) {
-      store = JSON.parse(fs.readFileSync(storePath, "utf8")) || {};
-    }
-  } catch (err) {
-    console.warn(
-      `[quaid][llm] failed to read gateway session override store; recreating: ${String(err?.message || err)}`
-    );
-    store = {};
+  const modelRef = `${resolved.provider}/${resolved.model}`;
+  const resetOut = execFileSync(
+    "openclaw",
+    ["gateway", "call", "sessions.reset", "--json", "--params", JSON.stringify({ key: sessionKey, reason: "new" })],
+    { encoding: "utf-8", timeout: 2e4 }
+  );
+  const resetParsed = JSON.parse(String(resetOut || "{}"));
+  if (!resetParsed?.ok) {
+    throw new Error(`[quaid][llm] sessions.reset failed for ${sessionKey}`);
   }
-  const prev = store[sessionKey] && typeof store[sessionKey] === "object" ? store[sessionKey] : {};
-  const sessionId = `quaid-${tier}-${now}`;
-  store[sessionKey] = {
-    ...prev,
-    sessionId,
-    updatedAt: now,
-    providerOverride: resolved.provider,
-    modelOverride: resolved.model
-  };
-  try {
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { mode: 384 });
-  } catch (err) {
-    const msg = String(err?.message || err);
-    throw new Error(`[quaid][llm] failed writing gateway session override store: ${msg}`, {
-      cause: err
-    });
+  const patchOut = execFileSync(
+    "openclaw",
+    ["gateway", "call", "sessions.patch", "--json", "--params", JSON.stringify({ key: sessionKey, model: modelRef })],
+    { encoding: "utf-8", timeout: 2e4 }
+  );
+  const patchParsed = JSON.parse(String(patchOut || "{}"));
+  if (!patchParsed?.ok) {
+    throw new Error(`[quaid][llm] sessions.patch failed for ${sessionKey} model=${modelRef}`);
   }
   return sessionKey;
 }
