@@ -6,8 +6,6 @@ function signalPriority(label) {
   if (normalized === "compactionsignal" || normalized === "compaction") return 2;
   return 1;
 }
-const FAIL_HARD_CACHE_MS = 5e3;
-const failHardCache = /* @__PURE__ */ new Map();
 function safeLog(logger, message) {
   try {
     if (logger) {
@@ -22,38 +20,6 @@ function safeLog(logger, message) {
     }
   } catch {
   }
-}
-function isFailHardEnabled(workspace) {
-  const now = Date.now();
-  const cached = failHardCache.get(workspace);
-  if (cached && now - cached.checkedAtMs < FAIL_HARD_CACHE_MS) {
-    return cached.value;
-  }
-  const configPath = path.join(workspace, "config", "memory.json");
-  let mtimeMs = -1;
-  try {
-    mtimeMs = fs.statSync(configPath).mtimeMs;
-  } catch {
-  }
-  if (cached && cached.mtimeMs === mtimeMs) {
-    cached.checkedAtMs = now;
-    failHardCache.set(workspace, cached);
-    return cached.value;
-  }
-  let value = true;
-  try {
-    const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    const retrieval = raw?.retrieval || {};
-    if (typeof retrieval.fail_hard === "boolean") value = retrieval.fail_hard;
-    if (typeof retrieval.failHard === "boolean") value = retrieval.failHard;
-  } catch (err) {
-    const msg = String(err?.message || err || "");
-    if (!msg.includes("ENOENT")) {
-      console.warn(`[quaid][timeout] failed to read failHard config; defaulting to true: ${msg}`);
-    }
-  }
-  failHardCache.set(workspace, { value, mtimeMs, checkedAtMs: now });
-  return value;
 }
 function messageText(msg) {
   if (!msg) return "";
@@ -207,7 +173,19 @@ class SessionTimeoutManager {
     this.installStatePath = path.join(opts.workspace, "data", "installed-at.json");
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
     this.eventFilePath = path.join(this.logDir, "session-timeout-events.jsonl");
-    this.failHard = isFailHardEnabled(opts.workspace);
+    const failHardOpt = opts.failHardEnabled;
+    if (typeof failHardOpt === "function") {
+      try {
+        this.failHard = Boolean(failHardOpt());
+      } catch (err) {
+        safeLog(this.logger, `[quaid][timeout] failHard source threw; defaulting to true: ${String(err?.message || err)}`);
+        this.failHard = true;
+      }
+    } else if (typeof failHardOpt === "boolean") {
+      this.failHard = failHardOpt;
+    } else {
+      this.failHard = true;
+    }
     const configuredTimeoutMs = Number(process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS || "");
     this.extractTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? Math.floor(configuredTimeoutMs) : 6e5;
     const configuredSignalRetries = Number(process.env.QUAID_SIGNAL_MAX_RETRIES || "");

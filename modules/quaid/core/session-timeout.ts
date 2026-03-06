@@ -50,6 +50,7 @@ type SessionTimeoutManagerOptions = {
   timeoutMinutes: number;
   extract: TimeoutExtractor;
   isBootstrapOnly: (messages: any[]) => boolean;
+  failHardEnabled?: boolean | (() => boolean);
   logger?: TimeoutLogger;
   readSessionMessages?: (sessionId: string) => any[];
   listSessionActivity?: () => SessionActivityRecord[];
@@ -58,15 +59,6 @@ type SessionTimeoutManagerOptions = {
 type AgentEndMeta = {
   source?: string;
 };
-
-type FailHardCacheEntry = {
-  value: boolean;
-  mtimeMs: number;
-  checkedAtMs: number;
-};
-
-const FAIL_HARD_CACHE_MS = 5000;
-const failHardCache = new Map<string, FailHardCacheEntry>();
 
 function safeLog(logger: TimeoutLogger | undefined, message: string): void {
   try {
@@ -81,41 +73,6 @@ function safeLog(logger: TimeoutLogger | undefined, message: string): void {
       console.log(message);
     }
   } catch {}
-}
-
-function isFailHardEnabled(workspace: string): boolean {
-  const now = Date.now();
-  const cached = failHardCache.get(workspace);
-  if (cached && (now - cached.checkedAtMs) < FAIL_HARD_CACHE_MS) {
-    return cached.value;
-  }
-
-  const configPath = path.join(workspace, "config", "memory.json");
-  let mtimeMs = -1;
-  try {
-    mtimeMs = fs.statSync(configPath).mtimeMs;
-  } catch {}
-
-  if (cached && cached.mtimeMs === mtimeMs) {
-    cached.checkedAtMs = now;
-    failHardCache.set(workspace, cached);
-    return cached.value;
-  }
-
-  let value = true;
-  try {
-    const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    const retrieval = raw?.retrieval || {};
-    if (typeof retrieval.fail_hard === "boolean") value = retrieval.fail_hard;
-    if (typeof retrieval.failHard === "boolean") value = retrieval.failHard;
-  } catch (err: unknown) {
-    const msg = String((err as Error)?.message || err || "");
-    if (!msg.includes("ENOENT")) {
-      console.warn(`[quaid][timeout] failed to read failHard config; defaulting to true: ${msg}`);
-    }
-  }
-  failHardCache.set(workspace, { value, mtimeMs, checkedAtMs: now });
-  return value;
 }
 
 function messageText(msg: any): string {
@@ -282,7 +239,19 @@ export class SessionTimeoutManager {
     this.installStatePath = path.join(opts.workspace, "data", "installed-at.json");
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
     this.eventFilePath = path.join(this.logDir, "session-timeout-events.jsonl");
-    this.failHard = isFailHardEnabled(opts.workspace);
+    const failHardOpt = opts.failHardEnabled;
+    if (typeof failHardOpt === "function") {
+      try {
+        this.failHard = Boolean(failHardOpt());
+      } catch (err: unknown) {
+        safeLog(this.logger, `[quaid][timeout] failHard source threw; defaulting to true: ${String((err as Error)?.message || err)}`);
+        this.failHard = true;
+      }
+    } else if (typeof failHardOpt === "boolean") {
+      this.failHard = failHardOpt;
+    } else {
+      this.failHard = true;
+    }
     const configuredTimeoutMs = Number(process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS || "");
     this.extractTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
       ? Math.floor(configuredTimeoutMs)

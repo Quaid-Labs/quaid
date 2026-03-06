@@ -1655,6 +1655,7 @@ ${factsOutput || "No facts found."}` }],
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
+      failHardEnabled: () => isFailHardEnabled(),
       isBootstrapOnly: (messages) => facade.isResetBootstrapOnlyConversation(messages),
       shouldSkipText: (text) => shouldSkipTranscriptText(text),
       readSessionMessages: (sessionId) => facade.readTimeoutSessionMessages(sessionId),

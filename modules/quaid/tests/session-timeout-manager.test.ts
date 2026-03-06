@@ -8,16 +8,6 @@ function makeWorkspace(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-function writeFailHardConfig(workspace: string, failHard: boolean): void {
-  const configDir = path.join(workspace, "config");
-  fs.mkdirSync(configDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(configDir, "memory.json"),
-    JSON.stringify({ retrieval: { failHard } }),
-    "utf8",
-  );
-}
-
 type SourceState = {
   messagesBySession: Map<string, any[]>;
   activityBySession: Map<string, number>;
@@ -34,11 +24,13 @@ function buildManager(params: {
   workspace: string;
   timeoutMinutes: number;
   source: SourceState;
+  failHardEnabled?: boolean;
   extract?: (messages: any[], sessionId?: string, label?: string) => Promise<void>;
 }) {
   return new SessionTimeoutManager({
     workspace: params.workspace,
     timeoutMinutes: params.timeoutMinutes,
+    failHardEnabled: params.failHardEnabled,
     isBootstrapOnly: () => false,
     logger: () => {},
     readSessionMessages: (sessionId: string) => params.source.messagesBySession.get(sessionId) || [],
@@ -122,10 +114,9 @@ describe("SessionTimeoutManager (cursor + source)", () => {
 
   it("blocks fallback payload when failHard=true and source has no messages", async () => {
     const workspace = makeWorkspace("quaid-timeout-failhard-block-");
-    writeFailHardConfig(workspace, true);
     const source = createSourceState();
 
-    const manager = buildManager({ workspace, timeoutMinutes: 10, source });
+    const manager = buildManager({ workspace, timeoutMinutes: 10, source, failHardEnabled: true });
     await expect(
       manager.extractSessionFromLog("session-failhard", "Reset", [
         { role: "user", content: "remember this", timestamp: Date.now() },
@@ -135,7 +126,6 @@ describe("SessionTimeoutManager (cursor + source)", () => {
 
   it("allows fallback payload when failHard=false", async () => {
     const workspace = makeWorkspace("quaid-timeout-soft-fallback-");
-    writeFailHardConfig(workspace, false);
     const source = createSourceState();
 
     const calls: Array<any[]> = [];
@@ -143,6 +133,7 @@ describe("SessionTimeoutManager (cursor + source)", () => {
       workspace,
       timeoutMinutes: 10,
       source,
+      failHardEnabled: false,
       extract: async (messages) => {
         calls.push(messages);
       },
