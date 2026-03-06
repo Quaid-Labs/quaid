@@ -144,7 +144,7 @@ class SessionTimeoutManager {
       try {
         return filterEligibleMessages(opts.readSessionMessages?.(sessionId) || [], opts.shouldSkipText);
       } catch (err) {
-        safeLog(this.logger, `[quaid][timeout] source readSessionMessages failed for ${sessionId}: ${String(err?.message || err)}`);
+        safeLog(this.logger, `[memory][timeout] source readSessionMessages failed for ${sessionId}: ${String(err?.message || err)}`);
         if (this.failHard) throw err;
         return [];
       }
@@ -158,7 +158,7 @@ class SessionTimeoutManager {
           lastActivityMs: Number(r?.lastActivityMs)
         })).filter((r) => r.sessionId && Number.isFinite(r.lastActivityMs) && r.lastActivityMs > 0);
       } catch (err) {
-        safeLog(this.logger, `[quaid][timeout] source listSessionActivity failed: ${String(err?.message || err)}`);
+        safeLog(this.logger, `[memory][timeout] source listSessionActivity failed: ${String(err?.message || err)}`);
         if (this.failHard) throw err;
         return [];
       }
@@ -178,7 +178,7 @@ class SessionTimeoutManager {
       try {
         this.failHard = Boolean(failHardOpt());
       } catch (err) {
-        safeLog(this.logger, `[quaid][timeout] failHard source threw; defaulting to true: ${String(err?.message || err)}`);
+        safeLog(this.logger, `[memory][timeout] failHard source threw; defaulting to true: ${String(err?.message || err)}`);
         this.failHard = true;
       }
     } else if (typeof failHardOpt === "boolean") {
@@ -203,7 +203,7 @@ class SessionTimeoutManager {
       fs.mkdirSync(path.dirname(this.installStatePath), { recursive: true });
     } catch (err) {
       const msg = String(err?.message || err || "unknown directory initialization error");
-      safeLog(this.logger, `[quaid][timeout] failed to initialize runtime directories: ${msg}`);
+      safeLog(this.logger, `[memory][timeout] failed to initialize runtime directories: ${msg}`);
       if (this.failHard) {
         throw err;
       }
@@ -256,7 +256,7 @@ class SessionTimeoutManager {
       return;
     }
     if (this.isBootstrapOnly(gatedIncoming)) {
-      safeLog(this.logger, `[quaid][timeout] skipping bootstrap-only transcript session=${sessionId} message_count=${gatedIncoming.length}; preserving prior timeout context`);
+      safeLog(this.logger, `[memory][timeout] skipping bootstrap-only transcript session=${sessionId} message_count=${gatedIncoming.length}; preserving prior timeout context`);
       this.writeQuaidLog("skip_bootstrap_only", sessionId, { message_count: gatedIncoming.length });
       return;
     }
@@ -328,12 +328,12 @@ class SessionTimeoutManager {
   async extractSessionFromLog(sessionId, label, fallbackMessages) {
     let extracted = false;
     const work = this.chain.catch((err) => {
-      safeLog(this.logger, `[quaid][timeout] previous extraction chain error: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] previous extraction chain error: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     }).then(async () => {
       extracted = await this.extractSessionFromSourceDirect(sessionId, label, fallbackMessages);
     }).catch((err) => {
-      safeLog(this.logger, `[quaid][timeout] extraction queue failed: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] extraction queue failed: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     });
     this.chain = work.then(() => void 0, () => void 0);
@@ -495,7 +495,7 @@ class SessionTimeoutManager {
           existingLabel = String(existing?.label || "Signal");
           existingAttemptCount = Math.max(0, Number(existing?.attemptCount || 0));
         } catch (err) {
-          safeLog(this.logger, `[quaid][timeout] failed to parse existing extraction signal ${signalPath}: ${String(err?.message || err)}`);
+          safeLog(this.logger, `[memory][timeout] failed to parse existing extraction signal ${signalPath}: ${String(err?.message || err)}`);
         }
         const incomingPriority = signalPriority(signal.label);
         const existingPriority = signalPriority(existingLabel);
@@ -560,11 +560,11 @@ class SessionTimeoutManager {
       try {
         signal = JSON.parse(fs.readFileSync(lockedPath, "utf8"));
       } catch (err) {
-        safeLog(this.logger, `[quaid][timeout] dropping malformed extraction signal ${lockedPath}: ${String(err?.message || err)}`);
+        safeLog(this.logger, `[memory][timeout] dropping malformed extraction signal ${lockedPath}: ${String(err?.message || err)}`);
         try {
           fs.unlinkSync(lockedPath);
         } catch (unlinkErr) {
-          safeLog(this.logger, `[quaid][timeout] failed to delete malformed extraction signal ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
+          safeLog(this.logger, `[memory][timeout] failed to delete malformed extraction signal ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
         }
         continue;
       }
@@ -576,7 +576,7 @@ class SessionTimeoutManager {
         try {
           fs.unlinkSync(lockedPath);
         } catch (unlinkErr) {
-          safeLog(this.logger, `[quaid][timeout] failed to delete signal without session id ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
+          safeLog(this.logger, `[memory][timeout] failed to delete signal without session id ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
         }
         continue;
       }
@@ -634,7 +634,7 @@ class SessionTimeoutManager {
             });
           }
         } catch (restoreErr) {
-          safeLog(this.logger, `[quaid][timeout] failed restoring signal claim ${lockedPath}: ${String(restoreErr?.message || restoreErr)}`);
+          safeLog(this.logger, `[memory][timeout] failed restoring signal claim ${lockedPath}: ${String(restoreErr?.message || restoreErr)}`);
           if (restoreErr?.code !== "ENOENT") {
             throw restoreErr;
           }
@@ -648,7 +648,7 @@ class SessionTimeoutManager {
             fs.unlinkSync(lockedPath);
           }
         } catch (unlinkErr) {
-          safeLog(this.logger, `[quaid][timeout] failed cleaning claimed signal ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
+          safeLog(this.logger, `[memory][timeout] failed cleaning claimed signal ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
           if (this.failHard && unlinkErr?.code !== "ENOENT") {
             throw unlinkErr;
           }
@@ -703,7 +703,7 @@ class SessionTimeoutManager {
     try {
       fs.mkdirSync(path.dirname(this.workerLockPath), { recursive: true });
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed to initialize worker lock directory: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed to initialize worker lock directory: ${String(err?.message || err)}`);
       if (this.failHard) {
         throw err;
       }
@@ -735,7 +735,7 @@ class SessionTimeoutManager {
       try {
         fs.unlinkSync(this.workerLockPath);
       } catch (unlinkErr) {
-        safeLog(this.logger, `[quaid][timeout] failed removing stale worker lock ${this.workerLockPath}: ${String(unlinkErr?.message || unlinkErr)}`);
+        safeLog(this.logger, `[memory][timeout] failed removing stale worker lock ${this.workerLockPath}: ${String(unlinkErr?.message || unlinkErr)}`);
         if (this.failHard && unlinkErr?.code !== "ENOENT") {
           throw unlinkErr;
         }
@@ -745,7 +745,7 @@ class SessionTimeoutManager {
       this.writeQuaidLog("worker_lock_stale_recovered", void 0, { stale_pid: existingPid || void 0 });
       return true;
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed stale-worker lock recovery: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed stale-worker lock recovery: ${String(err?.message || err)}`);
       if (this.failHard) {
         throw err;
       }
@@ -762,7 +762,7 @@ class SessionTimeoutManager {
         return false;
       }
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed validating worker lock before release: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed validating worker lock before release: ${String(err?.message || err)}`);
       if (this.failHard && err?.code !== "ENOENT") {
         throw err;
       }
@@ -770,7 +770,7 @@ class SessionTimeoutManager {
     try {
       fs.unlinkSync(this.workerLockPath);
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed releasing worker lock ${this.workerLockPath}: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed releasing worker lock ${this.workerLockPath}: ${String(err?.message || err)}`);
       if (this.failHard && err?.code !== "ENOENT") {
         throw err;
       }
@@ -780,7 +780,7 @@ class SessionTimeoutManager {
   }
   queueExtractionFromSession(sessionId, fallbackMessages, timeoutMinutes) {
     this.chain = this.chain.catch((err) => {
-      safeLog(this.logger, `[quaid][timeout] previous extraction chain error: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] previous extraction chain error: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     }).then(async () => {
       const extracted = await this.extractSessionFromSourceDirect(sessionId, "Timeout", fallbackMessages);
@@ -790,19 +790,19 @@ class SessionTimeoutManager {
       }
       this.writeQuaidLog("timeout_extract_done", sessionId, { timeout_minutes: timeoutMinutes });
     }).catch((err) => {
-      safeLog(this.logger, `[quaid][timeout] extraction queue failed: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] extraction queue failed: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     });
   }
   triggerWorkerTick() {
     this.chain = this.chain.catch((err) => {
-      safeLog(this.logger, `[quaid][timeout] previous worker chain error: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] previous worker chain error: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     }).then(async () => {
       await this.processPendingExtractionSignals();
       await this.recoverStaleBuffers();
     }).catch((err) => {
-      safeLog(this.logger, `[quaid][timeout] worker tick failed: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] worker tick failed: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     });
   }
@@ -815,7 +815,7 @@ class SessionTimeoutManager {
       if (!fs.existsSync(this.pendingSignalDir)) return [];
       return fs.readdirSync(this.pendingSignalDir).filter((f) => f.endsWith(".json")).map((f) => path.join(this.pendingSignalDir, f));
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed listing signal files: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed listing signal files: ${String(err?.message || err)}`);
       if (this.failHard && err?.code !== "ENOENT") {
         throw err;
       }
@@ -827,7 +827,7 @@ class SessionTimeoutManager {
       if (!fs.existsSync(this.pendingSignalDir)) return [];
       return fs.readdirSync(this.pendingSignalDir).filter((f) => /\.json\.processing\.\d+$/.test(f)).map((f) => path.join(this.pendingSignalDir, f));
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed listing signal claim files: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed listing signal claim files: ${String(err?.message || err)}`);
       if (this.failHard && err?.code !== "ENOENT") {
         throw err;
       }
@@ -877,7 +877,7 @@ class SessionTimeoutManager {
           to: originalPath
         });
       } catch (err) {
-        safeLog(this.logger, `[quaid][timeout] failed recovering orphaned signal claim ${lockedPath}: ${String(err?.message || err)}`);
+        safeLog(this.logger, `[memory][timeout] failed recovering orphaned signal claim ${lockedPath}: ${String(err?.message || err)}`);
         if (this.failHard && err?.code !== "ENOENT") {
           throw err;
         }
@@ -905,7 +905,7 @@ class SessionTimeoutManager {
       if (!payload || typeof payload !== "object") return null;
       return payload;
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed reading session cursor for ${sessionId}: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed reading session cursor for ${sessionId}: ${String(err?.message || err)}`);
       if (this.failHard && err?.code !== "ENOENT") {
         throw err;
       }
@@ -1003,7 +1003,7 @@ class SessionTimeoutManager {
         retries
       };
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed reading stale sweep state: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed reading stale sweep state: ${String(err?.message || err)}`);
       if (this.failHard && err?.code !== "ENOENT") {
         throw err;
       }
@@ -1016,7 +1016,7 @@ class SessionTimeoutManager {
       const installedAt = state.installedAt || this.readInstalledAt();
       fs.writeFileSync(this.staleSweepStatePath, JSON.stringify({ ...state, installedAt }), { mode: 384 });
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed writing stale sweep state: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed writing stale sweep state: ${String(err?.message || err)}`);
       if (this.failHard) {
         throw err;
       }
@@ -1032,7 +1032,7 @@ class SessionTimeoutManager {
         }
       }
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed reading installed-at state: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed reading installed-at state: ${String(err?.message || err)}`);
       if (this.failHard && err?.code !== "ENOENT") {
         throw err;
       }
@@ -1042,7 +1042,7 @@ class SessionTimeoutManager {
       fs.mkdirSync(path.dirname(this.installStatePath), { recursive: true });
       fs.writeFileSync(this.installStatePath, JSON.stringify({ installedAt }), { mode: 384 });
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed writing installed-at state: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed writing installed-at state: ${String(err?.message || err)}`);
       if (this.failHard) {
         throw err;
       }
@@ -1058,7 +1058,7 @@ class SessionTimeoutManager {
       fs.mkdirSync(path.dirname(this.logFilePath), { recursive: true });
       fs.appendFileSync(this.logFilePath, line, "utf8");
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed writing timeout log file ${this.logFilePath}: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed writing timeout log file ${this.logFilePath}: ${String(err?.message || err)}`);
       if (this.failHard) {
         throw err;
       }
@@ -1069,7 +1069,7 @@ class SessionTimeoutManager {
       fs.appendFileSync(this.eventFilePath, `${JSON.stringify(payload)}
 `, "utf8");
     } catch (err) {
-      safeLog(this.logger, `[quaid][timeout] failed writing timeout event log ${this.eventFilePath}: ${String(err?.message || err)}`);
+      safeLog(this.logger, `[memory][timeout] failed writing timeout event log ${this.eventFilePath}: ${String(err?.message || err)}`);
       if (this.failHard) {
         throw err;
       }
@@ -1082,7 +1082,7 @@ class SessionTimeoutManager {
         fs.appendFileSync(sessionPath, `${JSON.stringify(payload)}
 `, "utf8");
       } catch (err) {
-        safeLog(this.logger, `[quaid][timeout] failed writing timeout session log ${sessionPath}: ${String(err?.message || err)}`);
+        safeLog(this.logger, `[memory][timeout] failed writing timeout session log ${sessionPath}: ${String(err?.message || err)}`);
         if (this.failHard) {
           throw err;
         }

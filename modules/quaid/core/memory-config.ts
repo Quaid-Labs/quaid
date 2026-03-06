@@ -98,7 +98,7 @@ export function createMemoryConfigResolver(deps: MemoryConfigResolverDeps): Memo
     } catch (err: unknown) {
       const msg = String((err as Error)?.message || err || "");
       if (!msg.includes("ENOENT")) {
-        warn(`[quaid] memory config stat failed: ${msg}`);
+        warn(`[memory] memory config stat failed: ${msg}`);
       }
     }
     if (memoryConfig && mtimeMs >= 0 && memoryConfigMtimeMs === mtimeMs) {
@@ -113,7 +113,7 @@ export function createMemoryConfigResolver(deps: MemoryConfigResolverDeps): Memo
     } catch (err: unknown) {
       if (!memoryConfigErrorLogged) {
         memoryConfigErrorLogged = true;
-        error(`[quaid] failed to load memory config (${configPath}): ${(err as Error)?.message || String(err)}`);
+        error(`[memory] failed to load memory config (${configPath}): ${(err as Error)?.message || String(err)}`);
       }
       if (deps.isMissingFileError(err)) {
         memoryConfig = buildFallbackMemoryConfig();

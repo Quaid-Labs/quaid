@@ -64,7 +64,7 @@ function createKnowledgeEngine(deps) {
       if (typeof retrieval.fail_hard === "boolean") return retrieval.fail_hard;
       if (typeof retrieval.failHard === "boolean") return retrieval.failHard;
     } catch (err) {
-      console.warn(`[quaid][recall-router] failed to read failHard config; defaulting to true: ${String(err?.message || err)}`);
+      console.warn(`[memory][recall-router] failed to read failHard config; defaulting to true: ${String(err?.message || err)}`);
     }
     return true;
   }
@@ -74,7 +74,7 @@ function createKnowledgeEngine(deps) {
       return validate(first);
     } catch (err) {
       const reason = err?.message || String(err);
-      console.warn(`[quaid][recall-router] ${label}: invalid first response; retrying repair (${reason})`);
+      console.warn(`[memory][recall-router] ${label}: invalid first response; retrying repair (${reason})`);
       const repairSystemPrompt = `${systemPrompt}
 
 Return STRICT JSON only. No prose, no markdown, no comments, no code fences.`;
@@ -335,7 +335,7 @@ intent: ${intent}`;
         all.push(...await descriptor.recall({ query, limit, opts }));
       } catch (err) {
         const msg = String(err?.message || err);
-        console.warn(`[quaid][recall] datastore=${store} failed: ${msg}`);
+        console.warn(`[memory][recall] datastore=${store} failed: ${msg}`);
         if (isFailHardEnabled()) {
           throw err;
         }
@@ -369,7 +369,7 @@ intent: ${intent}`;
         const reason = err?.message || String(err);
         const fallbackDatastores = normalizeKnowledgeDatastores(void 0, opts.expandGraph);
         console.error(
-          `[quaid][recall-router][FAIL-OPEN] Router prepass failed; using deterministic default recall plan. reason="${reason}" datastores=${fallbackDatastores.join(",")}`
+          `[memory][recall-router][FAIL-OPEN] Router prepass failed; using deterministic default recall plan. reason="${reason}" datastores=${fallbackDatastores.join(",")}`
         );
         const fallbackResults = await totalRecall(query, limit, {
           ...opts,
@@ -386,7 +386,7 @@ intent: ${intent}`;
       if (opts.failOpen && failHard) {
         const reason = err?.message || String(err);
         console.error(
-          `[quaid][recall-router][FAIL-HARD] Router prepass failed and fallback was blocked by failHard=true. reason="${reason}"`
+          `[memory][recall-router][FAIL-HARD] Router prepass failed and fallback was blocked by failHard=true. reason="${reason}"`
         );
       }
       throw err;

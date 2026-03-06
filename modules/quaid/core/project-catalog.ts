@@ -33,7 +33,7 @@ function getProjectDescriptionFromToolsMd(
     if (m && m[1]) return m[1].trim().slice(0, 180);
     return firstUsefulLine(content).slice(0, 180);
   } catch (err: unknown) {
-    warnCatalog(`[quaid] project catalog: TOOLS.md description read failed: ${String((err as Error)?.message || err)}`);
+    warnCatalog(`[memory] project catalog: TOOLS.md description read failed: ${String((err as Error)?.message || err)}`);
     return "";
   }
 }
@@ -51,7 +51,7 @@ function getProjectDescriptionFromProjectMd(
     if (m && m[1]) return m[1].trim().slice(0, 180);
     return firstUsefulLine(content).slice(0, 180);
   } catch (err: unknown) {
-    warnCatalog(`[quaid] project catalog: PROJECT.md description read failed: ${String((err as Error)?.message || err)}`);
+    warnCatalog(`[memory] project catalog: PROJECT.md description read failed: ${String((err as Error)?.message || err)}`);
     return "";
   }
 }
@@ -76,9 +76,9 @@ export function createProjectCatalogReader(deps: ProjectCatalogReaderDeps) {
     const detail = String((err as Error)?.message || err);
     if (shouldFailHard()) {
       const cause = err instanceof Error ? err : new Error(detail);
-      throw new Error(`[quaid] project catalog: ${context}: ${detail}`, { cause });
+      throw new Error(`[memory] project catalog: ${context}: ${detail}`, { cause });
     }
-    warnCatalog(`[quaid] project catalog: ${context}: ${detail}`);
+    warnCatalog(`[memory] project catalog: ${context}: ${detail}`);
   }
 
   function getProjectNames(): string[] {

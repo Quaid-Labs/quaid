@@ -93,7 +93,7 @@ export function createDataWriteEngine(opts: DataWriteEngineOptions = {}) {
       return await writer.write(envelope as DataWriteEnvelope<unknown>);
     } catch (err: unknown) {
       onError(
-        `[quaid][data-writers] writeData failed datastore=${String(envelope.datastore)} action=${String(envelope.action)}`,
+        `[memory][data-writers] writeData failed datastore=${String(envelope.datastore)} action=${String(envelope.action)}`,
         err,
       );
       if (failHard) {

@@ -276,13 +276,16 @@ const configSchema = Type.Object({
   autoRecall: Type.Optional(Type.Boolean({ default: true }))
 });
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
+function getOpenClawSessionsPath() {
+  return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+}
 function resolveSessionIdFromSessionKey(sessionKey) {
   const key = String(sessionKey || "").trim();
   if (!key) {
     return "";
   }
   try {
-    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    const sessionsPath = getOpenClawSessionsPath();
     if (!fs.existsSync(sessionsPath)) {
       return "";
     }
@@ -299,7 +302,7 @@ function resolveSessionIdFromSessionKey(sessionKey) {
 }
 function resolveMostRecentSessionId() {
   try {
-    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    const sessionsPath = getOpenClawSessionsPath();
     if (!fs.existsSync(sessionsPath)) {
       return "";
     }
@@ -324,7 +327,7 @@ function resolveMostRecentSessionId() {
 }
 function listCompactionSessions() {
   try {
-    const sessionsPath = path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
+    const sessionsPath = getOpenClawSessionsPath();
     const raw = fs.readFileSync(sessionsPath, "utf8");
     const data = JSON.parse(raw);
     return Object.entries(data || {}).filter(([_, value]) => value && typeof value === "object").map(([key, value]) => ({
@@ -335,18 +338,24 @@ function listCompactionSessions() {
     return [];
   }
 }
-function requestSessionCompaction(sessionKey) {
-  try {
-    const out = execFileSync(
+async function requestSessionCompaction(sessionKey) {
+  const out = await spawnWithTimeout({
+    cwd: WORKSPACE,
+    env: process.env,
+    timeoutMs: 2e4,
+    label: "[quaid][gateway] sessions.compact",
+    argv: [
       "openclaw",
-      ["gateway", "call", "sessions.compact", "--json", "--params", JSON.stringify({ key: sessionKey })],
-      { encoding: "utf-8", timeout: 2e4 }
-    );
-    const parsed = JSON.parse(String(out || "{}"));
-    return { ok: Boolean(parsed?.ok), compacted: parsed?.compacted, raw: String(out || "") };
-  } catch (err) {
-    throw err;
-  }
+      "gateway",
+      "call",
+      "sessions.compact",
+      "--json",
+      "--params",
+      JSON.stringify({ key: sessionKey })
+    ]
+  });
+  const parsed = JSON.parse(String(out || "{}"));
+  return { ok: Boolean(parsed?.ok), compacted: parsed?.compacted, raw: String(out || "") };
 }
 function parseSessionMessagesJsonl(sessionFile) {
   const content = fs.readFileSync(sessionFile, "utf8");
@@ -422,23 +431,43 @@ function _getGatewayToken() {
   }
   return void 0;
 }
-function _ensureGatewaySessionOverride(tier, resolved) {
+async function _ensureGatewaySessionOverride(tier, resolved) {
   const sessionKey = `agent:main:quaid-llm-${tier}`;
   const modelRef = `${resolved.provider}/${resolved.model}`;
-  const resetOut = execFileSync(
-    "openclaw",
-    ["gateway", "call", "sessions.reset", "--json", "--params", JSON.stringify({ key: sessionKey, reason: "new" })],
-    { encoding: "utf-8", timeout: 2e4 }
-  );
+  const resetOut = await spawnWithTimeout({
+    cwd: WORKSPACE,
+    env: process.env,
+    timeoutMs: 2e4,
+    label: "[quaid][gateway] sessions.reset",
+    argv: [
+      "openclaw",
+      "gateway",
+      "call",
+      "sessions.reset",
+      "--json",
+      "--params",
+      JSON.stringify({ key: sessionKey, reason: "new" })
+    ]
+  });
   const resetParsed = JSON.parse(String(resetOut || "{}"));
   if (!resetParsed?.ok) {
     throw new Error(`[quaid][llm] sessions.reset failed for ${sessionKey}`);
   }
-  const patchOut = execFileSync(
-    "openclaw",
-    ["gateway", "call", "sessions.patch", "--json", "--params", JSON.stringify({ key: sessionKey, model: modelRef })],
-    { encoding: "utf-8", timeout: 2e4 }
-  );
+  const patchOut = await spawnWithTimeout({
+    cwd: WORKSPACE,
+    env: process.env,
+    timeoutMs: 2e4,
+    label: "[quaid][gateway] sessions.patch",
+    argv: [
+      "openclaw",
+      "gateway",
+      "call",
+      "sessions.patch",
+      "--json",
+      "--params",
+      JSON.stringify({ key: sessionKey, model: modelRef })
+    ]
+  });
   const patchParsed = JSON.parse(String(patchOut || "{}"));
   if (!patchParsed?.ok) {
     throw new Error(`[quaid][llm] sessions.patch failed for ${sessionKey} model=${modelRef}`);
@@ -450,7 +479,7 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
   const provider = String(resolved.provider || "").trim().toLowerCase();
   const started = Date.now();
   try {
-    _ensureGatewaySessionOverride(modelTier, resolved);
+    await _ensureGatewaySessionOverride(modelTier, resolved);
   } catch (err) {
     const msg = String(err?.message || err);
     console.warn(`[quaid][llm] gateway session override unavailable; continuing without session_id: ${msg}`);
@@ -1825,7 +1854,7 @@ notify_memory_extraction(
         }
       }
       if (triggerType === "timeout") {
-        facade.maybeForceCompactionAfterTimeout(sessionId);
+        await facade.maybeForceCompactionAfterTimeout(sessionId);
       }
       try {
         facade.updateExtractionLog(sessionId || "unknown", messages, label);
@@ -2162,23 +2191,14 @@ notify_memory_extraction(
             res.end(JSON.stringify({ error: "Valid sessionId parameter required" }));
             return;
           }
-          const enhancedLogPath = path.join(QUAID_LOGS_DIR, "memory-injection", `session-${sessionId}.log`);
-          const tempLogPath = facade.getInjectionLogPath(sessionId);
+          const sessionLogPath = facade.getInjectionLogPath(sessionId);
           let logData = null;
-          if (fs.existsSync(enhancedLogPath)) {
+          if (fs.existsSync(sessionLogPath)) {
             try {
-              const content = fs.readFileSync(enhancedLogPath, "utf8");
+              const content = fs.readFileSync(sessionLogPath, "utf8");
               logData = JSON.parse(content);
             } catch (err) {
-              console.error(`[quaid] Failed to read enhanced log: ${String(err)}`);
-            }
-          }
-          if (!logData && fs.existsSync(tempLogPath)) {
-            try {
-              const content = fs.readFileSync(tempLogPath, "utf8");
-              logData = JSON.parse(content);
-            } catch (err) {
-              console.error(`[quaid] Failed to read temp log: ${String(err)}`);
+              console.error(`[quaid] Failed to read session log: ${String(err)}`);
             }
           }
           if (!logData) {
