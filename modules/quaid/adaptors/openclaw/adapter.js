@@ -181,22 +181,18 @@ function isMissingFileError(err) {
 }
 function getGatewayDefaultProvider() {
   try {
-    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-    if (fs.existsSync(cfgPath)) {
-      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-      const primaryModel = String(
-        cfg?.agents?.main?.modelPrimary || cfg?.agents?.defaults?.modelPrimary || ""
-      ).trim();
-      if (primaryModel.includes("/")) {
-        const provider = primaryModel.split("/", 1)[0];
-        const normalized = String(provider || "").trim().toLowerCase();
-        if (normalized) {
-          return normalized;
-        }
+    const cfg = _readOpenClawConfig();
+    const primaryModel = String(
+      cfg?.agents?.main?.modelPrimary || cfg?.agents?.defaults?.modelPrimary || ""
+    ).trim();
+    if (primaryModel.includes("/")) {
+      const provider = primaryModel.split("/", 1)[0];
+      const normalized = String(provider || "").trim().toLowerCase();
+      if (normalized) {
+        return normalized;
       }
     }
-  } catch (err) {
-    console.warn(`[quaid] gateway default provider read failed from openclaw.json: ${String(err?.message || err)}`);
+  } catch {
   }
   try {
     const profilesPath = path.join(os.homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
