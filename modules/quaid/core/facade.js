@@ -2354,6 +2354,28 @@ ${lines.join("\n")}
             },
         };
     }
+    function buildRecallNotificationPayload(results, query, mode, breakdown) {
+        const vectorCount = results.filter((r) => isVectorRecallResult(r)).length;
+        const graphCount = results.filter((r) => (r.via || "") === "graph" || r.category === "graph").length;
+        const journalCount = results.filter((r) => (r.via || "") === "journal").length;
+        const projectCount = results.filter((r) => (r.via || "") === "project").length;
+        return {
+            memories: results.map((m) => ({
+                text: m.text,
+                similarity: Math.round((m.similarity || 0) * 100),
+                via: m.via || "vector",
+                category: m.category || "",
+            })),
+            source_breakdown: {
+                vector_count: Number(breakdown?.vector_count ?? vectorCount),
+                graph_count: Number(breakdown?.graph_count ?? graphCount),
+                journal_count: Number(breakdown?.journal_count ?? journalCount),
+                project_count: Number(breakdown?.project_count ?? projectCount),
+                query,
+                mode,
+            },
+        };
+    }
     // -------------------------------------------------------------------------
     // Stub helper
     // -------------------------------------------------------------------------
@@ -2427,6 +2449,7 @@ ${lines.join("\n")}
         recallWithToolRetry,
         formatMemoriesForInjection,
         formatRecallToolResponse,
+        buildRecallNotificationPayload,
         isLowQualityQuery,
         filterMemoriesByPrivacy,
         loadInjectedMemoryKeys,

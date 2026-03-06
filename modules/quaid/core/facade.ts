@@ -226,6 +226,32 @@ export type QuaidFacade = {
       project_count: number;
     };
   };
+  buildRecallNotificationPayload: (
+    results: MemoryResult[],
+    query: string,
+    mode: "tool" | "auto_inject",
+    breakdown?: {
+      vector_count: number;
+      graph_count: number;
+      journal_count?: number;
+      project_count?: number;
+    },
+  ) => {
+    memories: Array<{
+      text: string;
+      similarity: number;
+      via: string;
+      category: string;
+    }>;
+    source_breakdown: {
+      vector_count: number;
+      graph_count: number;
+      journal_count: number;
+      project_count: number;
+      query: string;
+      mode: "tool" | "auto_inject";
+    };
+  };
   isLowQualityQuery: (query: string) => boolean;
   filterMemoriesByPrivacy: (memories: MemoryResult[], currentOwner: string) => MemoryResult[];
   loadInjectedMemoryKeys: (sessionId: string) => string[];
@@ -2816,6 +2842,54 @@ ${lines.join("\n")}
     };
   }
 
+  function buildRecallNotificationPayload(
+    results: MemoryResult[],
+    query: string,
+    mode: "tool" | "auto_inject",
+    breakdown?: {
+      vector_count: number;
+      graph_count: number;
+      journal_count?: number;
+      project_count?: number;
+    },
+  ): {
+    memories: Array<{
+      text: string;
+      similarity: number;
+      via: string;
+      category: string;
+    }>;
+    source_breakdown: {
+      vector_count: number;
+      graph_count: number;
+      journal_count: number;
+      project_count: number;
+      query: string;
+      mode: "tool" | "auto_inject";
+    };
+  } {
+    const vectorCount = results.filter((r) => isVectorRecallResult(r)).length;
+    const graphCount = results.filter((r) => (r.via || "") === "graph" || r.category === "graph").length;
+    const journalCount = results.filter((r) => (r.via || "") === "journal").length;
+    const projectCount = results.filter((r) => (r.via || "") === "project").length;
+    return {
+      memories: results.map((m) => ({
+        text: m.text,
+        similarity: Math.round((m.similarity || 0) * 100),
+        via: m.via || "vector",
+        category: m.category || "",
+      })),
+      source_breakdown: {
+        vector_count: Number(breakdown?.vector_count ?? vectorCount),
+        graph_count: Number(breakdown?.graph_count ?? graphCount),
+        journal_count: Number(breakdown?.journal_count ?? journalCount),
+        project_count: Number(breakdown?.project_count ?? projectCount),
+        query,
+        mode,
+      },
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Stub helper
   // -------------------------------------------------------------------------
@@ -2894,6 +2968,7 @@ ${lines.join("\n")}
     recallWithToolRetry,
     formatMemoriesForInjection,
     formatRecallToolResponse,
+    buildRecallNotificationPayload,
     isLowQualityQuery,
     filterMemoriesByPrivacy,
     loadInjectedMemoryKeys,

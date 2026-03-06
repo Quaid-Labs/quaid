@@ -1269,24 +1269,10 @@ notify_user(${JSON.stringify(message)})
 
         // Best-effort user notification for auto-injected recalls.
         try {
-              if (facade.shouldNotifyFeature("retrieval", "summary")) {
-            const vectorInjected = toInject.filter((m) => m.via === "vector" || (!m.via && m.category !== "graph"));
-            const graphInjected = toInject.filter((m) => m.via === "graph" || m.category === "graph");
+          if (facade.shouldNotifyFeature("retrieval", "summary")) {
+            const payload = facade.buildRecallNotificationPayload(toInject, query, "auto_inject");
             const dataFile = path.join(QUAID_TMP_DIR, `auto-inject-recall-${Date.now()}.json`);
-            fs.writeFileSync(dataFile, JSON.stringify({
-              memories: toInject.map((m) => ({
-                text: m.text,
-                similarity: Math.round((m.similarity || 0) * 100),
-                via: m.via || "vector",
-                category: m.category || "",
-              })),
-              source_breakdown: {
-                vector_count: vectorInjected.length,
-                graph_count: graphInjected.length,
-                query,
-                mode: "auto_inject",
-              },
-            }), { mode: 0o600 });
+            fs.writeFileSync(dataFile, JSON.stringify(payload), { mode: 0o600 });
             const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_recall
@@ -1562,25 +1548,16 @@ ${recallStoreGuidance}`,
             // Notify user about what memories were retrieved (if enabled)
             try {
               if (facade.shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
-                const memoryData = results.map(m => ({
-                  text: m.text,
-                  similarity: Math.round((m.similarity || 0) * 100),
-                  via: m.via || "vector",
-                  category: m.category || "",
-                }));
-                // Build source breakdown for notification
-                const sourceBreakdown = {
-                  vector_count: recallFormatted.breakdown.vector_count,
-                  graph_count: recallFormatted.breakdown.graph_count,
-                  journal_count: recallFormatted.breakdown.journal_count,
-                  project_count: recallFormatted.breakdown.project_count,
-                  query: query,
-                  mode: "tool",
-                };
+                const payload = facade.buildRecallNotificationPayload(
+                  results,
+                  query,
+                  "tool",
+                  recallFormatted.breakdown,
+                );
 
                 // Fire and forget notification
                 const dataFile2 = path.join(QUAID_TMP_DIR, `recall-data-${Date.now()}.json`);
-                fs.writeFileSync(dataFile2, JSON.stringify({ memories: memoryData, source_breakdown: sourceBreakdown }), { mode: 0o600 });
+                fs.writeFileSync(dataFile2, JSON.stringify(payload), { mode: 0o600 });
                 const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_memory_recall

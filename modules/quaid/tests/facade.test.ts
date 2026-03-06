@@ -806,6 +806,45 @@ describe("QuaidFacade", () => {
     });
   });
 
+  it("buildRecallNotificationPayload normalizes memories and derives breakdown", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const payload = facade.buildRecallNotificationPayload(
+      [
+        { text: "v1", category: "fact", similarity: 0.71, via: "vector" },
+        { text: "g1", category: "graph", similarity: 0.82, via: "graph" },
+        { text: "j1", category: "fact", similarity: 0.63, via: "journal" },
+      ],
+      "who leads project alpha",
+      "tool",
+    );
+    expect(payload.memories).toEqual([
+      { text: "v1", similarity: 71, via: "vector", category: "fact" },
+      { text: "g1", similarity: 82, via: "graph", category: "graph" },
+      { text: "j1", similarity: 63, via: "journal", category: "fact" },
+    ]);
+    expect(payload.source_breakdown).toEqual({
+      vector_count: 1,
+      graph_count: 1,
+      journal_count: 1,
+      project_count: 0,
+      query: "who leads project alpha",
+      mode: "tool",
+    });
+  });
+
+  it("buildRecallNotificationPayload respects provided breakdown override", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const payload = facade.buildRecallNotificationPayload(
+      [{ text: "v1", category: "fact", similarity: 0.5, via: "vector" }],
+      "query",
+      "auto_inject",
+      { vector_count: 5, graph_count: 2, journal_count: 0, project_count: 0 },
+    );
+    expect(payload.source_breakdown.vector_count).toBe(5);
+    expect(payload.source_breakdown.graph_count).toBe(2);
+    expect(payload.source_breakdown.mode).toBe("auto_inject");
+  });
+
   it("queueCompactionExtractionSummary batches and flushes once", () => {
     vi.useFakeTimers();
     const notify = vi.fn();
