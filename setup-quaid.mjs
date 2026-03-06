@@ -501,6 +501,22 @@ function shell(cmd, trim = true) {
   } catch { return ""; }
 }
 
+function runCliWithTimeout(bin, args, timeoutMs = 30_000) {
+  return spawnSync(bin, args, {
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: timeoutMs,
+  });
+}
+
+function renderCliFailure(res) {
+  const sig = String(res?.signal || "");
+  if (sig === "SIGTERM" || sig === "SIGKILL") {
+    return `timed out after ${Number(res?.timeout || 0) || "configured"}ms`;
+  }
+  return String(res?.stderr || res?.stdout || "").trim() || "unknown error";
+}
+
 function canRun(cmd) {
   return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
 }
@@ -892,12 +908,9 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   _removeOpenClawPluginsAllowQuaid();
   _sanitizeOpenClawMemorySlot();
 
-  const uninstallRes = spawnSync(cli, ["plugins", "uninstall", "quaid", "--force"], {
-    encoding: "utf8",
-    stdio: "pipe",
-  });
+  const uninstallRes = runCliWithTimeout(cli, ["plugins", "uninstall", "quaid", "--force"], 45_000);
   if (uninstallRes.status !== 0) {
-    const msg = `${uninstallRes.stderr || ""}\n${uninstallRes.stdout || ""}`;
+    const msg = renderCliFailure(uninstallRes);
     const norm = normalize(msg);
     const unmanaged = norm.includes("not managed by plugins config/install records");
     if (!norm.includes("not installed") && !norm.includes("not found") && !norm.includes("missing") && !unmanaged) {
@@ -906,22 +919,16 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     if (unmanaged) removeStaleExtensionDir();
   }
 
-  const installRes = spawnSync(cli, ["plugins", "install", stagedPluginPath], {
-    encoding: "utf8",
-    stdio: "pipe",
-  });
+  const installRes = runCliWithTimeout(cli, ["plugins", "install", stagedPluginPath], 60_000);
   if (installRes.status !== 0) {
-    const msg = `${installRes.stderr || ""}\n${installRes.stdout || ""}`;
+    const msg = renderCliFailure(installRes);
     const norm = normalize(msg);
     if ((norm.includes("already installed") || norm.includes("already exists")) && removeStaleExtensionDir()) {
-      const retry = spawnSync(cli, ["plugins", "install", stagedPluginPath], {
-        encoding: "utf8",
-        stdio: "pipe",
-      });
+      const retry = runCliWithTimeout(cli, ["plugins", "install", stagedPluginPath], 60_000);
       if (retry.status === 0) {
         // continue
       } else {
-        const retryMsg = `${retry.stderr || ""}\n${retry.stdout || ""}`;
+        const retryMsg = renderCliFailure(retry);
         return { ok: false, reason: `plugins install failed after stale-dir cleanup: ${retryMsg.trim() || "unknown error"}` };
       }
     } else {
@@ -929,9 +936,9 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     }
   }
 
-  const enableRes = spawnSync(cli, ["plugins", "enable", "quaid"], { encoding: "utf8", stdio: "pipe" });
+  const enableRes = runCliWithTimeout(cli, ["plugins", "enable", "quaid"], 45_000);
   if (enableRes.status !== 0) {
-    const msg = `${enableRes.stderr || ""}\n${enableRes.stdout || ""}`;
+    const msg = renderCliFailure(enableRes);
     const norm = normalize(msg);
     if (!norm.includes("already enabled")) {
       return { ok: false, reason: `plugins enable failed: ${msg.trim() || "unknown error"}` };
@@ -940,9 +947,9 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
 
   // Verify the plugin registry can actually resolve/load Quaid on this OpenClaw build.
   // Some builds accept install/enable config writes but still do not expose the plugin at runtime.
-  const listRes = spawnSync(cli, ["plugins", "list", "--json"], { encoding: "utf8", stdio: "pipe" });
+  const listRes = runCliWithTimeout(cli, ["plugins", "list", "--json"], 20_000);
   if (listRes.status !== 0) {
-    const msg = `${listRes.stderr || ""}\n${listRes.stdout || ""}`.trim();
+    const msg = renderCliFailure(listRes);
     return { ok: false, reason: `plugins list failed after enable: ${msg || "unknown error"}` };
   }
   const listRaw = String(listRes.stdout || "");
@@ -956,9 +963,9 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     };
   }
 
-  const restartRes = spawnSync(cli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
+  const restartRes = runCliWithTimeout(cli, ["gateway", "restart"], 30_000);
   if (restartRes.status !== 0) {
-    const msg = `${restartRes.stderr || ""}\n${restartRes.stdout || ""}`.trim();
+    const msg = renderCliFailure(restartRes);
     return { ok: false, reason: `gateway restart failed: ${msg || "unknown error"}` };
   }
 
@@ -2102,6 +2109,11 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     copyDirSync(pluginSrc, PLUGIN_DIR);
     s.stop(C.green(pluginDirEmpty ? "Plugin installed" : "Plugin synced"));
   }
+  if (ensureQuaidCliShim(PLUGIN_DIR)) {
+    log.info(`Updated CLI shim: ${path.join(os.homedir(), "bin", "quaid")} -> ${path.join(PLUGIN_DIR, "quaid")}`);
+  } else {
+    log.warn("Could not update ~/bin/quaid shim automatically.");
+  }
 
   // Install Node dependencies (typebox etc.)
   const pluginPkg = path.join(PLUGIN_DIR, "package.json");
@@ -2794,7 +2806,7 @@ function enableRequiredOpenClawHooks() {
 
   const discoverOptionalQuaidHooks = () => {
     try {
-      const listRes = spawnSync(cli, ["hooks", "list", "--json"], { encoding: "utf8", stdio: "pipe" });
+      const listRes = runCliWithTimeout(cli, ["hooks", "list", "--json"], 20_000);
       if (listRes.status !== 0) return [];
       const raw = String(listRes.stdout || "");
       const start = raw.indexOf("{");
@@ -2850,7 +2862,7 @@ function enableRequiredOpenClawHooks() {
     let enabled = false;
     let lastErr = "";
     for (const hookName of candidates) {
-      const res = spawnSync(cli, ["hooks", "enable", hookName], { encoding: "utf8", stdio: "pipe" });
+      const res = runCliWithTimeout(cli, ["hooks", "enable", hookName], 25_000);
       if (res.status === 0) {
         const label = hookName === "bot-strap-extra-files" ? "bootstrap-extra-files" :
           (hookName === "session-memoey" ? "session-memory" : hookName);
@@ -2858,7 +2870,7 @@ function enableRequiredOpenClawHooks() {
         enabled = true;
         break;
       }
-      lastErr = String(res.stderr || res.stdout || "").trim();
+      lastErr = renderCliFailure(res);
       // Not found or unknown hook name: try alias fallback.
       if (/not found|unknown|no such hook|invalid/i.test(lastErr)) continue;
       // Eligible/state failures should still be surfaced but do not fail install.
@@ -2881,12 +2893,29 @@ function enableRequiredOpenClawHooks() {
     }
   }
   if (forcedAny) {
-    const restart = spawnSync(cli, ["gateway", "restart"], { encoding: "utf8", stdio: "pipe" });
+    const restart = runCliWithTimeout(cli, ["gateway", "restart"], 30_000);
     if (restart.status === 0) {
       log.info("Restarted OpenClaw gateway to apply forced hook state");
     } else {
       log.warn("Could not auto-restart OpenClaw gateway after forced hook enable. Restart manually.");
     }
+  }
+}
+
+function ensureQuaidCliShim(pluginDirPath) {
+  try {
+    const target = path.join(pluginDirPath, "quaid");
+    if (!fs.existsSync(target)) {
+      return false;
+    }
+    const binDir = path.join(os.homedir(), "bin");
+    const shimPath = path.join(binDir, "quaid");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.rmSync(shimPath, { force: true });
+    fs.symlinkSync(target, shimPath);
+    return true;
+  } catch {
+    return false;
   }
 }
 
