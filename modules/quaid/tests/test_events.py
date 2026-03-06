@@ -13,6 +13,7 @@ from core.runtime.events import (
     register_event_handler,
     validate_declared_event_contract,
 )
+from core.runtime.paths import get_runtime_root
 from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
 
 
@@ -75,7 +76,7 @@ def test_event_process_delayed_notification_queues_llm_request(tmp_path):
     assert out["processed"] >= 1
     assert out["failed"] == 0
 
-    requests_path = tmp_path / ".quaid" / "runtime" / "notes" / "delayed-llm-requests.json"
+    requests_path = get_runtime_root(tmp_path) / "notes" / "delayed-llm-requests.json"
     assert requests_path.exists()
     payload = json.loads(requests_path.read_text(encoding="utf-8"))
     requests = payload.get("requests") or []
@@ -182,7 +183,7 @@ def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, t
     assert out["processed"] >= 1
     assert out["failed"] == 0
 
-    requests_path = tmp_path / ".quaid" / "runtime" / "notes" / "delayed-llm-requests.json"
+    requests_path = get_runtime_root(tmp_path) / "notes" / "delayed-llm-requests.json"
     payload = json.loads(requests_path.read_text(encoding="utf-8"))
     requests = payload.get("requests") or []
     kinds = [str(r.get("kind", "")) for r in requests]
@@ -216,7 +217,7 @@ def test_event_process_janitor_daily_digest_is_independently_gated(monkeypatch, 
     assert out["processed"] >= 1
     assert out["failed"] == 0
 
-    requests_path = tmp_path / ".quaid" / "runtime" / "notes" / "delayed-llm-requests.json"
+    requests_path = get_runtime_root(tmp_path) / "notes" / "delayed-llm-requests.json"
     payload = json.loads(requests_path.read_text(encoding="utf-8"))
     requests = payload.get("requests") or []
     kinds = [str(r.get("kind", "")) for r in requests]
@@ -233,7 +234,7 @@ def test_emit_event_caps_queue_length(monkeypatch, tmp_path):
     for i in range(5):
         emit_event(name="session.reset", payload={"idx": i}, source="pytest")
 
-    queue_path = tmp_path / ".quaid" / "runtime" / "events" / "queue.json"
+    queue_path = get_runtime_root(tmp_path) / "events" / "queue.json"
     payload = json.loads(queue_path.read_text(encoding="utf-8"))
     queued = payload.get("events") or []
     assert len(queued) == 3
@@ -248,7 +249,7 @@ def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
     monkeypatch.setattr(events, "MAX_HISTORY_JSONL_BYTES", 120)
     monkeypatch.setattr(events, "HISTORY_TRIM_TARGET_BYTES", 60)
 
-    history_path = tmp_path / ".quaid" / "runtime" / "events" / "history.jsonl"
+    history_path = get_runtime_root(tmp_path) / "events" / "history.jsonl"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     seed = "".join(
         json.dumps({"ts": f"t{i}", "op": "seed", "event": {"id": i}}) + "\n"
@@ -321,7 +322,7 @@ def test_emit_event_raises_on_malformed_queue_when_fail_hard(monkeypatch, tmp_pa
 
     import core.runtime.events as events
 
-    queue_path = tmp_path / ".quaid" / "runtime" / "events" / "queue.json"
+    queue_path = get_runtime_root(tmp_path) / "events" / "queue.json"
     queue_path.parent.mkdir(parents=True, exist_ok=True)
     queue_path.write_text("{bad json", encoding="utf-8")
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
@@ -335,7 +336,7 @@ def test_emit_event_recovers_on_malformed_queue_when_not_fail_hard(monkeypatch, 
 
     import core.runtime.events as events
 
-    queue_path = tmp_path / ".quaid" / "runtime" / "events" / "queue.json"
+    queue_path = get_runtime_root(tmp_path) / "events" / "queue.json"
     queue_path.parent.mkdir(parents=True, exist_ok=True)
     queue_path.write_text("{bad json", encoding="utf-8")
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)

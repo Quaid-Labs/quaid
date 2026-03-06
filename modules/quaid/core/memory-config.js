@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 function buildFallbackMemoryConfig() {
     return {
         models: {
@@ -50,7 +49,6 @@ export function createMemoryConfigResolver(deps) {
         }
         return [
             path.join(deps.workspace, "memory-config.json"),
-            path.join(os.homedir(), ".quaid", "memory-config.json"),
             path.join(process.cwd(), "memory-config.json"),
         ];
     }

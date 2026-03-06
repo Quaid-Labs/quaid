@@ -3499,20 +3499,30 @@ def queue_signal_fallback(session_id_value: str, label: str) -> None:
     if not session_id_value:
         raise SystemExit(f"[e2e] ERROR: cannot queue fallback {label}; empty session id")
     script = r"""
-import { SessionTimeoutManager } from "./modules/quaid/core/session-timeout.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 const workspace = process.argv[1];
 const sid = process.argv[2];
 const signalLabel = process.argv[3];
-const tm = new SessionTimeoutManager({
-  workspace,
-  timeoutMinutes: 60,
-  isBootstrapOnly: false,
-  logger: console,
-  extract: async () => {},
-  readSessionMessages: () => [{ role: "user", content: "e2e-ingest-fallback", timestamp: new Date().toISOString() }],
-  listSessionActivity: () => [{ sessionId: sid, lastActivityMs: Date.now() }],
-});
-tm.queueExtractionSignal(sid, signalLabel, { source: "e2e_ingest_fallback" });
+const signalDir = join(workspace, "data", "pending-extraction-signals");
+const signalPath = join(signalDir, `${sid}.json`);
+mkdirSync(signalDir, { recursive: true });
+let attemptCount = 0;
+if (existsSync(signalPath)) {
+  try {
+    const existing = JSON.parse(readFileSync(signalPath, "utf8"));
+    attemptCount = Number(existing?.attemptCount || 0);
+  } catch {}
+}
+const payload = {
+  sessionId: sid,
+  label: signalLabel,
+  source: "e2e_ingest_fallback",
+  enqueuedAtMs: Date.now(),
+  attemptCount,
+  fallbackText: "e2e ingest fallback",
+};
+writeFileSync(signalPath, JSON.stringify(payload, null, 2), "utf8");
 console.log(`[e2e] queued fallback ${signalLabel} for ${sid}`);
 """
     proc = subprocess.run(

@@ -22,6 +22,7 @@ from threading import Lock
 from typing import Any, Callable, Dict, List, Optional
 
 from core.ingest_runtime import run_docs_ingest, run_session_logs_ingest
+from core.runtime.paths import get_runtime_root
 from lib.runtime_context import get_workspace_dir
 
 Event = Dict[str, Any]
@@ -201,7 +202,7 @@ def _ensure_parent(path: Path) -> None:
 
 def _event_paths() -> Dict[str, Path]:
     root = get_workspace_dir()
-    runtime = root / ".quaid" / "runtime"
+    runtime = get_runtime_root(root)
     events_dir = runtime / "events"
     notes_dir = runtime / "notes"
     return {

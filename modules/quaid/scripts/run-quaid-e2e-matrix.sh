@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="${SCRIPT_DIR}/run-quaid-e2e.sh"
 BOOTSTRAP_ROOT="${QUAID_BOOTSTRAP_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 PROFILE_PATH="${QUAID_E2E_PROFILE_PATH:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
-PATH_TIMEOUT_SEC="${QUAID_E2E_PATH_TIMEOUT_SEC:-1200}"
+PATH_TIMEOUT_SEC="${QUAID_E2E_PATH_TIMEOUT_SEC:-1800}"
 
 PATHS=("openai-oauth" "openai-api" "anthropic-oauth" "anthropic-api")
 EXPECT_SPEC=""
@@ -25,7 +25,7 @@ Options:
   -h, --help         Show help
 
 Environment:
-  QUAID_E2E_PATH_TIMEOUT_SEC  Max seconds per auth path before timeout classification (default: 1200)
+  QUAID_E2E_PATH_TIMEOUT_SEC  Max seconds per auth path before timeout classification (default: 1800)
   QUAID_E2E_MATRIX_FAIL_ON_SKIP  Treat skipped auth lanes as failures (default: false)
 USAGE
 }

@@ -10,7 +10,7 @@ import type { PythonBridgeExec } from "./datastore-bridge.js";
 import { createDatastoreBridge } from "./datastore-bridge.js";
 import { createProjectCatalogReader } from "./project-catalog.js";
 import { createKnowledgeEngine } from "./knowledge-engine.js";
-import type { TotalRecallOptions } from "../orchestrator/default-orchestrator.js";
+import type { TotalRecallOptions } from "./knowledge-engine.js";
 import {
   normalizeKnowledgeDatastores,
   renderKnowledgeDatastoreGuidanceForAgents,
@@ -57,6 +57,9 @@ export type QuaidFacadeDeps = {
   ) => Promise<LLMCallResult | null>;
   getDefaultLLMProvider?: () => string;
   adapterName?: string;
+  defaultOwner?: string;
+  isSystemSession?: (sessionId: string) => boolean;
+  runtimeDir?: string;
   providerAliases?: Record<string, string>;
   getDatastoreStatsSync?: () => Record<string, any> | null;
   initDatastore?: () => void;
@@ -542,13 +545,13 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const usersCfg = deps.getMemoryConfig()?.users;
     const config = usersCfg && typeof usersCfg === "object" && !Array.isArray(usersCfg)
       ? usersCfg as Record<string, any>
-      : { defaultOwner: "quaid", identities: {} };
+      : { defaultOwner: String(deps.defaultOwner || "default"), identities: {} };
     const identities = config.identities && typeof config.identities === "object" && !Array.isArray(config.identities)
       ? config.identities as Record<string, any>
       : {};
     const defaultOwner = typeof config.defaultOwner === "string" && config.defaultOwner.trim()
       ? config.defaultOwner.trim()
-      : "quaid";
+      : String(deps.defaultOwner || "default");
 
     for (const [userId, identity] of Object.entries(identities)) {
       if (!identity || typeof identity !== "object") continue;
@@ -581,7 +584,10 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   function isInternalQuaidSession(sessionId: unknown): boolean {
     const sid = typeof sessionId === "string" ? sessionId.trim() : "";
     if (!sid) return false;
-    return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
+    if (typeof deps.isSystemSession === "function") {
+      return deps.isSystemSession(sid);
+    }
+    return sid.startsWith("runtime-fast-") || sid.startsWith("runtime-deep-") || sid.includes("runtime-llm");
   }
 
   function normalizeProvider(provider: string): string {
@@ -869,7 +875,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
   }
 
-  const INJECTION_LOG_DIR = path.join(deps.workspace, ".quaid", "runtime", "injection");
+  const runtimeDir = path.resolve(String(deps.runtimeDir || path.join(deps.workspace, ".runtime")));
+  const INJECTION_LOG_DIR = path.join(runtimeDir, "injection");
 
   function getInjectionLogPath(sessionId: string): string {
     return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
@@ -967,7 +974,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function queueDelayedRequest(request: DelayedRequestInput): boolean {
     const requestsPath = String(
-      request?.requestsPath || path.join(deps.workspace, ".quaid", "runtime", "notes", "delayed-llm-requests.json"),
+      request?.requestsPath || path.join(runtimeDir, "notes", "delayed-llm-requests.json"),
     );
     const message = String(request?.message || "").trim();
     const kind = String(request?.kind || "janitor");
@@ -1653,7 +1660,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     messages: unknown[],
     label: string,
     sessionId?: string,
-    tempDir: string = path.join(deps.workspace, ".quaid", "tmp"),
+    tempDir: string = path.join(runtimeDir, "tmp"),
   ): Promise<void> {
     if (!deps.isSystemEnabled("workspace")) {
       return;
@@ -2420,7 +2427,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   const _memoryNotes = new Map<string, string[]>();
   const _memoryNotesTouchedAt = new Map<string, number>();
-  const NOTES_DIR = path.join(deps.workspace, ".quaid", "runtime", "notes");
+  const NOTES_DIR = path.join(runtimeDir, "notes");
 
   function getNotesPath(sessionId: string): string {
     return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
@@ -2553,7 +2560,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const journalEnabled = deps.isSystemEnabled("journal") && journalConfig.enabled !== false;
     const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
     const triggerType = resolveExtractionTrigger(label);
-    const tmpDir = path.join(deps.workspace, ".quaid", "tmp");
+    const tmpDir = path.join(runtimeDir, "tmp");
     fs.mkdirSync(tmpDir, { recursive: true });
     const tmpPath = path.join(tmpDir, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
     fs.writeFileSync(tmpPath, transcriptForExtraction, { mode: 0o600 });

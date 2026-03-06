@@ -47,6 +47,7 @@ type TimeoutLogger = (message: string) => void;
 
 type SessionTimeoutManagerOptions = {
   workspace: string;
+  logDir?: string;
   timeoutMinutes: number;
   extract: TimeoutExtractor;
   isBootstrapOnly: (messages: any[]) => boolean;
@@ -229,7 +230,7 @@ export class SessionTimeoutManager {
       }
     };
 
-    this.logDir = path.join(opts.workspace, "logs", "quaid");
+    this.logDir = path.resolve(String(opts.logDir || path.join(opts.workspace, "logs", "runtime")));
     this.sessionLogDir = path.join(this.logDir, "sessions");
     this.sessionCursorDir = path.join(opts.workspace, "data", "session-cursors");
     this.pendingSignalDir = path.join(opts.workspace, "data", "pending-extraction-signals");

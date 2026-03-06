@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from core.llm.scheduler import get_global_llm_scheduler
+from core.runtime.paths import get_runtime_root
 from core.runtime.parallel_runtime import ResourceLockRegistry, get_parallel_config
 logger = logging.getLogger(__name__)
 
@@ -307,7 +308,7 @@ class LifecycleRegistry:
             return
 
     def _lock_registry_for_workspace(self, workspace: Path) -> ResourceLockRegistry:
-        lock_root = (Path(workspace).resolve() / ".quaid" / "runtime" / "locks" / "janitor")
+        lock_root = get_runtime_root(Path(workspace).resolve()) / "locks" / "janitor"
         key = str(lock_root)
         with self._lock_registries_guard:
             reg = self._lock_registries.pop(key, None)

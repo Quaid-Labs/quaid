@@ -13,6 +13,7 @@ from core.lifecycle.janitor_lifecycle import (
     _register_module_routines,
     build_default_registry,
 )
+from core.runtime.paths import get_runtime_root
 
 
 class _FakeRag:
@@ -613,8 +614,8 @@ def test_lifecycle_registry_caps_workspace_lock_registry_cache(tmp_path):
     assert reg1 is not None and reg2 is not None and reg3 is not None
     assert len(registry._lock_registries) == 2
     keys = set(registry._lock_registries.keys())
-    assert str((tmp_path / "b" / ".quaid" / "runtime" / "locks" / "janitor").resolve()) in keys
-    assert str((tmp_path / "c" / ".quaid" / "runtime" / "locks" / "janitor").resolve()) in keys
+    assert str((get_runtime_root(tmp_path / "b") / "locks" / "janitor").resolve()) in keys
+    assert str((get_runtime_root(tmp_path / "c") / "locks" / "janitor").resolve()) in keys
 
 
 def test_lifecycle_env_modules_reject_unapproved_prefix(monkeypatch):

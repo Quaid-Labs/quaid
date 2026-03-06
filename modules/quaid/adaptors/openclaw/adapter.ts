@@ -123,6 +123,7 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
   return {
     ...process.env,
     MEMORY_DB_PATH: DB_PATH,
+    MEMORY_RUNTIME_DIR: QUAID_RUNTIME_DIR,
     QUAID_HOME: WORKSPACE,
     QUAID_WORKSPACE: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE,
@@ -836,6 +837,10 @@ const facade = createQuaidFacade({
   callLLM: callConfiguredLLM,
   getDefaultLLMProvider: getGatewayDefaultProvider,
   adapterName: "openclaw_adapter",
+  defaultOwner: "quaid",
+  isSystemSession: (sid: string) =>
+    sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm"),
+  runtimeDir: QUAID_RUNTIME_DIR,
   providerAliases: {
     "openai-codex": "openai",
     "anthropic-claude-code": "anthropic",
@@ -1868,6 +1873,7 @@ notify_user(f"📁 Project registered: {project_label}")
     // Extraction promise gate is facade-owned so adapters remain swappable.
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
+      logDir: path.join(QUAID_LOGS_DIR, "quaid"),
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
       failHardEnabled: () => isFailHardEnabled(),
       isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),

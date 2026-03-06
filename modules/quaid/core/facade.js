@@ -138,13 +138,13 @@ export function createQuaidFacade(deps) {
         const usersCfg = deps.getMemoryConfig()?.users;
         const config = usersCfg && typeof usersCfg === "object" && !Array.isArray(usersCfg)
             ? usersCfg
-            : { defaultOwner: "quaid", identities: {} };
+            : { defaultOwner: String(deps.defaultOwner || "default"), identities: {} };
         const identities = config.identities && typeof config.identities === "object" && !Array.isArray(config.identities)
             ? config.identities
             : {};
         const defaultOwner = typeof config.defaultOwner === "string" && config.defaultOwner.trim()
             ? config.defaultOwner.trim()
-            : "quaid";
+            : String(deps.defaultOwner || "default");
         for (const [userId, identity] of Object.entries(identities)) {
             if (!identity || typeof identity !== "object")
                 continue;
@@ -176,7 +176,10 @@ export function createQuaidFacade(deps) {
         const sid = typeof sessionId === "string" ? sessionId.trim() : "";
         if (!sid)
             return false;
-        return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
+        if (typeof deps.isSystemSession === "function") {
+            return deps.isSystemSession(sid);
+        }
+        return sid.startsWith("runtime-fast-") || sid.startsWith("runtime-deep-") || sid.includes("runtime-llm");
     }
     function normalizeProvider(provider) {
         return String(provider || "").trim().toLowerCase();
@@ -445,7 +448,8 @@ export function createQuaidFacade(deps) {
         const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
         fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
     }
-    const INJECTION_LOG_DIR = path.join(deps.workspace, ".quaid", "runtime", "injection");
+    const runtimeDir = path.resolve(String(deps.runtimeDir || path.join(deps.workspace, ".runtime")));
+    const INJECTION_LOG_DIR = path.join(runtimeDir, "injection");
     function getInjectionLogPath(sessionId) {
         return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
     }
@@ -530,7 +534,7 @@ export function createQuaidFacade(deps) {
         return `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
     }
     function queueDelayedRequest(request) {
-        const requestsPath = String(request?.requestsPath || path.join(deps.workspace, ".quaid", "runtime", "notes", "delayed-llm-requests.json"));
+        const requestsPath = String(request?.requestsPath || path.join(runtimeDir, "notes", "delayed-llm-requests.json"));
         const message = String(request?.message || "").trim();
         const kind = String(request?.kind || "janitor");
         const priority = String(request?.priority || "normal");
@@ -1197,7 +1201,7 @@ export function createQuaidFacade(deps) {
         const nonBootstrapUserTexts = userTexts.filter((text) => !text.startsWith(bootstrapPrompt));
         return nonBootstrapUserTexts.length === 0;
     }
-    async function updateDocsFromTranscript(messages, label, sessionId, tempDir = path.join(deps.workspace, ".quaid", "tmp")) {
+    async function updateDocsFromTranscript(messages, label, sessionId, tempDir = path.join(runtimeDir, "tmp")) {
         if (!deps.isSystemEnabled("workspace")) {
             return;
         }
@@ -1922,7 +1926,7 @@ export function createQuaidFacade(deps) {
     // -------------------------------------------------------------------------
     const _memoryNotes = new Map();
     const _memoryNotesTouchedAt = new Map();
-    const NOTES_DIR = path.join(deps.workspace, ".quaid", "runtime", "notes");
+    const NOTES_DIR = path.join(runtimeDir, "notes");
     function getNotesPath(sessionId) {
         return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
     }
@@ -2059,7 +2063,7 @@ export function createQuaidFacade(deps) {
         const journalEnabled = deps.isSystemEnabled("journal") && journalConfig.enabled !== false;
         const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
         const triggerType = resolveExtractionTrigger(label);
-        const tmpDir = path.join(deps.workspace, ".quaid", "tmp");
+        const tmpDir = path.join(runtimeDir, "tmp");
         fs.mkdirSync(tmpDir, { recursive: true });
         const tmpPath = path.join(tmpDir, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
         fs.writeFileSync(tmpPath, transcriptForExtraction, { mode: 0o600 });

@@ -102,6 +102,7 @@ function buildPythonEnv(extra = {}) {
   return {
     ...process.env,
     MEMORY_DB_PATH: DB_PATH,
+    MEMORY_RUNTIME_DIR: QUAID_RUNTIME_DIR,
     QUAID_HOME: WORKSPACE,
     QUAID_WORKSPACE: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE,
@@ -667,6 +668,9 @@ subprocess.run(["python3", ${JSON.stringify(PROJECT_UPDATER)}, "process-event", 
   callLLM: callConfiguredLLM,
   getDefaultLLMProvider: getGatewayDefaultProvider,
   adapterName: "openclaw_adapter",
+  defaultOwner: "quaid",
+  isSystemSession: (sid) => sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm"),
+  runtimeDir: QUAID_RUNTIME_DIR,
   providerAliases: {
     "openai-codex": "openai",
     "anthropic-claude-code": "anthropic"
@@ -1597,6 +1601,7 @@ ${factsOutput || "No facts found."}` }],
     );
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
+      logDir: path.join(QUAID_LOGS_DIR, "quaid"),
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
       failHardEnabled: () => isFailHardEnabled(),
       isBootstrapOnly: (messages) => facade.isResetBootstrapOnlyConversation(messages),

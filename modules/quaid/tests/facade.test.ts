@@ -7,11 +7,16 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps {
+  const workspace = String(overrides.workspace || "/tmp/test-workspace");
   return {
-    workspace: "/tmp/test-workspace",
-    pluginRoot: "/tmp/test-workspace/modules/quaid",
+    workspace,
+    pluginRoot: `${workspace}/modules/quaid`,
     dbPath: "/tmp/test-memory.db",
     eventSource: "openclaw_adapter",
+    defaultOwner: "quaid",
+    isSystemSession: (sid: string) =>
+      sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm"),
+    runtimeDir: path.join(workspace, ".quaid", "runtime"),
     execPython: vi.fn(async () => "{}"),
     execExtractPipeline: vi.fn(async () => "{}"),
     execDocsRag: vi.fn(async () => ""),
