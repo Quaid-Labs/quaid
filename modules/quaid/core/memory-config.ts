@@ -109,7 +109,7 @@ export function createMemoryConfigResolver(deps: MemoryConfigResolverDeps): Memo
     } catch (err: unknown) {
       if (!memoryConfigErrorLogged) {
         memoryConfigErrorLogged = true;
-        error(`[quaid] failed to load config/memory.json: ${(err as Error)?.message || String(err)}`);
+        error(`[quaid] failed to load memory config (${configPath}): ${(err as Error)?.message || String(err)}`);
       }
       if (deps.isMissingFileError(err)) {
         memoryConfig = buildFallbackMemoryConfig();
