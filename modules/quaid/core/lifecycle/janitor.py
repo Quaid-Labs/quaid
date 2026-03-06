@@ -826,7 +826,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             print("⚠️" * 10)
             print(f"⚠️  WARNING: LLM provider not available: {_provider_err}")
             print("⚠️  The janitor needs a working LLM provider for review, dedup, and decay tasks.")
-            print("⚠️  Check your adapter configuration (config/memory.json adapter.type, gateway status, etc.).")
+            print("⚠️  Check your adapter configuration (config/memory.json adapter.type, adapter status, etc.).")
             print("⚠️" * 10)
             print()
 
