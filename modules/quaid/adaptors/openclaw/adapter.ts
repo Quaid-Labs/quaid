@@ -1937,6 +1937,7 @@ notify_user(f"📁 Project registered: {project_label}")
     const timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
+      failHardEnabled: () => isFailHardEnabled(),
       isBootstrapOnly: (messages: any[]) => facade.isResetBootstrapOnlyConversation(messages),
       shouldSkipText: (text: string) => shouldSkipTranscriptText(text),
       readSessionMessages: (sessionId: string) => facade.readTimeoutSessionMessages(sessionId),
