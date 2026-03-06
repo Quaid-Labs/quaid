@@ -131,6 +131,28 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
   };
 }
 
+function getDatastoreStatsSync(): Record<string, any> | null {
+  try {
+    const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
+      encoding: "utf-8",
+      timeout: 30_000,
+      env: buildPythonEnv(),
+    });
+    const parsed = JSON.parse(output || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, any>;
+  } catch (err: unknown) {
+    const msg = `[quaid] datastore stats read failed: ${String((err as Error)?.message || err)}`;
+    if (isFailHardEnabled()) {
+      throw new Error(msg, { cause: err as Error });
+    }
+    console.warn(msg);
+    return null;
+  }
+}
+
 const memoryConfigResolver = createMemoryConfigResolver({
   workspace: WORKSPACE,
   isMissingFileError,
@@ -862,6 +884,7 @@ const facade = createQuaidFacade({
   readSessionMessagesFile: (sessionFile: string) => parseSessionMessagesJsonl(sessionFile),
   listCompactionSessions,
   requestSessionCompaction,
+  getDatastoreStatsSync,
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
@@ -1622,11 +1645,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             // If project specified, prepend full PROJECT.md for context
             let projectMdContent = "";
             if (project) {
-              try {
-                projectMdContent = facade.loadProjectMarkdown(project);
-              } catch (err: unknown) {
-                console.warn(`[quaid] projects_search PROJECT.md preload failed: ${String((err as Error)?.message || err)}`);
-              }
+              projectMdContent = facade.loadProjectMarkdown(project);
             }
 
             // Staleness check (lightweight mtime comparison)

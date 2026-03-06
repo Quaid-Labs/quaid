@@ -9,7 +9,6 @@ import { createDatastoreBridge } from "./datastore-bridge.js";
 import { createProjectCatalogReader } from "./project-catalog.js";
 import { createKnowledgeEngine } from "./knowledge-engine.js";
 import { normalizeKnowledgeDatastores, renderKnowledgeDatastoreGuidanceForAgents, } from "./knowledge-stores.js";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -19,7 +18,6 @@ import * as path from "node:path";
 const FAST_ROUTER_TIMEOUT_MS = 45_000;
 const DEEP_ROUTER_TIMEOUT_MS = 60_000;
 const NODE_COUNT_CACHE_MS = 120_000;
-const DATASTORE_STATS_TIMEOUT_MS = 30_000;
 const MAX_MEMORY_NOTES_PER_SESSION = 400;
 const MAX_MEMORY_NOTE_SESSIONS = 200;
 const EXTRACTION_NOTIFY_DEDUPE_MS = 90_000;
@@ -589,21 +587,14 @@ export function createQuaidFacade(deps) {
         if ((now - _datastoreStatsTimestamp) < maxAgeMs) {
             return _cachedDatastoreStats;
         }
+        const readStats = deps.getDatastoreStatsSync;
+        if (typeof readStats !== "function") {
+            _cachedDatastoreStats = null;
+            _datastoreStatsTimestamp = now;
+            return null;
+        }
         try {
-            const pyScript = path.join(deps.pluginRoot, "datastore/memorydb/memory_graph.py");
-            const output = execFileSync("python3", [pyScript, "stats"], {
-                encoding: "utf-8",
-                timeout: DATASTORE_STATS_TIMEOUT_MS,
-                env: {
-                    ...process.env,
-                    MEMORY_DB_PATH: deps.dbPath,
-                    QUAID_HOME: deps.workspace,
-                    QUAID_WORKSPACE: deps.workspace,
-                    CLAWDBOT_WORKSPACE: deps.workspace,
-                    PYTHONPATH: deps.pluginRoot,
-                },
-            });
-            const parsed = JSON.parse(output);
+            const parsed = readStats();
             if (!parsed || typeof parsed !== "object") {
                 _cachedDatastoreStats = null;
                 _datastoreStatsTimestamp = now;
