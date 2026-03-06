@@ -1,7 +1,7 @@
 """Provider ABCs and concrete implementations for LLM and embeddings.
 
-Providers are the lowest-level abstraction for calling models.  Adapters
-produce providers (e.g. OpenClawAdapter → AnthropicLLMProvider), but
+Providers are the lowest-level abstraction for calling models. Platform adapters
+produce providers (e.g. host adapter → AnthropicLLMProvider), but
 providers also work standalone (e.g. OllamaEmbeddingsProvider).
 
 Concrete providers shipped:
@@ -146,7 +146,7 @@ class EmbeddingsProvider(abc.ABC):
 class AnthropicLLMProvider(LLMProvider):
     """Calls the Anthropic Messages API directly with an API key.
 
-    Used by OpenClawAdapter and any installation that has an API key.
+    Used by platform adapters and any installation that has an API key.
     Supports prompt caching via cache_control on the system block.
     """
 

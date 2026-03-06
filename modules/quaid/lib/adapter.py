@@ -7,9 +7,9 @@ Provides an abstract interface that Quaid modules call for:
 - Session access (conversation transcripts)
 - Platform-specific filtering (HEARTBEAT, gateway messages)
 
-Two concrete adapters ship out of the box:
+Built-in adapters currently include:
 - StandaloneAdapter: works anywhere (~/quaid/)
-- OpenClawAdapter: for OpenClaw gateway runtime
+- Additional host-specific adapters from `adaptors/` (for gateway/runtime integrations)
 
 Adapter selection (get_adapter()):
 1. config/memory.json adapter type  (required)
