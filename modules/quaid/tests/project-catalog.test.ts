@@ -6,6 +6,9 @@ describe("project catalog reader diagnostics", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const reader = createProjectCatalogReader({
       workspace: "/tmp/quaid-test",
+      getMemoryConfig: () => {
+        throw new Error("boom");
+      },
       fs: {
         readFileSync: () => {
           throw new Error("boom");
@@ -25,6 +28,9 @@ describe("project catalog reader diagnostics", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const reader = createProjectCatalogReader({
       workspace: "/tmp/quaid-test",
+      getMemoryConfig: () => {
+        throw new Error("boom");
+      },
       fs: {
         readFileSync: () => {
           throw new Error("boom");

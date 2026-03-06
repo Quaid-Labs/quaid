@@ -1553,11 +1553,9 @@ notify_user(f"\u{1F4C1} Project registered: {project_label}")
                   details: { error: "invalid_session_id" }
                 };
               }
-              const sessionsDir = path.join(os.homedir(), ".openclaw", "sessions");
-              const sessionPath = path.join(sessionsDir, `${sid}.jsonl`);
-              if (fs.existsSync(sessionPath)) {
-                try {
-                  const messages = parseSessionMessagesJsonl(sessionPath);
+              try {
+                const messages = facade.readTimeoutSessionMessages(sid);
+                if (messages.length > 0) {
                   const transcript = facade.buildTranscript(messages);
                   const truncated = transcript.length > 1e4 ? "...[truncated]...\n\n" + transcript.slice(-1e4) : transcript;
                   return {
@@ -1566,8 +1564,8 @@ notify_user(f"\u{1F4C1} Project registered: {project_label}")
 ${truncated}` }],
                     details: { session_id: sid, message_count: messages.length, truncated: transcript.length > 1e4 }
                   };
-                } catch {
                 }
+              } catch {
               }
               try {
                 const factsOutput = await facade.searchBySession(sid, 20);
