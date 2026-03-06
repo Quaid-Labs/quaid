@@ -409,6 +409,24 @@ function requestSessionCompaction(sessionKey) {
     throw err;
   }
 }
+function parseSessionMessagesJsonl(sessionFile) {
+  const content = fs.readFileSync(sessionFile, "utf8");
+  const lines = content.trim().split("\n");
+  const messages = [];
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "message" && entry.message) {
+        messages.push(entry.message);
+      } else if (entry.role) {
+        messages.push(entry);
+      }
+    } catch (err) {
+      console.warn(`[quaid] session file line parse failed: ${String(err?.message || err)}`);
+    }
+  }
+  return messages;
+}
 const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py");
 const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
@@ -904,7 +922,7 @@ const facade = createQuaidFacade({
     path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
     path.join(os.homedir(), ".openclaw", "sessions")
   ],
-  readSessionMessagesFile: (sessionFile) => readMessagesFromSessionFile(sessionFile),
+  readSessionMessagesFile: (sessionFile) => parseSessionMessagesJsonl(sessionFile),
   listCompactionSessions,
   requestSessionCompaction,
   getMemoryConfig,
@@ -1197,7 +1215,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         try {
           const sessionFile = String(update?.sessionFile || "").trim();
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
-          const messages = readMessagesFromSessionFile2(sessionFile);
+          const messages = parseSessionMessagesJsonl(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
           const detail = facade.detectLifecycleSignal(messages);
           if (!detail) return;
@@ -1905,7 +1923,7 @@ notify_user(f"\u{1F4C1} Project registered: {project_label}")
               const sessionPath = path.join(sessionsDir, `${sid}.jsonl`);
               if (fs.existsSync(sessionPath)) {
                 try {
-                  const messages = readMessagesFromSessionFile2(sessionPath);
+                  const messages = parseSessionMessagesJsonl(sessionPath);
                   const transcript = facade.buildTranscript(messages);
                   const truncated = transcript.length > 1e4 ? "...[truncated]...\n\n" + transcript.slice(-1e4) : transcript;
                   return {
@@ -2040,24 +2058,6 @@ ${factsOutput || "No facts found."}` }],
         failOpen: opts.failOpen
       };
       return sourceTag === "tool" ? facade.recallWithToolRetry(recallOpts) : facade.recall(recallOpts);
-    }
-    function readMessagesFromSessionFile2(sessionFile) {
-      const content = fs.readFileSync(sessionFile, "utf8");
-      const lines = content.trim().split("\n");
-      const messages = [];
-      for (const line of lines) {
-        try {
-          const entry = JSON.parse(line);
-          if (entry.type === "message" && entry.message) {
-            messages.push(entry.message);
-          } else if (entry.role) {
-            messages.push(entry);
-          }
-        } catch (err) {
-          console.warn(`[quaid] session file line parse failed: ${String(err?.message || err)}`);
-        }
-      }
-      return messages;
     }
     const extractMemoriesFromMessages = async (messages, label, sessionId) => {
       console.log(`[quaid][extract] start label=${label} session=${sessionId || "unknown"} message_count=${messages.length}`);

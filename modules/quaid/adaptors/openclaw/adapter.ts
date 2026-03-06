@@ -479,6 +479,25 @@ function requestSessionCompaction(sessionKey: string): { ok: boolean; compacted?
   }
 }
 
+function parseSessionMessagesJsonl(sessionFile: string): any[] {
+  const content = fs.readFileSync(sessionFile, "utf8");
+  const lines = content.trim().split("\n");
+  const messages: any[] = [];
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "message" && entry.message) {
+        messages.push(entry.message);
+      } else if (entry.role) {
+        messages.push(entry);
+      }
+    } catch (err: unknown) {
+      console.warn(`[quaid] session file line parse failed: ${String((err as Error)?.message || err)}`);
+    }
+  }
+  return messages;
+}
+
 // ============================================================================
 // Python Bridges (docs_updater, docs_rag)
 // ============================================================================
@@ -1088,7 +1107,7 @@ const facade = createQuaidFacade({
     path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
     path.join(os.homedir(), ".openclaw", "sessions"),
   ],
-  readSessionMessagesFile: (sessionFile: string) => readMessagesFromSessionFile(sessionFile),
+  readSessionMessagesFile: (sessionFile: string) => parseSessionMessagesJsonl(sessionFile),
   listCompactionSessions,
   requestSessionCompaction,
   getMemoryConfig,
@@ -1478,7 +1497,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         try {
           const sessionFile = String(update?.sessionFile || "").trim();
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
-          const messages = readMessagesFromSessionFile(sessionFile);
+          const messages = parseSessionMessagesJsonl(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
           const detail = facade.detectLifecycleSignal(messages);
           if (!detail) return;
@@ -2199,7 +2218,7 @@ notify_user(f"📁 Project registered: {project_label}")
 
               if (fs.existsSync(sessionPath)) {
                 try {
-                  const messages = readMessagesFromSessionFile(sessionPath);
+                  const messages = parseSessionMessagesJsonl(sessionPath);
                   const transcript = facade.buildTranscript(messages);
                   // Return last 10k chars (most recent part of conversation)
                   const truncated = transcript.length > 10000
@@ -2336,27 +2355,6 @@ notify_user(f"📁 Project registered: {project_label}")
     }
 
     // Read messages from a session JSONL file
-    function readMessagesFromSessionFile(sessionFile: string): any[] {
-      const content = fs.readFileSync(sessionFile, 'utf8');
-      const lines = content.trim().split('\n');
-      const messages: any[] = [];
-      for (const line of lines) {
-        try {
-          const entry = JSON.parse(line);
-          // Session JSONL has entries like { type: "message", message: { role, content } }
-          // and also direct message objects { role, content }
-          if (entry.type === 'message' && entry.message) {
-            messages.push(entry.message);
-          } else if (entry.role) {
-            messages.push(entry);
-          }
-        } catch (err: unknown) {
-          console.warn(`[quaid] session file line parse failed: ${String((err as Error)?.message || err)}`);
-        }
-      }
-      return messages;
-    }
-
     // Shared memory extraction logic — used by both compaction and reset hooks
     const extractMemoriesFromMessages = async (messages: any[], label: string, sessionId?: string) => {
       console.log(`[quaid][extract] start label=${label} session=${sessionId || "unknown"} message_count=${messages.length}`);
