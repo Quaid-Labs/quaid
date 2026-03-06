@@ -1112,15 +1112,14 @@ ${recallStoreGuidance}`,
           }),
           async execute(toolCallId, params) {
             try {
-              const configPath = path.join(WORKSPACE, "config/memory.json");
               let maxLimit = 50;
               try {
-                const configData = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+                const configData = facade.getConfig();
                 const rawMaxLimit = configData?.retrieval?.maxLimit ?? configData?.retrieval?.max_limit ?? 50;
                 const parsedMaxLimit = Number(rawMaxLimit);
                 maxLimit = Number.isFinite(parsedMaxLimit) && parsedMaxLimit > 0 ? parsedMaxLimit : 50;
               } catch (err) {
-                console.warn(`[quaid] memory_recall maxLimit config read failed: ${String(err?.message || err)}`);
+                console.warn(`[quaid] memory_recall maxLimit config resolve failed: ${String(err?.message || err)}`);
               }
               const dynamicK = facade.computeDynamicK();
               const { query, options = {} } = params || {};

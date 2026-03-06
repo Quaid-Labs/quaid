@@ -1383,15 +1383,14 @@ ${recallStoreGuidance}`,
         async execute(toolCallId, params) {
           try {
             // Dynamic K: 2 * log2(nodeCount), with config maxLimit as hard cap
-            const configPath = path.join(WORKSPACE, "config/memory.json");
             let maxLimit = 50;
             try {
-              const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+              const configData = facade.getConfig();
               const rawMaxLimit = configData?.retrieval?.maxLimit ?? configData?.retrieval?.max_limit ?? 50;
               const parsedMaxLimit = Number(rawMaxLimit);
               maxLimit = Number.isFinite(parsedMaxLimit) && parsedMaxLimit > 0 ? parsedMaxLimit : 50;
             } catch (err: unknown) {
-              console.warn(`[quaid] memory_recall maxLimit config read failed: ${String((err as Error)?.message || err)}`);
+              console.warn(`[quaid] memory_recall maxLimit config resolve failed: ${String((err as Error)?.message || err)}`);
             }
 
             const dynamicK = facade.computeDynamicK();
