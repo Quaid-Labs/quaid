@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQuaidFacade } from "../core/facade.js";
 import type { QuaidFacadeDeps, LLMCallResult } from "../core/facade.js";
 import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -71,6 +72,20 @@ describe("QuaidFacade", () => {
   it("isFailHardEnabled delegates to deps", () => {
     const facade = createQuaidFacade(makeMockDeps({ isFailHardEnabled: vi.fn(() => true) }));
     expect(facade.isFailHardEnabled()).toBe(true);
+  });
+
+  it("initializeDatastoreIfMissing creates db dir and calls init callback once", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-db-init-"));
+    const dbPath = path.join(workspace, "data", "memory.db");
+    const initDatastore = vi.fn(() => {
+      mkdirSync(path.dirname(dbPath), { recursive: true });
+      writeFileSync(dbPath, "", "utf8");
+    });
+    const facade = createQuaidFacade(makeMockDeps({ workspace, dbPath, initDatastore }));
+    expect(facade.initializeDatastoreIfMissing()).toBe(true);
+    expect(facade.initializeDatastoreIfMissing()).toBe(false);
+    expect(initDatastore).toHaveBeenCalledTimes(1);
+    await rm(workspace, { recursive: true, force: true });
   });
 
   it("getCaptureTimeoutMinutes reads capture timeout from config", () => {

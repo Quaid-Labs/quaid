@@ -884,6 +884,12 @@ const facade = createQuaidFacade({
   readSessionMessagesFile: (sessionFile: string) => parseSessionMessagesJsonl(sessionFile),
   listCompactionSessions,
   requestSessionCompaction,
+  initDatastore: () => {
+    execFileSync("python3", [PYTHON_SCRIPT, "init"], {
+      timeout: 20_000,
+      env: buildPythonEnv(),
+    });
+  },
   getDatastoreStatsSync,
   getMemoryConfig,
   isSystemEnabled,
@@ -974,26 +980,16 @@ const quaidPlugin = {
       return api.registerHttpRoute(route as any);
     };
 
-    // Ensure database exists
-    const dataDir = path.dirname(DB_PATH);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    // Check if database needs seeding
-    if (!fs.existsSync(DB_PATH)) {
-      console.log("[quaid] Database not found, initializing datastore...");
-      try {
-        execFileSync("python3", [PYTHON_SCRIPT, "init"], {
-          timeout: 20_000,
-          env: buildPythonEnv(),
-        });
+    // Ensure database exists (facade owns the init policy; adapter supplies callback).
+    try {
+      const initialized = facade.initializeDatastoreIfMissing();
+      if (initialized) {
         console.log("[quaid] Datastore initialization complete");
-      } catch (err: unknown) {
-        console.error("[quaid] Datastore initialization failed:", (err as Error).message);
-        if (isFailHardEnabled()) {
-          throw err;
-        }
+      }
+    } catch (err: unknown) {
+      console.error("[quaid] Datastore initialization failed:", (err as Error).message);
+      if (isFailHardEnabled()) {
+        throw err;
       }
     }
 

@@ -59,6 +59,7 @@ export type QuaidFacadeDeps = {
   adapterName?: string;
   providerAliases?: Record<string, string>;
   getDatastoreStatsSync?: () => Record<string, any> | null;
+  initDatastore?: () => void;
   resolveSessionIdFromSessionKey?: (sessionKey: string) => string;
   resolveDefaultSessionId?: () => string;
   resolveMostRecentSessionId?: () => string;
@@ -196,6 +197,7 @@ export type QuaidFacade = {
   updateExtractionLog: (sessionId: string, messages: unknown[], label: string) => void;
   getInjectionLogPath: (sessionId: string) => string;
   pruneInjectionLogFiles: () => void;
+  initializeDatastoreIfMissing: () => boolean;
 
   // --- Datastore stats ---
   stats: () => Promise<string>;
@@ -508,6 +510,25 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function getQueuedExtractionPromise(): Promise<void> | null {
     return extractionPromise;
+  }
+
+  function initializeDatastoreIfMissing(): boolean {
+    const dataDir = path.dirname(deps.dbPath);
+    fs.mkdirSync(dataDir, { recursive: true });
+    if (fs.existsSync(deps.dbPath)) {
+      return false;
+    }
+    const initDatastore = deps.initDatastore;
+    if (typeof initDatastore !== "function") {
+      const msg = "[quaid][facade] datastore initialization callback is not configured";
+      if (deps.isFailHardEnabled()) {
+        throw new Error(msg);
+      }
+      console.warn(msg);
+      return false;
+    }
+    initDatastore();
+    return true;
   }
 
   function resolveOwner(speaker?: string, channel?: string): string {
@@ -2963,6 +2984,7 @@ ${lines.join("\n")}
     getConfig: deps.getMemoryConfig,
     isSystemEnabled: deps.isSystemEnabled,
     isFailHardEnabled: deps.isFailHardEnabled,
+    initializeDatastoreIfMissing,
     getCaptureTimeoutMinutes,
     isInternalQuaidSession,
     resolveTierModel,

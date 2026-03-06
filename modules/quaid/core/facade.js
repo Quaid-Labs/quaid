@@ -115,6 +115,24 @@ export function createQuaidFacade(deps) {
     function getQueuedExtractionPromise() {
         return extractionPromise;
     }
+    function initializeDatastoreIfMissing() {
+        const dataDir = path.dirname(deps.dbPath);
+        fs.mkdirSync(dataDir, { recursive: true });
+        if (fs.existsSync(deps.dbPath)) {
+            return false;
+        }
+        const initDatastore = deps.initDatastore;
+        if (typeof initDatastore !== "function") {
+            const msg = "[quaid][facade] datastore initialization callback is not configured";
+            if (deps.isFailHardEnabled()) {
+                throw new Error(msg);
+            }
+            console.warn(msg);
+            return false;
+        }
+        initDatastore();
+        return true;
+    }
     function resolveOwner(speaker, channel) {
         const usersCfg = deps.getMemoryConfig()?.users;
         const config = usersCfg && typeof usersCfg === "object" && !Array.isArray(usersCfg)
@@ -2433,6 +2451,7 @@ ${lines.join("\n")}
         getConfig: deps.getMemoryConfig,
         isSystemEnabled: deps.isSystemEnabled,
         isFailHardEnabled: deps.isFailHardEnabled,
+        initializeDatastoreIfMissing,
         getCaptureTimeoutMinutes,
         isInternalQuaidSession,
         resolveTierModel,
