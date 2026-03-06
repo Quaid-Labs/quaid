@@ -57,6 +57,7 @@ export type QuaidFacadeDeps = {
     timeoutMs?: number,
   ) => Promise<LLMCallResult | null>;
   getDefaultLLMProvider?: () => string;
+  adapterName?: string;
   providerAliases?: Record<string, string>;
   resolveSessionIdFromSessionKey?: (sessionKey: string) => string;
   resolveDefaultSessionId?: () => string;
@@ -585,12 +586,12 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (configuredProvider && configuredProvider !== "default") {
       return configuredProvider;
     }
-    const gatewayProvider = getDefaultLLMProvider();
-    if (gatewayProvider) {
-      return gatewayProvider;
+    const defaultProvider = getDefaultLLMProvider();
+    if (defaultProvider) {
+      return defaultProvider;
     }
     throw new Error(
-      "models.llmProvider is 'default' but no active gateway provider was resolved. " +
+      "models.llmProvider is 'default' but no active default provider was resolved. " +
       "Set models.llmProvider explicitly (anthropic/openai/openai-compatible/claude-code).",
     );
   }
@@ -908,7 +909,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const message = String(request?.message || "").trim();
     const kind = String(request?.kind || "janitor");
     const priority = String(request?.priority || "normal");
-    const source = String(request?.source || "quaid_adapter");
+    const source = String(request?.source || deps.adapterName || "adapter");
 
     if (!message) return false;
 
@@ -1067,7 +1068,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       message: issue,
       kind: "janitor_health",
       priority: "high",
-      source: "quaid_adapter",
+      source: String(deps.adapterName || "adapter"),
     });
     if (!queued) return false;
     state.lastJanitorHealthAlertAt = now;

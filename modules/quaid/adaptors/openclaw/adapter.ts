@@ -1020,6 +1020,7 @@ const facade = createQuaidFacade({
   },
   callLLM: callConfiguredLLM,
   getDefaultLLMProvider: getGatewayDefaultProvider,
+  adapterName: "openclaw_adapter",
   providerAliases: {
     "openai-codex": "openai",
     "anthropic-claude-code": "anthropic",
