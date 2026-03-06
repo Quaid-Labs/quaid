@@ -238,7 +238,7 @@ const WORKSPACE =
   process.env.CLAWDBOT_WORKSPACE ||
   detectWorkspaceFromCli() ||
   path.join(os.homedir(), "quaid");
-const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1";
+const AGENT_MODE = INSTALL_ARGS.agent || process.env.QUAID_INSTALL_AGENT === "1" || !process.stdin.isTTY;
 const MODULES_PLUGIN_DIR = path.join(WORKSPACE, "modules", "quaid");
 const LEGACY_PLUGIN_DIR = path.join(WORKSPACE, "plugins", "quaid");
 const PLUGIN_DIR = fs.existsSync(path.join(MODULES_PLUGIN_DIR, "package.json"))
@@ -491,7 +491,12 @@ const spinner = _testAnswers
 // --- Helpers ---
 function shell(cmd, trim = true) {
   try {
-    const out = execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], cwd: os.homedir() });
+    const out = execSync(cmd, {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: os.homedir(),
+      timeout: 15_000,
+    });
     return trim ? out.trim() : out;
   } catch { return ""; }
 }
