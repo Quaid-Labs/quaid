@@ -8,6 +8,7 @@ import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
 import { createQuaidFacade } from "../../core/facade.js";
 import { createMemoryConfigResolver } from "../../core/memory-config.js";
 import { spawnWithTimeout } from "../../core/spawn-with-timeout.js";
+import { spawnDetachedScript } from "../../core/spawn-detached-script.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import {
   assertDeclaredRegistration,
@@ -597,57 +598,18 @@ function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON
   });
 }
 function spawnNotifyScript(scriptBody) {
-  const tmpFile = path.join(QUAID_NOTIFY_DIR, `notify-${Date.now()}-${Math.random().toString(36).slice(2)}.py`);
   const notifyLogFile = path.join(QUAID_LOGS_DIR, "notify-worker.log");
-  const appendNotifyLog = (msg) => {
-    try {
-      fs.appendFileSync(notifyLogFile, `${(/* @__PURE__ */ new Date()).toISOString()} ${msg}
-`);
-    } catch {
-    }
-  };
   const preamble = `import sys, os
 sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})
 `;
-  const cleanup = `
-os.unlink(${JSON.stringify(tmpFile)})
-`;
-  let launched = false;
-  let notifyLogFd = null;
-  fs.writeFileSync(tmpFile, preamble + scriptBody + cleanup, { mode: 384 });
-  try {
-    notifyLogFd = fs.openSync(notifyLogFile, "a");
-    const proc = spawn("python3", [tmpFile], {
-      detached: true,
-      stdio: ["ignore", notifyLogFd, notifyLogFd],
-      env: buildPythonEnv()
-    });
-    launched = true;
-    proc.on("error", (err) => {
-      appendNotifyLog(`[notify-worker-error] spawn failed: ${err.message}`);
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch {
-      }
-    });
-    proc.unref();
-  } catch (err) {
-    appendNotifyLog(`[notify-worker-error] launch failed: ${String(err?.message || err)}`);
-    if (!launched) {
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch {
-      }
-    }
-  } finally {
-    if (notifyLogFd !== null) {
-      try {
-        fs.closeSync(notifyLogFd);
-      } catch {
-      }
-    }
-  }
-  return launched;
+  return spawnDetachedScript({
+    scriptDir: QUAID_NOTIFY_DIR,
+    logFile: notifyLogFile,
+    scriptPrefix: preamble,
+    scriptBody,
+    env: buildPythonEnv(),
+    filePrefix: "notify"
+  });
 }
 function preprocessTranscriptText(text) {
   return String(text || "").replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "").replace(/\n?\[message_id:\s*\d+\]/gi, "").trim();
