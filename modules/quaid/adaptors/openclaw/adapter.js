@@ -6,6 +6,7 @@ import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
 import { createQuaidFacade } from "../../core/facade.js";
+import { createMemoryConfigResolver } from "../../core/memory-config.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import {
   assertDeclaredRegistration,
@@ -82,9 +83,6 @@ for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECT
     console.error(`[quaid][startup] failed to create runtime dir: ${p}`, err?.message || String(err));
   }
 }
-let _memoryConfigErrorLogged = false;
-let _memoryConfigMtimeMs = -1;
-let _memoryConfigPath = "";
 function _envTimeoutMs(name, fallbackMs) {
   const raw = Number(process.env[name] || "");
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -109,88 +107,13 @@ function buildPythonEnv(extra = {}) {
     ...extra
   };
 }
-let _memoryConfig = null;
-function _memoryConfigCandidates() {
-  return [
-    path.join(WORKSPACE, "config", "memory.json"),
-    path.join(os.homedir(), ".quaid", "memory-config.json"),
-    path.join(process.cwd(), "memory-config.json")
-  ];
-}
-function _resolveMemoryConfigPath() {
-  for (const candidate of _memoryConfigCandidates()) {
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-    }
-  }
-  return _memoryConfigCandidates()[0];
-}
-function _buildFallbackMemoryConfig() {
-  return {
-    models: {
-      llmProvider: "default",
-      deepReasoning: "default",
-      fastReasoning: "default",
-      deepReasoningModelClasses: {
-        anthropic: "claude-opus-4-6",
-        openai: "gpt-5",
-        "openai-compatible": "gpt-4.1"
-      },
-      fastReasoningModelClasses: {
-        anthropic: "claude-haiku-4-5",
-        openai: "gpt-5-mini",
-        "openai-compatible": "gpt-4.1-mini"
-      }
-    },
-    retrieval: {
-      maxLimit: 8
-    }
-  };
-}
+const memoryConfigResolver = createMemoryConfigResolver({
+  workspace: WORKSPACE,
+  isMissingFileError,
+  isFailHardEnabled: () => isFailHardEnabled()
+});
 function getMemoryConfig() {
-  const configPath = _resolveMemoryConfigPath();
-  if (configPath !== _memoryConfigPath) {
-    _memoryConfigMtimeMs = -1;
-    _memoryConfigPath = configPath;
-  }
-  let mtimeMs = -1;
-  try {
-    mtimeMs = fs.statSync(configPath).mtimeMs;
-  } catch (err) {
-    const msg = String(err?.message || err || "");
-    if (!msg.includes("ENOENT")) {
-      console.warn(`[quaid] memory config stat failed: ${msg}`);
-    }
-  }
-  if (_memoryConfig && mtimeMs >= 0 && _memoryConfigMtimeMs === mtimeMs) {
-    return _memoryConfig;
-  }
-  if (_memoryConfig && mtimeMs < 0) {
-    return _memoryConfig;
-  }
-  try {
-    _memoryConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    _memoryConfigMtimeMs = mtimeMs;
-  } catch (err) {
-    if (!_memoryConfigErrorLogged) {
-      _memoryConfigErrorLogged = true;
-      console.error("[quaid] failed to load config/memory.json:", err?.message || String(err));
-    }
-    if (isMissingFileError(err)) {
-      _memoryConfig = _buildFallbackMemoryConfig();
-      _memoryConfigMtimeMs = -1;
-      return _memoryConfig;
-    }
-    _memoryConfig = _buildFallbackMemoryConfig();
-    _memoryConfigMtimeMs = mtimeMs;
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-  }
-  return _memoryConfig;
+  return memoryConfigResolver.getMemoryConfig();
 }
 function isSystemEnabled(system) {
   const config = getMemoryConfig();

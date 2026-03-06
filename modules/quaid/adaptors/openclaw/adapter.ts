@@ -14,6 +14,7 @@ import * as os from "node:os";
 import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
 import { createQuaidFacade } from "../../core/facade.js";
+import { createMemoryConfigResolver } from "../../core/memory-config.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import {
   assertDeclaredRegistration,
@@ -101,10 +102,6 @@ for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECT
   }
 }
 
-let _memoryConfigErrorLogged = false;
-let _memoryConfigMtimeMs = -1;
-let _memoryConfigPath = "";
-
 function _envTimeoutMs(name: string, fallbackMs: number): number {
   const raw = Number(process.env[name] || "");
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -132,95 +129,14 @@ function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<
   };
 }
 
-// Model resolution — reads from config/memory.json, no hardcoded model IDs
-let _memoryConfig: any = null;
-function _memoryConfigCandidates(): string[] {
-  return [
-    path.join(WORKSPACE, "config", "memory.json"),
-    path.join(os.homedir(), ".quaid", "memory-config.json"),
-    path.join(process.cwd(), "memory-config.json"),
-  ];
-}
-
-function _resolveMemoryConfigPath(): string {
-  for (const candidate of _memoryConfigCandidates()) {
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch {
-      // Ignore filesystem probe failures and continue to next candidate.
-    }
-  }
-  return _memoryConfigCandidates()[0];
-}
-
-function _buildFallbackMemoryConfig(): any {
-  return {
-    models: {
-      llmProvider: "default",
-      deepReasoning: "default",
-      fastReasoning: "default",
-      deepReasoningModelClasses: {
-        anthropic: "claude-opus-4-6",
-        openai: "gpt-5",
-        "openai-compatible": "gpt-4.1",
-      },
-      fastReasoningModelClasses: {
-        anthropic: "claude-haiku-4-5",
-        openai: "gpt-5-mini",
-        "openai-compatible": "gpt-4.1-mini",
-      },
-    },
-    retrieval: {
-      maxLimit: 8,
-    },
-  };
-}
+const memoryConfigResolver = createMemoryConfigResolver({
+  workspace: WORKSPACE,
+  isMissingFileError,
+  isFailHardEnabled: () => isFailHardEnabled(),
+});
 
 function getMemoryConfig(): any {
-  const configPath = _resolveMemoryConfigPath();
-  if (configPath !== _memoryConfigPath) {
-    _memoryConfigMtimeMs = -1;
-    _memoryConfigPath = configPath;
-  }
-  let mtimeMs = -1;
-  try {
-    mtimeMs = fs.statSync(configPath).mtimeMs;
-  } catch (err: unknown) {
-    const msg = String((err as Error)?.message || err || "");
-    if (!msg.includes("ENOENT")) {
-      console.warn(`[quaid] memory config stat failed: ${msg}`);
-    }
-  }
-  if (_memoryConfig && mtimeMs >= 0 && _memoryConfigMtimeMs === mtimeMs) {
-    return _memoryConfig;
-  }
-  if (_memoryConfig && mtimeMs < 0) {
-    return _memoryConfig;
-  }
-  try {
-    _memoryConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    _memoryConfigMtimeMs = mtimeMs;
-  } catch (err: unknown) {
-    if (!_memoryConfigErrorLogged) {
-      _memoryConfigErrorLogged = true;
-      console.error("[quaid] failed to load config/memory.json:", (err as Error)?.message || String(err));
-    }
-    if (isMissingFileError(err)) {
-      // During gateway reloads, config may be briefly unavailable; keep plugin alive with safe defaults.
-      _memoryConfig = _buildFallbackMemoryConfig();
-      _memoryConfigMtimeMs = -1;
-      return _memoryConfig;
-    }
-    // Prevent isFailHardEnabled() -> getMemoryConfig() mutual recursion on invalid config.
-    _memoryConfig = _buildFallbackMemoryConfig();
-    _memoryConfigMtimeMs = mtimeMs;
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-  }
-  return _memoryConfig;
+  return memoryConfigResolver.getMemoryConfig();
 }
 
 // System gates — check if a subsystem is enabled in config
