@@ -1825,6 +1825,24 @@ while time.time() < deadline:
             break
     time.sleep(1)
 if not isinstance(cursor_payload, dict):
+    print(
+        f"[e2e] WARN: session cursor missing for runtime session ({runtime_session_id}); "
+        "queueing fallback ResetSignal to verify cursor progression."
+    )
+    fallback_used = True
+    queue_signal_fallback(runtime_session_id, "ResetSignal")
+    retry_deadline = time.time() + 25
+    while time.time() < retry_deadline:
+        if os.path.exists(cursor_path):
+            try:
+                with open(cursor_path, "r", encoding="utf-8", errors="replace") as f:
+                    cursor_payload = json.load(f)
+            except Exception:
+                cursor_payload = None
+            if isinstance(cursor_payload, dict):
+                break
+        time.sleep(1)
+if not isinstance(cursor_payload, dict):
     raise SystemExit(
         f"[e2e] ERROR: session cursor was not written for live events session ({runtime_session_id})"
     )

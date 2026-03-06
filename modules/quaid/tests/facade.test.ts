@@ -535,6 +535,28 @@ describe("QuaidFacade", () => {
     expect(results.length).toBeGreaterThan(0);
   });
 
+  it("recall forwards domain filter with --domain-filter flag", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command === "search") {
+        return JSON.stringify([{ text: "domain fact", category: "fact", similarity: 0.8 }]);
+      }
+      return "{}";
+    });
+    const facade = createQuaidFacade(makeMockDeps({ execPython }));
+    await facade.recall({
+      query: "test domain filter",
+      limit: 5,
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      domain: { personal: true },
+    });
+    const searchCall = execPython.mock.calls.find((args) => args[0] === "search");
+    expect(searchCall).toBeTruthy();
+    expect(searchCall?.[1]).toContain("--domain-filter");
+    expect(searchCall?.[1]).not.toContain("--domain");
+  });
+
   it("recallWithToolRetry returns primary results when retry heuristics do not trigger", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command !== "search") return "{}";
@@ -630,6 +652,16 @@ describe("QuaidFacade", () => {
       getDatastoreStatsSync: vi.fn(() => ({ active_nodes: 500 })),
     }));
     expect(facade.computeDynamicK()).toBe(10);
+  });
+
+  it("computeDynamicK falls back when stats probe fails under failHard", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      isFailHardEnabled: vi.fn(() => true),
+      getDatastoreStatsSync: vi.fn(() => {
+        throw new Error("stats probe failed");
+      }),
+    }));
+    expect(facade.computeDynamicK()).toBe(5);
   });
 
   // -----------------------------------------------------------------------

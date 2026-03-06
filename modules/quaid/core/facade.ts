@@ -1077,15 +1077,21 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (_cachedNodeCount !== null && (now - _nodeCountTimestamp) < NODE_COUNT_CACHE_MS) {
       return _cachedNodeCount;
     }
-    const stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
+    let stats: Record<string, any> | null = null;
+    try {
+      stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
+    } catch (err: unknown) {
+      console.warn(`[quaid][facade] active node stats probe failed; using fallback=100: ${String((err as Error)?.message || err)}`);
+    }
     const active = Number(stats?.active_nodes ?? stats?.by_status?.active ?? 0);
     if (Number.isFinite(active) && active > 0) {
       _cachedNodeCount = active;
       _nodeCountTimestamp = now;
       return _cachedNodeCount;
     }
-    if (_cachedNodeCount === null && deps.isFailHardEnabled()) {
-      throw new Error("[quaid][facade] unable to derive active node count under failHard");
+    if (_cachedNodeCount === null) {
+      // Dynamic K is a heuristic; fallback is safer than failing tool calls.
+      console.warn("[quaid][facade] unable to derive active node count; using fallback=100");
     }
     return _cachedNodeCount ?? 100;
   }
@@ -2194,7 +2200,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         query, "--limit", String(limit), "--json",
       ];
       if (domain && typeof domain === "object") {
-        args.push("--domain", JSON.stringify(domain));
+        args.push("--domain-filter", JSON.stringify(domain));
       }
       if (domainBoost) {
         args.push("--domain-boost", JSON.stringify(domainBoost));

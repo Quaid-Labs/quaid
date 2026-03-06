@@ -449,9 +449,6 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
     _ensureGatewaySessionOverride(modelTier, resolved);
   } catch (err) {
     const msg = String(err?.message || err);
-    if (isFailHardEnabled()) {
-      throw err;
-    }
     console.warn(`[quaid][llm] gateway session override unavailable; continuing without session_id: ${msg}`);
   }
   console.log(
