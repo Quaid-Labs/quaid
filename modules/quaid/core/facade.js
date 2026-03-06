@@ -1922,6 +1922,112 @@ export function createQuaidFacade(deps) {
             return merged;
         });
     }
+    async function runExtractionPipeline(messages, label, sessionId) {
+        const rows = Array.isArray(messages) ? messages : [];
+        if (rows.length === 0) {
+            return null;
+        }
+        const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
+        const allNotes = Array.from(new Set([...sessionNotes]));
+        const fullTranscript = buildTranscript(rows);
+        if (!fullTranscript.trim() && allNotes.length === 0) {
+            return null;
+        }
+        const hasMeaningfulUserContent = rows.some((m) => {
+            if (!m || typeof m !== "object")
+                return false;
+            const role = String(m.role || "");
+            if (role !== "user")
+                return false;
+            const text = getMessageText(m).trim();
+            if (!text)
+                return false;
+            if (typeof deps.transcriptFormat?.shouldSkipText === "function") {
+                return !deps.transcriptFormat.shouldSkipText("user", text);
+            }
+            return true;
+        });
+        const transcriptForExtraction = allNotes.length > 0
+            ? ("=== USER EXPLICITLY ASKED TO REMEMBER THESE (extract as high-confidence facts) ===\n"
+                + `${allNotes.map((n) => `- ${n}`).join("\n")}\n`
+                + "=== END EXPLICIT MEMORY REQUESTS ===\n\n"
+                + fullTranscript)
+            : fullTranscript;
+        const journalConfig = deps.getMemoryConfig().docs?.journal || {};
+        const journalEnabled = deps.isSystemEnabled("journal") && journalConfig.enabled !== false;
+        const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
+        const triggerType = resolveExtractionTrigger(label);
+        const tmpDir = path.join(deps.workspace, ".quaid", "tmp");
+        fs.mkdirSync(tmpDir, { recursive: true });
+        const tmpPath = path.join(tmpDir, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+        fs.writeFileSync(tmpPath, transcriptForExtraction, { mode: 0o600 });
+        const args = [
+            tmpPath,
+            "--owner", resolveOwner(),
+            "--label", triggerType,
+            "--json",
+        ];
+        if (sessionId)
+            args.push("--session-id", sessionId);
+        if (!snippetsEnabled)
+            args.push("--no-snippets");
+        if (!journalEnabled)
+            args.push("--no-journal");
+        let extracted = {};
+        try {
+            const output = await deps.execExtractPipeline(tmpPath, args);
+            extracted = JSON.parse(output || "{}");
+        }
+        catch (err) {
+            const msg = String(err?.message || err);
+            throw new Error(`[quaid][facade] extract pipeline failed: ${msg.slice(0, 500)}`);
+        }
+        finally {
+            try {
+                fs.unlinkSync(tmpPath);
+            }
+            catch { }
+        }
+        const factDetails = Array.isArray(extracted?.facts)
+            ? extracted.facts
+            : [];
+        const stored = Number(extracted?.facts_stored || 0);
+        const skipped = Number(extracted?.facts_skipped || 0);
+        const edgesCreated = Number(extracted?.edges_created || 0);
+        const snippetDetails = {};
+        const journalDetails = {};
+        const targetFiles = journalConfig.targetFiles || ["SOUL.md", "USER.md", "MEMORY.md"];
+        const snippetsRaw = extracted?.snippets;
+        if (snippetsRaw && typeof snippetsRaw === "object" && !Array.isArray(snippetsRaw)) {
+            for (const [filename, snippets] of Object.entries(snippetsRaw)) {
+                if (!targetFiles.includes(filename) || !Array.isArray(snippets))
+                    continue;
+                const valid = snippets.filter((s) => typeof s === "string" && s.trim().length > 0);
+                if (valid.length > 0)
+                    snippetDetails[filename] = valid.map((s) => s.trim());
+            }
+        }
+        const journalRaw = extracted?.journal;
+        if (journalRaw && typeof journalRaw === "object" && !Array.isArray(journalRaw)) {
+            for (const [filename, entry] of Object.entries(journalRaw)) {
+                if (!targetFiles.includes(filename))
+                    continue;
+                const text = typeof entry === "string" ? entry : "";
+                if (text.trim().length > 0)
+                    journalDetails[filename] = [text.trim()];
+            }
+        }
+        return {
+            hasMeaningfulUserContent,
+            triggerType,
+            factDetails,
+            stored,
+            skipped,
+            edgesCreated,
+            snippetDetails,
+            journalDetails,
+        };
+    }
     // -------------------------------------------------------------------------
     // Facade-level recall (wraps orchestrator)
     // -------------------------------------------------------------------------
@@ -2296,6 +2402,7 @@ ${lines.join("\n")}
         // Memory notes
         addMemoryNote,
         getAndClearMemoryNotes,
+        runExtractionPipeline,
         // Project catalog
         getProjectCatalog: () => projectCatalogReader.getProjectCatalog(),
         getProjectNames: () => projectCatalogReader.getProjectNames(),

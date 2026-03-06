@@ -864,62 +864,6 @@ function _spawnWithTimeout(
   });
 }
 
-async function callExtractPipeline(opts: {
-  transcript: string;
-  owner: string;
-  label: string;
-  sessionId?: string;
-  writeSnippets: boolean;
-  writeJournal: boolean;
-}): Promise<any> {
-  const tmpPath = path.join(QUAID_TMP_DIR, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-  fs.writeFileSync(tmpPath, opts.transcript, { mode: 0o600 });
-  const args = [
-    tmpPath,
-    "--owner", opts.owner,
-    "--label", opts.label,
-    "--json",
-  ];
-  if (opts.sessionId) {
-    args.push("--session-id", opts.sessionId);
-  }
-  if (!opts.writeSnippets) {
-    args.push("--no-snippets");
-  }
-  if (!opts.writeJournal) {
-    args.push("--no-journal");
-  }
-
-  try {
-    const output = await _spawnWithTimeout(
-      EXTRACT_SCRIPT,
-      tmpPath,
-      args.slice(1),
-      "extract",
-      {},
-      EXTRACT_PIPELINE_TIMEOUT_MS,
-    );
-    const parsed = JSON.parse(output || "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("extract pipeline returned non-object JSON payload");
-    }
-    return parsed;
-  } catch (err: unknown) {
-    const cause = err instanceof Error ? err : new Error(String(err));
-    const msg = String(cause.message || cause);
-    throw new Error(
-      `[quaid] extract pipeline parse/exec failed: ${msg.slice(0, 500)}`,
-      { cause },
-    );
-  } finally {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch (err: unknown) {
-      console.warn(`[quaid] Failed cleaning extraction temp file ${tmpPath}: ${String((err as Error)?.message || err)}`);
-    }
-  }
-}
-
 /**
  * Spawn a fire-and-forget Python notification script safely.
  * Writes code to a temp file to avoid shell injection via inline -c strings.
@@ -2363,19 +2307,6 @@ notify_user(f"📁 Project registered: {project_label}")
         return;
       }
 
-      const sessionNotes = sessionId ? facade.getAndClearMemoryNotes(sessionId) : [];
-      // Avoid cross-session leakage: extraction only consumes notes for the active session.
-      const allNotes = Array.from(new Set([...sessionNotes]));
-      if (allNotes.length > 0) {
-        console.log(`[quaid] ${label}: prepend ${allNotes.length} queued memory note(s)`);
-      }
-
-      const fullTranscript = facade.buildTranscript(messages);
-      if (!fullTranscript.trim() && allNotes.length === 0) {
-        console.log(`[quaid] ${label}: empty transcript after filtering`);
-        return;
-      }
-
       const hasMeaningfulUserContent = messages.some((m: any) => {
         if (m?.role !== "user") return false;
         const text = facade.getMessageText(m).trim();
@@ -2384,16 +2315,6 @@ notify_user(f"📁 Project registered: {project_label}")
         if (text.startsWith("System:")) return false;
         return true;
       });
-
-      const transcriptForExtraction = allNotes.length > 0
-        ? (
-          "=== USER EXPLICITLY ASKED TO REMEMBER THESE (extract as high-confidence facts) ===\n" +
-          `${allNotes.map((n) => `- ${n}`).join("\n")}\n` +
-          "=== END EXPLICIT MEMORY REQUESTS ===\n\n" +
-          fullTranscript
-        )
-        : fullTranscript;
-      console.log(`[quaid] ${label} transcript: ${messages.length} messages, ${transcriptForExtraction.length} chars`);
 
       if (getMemoryConfig().notifications?.showProcessingStart !== false && facade.shouldNotifyFeature("extraction", "summary")) {
         const triggerType = facade.resolveExtractionTrigger(label);
@@ -2426,20 +2347,9 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         }
       }
 
-      const journalConfig = getMemoryConfig().docs?.journal || {};
-      const journalEnabled = isSystemEnabled("journal") && journalConfig.enabled !== false;
-      const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
-      const triggerLabel = facade.resolveExtractionTrigger(label);
-      let extracted: any;
+      let extractionResult: any = null;
       try {
-        extracted = await callExtractPipeline({
-          transcript: transcriptForExtraction,
-          owner: facade.resolveOwner(),
-          label: triggerLabel,
-          sessionId,
-          writeSnippets: snippetsEnabled,
-          writeJournal: journalEnabled,
-        });
+        extractionResult = await facade.runExtractionPipeline(messages, label, sessionId);
       } catch (err: unknown) {
         const msg = String((err as Error)?.message || err);
         console.error(`[quaid] ${label} extraction failed: ${msg}`);
@@ -2449,12 +2359,16 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         return;
       }
 
-      const factDetails: Array<{ text: string; status: string; reason?: string; edges?: string[] }> = Array.isArray(extracted?.facts)
-        ? extracted.facts
-        : [];
-      const stored = Number(extracted?.facts_stored || 0);
-      const skipped = Number(extracted?.facts_skipped || 0);
-      const edgesCreated = Number(extracted?.edges_created || 0);
+      if (!extractionResult) {
+        console.log(`[quaid] ${label}: empty transcript after filtering`);
+        return;
+      }
+      const factDetails = extractionResult.factDetails || [];
+      const stored = Number(extractionResult.stored || 0);
+      const skipped = Number(extractionResult.skipped || 0);
+      const edgesCreated = Number(extractionResult.edgesCreated || 0);
+      const hasMeaningfulFromExtraction = Boolean(extractionResult.hasMeaningfulUserContent);
+      const triggerFromExtraction = String(extractionResult.triggerType || facade.resolveExtractionTrigger(label));
       const firstFactStatus = factDetails.length > 0 ? String(factDetails[0]?.status || "unknown") : "none";
       console.log(
         `[quaid][extract] payload label=${label} session=${sessionId || "unknown"} ` +
@@ -2464,42 +2378,12 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
       console.log(`[quaid] ${label} extraction complete: ${stored} stored, ${skipped} skipped, ${edgesCreated} edges`);
       console.log(`[quaid][extract] done label=${label} session=${sessionId || "unknown"} stored=${stored} skipped=${skipped} edges=${edgesCreated}`);
 
-      let snippetDetails: Record<string, string[]> = {};
-      let journalDetails: Record<string, string[]> = {};
-      try {
-        const journalRaw = extracted?.journal;
-        const snippetsRaw = extracted?.snippets;
-        const targetFiles: string[] = journalConfig.targetFiles || ["SOUL.md", "USER.md", "MEMORY.md"];
-
-        if (snippetsRaw && typeof snippetsRaw === "object" && !Array.isArray(snippetsRaw)) {
-          for (const [filename, snippets] of Object.entries(snippetsRaw)) {
-            if (!targetFiles.includes(filename) || !Array.isArray(snippets)) continue;
-            const valid = snippets.filter((s: unknown) => typeof s === "string" && (s as string).trim().length > 0);
-            if (valid.length > 0) {
-              snippetDetails[filename] = valid.map((s: string) => s.trim());
-            }
-          }
-        }
-
-        if (journalRaw && typeof journalRaw === "object" && !Array.isArray(journalRaw)) {
-          for (const [filename, entry] of Object.entries(journalRaw)) {
-            if (!targetFiles.includes(filename)) continue;
-            const text = typeof entry === "string" ? entry : "";
-            if (text.trim().length > 0) {
-              journalDetails[filename] = [text.trim()];
-            }
-          }
-        }
-      } catch (err: unknown) {
-        if (isFailHardEnabled()) {
-          throw new Error("[quaid] extraction snippet/journal parsing failed under failHard", { cause: err as Error });
-        }
-        console.warn(`[quaid] extraction snippet/journal parsing failed: ${String((err as Error)?.message || err)}`);
-      }
+      const snippetDetails: Record<string, string[]> = extractionResult.snippetDetails || {};
+      const journalDetails: Record<string, string[]> = extractionResult.journalDetails || {};
 
       const hasSnippets = Object.keys(snippetDetails).length > 0;
       const hasJournalEntries = Object.keys(journalDetails).length > 0;
-      const triggerType = facade.resolveExtractionTrigger(label);
+      const triggerType = triggerFromExtraction as any;
       const suppressBacklogNotify = facade.isBacklogLifecycleReplay(
         messages,
         triggerType,
@@ -2508,7 +2392,7 @@ notify_user("🧠 Processing memories from ${triggerDesc}...")
         BACKLOG_NOTIFY_STALE_MS,
       );
       const alwaysNotifyCompletion = (triggerType === "timeout" || triggerType === "reset" || triggerType === "new")
-        && hasMeaningfulUserContent
+        && (hasMeaningfulFromExtraction || hasMeaningfulUserContent)
         && facade.shouldNotifyFeature("extraction", "summary");
       const dedupeSession = sessionId || facade.extractSessionId(messages, {});
       const completionDedupeKey = `done:${dedupeSession}:${triggerType}:${stored}:${skipped}:${edgesCreated}`;
