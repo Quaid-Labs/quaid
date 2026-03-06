@@ -599,7 +599,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (typeof configured === "string" && configured.trim().length > 0) {
       return configured.trim();
     }
-    throw new Error(`Missing models.${key} in config/memory.json`);
+    throw new Error(`Missing models.${key} in memory config`);
   }
 
   function getConfiguredTierProvider(tier: ModelTier): string {

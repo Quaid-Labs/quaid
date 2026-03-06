@@ -197,8 +197,8 @@ export function createQuaidFacade(deps) {
         if (typeof configured === "string" && configured.trim().length > 0) {
             return configured.trim();
         }
-        throw new Error(`Missing models.${key} in config/memory.json`);
-    }
+    throw new Error(`Missing models.${key} in memory config`);
+  }
     function getConfiguredTierProvider(tier) {
         const key = tier === "fast" ? "fastReasoningProvider" : "deepReasoningProvider";
         const configured = deps.getMemoryConfig().models?.[key];

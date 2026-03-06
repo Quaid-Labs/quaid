@@ -89,10 +89,10 @@ export function createMemoryConfigResolver(deps) {
             memoryConfigMtimeMs = mtimeMs;
         }
         catch (err) {
-            if (!memoryConfigErrorLogged) {
-                memoryConfigErrorLogged = true;
-                error(`[quaid] failed to load config/memory.json: ${err?.message || String(err)}`);
-            }
+      if (!memoryConfigErrorLogged) {
+        memoryConfigErrorLogged = true;
+        error(`[quaid] failed to load memory config (${configPath}): ${err?.message || String(err)}`);
+      }
             if (deps.isMissingFileError(err)) {
                 memoryConfig = buildFallbackMemoryConfig();
                 memoryConfigMtimeMs = -1;
