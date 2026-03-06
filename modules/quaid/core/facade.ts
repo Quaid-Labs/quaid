@@ -66,6 +66,7 @@ export type QuaidFacadeDeps = {
   readSessionMessagesFile?: (sessionFile: string) => any[];
   listCompactionSessions?: () => Array<{ key: string; sessionId: string }>;
   requestSessionCompaction?: (sessionKey: string) => { ok: boolean; compacted?: unknown; raw?: string };
+  emitProjectEventBackground?: (eventPath: string, projectHint: string | null) => void;
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
@@ -284,6 +285,12 @@ export type QuaidFacade = {
     stagingDirOverride?: string,
     summaryTimeoutMs?: number,
   ) => Promise<{ eventPath: string; projectHint: string | null } | null>;
+  emitProjectEvent: (
+    messages: unknown[],
+    trigger: string,
+    sessionId?: string,
+    summaryTimeoutMs?: number,
+  ) => Promise<void>;
 
   // --- Stubs (typed, not yet implemented) ---
   detectLifecycleSignal: (messages: unknown[]) => LifecycleSignal | null;
@@ -1651,6 +1658,34 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return { eventPath, projectHint: summary.project_name || null };
   }
 
+  async function emitProjectEvent(
+    messages: unknown[],
+    trigger: string,
+    sessionId?: string,
+    summaryTimeoutMs: number = 15_000,
+  ): Promise<void> {
+    const staged = await stageProjectEvent(messages, trigger, sessionId, undefined, summaryTimeoutMs);
+    if (!staged) {
+      return;
+    }
+    const spawnProjectEvent = deps.emitProjectEventBackground;
+    if (typeof spawnProjectEvent !== "function") {
+      if (deps.isFailHardEnabled()) {
+        throw new Error("[quaid][facade] emitProjectEventBackground callback is required");
+      }
+      console.warn("[quaid][facade] project event background callback not configured; staged event left for janitor.");
+      return;
+    }
+    try {
+      spawnProjectEvent(staged.eventPath, staged.projectHint);
+    } catch (err: unknown) {
+      if (deps.isFailHardEnabled()) {
+        throw err;
+      }
+      console.warn(`[quaid][facade] project event background dispatch failed: ${String((err as Error)?.message || err)}`);
+    }
+  }
+
   function detectExplicitLifecycleUserCommand(text: string): "/new" | "/reset" | "/restart" | "/compact" | null {
     if (!text) return null;
     const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -2742,6 +2777,7 @@ ${lines.join("\n")}
     isVectorRecallResult,
     updateDocsFromTranscript,
     stageProjectEvent,
+    emitProjectEvent,
 
     // Stubs
     detectLifecycleSignal,

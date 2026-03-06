@@ -961,45 +961,6 @@ function spawnNotifyScript(scriptBody: string): boolean {
 }
 
 // ============================================================================
-// Project Event Emitter (compact/reset → background processor)
-// ============================================================================
-
-async function emitProjectEvent(messages: any[], trigger: string, sessionId?: string): Promise<void> {
-  try {
-    const staged = await facade.stageProjectEvent(messages, trigger, sessionId, undefined, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
-    if (!staged) {
-      return;
-    }
-
-    // Spawn background processor (detached) — gateway-managed credential only
-    const bgApiKey = _getAnthropicCredential();
-    const logFile = path.join(WORKSPACE, "logs/project-updater.log");
-    const logDir = path.dirname(logFile);
-    if (!fs.existsSync(logDir)) { fs.mkdirSync(logDir, { recursive: true }); }
-    const logFd = fs.openSync(logFile, "a");
-    try {
-      const proc = spawn("python3", [PROJECT_UPDATER, "process-event", staged.eventPath], {
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        cwd: WORKSPACE,
-        env: buildPythonEnv({ ...(bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {}) }),
-      });
-      proc.unref();
-    } finally {
-      // Close FD in parent process — child has its own copy
-      fs.closeSync(logFd);
-    }
-
-    console.log(`[quaid] Emitted project event: ${trigger} -> ${staged.projectHint || "unknown"}`);
-  } catch (err: unknown) {
-    console.error("[quaid] Failed to emit project event:", (err as Error).message);
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-  }
-}
-
-// ============================================================================
 // Transcript Builder (shared by memory extraction + doc update)
 // ============================================================================
 
@@ -1092,6 +1053,27 @@ const facade = createQuaidFacade({
     _spawnWithTimeout(EVENTS_SCRIPT, cmd, args, "events", {
       QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
     }, EVENTS_EMIT_TIMEOUT_MS),
+  emitProjectEventBackground: (eventPath: string, projectHint: string | null) => {
+    const bgApiKey = _getAnthropicCredential();
+    const logFile = path.join(WORKSPACE, "logs/project-updater.log");
+    const logDir = path.dirname(logFile);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logFd = fs.openSync(logFile, "a");
+    try {
+      const proc = spawn("python3", [PROJECT_UPDATER, "process-event", eventPath], {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        cwd: WORKSPACE,
+        env: buildPythonEnv({ ...(bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {}) }),
+      });
+      proc.unref();
+    } finally {
+      fs.closeSync(logFd);
+    }
+    console.log(`[quaid] Emitted project event -> ${projectHint || "unknown"}`);
+  },
   callLLM: callConfiguredLLM,
   getDefaultLLMProvider: getGatewayDefaultProvider,
   providerAliases: {
@@ -2684,7 +2666,7 @@ notify_memory_extraction(
 
           // Emit project event for background processing (non-fatal)
           try {
-            await emitProjectEvent(conversationMessages, "compact", uniqueSessionId);
+            await facade.emitProjectEvent(conversationMessages, "compact", uniqueSessionId, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
           } catch (err: unknown) {
             if (isFailHardEnabled()) {
               throw err;
@@ -2824,7 +2806,7 @@ notify_memory_extraction(
 
             // Emit project event for background processing (non-fatal)
             try {
-              await emitProjectEvent(conversationMessages, "reset", uniqueSessionId);
+              await facade.emitProjectEvent(conversationMessages, "reset", uniqueSessionId, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
             } catch (err: unknown) {
               if (isFailHardEnabled()) {
                 throw err;

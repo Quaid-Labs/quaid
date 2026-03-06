@@ -826,38 +826,6 @@ os.unlink(${JSON.stringify(tmpFile)})
   }
   return launched;
 }
-async function emitProjectEvent(messages, trigger, sessionId) {
-  try {
-    const staged = await facade.stageProjectEvent(messages, trigger, sessionId, void 0, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
-    if (!staged) {
-      return;
-    }
-    const bgApiKey = _getAnthropicCredential();
-    const logFile = path.join(WORKSPACE, "logs/project-updater.log");
-    const logDir = path.dirname(logFile);
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
-    }
-    const logFd = fs.openSync(logFile, "a");
-    try {
-      const proc = spawn("python3", [PROJECT_UPDATER, "process-event", staged.eventPath], {
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        cwd: WORKSPACE,
-        env: buildPythonEnv({ ...bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {} })
-      });
-      proc.unref();
-    } finally {
-      fs.closeSync(logFd);
-    }
-    console.log(`[quaid] Emitted project event: ${trigger} -> ${staged.projectHint || "unknown"}`);
-  } catch (err) {
-    console.error("[quaid] Failed to emit project event:", err.message);
-    if (isFailHardEnabled()) {
-      throw err;
-    }
-  }
-}
 function preprocessTranscriptText(text) {
   return String(text || "").replace(/^\[(?:Telegram|WhatsApp|Discord|Signal|Slack)\s+[^\]]+\]\s*/i, "").replace(/\n?\[message_id:\s*\d+\]/gi, "").trim();
 }
@@ -901,6 +869,27 @@ const facade = createQuaidFacade({
     QUAID_HOME: WORKSPACE,
     CLAWDBOT_WORKSPACE: WORKSPACE
   }, EVENTS_EMIT_TIMEOUT_MS),
+  emitProjectEventBackground: (eventPath, projectHint) => {
+    const bgApiKey = _getAnthropicCredential();
+    const logFile = path.join(WORKSPACE, "logs/project-updater.log");
+    const logDir = path.dirname(logFile);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logFd = fs.openSync(logFile, "a");
+    try {
+      const proc = spawn("python3", [PROJECT_UPDATER, "process-event", eventPath], {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        cwd: WORKSPACE,
+        env: buildPythonEnv({ ...bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {} })
+      });
+      proc.unref();
+    } finally {
+      fs.closeSync(logFd);
+    }
+    console.log(`[quaid] Emitted project event -> ${projectHint || "unknown"}`);
+  },
   callLLM: callConfiguredLLM,
   getDefaultLLMProvider: getGatewayDefaultProvider,
   providerAliases: {
@@ -2327,7 +2316,7 @@ notify_memory_extraction(
             console.error("[quaid] Compaction doc update failed:", err.message);
           }
           try {
-            await emitProjectEvent(conversationMessages, "compact", uniqueSessionId);
+            await facade.emitProjectEvent(conversationMessages, "compact", uniqueSessionId, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
           } catch (err) {
             if (isFailHardEnabled()) {
               throw err;
@@ -2448,7 +2437,7 @@ notify_memory_extraction(
               console.error("[quaid] Reset doc update failed:", err.message);
             }
             try {
-              await emitProjectEvent(conversationMessages, "reset", uniqueSessionId);
+              await facade.emitProjectEvent(conversationMessages, "reset", uniqueSessionId, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
             } catch (err) {
               if (isFailHardEnabled()) {
                 throw err;

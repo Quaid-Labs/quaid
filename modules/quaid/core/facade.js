@@ -1256,6 +1256,29 @@ export function createQuaidFacade(deps) {
         fs.writeFileSync(eventPath, JSON.stringify(event, null, 2));
         return { eventPath, projectHint: summary.project_name || null };
     }
+    async function emitProjectEvent(messages, trigger, sessionId, summaryTimeoutMs = 15e3) {
+        const staged = await stageProjectEvent(messages, trigger, sessionId, void 0, summaryTimeoutMs);
+        if (!staged) {
+            return;
+        }
+        const spawnProjectEvent = deps.emitProjectEventBackground;
+        if (typeof spawnProjectEvent !== "function") {
+            if (deps.isFailHardEnabled()) {
+                throw new Error("[quaid][facade] emitProjectEventBackground callback is required");
+            }
+            console.warn("[quaid][facade] project event background callback not configured; staged event left for janitor.");
+            return;
+        }
+        try {
+            spawnProjectEvent(staged.eventPath, staged.projectHint);
+        }
+        catch (err) {
+            if (deps.isFailHardEnabled()) {
+                throw err;
+            }
+            console.warn(`[quaid][facade] project event background dispatch failed: ${String(err?.message || err)}`);
+        }
+    }
     function detectExplicitLifecycleUserCommand(text) {
         if (!text)
             return null;
@@ -2294,6 +2317,7 @@ ${lines.join("\n")}
         isVectorRecallResult,
         updateDocsFromTranscript,
         stageProjectEvent,
+        emitProjectEvent,
         // Stubs
         detectLifecycleSignal,
         latestMessageTimestampMs,

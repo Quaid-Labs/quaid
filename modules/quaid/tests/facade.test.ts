@@ -1104,6 +1104,41 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("emitProjectEvent calls background callback after staging", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-project-event-"));
+    await mkdir(path.join(workspace, "projects", "demo"), { recursive: true });
+    const emitProjectEventBackground = vi.fn();
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      emitProjectEventBackground,
+      isSystemEnabled: vi.fn((system: string) => system === "projects"),
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        projects: { enabled: true, stagingDir: ".quaid/runtime/projects/staging" },
+      })),
+      callLLM: vi.fn(async () => ({
+        text: '{"project_name":"demo","summary":"project event summary"}',
+        model: "test-model",
+        input_tokens: 10,
+        output_tokens: 10,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        truncated: false,
+      })),
+    }));
+    await facade.emitProjectEvent(
+      [{ role: "user", content: "Updated demo project", timestamp: "2026-03-05T00:00:00.000Z" }],
+      "compact",
+      "sess-project",
+      1_000,
+    );
+    expect(emitProjectEventBackground).toHaveBeenCalledTimes(1);
+    const [eventPath, projectHint] = emitProjectEventBackground.mock.calls[0];
+    expect(String(eventPath)).toContain(".quaid/runtime/projects/staging");
+    expect(projectHint).toBe("demo");
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("collectJanitorNudges emits install/approval nudges with cooldown persistence", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-janitor-nudges-"));
     const facade = createQuaidFacade(makeMockDeps({ workspace }));
