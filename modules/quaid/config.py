@@ -221,7 +221,7 @@ class RetrievalConfig:
     pre_injection_pass: bool = True  # Auto-inject: use total_recall planning pass
     router_fail_open: bool = True  # If true, total_recall router failures use deterministic fallback recall instead of raising
     fail_hard: bool = True  # If true, embedding outages raise instead of silent degraded fallback
-    auto_inject: bool = False  # Auto-inject memories into context (Mem0-style)
+    auto_inject: bool = True  # Auto-inject memories into context (Mem0-style)
     use_hyde: bool = True  # Enable HyDE query expansion by default
     domains: Dict[str, str] = field(default_factory=dict)  # Domain id -> brief description
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
@@ -287,8 +287,9 @@ class JournalConfig:
     inject_full: bool = False  # EXPERIMENTAL: inject full journal into context every turn (uncapped size — use with caution)
     journal_dir: str = "journal"  # relative to workspace
     target_files: List[str] = field(default_factory=lambda: ["SOUL.md", "USER.md", "MEMORY.md"])
-    max_entries_per_file: int = 50
+    max_entries_per_file: int = 0  # 0 disables active journal capping (unlimited)
     max_tokens: int = 8192
+    generated_markdown_line_limit: int = 0  # 0 disables soft target
     distillation_interval_days: int = 7
     archive_after_distillation: bool = True
 
@@ -1102,7 +1103,7 @@ def _load_config_inner() -> MemoryConfig:
         pre_injection_pass=retrieval_data.get('pre_injection_pass', retrieval_data.get('preInjectionPass', True)),
         router_fail_open=bool(retrieval_data.get('router_fail_open', retrieval_data.get('routerFailOpen', True))),
         fail_hard=retrieval_data.get('fail_hard', retrieval_data.get('failHard', True)),
-        auto_inject=retrieval_data.get('auto_inject', retrieval_data.get('autoInject', False)),
+        auto_inject=retrieval_data.get('auto_inject', retrieval_data.get('autoInject', True)),
         use_hyde=retrieval_data.get('use_hyde', retrieval_data.get('useHyde', True)),
         domains=parsed_domains,
         traversal=traversal,
@@ -1145,8 +1146,9 @@ def _load_config_inner() -> MemoryConfig:
         journal_dir=raw_journal.get('journalDir', 'journal'),
         target_files=raw_journal.get('targetFiles', _default_targets),
         max_entries_per_file=raw_journal.get('maxEntriesPerFile',
-                             raw_journal.get('maxSnippetsPerFile', 50)),
+                             raw_journal.get('maxSnippetsPerFile', 0)),
         max_tokens=raw_journal.get('maxTokens', 8192),
+        generated_markdown_line_limit=int(raw_journal.get('generatedMarkdownLineLimit', 0) or 0),
         distillation_interval_days=raw_journal.get('distillationIntervalDays', 7),
         archive_after_distillation=raw_journal.get('archiveAfterDistillation', True),
     )

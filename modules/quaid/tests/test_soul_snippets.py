@@ -126,6 +126,19 @@ class TestJournalMaxEntriesCap:
         archive_dir = workspace_dir / "journal" / "archive"
         assert archive_dir.exists()
 
+    def test_unlimited_mode_keeps_all_entries_and_skips_cap_archive(self, workspace_dir, mock_config):
+        mock_config.docs.journal.max_entries_per_file = 0
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import write_journal_entry
+            for i in range(6):
+                write_journal_entry("SOUL.md", f"Entry {i}.", "Compaction", f"2026-02-{10+i:02d}")
+
+        journal_path = workspace_dir / "journal" / "SOUL.journal.md"
+        content = journal_path.read_text()
+        assert content.count("## 2026-02-") == 6
+        archive_dir = workspace_dir / "journal" / "archive"
+        assert not archive_dir.exists()
+
 
 # =============================================================================
 # Journal reading tests
@@ -275,6 +288,27 @@ class TestDistillation:
         assert "additions" in prompt
         assert "edits" in prompt
 
+    def test_build_distillation_prompt_keeps_full_visible_content(self, workspace_dir, mock_config):
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import build_distillation_prompt
+            tail = "TAIL_MARKER_DISTILL_12345"
+            parent_content = "# SOUL\n\n" + ("line\n" * 5000) + tail + "\n"
+            entries = [{"date": "2026-02-10", "trigger": "Reset", "content": "A deep reflection."}]
+            prompt = build_distillation_prompt("SOUL.md", parent_content, entries)
+        assert tail in prompt
+
+    def test_build_distillation_prompt_includes_project_context(self, workspace_dir, mock_config):
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import build_distillation_prompt
+            prompt = build_distillation_prompt(
+                "SOUL.md",
+                "# SOUL\nbase context\n",
+                [{"date": "2026-02-10", "trigger": "Reset", "content": "A deep reflection."}],
+                project_content="# SOUL\nproject context\n",
+            )
+        assert "projects/quaid/SOUL.md" in prompt
+        assert "project context" in prompt
+
     def test_apply_distillation_additions(self, workspace_dir, mock_config):
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.\n")
@@ -376,7 +410,7 @@ class TestDistillation:
         mock_opus.assert_called_once()
         args, kwargs = mock_opus.call_args
         assert len(args) == 1
-        assert isinstance(args[0], str) and "Recent journal entries" in args[0]
+        assert isinstance(args[0], str) and "RECENT SIGNAL (journal entries)" in args[0]
         assert "model_tier" not in kwargs
         assert kwargs.get("system_prompt", "").startswith("Respond with JSON only")
         assert isinstance(kwargs.get("max_tokens"), int)
@@ -408,9 +442,11 @@ class TestDistillation:
             result = run_journal_distillation(dry_run=False, force_distill=True)
 
         assert result["additions"] == 1
-        assert "I grow through every conversation." in (workspace_dir / "SOUL.md").read_text()
-        # Backup should exist
-        assert (workspace_dir / "backups" / "soul-snippets").exists()
+        assert "I grow through every conversation." in (
+            workspace_dir / "projects" / "quaid" / "SOUL.md"
+        ).read_text()
+        # Generated project artifact should exist
+        assert (workspace_dir / "projects" / "quaid" / "SOUL.md").exists()
 
     def test_apply_distillation_edits_plus_additions(self, workspace_dir, mock_config):
         """Regression: edits must not be lost when additions are also applied."""
@@ -723,6 +759,16 @@ class TestDistillationStateEdgeCases:
             _save_distillation_state({"SOUL.md": {"last_distilled": "not-a-date"}})
             assert _is_distillation_due("SOUL.md") is True
 
+    def test_quaid_now_overrides_distillation_clock(self, workspace_dir, mock_config):
+        """QUAID_NOW drives distillation interval checks for deterministic replay."""
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import _save_distillation_state, _is_distillation_due
+            _save_distillation_state({"SOUL.md": {"last_distilled": "2026-03-01"}})
+            with patch.dict(os.environ, {"QUAID_NOW": "2026-03-05T00:00:00"}, clear=False):
+                assert _is_distillation_due("SOUL.md") is False
+            with patch.dict(os.environ, {"QUAID_NOW": "2026-03-10T00:00:00"}, clear=False):
+                assert _is_distillation_due("SOUL.md") is True
+
 
 class TestInsertIntoFileEdgeCases:
     def test_section_not_found_appends_to_end(self, workspace_dir):
@@ -736,6 +782,23 @@ class TestInsertIntoFileEdgeCases:
         assert "Appended text." in content
         # Should be at the end
         assert content.strip().endswith("Appended text.")
+
+
+class TestTokenWindowing:
+    def test_build_token_windows_splits_on_budget(self, workspace_dir, mock_config):
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import _build_token_windows
+
+            items = ["aaa", "bbb", "ccc"]
+            windows = _build_token_windows(
+                items,
+                item_token_fn=lambda _x: 10,
+                budget_tokens=15,
+            )
+        assert len(windows) == 3
+        assert windows[0] == ["aaa"]
+        assert windows[1] == ["bbb"]
+        assert windows[2] == ["ccc"]
 
     def test_end_insert_no_trailing_newline(self, workspace_dir):
         """_insert_into_file handles files without trailing newline."""
@@ -1021,7 +1084,7 @@ class TestConfigParsing:
         cfg = JournalConfig()
         assert cfg.enabled is True
         assert cfg.mode == "distilled"
-        assert cfg.max_entries_per_file == 50
+        assert cfg.max_entries_per_file == 0
         assert "SOUL.md" in cfg.target_files
         assert "AGENTS.md" not in cfg.target_files
 
@@ -1096,7 +1159,7 @@ class TestSnippetReview:
         mock_opus.assert_called_once()
         args, kwargs = mock_opus.call_args
         assert len(args) == 1
-        assert isinstance(args[0], str) and "Pending snippets" in args[0]
+        assert isinstance(args[0], str) and "RECENT SIGNAL (new snippets)" in args[0]
         assert "model_tier" not in kwargs
         assert kwargs.get("system_prompt", "").startswith("Respond with JSON only")
         assert isinstance(kwargs.get("max_tokens"), int)
@@ -1124,7 +1187,9 @@ class TestSnippetReview:
             result = run_soul_snippets_review(dry_run=False)
 
         assert result["folded"] == 1
-        assert "I notice patterns in my responses." in (workspace_dir / "SOUL.md").read_text()
+        assert "I notice patterns in my responses." in (
+            workspace_dir / "projects" / "quaid" / "SOUL.md"
+        ).read_text()
 
     def test_disabled_skips(self, workspace_dir, mock_config):
         """Snippets disabled returns skipped."""

@@ -186,6 +186,51 @@ class TestStoreBasic:
             node = graph.get_node(result["id"])
             assert node.type == "Fact"
 
+    def test_recall_orchestrator_runs_followup_passes(self):
+        import datastore.memorydb.memory_graph as mg
+
+        calls = []
+
+        def fake_once(query, **kwargs):
+            calls.append(query)
+            if query == "Where does Maya work?":
+                return [{"id": "a", "text": "Maya works remotely", "similarity": 0.62}]
+            return [{"id": "b", "text": "Maya works at Acme", "similarity": 0.83}]
+
+        with patch.object(mg, "_recall_once", side_effect=fake_once), \
+             patch.object(mg, "_plan_recall_queries", return_value=["Where does Maya work?", "Maya employer workplace"]):
+            out = mg.recall("Where does Maya work?", owner_id="quaid", limit=5, use_routing=True)
+
+        assert len(calls) == 2
+        ids = [r.get("id") for r in out]
+        assert "a" in ids
+        assert "b" in ids
+        assert out[0]["id"] == "b"
+
+    def test_recall_orchestrator_no_plan_when_routing_disabled(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_recall_once", return_value=[{"id": "a", "similarity": 0.7}]) as mocked_once, \
+             patch.object(mg, "_plan_recall_queries", side_effect=AssertionError("planner should not be called")):
+            out = mg.recall("test query", owner_id="quaid", limit=5, use_routing=False)
+
+        assert mocked_once.call_count == 1
+        assert out and out[0]["id"] == "a"
+
+    def test_recall_orchestrator_dedup_keeps_best_similarity(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_recall_once", side_effect=[
+            [{"id": "x", "text": "v1", "similarity": 0.61}],
+            [{"id": "x", "text": "v2", "similarity": 0.89}],
+        ]), patch.object(mg, "_plan_recall_queries", return_value=["q1", "q2"]):
+            out = mg.recall("q1", owner_id="quaid", limit=5, use_routing=True)
+
+        assert len(out) == 1
+        assert out[0]["id"] == "x"
+        assert out[0]["text"] == "v2"
+        assert out[0]["similarity"] == 0.89
+
     def test_category_to_type_mapping_decision(self, tmp_path):
         """category='decision' maps to type 'Event'."""
         from datastore.memorydb.memory_graph import store

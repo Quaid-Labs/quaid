@@ -3340,7 +3340,7 @@ def _normalize_project_tag(value: Optional[str]) -> Optional[str]:
     return norm[:64] if norm else None
 
 
-def recall(
+def _recall_once(
     query: str,
     limit: int = 5,
     privacy: Optional[List[str]] = None,
@@ -4019,7 +4019,7 @@ def recall(
             retry_query = _expand_low_signal_query(clean_query, intent)
             if retry_query and retry_query != clean_query:
                 try:
-                    retry_output = recall(
+                    retry_output = _recall_once(
                         retry_query,
                         limit=limit,
                         privacy=privacy,
@@ -4045,6 +4045,202 @@ def recall(
                     pass
 
     return final_output
+
+
+def _plan_recall_queries(query: str, max_queries: int = 3) -> List[str]:
+    """Plan focused recall sub-queries from the original query.
+
+    Best-effort: if planner LLM is unavailable or fails, return the original query.
+    """
+    clean_query = " ".join((query or "").split())
+    if not clean_query:
+        return []
+    if len(clean_query) < 10:
+        return [clean_query]
+    if not _HAS_LLM_CLIENTS:
+        return [clean_query]
+
+    prompt = (
+        "Generate focused memory-retrieval sub-queries for the user question.\n"
+        "Rules:\n"
+        "- Return JSON only: {\"queries\": [\"...\"]}\n"
+        "- Keep original entities, names, dates, and projects.\n"
+        "- Do not invent new facts.\n"
+        "- Include 1 broad query and up to 2 focused query variants.\n\n"
+        f"Question: {clean_query}"
+    )
+
+    try:
+        result, _ = call_fast_reasoning(
+            prompt=prompt,
+            max_tokens=200,
+            timeout=6.0,
+            system_prompt=(
+                "You output compact JSON for retrieval planning. "
+                "No prose."
+            ),
+            max_retries=0,
+        )
+        parsed = parse_json_response(result)
+        queries = parsed.get("queries") if isinstance(parsed, dict) else None
+        if not isinstance(queries, list):
+            return [clean_query]
+
+        out: List[str] = []
+        seen = set()
+        for raw in queries:
+            q = " ".join(str(raw or "").split())
+            if not q:
+                continue
+            key = q.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(q)
+            if len(out) >= max(1, max_queries):
+                break
+        if clean_query.lower() not in {q.lower() for q in out}:
+            out.insert(0, clean_query)
+        return out or [clean_query]
+    except Exception:
+        return [clean_query]
+
+
+def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> List[Dict[str, Any]]:
+    """Merge recall batches by memory id, keeping highest similarity variant."""
+    by_id: Dict[str, Dict[str, Any]] = {}
+    fallback_rows: List[Dict[str, Any]] = []
+    for batch in batches:
+        for row in batch or []:
+            if not isinstance(row, dict):
+                continue
+            rid = str(row.get("id") or "").strip()
+            if not rid:
+                fallback_rows.append(row)
+                continue
+            prev = by_id.get(rid)
+            if prev is None or float(row.get("similarity", 0.0)) > float(prev.get("similarity", 0.0)):
+                by_id[rid] = row
+
+    merged = list(by_id.values()) + fallback_rows
+    merged.sort(key=lambda x: float(x.get("similarity", 0.0)), reverse=True)
+    return merged[: max(1, limit)]
+
+
+def recall(
+    query: str,
+    limit: int = 5,
+    privacy: Optional[List[str]] = None,
+    owner_id: Optional[str] = None,
+    min_similarity: Optional[float] = None,
+    use_routing: bool = True,
+    use_aliases: bool = True,
+    use_intent: bool = True,
+    use_multi_pass: bool = True,
+    use_reranker: Optional[bool] = None,
+    current_session_id: Optional[str] = None,
+    compaction_time: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    viewer_entity_id: Optional[str] = None,
+    participant_entity_ids: Optional[List[str]] = None,
+    include_unscoped: bool = True,
+    debug: bool = False,
+    domain: Optional[Dict[str, bool]] = None,
+    domain_boost: Optional[Any] = None,
+    project: Optional[str] = None,
+    low_signal_retry: bool = True,
+) -> List[Dict[str, Any]]:
+    """Orchestrated recall surface for LLM/tool callers.
+
+    Runs one or more focused recall passes, then merges and deduplicates results.
+    """
+    if not query or not query.strip():
+        return []
+
+    # Pass 1: original query
+    first_batch = _recall_once(
+        query=query,
+        limit=limit,
+        privacy=privacy,
+        owner_id=owner_id,
+        min_similarity=min_similarity,
+        use_routing=use_routing,
+        use_aliases=use_aliases,
+        use_intent=use_intent,
+        use_multi_pass=use_multi_pass,
+        use_reranker=use_reranker,
+        current_session_id=current_session_id,
+        compaction_time=compaction_time,
+        date_from=date_from,
+        date_to=date_to,
+        source_channel=source_channel,
+        source_conversation_id=source_conversation_id,
+        source_author_id=source_author_id,
+        actor_id=actor_id,
+        subject_entity_id=subject_entity_id,
+        viewer_entity_id=viewer_entity_id,
+        participant_entity_ids=participant_entity_ids,
+        include_unscoped=include_unscoped,
+        debug=debug,
+        domain=domain,
+        domain_boost=domain_boost,
+        project=project,
+        low_signal_retry=low_signal_retry,
+    )
+
+    planned = _plan_recall_queries(query) if use_routing else [query]
+    planned = [p for p in planned if p and p.strip()]
+    if len(planned) <= 1:
+        return first_batch
+
+    batches: List[List[Dict[str, Any]]] = [first_batch]
+    # Follow-up passes: keep them lightweight to control token/cost.
+    for subq in planned[1:]:
+        sub_batch = _recall_once(
+            query=subq,
+            limit=min(max(3, limit), 12),
+            privacy=privacy,
+            owner_id=owner_id,
+            min_similarity=min_similarity,
+            use_routing=False,
+            use_aliases=use_aliases,
+            use_intent=use_intent,
+            use_multi_pass=False,
+            use_reranker=use_reranker,
+            current_session_id=current_session_id,
+            compaction_time=compaction_time,
+            date_from=date_from,
+            date_to=date_to,
+            source_channel=source_channel,
+            source_conversation_id=source_conversation_id,
+            source_author_id=source_author_id,
+            actor_id=actor_id,
+            subject_entity_id=subject_entity_id,
+            viewer_entity_id=viewer_entity_id,
+            participant_entity_ids=participant_entity_ids,
+            include_unscoped=include_unscoped,
+            debug=debug,
+            domain=domain,
+            domain_boost=domain_boost,
+            project=project,
+            low_signal_retry=False,
+        )
+        batches.append(sub_batch)
+
+    merged = _merge_recall_batches(batches, limit=limit)
+    if debug:
+        for row in merged:
+            if isinstance(row, dict):
+                row.setdefault("_planner", {})
+                row["_planner"]["queries"] = planned[:]
+                row["_planner"]["passes"] = len(batches)
+    return merged
 
 
 def _check_injection_blocklist(text: str) -> Optional[str]:

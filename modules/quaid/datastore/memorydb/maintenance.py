@@ -136,6 +136,17 @@ def run_memory_graph_maintenance(ctx, result_factory):
             return result
 
         result.errors.append(f"Unknown memory_graph_maintenance subtask: {subtask}")
+    except ValueError as exc:
+        msg = str(exc)
+        # Recoverable data-quality guard: malformed short facts should not fail
+        # the whole janitor pass. Keep telemetry and continue.
+        if "at least 3 words" in msg:
+            result.metrics["invalid_facts_skipped"] = int(result.metrics.get("invalid_facts_skipped", 0)) + 1
+            result.logs.append(f"Memory graph maintenance skipped malformed fact: {msg}")
+            return result
+        result.errors.append(
+            f"Memory graph maintenance failed ({exc.__class__.__name__}): {exc}"
+        )
     except RuntimeError as exc:
         result.errors.append(
             f"Memory graph maintenance failed ({exc.__class__.__name__}): {exc}"

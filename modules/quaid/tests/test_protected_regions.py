@@ -467,13 +467,15 @@ class TestSoulSnippetsProtectedRegions:
         """build_review_prompt (legacy) should not include protected content in parent."""
         from datastore.notedb.soul_snippets import build_review_prompt
 
+        tail = "TAIL_MARKER_REVIEW_98765"
         all_snippets = {
             "SOUL.md": {
                 "parent_content": (
                     "# SOUL\n\n"
                     "Visible.\n"
                     "<!-- protected -->\nSecret.\n<!-- /protected -->\n"
-                    "Also visible.\n"
+                    + ("repeat visible line\n" * 4000) +
+                    f"{tail}\n"
                 ),
                 "snippets": ["A test snippet."],
                 "config": {"purpose": "Personality", "maxLines": 80},
@@ -482,7 +484,7 @@ class TestSoulSnippetsProtectedRegions:
         prompt = build_review_prompt(all_snippets)
         assert "Secret." not in prompt
         assert "Visible." in prompt
-        assert "Also visible." in prompt
+        assert tail in prompt
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_full_distillation_respects_protected(self, mock_opus, snippets_workspace_dir, mock_config):
@@ -519,7 +521,7 @@ class TestSoulSnippetsProtectedRegions:
             result = run_journal_distillation(dry_run=False, force_distill=True)
 
         assert result["additions"] == 1
-        content = (snippets_workspace_dir / "SOUL.md").read_text()
+        content = (snippets_workspace_dir / "projects" / "quaid" / "SOUL.md").read_text()
         # Protected content unchanged
         assert "I am Alfie. This never changes." in content
         # Addition was made in unprotected section
