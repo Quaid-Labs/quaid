@@ -1225,11 +1225,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // slash commands. Subscribe to transcript updates and queue lifecycle signals
     // from explicit command/system markers.
     const runtimeEvents = (api as any)?.runtime?.events;
-    const parseSessionIdFromTranscriptPath = (sessionFile: string): string => {
-      const base = path.basename(String(sessionFile || ""));
-      const match = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-      return match ? match[0].toLowerCase() : "";
-    };
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update: any) => {
         try {
@@ -1240,7 +1235,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const detail = facade.detectLifecycleSignal(messages);
           if (!detail) return;
           const sessionId =
-            parseSessionIdFromTranscriptPath(sessionFile) ||
+            facade.parseSessionIdFromTranscriptPath(sessionFile) ||
             String(update?.sessionId || "").trim();
           if (!sessionId) {
             console.log(`[quaid][signal] transcript_update missing session id file=${sessionFile}`);
