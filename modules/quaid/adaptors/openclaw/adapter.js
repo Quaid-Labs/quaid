@@ -7,6 +7,7 @@ import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
 import { createQuaidFacade } from "../../core/facade.js";
 import { createMemoryConfigResolver } from "../../core/memory-config.js";
+import { spawnWithTimeout } from "../../core/spawn-with-timeout.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import {
   assertDeclaredRegistration,
@@ -587,70 +588,12 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
   };
 }
 function _spawnWithTimeout(script, command, args, label, env, timeoutMs = PYTHON_BRIDGE_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("python3", [script, command, ...args], {
-      cwd: WORKSPACE,
-      env: buildPythonEnv(env)
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let killTimer = null;
-    const timer = setTimeout(() => {
-      if (!settled) {
-        try {
-          proc.kill("SIGTERM");
-        } catch {
-        }
-        killTimer = setTimeout(() => {
-          if (!settled) {
-            try {
-              proc.kill("SIGKILL");
-            } catch {
-            }
-          }
-        }, 5e3);
-        settled = true;
-        reject(new Error(`${label} timeout after ${timeoutMs}ms: ${command} ${args.join(" ")}`));
-      }
-    }, timeoutMs);
-    proc.stdout.on("data", (data) => {
-      stdout += data;
-    });
-    proc.stderr.on("data", (data) => {
-      stderr += data;
-    });
-    proc.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (killTimer) {
-        clearTimeout(killTimer);
-        killTimer = null;
-      }
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        const stderrText = stderr.trim();
-        const stdoutText = stdout.trim();
-        const detail = [stderrText ? `stderr: ${stderrText}` : "", stdoutText ? `stdout: ${stdoutText}` : ""].filter(Boolean).join(" | ").slice(0, 1e3);
-        reject(new Error(`${label} error (exit=${String(code)}): ${detail}`));
-      }
-    });
-    proc.on("error", (err) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      if (killTimer) {
-        clearTimeout(killTimer);
-        killTimer = null;
-      }
-      reject(err);
-    });
+  return spawnWithTimeout({
+    cwd: WORKSPACE,
+    env: buildPythonEnv(env),
+    timeoutMs,
+    label,
+    argv: ["python3", script, command, ...args]
   });
 }
 function spawnNotifyScript(scriptBody) {
