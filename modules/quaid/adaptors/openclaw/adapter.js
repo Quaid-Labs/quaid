@@ -7,7 +7,6 @@ import { SessionTimeoutManager } from "../../core/session-timeout.js";
 import {
   createQuaidFacade
 } from "../../core/facade.js";
-import { createMemoryConfigResolver } from "../../core/memory-config.js";
 import { spawnWithTimeout } from "../../core/spawn-with-timeout.js";
 import { spawnDetachedScript } from "../../core/spawn-detached-script.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
@@ -134,16 +133,99 @@ function getDatastoreStatsSync() {
     return null;
   }
 }
-const memoryConfigResolver = createMemoryConfigResolver({
-  workspace: WORKSPACE,
-  isMissingFileError,
-  isFailHardEnabled: () => isFailHardEnabled(),
-  getMemoryConfigCandidates: () => [
-    path.join(WORKSPACE, "config", "memory.json"),
-    path.join(os.homedir(), ".quaid", "memory-config.json"),
-    path.join(process.cwd(), "memory-config.json")
-  ]
-});
+function buildFallbackMemoryConfig() {
+  return {
+    models: {
+      llmProvider: "default",
+      deepReasoning: "default",
+      fastReasoning: "default",
+      deepReasoningModelClasses: {
+        anthropic: "claude-opus-4-6",
+        openai: "gpt-5",
+        "openai-compatible": "gpt-4.1"
+      },
+      fastReasoningModelClasses: {
+        anthropic: "claude-haiku-4-5",
+        openai: "gpt-5-mini",
+        "openai-compatible": "gpt-4.1-mini"
+      }
+    },
+    retrieval: {
+      maxLimit: 8
+    }
+  };
+}
+function createAdapterMemoryConfigResolver() {
+  let memoryConfigErrorLogged = false;
+  let memoryConfigMtimeMs = -1;
+  let memoryConfigPath = "";
+  let memoryConfig = null;
+  function memoryConfigCandidates() {
+    return [
+      path.join(WORKSPACE, "config", "memory.json"),
+      path.join(os.homedir(), ".quaid", "memory-config.json"),
+      path.join(process.cwd(), "memory-config.json")
+    ];
+  }
+  function resolveMemoryConfigPath() {
+    for (const candidate of memoryConfigCandidates()) {
+      try {
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      } catch {
+      }
+    }
+    return memoryConfigCandidates()[0];
+  }
+  function getMemoryConfig2() {
+    const configPath = resolveMemoryConfigPath();
+    if (configPath !== memoryConfigPath) {
+      memoryConfigMtimeMs = -1;
+      memoryConfigPath = configPath;
+    }
+    let mtimeMs = -1;
+    try {
+      mtimeMs = fs.statSync(configPath).mtimeMs;
+    } catch (err) {
+      const msg = String(err?.message || err || "");
+      if (!msg.includes("ENOENT")) {
+        console.warn(`[memory] memory config stat failed: ${msg}`);
+      }
+    }
+    if (memoryConfig && mtimeMs >= 0 && memoryConfigMtimeMs === mtimeMs) {
+      return memoryConfig;
+    }
+    if (memoryConfig && mtimeMs < 0) {
+      return memoryConfig;
+    }
+    try {
+      memoryConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      memoryConfigMtimeMs = mtimeMs;
+    } catch (err) {
+      if (!memoryConfigErrorLogged) {
+        memoryConfigErrorLogged = true;
+        console.error(`[memory] failed to load memory config (${configPath}): ${err?.message || String(err)}`);
+      }
+      if (isMissingFileError(err)) {
+        memoryConfig = buildFallbackMemoryConfig();
+        memoryConfigMtimeMs = -1;
+        return memoryConfig;
+      }
+      memoryConfig = buildFallbackMemoryConfig();
+      memoryConfigMtimeMs = mtimeMs;
+      if (isFailHardEnabled()) {
+        throw err;
+      }
+    }
+    return memoryConfig;
+  }
+  return {
+    getMemoryConfig: getMemoryConfig2,
+    resolveMemoryConfigPath
+  };
+}
+const memoryConfigResolver = createAdapterMemoryConfigResolver();
 function getMemoryConfig() {
   return memoryConfigResolver.getMemoryConfig();
 }

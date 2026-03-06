@@ -1793,34 +1793,10 @@ async function step5_systems(advancedSetup = false) {
     C.bmag("SUBSYSTEMS")
   );
 
-  log.info(C.bold("All 4 systems are recommended. Only disable if you know there's a conflict"));
-  log.info(C.bold("with another tool or workflow that manages the same files."));
+  log.info(C.bold("All 4 systems are enabled by policy."));
+  log.info(C.bold("Installer no longer supports subsystem disablement."));
   const systems = { memory: true, journal: true, projects: true, workspace: true };
-  if (!advancedSetup) {
-    log.success(`Enabled: ${C.bcyan("memory, journal, projects, workspace")} ${C.dim("(recommended)")}`);
-    return systems;
-  }
-
-  log.message("");
-
-  const keepAll = handleCancel(await confirm({
-    message: "Keep all systems enabled? (Recommended)",
-    initialValue: true,
-  }));
-
-  if (!keepAll) {
-    for (const [key, info] of Object.entries(sysInfo)) {
-      const enabled = handleCancel(await confirm({
-        message: `${C.bcyan(info.label)}: ${info.desc}`,
-        initialValue: true,
-      }));
-      systems[key] = enabled;
-      if (!enabled) log.warn(`${info.label} disabled — ${C.dim(info.detail.split(".")[0])}`);
-    }
-  }
-
-  const enabled = Object.entries(systems).filter(([,v]) => v).map(([k]) => k);
-  log.success(`Enabled: ${C.bcyan(enabled.join(", "))}`);
+  log.success(`Enabled: ${C.bcyan("memory, journal, projects, workspace")} ${C.dim("(required)")}`);
 
   return systems;
 }
