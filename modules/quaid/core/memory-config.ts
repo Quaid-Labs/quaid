@@ -6,6 +6,7 @@ type MemoryConfigResolverDeps = {
   workspace: string;
   isMissingFileError: (err: unknown) => boolean;
   isFailHardEnabled: () => boolean;
+  getMemoryConfigCandidates?: () => string[];
   logger?: {
     warn: (message: string) => void;
     error: (message: string) => void;
@@ -62,8 +63,13 @@ export function createMemoryConfigResolver(deps: MemoryConfigResolverDeps): Memo
   };
 
   function memoryConfigCandidates(): string[] {
+    const provided = deps.getMemoryConfigCandidates?.() || [];
+    const normalized = provided.map((p) => String(p || "").trim()).filter(Boolean);
+    if (normalized.length > 0) {
+      return normalized;
+    }
     return [
-      path.join(deps.workspace, "config", "memory.json"),
+      path.join(deps.workspace, "memory-config.json"),
       path.join(os.homedir(), ".quaid", "memory-config.json"),
       path.join(process.cwd(), "memory-config.json"),
     ];

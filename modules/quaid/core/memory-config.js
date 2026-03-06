@@ -43,8 +43,13 @@ export function createMemoryConfigResolver(deps) {
         console.error(message);
     };
     function memoryConfigCandidates() {
+        const provided = deps.getMemoryConfigCandidates?.() || [];
+        const normalized = provided.map((p) => String(p || "").trim()).filter(Boolean);
+        if (normalized.length > 0) {
+            return normalized;
+        }
         return [
-            path.join(deps.workspace, "config", "memory.json"),
+            path.join(deps.workspace, "memory-config.json"),
             path.join(os.homedir(), ".quaid", "memory-config.json"),
             path.join(process.cwd(), "memory-config.json"),
         ];

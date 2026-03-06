@@ -133,7 +133,12 @@ function getDatastoreStatsSync() {
 const memoryConfigResolver = createMemoryConfigResolver({
   workspace: WORKSPACE,
   isMissingFileError,
-  isFailHardEnabled: () => isFailHardEnabled()
+  isFailHardEnabled: () => isFailHardEnabled(),
+  getMemoryConfigCandidates: () => [
+    path.join(WORKSPACE, "config", "memory.json"),
+    path.join(os.homedir(), ".quaid", "memory-config.json"),
+    path.join(process.cwd(), "memory-config.json")
+  ]
 });
 function getMemoryConfig() {
   return memoryConfigResolver.getMemoryConfig();
