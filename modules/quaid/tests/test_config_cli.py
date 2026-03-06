@@ -27,7 +27,7 @@ def test_interactive_edit_updates_failhard_and_parallel_settings(monkeypatch, tm
             "7", "false",  # failHard -> false
             "8", "true",   # parallel enabled -> true
             "9", "6",      # llmWorkers -> 6
-            "13",          # save and exit
+            "12",          # save and exit
         ]
     )
 
@@ -92,7 +92,7 @@ def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeyp
         [
             "4", "qwen3-embedding:8b",
             "6", "60",
-            "13",
+            "12",
         ]
     )
 
@@ -116,7 +116,7 @@ def test_interactive_edit_writes_embedding_and_timeout_to_canonical_keys(monkeyp
 def test_interactive_edit_updates_existing_snake_case_model_keys(monkeypatch, tmp_path):
     path = tmp_path / "config" / "memory.json"
     data = {"models": {"llm_provider": "anthropic"}}
-    answers = iter(["1", "openai-compatible", "13"])
+    answers = iter(["1", "openai-compatible", "12"])
 
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
     monkeypatch.setattr(config_cli, "_run_config_callbacks_after_save", lambda: None)

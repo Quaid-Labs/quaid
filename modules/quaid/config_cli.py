@@ -264,11 +264,6 @@ def _prompt_int(label: str, current: int) -> int:
     return int(raw)
 
 
-def _toggle_bool(data: dict[str, Any], key: str) -> None:
-    current = bool(_get(data, key, True))
-    _set(data, key, not current)
-
-
 def _model_key_path(staged: dict[str, Any], snake: str, camel: str) -> str:
     models = _get(staged, "models", {})
     if isinstance(models, dict):
@@ -299,28 +294,6 @@ def _edit_plugin_config(staged: dict[str, Any], path: Path) -> None:
     _edit_plugin_config_json(staged, plugin_id)
 
 
-def _edit_systems(data: dict[str, Any]) -> None:
-    while True:
-        print("\nSystems")
-        for idx, key in enumerate(("memory", "journal", "projects", "workspace"), start=1):
-            enabled = bool(_get(data, f"systems.{key}", True))
-            print(f"{idx}. {key:<10} {'on' if enabled else 'off'}")
-        print("5. Back")
-        choice = input("Select: ").strip()
-        if choice == "1":
-            _toggle_bool(data, "systems.memory")
-        elif choice == "2":
-            _toggle_bool(data, "systems.journal")
-        elif choice == "3":
-            _toggle_bool(data, "systems.projects")
-        elif choice == "4":
-            _toggle_bool(data, "systems.workspace")
-        elif choice == "5":
-            return
-        else:
-            print("Invalid choice")
-
-
 def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
     staged = json.loads(json.dumps(data))
 
@@ -335,10 +308,9 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
         print("7. Fail hard (retrieval.fail_hard)")
         print("8. Core parallel enabled")
         print("9. Core LLM workers")
-        print("10. Systems on/off")
-        print("11. Edit plugin config JSON")
-        print("12. Show summary")
-        print("13. Save and exit")
+        print("10. Edit plugin config JSON")
+        print("11. Show summary")
+        print("12. Save and exit")
         print("0. Exit without saving")
         choice = input("Select: ").strip()
 
@@ -378,12 +350,10 @@ def interactive_edit(path: Path, data: dict[str, Any]) -> bool:
                 cur = int(_get(staged, "core.parallel.llmWorkers", _get(staged, "core.parallel.llm_workers", 4)))
                 _set(staged, "core.parallel.llmWorkers", _prompt_int("core.parallel.llmWorkers", cur))
             elif choice == "10":
-                _edit_systems(staged)
-            elif choice == "11":
                 _edit_plugin_config(staged, path)
-            elif choice == "12":
+            elif choice == "11":
                 _print_summary(path, staged)
-            elif choice == "13":
+            elif choice == "12":
                 _save_config(path, staged)
                 _run_config_callbacks_after_save()
                 print(f"Saved: {path}")
