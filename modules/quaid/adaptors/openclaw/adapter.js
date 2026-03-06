@@ -109,6 +109,27 @@ function buildPythonEnv(extra = {}) {
     ...extra
   };
 }
+function getDatastoreStatsSync() {
+  try {
+    const output = execFileSync("python3", [PYTHON_SCRIPT, "stats"], {
+      encoding: "utf-8",
+      timeout: 3e4,
+      env: buildPythonEnv()
+    });
+    const parsed = JSON.parse(output || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch (err) {
+    const msg = `[quaid] datastore stats read failed: ${String(err?.message || err)}`;
+    if (isFailHardEnabled()) {
+      throw new Error(msg, { cause: err });
+    }
+    console.warn(msg);
+    return null;
+  }
+}
 const memoryConfigResolver = createMemoryConfigResolver({
   workspace: WORKSPACE,
   isMissingFileError,
@@ -693,6 +714,7 @@ const facade = createQuaidFacade({
   readSessionMessagesFile: (sessionFile) => parseSessionMessagesJsonl(sessionFile),
   listCompactionSessions,
   requestSessionCompaction,
+  getDatastoreStatsSync,
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
@@ -1347,11 +1369,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             const results = await facade.docsSearch(query, searchArgs);
             let projectMdContent = "";
             if (project) {
-              try {
-                projectMdContent = facade.loadProjectMarkdown(project);
-              } catch (err) {
-                console.warn(`[quaid] projects_search PROJECT.md preload failed: ${String(err?.message || err)}`);
-              }
+              projectMdContent = facade.loadProjectMarkdown(project);
             }
             let stalenessWarning = "";
             try {

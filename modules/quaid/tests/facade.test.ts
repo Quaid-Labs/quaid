@@ -5,22 +5,6 @@ import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
-const { mockExecFileSync } = vi.hoisted(() => ({
-  mockExecFileSync: vi.fn(),
-}));
-
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    execFileSync: (...args: any[]) => {
-      const mocked = mockExecFileSync(...args);
-      if (mocked !== undefined) return mocked;
-      return actual.execFileSync(...(args as Parameters<typeof actual.execFileSync>));
-    },
-  };
-});
-
 function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps {
   return {
     workspace: "/tmp/test-workspace",
@@ -43,6 +27,7 @@ function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps
       truncated: false,
     } satisfies LLMCallResult)),
     getMemoryConfig: vi.fn(() => ({ retrieval: { failHard: false } })),
+    getDatastoreStatsSync: vi.fn(() => null),
     isSystemEnabled: vi.fn(() => false),
     isFailHardEnabled: vi.fn(() => false),
     transcriptFormat: {
@@ -601,8 +586,9 @@ describe("QuaidFacade", () => {
   });
 
   it("computeDynamicK derives K from datastore active_nodes stats", () => {
-    mockExecFileSync.mockReturnValueOnce('{"active_nodes":500}');
-    const facade = createQuaidFacade(makeMockDeps());
+    const facade = createQuaidFacade(makeMockDeps({
+      getDatastoreStatsSync: vi.fn(() => ({ active_nodes: 500 })),
+    }));
     expect(facade.computeDynamicK()).toBe(10);
   });
 
