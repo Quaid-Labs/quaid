@@ -1402,7 +1402,7 @@ describe("QuaidFacade", () => {
       nowMs: 1_700_000_000_000,
     });
     expect(nudges).toHaveLength(2);
-    expect(nudges[0]).toContain("just installed Quaid");
+    expect(nudges[0]).toContain("just installed the memory system");
     expect(nudges[1]).toContain("1 pending approval request");
 
     const suppressed = facade.collectJanitorNudges({
