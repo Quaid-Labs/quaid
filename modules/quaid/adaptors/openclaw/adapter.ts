@@ -226,18 +226,6 @@ function isSystemEnabled(system: "memory" | "journal" | "projects" | "workspace"
   return systems[system] !== false;
 }
 
-function isPluginStrictMode(): boolean {
-  const plugins = getMemoryConfig().plugins || {};
-  const raw = plugins.strict;
-  if (raw === undefined) return true;
-  if (raw === null) return false;
-  if (typeof raw === "number") return raw !== 0;
-  if (typeof raw === "string") return raw.length > 0;
-  if (Array.isArray(raw)) return raw.length > 0;
-  if (typeof raw === "object") return Object.keys(raw).length > 0;
-  return !!raw;
-}
-
 type AdapterContractDeclarations = {
   enabled: boolean;
   tools: Set<string>;
@@ -245,7 +233,7 @@ type AdapterContractDeclarations = {
   api: Set<string>;
 };
 
-function loadAdapterContractDeclarations(): AdapterContractDeclarations {
+function loadAdapterContractDeclarations(strictMode: boolean): AdapterContractDeclarations {
   try {
     const payload = JSON.parse(fs.readFileSync(ADAPTER_PLUGIN_MANIFEST_PATH, "utf8"));
     const contract = payload?.capabilities?.contract || {};
@@ -257,19 +245,12 @@ function loadAdapterContractDeclarations(): AdapterContractDeclarations {
     };
   } catch (err: unknown) {
     const msg = `[quaid][contract] failed reading adapter manifest ${ADAPTER_PLUGIN_MANIFEST_PATH}: ${String((err as Error)?.message || err)}`;
-    if (isPluginStrictMode()) {
+    if (strictMode) {
       throw new Error(msg, { cause: err as Error });
     }
     console.warn(msg);
     return { enabled: false, tools: new Set<string>(), events: new Set<string>(), api: new Set<string>() };
   }
-}
-
-function isPreInjectionPassEnabled(): boolean {
-  const retrieval = getMemoryConfig().retrieval || {};
-  if (typeof retrieval.preInjectionPass === "boolean") return retrieval.preInjectionPass;
-  if (typeof retrieval.pre_injection_pass === "boolean") return retrieval.pre_injection_pass;
-  return true;
 }
 
 function isFailHardEnabled(): boolean {
@@ -1106,8 +1087,8 @@ const quaidPlugin = {
 
     // Fail fast on model/provider/config mismatches so runtime doesn't degrade silently.
     runStartupSelfCheck();
-    const contractDecl = loadAdapterContractDeclarations();
-    const strictContracts = isPluginStrictMode();
+    const strictContracts = facade.isPluginStrictMode();
+    const contractDecl = loadAdapterContractDeclarations(strictContracts);
     if (contractDecl.enabled) {
       validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
     }
@@ -1318,7 +1299,7 @@ notify_user(${JSON.stringify(message)})
         // sources explicitly so implementation facts are not filtered out.
         // Dynamic K: 2 * log2(nodeCount) — scales with graph size
         const autoInjectK = facade.computeDynamicK();
-        const useTotalRecallForInject = isPreInjectionPassEnabled();
+        const useTotalRecallForInject = facade.isPreInjectionPassEnabled();
         const routerFailOpen = Boolean(
           getMemoryConfig().retrieval?.routerFailOpen ??
           getMemoryConfig().retrieval?.router_fail_open ??

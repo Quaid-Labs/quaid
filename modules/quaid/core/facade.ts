@@ -181,6 +181,8 @@ export type QuaidFacade = {
     detail?: "summary" | "full",
   ) => boolean;
   shouldNotifyProjectCreate: () => boolean;
+  isPluginStrictMode: () => boolean;
+  isPreInjectionPassEnabled: () => boolean;
   shouldEmitExtractionNotify: (key: string, now?: number) => boolean;
   clearExtractionNotifyHistory: () => void;
   listRecentSessionsFromExtractionLog: (limit?: number) => Array<{
@@ -677,6 +679,25 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (camel && typeof camel === "object" && typeof camel.enabled === "boolean") {
       return camel.enabled;
     }
+    return true;
+  }
+
+  function isPluginStrictMode(): boolean {
+    const plugins = deps.getMemoryConfig().plugins || {};
+    const raw = (plugins as any).strict;
+    if (raw === undefined) return true;
+    if (raw === null) return false;
+    if (typeof raw === "number") return raw !== 0;
+    if (typeof raw === "string") return raw.length > 0;
+    if (Array.isArray(raw)) return raw.length > 0;
+    if (typeof raw === "object") return Object.keys(raw).length > 0;
+    return !!raw;
+  }
+
+  function isPreInjectionPassEnabled(): boolean {
+    const retrieval = deps.getMemoryConfig().retrieval || {};
+    if (typeof (retrieval as any).preInjectionPass === "boolean") return (retrieval as any).preInjectionPass;
+    if (typeof (retrieval as any).pre_injection_pass === "boolean") return (retrieval as any).pre_injection_pass;
     return true;
   }
 
@@ -2816,6 +2837,8 @@ ${lines.join("\n")}
     resolveOwner,
     shouldNotifyFeature,
     shouldNotifyProjectCreate,
+    isPluginStrictMode,
+    isPreInjectionPassEnabled,
     shouldEmitExtractionNotify,
     clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
     listRecentSessionsFromExtractionLog,

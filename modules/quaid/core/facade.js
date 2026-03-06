@@ -306,6 +306,31 @@ export function createQuaidFacade(deps) {
         }
         return true;
     }
+    function isPluginStrictMode() {
+        const plugins = deps.getMemoryConfig().plugins || {};
+        const raw = plugins.strict;
+        if (raw === undefined)
+            return true;
+        if (raw === null)
+            return false;
+        if (typeof raw === "number")
+            return raw !== 0;
+        if (typeof raw === "string")
+            return raw.length > 0;
+        if (Array.isArray(raw))
+            return raw.length > 0;
+        if (typeof raw === "object")
+            return Object.keys(raw).length > 0;
+        return !!raw;
+    }
+    function isPreInjectionPassEnabled() {
+        const retrieval = deps.getMemoryConfig().retrieval || {};
+        if (typeof retrieval.preInjectionPass === "boolean")
+            return retrieval.preInjectionPass;
+        if (typeof retrieval.pre_injection_pass === "boolean")
+            return retrieval.pre_injection_pass;
+        return true;
+    }
     function shouldEmitExtractionNotify(key, now = Date.now()) {
         for (const [k, ts] of extractionNotifyHistory.entries()) {
             if ((now - ts) > EXTRACTION_NOTIFY_DEDUPE_MS) {
@@ -2348,6 +2373,8 @@ ${lines.join("\n")}
         resolveOwner,
         shouldNotifyFeature,
         shouldNotifyProjectCreate,
+        isPluginStrictMode,
+        isPreInjectionPassEnabled,
         shouldEmitExtractionNotify,
         clearExtractionNotifyHistory: () => extractionNotifyHistory.clear(),
         listRecentSessionsFromExtractionLog,

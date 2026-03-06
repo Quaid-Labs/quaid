@@ -233,6 +233,17 @@ describe("QuaidFacade", () => {
     expect(facade.shouldNotifyProjectCreate()).toBe(false);
   });
 
+  it("isPluginStrictMode and isPreInjectionPassEnabled read config flags", () => {
+    const facade = createQuaidFacade(makeMockDeps({
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { pre_injection_pass: false, failHard: false },
+        plugins: { strict: 0 },
+      })),
+    }));
+    expect(facade.isPluginStrictMode()).toBe(false);
+    expect(facade.isPreInjectionPassEnabled()).toBe(false);
+  });
+
   it("shouldEmitExtractionNotify dedupes keys within cooldown", () => {
     const facade = createQuaidFacade(makeMockDeps());
     const t0 = 1_700_000_000_000;

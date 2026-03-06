@@ -192,18 +192,7 @@ function isSystemEnabled(system) {
   const systems = config.systems || {};
   return systems[system] !== false;
 }
-function isPluginStrictMode() {
-  const plugins = getMemoryConfig().plugins || {};
-  const raw = plugins.strict;
-  if (raw === void 0) return true;
-  if (raw === null) return false;
-  if (typeof raw === "number") return raw !== 0;
-  if (typeof raw === "string") return raw.length > 0;
-  if (Array.isArray(raw)) return raw.length > 0;
-  if (typeof raw === "object") return Object.keys(raw).length > 0;
-  return !!raw;
-}
-function loadAdapterContractDeclarations() {
+function loadAdapterContractDeclarations(strictMode) {
   try {
     const payload = JSON.parse(fs.readFileSync(ADAPTER_PLUGIN_MANIFEST_PATH, "utf8"));
     const contract = payload?.capabilities?.contract || {};
@@ -215,18 +204,12 @@ function loadAdapterContractDeclarations() {
     };
   } catch (err) {
     const msg = `[quaid][contract] failed reading adapter manifest ${ADAPTER_PLUGIN_MANIFEST_PATH}: ${String(err?.message || err)}`;
-    if (isPluginStrictMode()) {
+    if (strictMode) {
       throw new Error(msg, { cause: err });
     }
     console.warn(msg);
     return { enabled: false, tools: /* @__PURE__ */ new Set(), events: /* @__PURE__ */ new Set(), api: /* @__PURE__ */ new Set() };
   }
-}
-function isPreInjectionPassEnabled() {
-  const retrieval = getMemoryConfig().retrieval || {};
-  if (typeof retrieval.preInjectionPass === "boolean") return retrieval.preInjectionPass;
-  if (typeof retrieval.pre_injection_pass === "boolean") return retrieval.pre_injection_pass;
-  return true;
 }
 function isFailHardEnabled() {
   const retrieval = getMemoryConfig().retrieval || {};
@@ -896,8 +879,8 @@ const quaidPlugin = {
   register(api) {
     console.log("[quaid] Registering local graph memory plugin");
     runStartupSelfCheck();
-    const contractDecl = loadAdapterContractDeclarations();
-    const strictContracts = isPluginStrictMode();
+    const strictContracts = facade.isPluginStrictMode();
+    const contractDecl = loadAdapterContractDeclarations(strictContracts);
     if (contractDecl.enabled) {
       validateApiSurface(contractDecl.api, strictContracts, (m) => console.warn(m));
     }
@@ -1068,7 +1051,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
           return;
         }
         const autoInjectK = facade.computeDynamicK();
-        const useTotalRecallForInject = isPreInjectionPassEnabled();
+        const useTotalRecallForInject = facade.isPreInjectionPassEnabled();
         const routerFailOpen = Boolean(
           getMemoryConfig().retrieval?.routerFailOpen ?? getMemoryConfig().retrieval?.router_fail_open ?? true
         );
