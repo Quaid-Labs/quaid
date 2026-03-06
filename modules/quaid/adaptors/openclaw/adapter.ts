@@ -1752,25 +1752,11 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             // Notify user about what docs were searched (if enabled)
             try {
               if (facade.shouldNotifyFeature("retrieval", "summary") && results) {
-                // Parse results to extract doc names and scores
-                const docResults: Array<{doc: string, section: string, score: number}> = [];
-                const lines = results.split('\n');
-                for (const line of lines) {
-                  // Match pattern: "1. ~/docs/filename.md > section (similarity: 0.xxx)"
-                  const match = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
-                  if (match) {
-                    docResults.push({
-                      doc: match[1].split('/').pop() || match[1],
-                      section: match[2].trim(),
-                      score: parseFloat(match[3])
-                    });
-                  }
-                }
-
-                if (docResults.length > 0) {
+                const payload = facade.buildDocsSearchNotificationPayload(query, results);
+                if (payload.results.length > 0) {
                   // Fire and forget notification
                   const dataFile3 = path.join(QUAID_TMP_DIR, `docs-search-data-${Date.now()}.json`);
-                  fs.writeFileSync(dataFile3, JSON.stringify({ query, results: docResults }), { mode: 0o600 });
+                  fs.writeFileSync(dataFile3, JSON.stringify(payload), { mode: 0o600 });
                   const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_docs_search

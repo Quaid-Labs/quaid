@@ -283,6 +283,13 @@ export type QuaidFacade = {
   docsListProjects: (args?: string[]) => Promise<string>;
   docsCheckStaleness: () => Promise<string>;
   getDocsStalenessWarning: () => Promise<string>;
+  buildDocsSearchNotificationPayload: (
+    query: string,
+    results: string,
+  ) => {
+    query: string;
+    results: Array<{ doc: string; section: string; score: number }>;
+  };
 
   // --- Memory notes (state management) ---
   addMemoryNote: (sessionId: string, text: string, category: string) => void;
@@ -2093,6 +2100,30 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return `\n\nSTALENESS WARNING: The following docs may be outdated:\n${warnings.join("\n")}\nConsider running: python3 docs_updater.py update-stale --apply`;
   }
 
+  function buildDocsSearchNotificationPayload(
+    query: string,
+    results: string,
+  ): {
+    query: string;
+    results: Array<{ doc: string; section: string; score: number }>;
+  } {
+    const docResults: Array<{ doc: string; section: string; score: number }> = [];
+    const lines = String(results || "").split("\n");
+    for (const line of lines) {
+      const match = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
+      if (!match) continue;
+      docResults.push({
+        doc: match[1].split("/").pop() || match[1],
+        section: match[2].trim(),
+        score: parseFloat(match[3]),
+      });
+    }
+    return {
+      query: String(query || ""),
+      results: docResults,
+    };
+  }
+
   function computeDynamicK(): number {
     const nodeCount = getActiveNodeCount();
     if (nodeCount < 10) return 5;
@@ -2989,6 +3020,7 @@ ${lines.join("\n")}
     docsListProjects: (args = ["--json"]) => deps.execDocsRegistry("list-projects", args),
     docsCheckStaleness: () => deps.execDocsUpdater("check", ["--json"]),
     getDocsStalenessWarning,
+    buildDocsSearchNotificationPayload,
 
     // Memory notes
     addMemoryNote,

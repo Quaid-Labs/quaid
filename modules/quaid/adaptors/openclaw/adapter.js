@@ -1474,21 +1474,10 @@ ${projectMdContent}
 ${results || "No results."}${stalenessWarning}` : results ? results + stalenessWarning : "No results found." + stalenessWarning;
             try {
               if (facade.shouldNotifyFeature("retrieval", "summary") && results) {
-                const docResults = [];
-                const lines = results.split("\n");
-                for (const line of lines) {
-                  const match = line.match(/^\d+\.\s+~?\/?([^\s>]+)\s+>\s+(.+?)\s+\(similarity:\s+([\d.]+)\)/);
-                  if (match) {
-                    docResults.push({
-                      doc: match[1].split("/").pop() || match[1],
-                      section: match[2].trim(),
-                      score: parseFloat(match[3])
-                    });
-                  }
-                }
-                if (docResults.length > 0) {
+                const payload = facade.buildDocsSearchNotificationPayload(query, results);
+                if (payload.results.length > 0) {
                   const dataFile3 = path.join(QUAID_TMP_DIR, `docs-search-data-${Date.now()}.json`);
-                  fs.writeFileSync(dataFile3, JSON.stringify({ query, results: docResults }), { mode: 384 });
+                  fs.writeFileSync(dataFile3, JSON.stringify(payload), { mode: 384 });
                   const launchedNotify = spawnNotifyScript(`
 import json
 from core.runtime.notify import notify_docs_search
