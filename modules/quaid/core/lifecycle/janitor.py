@@ -100,6 +100,27 @@ MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 1
 
 # Fixed values (not in config)
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
+JANITOR_TASK_CHOICES = [
+    "embeddings",
+    "workspace",
+    "docs_staleness",
+    "docs_cleanup",
+    "snippets",
+    "journal",
+    "review",
+    "dedup_review",
+    "duplicates",
+    "contradictions",
+    "decay",
+    "decay_review",
+    "graduate",
+    "rag",
+    "temporal",
+    "tests",
+    "cleanup",
+    "update_check",
+    "all",
+]
 
 
 def _refresh_runtime_state() -> None:
@@ -1708,7 +1729,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 if __name__ == "__main__":
     _refresh_runtime_state()
     parser = argparse.ArgumentParser(description="Memory Janitor (Optimized)")
-    parser.add_argument("--task", choices=["embeddings", "workspace", "docs_staleness", "docs_cleanup", "snippets", "journal", "review", "dedup_review", "duplicates", "contradictions", "decay", "decay_review", "graduate", "rag", "tests", "cleanup", "update_check", "all"],
+    parser.add_argument("--task", choices=JANITOR_TASK_CHOICES,
                        default="all", help="Task to run")
     parser.add_argument("--apply", action="store_true", help="Apply changes (default: dry-run)")
     parser.add_argument("--approve", action="store_true",

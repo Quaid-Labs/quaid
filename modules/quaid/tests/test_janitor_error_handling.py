@@ -227,3 +227,7 @@ def test_check_for_updates_ignores_non_object_github_payload(tmp_path, monkeypat
             version_file.unlink(missing_ok=True)
         else:
             version_file.write_text(original, encoding="utf-8")
+
+
+def test_cli_task_choices_include_temporal():
+    assert "temporal" in janitor.JANITOR_TASK_CHOICES

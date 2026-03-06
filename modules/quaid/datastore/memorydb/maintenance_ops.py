@@ -97,6 +97,20 @@ CONFIDENCE_DECAY_RATE = _cfg.decay.rate_percent / 100.0  # Convert percent to de
 # Fixed values (not in config)
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 
+def _quaid_now() -> datetime:
+    """Return current time, honoring benchmark/test override via QUAID_NOW."""
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            return datetime.fromisoformat(candidate).replace(tzinfo=None)
+        except ValueError:
+            try:
+                return datetime.strptime(raw, "%Y-%m-%d")
+            except ValueError:
+                logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+    return datetime.now()
+
 
 def _effective_llm_timeout(requested_seconds: Optional[float], default_seconds: float) -> float:
     """Bound per-call timeout by remaining budget when provided."""
@@ -2563,7 +2577,7 @@ JSON array only:"""
                         extend_conf = max(0.3, float(ext_conf) * 0.5) if ext_conf else 0.3
                         conn.execute(
                             "UPDATE nodes SET confidence = ?, accessed_at = ? WHERE id = ?",
-                            (extend_conf, datetime.now().isoformat(), node_id)
+                            (extend_conf, _quaid_now().isoformat(), node_id)
                         )
                         conn.execute(
                             """
@@ -2620,7 +2634,8 @@ def find_stale_memories_optimized(graph: MemoryGraph, metrics: JanitorMetrics) -
     metrics.start_task("decay_discovery")
     
     stale = []
-    cutoff = (datetime.now() - timedelta(days=CONFIDENCE_DECAY_DAYS)).isoformat()
+    now = _quaid_now()
+    cutoff = (now - timedelta(days=CONFIDENCE_DECAY_DAYS)).isoformat()
     
     with graph._get_conn() as conn:
         rows = conn.execute("""
@@ -2714,8 +2729,8 @@ def apply_decay_optimized(stale: List[Dict[str, Any]], graph: MemoryGraph,
             try:
                 accessed_dt = datetime.fromisoformat(last_accessed)
             except (ValueError, TypeError):
-                accessed_dt = datetime.now() - timedelta(days=CONFIDENCE_DECAY_DAYS + 1)
-            days_elapsed = (datetime.now() - accessed_dt).total_seconds() / 86400.0
+                accessed_dt = _quaid_now() - timedelta(days=CONFIDENCE_DECAY_DAYS + 1)
+            days_elapsed = (_quaid_now() - accessed_dt).total_seconds() / 86400.0
             retention = _ebbinghaus_retention(
                 days_elapsed, mem.get("access_count", 0), is_verified,
                 storage_strength=mem.get("storage_strength", 0.0)

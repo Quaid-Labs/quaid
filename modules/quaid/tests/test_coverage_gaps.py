@@ -419,6 +419,24 @@ class TestApplyDecayOptimizedReal:
         # Verified: rate * 0.5 = 0.05, so 0.8 - 0.05 = 0.75
         assert updated.confidence == pytest.approx(0.75, abs=0.01)
 
+    def test_find_stale_memories_honors_quaid_now(self, tmp_path):
+        """Decay discovery should use QUAID_NOW for deterministic simulated time."""
+        from datastore.memorydb.maintenance_ops import find_stale_memories_optimized, JanitorMetrics
+        graph, _ = _make_graph(tmp_path)
+        node = _make_node(graph, "Time travel stale check", confidence=0.8)
+        with graph._get_conn() as conn:
+            conn.execute(
+                "UPDATE nodes SET accessed_at = ? WHERE id = ?",
+                ("2026-03-01T00:00:00", node.id),
+            )
+        metrics = JanitorMetrics()
+        with patch.dict(os.environ, {"QUAID_NOW": "2026-03-20T00:00:00"}, clear=False):
+            not_stale = find_stale_memories_optimized(graph, metrics)
+        with patch.dict(os.environ, {"QUAID_NOW": "2026-04-10T00:00:00"}, clear=False):
+            stale = find_stale_memories_optimized(graph, metrics)
+        assert not any(mem["id"] == node.id for mem in not_stale)
+        assert any(mem["id"] == node.id for mem in stale)
+
 
 # ===========================================================================
 # decay_memories() CLI path

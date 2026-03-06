@@ -33,6 +33,7 @@ from config import get_config
 from lib.fail_policy import is_fail_hard_enabled
 from lib.markdown import strip_protected_regions
 from lib.runtime_context import get_workspace_dir
+from lib.tokens import estimate_tokens
 from prompt_sets import get_prompt
 
 # Configuration
@@ -42,8 +43,61 @@ def _workspace_dir() -> Path:
 def _backup_dir() -> Path:
     return _workspace_dir() / "backups" / "soul-snippets"
 
+
+def _project_file_path(filename: str) -> Path:
+    return _workspace_dir() / "projects" / "quaid" / filename
+
+
+def _root_file_path(filename: str) -> Path:
+    return _workspace_dir() / filename
+
+
+def _ensure_project_file(filename: str) -> Path:
+    """Ensure projects/quaid/<filename> exists, seeded from root file if present."""
+    project_path = _project_file_path(filename)
+    if project_path.exists():
+        return project_path
+    project_path.parent.mkdir(parents=True, exist_ok=True)
+    root_path = _root_file_path(filename)
+    if root_path.exists():
+        _atomic_write_text(project_path, root_path.read_text(encoding="utf-8"))
+    else:
+        _atomic_write_text(project_path, f"# {filename.removesuffix('.md')}\n")
+    return project_path
+
+
+def _resolve_writable_file_path(filename: str, *, allow_create_project: bool = False) -> Optional[Path]:
+    """Prefer project generated markdown when present; fall back to root file.
+
+    If allow_create_project is True and root exists, seed/create projects/quaid target.
+    """
+    project_path = _project_file_path(filename)
+    if project_path.exists():
+        return project_path
+    root_path = _root_file_path(filename)
+    if root_path.exists():
+        if allow_create_project:
+            return _ensure_project_file(filename)
+        return root_path
+    return None
+
 logger = logging.getLogger(__name__)
-_SNIPPETS_REVIEW_MAX_PER_FILE = int(os.environ.get("QUAID_SNIPPETS_REVIEW_MAX_PER_FILE", "50") or 50)
+_SNIPPETS_REVIEW_MAX_PER_FILE = int(os.environ.get("QUAID_SNIPPETS_REVIEW_MAX_PER_FILE", "0") or 0)
+_REVIEW_WINDOW_TOKEN_CAP = int(os.environ.get("QUAID_REVIEW_WINDOW_TOKEN_CAP", "25000") or 25000)
+
+def _quaid_now() -> datetime:
+    """Return current time, honoring benchmark/test override via QUAID_NOW."""
+    raw = os.environ.get("QUAID_NOW", "").strip()
+    if raw:
+        candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            return datetime.fromisoformat(candidate).replace(tzinfo=None)
+        except ValueError:
+            try:
+                return datetime.strptime(raw, "%Y-%m-%d")
+            except ValueError:
+                logger.warning("Invalid QUAID_NOW=%r; using wall clock", raw)
+    return datetime.now()
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -190,11 +244,19 @@ def _get_target_files() -> List[str]:
 
 
 def _get_max_entries() -> int:
-    """Get max entries per file from config."""
+    """Get max entries per file from config.
+
+    Returns:
+        int: Positive value to enforce a cap, or 0 for unlimited.
+    """
     cfg = _get_journal_config()
-    if cfg:
-        return cfg.max_entries_per_file
-    return 50
+    raw_value = getattr(cfg, "max_entries_per_file", 0) if cfg else 0
+    try:
+        max_entries = int(raw_value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid journal max_entries_per_file=%r; defaulting to unlimited", raw_value)
+        return 0
+    return max_entries if max_entries > 0 else 0
 
 
 def _is_enabled() -> bool:
@@ -330,10 +392,10 @@ def write_journal_entry(filename: str, content: str, trigger: str = "Compaction"
         header_end = existing.index('\n') if '\n' in existing else len(existing)
         updated = existing[:header_end + 1] + new_section + existing[header_end + 1:]
 
-    # Cap at max entries — archive oldest when exceeded
+    # Optionally cap active entries. max_entries <= 0 means unlimited.
     _, entries = _parse_journal_content(updated)
     max_entries = _get_max_entries()
-    if len(entries) > max_entries:
+    if max_entries > 0 and len(entries) > max_entries:
         _archive_oldest_entries(filename, entries[max_entries:])
         # Rebuild content with only the kept entries
         updated = _rebuild_journal_content(base_name, entries[:max_entries])
@@ -562,7 +624,7 @@ def _is_distillation_due(filename: str) -> bool:
 
     try:
         last_date = datetime.strptime(last_distilled, "%Y-%m-%d")
-        return datetime.now() - last_date >= timedelta(days=interval_days)
+        return _quaid_now() - last_date >= timedelta(days=interval_days)
     except ValueError:
         return True
 
@@ -571,8 +633,12 @@ def _is_distillation_due(filename: str) -> bool:
 # Distillation (Opus synthesis)
 # =============================================================================
 
-def build_distillation_prompt(filename: str, parent_content: str,
-                               entries: List[Dict[str, Any]]) -> str:
+def build_distillation_prompt(
+    filename: str,
+    parent_content: str,
+    entries: List[Dict[str, Any]],
+    project_content: str = "",
+) -> str:
     """Build the Opus prompt for distilling journal entries into core markdown."""
     config = _get_core_markdown_config(filename)
     purpose = config.get("purpose", "")
@@ -589,21 +655,24 @@ def build_distillation_prompt(filename: str, parent_content: str,
     state = _get_distillation_state()
     last_distilled = state.get(filename, {}).get("last_distilled", "never")
 
-    # Strip protected regions before showing to Opus
+    # Strip protected regions before showing to model
     visible_content, _ = strip_protected_regions(parent_content)
-    truncated = visible_content[:4000]
-    truncation_note = ""
-    if len(visible_content) > 4000:
-        truncation_note = f"\n... (truncated, {len(visible_content)} total chars)"
+    visible_project_content, _ = strip_protected_regions(project_content or "")
 
     return f"""You are reviewing journal entries to decide what should become part of the permanent core identity file.
 
 Current {filename} ({current_lines}/{max_lines} lines):
 ```
-{truncated}{truncation_note}
+{visible_content}
 ```
 
-Recent journal entries (since {last_distilled}):
+Current projects/quaid/{filename} (generated companion context):
+```
+{visible_project_content}
+```
+
+RECENT SIGNAL (journal entries):
+since {last_distilled}
 {entries_text}
 
 Your job:
@@ -653,12 +722,12 @@ def apply_distillation(filename: str, result: Dict[str, Any],
                         dry_run: bool = True) -> Dict[str, Any]:
     """Apply distillation results (additions/edits) to a core markdown file.
 
-    Returns stats: {"additions": int, "edits": int, "recovered_edits": int, "errors": [str]}
+    Returns stats: {"additions": int, "edits": int, "errors": [str]}
     """
     stats = {"additions": 0, "edits": 0, "recovered_edits": 0, "errors": []}
 
-    file_path = _workspace_dir() / filename
-    if not file_path.exists():
+    file_path = _resolve_writable_file_path(filename)
+    if file_path is None:
         stats["errors"].append(f"File not found: {filename}")
         return stats
 
@@ -666,6 +735,8 @@ def apply_distillation(filename: str, result: Dict[str, Any],
 
     # Detect protected regions so we can skip edits within them
     _, protected_ranges = strip_protected_regions(content)
+
+    recoveries: List[Tuple[str, str]] = []
 
     # Apply edits first (before additions change line positions)
     for edit in result.get("edits", []):
@@ -684,28 +755,19 @@ def apply_distillation(filename: str, result: Dict[str, Any],
             stats["edits"] += 1
             logger.info(f"Edit in {filename}: '{old_text[:40]}...' → '{new_text[:40]}...'")
         else:
-            # Recovery path: preserve distilled update by appending a tagged note at EOF.
-            # Missing file remains a hard error above; this only handles text-anchor drift.
-            recovery_tag = (
-                f"<!-- DISTILL_RECOVERY:{datetime.now().strftime('%Y%m%d%H%M%S')}:{filename} -->"
-            )
-            recovery_body = new_text.strip()
-            if not recovery_body.startswith("- "):
-                recovery_body = f"- {recovery_body}"
-            recovery_entry = f"\n{recovery_tag}\n{recovery_body}\n"
-            if not dry_run:
-                if not content.endswith("\n"):
-                    content += "\n"
-                content += recovery_entry
             stats["recovered_edits"] += 1
-            logger.warning(
-                "Distillation anchor miss recovered in %s: '%s...'",
-                filename,
-                old_text[:50],
-            )
+            if not dry_run:
+                recoveries.append((old_text, new_text))
+
+    if not dry_run and recoveries:
+        for old_text, new_text in recoveries:
+            marker = f"<!-- DISTILL_RECOVERY: {old_text[:120]} -->"
+            if not content.endswith("\n"):
+                content += "\n"
+            content += f"\n{marker}\n- {new_text}\n"
 
     # Flush edits/recoveries to disk before additions (so _insert_into_file sees latest content)
-    if not dry_run and (stats["edits"] > 0 or stats["recovered_edits"] > 0):
+    if not dry_run and (stats["edits"] > 0 or recoveries):
         _atomic_write_text(file_path, content)
 
     # Apply additions
@@ -834,19 +896,74 @@ def read_snippets_file(filename: str) -> Tuple[str, List[Dict[str, Any]]]:
 
 def read_parent_file(filename: str) -> str:
     """Read a parent markdown file."""
-    parent_path = _workspace_dir() / filename
+    parent_path = _root_file_path(filename)
     if not parent_path.exists():
         return ""
     return parent_path.read_text(encoding='utf-8')
+
+
+def read_project_generated_file(filename: str) -> str:
+    """Read the generated project markdown companion for context."""
+    project_path = _workspace_dir() / "projects" / "quaid" / filename
+    if not project_path.exists():
+        return ""
+    return project_path.read_text(encoding='utf-8')
+
+
+def _entry_token_estimate(entry: Dict[str, Any]) -> int:
+    return (
+        estimate_tokens(str(entry.get("date", "")))
+        + estimate_tokens(str(entry.get("trigger", "")))
+        + estimate_tokens(str(entry.get("content", "")))
+        + 32
+    )
+
+
+def _snippet_token_estimate(snippet: str) -> int:
+    return estimate_tokens(str(snippet or "")) + 24
+
+
+def _build_token_windows(
+    items: List[Any],
+    *,
+    item_token_fn: Callable[[Any], int],
+    budget_tokens: int,
+) -> List[List[Any]]:
+    """Greedy token-window splitter. Keeps all items (never drops)."""
+    if not items:
+        return []
+    if budget_tokens <= 0:
+        return [[item] for item in items]
+
+    windows: List[List[Any]] = []
+    current: List[Any] = []
+    current_tokens = 0
+
+    for item in items:
+        t = max(1, int(item_token_fn(item)))
+        if current and current_tokens + t > budget_tokens:
+            windows.append(current)
+            current = []
+            current_tokens = 0
+        current.append(item)
+        current_tokens += t
+
+    if current:
+        windows.append(current)
+    return windows
 
 
 def backup_file(filename: str) -> Optional[str]:
     """Create a timestamped backup of a file before modification.
     Keeps at most 30 backups per filename, removing oldest.
     """
-    src = _workspace_dir() / filename
+    src = _project_file_path(filename)
     if not src.exists():
-        return None
+        root = _root_file_path(filename)
+        if root.exists():
+            src = _ensure_project_file(filename)
+        else:
+            return None
 
     _backup_dir().mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -879,8 +996,8 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
     Returns:
         True if the insert was performed, False if skipped.
     """
-    file_path = _workspace_dir() / filename
-    if not file_path.exists():
+    file_path = _resolve_writable_file_path(filename)
+    if file_path is None:
         logger.warning(f"Skipping insert into {filename}: file does not exist")
         return False
 
@@ -998,6 +1115,7 @@ def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
     file_sections = []
     for filename, data in all_snippets.items():
         parent_content = data["parent_content"]
+        project_content = data.get("project_content", "")
         snippets = data["snippets"]
         config = data.get("config", {})
         purpose = config.get("purpose", "")
@@ -1006,12 +1124,9 @@ def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
 
         snippet_list = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(snippets))
 
-        # Strip protected regions before showing to Opus
+        # Strip protected regions before showing to model
         visible_content, _ = strip_protected_regions(parent_content)
-        truncated = visible_content[:3000]
-        truncation_note = ""
-        if len(visible_content) > 3000:
-            truncation_note = f"\n... (truncated, {len(visible_content)} total chars)"
+        visible_project_content, _ = strip_protected_regions(project_content)
 
         file_sections.append(f"""### {filename}
 Purpose: {purpose}
@@ -1020,10 +1135,15 @@ Headroom: {max_lines - current_lines} lines
 
 Current content:
 ```
-{truncated}{truncation_note}
+{visible_content}
 ```
 
-Pending snippets:
+Current projects/quaid/{filename} (generated companion context):
+```
+{visible_project_content}
+```
+
+RECENT SIGNAL (new snippets):
 {snippet_list}""")
 
     files_block = "\n\n".join(file_sections)
@@ -1154,7 +1274,7 @@ def apply_decisions(
                         stats["folded"] += 1
                     processed_snippets.setdefault(filename, []).append(original_text)
                 else:
-                    file_path = _workspace_dir() / filename
+                    file_path = _resolve_writable_file_path(filename)
                     if not file_path.exists():
                         stats["errors"].append(f"Skipped {filename}[{snippet_idx+1}]: file missing")
                     else:
@@ -1225,22 +1345,23 @@ def run_journal_distillation(
     total_entries = 0
     total_additions = 0
     total_edits = 0
-    total_recovered_edits = 0
     all_errors: List[str] = []
     files_distilled = 0
-    work_items: List[Dict[str, Any]] = []
+
+    system_prompt = get_prompt("llm.json_only")
+    cfg = _get_journal_config()
+    max_tokens = cfg.max_tokens if cfg else 8192
+    llm_timeout = _snippet_review_timeout_seconds()
 
     for filename in target_files:
         _, entries = read_journal_file(filename)
         if not entries:
             continue
 
-        # Check distillation interval
         if not force_distill and not _is_distillation_due(filename):
             print(f"  {filename}: {len(entries)} entries (distillation not yet due)")
             continue
 
-        # Filter entries since last distillation
         state = _get_distillation_state()
         last_distilled = state.get(filename, {}).get("last_distilled")
         if last_distilled and not force_distill:
@@ -1250,125 +1371,103 @@ def run_journal_distillation(
             print(f"  {filename}: no new entries since last distillation")
             continue
 
-        total_entries += len(entries)
-        print(f"  {filename}: {len(entries)} entries to distill")
-
-        # Read parent file
         parent_content = read_parent_file(filename)
         if not parent_content:
             print(f"  {filename}: parent file not found, skipping")
             continue
 
-        work_items.append({
-            "filename": filename,
-            "entries": entries,
-            "parent_content": parent_content,
-        })
-
-    if not work_items:
-        print(f"  Results: {files_distilled} files distilled, {total_additions} additions, "
-              f"{total_edits} edits from {total_entries} entries")
-        return {
-            "total_entries": total_entries,
-            "files_distilled": files_distilled,
-            "additions": total_additions,
-            "edits": total_edits,
-            "errors": all_errors,
-        }
-
-    system_prompt = get_prompt("llm.json_only")
-    cfg = _get_journal_config()
-    max_tokens = cfg.max_tokens if cfg else 8192
-    llm_timeout = _snippet_review_timeout_seconds()
-    worker_count = min(max(1, int(llm_workers or 1)), len(work_items))
-    print(
-        f"  Calling review model for distillation across {len(work_items)} files "
-        f"(configured deep-reasoning model, workers={worker_count})..."
-    )
-
-    def _distill_file(item: Dict[str, Any]) -> Dict[str, Any]:
-        filename = item["filename"]
-        prompt = build_distillation_prompt(filename, item["parent_content"], item["entries"])
-        response_text, duration = call_deep_reasoning(
-            prompt,
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-            timeout=llm_timeout,
+        project_content = read_project_generated_file(filename)
+        context_tokens = (
+            estimate_tokens(system_prompt)
+            + estimate_tokens(parent_content)
+            + estimate_tokens(project_content)
+            + 1200
         )
-        if not response_text:
-            return {"filename": filename, "error": f"No response for {filename}"}
-        result = parse_json_response(response_text)
-        if not result:
-            return {"filename": filename, "error": f"Parse failed for {filename}: {response_text[:200]}"}
-        return {"filename": filename, "duration": duration, "result": result}
+        entry_budget = max(1, _REVIEW_WINDOW_TOKEN_CAP - context_tokens)
+        windows = _build_token_windows(
+            entries,
+            item_token_fn=_entry_token_estimate,
+            budget_tokens=entry_budget,
+        )
+        total_entries += len(entries)
+        print(
+            f"  {filename}: {len(entries)} entries -> {len(windows)} window(s) "
+            f"(cap={_REVIEW_WINDOW_TOKEN_CAP}, context≈{context_tokens}, entry_budget≈{entry_budget})"
+        )
 
-    distill_results: Dict[str, Dict[str, Any]] = {}
-    if parallel_map and worker_count > 1:
-        try:
-            mapped = parallel_map(work_items, _distill_file, max_workers=worker_count)
-            for res in mapped:
-                filename = str((res or {}).get("filename") or "").strip()
-                if filename:
-                    distill_results[filename] = res
-        except Exception as exc:
-            all_errors.append(f"Parallel distillation dispatch failed: {exc}")
-            for item in work_items:
-                res = _distill_file(item)
-                distill_results[item["filename"]] = res
-    else:
-        for item in work_items:
-            res = _distill_file(item)
-            distill_results[item["filename"]] = res
-
-    for item in work_items:
-        filename = item["filename"]
-        entries = item["entries"]
-        out = distill_results.get(filename, {"filename": filename, "error": f"No result for {filename}"})
-        if out.get("error"):
-            print(f"  Opus distillation failed for {filename}: {out['error']}")
-            all_errors.append(str(out["error"]))
-            continue
-        result = out["result"]
-        print(f"  Opus responded for {filename} in {float(out.get('duration', 0.0)):.1f}s")
-
-        # Backup before modification
         if not dry_run:
             backup_file(filename)
 
-        # Apply additions and edits
-        stats = apply_distillation(filename, result, dry_run=dry_run)
-        total_additions += stats["additions"]
-        total_edits += stats["edits"]
-        total_recovered_edits += int(stats.get("recovered_edits", 0))
-        all_errors.extend(stats["errors"])
-        files_distilled += 1
+        file_had_success = False
+        captured_dates_all: set[str] = set()
+        for window_idx, window_entries in enumerate(windows, 1):
+            current_parent = read_parent_file(filename)
+            current_project = read_project_generated_file(filename)
+            prompt = build_distillation_prompt(
+                filename,
+                current_parent,
+                window_entries,
+                project_content=current_project,
+            )
+            response_text, duration = call_deep_reasoning(
+                prompt,
+                system_prompt=system_prompt,
+                max_tokens=max_tokens,
+                timeout=llm_timeout,
+            )
+            if not response_text:
+                msg = f"No response for {filename} window {window_idx}/{len(windows)}"
+                print(f"  Opus distillation failed: {msg}")
+                all_errors.append(msg)
+                continue
 
-        # Archive captured entries
-        captured_dates = result.get("captured_dates", [])
-        if captured_dates and not dry_run:
-            cfg = _get_journal_config()
-            if cfg and cfg.archive_after_distillation:
-                captured = [e for e in entries if e["date"] in captured_dates]
-                if captured:
-                    archive_entries(filename, captured)
-                    print(f"  Archived {len(captured)} entries from {filename}")
+            result = parse_json_response(response_text)
+            if not result:
+                msg = (
+                    f"Parse failed for {filename} window {window_idx}/{len(windows)}: "
+                    f"{response_text[:200]}"
+                )
+                print(f"  Opus distillation failed: {msg}")
+                all_errors.append(msg)
+                continue
 
-        # Update distillation state
+            print(
+                f"  Opus responded for {filename} window {window_idx}/{len(windows)} "
+                f"in {float(duration or 0.0):.1f}s"
+            )
+            stats = apply_distillation(filename, result, dry_run=dry_run)
+            total_additions += stats["additions"]
+            total_edits += stats["edits"]
+            all_errors.extend(stats["errors"])
+            file_had_success = True
+            for d in result.get("captured_dates", []) or []:
+                if isinstance(d, str) and d.strip():
+                    captured_dates_all.add(d.strip())
+
+            reasoning = result.get("reasoning", "")
+            if reasoning:
+                print(f"  Opus reasoning ({filename} w{window_idx}): {reasoning[:120]}...")
+
+        if file_had_success:
+            files_distilled += 1
+
+        if captured_dates_all and not dry_run and cfg and cfg.archive_after_distillation:
+            captured = [e for e in entries if e["date"] in captured_dates_all]
+            if captured:
+                archive_entries(filename, captured)
+                print(f"  Archived {len(captured)} entries from {filename}")
+
         if not dry_run:
             state = _get_distillation_state()
             state[filename] = {
-                "last_distilled": datetime.now().strftime("%Y-%m-%d"),
+                "last_distilled": _quaid_now().strftime("%Y-%m-%d"),
                 "entries_distilled": len(entries),
             }
             _save_distillation_state(state)
 
-        reasoning = result.get("reasoning", "")
-        if reasoning:
-            print(f"  Opus reasoning: {reasoning[:120]}...")
-
     # Report
     print(f"  Results: {files_distilled} files distilled, {total_additions} additions, "
-          f"{total_edits} edits (+{total_recovered_edits} recovered) from {total_entries} entries")
+          f"{total_edits} edits from {total_entries} entries")
     if all_errors:
         for err in all_errors:
             print(f"  Error: {err}")
@@ -1378,7 +1477,6 @@ def run_journal_distillation(
         "files_distilled": files_distilled,
         "additions": total_additions,
         "edits": total_edits,
-        "recovered_edits": total_recovered_edits,
         "errors": all_errors,
     }
 
@@ -1400,18 +1498,17 @@ def run_soul_snippets_review(
         return {"skipped": True, "reason": "snippets_disabled"}
 
     target_files = _get_target_files()
-    all_snippets: Dict[str, Dict[str, Any]] = {}
     total_snippet_count = 0
+    file_payloads: Dict[str, Dict[str, Any]] = {}
 
     for filename in target_files:
         _, sections = read_snippets_file(filename)
         if not sections:
             continue
 
-        snippets = []
+        snippets: List[str] = []
         for section in sections:
             snippets.extend(section["snippets"])
-
         if not snippets:
             continue
 
@@ -1423,92 +1520,100 @@ def run_soul_snippets_review(
                 f"{_SNIPPETS_REVIEW_MAX_PER_FILE} (skipping {skipped} older snippets this cycle)"
             )
 
-        parent_content = read_parent_file(filename)
-        config = _get_core_markdown_config(filename)
-
-        all_snippets[filename] = {
-            "parent_content": parent_content,
+        file_payloads[filename] = {
             "snippets": snippets,
-            "config": config,
+            "config": _get_core_markdown_config(filename),
         }
         total_snippet_count += len(snippets)
 
-    if not all_snippets:
+    if not file_payloads:
         print("  No pending snippets to review")
         return {"total_snippets": 0, "folded": 0, "rewritten": 0, "discarded": 0, "errors": []}
 
-    print(f"  Found {total_snippet_count} snippets across {len(all_snippets)} files")
+    print(f"  Found {total_snippet_count} snippets across {len(file_payloads)} files")
 
     system_prompt = get_prompt("llm.json_only")
     cfg = _get_journal_config()
     max_tokens = cfg.max_tokens if cfg else 8192
     llm_timeout = _snippet_review_timeout_seconds()
-    worker_count = min(max(1, int(llm_workers or 1)), len(all_snippets))
     print(
-        f"  Calling review model for snippet review across {len(all_snippets)} files "
-        f"(configured deep-reasoning model, workers={worker_count})..."
+        f"  Calling review model for snippet review across {len(file_payloads)} files "
+        f"(configured deep-reasoning model)..."
     )
 
-    def _review_file(filename: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        prompt = build_review_prompt({filename: payload})
-        response_text, duration = call_deep_reasoning(
-            prompt,
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-            timeout=llm_timeout,
-        )
-        if not response_text:
-            return {"filename": filename, "error": f"No response from review model for {filename}"}
-        parsed = parse_json_response(response_text)
-        if not parsed:
-            return {"filename": filename, "error": f"Snippet review parse failed for {filename}: {response_text[:200]}"}
-        decisions = parsed.get("decisions", [])
-        if not decisions:
-            return {"filename": filename, "error": f"No decisions returned for pending snippets in {filename}"}
-        return {"filename": filename, "duration": duration, "decisions": decisions}
-
-    review_results: Dict[str, Dict[str, Any]] = {}
-    review_items = list(all_snippets.items())
-    if parallel_map and worker_count > 1:
-        def _review_item(item: Tuple[str, Dict[str, Any]]) -> Dict[str, Any]:
-            filename, payload = item
-            return _review_file(filename, payload)
-
-        try:
-            mapped = parallel_map(review_items, _review_item, max_workers=worker_count)
-            for res in mapped:
-                filename = str((res or {}).get("filename") or "").strip()
-                if filename:
-                    review_results[filename] = res
-        except Exception as exc:
-            stats_err = f"Parallel snippet review dispatch failed: {exc}"
-            for filename in all_snippets:
-                review_results[filename] = {"filename": filename, "error": stats_err}
-    else:
-        for filename, payload in review_items:
-            review_results[filename] = _review_file(filename, payload)
-
-    # Backup before modification
-    if not dry_run:
-        for filename in all_snippets:
+    stats = {"folded": 0, "rewritten": 0, "discarded": 0, "errors": []}
+    for filename, payload in file_payloads.items():
+        if not dry_run:
             backup_file(filename)
 
-    stats = {"folded": 0, "rewritten": 0, "discarded": 0, "errors": []}
-    for filename in all_snippets:
-        out = review_results.get(filename, {"filename": filename, "error": f"No review result for {filename}"})
-        if out.get("error"):
-            stats["errors"].append(str(out["error"]))
-            continue
-        print(f"  Review model responded for {filename} in {float(out.get('duration', 0.0)):.1f}s")
-        file_stats = apply_decisions(
-            out.get("decisions", []),
-            {filename: all_snippets[filename]},
-            dry_run=dry_run,
+        current_parent = read_parent_file(filename)
+        current_project = read_project_generated_file(filename)
+        context_tokens = (
+            estimate_tokens(system_prompt)
+            + estimate_tokens(current_parent)
+            + estimate_tokens(current_project)
+            + 1200
         )
-        stats["folded"] += int(file_stats.get("folded", 0))
-        stats["rewritten"] += int(file_stats.get("rewritten", 0))
-        stats["discarded"] += int(file_stats.get("discarded", 0))
-        stats["errors"].extend(file_stats.get("errors", []))
+        snippet_budget = max(1, _REVIEW_WINDOW_TOKEN_CAP - context_tokens)
+        windows = _build_token_windows(
+            payload["snippets"],
+            item_token_fn=_snippet_token_estimate,
+            budget_tokens=snippet_budget,
+        )
+        print(
+            f"  {filename}: {len(payload['snippets'])} snippets -> {len(windows)} window(s) "
+            f"(cap={_REVIEW_WINDOW_TOKEN_CAP}, context≈{context_tokens}, snippet_budget≈{snippet_budget})"
+        )
+
+        for window_idx, window_snippets in enumerate(windows, 1):
+            current_parent = read_parent_file(filename)
+            current_project = read_project_generated_file(filename)
+            window_payload = {
+                "parent_content": current_parent,
+                "project_content": current_project,
+                "snippets": window_snippets,
+                "config": payload.get("config", {}),
+            }
+            prompt = build_review_prompt({filename: window_payload})
+            response_text, duration = call_deep_reasoning(
+                prompt,
+                system_prompt=system_prompt,
+                max_tokens=max_tokens,
+                timeout=llm_timeout,
+            )
+            if not response_text:
+                stats["errors"].append(
+                    f"No response from review model for {filename} window {window_idx}/{len(windows)}"
+                )
+                continue
+
+            parsed = parse_json_response(response_text)
+            if not parsed:
+                stats["errors"].append(
+                    f"Snippet review parse failed for {filename} window {window_idx}/{len(windows)}: "
+                    f"{response_text[:200]}"
+                )
+                continue
+            decisions = parsed.get("decisions", [])
+            if not decisions:
+                stats["errors"].append(
+                    f"No decisions returned for {filename} window {window_idx}/{len(windows)}"
+                )
+                continue
+
+            print(
+                f"  Review model responded for {filename} window {window_idx}/{len(windows)} "
+                f"in {float(duration or 0.0):.1f}s"
+            )
+            file_stats = apply_decisions(
+                decisions,
+                {filename: window_payload},
+                dry_run=dry_run,
+            )
+            stats["folded"] += int(file_stats.get("folded", 0))
+            stats["rewritten"] += int(file_stats.get("rewritten", 0))
+            stats["discarded"] += int(file_stats.get("discarded", 0))
+            stats["errors"].extend(file_stats.get("errors", []))
 
     print(f"  Results: {stats['folded']} folded, {stats['rewritten']} rewritten, "
           f"{stats['discarded']} discarded from {total_snippet_count} snippets")
@@ -1556,7 +1661,6 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             )
             result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
             result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
-            result.metrics["journal_recovered_edits"] = int(journal_result.get("recovered_edits", 0))
             result.metrics["journal_entries_distilled"] = int(journal_result.get("total_entries", 0))
             for err in (journal_result.get("errors") or []):
                 result.errors.append(f"Journal distillation failed: {err}")
