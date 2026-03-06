@@ -74,6 +74,31 @@ describe("QuaidFacade", () => {
     expect(facade.isFailHardEnabled()).toBe(true);
   });
 
+  it("injectFullJournalContext appends full-mode journal content", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-journal-"));
+    const journalDir = path.join(workspace, "journal");
+    await mkdir(journalDir, { recursive: true });
+    await writeFile(path.join(journalDir, "2026-03-06.journal.md"), "A meaningful entry", "utf8");
+    await writeFile(path.join(journalDir, "ignore.txt"), "ignore", "utf8");
+
+    const facade = createQuaidFacade(makeMockDeps({
+      workspace,
+      isSystemEnabled: vi.fn((s: string) => s === "journal"),
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false },
+        docs: { journal: { mode: "full", journalDir: "journal" } },
+      })),
+    }));
+
+    const out = facade.injectFullJournalContext("seed");
+    expect(out).toContain("seed");
+    expect(out).toContain("[JOURNAL - Full Soul Mode]");
+    expect(out).toContain("--- 2026-03-06.journal.md ---");
+    expect(out).toContain("A meaningful entry");
+
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("initializeDatastoreIfMissing creates db dir and calls init callback once", async () => {
     const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-db-init-"));
     const dbPath = path.join(workspace, "data", "memory.db");

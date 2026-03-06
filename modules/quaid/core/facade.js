@@ -2437,6 +2437,56 @@ ${lines.join("\n")}
             },
         };
     }
+    function injectFullJournalContext(existingContext) {
+        let prepend = existingContext;
+        if (!deps.isSystemEnabled("journal"))
+            return prepend;
+        try {
+            const journalConfig = deps.getMemoryConfig().docs?.journal || {};
+            const journalMode = journalConfig.mode || "distilled";
+            if (journalMode !== "full")
+                return prepend;
+            const journalDir = path.join(deps.workspace, journalConfig.journalDir || "journal");
+            let journalFiles = [];
+            try {
+                journalFiles = fs.readdirSync(journalDir).filter((f) => f.endsWith(".journal.md")).sort();
+            }
+            catch (err) {
+                if (deps.isFailHardEnabled()) {
+                    throw new Error("[quaid] Journal injection listing failed under failHard", { cause: err });
+                }
+                console.warn(`[quaid] Journal injection listing failed: ${String(err?.message || err)}`);
+            }
+            let journalContent = "";
+            for (const file of journalFiles) {
+                try {
+                    const content = fs.readFileSync(path.join(journalDir, file), "utf8");
+                    if (content.trim()) {
+                        journalContent += `\n\n--- ${file} ---\n${content}`;
+                    }
+                }
+                catch (err) {
+                    if (deps.isFailHardEnabled()) {
+                        throw new Error(`[quaid] Journal injection read failed for ${file} under failHard`, { cause: err });
+                    }
+                    console.warn(`[quaid] Journal injection read failed for ${file}: ${String(err?.message || err)}`);
+                }
+            }
+            if (journalContent) {
+                const header = "[JOURNAL - Full Soul Mode]\n"
+                    + "These are your recent journal reflections. They are part of your inner life.\n";
+                prepend = prepend ? `${prepend}\n\n${header}${journalContent}` : `${header}${journalContent}`;
+                console.log(`[quaid] Full soul mode: injected ${journalFiles.length} journal files`);
+            }
+        }
+        catch (err) {
+            if (deps.isFailHardEnabled()) {
+                throw err;
+            }
+            console.warn(`[quaid] Journal injection failed (non-fatal): ${err.message}`);
+        }
+        return prepend;
+    }
     // -------------------------------------------------------------------------
     // Stub helper
     // -------------------------------------------------------------------------
@@ -2512,6 +2562,7 @@ ${lines.join("\n")}
         formatMemoriesForInjection,
         formatRecallToolResponse,
         buildRecallNotificationPayload,
+        injectFullJournalContext,
         isLowQualityQuery,
         filterMemoriesByPrivacy,
         loadInjectedMemoryKeys,
