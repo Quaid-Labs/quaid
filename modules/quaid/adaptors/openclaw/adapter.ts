@@ -16,6 +16,7 @@ import { normalizeKnowledgeDatastores } from "../../core/knowledge-stores.js";
 import { createQuaidFacade } from "../../core/facade.js";
 import { createMemoryConfigResolver } from "../../core/memory-config.js";
 import { spawnWithTimeout } from "../../core/spawn-with-timeout.js";
+import { spawnDetachedScript } from "../../core/spawn-detached-script.js";
 import { PYTHON_BRIDGE_TIMEOUT_MS, createPythonBridgeExecutor } from "./python-bridge.js";
 import {
   assertDeclaredRegistration,
@@ -717,57 +718,16 @@ function _spawnWithTimeout(
  * The script auto-deletes its temp file on completion.
  */
 function spawnNotifyScript(scriptBody: string): boolean {
-  const tmpFile = path.join(QUAID_NOTIFY_DIR, `notify-${Date.now()}-${Math.random().toString(36).slice(2)}.py`);
   const notifyLogFile = path.join(QUAID_LOGS_DIR, "notify-worker.log");
-  const appendNotifyLog = (msg: string) => {
-    try {
-      fs.appendFileSync(notifyLogFile, `${new Date().toISOString()} ${msg}\n`);
-    } catch {
-      // best-effort only
-    }
-  };
   const preamble = `import sys, os\nsys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})\n`;
-  const cleanup = `\nos.unlink(${JSON.stringify(tmpFile)})\n`;
-  let launched = false;
-  let notifyLogFd: number | null = null;
-  fs.writeFileSync(tmpFile, preamble + scriptBody + cleanup, { mode: 0o600 });
-  try {
-    notifyLogFd = fs.openSync(notifyLogFile, "a");
-    const proc = spawn('python3', [tmpFile], {
-      detached: true,
-      stdio: ['ignore', notifyLogFd, notifyLogFd],
-      env: buildPythonEnv(),
-    });
-    launched = true;
-    proc.on("error", (err: Error) => {
-      appendNotifyLog(`[notify-worker-error] spawn failed: ${err.message}`);
-      // If spawn fails asynchronously after launch, clean up the temp script.
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch {
-        // best-effort only
-      }
-    });
-    proc.unref();
-  } catch (err: unknown) {
-    appendNotifyLog(`[notify-worker-error] launch failed: ${String((err as Error)?.message || err)}`);
-    if (!launched) {
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch {
-        // best-effort only
-      }
-    }
-  } finally {
-    if (notifyLogFd !== null) {
-      try {
-        fs.closeSync(notifyLogFd);
-      } catch {
-        // best-effort only
-      }
-    }
-  }
-  return launched;
+  return spawnDetachedScript({
+    scriptDir: QUAID_NOTIFY_DIR,
+    logFile: notifyLogFile,
+    scriptPrefix: preamble,
+    scriptBody,
+    env: buildPythonEnv() as NodeJS.ProcessEnv,
+    filePrefix: "notify",
+  });
 }
 
 // ============================================================================
