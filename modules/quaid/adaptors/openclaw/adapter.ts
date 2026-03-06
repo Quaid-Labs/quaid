@@ -817,21 +817,16 @@ const facade = createQuaidFacade({
   emitProjectEventBackground: (eventPath: string, projectHint: string | null) => {
     const bgApiKey = _getAnthropicCredential();
     const logFile = path.join(WORKSPACE, "logs/project-updater.log");
-    const logDir = path.dirname(logFile);
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
-    }
-    const logFd = fs.openSync(logFile, "a");
-    try {
-      const proc = spawn("python3", [PROJECT_UPDATER, "process-event", eventPath], {
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-        cwd: WORKSPACE,
-        env: buildPythonEnv({ ...(bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {}) }),
-      });
-      proc.unref();
-    } finally {
-      fs.closeSync(logFd);
+    const launched = spawnDetachedScript({
+      scriptDir: QUAID_NOTIFY_DIR,
+      logFile,
+      scriptPrefix: "",
+      scriptBody: `import subprocess\nsubprocess.run(["python3", ${JSON.stringify(PROJECT_UPDATER)}, "process-event", ${JSON.stringify(eventPath)}], check=False)\n`,
+      env: buildPythonEnv({ ...(bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {}) }),
+      filePrefix: "project-updater",
+    });
+    if (!launched) {
+      throw new Error("failed to launch detached project-updater worker");
     }
     console.log(`[quaid] Emitted project event -> ${projectHint || "unknown"}`);
   },
