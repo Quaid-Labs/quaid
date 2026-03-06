@@ -253,6 +253,7 @@ export type QuaidFacade = {
   docsCreateProject: (args: string[]) => Promise<string>;
   docsListProjects: (args?: string[]) => Promise<string>;
   docsCheckStaleness: () => Promise<string>;
+  getDocsStalenessWarning: () => Promise<string>;
 
   // --- Memory notes (state management) ---
   addMemoryNote: (sessionId: string, text: string, category: string) => void;
@@ -2024,6 +2025,25 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     }
   }
 
+  async function getDocsStalenessWarning(): Promise<string> {
+    const stalenessJson = await deps.execDocsUpdater("check", ["--json"]);
+    const staleRaw = JSON.parse(stalenessJson || "{}");
+    const staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw)
+      ? (staleRaw as Record<string, any>)
+      : {};
+    const staleKeys = Object.keys(staleDocs);
+    if (staleKeys.length === 0) {
+      return "";
+    }
+    const warnings = staleKeys.map((k) => {
+      const entry = staleDocs[k] && typeof staleDocs[k] === "object" ? staleDocs[k] : {};
+      const gapHours = Number(entry?.gap_hours);
+      const staleSources = Array.isArray(entry?.stale_sources) ? entry.stale_sources : [];
+      return `  ${k} (${Number.isFinite(gapHours) ? gapHours : 0}h behind: ${staleSources.join(", ")})`;
+    });
+    return `\n\nSTALENESS WARNING: The following docs may be outdated:\n${warnings.join("\n")}\nConsider running: python3 docs_updater.py update-stale --apply`;
+  }
+
   function computeDynamicK(): number {
     const nodeCount = getActiveNodeCount();
     if (nodeCount < 10) return 5;
@@ -2408,7 +2428,6 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     const tmpPath = path.join(tmpDir, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
     fs.writeFileSync(tmpPath, transcriptForExtraction, { mode: 0o600 });
     const args = [
-      tmpPath,
       "--owner", resolveOwner(),
       "--label", triggerType,
       "--json",
@@ -2869,6 +2888,7 @@ ${lines.join("\n")}
     docsCreateProject: (args) => deps.execDocsRegistry("create-project", args),
     docsListProjects: (args = ["--json"]) => deps.execDocsRegistry("list-projects", args),
     docsCheckStaleness: () => deps.execDocsUpdater("check", ["--json"]),
+    getDocsStalenessWarning,
 
     // Memory notes
     addMemoryNote,

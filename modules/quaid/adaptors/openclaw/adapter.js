@@ -1573,25 +1573,7 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             }
             let stalenessWarning = "";
             try {
-              const stalenessJson = await facade.docsCheckStaleness();
-              const staleRaw = JSON.parse(stalenessJson || "{}");
-              const staleDocs = staleRaw && typeof staleRaw === "object" && !Array.isArray(staleRaw) ? staleRaw : {};
-              const staleKeys = Object.keys(staleDocs);
-              if (staleKeys.length > 0) {
-                const warnings = staleKeys.map(
-                  (k) => {
-                    const entry = staleDocs[k] && typeof staleDocs[k] === "object" ? staleDocs[k] : {};
-                    const gapHours = Number(entry?.gap_hours);
-                    const staleSources = Array.isArray(entry?.stale_sources) ? entry.stale_sources : [];
-                    return `  ${k} (${Number.isFinite(gapHours) ? gapHours : 0}h behind: ${staleSources.join(", ")})`;
-                  }
-                );
-                stalenessWarning = `
-
-STALENESS WARNING: The following docs may be outdated:
-${warnings.join("\n")}
-Consider running: python3 docs_updater.py update-stale --apply`;
-              }
+              stalenessWarning = await facade.getDocsStalenessWarning();
             } catch (err) {
               console.warn(`[quaid] projects_search staleness check failed: ${String(err?.message || err)}`);
             }

@@ -395,6 +395,26 @@ describe("QuaidFacade", () => {
     expect(execDocsUpdater).toHaveBeenCalledWith("check", ["--json"]);
   });
 
+  it("getDocsStalenessWarning formats stale docs warning", async () => {
+    const execDocsUpdater = vi.fn(async () => JSON.stringify({
+      alpha: { gap_hours: 7, stale_sources: ["PROJECT.log", "SOUL.md"] },
+      beta: { gap_hours: 2, stale_sources: ["MEMORY.md"] },
+    }));
+    const facade = createQuaidFacade(makeMockDeps({ execDocsUpdater }));
+    const warning = await facade.getDocsStalenessWarning();
+    expect(warning).toContain("STALENESS WARNING");
+    expect(warning).toContain("alpha (7h behind: PROJECT.log, SOUL.md)");
+    expect(warning).toContain("beta (2h behind: MEMORY.md)");
+    expect(execDocsUpdater).toHaveBeenCalledWith("check", ["--json"]);
+  });
+
+  it("getDocsStalenessWarning returns empty string when no stale docs", async () => {
+    const execDocsUpdater = vi.fn(async () => "{}");
+    const facade = createQuaidFacade(makeMockDeps({ execDocsUpdater }));
+    const warning = await facade.getDocsStalenessWarning();
+    expect(warning).toBe("");
+  });
+
   // -----------------------------------------------------------------------
   // Recall (routes through knowledgeEngine)
   // -----------------------------------------------------------------------
