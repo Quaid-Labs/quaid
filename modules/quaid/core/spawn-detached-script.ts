@@ -11,14 +11,16 @@ export type SpawnDetachedScriptOptions = {
   env: NodeJS.ProcessEnv;
   interpreter?: string;
   filePrefix?: string;
+  fileExtension?: string;
 };
 
 export function spawnDetachedScript(opts: SpawnDetachedScriptOptions): boolean {
-  const interpreter = String(opts.interpreter || "python3");
+  const interpreter = String(opts.interpreter || process.execPath);
   const filePrefix = String(opts.filePrefix || "worker");
+  const fileExtension = String(opts.fileExtension || ".tmp");
   const tmpFile = path.join(
     opts.scriptDir,
-    `${filePrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.py`,
+    `${filePrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}${fileExtension.startsWith(".") ? fileExtension : `.${fileExtension}`}`,
   );
   const appendLog = (msg: string) => {
     try {

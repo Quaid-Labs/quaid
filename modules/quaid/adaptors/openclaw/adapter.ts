@@ -717,7 +717,9 @@ function spawnNotifyScript(scriptBody: string): boolean {
     scriptPrefix: preamble,
     scriptBody,
     env: buildPythonEnv() as NodeJS.ProcessEnv,
+    interpreter: "python3",
     filePrefix: "notify",
+    fileExtension: ".py",
   });
 }
 
@@ -823,7 +825,9 @@ const facade = createQuaidFacade({
       scriptPrefix: "",
       scriptBody: `import subprocess\nsubprocess.run(["python3", ${JSON.stringify(PROJECT_UPDATER)}, "process-event", ${JSON.stringify(eventPath)}], check=False)\n`,
       env: buildPythonEnv({ ...(bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {}) }),
+      interpreter: "python3",
       filePrefix: "project-updater",
+      fileExtension: ".py",
     });
     if (!launched) {
       throw new Error("failed to launch detached project-updater worker");

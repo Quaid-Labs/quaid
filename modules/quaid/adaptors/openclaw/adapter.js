@@ -598,7 +598,9 @@ sys.path.insert(0, ${JSON.stringify(PYTHON_PLUGIN_ROOT)})
     scriptPrefix: preamble,
     scriptBody,
     env: buildPythonEnv(),
-    filePrefix: "notify"
+    interpreter: "python3",
+    filePrefix: "notify",
+    fileExtension: ".py"
   });
 }
 function preprocessTranscriptText(text) {
@@ -655,7 +657,9 @@ const facade = createQuaidFacade({
 subprocess.run(["python3", ${JSON.stringify(PROJECT_UPDATER)}, "process-event", ${JSON.stringify(eventPath)}], check=False)
 `,
       env: buildPythonEnv({ ...bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {} }),
-      filePrefix: "project-updater"
+      interpreter: "python3",
+      filePrefix: "project-updater",
+      fileExtension: ".py"
     });
     if (!launched) {
       throw new Error("failed to launch detached project-updater worker");

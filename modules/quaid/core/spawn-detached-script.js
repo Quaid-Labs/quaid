@@ -2,9 +2,10 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 export function spawnDetachedScript(opts) {
-    const interpreter = String(opts.interpreter || "python3");
+    const interpreter = String(opts.interpreter || process.execPath);
     const filePrefix = String(opts.filePrefix || "worker");
-    const tmpFile = path.join(opts.scriptDir, `${filePrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.py`);
+    const fileExtension = String(opts.fileExtension || ".tmp");
+    const tmpFile = path.join(opts.scriptDir, `${filePrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}${fileExtension.startsWith(".") ? fileExtension : `.${fileExtension}`}`);
     const appendLog = (msg) => {
         try {
             fs.appendFileSync(opts.logFile, `${new Date().toISOString()} ${msg}\n`);
