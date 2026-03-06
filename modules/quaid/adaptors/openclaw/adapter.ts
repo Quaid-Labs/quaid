@@ -1984,35 +1984,20 @@ notify_user(f"📁 Project registered: {project_label}")
         return true;
       });
 
-      if (getMemoryConfig().notifications?.showProcessingStart !== false && facade.shouldNotifyFeature("extraction", "summary")) {
-        const triggerType = facade.resolveExtractionTrigger(label);
-        const suppressBacklogNotify = facade.isBacklogLifecycleReplay(
-          messages,
-          triggerType,
-          Date.now(),
-          ADAPTER_BOOT_TIME_MS,
-          BACKLOG_NOTIFY_STALE_MS,
-        );
-        const dedupeSession = sessionId || facade.extractSessionId(messages, {});
-        const dedupeKey = `start:${dedupeSession}:${triggerType}`;
-        const triggerDesc = triggerType === "compaction"
-          ? "compaction"
-          : triggerType === "recovery"
-            ? "recovery"
-            : triggerType === "timeout"
-              ? "timeout"
-              : triggerType === "new"
-                ? "/new"
-                : "reset";
-        if (triggerType !== "recovery"
-          && !suppressBacklogNotify
-          && hasMeaningfulUserContent
-          && facade.shouldEmitExtractionNotify(dedupeKey)) {
-          spawnNotifyScript(`
+      const startNotify = facade.shouldNotifyExtractionStart({
+        messages,
+        label,
+        sessionId,
+        hasMeaningfulUserContent,
+        bootTimeMs: ADAPTER_BOOT_TIME_MS,
+        backlogNotifyStaleMs: BACKLOG_NOTIFY_STALE_MS,
+        showProcessingStart: getMemoryConfig().notifications?.showProcessingStart !== false,
+      });
+      if (startNotify) {
+        spawnNotifyScript(`
 from core.runtime.notify import notify_user
-notify_user("🧠 Processing memories from ${triggerDesc}...")
+notify_user("🧠 Processing memories from ${startNotify.triggerDesc}...")
 `);
-        }
       }
 
       let extractionResult: any = null;

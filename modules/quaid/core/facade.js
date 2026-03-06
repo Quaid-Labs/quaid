@@ -2484,6 +2484,34 @@ ${lines.join("\n")}
             always_notify: Boolean(params.alwaysNotifyCompletion),
         };
     }
+    function getExtractionStartTriggerDescription(triggerType) {
+        if (triggerType === "compaction")
+            return "compaction";
+        if (triggerType === "recovery")
+            return "recovery";
+        if (triggerType === "timeout")
+            return "timeout";
+        if (triggerType === "new")
+            return "/new";
+        return "reset";
+    }
+    function shouldNotifyExtractionStart(params) {
+        if (!params.showProcessingStart || !shouldNotifyFeature("extraction", "summary"))
+            return null;
+        const triggerType = resolveExtractionTrigger(params.label);
+        const suppressBacklogNotify = isBacklogLifecycleReplay(params.messages, triggerType, Date.now(), params.bootTimeMs, params.backlogNotifyStaleMs);
+        const dedupeSession = params.sessionId || extractSessionId(params.messages, {});
+        const dedupeKey = `start:${dedupeSession}:${triggerType}`;
+        if (triggerType === "recovery")
+            return null;
+        if (suppressBacklogNotify)
+            return null;
+        if (!params.hasMeaningfulUserContent)
+            return null;
+        if (!shouldEmitExtractionNotify(dedupeKey))
+            return null;
+        return { triggerDesc: getExtractionStartTriggerDescription(triggerType) };
+    }
     function injectFullJournalContext(existingContext) {
         let prepend = existingContext;
         if (!deps.isSystemEnabled("journal"))
@@ -2611,6 +2639,7 @@ ${lines.join("\n")}
         buildRecallNotificationPayload,
         prepareAutoInjectionContext,
         buildExtractionCompletionNotificationPayload,
+        shouldNotifyExtractionStart,
         injectFullJournalContext,
         isLowQualityQuery,
         filterMemoriesByPrivacy,

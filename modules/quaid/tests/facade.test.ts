@@ -1163,6 +1163,20 @@ describe("QuaidFacade", () => {
     expect(facade.resolveExtractionTrigger("")).toBe("unknown");
   });
 
+  it("shouldNotifyExtractionStart returns trigger description when gates pass", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const out = facade.shouldNotifyExtractionStart({
+      messages: [{ role: "user", content: "remember this", timestamp: Date.now() }],
+      label: "CompactionSignal",
+      sessionId: "sess-start",
+      hasMeaningfulUserContent: true,
+      bootTimeMs: Date.now() - 1_000,
+      backlogNotifyStaleMs: 90_000,
+      showProcessingStart: true,
+    });
+    expect(out).toEqual({ triggerDesc: "compaction" });
+  });
+
   // -----------------------------------------------------------------------
   // Stubs throw "not implemented"
   // -----------------------------------------------------------------------
