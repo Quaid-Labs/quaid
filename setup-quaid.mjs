@@ -2109,7 +2109,10 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     copyDirSync(pluginSrc, PLUGIN_DIR);
     s.stop(C.green(pluginDirEmpty ? "Plugin installed" : "Plugin synced"));
   }
-  if (ensureQuaidCliShim(PLUGIN_DIR)) {
+  const skipBinShim = String(process.env.QUAID_INSTALL_SKIP_BIN_SHIM || "").trim() === "1";
+  if (skipBinShim) {
+    log.info("Skipping ~/bin/quaid shim update (QUAID_INSTALL_SKIP_BIN_SHIM=1).");
+  } else if (ensureQuaidCliShim(PLUGIN_DIR)) {
     log.info(`Updated CLI shim: ${path.join(os.homedir(), "bin", "quaid")} -> ${path.join(PLUGIN_DIR, "quaid")}`);
   } else {
     log.warn("Could not update ~/bin/quaid shim automatically.");
