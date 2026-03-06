@@ -1682,47 +1682,17 @@ exit(0 if any(model in n for n in names) else 1)
 step5_systems() {
     step 5 "System configuration"
 
-    echo "  Quaid has 4 subsystems. All are enabled by default."
-    echo "  Disabling a system prevents it from running entirely."
+    echo "  Quaid has 4 subsystems. All are enabled by policy."
+    echo "  Installer no longer supports subsystem disablement."
     echo ""
     echo -e "    ${GREEN}✓${RESET} Memory     — Extract and recall facts from conversations"
     echo -e "    ${GREEN}✓${RESET} Journal    — Track and understand personality evolution"
     echo -e "    ${GREEN}✓${RESET} Projects   — Auto-update project docs from document changes"
     echo -e "    ${GREEN}✓${RESET} Workspace  — Monitor core markdown file health"
     echo ""
-    echo -e "  ${DIM}Disable systems if they conflict with other plugins or you don't need them.${RESET}"
     echo -e "  ${DIM}Learn more: https://github.com/quaid-labs/quaid${RESET}"
     echo ""
-
-    if confirm "Keep all systems enabled?" "y"; then
-        info "All systems enabled"
-        return
-    fi
-
-    echo ""
-    echo "  Enter numbers to disable (e.g. '3 4' to disable Projects and Workspace):"
-    echo ""
-    echo "    1) Memory      2) Journal      3) Projects      4) Workspace"
-    echo ""
-    ask "Disable:"
-
-    for num in $REPLY; do
-        case "$num" in
-            1) SYS_MEMORY=false;    warn "Memory disabled — no fact extraction or recall" ;;
-            2) SYS_JOURNAL=false;   warn "Journal disabled — no personality tracking" ;;
-            3) SYS_PROJECTS=false;  warn "Projects disabled — no doc auto-updates" ;;
-            4) SYS_WORKSPACE=false; warn "Workspace disabled — no markdown monitoring" ;;
-        esac
-    done
-
-    echo ""
-    local enabled=""
-    $SYS_MEMORY    && enabled="${enabled}Memory, "
-    $SYS_JOURNAL   && enabled="${enabled}Journal, "
-    $SYS_PROJECTS  && enabled="${enabled}Projects, "
-    $SYS_WORKSPACE && enabled="${enabled}Workspace, "
-    enabled="${enabled%, }"
-    info "Enabled: ${enabled:-none}"
+    info "Enabled: Memory, Journal, Projects, Workspace (required)"
 }
 
 # =============================================================================
