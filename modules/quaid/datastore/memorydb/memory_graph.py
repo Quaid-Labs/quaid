@@ -2745,7 +2745,7 @@ def _is_fail_hard_mode() -> bool:
         return True
 
 
-def route_query(query: str, timeout_ms: int = 3000) -> str:
+def route_query(query: str, timeout_ms: Optional[int] = None, max_retries: Optional[int] = None) -> str:
     """HyDE (Hypothetical Document Embedding) — generate a hypothetical answer
     to the query, then use that for semantic search. The embedding of an answer
     is closer to stored facts in vector space than keywords or the raw question.
@@ -2759,13 +2759,26 @@ def route_query(query: str, timeout_ms: int = 3000) -> str:
     prompt = f'Rephrase this question as a declarative statement about someone\'s personal life. Do NOT invent specific names, dates, or places. Keep it general.\n\nQuestion: "{query[:300]}"\n\nStatement:'
 
     try:
+        cfg_timeout_ms = 15000
+        cfg_max_retries = 1
+        try:
+            from config import get_config
+            retrieval_cfg = get_config().retrieval
+            cfg_timeout_ms = int(getattr(retrieval_cfg, "hyde_timeout_ms", 15000) or 15000)
+            cfg_max_retries = int(getattr(retrieval_cfg, "hyde_max_retries", 1) or 1)
+        except Exception:
+            cfg_timeout_ms = 15000
+            cfg_max_retries = 1
+        effective_timeout_ms = max(1000, int(timeout_ms if timeout_ms is not None else cfg_timeout_ms))
+        effective_max_retries = max(0, int(max_retries if max_retries is not None else cfg_max_retries))
+
         from lib.llm_clients import call_fast_reasoning
         result, _ = call_fast_reasoning(
             prompt=prompt,
             max_tokens=50,
-            timeout=timeout_ms / 1000,
+            timeout=effective_timeout_ms / 1000,
             system_prompt="You rephrase questions as declarative statements. Respond with only the statement, no explanation.",
-            max_retries=0,  # Best-effort HyDE — fail fast, don't retry
+            max_retries=effective_max_retries,
         )
         if result:
             result = result.strip().strip('"\'')
@@ -2774,7 +2787,8 @@ def route_query(query: str, timeout_ms: int = 3000) -> str:
     except Exception as e:
         if _is_fail_hard_mode():
             raise RuntimeError(
-                "HyDE routing failed while fail-hard mode is enabled"
+                "HyDE routing failed while fail-hard mode is enabled "
+                f"(timeout_ms={effective_timeout_ms}, max_retries={effective_max_retries}, cause={type(e).__name__}: {e})"
             ) from e
 
     return query

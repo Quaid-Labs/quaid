@@ -24,6 +24,7 @@ from lib.adapter import (
 from lib.providers import (
     AnthropicLLMProvider,
     ClaudeCodeLLMProvider,
+    OpenAICompatibleLLMProvider,
     TestLLMProvider,
 )
 from adaptors.openclaw.adapter import OpenClawAdapter
@@ -754,6 +755,28 @@ class TestProviderFactoryMethods:
             deep_llm = standalone.get_llm_provider(model_tier="deep")
         assert isinstance(fast_llm, ClaudeCodeLLMProvider)
         assert isinstance(deep_llm, AnthropicLLMProvider)
+
+    def test_standalone_openai_compatible_defaults_to_openai_api_with_key(self, standalone, monkeypatch):
+        """OpenAI-compatible provider should use api.openai.com when a key exists but no base URL is set."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        monkeypatch.delenv("OPENAI_COMPATIBLE_BASE_URL", raising=False)
+        cfg = SimpleNamespace(
+            models=SimpleNamespace(
+                llm_provider="openai-compatible",
+                fast_reasoning_provider="default",
+                deep_reasoning_provider="default",
+                deep_reasoning="gpt-4o-mini",
+                fast_reasoning="gpt-4o-mini",
+                deep_reasoning_model_classes={},
+                fast_reasoning_model_classes={},
+                base_url="",
+                api_key_env="OPENAI_API_KEY",
+            )
+        )
+        with patch("config.get_config", return_value=cfg):
+            llm = standalone.get_llm_provider()
+        assert isinstance(llm, OpenAICompatibleLLMProvider)
+        assert llm._base_url == "https://api.openai.com"
 
     def test_standalone_raises_without_any_provider(self, standalone, monkeypatch):
         """StandaloneAdapter raises when config requires anthropic but no key."""

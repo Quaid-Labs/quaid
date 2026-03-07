@@ -361,12 +361,22 @@ class StandaloneAdapter(QuaidAdapter):
         if provider_id == "openai-compatible":
             from lib.providers import OpenAICompatibleLLMProvider
             import os
-            base_url = str(
-                getattr(cfg.models, "base_url", "")
-                or os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:8000")
-            )
             api_key_env = str(getattr(cfg.models, "api_key_env", "") or "OPENAI_API_KEY")
             api_key = os.environ.get(api_key_env, os.environ.get("OPENAI_API_KEY", ""))
+            configured_base_url = str(getattr(cfg.models, "base_url", "") or "").strip()
+            env_base_url = str(os.environ.get("OPENAI_COMPATIBLE_BASE_URL", "") or "").strip()
+            if configured_base_url:
+                base_url = configured_base_url
+            elif env_base_url:
+                base_url = env_base_url
+            elif api_key:
+                # When an OpenAI key is present but no explicit compatible endpoint
+                # is configured, prefer the real OpenAI API over the legacy local
+                # localhost default. This keeps strict fail-hard runs from silently
+                # routing to a dead local endpoint.
+                base_url = "https://api.openai.com"
+            else:
+                base_url = "http://localhost:8000"
             resolved_deep = deep_model
             resolved_fast = fast_model
             if not resolved_deep or str(resolved_deep).strip() == "default":

@@ -249,6 +249,10 @@ class TestClaudeCodeLLMProvider:
             assert "--model" in cmd
             idx = cmd.index("--model")
             assert cmd[idx + 1] == "opus"
+            turns_idx = cmd.index("--max-turns")
+            assert cmd[turns_idx + 1] == "2"
+            assert "hi" not in cmd
+            assert mock_run.call_args.kwargs["input"] == "hi"
 
     def test_llm_call_raises_on_cli_failure(self, monkeypatch):
         """Failed claude CLI should raise instead of returning a soft-null response."""
@@ -304,6 +308,52 @@ class TestClaudeCodeLLMProvider:
             p.llm_call([{"role": "user", "content": "hi"}], timeout=30)
         assert mock_run.call_args.kwargs["timeout"] == 2.0
 
+    def test_llm_call_deep_timeout_has_default_floor(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.delenv("CLAUDE_CODE_DEEP_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_TIMEOUT_CAP_S", raising=False)
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
+            p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep", timeout=120)
+        assert mock_run.call_args.kwargs["timeout"] == 600.0
+
+    def test_llm_call_deep_timeout_env_override_above_floor(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_TIMEOUT_S", "450")
+        monkeypatch.delenv("CLAUDE_CODE_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_TIMEOUT_CAP_S", raising=False)
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
+            p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep", timeout=120)
+        assert mock_run.call_args.kwargs["timeout"] == 450.0
+
+    def test_llm_call_timeout_multiplier_scales_effective_timeout(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.delenv("CLAUDE_CODE_DEEP_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_TIMEOUT_CAP_S", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_TIMEOUT_MULTIPLIER", "2")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
+            p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep", timeout=120)
+        assert mock_run.call_args.kwargs["timeout"] == 1200.0
+
     def test_llm_call_raises_on_non_object_json(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
         p = ClaudeCodeLLMProvider()
@@ -331,6 +381,7 @@ class TestClaudeCodeLLMProvider:
 
     def test_llm_call_raises_when_result_missing(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_MALFORMED_RETRY_DELAY_S", "0")
         p = ClaudeCodeLLMProvider()
         mock_result = MagicMock()
         mock_result.returncode = 0
@@ -338,8 +389,302 @@ class TestClaudeCodeLLMProvider:
         mock_result.stderr = ""
 
         with patch("lib.providers.subprocess.run", return_value=mock_result):
-            with pytest.raises(RuntimeError, match="missing result"):
+            with pytest.raises(RuntimeError, match="empty result"):
                 p.llm_call([{"role": "user", "content": "hi"}])
+
+    def test_llm_call_missing_result_includes_payload_detail(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_MALFORMED_RETRY_DELAY_S", "0")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", "0")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"modelUsage": {}, "meta": "x"})
+        mock_result.stderr = "stderr-tail"
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError) as excinfo:
+                p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+        msg = str(excinfo.value)
+        assert "empty result" in msg
+        assert "stdout=" in msg
+        assert "stderr=stderr-tail" in msg
+
+    def test_llm_call_retries_missing_result_then_succeeds(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_MALFORMED_RETRY_DELAY_S", "0")
+        monkeypatch.setenv("CLAUDE_CODE_MALFORMED_RETRIES", "2")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = json.dumps({"modelUsage": {}})
+        bad.stderr = ""
+
+        good = MagicMock()
+        good.returncode = 0
+        good.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        good.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[bad, good]) as mock_run:
+            result = p.llm_call([{"role": "user", "content": "hi"}])
+
+        assert result.text == "ok"
+        assert mock_run.call_count == 2
+
+    def test_llm_call_missing_result_success_payload_falls_back_to_plain_text(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", "0")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = json.dumps(
+            {"type": "result", "subtype": "success", "is_error": False, "modelUsage": {}}
+        )
+        bad.stderr = ""
+
+        plain = MagicMock()
+        plain.returncode = 0
+        plain.stdout = "{\"ok\":true}\n"
+        plain.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[bad, plain]) as mock_run:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+        assert result.text == "{\"ok\":true}"
+        assert mock_run.call_count == 2
+        fallback_cmd = mock_run.call_args_list[1].args[0]
+        assert "--output-format" not in fallback_cmd
+
+    def test_llm_call_empty_result_success_payload_falls_back_to_plain_text(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", "0")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = json.dumps(
+            {"type": "result", "subtype": "success", "is_error": False, "result": "", "modelUsage": {}}
+        )
+        bad.stderr = ""
+
+        plain = MagicMock()
+        plain.returncode = 0
+        plain.stdout = "plain fallback text\n"
+        plain.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[bad, plain]) as mock_run:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+        assert result.text == "plain fallback text"
+        assert mock_run.call_count == 2
+
+    def test_llm_call_deep_command_retry_recovers_after_malformed_streak(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", "0")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_COMMAND_RETRIES", "1")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRY_DELAY_S", "0")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = json.dumps(
+            {"type": "result", "subtype": "success", "is_error": False, "result": "", "modelUsage": {}}
+        )
+        bad.stderr = ""
+
+        good = MagicMock()
+        good.returncode = 0
+        good.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        good.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[bad, MagicMock(returncode=0, stdout="", stderr=""), good]) as mock_run:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+        assert result.text == "ok"
+        assert mock_run.call_count == 3
+
+    def test_llm_call_deep_command_retry_switches_to_text_mode_and_recovers(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", "0")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_COMMAND_RETRIES", "1")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRY_DELAY_S", "0")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = json.dumps(
+            {"type": "result", "subtype": "success", "is_error": False, "result": "", "modelUsage": {}}
+        )
+        bad.stderr = ""
+
+        text_ok = MagicMock()
+        text_ok.returncode = 0
+        text_ok.stdout = "```json\n{\"facts\": []}\n```"
+        text_ok.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[bad, MagicMock(returncode=0, stdout="", stderr=""), text_ok]) as mock_run:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+        assert result.text == "```json\n{\"facts\": []}\n```"
+        retry_cmd = mock_run.call_args_list[-1].args[0]
+        assert "--output-format" not in retry_cmd
+
+    def test_llm_call_deep_command_retry_recovers_after_empty_text_mode_output(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", "0")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_COMMAND_RETRIES", "2")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRY_DELAY_S", "0")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = json.dumps(
+            {"type": "result", "subtype": "success", "is_error": False, "result": "", "modelUsage": {}}
+        )
+        bad.stderr = ""
+
+        empty_text = MagicMock()
+        empty_text.returncode = 0
+        empty_text.stdout = ""
+        empty_text.stderr = ""
+
+        text_ok = MagicMock()
+        text_ok.returncode = 0
+        text_ok.stdout = "plain fallback text"
+        text_ok.stderr = ""
+
+        with patch(
+            "lib.providers.subprocess.run",
+            side_effect=[bad, empty_text, text_ok],
+        ) as mock_run:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+        assert result.text == "plain fallback text"
+        assert mock_run.call_count == 3
+        second_cmd = mock_run.call_args_list[1].args[0]
+        third_cmd = mock_run.call_args_list[2].args[0]
+        assert "--output-format" not in second_cmd
+        assert "--output-format" not in third_cmd
+
+    def test_llm_call_deep_command_retry_recovers_after_retryable_error_payload(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", "0")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_COMMAND_RETRIES", "1")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRY_DELAY_S", "0")
+        p = ClaudeCodeLLMProvider()
+
+        retryable = MagicMock()
+        retryable.returncode = 1
+        retryable.stdout = ""
+        retryable.stderr = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "is_error": True,
+                "message": "transient cli failure",
+            }
+        )
+
+        good = MagicMock()
+        good.returncode = 0
+        good.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        good.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[retryable, good]) as mock_run:
+            result = p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+
+        assert result.text == "ok"
+        assert mock_run.call_count == 2
+
+    def test_llm_call_deep_uses_stronger_default_malformed_retries(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.delenv("CLAUDE_CODE_MALFORMED_RETRIES", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_COMMAND_RETRIES", "0")
+        monkeypatch.setenv("CLAUDE_CODE_MALFORMED_RETRY_DELAY_S", "0")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRY_DELAY_S", "0")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = json.dumps({"modelUsage": {}})
+        bad.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[bad, bad, bad, bad, bad]) as mock_run:
+            with pytest.raises(RuntimeError, match="empty result"):
+                p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+        assert mock_run.call_count == 5
+
+    def test_llm_call_deep_uses_stronger_default_command_retries(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.delenv("CLAUDE_CODE_COMMAND_RETRIES", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_DEEP_COMMAND_RETRIES", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRIES", "0")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MALFORMED_RETRY_DELAY_S", "0")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = ""
+        bad.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[bad] * 5) as mock_run:
+            with pytest.raises(RuntimeError, match="non-JSON output"):
+                p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+        assert mock_run.call_count == 5
+
+    def test_llm_call_fast_keeps_single_turn_default(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
+            p.llm_call([{"role": "user", "content": "hi"}], model_tier="fast")
+        cmd = mock_run.call_args[0][0]
+        turns_idx = cmd.index("--max-turns")
+        assert cmd[turns_idx + 1] == "1"
+
+    def test_llm_call_deep_max_turns_env_override(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_DEEP_MAX_TURNS", "3")
+        p = ClaudeCodeLLMProvider()
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        mock_result.stderr = ""
+
+        with patch("lib.providers.subprocess.run", return_value=mock_result) as mock_run:
+            p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
+        cmd = mock_run.call_args[0][0]
+        turns_idx = cmd.index("--max-turns")
+        assert cmd[turns_idx + 1] == "3"
+
+    def test_llm_call_retries_non_json_then_succeeds(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_MALFORMED_RETRY_DELAY_S", "0")
+        monkeypatch.setenv("CLAUDE_CODE_MALFORMED_RETRIES", "2")
+        p = ClaudeCodeLLMProvider()
+
+        bad = MagicMock()
+        bad.returncode = 0
+        bad.stdout = "not-json"
+        bad.stderr = ""
+
+        good = MagicMock()
+        good.returncode = 0
+        good.stdout = json.dumps({"result": "ok", "modelUsage": {}})
+        good.stderr = ""
+
+        with patch("lib.providers.subprocess.run", side_effect=[bad, good]) as mock_run:
+            result = p.llm_call([{"role": "user", "content": "hi"}])
+
+        assert result.text == "ok"
+        assert mock_run.call_count == 2
 
     def test_oauth_env_file_fallback_used_when_failhard_disabled(self, tmp_path, monkeypatch):
         p = ClaudeCodeLLMProvider()

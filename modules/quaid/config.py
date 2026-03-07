@@ -223,6 +223,8 @@ class RetrievalConfig:
     fail_hard: bool = True  # If true, embedding outages raise instead of silent degraded fallback
     auto_inject: bool = True  # Auto-inject memories into context (Mem0-style)
     use_hyde: bool = True  # Enable HyDE query expansion by default
+    hyde_timeout_ms: int = 15_000  # Fast-tier timeout for HyDE query routing
+    hyde_max_retries: int = 1  # Extra retries for HyDE route calls (fail-hard still enforced)
     domains: Dict[str, str] = field(default_factory=dict)  # Domain id -> brief description
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
 
@@ -569,6 +571,9 @@ _KNOWN_RETRIEVAL_KEYS = {
     "router_fail_open",
     "fail_hard",
     "auto_inject",
+    "use_hyde",
+    "hyde_timeout_ms",
+    "hyde_max_retries",
     "domains",
     "traversal",
     "reranker",
@@ -755,6 +760,17 @@ def _extract_raw_user_identities(raw_config: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Deep-merge two JSON-like dicts, preserving nested defaults."""
+    merged: Dict[str, Any] = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
 def _decode_json_list(raw_value: Any, *, field_name: str, default: Optional[List[Any]] = None) -> List[Any]:
     """Decode list-typed JSON fields defensively."""
     fallback = list(default or [])
@@ -815,20 +831,28 @@ def _load_config_inner() -> MemoryConfig:
     """Inner config loader (called with re-entrancy guard held)."""
     global _config
 
-    raw_config = {}
+    raw_config: Dict[str, Any] = {}
+    loaded_paths: List[Path] = []
 
-    for config_path in _config_paths():
+    # _config_paths() is ordered highest-priority first. Merge lowest -> highest
+    # so per-workspace overlays can override a root config without discarding
+    # unrelated nested fields like models.baseUrl/apiKeyEnv.
+    for config_path in reversed(_config_paths()):
         if config_path.exists():
             try:
                 with open(config_path, 'r') as f:
-                    raw_config = json.load(f)
-                if not os.environ.get("QUAID_QUIET"):
-                    print(f"[config] Loaded from {config_path}", file=sys.stderr)
-                break
+                    parsed = json.load(f)
+                if isinstance(parsed, dict):
+                    raw_config = _deep_merge_dicts(raw_config, parsed)
+                    loaded_paths.append(config_path)
             except json.JSONDecodeError as e:
                 print(f"[config] Failed to parse {config_path}: {e}", file=sys.stderr)
             except Exception as e:
                 print(f"[config] Failed to read {config_path}: {e}", file=sys.stderr)
+
+    if loaded_paths and not os.environ.get("QUAID_QUIET"):
+        for config_path in loaded_paths:
+            print(f"[config] Loaded from {config_path}", file=sys.stderr)
 
     if not raw_config:
         if not os.environ.get("QUAID_QUIET"):
@@ -1105,6 +1129,8 @@ def _load_config_inner() -> MemoryConfig:
         fail_hard=retrieval_data.get('fail_hard', retrieval_data.get('failHard', True)),
         auto_inject=retrieval_data.get('auto_inject', retrieval_data.get('autoInject', True)),
         use_hyde=retrieval_data.get('use_hyde', retrieval_data.get('useHyde', True)),
+        hyde_timeout_ms=int(retrieval_data.get('hyde_timeout_ms', retrieval_data.get('hydeTimeoutMs', 15000))),
+        hyde_max_retries=max(0, int(retrieval_data.get('hyde_max_retries', retrieval_data.get('hydeMaxRetries', 1)))),
         domains=parsed_domains,
         traversal=traversal,
     )

@@ -100,6 +100,27 @@ class TestParseJsonResponse:
         # Should parse at least one of them
         assert "first" in result or "second" in result
 
+    def test_relaxed_parse_allows_multiline_string_content(self):
+        text = '{"reasoning":"line one\\nline two","content":"alpha\\n beta"}'.replace("\\n", "\n")
+        assert parse_json_response(text) == {
+            "reasoning": "line one\nline two",
+            "content": "alpha\n beta",
+        }
+
+    def test_relaxed_parse_allows_multiline_string_inside_fence(self):
+        text = '```json\n{"reasoning":"line one\\nline two","ok":true}\n```'.replace("\\n", "\n")
+        assert parse_json_response(text) == {
+            "reasoning": "line one\nline two",
+            "ok": True,
+        }
+
+    def test_fenced_json_with_trailing_junk_uses_balanced_object(self):
+        text = '```json\n{"reasoning":"ok","content":"value"}\nextra trailing junk\n```'
+        assert parse_json_response(text) == {
+            "reasoning": "ok",
+            "content": "value",
+        }
+
     def test_validate_llm_output_warns_on_unknown_keys(self, caplog):
         caplog.set_level("WARNING")
         parsed = [{"foo": "bar"}]

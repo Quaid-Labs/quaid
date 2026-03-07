@@ -351,6 +351,22 @@ class TestRouteQueryFailHard:
             with pytest.raises(RuntimeError, match="fail-hard mode"):
                 route_query("Where do I keep my passport?")
 
+    def test_route_query_uses_configured_timeout_and_retries(self):
+        from datastore.memorydb.memory_graph import route_query
+
+        fake_mod = MagicMock()
+        fake_mod.call_fast_reasoning.side_effect = RuntimeError("gateway timeout")
+        retrieval_cfg = type("R", (), {"hyde_timeout_ms": 9000, "hyde_max_retries": 2})()
+        cfg = type("C", (), {"retrieval": retrieval_cfg})()
+        with patch.dict(sys.modules, {"lib.llm_clients": fake_mod}), \
+             patch("config.get_config", return_value=cfg), \
+             patch("datastore.memorydb.memory_graph._is_fail_hard_mode", return_value=True):
+            with pytest.raises(RuntimeError, match="timeout_ms=9000, max_retries=2"):
+                route_query("Where do I keep my passport?")
+        call_kwargs = fake_mod.call_fast_reasoning.call_args.kwargs
+        assert call_kwargs["timeout"] == 9.0
+        assert call_kwargs["max_retries"] == 2
+
 
 # ---------------------------------------------------------------------------
 # has_owner_pronoun

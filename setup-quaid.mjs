@@ -3307,6 +3307,15 @@ function _resolveLastChannelFromSessions() {
     return fallbackMs;
   };
 
+  const channelPriority = (channel) => {
+    const key = String(channel || "").trim().toLowerCase();
+    if (!key) return 0;
+    if (key === "telegram") return 50;
+    if (key === "discord" || key === "slack" || key === "whatsapp") return 40;
+    if (key === "tui") return -100;
+    return 10;
+  };
+
   let best = null;
   for (const sessionsPath of candidates) {
     try {
@@ -3318,7 +3327,8 @@ function _resolveLastChannelFromSessions() {
         const target = String(session?.lastTo || "").trim();
         const account = String(session?.lastAccountId || "").trim();
         if (!channel || !target) continue;
-        const score = scoreTs(session, fileStat.mtimeMs);
+        const tsScore = scoreTs(session, fileStat.mtimeMs);
+        const score = tsScore + channelPriority(channel);
         if (!best || score > best.score) {
           best = { channel, target, account, score };
         }
@@ -3329,12 +3339,20 @@ function _resolveLastChannelFromSessions() {
   return { channel: best.channel, target: best.target, account: best.account };
 }
 
+function _resolveInstallerNotifyOverride() {
+  const channel = String(process.env.QUAID_INSTALL_NOTIFY_CHANNEL || "").trim();
+  const target = String(process.env.QUAID_INSTALL_NOTIFY_TARGET || "").trim();
+  const account = String(process.env.QUAID_INSTALL_NOTIFY_ACCOUNT || "").trim();
+  if (!channel || !target) return null;
+  return { channel, target, account };
+}
+
 function sendInstallerNotification(message) {
   if (!AGENT_MODE || !IS_OPENCLAW) return false;
   if (String(process.env.QUAID_INSTALL_NOTIFY || "1").trim() === "0") return false;
 
   const cli = _resolveInstallerMessageCli();
-  const lastChannel = _resolveLastChannelFromSessions();
+  const lastChannel = _resolveInstallerNotifyOverride() || _resolveLastChannelFromSessions();
   if (cli && lastChannel) {
     const args = [
       "message", "send",
@@ -3351,6 +3369,11 @@ function sendInstallerNotification(message) {
       timeout: 15_000,
     });
     if (!cliRes.error && cliRes.status === 0) return true;
+    if (!_installNotifyUnavailableLogged) {
+      _installNotifyUnavailableLogged = true;
+      const detail = String(cliRes.stderr || cliRes.stdout || "").trim();
+      log.warn(`Installer notification via CLI failed: ${detail || `exit ${String(cliRes.status)}`}`);
+    }
   }
 
   // Fallback once plugin is installed/configured: adapter notify path.

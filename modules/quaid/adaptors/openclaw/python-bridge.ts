@@ -12,6 +12,25 @@ function _resolveTimeoutMs(name: string, fallbackMs: number): number {
 
 export const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_MS", 120_000); // 2 minutes
 
+function _formatBridgeErrorDetail(stderrText: string, stdoutText: string): string {
+  const timeoutHint =
+    /timed out|timeout|Gateway LLM proxy transient error|URLError|TimeoutError/i.test(stderrText)
+      ? "[hint] upstream llm timeout/connection issue detected"
+      : "";
+  const compactStderr =
+    stderrText.length > 900
+      ? `${stderrText.slice(0, 420)} ... [truncated] ... ${stderrText.slice(-420)}`
+      : stderrText;
+  return [
+    timeoutHint,
+    compactStderr ? `stderr: ${compactStderr}` : "",
+    stdoutText ? `stdout: ${stdoutText}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ")
+    .slice(0, 2000);
+}
+
 type PythonBridgeConfig = {
   scriptPath: string;
   dbPath: string;
@@ -72,10 +91,7 @@ export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
         } else {
           const stderrText = stderr.trim();
           const stdoutText = stdout.trim();
-          const detail = [stderrText ? `stderr: ${stderrText}` : "", stdoutText ? `stdout: ${stdoutText}` : ""]
-            .filter(Boolean)
-            .join(" | ")
-            .slice(0, 1000);
+          const detail = _formatBridgeErrorDetail(stderrText, stdoutText);
           reject(new Error(`Python error (exit=${String(code)}): ${detail}`));
         }
       });

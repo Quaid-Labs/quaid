@@ -989,6 +989,46 @@ class TestConfigLoading:
         finally:
             config._config = old_config
 
+    def test_workspace_config_deep_merges_model_transport_fields(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            root_cfg = tmp_path / "root.json"
+            workspace_cfg = tmp_path / "workspace.json"
+            root_cfg.write_text(json.dumps({
+                "models": {
+                    "llmProvider": "openai-compatible",
+                    "fastReasoningProvider": "openai-compatible",
+                    "deepReasoningProvider": "openai-compatible",
+                    "apiKeyEnv": "OPENAI_API_KEY",
+                    "baseUrl": "https://api.openai.com",
+                },
+                "retrieval": {
+                    "useHyde": False,
+                    "failHard": True,
+                },
+            }))
+            workspace_cfg.write_text(json.dumps({
+                "models": {
+                    "fastReasoning": "gpt-4o-mini",
+                    "deepReasoning": "gpt-4o-mini",
+                },
+                "retrieval": {
+                    "failHard": False,
+                },
+            }))
+            with patch.object(config, "_config_paths", lambda: [workspace_cfg, root_cfg]):
+                cfg = load_config()
+                assert cfg.models.fast_reasoning == "gpt-4o-mini"
+                assert cfg.models.deep_reasoning == "gpt-4o-mini"
+                assert cfg.models.base_url == "https://api.openai.com"
+                assert cfg.models.api_key_env == "OPENAI_API_KEY"
+                assert cfg.retrieval.use_hyde is False
+                assert cfg.retrieval.fail_hard is False
+        finally:
+            config._config = old_config
+
     def test_users_identity_keys_preserve_user_id_casing(self, tmp_path):
         import config
         old_config = config._config
@@ -1045,6 +1085,25 @@ class TestConfigLoading:
             with patch.object(config, "_config_paths", lambda: [config_file]):
                 cfg = load_config()
                 assert cfg.retrieval.use_hyde is False
+        finally:
+            config._config = old_config
+
+    def test_retrieval_hyde_timeout_and_retries_respect_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "hydeTimeoutMs": 9500,
+                    "hydeMaxRetries": 2
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.retrieval.hyde_timeout_ms == 9500
+                assert cfg.retrieval.hyde_max_retries == 2
         finally:
             config._config = old_config
 

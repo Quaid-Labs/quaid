@@ -83,6 +83,12 @@ node setup-quaid.mjs --agent \
 - `QUAID_INSTALL_REF`: git branch/tag/commit (for github source)
 - `QUAID_INSTALL_GITHUB_REPO`: repo override (default `quaid-labs/quaid`)
 - `QUAID_INSTALL_ARTIFACT`: local path or URL to `.tar.gz` (for artifact source)
+- `QUAID_INSTALL_NOTIFY=0|1`: disable/enable installer progress notifications in agent mode
+- `QUAID_INSTALL_NOTIFY_PROGRESS=0|1`: disable/enable step checkpoint notifications
+- `QUAID_INSTALL_NOTIFY_COMPLETE=0|1`: disable/enable completion notification
+- `QUAID_INSTALL_NOTIFY_CHANNEL`: force installer progress channel (for example `telegram`)
+- `QUAID_INSTALL_NOTIFY_TARGET`: force installer progress target (for example `telegram:<chat_id>`)
+- `QUAID_INSTALL_NOTIFY_ACCOUNT`: optional channel account override when using explicit channel/target
 
 ## OpenClaw-specific Notes
 

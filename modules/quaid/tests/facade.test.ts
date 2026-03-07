@@ -7,16 +7,11 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 function makeMockDeps(overrides: Partial<QuaidFacadeDeps> = {}): QuaidFacadeDeps {
-  const workspace = String(overrides.workspace || "/tmp/test-workspace");
   return {
-    workspace,
-    pluginRoot: `${workspace}/modules/quaid`,
+    workspace: "/tmp/test-workspace",
+    pluginRoot: "/tmp/test-workspace/modules/quaid",
     dbPath: "/tmp/test-memory.db",
     eventSource: "openclaw_adapter",
-    defaultOwner: "quaid",
-    isSystemSession: (sid: string) =>
-      sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm"),
-    runtimeDir: path.join(workspace, ".quaid", "runtime"),
     execPython: vi.fn(async () => "{}"),
     execExtractPipeline: vi.fn(async () => "{}"),
     execDocsRag: vi.fn(async () => ""),
@@ -633,7 +628,8 @@ describe("QuaidFacade", () => {
       },
     ]);
     expect(out).toContain("<injected_memories>");
-    expect(out).toContain("AVAILABLE_DOMAINS: personal, technical");
+    expect(out).toContain("INJECTOR CONFIDENCE RULE:");
+    expect(out).not.toContain("AVAILABLE_DOMAINS:");
     expect(out).toContain("- [fact] (2026-01-01) [domains:technical] Older fact");
     expect(out).toContain("- [fact] (2026-01-02) [domains:personal] (uncertain) New uncertain fact");
     expect(out).toContain("[graph-node-hits] Entity node references");
@@ -1402,7 +1398,7 @@ describe("QuaidFacade", () => {
       nowMs: 1_700_000_000_000,
     });
     expect(nudges).toHaveLength(2);
-    expect(nudges[0]).toContain("just installed the memory system");
+    expect(nudges[0]).toContain("just installed Quaid");
     expect(nudges[1]).toContain("1 pending approval request");
 
     const suppressed = facade.collectJanitorNudges({

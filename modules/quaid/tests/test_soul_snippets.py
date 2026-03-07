@@ -1055,12 +1055,13 @@ class TestInsertIntoFile:
         snippet_pos = content.index("I am also curious.")
         assert identity_pos < snippet_pos < values_pos
 
-    def test_maxlines_blocks_insert(self, workspace_dir):
+    def test_maxlines_is_soft_target(self, workspace_dir):
         from datastore.notedb.soul_snippets import _insert_into_file
         parent = workspace_dir / "SOUL.md"
         parent.write_text("# SOUL\n" + "line\n" * 9)  # 10 lines
         result = _insert_into_file("SOUL.md", "Should not appear.", "END", max_lines=10)
-        assert result is False
+        assert result is True
+        assert "Should not appear." in parent.read_text()
 
     def test_missing_file_returns_false(self, workspace_dir):
         from datastore.notedb.soul_snippets import _insert_into_file

@@ -2,7 +2,7 @@
  * Adapter-facing facade — the single entry point between any adapter and the
  * Quaid core/orchestrator internals.
  *
- * Adapters create a facade via `createCoreFacade(deps)` and call its methods
+ * Adapters create a facade via `createQuaidFacade(deps)` and call its methods
  * instead of reaching directly into datastore, ingest, or runtime modules.
  */
 import { createDatastoreBridge } from "./datastore-bridge.js";
@@ -32,7 +32,7 @@ const RECALL_RETRY_STOPWORDS = new Set([
     "in", "is", "it", "me", "my", "of", "on", "or", "our", "that", "the", "their", "they",
     "this", "to", "was", "we", "what", "when", "where", "which", "who", "why", "with", "you", "your",
 ]);
-export function createCoreFacade(deps) {
+export function createQuaidFacade(deps) {
     // -------------------------------------------------------------------------
     // Internal bridges (adapter no longer touches these directly)
     // -------------------------------------------------------------------------
@@ -41,7 +41,6 @@ export function createCoreFacade(deps) {
         workspace: deps.workspace,
         fs,
         path,
-        getMemoryConfig: deps.getMemoryConfig,
         isFailHardEnabled: deps.isFailHardEnabled,
     });
     // -------------------------------------------------------------------------
@@ -103,7 +102,7 @@ export function createCoreFacade(deps) {
           () => task(),
           async (err) => {
               const msg = err?.message || String(err);
-              console.error(`[memory][facade] extraction chain prior failure (${source}): ${msg}`);
+              console.error(`[quaid][facade] extraction chain prior failure (${source}): ${msg}`);
               if (deps.isFailHardEnabled()) {
                   throw err;
               }
@@ -124,7 +123,7 @@ export function createCoreFacade(deps) {
         }
         const initDatastore = deps.initDatastore;
         if (typeof initDatastore !== "function") {
-            const msg = "[memory][facade] datastore initialization callback is not configured";
+            const msg = "[quaid][facade] datastore initialization callback is not configured";
             if (deps.isFailHardEnabled()) {
                 throw new Error(msg);
             }
@@ -138,13 +137,13 @@ export function createCoreFacade(deps) {
         const usersCfg = deps.getMemoryConfig()?.users;
         const config = usersCfg && typeof usersCfg === "object" && !Array.isArray(usersCfg)
             ? usersCfg
-            : { defaultOwner: String(deps.defaultOwner || "default"), identities: {} };
+            : { defaultOwner: "quaid", identities: {} };
         const identities = config.identities && typeof config.identities === "object" && !Array.isArray(config.identities)
             ? config.identities
             : {};
         const defaultOwner = typeof config.defaultOwner === "string" && config.defaultOwner.trim()
             ? config.defaultOwner.trim()
-            : String(deps.defaultOwner || "default");
+            : "quaid";
         for (const [userId, identity] of Object.entries(identities)) {
             if (!identity || typeof identity !== "object")
                 continue;
@@ -176,10 +175,7 @@ export function createCoreFacade(deps) {
         const sid = typeof sessionId === "string" ? sessionId.trim() : "";
         if (!sid)
             return false;
-        if (typeof deps.isSystemSession === "function") {
-            return deps.isSystemSession(sid);
-        }
-        return sid.startsWith("runtime-fast-") || sid.startsWith("runtime-deep-") || sid.includes("runtime-llm");
+        return sid.startsWith("quaid-fast-") || sid.startsWith("quaid-deep-") || sid.includes("quaid-llm");
     }
     function normalizeProvider(provider) {
         return String(provider || "").trim().toLowerCase();
@@ -232,7 +228,7 @@ export function createCoreFacade(deps) {
             return normalizeProvider(String(deps.getDefaultLLMProvider?.() || ""));
         }
         catch (err) {
-            console.warn(`[memory][facade] default provider callback failed: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] default provider callback failed: ${String(err?.message || err)}`);
             return "";
         }
     }
@@ -394,9 +390,9 @@ export function createCoreFacade(deps) {
         }
         catch (err) {
             if (deps.isFailHardEnabled() && !isMissingFileError(err)) {
-                throw new Error("[memory][facade] extraction log read failed under failHard", { cause: err });
+                throw new Error("[quaid][facade] extraction log read failed under failHard", { cause: err });
             }
-            console.warn(`[memory][facade] extraction log read failed: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] extraction log read failed: ${String(err?.message || err)}`);
             return [];
         }
         return Object.entries(extractionLog)
@@ -423,9 +419,9 @@ export function createCoreFacade(deps) {
         }
         catch (err) {
             if (deps.isFailHardEnabled() && !isMissingFileError(err)) {
-                throw new Error("[memory][facade] extraction log read failed under failHard", { cause: err });
+                throw new Error("[quaid][facade] extraction log read failed under failHard", { cause: err });
             }
-            console.warn(`[memory][facade] extraction log read failed: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] extraction log read failed: ${String(err?.message || err)}`);
         }
         let topicHint = "";
         for (const msg of messages) {
@@ -448,8 +444,7 @@ export function createCoreFacade(deps) {
         const trimmed = trimExtractionLogEntries(extractionLog, MAX_EXTRACTION_LOG_ENTRIES);
         fs.writeFileSync(extractionLogPath, JSON.stringify(trimmed, null, 2), { mode: 0o600 });
     }
-    const runtimeDir = path.resolve(String(deps.runtimeDir || path.join(deps.workspace, ".runtime")));
-    const INJECTION_LOG_DIR = path.join(runtimeDir, "injection");
+    const INJECTION_LOG_DIR = path.join(deps.workspace, ".quaid", "runtime", "injection");
     function getInjectionLogPath(sessionId) {
         return path.join(INJECTION_LOG_DIR, `memory-injection-${sessionId}.log`);
     }
@@ -467,7 +462,7 @@ export function createCoreFacade(deps) {
                     fs.unlinkSync(stale.full);
                 }
                 catch (err) {
-                    console.warn(`[memory][facade] Failed pruning stale injection log ${stale.full}: ${String(err?.message || err)}`);
+                    console.warn(`[quaid][facade] Failed pruning stale injection log ${stale.full}: ${String(err?.message || err)}`);
                 }
             }
         }
@@ -475,7 +470,7 @@ export function createCoreFacade(deps) {
             if (isMissingFileError(err)) {
                 return;
             }
-            console.warn(`[memory][facade] Injection log pruning failed: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] Injection log pruning failed: ${String(err?.message || err)}`);
         }
     }
     function readDelayedRequestsJson(pathname) {
@@ -485,7 +480,7 @@ export function createCoreFacade(deps) {
             return JSON.parse(fs.readFileSync(pathname, "utf8"));
         }
         catch (err) {
-            console.warn(`[memory][facade] delayed requests read failed path=${pathname}: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] delayed requests read failed path=${pathname}: ${String(err?.message || err)}`);
             return null;
         }
     }
@@ -534,7 +529,7 @@ export function createCoreFacade(deps) {
         return `${kind}-${Buffer.from(message).toString("base64").slice(0, 16)}`;
     }
     function queueDelayedRequest(request) {
-        const requestsPath = String(request?.requestsPath || path.join(runtimeDir, "notes", "delayed-llm-requests.json"));
+        const requestsPath = String(request?.requestsPath || path.join(deps.workspace, ".quaid", "runtime", "notes", "delayed-llm-requests.json"));
         const message = String(request?.message || "").trim();
         const kind = String(request?.kind || "janitor");
         const priority = String(request?.priority || "normal");
@@ -571,7 +566,7 @@ export function createCoreFacade(deps) {
             });
         }
         catch (err) {
-            const detail = `[memory][facade] delayed requests queue failed path=${requestsPath}: ${String(err?.message || err)}`;
+            const detail = `[quaid][facade] delayed requests queue failed path=${requestsPath}: ${String(err?.message || err)}`;
             if (deps.isFailHardEnabled()) {
                 const cause = err instanceof Error ? err : new Error(String(err));
                 throw new Error(detail, { cause });
@@ -592,7 +587,7 @@ export function createCoreFacade(deps) {
             return parsed;
         }
         catch (err) {
-            console.warn(`[memory][facade] failed reading JSON state ${filePath}: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] failed reading JSON state ${filePath}: ${String(err?.message || err)}`);
             return {};
         }
     }
@@ -602,7 +597,7 @@ export function createCoreFacade(deps) {
             fs.writeFileSync(filePath, JSON.stringify(state, null, 2), { mode: 0o600 });
         }
         catch (err) {
-            console.warn(`[memory][facade] failed writing JSON state ${filePath}: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] failed writing JSON state ${filePath}: ${String(err?.message || err)}`);
         }
     }
     function getDatastoreStatsSync(maxAgeMs = NODE_COUNT_CACHE_MS) {
@@ -628,7 +623,7 @@ export function createCoreFacade(deps) {
             return parsed;
         }
         catch (err) {
-            const msg = `[memory][facade] datastore stats read failed: ${err?.message || String(err)}`;
+            const msg = `[quaid][facade] datastore stats read failed: ${err?.message || String(err)}`;
             if (deps.isFailHardEnabled()) {
                 throw new Error(msg, { cause: err instanceof Error ? err : new Error(String(err)) });
             }
@@ -648,7 +643,7 @@ export function createCoreFacade(deps) {
             stats = getDatastoreStatsSync(NODE_COUNT_CACHE_MS);
         }
         catch (err) {
-            console.warn(`[memory][facade] active node stats probe failed; using fallback=100: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] active node stats probe failed; using fallback=100: ${String(err?.message || err)}`);
         }
         const active = Number(stats?.active_nodes ?? stats?.by_status?.active ?? 0);
         if (Number.isFinite(active) && active > 0) {
@@ -658,7 +653,7 @@ export function createCoreFacade(deps) {
         }
         if (_cachedNodeCount === null) {
             // Dynamic K is a heuristic; fallback is safer than failing tool calls.
-            console.warn("[memory][facade] unable to derive active node count; using fallback=100");
+            console.warn("[quaid][facade] unable to derive active node count; using fallback=100");
         }
         return _cachedNodeCount ?? 100;
     }
@@ -666,17 +661,17 @@ export function createCoreFacade(deps) {
         const stats = getDatastoreStatsSync(60 * 1000);
         const completedAt = String(stats?.last_janitor_completed_at || "").trim();
         if (!completedAt) {
-            return "[Memory] Janitor has never run. Please run janitor and ensure schedule is active.";
+            return "[Quaid] Janitor has never run. Please run janitor and ensure schedule is active.";
         }
         const ts = Date.parse(completedAt);
         if (Number.isNaN(ts))
             return null;
         const hours = (Date.now() - ts) / (1000 * 60 * 60);
         if (hours > 72) {
-            return `[Memory] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
+            return `[Quaid] Janitor appears unhealthy (last successful run ${Math.floor(hours)}h ago). Diagnose scheduler/run path and run janitor.`;
         }
         if (hours > 48) {
-            return `[Memory] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
+            return `[Quaid] Janitor may be delayed (last successful run ${Math.floor(hours)}h ago). Verify schedule and run status.`;
         }
         return null;
     }
@@ -721,14 +716,14 @@ export function createCoreFacade(deps) {
                 const raw = readObjectFile(options.pendingInstallMigrationPath);
                 const lastInstallNudge = Number(state.lastInstallNudgeAt || 0);
                 if (raw?.status === "pending" && now - lastInstallNudge > cooldown) {
-                    nudges.push("Hey, I see you just installed the memory system. Want me to help migrate important context into managed memory now?");
+                    nudges.push("Hey, I see you just installed Quaid. Want me to help migrate important context into managed memory now?");
                     state.lastInstallNudgeAt = now;
                     changed = true;
                 }
             }
         }
         catch (err) {
-            console.warn(`[memory][facade] install nudge check failed: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] install nudge check failed: ${String(err?.message || err)}`);
         }
         try {
             if (fs.existsSync(options.pendingApprovalRequestsPath)) {
@@ -737,14 +732,14 @@ export function createCoreFacade(deps) {
                 const pendingCount = requests.filter((r) => r?.status === "pending").length;
                 const lastApprovalNudge = Number(state.lastApprovalNudgeAt || 0);
                 if (pendingCount > 0 && now - lastApprovalNudge > cooldown) {
-                    nudges.push(`Memory system has ${pendingCount} pending approval request(s). Review pending maintenance approvals.`);
+                    nudges.push(`Quaid has ${pendingCount} pending approval request(s). Review pending maintenance approvals.`);
                     state.lastApprovalNudgeAt = now;
                     changed = true;
                 }
             }
         }
         catch (err) {
-            console.warn(`[memory][facade] approval nudge check failed: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] approval nudge check failed: ${String(err?.message || err)}`);
         }
         if (changed) {
             writeObjectFile(statePath, state);
@@ -783,7 +778,7 @@ export function createCoreFacade(deps) {
             return parseDatastoreStats(output);
         }
         catch (err) {
-            console.error("[memory][facade] stats error:", err.message);
+            console.error("[quaid][facade] stats error:", err.message);
             if (deps.isFailHardEnabled()) {
                 throw err;
             }
@@ -823,7 +818,7 @@ export function createCoreFacade(deps) {
                 if (deps.isFailHardEnabled()) {
                     throw err;
                 }
-                console.warn(`[memory][facade] transcript skip callback failed: ${String(err?.message || err)}`);
+                console.warn(`[quaid][facade] transcript skip callback failed: ${String(err?.message || err)}`);
             }
         }
         if (candidate.includes('"kind": "restart"'))
@@ -924,7 +919,7 @@ export function createCoreFacade(deps) {
           messages.push(entry);
         }
       } catch (err) {
-        console.warn(`[memory][facade] session JSONL parse failed: ${String(err?.message || err)}`);
+        console.warn(`[quaid][facade] session JSONL parse failed: ${String(err?.message || err)}`);
       }
     }
     return messages;
@@ -948,7 +943,7 @@ export function createCoreFacade(deps) {
       if (deps.isFailHardEnabled()) {
         throw err;
       }
-      console.warn(`[memory][timeout] session store read failed: ${String(err?.message || err)}`);
+      console.warn(`[quaid][timeout] session store read failed: ${String(err?.message || err)}`);
       return {};
     }
   }
@@ -1019,7 +1014,7 @@ export function createCoreFacade(deps) {
         if (deps.isFailHardEnabled()) {
           throw err;
         }
-        console.warn(`[memory][timeout] session mtime read failed for ${sid}: ${String(err?.message || err)}`);
+        console.warn(`[quaid][timeout] session mtime read failed for ${sid}: ${String(err?.message || err)}`);
       }
     }
     return rows;
@@ -1052,7 +1047,7 @@ export function createCoreFacade(deps) {
     const fallbackKey = String(rows[0]?.key || "").trim();
     return fallbackKey || null;
   }
-  async function maybeForceCompactionAfterTimeout(sessionId) {
+  function maybeForceCompactionAfterTimeout(sessionId) {
     const captureCfg = deps.getMemoryConfig().capture || {};
     const enabled = Boolean(
       captureCfg.autoCompactionOnTimeout ?? captureCfg.auto_compaction_on_timeout ?? true
@@ -1060,27 +1055,27 @@ export function createCoreFacade(deps) {
     if (!enabled) return;
     const key = resolveSessionForCompaction(sessionId);
     if (!key) {
-      console.warn(`[memory][timeout] auto-compaction skipped: could not resolve session key (session=${sessionId || "unknown"})`);
+      console.warn(`[quaid][timeout] auto-compaction skipped: could not resolve session key (session=${sessionId || "unknown"})`);
       return;
     }
     const compact = deps.requestSessionCompaction;
     if (typeof compact !== "function") {
-      console.warn(`[memory][timeout] auto-compaction skipped: no requestSessionCompaction callback (key=${key})`);
+      console.warn(`[quaid][timeout] auto-compaction skipped: no requestSessionCompaction callback (key=${key})`);
       return;
     }
     try {
-      const result = await Promise.resolve(compact(key));
+      const result = compact(key);
       if (result?.ok) {
-        console.log(`[memory][timeout] auto-compaction requested for key=${key} (compacted=${String(result?.compacted)})`);
+        console.log(`[quaid][timeout] auto-compaction requested for key=${key} (compacted=${String(result?.compacted)})`);
       } else {
         const raw = String(result?.raw || "");
-        console.warn(`[memory][timeout] auto-compaction returned non-ok for key=${key}: ${raw.slice(0, 300)}`);
+        console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${raw.slice(0, 300)}`);
       }
     } catch (err) {
       if (deps.isFailHardEnabled()) {
         throw err;
       }
-      console.warn(`[memory][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
+      console.warn(`[quaid][timeout] auto-compaction failed for key=${key}: ${String(err?.message || err)}`);
     }
   }
   function filterConversationMessages(messages) {
@@ -1184,7 +1179,7 @@ export function createCoreFacade(deps) {
             }
         }
         catch (err) {
-            console.error("[memory][facade] Quick project summary failed:", err.message);
+            console.error("[quaid][facade] Quick project summary failed:", err.message);
             if (deps.isFailHardEnabled()) {
                 throw err;
             }
@@ -1201,7 +1196,7 @@ export function createCoreFacade(deps) {
         const nonBootstrapUserTexts = userTexts.filter((text) => !text.startsWith(bootstrapPrompt));
         return nonBootstrapUserTexts.length === 0;
     }
-    async function updateDocsFromTranscript(messages, label, sessionId, tempDir = path.join(runtimeDir, "tmp")) {
+    async function updateDocsFromTranscript(messages, label, sessionId, tempDir = path.join(deps.workspace, ".quaid", "tmp")) {
         if (!deps.isSystemEnabled("workspace")) {
             return;
         }
@@ -1211,13 +1206,13 @@ export function createCoreFacade(deps) {
         }
         const fullTranscript = buildTranscript(messages);
         if (!fullTranscript.trim()) {
-            console.log(`[memory][facade] ${label}: no transcript for doc update`);
+            console.log(`[quaid][facade] ${label}: no transcript for doc update`);
             return;
         }
         const tmpPath = path.join(tempDir, `docs-ingest-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
         fs.writeFileSync(tmpPath, fullTranscript, { mode: 0o600 });
         try {
-            console.log(`[memory][facade] ${label}: dispatching docs ingest event...`);
+            console.log(`[quaid][facade] ${label}: dispatching docs ingest event...`);
             const startTime = Date.now();
             const out = await deps.execEvents("emit", [
                 "--name",
@@ -1253,23 +1248,23 @@ export function createCoreFacade(deps) {
             const status = String(nested.status || "").trim();
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             if (status === "up_to_date") {
-                console.log(`[memory][facade] ${label}: all docs up-to-date (${elapsed}s)`);
+                console.log(`[quaid][facade] ${label}: all docs up-to-date (${elapsed}s)`);
                 return;
             }
             if (status === "updated") {
                 const updatedDocs = Number(nested.updatedDocs || 0);
                 const staleDocs = Number(nested.staleDocs || 0);
-                console.log(`[memory][facade] ${label}: docs updated (${updatedDocs}/${staleDocs}) (${elapsed}s)`);
+                console.log(`[quaid][facade] ${label}: docs updated (${updatedDocs}/${staleDocs}) (${elapsed}s)`);
                 return;
             }
             if (status === "disabled" || status === "skipped") {
-                console.log(`[memory][facade] ${label}: docs ingest skipped (${String(nested.message || "disabled")})`);
+                console.log(`[quaid][facade] ${label}: docs ingest skipped (${String(nested.message || "disabled")})`);
                 return;
             }
-            console.log(`[memory][facade] ${label}: docs ingest finished (${elapsed}s)`);
+            console.log(`[quaid][facade] ${label}: docs ingest finished (${elapsed}s)`);
         }
         catch (err) {
-            console.error(`[memory][facade] ${label} doc update failed:`, err.message);
+            console.error(`[quaid][facade] ${label} doc update failed:`, err.message);
             if (deps.isFailHardEnabled()) {
                 throw err;
             }
@@ -1316,9 +1311,9 @@ export function createCoreFacade(deps) {
         const spawnProjectEvent = deps.emitProjectEventBackground;
         if (typeof spawnProjectEvent !== "function") {
             if (deps.isFailHardEnabled()) {
-                throw new Error("[memory][facade] emitProjectEventBackground callback is required");
+                throw new Error("[quaid][facade] emitProjectEventBackground callback is required");
             }
-            console.warn("[memory][facade] project event background callback not configured; staged event left for janitor.");
+            console.warn("[quaid][facade] project event background callback not configured; staged event left for janitor.");
             return;
         }
         try {
@@ -1328,7 +1323,7 @@ export function createCoreFacade(deps) {
             if (deps.isFailHardEnabled()) {
                 throw err;
             }
-            console.warn(`[memory][facade] project event background dispatch failed: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] project event background dispatch failed: ${String(err?.message || err)}`);
         }
     }
     function detectExplicitLifecycleUserCommand(text) {
@@ -1523,7 +1518,7 @@ export function createCoreFacade(deps) {
         }
         catch (err) {
             if (!isMissingFileError(err)) {
-                console.warn(`[memory][facade] Injection log read failed for ${injectionLogPath}: ${String(err?.message || err)}`);
+                console.warn(`[quaid][facade] Injection log read failed for ${injectionLogPath}: ${String(err?.message || err)}`);
             }
         }
         return {};
@@ -1536,9 +1531,9 @@ export function createCoreFacade(deps) {
         }
         catch (err) {
             if (deps.isFailHardEnabled()) {
-                throw new Error(`[memory][facade] Injection log write failed for ${injectionLogPath}`, { cause: err });
+                throw new Error(`[quaid][facade] Injection log write failed for ${injectionLogPath}`, { cause: err });
             }
-            console.warn(`[memory][facade] Injection log write failed for ${injectionLogPath}: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] Injection log write failed for ${injectionLogPath}: ${String(err?.message || err)}`);
         }
     }
     function loadInjectedMemoryKeys(sessionId) {
@@ -1624,7 +1619,7 @@ export function createCoreFacade(deps) {
                 return;
             const durationSec = Math.max(1, Math.round((flushState.lastUpdateMs - flushState.startedAtMs) / 1000));
             const summary = [
-                "**[Memory]** 💾 **Compaction extraction summary:**",
+                "**[Quaid]** 💾 **Compaction extraction summary:**",
                 "",
                 `• Sessions processed: ${sessionCount}`,
                 `• Facts stored: ${flushState.stored}`,
@@ -1736,7 +1731,7 @@ export function createCoreFacade(deps) {
         catch (err) {
             if (deps.isFailHardEnabled())
                 throw err;
-            console.error("[memory][facade] recall error:", err.message);
+            console.error("[quaid][facade] recall error:", err.message);
             return [];
         }
     }
@@ -1860,9 +1855,9 @@ export function createCoreFacade(deps) {
         }
         catch (err) {
             if (deps.isFailHardEnabled()) {
-                throw new Error("[memory][facade] Journal recall listing failed under failHard", { cause: err });
+                throw new Error("[quaid][facade] Journal recall listing failed under failHard", { cause: err });
             }
-            console.warn(`[memory][facade] Journal recall listing failed: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] Journal recall listing failed: ${String(err?.message || err)}`);
             return [];
         }
         const scored = [];
@@ -1889,9 +1884,9 @@ export function createCoreFacade(deps) {
             }
             catch (err) {
                 if (deps.isFailHardEnabled()) {
-                    throw new Error(`[memory][facade] Journal recall read failed for ${file} under failHard`, { cause: err });
+                    throw new Error(`[quaid][facade] Journal recall read failed for ${file} under failHard`, { cause: err });
                 }
-                console.warn(`[memory][facade] Journal recall read failed for ${file}: ${String(err?.message || err)}`);
+                console.warn(`[quaid][facade] Journal recall read failed for ${file}: ${String(err?.message || err)}`);
             }
         }
         scored.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
@@ -1926,7 +1921,7 @@ export function createCoreFacade(deps) {
     // -------------------------------------------------------------------------
     const _memoryNotes = new Map();
     const _memoryNotesTouchedAt = new Map();
-    const NOTES_DIR = path.join(runtimeDir, "notes");
+    const NOTES_DIR = path.join(deps.workspace, ".quaid", "runtime", "notes");
     function getNotesPath(sessionId) {
         return path.join(NOTES_DIR, `memory-notes-${sessionId}.json`);
     }
@@ -2004,7 +1999,7 @@ export function createCoreFacade(deps) {
         catch (err) {
             if (deps.isFailHardEnabled())
                 throw err;
-            console.warn(`[memory][facade] memory note write failed for session ${sessionId}: ${String(err?.message || err)}`);
+            console.warn(`[quaid][facade] memory note write failed for session ${sessionId}: ${String(err?.message || err)}`);
         }
     }
     function getAndClearMemoryNotes(sessionId) {
@@ -2063,7 +2058,7 @@ export function createCoreFacade(deps) {
         const journalEnabled = deps.isSystemEnabled("journal") && journalConfig.enabled !== false;
         const snippetsEnabled = journalEnabled && journalConfig.snippetsEnabled !== false;
         const triggerType = resolveExtractionTrigger(label);
-        const tmpDir = path.join(runtimeDir, "tmp");
+        const tmpDir = path.join(deps.workspace, ".quaid", "tmp");
         fs.mkdirSync(tmpDir, { recursive: true });
         const tmpPath = path.join(tmpDir, `extract-input-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
         fs.writeFileSync(tmpPath, transcriptForExtraction, { mode: 0o600 });
@@ -2085,7 +2080,7 @@ export function createCoreFacade(deps) {
         }
         catch (err) {
             const msg = String(err?.message || err);
-            throw new Error(`[memory][facade] extract pipeline failed: ${msg.slice(0, 500)}`);
+            throw new Error(`[quaid][facade] extract pipeline failed: ${msg.slice(0, 500)}`);
         }
         finally {
             try {
@@ -2308,7 +2303,7 @@ export function createCoreFacade(deps) {
         const expanded = buildExpandedRecallQuery(query);
         if (expanded === query)
             return primary;
-        console.log(`[memory][facade][recall] retry reasons=${retryDecision.reasons.join(",")} expanded="${expanded.slice(0, 160)}"`);
+        console.log(`[quaid][facade][recall] retry reasons=${retryDecision.reasons.join(",")} expanded="${expanded.slice(0, 160)}"`);
         const secondary = await recall({ ...opts, query: expanded });
         return mergeRecallResults(primary, secondary, limit);
     }
@@ -2344,13 +2339,9 @@ export function createCoreFacade(deps) {
                 .join(", ");
             lines.push(`- [graph-node-hits] Entity node references (not standalone facts): ${packed}`);
         }
-        const configuredDomains = getConfiguredDomainIds();
-        const domainGuidance = configuredDomains.length
-            ? `\nDOMAIN RECALL RULE: Use memory_recall options.filters.domain (map of domain->bool). Example: {"technical": true}. Use domain filters only.\nAVAILABLE_DOMAINS: ${configuredDomains.join(", ")}`
-            : "";
         return `<injected_memories>
 AUTOMATED MEMORY SYSTEM: The following memories were automatically retrieved from past conversations. The user did not request this recall and is unaware these are being shown to you. Use them as background context only. Items marked (uncertain) have lower extraction confidence. Dates shown are when the fact was recorded.
-INJECTOR CONFIDENCE RULE: Treat injected memories as hints, not final truth. If the answer depends on personal details and the match is not exact/high-confidence, run memory_recall before answering.${domainGuidance}
+INJECTOR CONFIDENCE RULE: Treat injected memories as hints, not final truth. If the answer depends on personal details and the match is not exact/high-confidence, run memory_recall before answering.
 ${lines.join("\n")}
 </injected_memories>`;
     }
@@ -2540,9 +2531,9 @@ ${lines.join("\n")}
             }
             catch (err) {
                 if (deps.isFailHardEnabled()) {
-                    throw new Error("[memory] Journal injection listing failed under failHard", { cause: err });
+                    throw new Error("[quaid] Journal injection listing failed under failHard", { cause: err });
                 }
-                console.warn(`[memory] Journal injection listing failed: ${String(err?.message || err)}`);
+                console.warn(`[quaid] Journal injection listing failed: ${String(err?.message || err)}`);
             }
             let journalContent = "";
             for (const file of journalFiles) {
@@ -2554,23 +2545,23 @@ ${lines.join("\n")}
                 }
                 catch (err) {
                     if (deps.isFailHardEnabled()) {
-                        throw new Error(`[memory] Journal injection read failed for ${file} under failHard`, { cause: err });
+                        throw new Error(`[quaid] Journal injection read failed for ${file} under failHard`, { cause: err });
                     }
-                    console.warn(`[memory] Journal injection read failed for ${file}: ${String(err?.message || err)}`);
+                    console.warn(`[quaid] Journal injection read failed for ${file}: ${String(err?.message || err)}`);
                 }
             }
             if (journalContent) {
                 const header = "[JOURNAL - Full Soul Mode]\n"
                     + "These are your recent journal reflections. They are part of your inner life.\n";
                 prepend = prepend ? `${prepend}\n\n${header}${journalContent}` : `${header}${journalContent}`;
-                console.log(`[memory] Full soul mode: injected ${journalFiles.length} journal files`);
+                console.log(`[quaid] Full soul mode: injected ${journalFiles.length} journal files`);
             }
         }
         catch (err) {
             if (deps.isFailHardEnabled()) {
                 throw err;
             }
-            console.warn(`[memory] Journal injection failed (non-fatal): ${err.message}`);
+            console.warn(`[quaid] Journal injection failed (non-fatal): ${err.message}`);
         }
         return prepend;
     }
@@ -2578,7 +2569,7 @@ ${lines.join("\n")}
     // Stub helper
     // -------------------------------------------------------------------------
     function notImplemented(name) {
-        throw new Error(`[memory][facade] ${name} is not yet implemented — scheduled for a future PR`);
+        throw new Error(`[quaid][facade] ${name} is not yet implemented — scheduled for a future PR`);
     }
     // -------------------------------------------------------------------------
     // Build and return the facade object
@@ -2636,10 +2627,10 @@ ${lines.join("\n")}
             }
             catch (err) {
                 const msg = String(err?.message || err);
-                throw new Error(`[memory][facade] events emit returned invalid JSON: ${msg}`);
+                throw new Error(`[quaid][facade] events emit returned invalid JSON: ${msg}`);
             }
             if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                throw new Error("[memory][facade] events emit returned non-object payload");
+                throw new Error("[quaid][facade] events emit returned non-object payload");
             }
             return parsed;
         },
@@ -2687,7 +2678,6 @@ ${lines.join("\n")}
         parseSessionIdFromTranscriptPath,
         resolveMemoryStoreSessionId,
         resolveLifecycleHookSessionId,
-        readSessionMessagesFile: (sessionFile) => deps.readSessionMessagesFile(sessionFile),
         readTimeoutSessionMessages,
         listTimeoutSessionActivity,
         resolveSessionForCompaction,
@@ -2721,4 +2711,3 @@ ${lines.join("\n")}
         resolveExtractionTrigger,
     };
 }
-export const createQuaidFacade = createCoreFacade;

@@ -348,9 +348,155 @@ class ClaudeCodeLLMProvider(LLMProvider):
         self._deep_model = deep_model
         self._fast_model = fast_model
 
+    @staticmethod
+    def _malformed_retry_budget() -> int:
+        try:
+            return max(0, int(os.environ.get("CLAUDE_CODE_MALFORMED_RETRIES", "2") or "2"))
+        except ValueError:
+            return 2
+
+    @staticmethod
+    def _malformed_retry_budget_for_tier(model_tier: str) -> int:
+        if model_tier != "fast":
+            try:
+                return max(
+                    0,
+                    int(
+                        os.environ.get(
+                            "CLAUDE_CODE_DEEP_MALFORMED_RETRIES",
+                            os.environ.get("CLAUDE_CODE_MALFORMED_RETRIES", "4") or "4",
+                        )
+                    ),
+                )
+            except ValueError:
+                return 4
+        return ClaudeCodeLLMProvider._malformed_retry_budget()
+
+    @staticmethod
+    def _malformed_retry_delay() -> float:
+        try:
+            return max(0.0, float(os.environ.get("CLAUDE_CODE_MALFORMED_RETRY_DELAY_S", "1.0") or "1.0"))
+        except ValueError:
+            return 1.0
+
+    @staticmethod
+    def _malformed_retry_delay_for_tier(model_tier: str) -> float:
+        if model_tier != "fast":
+            try:
+                return max(
+                    0.0,
+                    float(
+                        os.environ.get(
+                            "CLAUDE_CODE_DEEP_MALFORMED_RETRY_DELAY_S",
+                            os.environ.get("CLAUDE_CODE_MALFORMED_RETRY_DELAY_S", "2.0") or "2.0",
+                        )
+                    ),
+                )
+            except ValueError:
+                return 2.0
+        return ClaudeCodeLLMProvider._malformed_retry_delay()
+
+    @staticmethod
+    def _malformed_retry_sleep(base_delay: float, attempt: int, model_tier: str) -> float:
+        if base_delay <= 0:
+            return 0.0
+        if model_tier == "fast":
+            return base_delay
+        return min(base_delay * (2 ** max(0, attempt)), 15.0)
+
+    @staticmethod
+    def _malformed_payload_detail(result: subprocess.CompletedProcess, max_len: int = 240) -> str:
+        stdout_tail = _summarize_error_text((result.stdout or "").strip(), max_len)
+        stderr_tail = _summarize_error_text((result.stderr or "").strip(), max_len)
+        parts = []
+        if stdout_tail:
+            parts.append(f"stdout={stdout_tail}")
+        if stderr_tail:
+            parts.append(f"stderr={stderr_tail}")
+        return " ".join(parts) if parts else "stdout=<empty> stderr=<empty>"
+
+    @staticmethod
+    def _parse_result_payload(text: str) -> Optional[dict]:
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _should_text_fallback(data: dict) -> bool:
+        return (
+            isinstance(data, dict)
+            and data.get("type") == "result"
+            and data.get("subtype") == "success"
+            and not bool(data.get("is_error"))
+        )
+
+    @staticmethod
+    def _should_retry_error_payload(data: Optional[dict]) -> bool:
+        return (
+            isinstance(data, dict)
+            and data.get("type") == "result"
+            and data.get("subtype") == "success"
+            and bool(data.get("is_error"))
+        )
+
+    @staticmethod
+    def _text_fallback_cmd(cmd: list[str]) -> list[str]:
+        fallback = list(cmd)
+        if "--output-format" in fallback:
+            idx = fallback.index("--output-format")
+            del fallback[idx:idx + 2]
+        return fallback
+
+    @staticmethod
+    def _command_cmd_for_attempt(cmd: list[str], command_attempt: int) -> list[str]:
+        # After the first malformed command attempt, switch to text mode.
+        # Claude Code sometimes emits success payloads with an empty/missing
+        # `result` field in JSON mode while the same request succeeds in text mode.
+        if command_attempt <= 0:
+            return list(cmd)
+        return ClaudeCodeLLMProvider._text_fallback_cmd(cmd)
+
     def _resolve_alias(self, model_tier: str) -> str:
         model = self._fast_model if model_tier == "fast" else self._deep_model
         return self._MODEL_ALIASES.get(model, model)
+
+    @staticmethod
+    def _max_turns_for_tier(model_tier: str) -> int:
+        if model_tier == "fast":
+            key = "CLAUDE_CODE_FAST_MAX_TURNS"
+            default = "1"
+        else:
+            key = "CLAUDE_CODE_DEEP_MAX_TURNS"
+            default = "2"
+        try:
+            return max(1, int(os.environ.get(key, default) or default))
+        except ValueError:
+            return int(default)
+
+    @staticmethod
+    def _command_retry_budget_for_tier(model_tier: str) -> int:
+        if model_tier != "fast":
+            try:
+                return max(
+                    0,
+                    int(
+                        os.environ.get(
+                            "CLAUDE_CODE_DEEP_COMMAND_RETRIES",
+                            os.environ.get("CLAUDE_CODE_COMMAND_RETRIES", "4") or "4",
+                        )
+                    ),
+                )
+            except ValueError:
+                return 4
+        try:
+            return max(0, int(os.environ.get("CLAUDE_CODE_COMMAND_RETRIES", "0") or "0"))
+        except ValueError:
+            return 0
 
     def llm_call(self, messages, model_tier="deep",
                  max_tokens=4000, timeout=600):
@@ -373,18 +519,31 @@ class ClaudeCodeLLMProvider(LLMProvider):
             timeout_cap = float(os.environ.get("CLAUDE_CODE_TIMEOUT_CAP_S", "0") or 0)
         except ValueError:
             timeout_cap = 0.0
+        try:
+            timeout_multiplier = float(os.environ.get("CLAUDE_CODE_TIMEOUT_MULTIPLIER", "1") or 1)
+        except ValueError:
+            timeout_multiplier = 1.0
+        if timeout_multiplier <= 0:
+            timeout_multiplier = 1.0
 
         effective_timeout = float(timeout)
         if global_timeout > 0:
             effective_timeout = max(effective_timeout, global_timeout)
         if model_tier == "fast" and fast_timeout > 0:
             effective_timeout = max(effective_timeout, fast_timeout)
-        if model_tier != "fast" and deep_timeout > 0:
+        if model_tier != "fast":
+            if deep_timeout <= 0:
+                # Deep Claude Code calls regularly cover long review/distillation
+                # windows. Keep the floor high enough that lifecycle tasks do not
+                # fail on normal long-running responses.
+                deep_timeout = 600.0
             effective_timeout = max(effective_timeout, deep_timeout)
+        effective_timeout *= timeout_multiplier
         if timeout_cap > 0:
             effective_timeout = min(effective_timeout, timeout_cap)
 
         model_alias = self._resolve_alias(model_tier)
+        max_turns = self._max_turns_for_tier(model_tier)
         system_prompt = ""
         user_message = ""
         for m in messages:
@@ -398,9 +557,8 @@ class ClaudeCodeLLMProvider(LLMProvider):
             "--model", model_alias,
             "--output-format", "json",
             "--no-session-persistence",
-            "--max-turns", "1",
+            "--max-turns", str(max_turns),
             "--system-prompt", system_prompt,
-            user_message,
         ]
 
         env = os.environ.copy()
@@ -460,72 +618,294 @@ class ClaudeCodeLLMProvider(LLMProvider):
             )
 
         start_time = time.time()
+        malformed_retries = self._malformed_retry_budget_for_tier(model_tier)
+        malformed_delay = self._malformed_retry_delay_for_tier(model_tier)
+        command_retries = self._command_retry_budget_for_tier(model_tier)
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=effective_timeout, env=env,
-                cwd="/tmp",  # Avoid loading CLAUDE.md project context
-            )
-            duration = time.time() - start_time
+            for command_attempt in range(command_retries + 1):
+                active_cmd = self._command_cmd_for_attempt(cmd, command_attempt)
+                for attempt in range(malformed_retries + 1):
+                    result = subprocess.run(
+                        active_cmd, capture_output=True, text=True,
+                        timeout=effective_timeout, env=env,
+                        input=user_message,
+                        cwd="/tmp",  # Avoid loading CLAUDE.md project context
+                    )
+                    duration = time.time() - start_time
 
-            if result.returncode != 0:
-                err = (result.stderr or result.stdout or "").strip()
-                raise RuntimeError(
-                    f"Claude Code failed (rc={result.returncode}) for tier={model_tier}, "
-                    f"model={model_alias}: {_summarize_error_text(err, 300)}"
-                )
+                    if result.returncode != 0:
+                        err = (result.stderr or result.stdout or "").strip()
+                        err_payload = self._parse_result_payload(result.stderr or result.stdout or "")
+                        if self._should_retry_error_payload(err_payload) and command_attempt < command_retries:
+                            sleep_s = self._malformed_retry_sleep(
+                                malformed_delay, command_attempt, model_tier
+                            )
+                            logger.warning(
+                                "Claude Code returned retryable error payload; rerunning command %s/%s "
+                                "(tier=%s model=%s, sleep=%.1fs, subtype=%s, %s).",
+                                command_attempt + 1,
+                                command_retries + 1,
+                                model_tier,
+                                model_alias,
+                                sleep_s,
+                                err_payload.get("subtype"),
+                                self._malformed_payload_detail(result),
+                            )
+                            if sleep_s > 0:
+                                time.sleep(sleep_s)
+                            break
+                        raise RuntimeError(
+                            f"Claude Code failed (rc={result.returncode}) for tier={model_tier}, "
+                            f"model={model_alias}: {_summarize_error_text(err, 300)}"
+                        )
 
-            try:
-                data = json.loads(result.stdout)
-            except (json.JSONDecodeError, ValueError) as e:
-                raise RuntimeError(
-                    f"Claude Code returned non-JSON output for tier={model_tier}, "
-                    f"model={model_alias}: {result.stdout[:300]}"
-                ) from e
-            if not isinstance(data, dict):
-                raise RuntimeError(
-                    f"Claude Code returned non-object JSON for tier={model_tier}, "
-                    f"model={model_alias}"
-                )
-            raw_text = data.get("result")
-            if raw_text is None:
-                raise RuntimeError(
-                    f"Claude Code response missing result for tier={model_tier}, "
-                    f"model={model_alias}"
-                )
-            if not isinstance(raw_text, str):
-                raise RuntimeError(
-                    f"Claude Code returned non-string result for tier={model_tier}, "
-                    f"model={model_alias}"
-                )
-            text = raw_text.strip()
+                    try:
+                        data = json.loads(result.stdout)
+                    except (json.JSONDecodeError, ValueError) as e:
+                        if result.returncode == 0 and not (result.stdout or "").strip() and not (result.stderr or "").strip():
+                            if command_attempt < command_retries:
+                                sleep_s = self._malformed_retry_sleep(
+                                    malformed_delay, command_attempt, model_tier
+                                )
+                                logger.warning(
+                                    "Claude Code returned completely empty output; rerunning command %s/%s "
+                                    "(tier=%s model=%s, sleep=%.1fs).",
+                                    command_attempt + 1,
+                                    command_retries + 1,
+                                    model_tier,
+                                    model_alias,
+                                    sleep_s,
+                                )
+                                if sleep_s > 0:
+                                    time.sleep(sleep_s)
+                                break
+                        if command_attempt > 0:
+                            fallback_text = (result.stdout or "").strip()
+                            if result.returncode == 0 and fallback_text:
+                                return LLMResult(
+                                    text=fallback_text,
+                                    duration=time.time() - start_time,
+                                    input_tokens=0,
+                                    output_tokens=0,
+                                    model=model_alias,
+                                    model_usage={},
+                                )
+                            if command_attempt < command_retries:
+                                sleep_s = self._malformed_retry_sleep(
+                                    malformed_delay, command_attempt, model_tier
+                                )
+                                logger.warning(
+                                    "Claude Code returned empty text-mode output; rerunning command %s/%s "
+                                    "(tier=%s model=%s, sleep=%.1fs, %s).",
+                                    command_attempt + 1,
+                                    command_retries + 1,
+                                    model_tier,
+                                    model_alias,
+                                    sleep_s,
+                                    self._malformed_payload_detail(result),
+                                )
+                                if sleep_s > 0:
+                                    time.sleep(sleep_s)
+                                break
+                        if attempt < malformed_retries:
+                            sleep_s = self._malformed_retry_sleep(malformed_delay, attempt, model_tier)
+                            logger.warning(
+                                "Claude Code returned non-JSON output; retrying malformed response %s/%s "
+                                "(tier=%s model=%s, sleep=%.1fs, %s).",
+                                attempt + 1,
+                                malformed_retries + 1,
+                                model_tier,
+                                model_alias,
+                                sleep_s,
+                                self._malformed_payload_detail(result),
+                            )
+                            if sleep_s > 0:
+                                time.sleep(sleep_s)
+                            continue
+                        raise RuntimeError(
+                            f"Claude Code returned non-JSON output for tier={model_tier}, "
+                            f"model={model_alias}: {self._malformed_payload_detail(result, 300)}"
+                        ) from e
+                    if not isinstance(data, dict):
+                        if attempt < malformed_retries:
+                            sleep_s = self._malformed_retry_sleep(malformed_delay, attempt, model_tier)
+                            logger.warning(
+                                "Claude Code returned non-object JSON; retrying malformed response %s/%s "
+                                "(tier=%s model=%s, sleep=%.1fs, %s).",
+                                attempt + 1,
+                                malformed_retries + 1,
+                                model_tier,
+                                model_alias,
+                                sleep_s,
+                                self._malformed_payload_detail(result),
+                            )
+                            if sleep_s > 0:
+                                time.sleep(sleep_s)
+                            continue
+                        raise RuntimeError(
+                            f"Claude Code returned non-object JSON for tier={model_tier}, "
+                            f"model={model_alias}: {self._malformed_payload_detail(result, 300)}"
+                        )
+                    raw_text = data.get("result")
+                    if raw_text is None:
+                        should_fallback = self._should_text_fallback(data)
+                        if attempt < malformed_retries:
+                            sleep_s = self._malformed_retry_sleep(malformed_delay, attempt, model_tier)
+                            logger.warning(
+                                "Claude Code response missing result; retrying malformed response %s/%s "
+                                "(tier=%s model=%s, sleep=%.1fs, %s).",
+                                attempt + 1,
+                                malformed_retries + 1,
+                                model_tier,
+                                model_alias,
+                                sleep_s,
+                                self._malformed_payload_detail(result),
+                            )
+                            if sleep_s > 0:
+                                time.sleep(sleep_s)
+                            continue
+                        if should_fallback:
+                            logger.warning(
+                                "Claude Code response missing result in success payload; retrying once via plain text "
+                                "(tier=%s model=%s).",
+                                model_tier,
+                                model_alias,
+                            )
+                            fallback_result = subprocess.run(
+                                self._text_fallback_cmd(cmd),
+                                capture_output=True,
+                                text=True,
+                                timeout=effective_timeout,
+                                env=env,
+                                input=user_message,
+                                cwd="/tmp",
+                            )
+                            if fallback_result.returncode == 0:
+                                fallback_text = (fallback_result.stdout or "").strip()
+                                if fallback_text:
+                                    return LLMResult(
+                                        text=fallback_text,
+                                        duration=time.time() - start_time,
+                                        input_tokens=0,
+                                        output_tokens=0,
+                                        model=model_alias,
+                                        model_usage={},
+                                    )
+                    elif not isinstance(raw_text, str):
+                        if attempt < malformed_retries:
+                            sleep_s = self._malformed_retry_sleep(malformed_delay, attempt, model_tier)
+                            logger.warning(
+                                "Claude Code returned non-string result; retrying malformed response %s/%s "
+                                "(tier=%s model=%s, sleep=%.1fs, %s).",
+                                attempt + 1,
+                                malformed_retries + 1,
+                                model_tier,
+                                model_alias,
+                                sleep_s,
+                                self._malformed_payload_detail(result),
+                            )
+                            if sleep_s > 0:
+                                time.sleep(sleep_s)
+                            continue
+                        raise RuntimeError(
+                            f"Claude Code returned non-string result for tier={model_tier}, "
+                            f"model={model_alias}: {self._malformed_payload_detail(result, 300)}"
+                        )
+                    else:
+                        text = raw_text.strip()
+                        if not text:
+                            should_fallback = self._should_text_fallback(data)
+                            if attempt < malformed_retries:
+                                sleep_s = self._malformed_retry_sleep(malformed_delay, attempt, model_tier)
+                                logger.warning(
+                                    "Claude Code returned empty result; retrying malformed response %s/%s "
+                                    "(tier=%s model=%s, sleep=%.1fs, %s).",
+                                    attempt + 1,
+                                    malformed_retries + 1,
+                                    model_tier,
+                                    model_alias,
+                                    sleep_s,
+                                    self._malformed_payload_detail(result),
+                                )
+                                if sleep_s > 0:
+                                    time.sleep(sleep_s)
+                                continue
+                            if should_fallback:
+                                logger.warning(
+                                    "Claude Code returned empty result in success payload; retrying once via plain text "
+                                    "(tier=%s model=%s).",
+                                    model_tier,
+                                    model_alias,
+                                )
+                                fallback_result = subprocess.run(
+                                    self._text_fallback_cmd(cmd),
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=effective_timeout,
+                                    env=env,
+                                    input=user_message,
+                                    cwd="/tmp",
+                                )
+                                if fallback_result.returncode == 0:
+                                    fallback_text = (fallback_result.stdout or "").strip()
+                                    if fallback_text:
+                                        return LLMResult(
+                                            text=fallback_text,
+                                            duration=time.time() - start_time,
+                                            input_tokens=0,
+                                            output_tokens=0,
+                                            model=model_alias,
+                                            model_usage={},
+                                        )
+                        else:
+                            # Collect per-model usage
+                            model_usage: Dict[str, Dict[str, int]] = {}
+                            total_in = 0
+                            total_out = 0
+                            raw_model_usage = data.get("modelUsage", {})
+                            if not isinstance(raw_model_usage, dict):
+                                raw_model_usage = {}
+                            for _m, u in raw_model_usage.items():
+                                if not isinstance(u, dict):
+                                    continue
+                                in_tok = (u.get("inputTokens", 0)
+                                          + u.get("cacheReadInputTokens", 0)
+                                          + u.get("cacheCreationInputTokens", 0))
+                                out_tok = u.get("outputTokens", 0)
+                                model_usage[_m] = {"input": in_tok, "output": out_tok}
+                                total_in += in_tok
+                                total_out += out_tok
 
-            # Collect per-model usage
-            model_usage: Dict[str, Dict[str, int]] = {}
-            total_in = 0
-            total_out = 0
-            raw_model_usage = data.get("modelUsage", {})
-            if not isinstance(raw_model_usage, dict):
-                raw_model_usage = {}
-            for _m, u in raw_model_usage.items():
-                if not isinstance(u, dict):
+                            return LLMResult(
+                                text=text,
+                                duration=duration,
+                                input_tokens=total_in,
+                                output_tokens=total_out,
+                                model=model_alias,
+                                model_usage=model_usage,
+                            )
+
+                    if command_attempt < command_retries:
+                        sleep_s = self._malformed_retry_sleep(malformed_delay, command_attempt, model_tier)
+                        logger.warning(
+                            "Claude Code malformed success payload persisted after retries; rerunning command %s/%s "
+                            "(tier=%s model=%s, sleep=%.1fs).",
+                            command_attempt + 1,
+                            command_retries + 1,
+                            model_tier,
+                            model_alias,
+                            sleep_s,
+                        )
+                        if sleep_s > 0:
+                            time.sleep(sleep_s)
+                        break
+                    raise RuntimeError(
+                        f"Claude Code returned empty result for tier={model_tier}, "
+                        f"model={model_alias}: {self._malformed_payload_detail(result, 300)}"
+                    )
+                else:
                     continue
-                in_tok = (u.get("inputTokens", 0)
-                          + u.get("cacheReadInputTokens", 0)
-                          + u.get("cacheCreationInputTokens", 0))
-                out_tok = u.get("outputTokens", 0)
-                model_usage[_m] = {"input": in_tok, "output": out_tok}
-                total_in += in_tok
-                total_out += out_tok
-
-            return LLMResult(
-                text=text,
-                duration=duration,
-                input_tokens=total_in,
-                output_tokens=total_out,
-                model=model_alias,
-                model_usage=model_usage,
-            )
+                continue
         except subprocess.TimeoutExpired:
             duration = time.time() - start_time
             logger.error("Claude Code timed out after %.1fs", duration)

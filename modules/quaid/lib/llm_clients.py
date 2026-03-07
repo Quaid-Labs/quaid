@@ -618,6 +618,49 @@ def parse_json_response(text: str) -> Optional[object]:
     Handles responses wrapped in ```json ... ``` blocks as well as bare JSON.
     Returns parsed JSON (dict or list) or None on failure.
     """
+    def _extract_balanced_json(candidate: str) -> Optional[str]:
+        candidate = (candidate or "").strip()
+        if not candidate:
+            return None
+        starts = [idx for idx in (candidate.find("{"), candidate.find("[")) if idx != -1]
+        if not starts:
+            return None
+        start = min(starts)
+        opening = candidate[start]
+        closing = "}" if opening == "{" else "]"
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start, len(candidate)):
+            ch = candidate[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == "\"":
+                    in_string = False
+                continue
+            if ch == "\"":
+                in_string = True
+                continue
+            if ch == opening:
+                depth += 1
+            elif ch == closing:
+                depth -= 1
+                if depth == 0:
+                    return candidate[start:idx + 1]
+        return None
+
+    def _loads_with_relaxed_fallback(candidate: str):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as e:
+            try:
+                return json.loads(candidate, strict=False)
+            except json.JSONDecodeError:
+                raise e
+
     if not text:
         return None
 
@@ -626,7 +669,7 @@ def parse_json_response(text: str) -> Optional[object]:
 
     # Try direct parse first
     try:
-        return json.loads(cleaned)
+        return _loads_with_relaxed_fallback(cleaned)
     except json.JSONDecodeError as e:
         parse_errors.append(f"direct parse failed at line {e.lineno}, col {e.colno}: {e.msg}")
 
@@ -639,8 +682,14 @@ def parse_json_response(text: str) -> Optional[object]:
                 candidate = candidate[4:].strip()
             if candidate and (candidate.startswith("{") or candidate.startswith("[")):
                 try:
-                    return json.loads(candidate)
+                    return _loads_with_relaxed_fallback(candidate)
                 except json.JSONDecodeError as e:
+                    balanced = _extract_balanced_json(candidate)
+                    if balanced and balanced != candidate:
+                        try:
+                            return _loads_with_relaxed_fallback(balanced)
+                        except json.JSONDecodeError:
+                            pass
                     parse_errors.append(f"fenced parse failed at line {e.lineno}, col {e.colno}: {e.msg}")
                     continue
 
@@ -650,12 +699,20 @@ def parse_json_response(text: str) -> Optional[object]:
         end_idx = cleaned.rfind(end_char)
         if start_idx != -1 and end_idx > start_idx:
             try:
-                return json.loads(cleaned[start_idx:end_idx + 1])
+                return _loads_with_relaxed_fallback(cleaned[start_idx:end_idx + 1])
             except json.JSONDecodeError as e:
                 parse_errors.append(
                     f"substring parse ({start_char}...{end_char}) failed at line {e.lineno}, col {e.colno}: {e.msg}"
                 )
                 continue
+    balanced = _extract_balanced_json(cleaned)
+    if balanced:
+        try:
+            return _loads_with_relaxed_fallback(balanced)
+        except json.JSONDecodeError as e:
+            parse_errors.append(
+                f"balanced parse failed at line {e.lineno}, col {e.colno}: {e.msg}"
+            )
 
     if parse_errors:
         content_len = len(cleaned)

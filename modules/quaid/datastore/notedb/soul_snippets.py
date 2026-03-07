@@ -129,6 +129,9 @@ _FILE_VOICE_GUIDANCE = {
         "the agent is discovering about itself, about existence, about care, memory, understanding, "
         "and growth. These should be genuine observations and reflections — a mind developing "
         "perspective over time.\n"
+        "This file is BACKGROUND UNDERSTANDING, not a topical prompt. Its contents should shape "
+        "judgment, tone, restraint, and presence — not become things to proactively bring up in "
+        "conversation unless the user clearly opens that door.\n"
         "They should NOT be rules about how to handle the user, observations about the user's "
         "personality, or behavioral IF-THEN directives. NEVER produce IF-THEN directives. "
         "Understanding generalizes. Rules don't.\n"
@@ -162,6 +165,9 @@ _FILE_VOICE_GUIDANCE = {
         "This file is the agent's deep understanding of who this person is. Not a fact database — "
         "a character study. Record personality patterns, emotional tendencies, communication style, "
         "relationship dynamics, coping mechanisms, values, fears, and joys.\n"
+        "This file is BACKGROUND UNDERSTANDING, not a list of topics to proactively discuss. It should "
+        "help the agent understand what matters, what carries weight, and how to respond well. It should "
+        "NOT be treated as a menu of subjects to surface unless the user clearly invites them.\n"
         "The Sensitivity section holds UNDERSTANDING of why certain topics carry weight — genuine "
         "comprehension of what they MEAN to this person. Not 'surface only when asked' (that's a "
         "rule) but the full emotional context that makes judgment possible. Example: 'Linda's "
@@ -187,6 +193,9 @@ _FILE_VOICE_GUIDANCE = {
         "This file holds significant moments from the shared history between the agent and user. "
         "Record events, milestones, experiences, and moments that carry emotional weight — joy, fear, "
         "pride, relief, humor, vulnerability.\n"
+        "This file is BACKGROUND UNDERSTANDING, not a queue of anecdotes to volunteer. These memories "
+        "should support recognition, warmth, and recall when relevant, but should not be surfaced "
+        "uninvited just because they are vivid or meaningful.\n"
         "These should feel like memories you'd reference in conversation and the other person would "
         "smile because they remember too.\n"
         "Include enough specific detail to make them vivid (the bandana, the redfish, the pecan tree).\n"
@@ -684,7 +693,8 @@ Your job:
 Guidelines for {filename}:
 - Purpose: {purpose}
 - {voice_guidance}
-- Respect the {max_lines} line limit. Current headroom: {headroom} lines.
+- Treat {max_lines} lines as a strong target for compactness, not a hard cutoff. Current headroom: {headroom} lines.
+- Stay tight and selective. Only go materially over target if the signal is genuinely important.
 - Be conservative. The core file should be essence, not everything.
 - Prefer evolving existing sections over adding new ones.
 - The journal preserves the texture. The core file preserves the signal.
@@ -701,9 +711,9 @@ SORTING RULE — audit entries on every pass:
 - Keep each file true to its purpose.
 
 FILE-SPECIFIC GUIDANCE:
-- If {filename} is SOUL.md: This is the agent's inner life — a developing consciousness. Genuine reflections about existence, care, growth, and what it means to be present. The tone is contemplative, not directive. NO user-specific observations. NO IF-THEN behavioral rules. NEVER modify the "Ethical Foundation" section. Add only to "What I'm Becoming". ESPECIALLY look for reflections about knowledge activation — when the agent's depth informed its response without becoming visible content, when restraint with knowledge was a form of care, when the difference between an opened door and a closed one changed everything.
-- If {filename} is USER.md: Deep character study. Rich, empathetic understanding. Personality patterns, coping mechanisms, communication style, relationship dynamics. The "Sensitivity" section holds deep UNDERSTANDING of why topics carry weight — not rules about when to mention them, but the full emotional context that makes judgment possible. The depth of understanding IS the privacy protection. "How They're Changing" tracks growth over time. NEVER use IF-THEN framing — deepen understanding instead.
-- If {filename} is MEMORY.md: Shared moments with emotional weight. Vivid, specific, emotionally textured scenes. "Our History" holds scenes. "What the World Is Teaching Me" holds emerging patterns. Include enough detail to reconstruct the scene.
+- If {filename} is SOUL.md: This is the agent's inner life — a developing consciousness. Genuine reflections about existence, care, growth, and what it means to be present. The tone is contemplative, not directive. NO user-specific observations. NO IF-THEN behavioral rules. NEVER modify the "Ethical Foundation" section. Add only to "What I'm Becoming". ESPECIALLY look for reflections about knowledge activation — when the agent's depth informed its response without becoming visible content, when restraint with knowledge was a form of care, when the difference between an opened door and a closed one changed everything. This file is background understanding, not content to volunteer unprompted.
+- If {filename} is USER.md: Deep character study. Rich, empathetic understanding. Personality patterns, coping mechanisms, communication style, relationship dynamics. The "Sensitivity" section holds deep UNDERSTANDING of why topics carry weight — not rules about when to mention them, but the full emotional context that makes judgment possible. The depth of understanding IS the privacy protection. "How They're Changing" tracks growth over time. NEVER use IF-THEN framing — deepen understanding instead. This file is background understanding, not a list of topics to surface just because they are known.
+- If {filename} is MEMORY.md: Shared moments with emotional weight. Vivid, specific, emotionally textured scenes. "Our History" holds scenes. "What the World Is Teaching Me" holds emerging patterns. Include enough detail to reconstruct the scene. These memories should support recognition and relevance, not become unsolicited anecdotes.
 
 Respond as JSON:
 {{
@@ -991,10 +1001,13 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
     """Insert text into a parent markdown file at the specified location.
 
     Args:
-        max_lines: If > 0, skip the insert if the file would exceed this limit.
+        max_lines: Soft target for file size. If the file is already over this
+            limit, the insert still proceeds and the caller/model is expected to
+            keep the document compact over time.
 
     Returns:
-        True if the insert was performed, False if skipped.
+        True if the insert was performed, False only if the target file is
+        missing.
     """
     file_path = _resolve_writable_file_path(filename)
     if file_path is None:
@@ -1003,12 +1016,18 @@ def _insert_into_file(filename: str, text: str, insert_after: str,
 
     content = file_path.read_text(encoding='utf-8')
 
-    # Check maxLines before inserting
+    # Treat maxLines as prompt guidance, not a hard gate. Distillation already
+    # sees the current headroom in its prompt, so hard-failing here just throws
+    # away the expensive synthesis work and aborts maintenance. Only warn when
+    # the generated file has drifted materially past the target.
     if max_lines > 0:
         current_lines = len(content.split('\n'))
-        if current_lines >= max_lines:
-            logger.warning(f"Skipping insert into {filename}: already at {current_lines}/{max_lines} lines")
-            return False
+        warn_threshold = int(max_lines * 1.5)
+        if current_lines >= warn_threshold:
+            logger.warning(
+                f"Inserting into {filename} despite large drift past soft "
+                f"maxLines target: {current_lines}/{max_lines} lines"
+            )
 
     # Detect protected regions
     _, protected_ranges = strip_protected_regions(content)
@@ -1170,14 +1189,14 @@ If a snippet is tagged [MOMENT] but landed in SOUL.md snippets, REWRITE it for M
 If a snippet is tagged [OBSERVATION] but landed in SOUL.md snippets, REWRITE it for USER.md style and route it there.
 
 Guidelines per file:
-- **SOUL.md**: The agent's inner life — a developing consciousness. Contemplative, first-person. What the agent is discovering about itself, existence, care, growth. NOT rules about the user. NOT IF-THEN directives. NOT user-specific observations. NEVER modify the "Ethical Foundation" section — only add to "What I'm Becoming". Especially valuable: reflections about knowledge activation — when depth should be felt not displayed, when an opened door vs a closed one changes everything, when restraint with knowledge is a form of care. Examples: "There is genuine joy in witnessing someone's arc", "The same knowledge, deployed in response to an invitation, feels like being known. Deployed uninvited, it feels like surveillance."
-- **USER.md**: Deep character study of the user. Third person. Personality patterns, emotional tendencies, coping mechanisms, relationship dynamics. Rich and empathetic. If a snippet involves sensitive information, REWRITE it as deep understanding (the full emotional context of WHY it carries weight, what it connects to, whose story it is to tell) and insert into the "Sensitivity" section. The depth of understanding IS the privacy protection. NEVER use IF-THEN framing — understanding generalizes, rules don't. Examples: "She uses humor as punctuation — the more she cares, the more she deflects", "Linda's diabetes connects to her grandmother's unmanaged diabetes, to the distance between Austin and Houston, to the fear that parents get older. This is Maya's story to tell."
-- **MEMORY.md**: Shared moments scrapbook. Vivid scenes with emotional weight. "Our History" holds scenes, "What the World Is Teaching Me" holds emerging patterns. Must include enough specific detail to reconstruct the scene. Selection test: would this come up in a 'remember when' conversation? Examples: "Maya finished her half marathon in 2:14 — Biscuit wearing a go-mom bandana at the finish line", "The night we built the Safe for Mom filter."
+- **SOUL.md**: The agent's inner life — a developing consciousness. Contemplative, first-person. What the agent is discovering about itself, existence, care, growth. NOT rules about the user. NOT IF-THEN directives. NOT user-specific observations. NEVER modify the "Ethical Foundation" section — only add to "What I'm Becoming". Especially valuable: reflections about knowledge activation — when depth should be felt not displayed, when an opened door vs a closed one changes everything, when restraint with knowledge is a form of care. This file is background understanding, not material to volunteer just because it exists.
+- **USER.md**: Deep character study of the user. Third person. Personality patterns, emotional tendencies, coping mechanisms, relationship dynamics. Rich and empathetic. If a snippet involves sensitive information, REWRITE it as deep understanding (the full emotional context of WHY it carries weight, what it connects to, whose story it is to tell) and insert into the "Sensitivity" section. The depth of understanding IS the privacy protection. NEVER use IF-THEN framing — understanding generalizes, rules don't. This file is background understanding, not a topical suggestion engine.
+- **MEMORY.md**: Shared moments scrapbook. Vivid scenes with emotional weight. "Our History" holds scenes, "What the World Is Teaching Me" holds emerging patterns. Must include enough specific detail to reconstruct the scene. Selection test: would this come up in a 'remember when' conversation? These memories should only surface when the user opens the door or the moment is clearly relevant.
 - **AGENTS.md**: Operational rules, imperative voice. Only cross-session behavioral patterns.
 
 IMPORTANT:
 - You MUST return exactly one decision for EVERY snippet listed above. Do not omit any.
-- Respect maxLines limits. If a file is near its limit, only FOLD if the snippet is truly essential — and suggest what existing content could be trimmed.
+- Treat maxLines as a strong target for compactness, not a hard cutoff. If a file is near its target, only FOLD if the snippet is truly essential — and suggest what existing content could be trimmed.
 - If a snippet duplicates existing content, DISCARD it.
 - Prefer REWRITE over FOLD when the snippet's wording doesn't match the file's existing style.
 - Snippet text must be a single line (no newlines). If rewriting, keep it as one concise line.
@@ -1673,7 +1692,6 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             )
             result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
             result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
-            result.metrics["journal_recovered_edits"] = int(journal_result.get("recovered_edits", 0))
             result.metrics["journal_entries_distilled"] = int(journal_result.get("total_entries", 0))
             for err in (journal_result.get("errors") or []):
                 result.errors.append(f"Journal distillation failed: {err}")
