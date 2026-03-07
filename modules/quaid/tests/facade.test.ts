@@ -629,6 +629,7 @@ describe("QuaidFacade", () => {
     ]);
     expect(out).toContain("<injected_memories>");
     expect(out).toContain("INJECTOR CONFIDENCE RULE:");
+    expect(out).toContain("TOPIC LICENSING RULE:");
     expect(out).not.toContain("AVAILABLE_DOMAINS:");
     expect(out).toContain("- [fact] (2026-01-01) [domains:technical] Older fact");
     expect(out).toContain("- [fact] (2026-01-02) [domains:personal] (uncertain) New uncertain fact");
