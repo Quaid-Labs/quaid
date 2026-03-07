@@ -41,6 +41,7 @@ export function createQuaidFacade(deps) {
         workspace: deps.workspace,
         fs,
         path,
+        getMemoryConfig: deps.getMemoryConfig,
         isFailHardEnabled: deps.isFailHardEnabled,
     });
     // -------------------------------------------------------------------------
@@ -2676,6 +2677,7 @@ ${lines.join("\n")}
         getMessageText,
         extractSessionId,
         parseSessionIdFromTranscriptPath,
+        readSessionMessagesFile: (sessionFile) => deps.readSessionMessagesFile?.(sessionFile) || readMessagesFromSessionJsonl(sessionFile),
         resolveMemoryStoreSessionId,
         resolveLifecycleHookSessionId,
         readTimeoutSessionMessages,

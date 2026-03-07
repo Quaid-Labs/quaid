@@ -1692,6 +1692,7 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             )
             result.metrics["journal_additions"] = int(journal_result.get("additions", 0))
             result.metrics["journal_edits"] = int(journal_result.get("edits", 0))
+            result.metrics["journal_recovered_edits"] = int(journal_result.get("recovered_edits", 0))
             result.metrics["journal_entries_distilled"] = int(journal_result.get("total_entries", 0))
             for err in (journal_result.get("errors") or []):
                 result.errors.append(f"Journal distillation failed: {err}")

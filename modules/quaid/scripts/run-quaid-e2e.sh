@@ -738,6 +738,113 @@ case "$AUTH_PATH" in
     ;;
 esac
 
+has_oauth_profile_token() {
+  local provider="$1"
+  python3 - "$provider" "$PROFILE_SRC" <<'PY'
+import json
+import pathlib
+import sys
+
+provider = str(sys.argv[1]).strip().lower()
+profile_src = pathlib.Path(sys.argv[2]).expanduser()
+
+def load_json(path: pathlib.Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+cfg = load_json(profile_src)
+openclaw = cfg.get("openclaw") if isinstance(cfg, dict) else {}
+if not isinstance(openclaw, dict):
+    openclaw = {}
+config_path = pathlib.Path(str(openclaw.get("configPath") or "~/.openclaw/openclaw.json")).expanduser()
+runtime_cfg = load_json(config_path)
+auth_store_raw = openclaw.get("authProfileStorePath")
+if isinstance(auth_store_raw, str) and auth_store_raw.strip():
+    auth_store_path = pathlib.Path(auth_store_raw).expanduser()
+else:
+    auth_store_path = config_path.parent / "agents" / "main" / "agent" / "auth-profiles.json"
+
+store = load_json(auth_store_path)
+profiles = store.get("profiles") if isinstance(store, dict) else {}
+if not isinstance(profiles, dict):
+    profiles = {}
+
+runtime_auth = runtime_cfg.get("auth") if isinstance(runtime_cfg, dict) else {}
+runtime_profiles = runtime_auth.get("profiles") if isinstance(runtime_auth, dict) else {}
+if isinstance(runtime_profiles, dict):
+    merged = dict(runtime_profiles)
+    merged.update(profiles)
+    profiles = merged
+
+for profile_id, payload in profiles.items():
+    if not isinstance(payload, dict):
+        continue
+    pid = str(profile_id).strip().lower()
+    p_provider = str(payload.get("provider") or "").strip().lower()
+    p_mode = str(payload.get("mode") or payload.get("type") or "").strip().lower()
+    token = str(payload.get("token") or "").strip()
+    if not token:
+        continue
+    if provider == "openai":
+        provider_match = p_provider in {"openai", "openai-codex"} or pid.startswith("openai")
+    elif provider == "anthropic":
+        provider_match = p_provider == "anthropic" or pid.startswith("anthropic")
+    else:
+        provider_match = p_provider == provider or pid.startswith(provider)
+    if not provider_match:
+        continue
+    oauthish = (
+        p_mode == "oauth"
+        or "oauth" in pid
+        or pid.endswith(":manual")
+        or pid.endswith(":claude-cli")
+    )
+    if oauthish:
+        print("yes")
+        raise SystemExit(0)
+
+print("no")
+PY
+}
+
+case "$AUTH_PATH" in
+  openai-oauth)
+    if [[ "$(has_oauth_profile_token openai)" != "yes" ]]; then
+      skip_e2e "missing-openai-oauth-token"
+    fi
+    ;;
+  anthropic-oauth)
+    if [[ "$(has_oauth_profile_token anthropic)" != "yes" ]]; then
+      skip_e2e "missing-anthropic-oauth-token"
+    fi
+    ;;
+esac
+
+# Critical e2e isolation rule:
+# For proper e2e behavior there can be NO cross contamination of keys between
+# auth lanes. We intentionally scrub non-lane credentials before bootstrap so a
+# passing lane cannot be "fixed" by fallback to another provider's key.
+isolate_auth_lane_keys() {
+  case "$AUTH_PATH" in
+    openai-api)
+      unset ANTHROPIC_API_KEY E2E_TEST_KEY_ANTHROPIC E2E_TEST_KEY_ANTRHOPIC
+      ;;
+    anthropic-api)
+      unset OPENAI_API_KEY E2E_TEST_KEY_OPENAI
+      ;;
+    openai-oauth)
+      unset OPENAI_API_KEY ANTHROPIC_API_KEY E2E_TEST_KEY_OPENAI E2E_TEST_KEY_ANTHROPIC E2E_TEST_KEY_ANTRHOPIC
+      ;;
+    anthropic-oauth)
+      unset OPENAI_API_KEY ANTHROPIC_API_KEY E2E_TEST_KEY_OPENAI E2E_TEST_KEY_ANTHROPIC E2E_TEST_KEY_ANTRHOPIC
+      ;;
+  esac
+}
+
+isolate_auth_lane_keys
+
 if ! command -v openclaw >/dev/null 2>&1; then
   skip_e2e "missing-openclaw-cli"
 fi
@@ -1012,7 +1119,10 @@ channels = openclaw.setdefault("channels", {})
 telegram = channels.setdefault("telegram", {})
 telegram["enabled"] = False
 
-openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+# Critical e2e isolation rule:
+# For proper e2e behavior there can be NO cross contamination of keys between
+# lanes. Only inject the API key that belongs to the selected auth lane.
+openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip() if auth_path == "openai-api" else ""
 if openai_api_key:
     # Always provision native OpenAI API-key profile for API-key auth paths.
     openai_profile = dict(creds.get("openai:default") or {})
@@ -1046,7 +1156,7 @@ if openai_api_key:
             if isinstance(agent, dict):
                 agent["modelPrimary"] = "openai/gpt-5.1-codex"
 
-anthropic_api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+anthropic_api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip() if auth_path == "anthropic-api" else ""
 if anthropic_api_key:
     profile = dict(creds.get("anthropic:default") or {})
     profile["type"] = "api_key"
@@ -2952,7 +3062,13 @@ seed_compact_text = (
 second_seed_ok = run_agent(seed_compact_text, timeout_sec=45, retries=3)
 pre_reset_session_id = resolve_session_id_from_key(session_key, runtime_session_id)
 if not second_seed_ok:
-    raise SystemExit("[e2e] ERROR: post-timeout seed message failed before reset extraction.")
+    # Provider/gateway can occasionally timeout on the visible reply while still
+    # allowing deterministic reset-triggered extraction fallback below.
+    print(
+        "[e2e] WARN: post-timeout seed message timed out before reset extraction; "
+        "continuing with reset signal and direct extract fallback.",
+        flush=True,
+    )
 if not wait_for_session_persisted_token(pre_reset_session_id, iris_token, seconds=20):
     print(
         f"[e2e] WARN: post-timeout seed token not yet persisted for session={pre_reset_session_id}; proceeding with sessions.reset.",

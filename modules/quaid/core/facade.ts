@@ -320,6 +320,7 @@ export type QuaidFacade = {
   getMessageText: (message: unknown) => string;
   extractSessionId: (messages: unknown[], ctx?: unknown) => string;
   parseSessionIdFromTranscriptPath: (sessionFile: string) => string;
+  readSessionMessagesFile: (sessionFile: string) => unknown[];
   resolveMemoryStoreSessionId: (ctx?: unknown) => string;
   resolveLifecycleHookSessionId: (event: unknown, ctx: unknown, messages: unknown[]) => string;
   readTimeoutSessionMessages: (sessionId: string) => unknown[];
@@ -420,6 +421,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     workspace: deps.workspace,
     fs,
     path,
+    getMemoryConfig: deps.getMemoryConfig,
     isFailHardEnabled: deps.isFailHardEnabled,
   });
 
@@ -3258,6 +3260,7 @@ ${lines.join("\n")}
     getMessageText,
     extractSessionId,
     parseSessionIdFromTranscriptPath,
+    readSessionMessagesFile: (sessionFile: string) => deps.readSessionMessagesFile?.(sessionFile) || readMessagesFromSessionJsonl(sessionFile),
     resolveMemoryStoreSessionId,
     resolveLifecycleHookSessionId,
     readTimeoutSessionMessages,
