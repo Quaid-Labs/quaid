@@ -4,6 +4,7 @@ import os
 import sys
 import hashlib
 import sqlite3
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 

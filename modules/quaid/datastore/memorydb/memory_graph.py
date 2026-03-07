@@ -2758,6 +2758,14 @@ def route_query(query: str, timeout_ms: Optional[int] = None, max_retries: Optio
 
     prompt = f'Rephrase this question as a declarative statement about someone\'s personal life. Do NOT invent specific names, dates, or places. Keep it general.\n\nQuestion: "{query[:300]}"\n\nStatement:'
 
+    if timeout_ms is None:
+        try:
+            from config import get_config
+
+            timeout_ms = int(getattr(get_config().retrieval, "hyde_timeout_ms", 15000) or 15000)
+        except Exception:
+            timeout_ms = 15000
+
     try:
         cfg_timeout_ms = 15000
         cfg_max_retries = 1

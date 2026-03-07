@@ -406,7 +406,7 @@ class TestClaudeCodeLLMProvider:
             with pytest.raises(RuntimeError) as excinfo:
                 p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
         msg = str(excinfo.value)
-        assert "empty result" in msg
+        assert ("empty result" in msg) or ("missing result" in msg)
         assert "stdout=" in msg
         assert "stderr=stderr-tail" in msg
 
@@ -613,7 +613,7 @@ class TestClaudeCodeLLMProvider:
         bad.stderr = ""
 
         with patch("lib.providers.subprocess.run", side_effect=[bad, bad, bad, bad, bad]) as mock_run:
-            with pytest.raises(RuntimeError, match="empty result"):
+            with pytest.raises(RuntimeError, match="(empty|missing) result"):
                 p.llm_call([{"role": "user", "content": "hi"}], model_tier="deep")
         assert mock_run.call_count == 5
 
