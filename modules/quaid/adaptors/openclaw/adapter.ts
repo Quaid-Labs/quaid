@@ -553,6 +553,7 @@ const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 const PROJECT_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/project_updater.py");
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
+const _sessionModelOverrideCache = new Map<string, string>();
 
 function _getGatewayCredential(providers: string[]): string | undefined {
   for (const provider of providers) {
@@ -608,8 +609,34 @@ async function _ensureGatewaySessionOverride(
 ): Promise<string> {
   const sessionKey = `agent:main:quaid-llm-${tier}`;
   const modelRef = `${resolved.provider}/${resolved.model}`;
-  // Reset via gateway API so utility lanes always get a fresh session without
-  // directly mutating sessions.json.
+  const cached = _sessionModelOverrideCache.get(sessionKey);
+  if (cached === modelRef) {
+    return sessionKey;
+  }
+
+  // Patch first: avoid per-call resets that can churn gateway sessions.
+  const patchOut = await spawnWithTimeout({
+    cwd: WORKSPACE,
+    env: process.env,
+    timeoutMs: 20_000,
+    label: "[quaid][gateway] sessions.patch",
+    argv: [
+      "openclaw",
+      "gateway",
+      "call",
+      "sessions.patch",
+      "--json",
+      "--params",
+      JSON.stringify({ key: sessionKey, model: modelRef }),
+    ],
+  });
+  const patchParsed = JSON.parse(String(patchOut || "{}"));
+  if (patchParsed?.ok) {
+    _sessionModelOverrideCache.set(sessionKey, modelRef);
+    return sessionKey;
+  }
+
+  // If the utility lane is missing/corrupt, reset once and re-apply the model.
   const resetOut = await spawnWithTimeout({
     cwd: WORKSPACE,
     env: process.env,
@@ -629,7 +656,7 @@ async function _ensureGatewaySessionOverride(
   if (!resetParsed?.ok) {
     throw new Error(`[quaid][llm] sessions.reset failed for ${sessionKey}`);
   }
-  const patchOut = await spawnWithTimeout({
+  const patchAfterResetOut = await spawnWithTimeout({
     cwd: WORKSPACE,
     env: process.env,
     timeoutMs: 20_000,
@@ -644,10 +671,11 @@ async function _ensureGatewaySessionOverride(
       JSON.stringify({ key: sessionKey, model: modelRef }),
     ],
   });
-  const patchParsed = JSON.parse(String(patchOut || "{}"));
-  if (!patchParsed?.ok) {
+  const patchAfterResetParsed = JSON.parse(String(patchAfterResetOut || "{}"));
+  if (!patchAfterResetParsed?.ok) {
     throw new Error(`[quaid][llm] sessions.patch failed for ${sessionKey} model=${modelRef}`);
   }
+  _sessionModelOverrideCache.set(sessionKey, modelRef);
   return sessionKey;
 }
 
