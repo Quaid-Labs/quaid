@@ -1062,6 +1062,7 @@ SKIP WHEN: General knowledge questions, greetings, short acknowledgments.
 QUERY TIPS: Use specific names and topics. Try multiple searches with different phrasings if the first doesn't return what you need.
 options.graph.depth: Set to 2 for relationship queries (e.g., nephew = sibling's child). Default 1 is usually sufficient.
 options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by date range.
+RESPONSE BOUNDARY: Retrieved memories are supporting context, not permission to proactively dump sensitive details. On greetings, acknowledgments, or vague prompts, follow the user's lead before surfacing private health, finances, conflicts, or emotionally loaded history.
 
 ${recallStoreGuidance}`,
           parameters: Type.Object({
