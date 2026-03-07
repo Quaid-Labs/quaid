@@ -462,6 +462,7 @@ const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 const PROJECT_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/project_updater.py");
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
+const _sessionModelOverrideCache = /* @__PURE__ */ new Map();
 function _getGatewayCredential(providers) {
   for (const provider of providers) {
     const normalized = String(provider || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -516,6 +517,30 @@ function _getGatewayToken() {
 async function _ensureGatewaySessionOverride(tier, resolved) {
   const sessionKey = `agent:main:quaid-llm-${tier}`;
   const modelRef = `${resolved.provider}/${resolved.model}`;
+  const cached = _sessionModelOverrideCache.get(sessionKey);
+  if (cached === modelRef) {
+    return sessionKey;
+  }
+  const patchOut = await spawnWithTimeout({
+    cwd: WORKSPACE,
+    env: process.env,
+    timeoutMs: 2e4,
+    label: "[quaid][gateway] sessions.patch",
+    argv: [
+      "openclaw",
+      "gateway",
+      "call",
+      "sessions.patch",
+      "--json",
+      "--params",
+      JSON.stringify({ key: sessionKey, model: modelRef })
+    ]
+  });
+  const patchParsed = JSON.parse(String(patchOut || "{}"));
+  if (patchParsed?.ok) {
+    _sessionModelOverrideCache.set(sessionKey, modelRef);
+    return sessionKey;
+  }
   const resetOut = await spawnWithTimeout({
     cwd: WORKSPACE,
     env: process.env,
@@ -535,7 +560,7 @@ async function _ensureGatewaySessionOverride(tier, resolved) {
   if (!resetParsed?.ok) {
     throw new Error(`[quaid][llm] sessions.reset failed for ${sessionKey}`);
   }
-  const patchOut = await spawnWithTimeout({
+  const patchAfterResetOut = await spawnWithTimeout({
     cwd: WORKSPACE,
     env: process.env,
     timeoutMs: 2e4,
@@ -550,10 +575,11 @@ async function _ensureGatewaySessionOverride(tier, resolved) {
       JSON.stringify({ key: sessionKey, model: modelRef })
     ]
   });
-  const patchParsed = JSON.parse(String(patchOut || "{}"));
-  if (!patchParsed?.ok) {
+  const patchAfterResetParsed = JSON.parse(String(patchAfterResetOut || "{}"));
+  if (!patchAfterResetParsed?.ok) {
     throw new Error(`[quaid][llm] sessions.patch failed for ${sessionKey} model=${modelRef}`);
   }
+  _sessionModelOverrideCache.set(sessionKey, modelRef);
   return sessionKey;
 }
 async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 6e5) {
