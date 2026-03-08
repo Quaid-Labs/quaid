@@ -1673,6 +1673,10 @@ def reset_signal_source(lines: list[str]) -> str:
             return "before_reset"
         if '"source":"command_hook"' in ln:
             return "command_hook"
+        if '"source":"command:reset"' in ln or '"source":"command:new"' in ln or '"source":"command:restart"' in ln:
+            return "command"
+        if '"meta":{"source":"command:reset"' in ln or '"meta":{"source":"command:new"' in ln or '"meta":{"source":"command:restart"' in ln:
+            return "command"
         if '"source":"transcript_update"' in ln:
             return "transcript_update"
     return ""
@@ -1689,6 +1693,8 @@ def compaction_signal_source(lines: list[str]) -> str:
             continue
         if '"source":"before_compaction"' in ln:
             return "before_compaction"
+        if '"source":"command:compact"' in ln or '"meta":{"source":"command:compact"' in ln:
+            return "command"
         if '"source":"transcript_update"' in ln:
             return "transcript_update"
     return ""

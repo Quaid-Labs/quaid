@@ -1353,6 +1353,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // slash commands. Subscribe to transcript updates and queue lifecycle signals
     // from explicit command/system markers.
     const transcriptLifecycleCursor = new Map<string, number>();
+    let lastTranscriptSessionHint: { sessionId: string; seenAtMs: number } | null = null;
     const runtimeEvents = (api as any)?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update: any) => {
@@ -1397,6 +1398,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             message_count: messages.length,
           });
           const detail = facade.detectLifecycleSignal(messages);
+          const conversationMessages = facade.filterConversationMessages(messages);
+          const bootstrapOnlyConversation = facade.isResetBootstrapOnlyConversation(conversationMessages);
+          const hasLifecycleUserCommand = facade.hasExplicitLifecycleUserCommand(conversationMessages);
           if (!detail) {
             const tail = messages.slice(-5).map((m: any) => ({
               role: String(m?.role || ""),
@@ -1452,6 +1456,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             console.log(`[quaid][signal] suppressed duplicate ${detail.label} session=${sessionId} source=transcript_update`);
             return;
           }
+          if (
+            conversationMessages.length > 0
+            && !bootstrapOnlyConversation
+            && !hasLifecycleUserCommand
+          ) {
+            lastTranscriptSessionHint = { sessionId, seenAtMs: Date.now() };
+          }
           timeoutManager.queueExtractionSignal(sessionId, detail.label, {
             source: "transcript_update",
           });
@@ -1488,7 +1499,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           lifecycleSignal = "CompactionSignal";
         }
         if (!commandAction || !lifecycleSignal) return;
-        const sessionId = facade.resolveMemoryStoreSessionId(ctx);
+        const hookMessages = event?.message ? [event.message] : [];
+        const sessionId = facade.resolveLifecycleHookSessionId(event, ctx, hookMessages);
         writeHookTrace("hook.message.command_detected", {
           source_event: sourceEvent,
           command: commandAction,
@@ -1550,17 +1562,48 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
     // Primary lifecycle command path on supported OpenClaw builds.
     // Keep this explicit hook path to avoid transcript/session drift.
+    const resolveLifecycleCommandTargetSessionId = (
+      action: "new" | "reset" | "compact",
+      event: any,
+      ctx: any,
+    ): string => {
+      // For /new and /reset the hook payload can include both the old session
+      // (messages to extract) and the new session (empty/bootstrap). Prefer the
+      // previous session entry when present so extraction targets real content.
+      if (action === "new" || action === "reset") {
+        const previousSessionId = String(
+          event?.previousSessionEntry?.sessionId
+          || event?.previousSessionId
+          || "",
+        ).trim();
+        if (previousSessionId) {
+          return previousSessionId;
+        }
+        const hint = lastTranscriptSessionHint;
+        if (hint?.sessionId) {
+          const ageMs = Date.now() - Number(hint.seenAtMs || 0);
+          if (ageMs >= 0 && ageMs <= (5 * 60_000)) {
+            return hint.sessionId;
+          }
+        }
+      }
+      return facade.resolveLifecycleHookSessionId(event, ctx);
+    };
+
     const handleLifecycleCommandHook = async (
       action: "new" | "reset",
       event: any,
       ctx: any
     ) => {
       try {
-        const sessionId = facade.resolveLifecycleHookSessionId(event, ctx);
+        const sessionId = resolveLifecycleCommandTargetSessionId(action, event, ctx);
         writeHookTrace("hook.command.received", {
           action,
           hook_session_id: sessionId || "",
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+          previous_session_entry_id: String(event?.previousSessionEntry?.sessionId || ""),
+          previous_session_id: String(event?.previousSessionId || ""),
+          transcript_hint_session_id: String(lastTranscriptSessionHint?.sessionId || ""),
         });
         if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled("memory")) {
           return;
@@ -1609,7 +1652,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       try {
-        const sessionId = facade.resolveLifecycleHookSessionId(event, ctx);
+        const sessionId = resolveLifecycleCommandTargetSessionId("compact", event, ctx);
         writeHookTrace("hook.command.received", {
           action,
           hook_session_id: sessionId || "",
