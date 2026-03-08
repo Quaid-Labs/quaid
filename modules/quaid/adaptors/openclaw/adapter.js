@@ -844,6 +844,7 @@ subprocess.run(["python3", ${JSON.stringify(PROJECT_UPDATER)}, "process-event", 
   resolveMostRecentSessionId,
   timeoutSessionStorePath: () => path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json"),
   timeoutSessionTranscriptDirs: () => [
+    path.join(WORKSPACE, "logs", "quaid", "sessions"),
     path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
     path.join(os.homedir(), ".openclaw", "sessions")
   ],
@@ -1777,6 +1778,7 @@ ${factsOutput || "No facts found."}` }],
       shouldSkipText: (text) => shouldSkipTranscriptText(text),
       readSessionMessages: (sessionId) => facade.readTimeoutSessionMessages(sessionId),
       listSessionActivity: () => facade.listTimeoutSessionActivity(),
+      hasPendingSessionNotes: (sessionId) => facade.hasPendingMemoryNotes(sessionId),
       logger: (msg) => {
         const lowered = String(msg || "").toLowerCase();
         if (lowered.includes("fail") || lowered.includes("error")) {

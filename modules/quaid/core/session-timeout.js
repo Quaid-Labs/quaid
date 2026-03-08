@@ -113,6 +113,7 @@ class SessionTimeoutManager {
   readSessionMessagesSource;
   listSessionActivitySource;
   shouldSkipText;
+  hasPendingSessionNotesSource;
   timer = null;
   pendingFallbackMessages = null;
   pendingSessionId;
@@ -132,6 +133,7 @@ class SessionTimeoutManager {
   failHard;
   extractTimeoutMs;
   maxSignalRetries;
+  maxStaleRecoverPerTick;
   staleRecoveryInitialBackoffMs = 5e3;
   staleRecoveryMaxBackoffMs = 5 * 60 * 1e3;
   constructor(opts) {
@@ -161,6 +163,15 @@ class SessionTimeoutManager {
         safeLog(this.logger, `[memory][timeout] source listSessionActivity failed: ${String(err?.message || err)}`);
         if (this.failHard) throw err;
         return [];
+      }
+    };
+    this.hasPendingSessionNotesSource = (sessionId) => {
+      try {
+        return Boolean(opts.hasPendingSessionNotes?.(sessionId));
+      } catch (err) {
+        safeLog(this.logger, `[memory][timeout] source hasPendingSessionNotes failed for ${sessionId}: ${String(err?.message || err)}`);
+        if (this.failHard) throw err;
+        return false;
       }
     };
     this.logDir = path.resolve(String(opts.logDir || path.join(opts.workspace, "logs", "runtime")));
@@ -194,6 +205,10 @@ class SessionTimeoutManager {
       process.env.SIGNAL_MAX_RETRIES || process.env.QUAID_SIGNAL_MAX_RETRIES || ""
     );
     this.maxSignalRetries = Number.isFinite(configuredSignalRetries) && configuredSignalRetries >= 0 ? Math.floor(configuredSignalRetries) : 3;
+    const configuredStaleRecoverPerTick = Number(
+      process.env.STALE_RECOVERY_MAX_PER_TICK || process.env.QUAID_STALE_RECOVERY_MAX_PER_TICK || ""
+    );
+    this.maxStaleRecoverPerTick = Number.isFinite(configuredStaleRecoverPerTick) && configuredStaleRecoverPerTick > 0 ? Math.floor(configuredStaleRecoverPerTick) : 3;
     try {
       fs.mkdirSync(this.logDir, { recursive: true });
       fs.mkdirSync(this.sessionLogDir, { recursive: true });
@@ -308,9 +323,17 @@ class SessionTimeoutManager {
     const sourceUnprocessed = this.filterReplayedMessages(sessionId, sourceMessages);
     const fallback = this.filterReplayedMessages(sessionId, filterEligibleMessages(fallbackMessages || [], this.shouldSkipText));
     const allowFallback = !this.failHard;
-    const source = sourceUnprocessed.length > 0 ? "source_session_messages" : allowFallback && fallback.length > 0 ? "fallback_event_messages" : "none";
+    const hasPendingNotes = this.hasPendingSessionNotesSource(sessionId);
+    const source = sourceUnprocessed.length > 0 ? "source_session_messages" : allowFallback && fallback.length > 0 ? "fallback_event_messages" : hasPendingNotes ? "memory_notes_only" : "none";
     const messages = sourceUnprocessed.length > 0 ? sourceUnprocessed : allowFallback ? fallback : [];
     if (!messages.length) {
+      if (hasPendingNotes) {
+        this.writeQuaidLog("extract_begin", sessionId, { label, message_count: 0, source, notes_only: true });
+        await this.runExtractWithTimeout([], sessionId, label);
+        this.writeQuaidLog("extract_done", sessionId, { label, message_count: 0, source, notes_only: true });
+        this.clearSession(sessionId, []);
+        return true;
+      }
       if (this.failHard && fallback.length > 0 && sourceUnprocessed.length === 0) {
         const msg = "session-timeout fallback payload blocked by failHard; no source session messages available";
         this.writeQuaidLog("extract_fail_hard_blocked_fallback", sessionId, { label, fallback_count: fallback.length });
@@ -411,11 +434,20 @@ class SessionTimeoutManager {
       current_cutoff_ms: currentCutoffMs,
       candidate_count: candidates.size
     });
+    let processed = 0;
     for (const [sessionId, lastActivityMs] of candidates.entries()) {
+      if (processed >= this.maxStaleRecoverPerTick) {
+        this.writeQuaidLog("stale_sweep_deferred", void 0, {
+          deferred_count: Math.max(0, candidates.size - processed),
+          max_per_tick: this.maxStaleRecoverPerTick
+        });
+        break;
+      }
       const messages = this.filterReplayedMessages(sessionId, this.readSourceSessionMessages(sessionId));
       if (!messages.length) {
         delete retries[sessionId];
         this.writeQuaidLog("recover_stale_buffer_skip_empty", sessionId, { last_activity_ms: lastActivityMs });
+        processed += 1;
         continue;
       }
       this.writeQuaidLog("recover_stale_buffer", sessionId, {
@@ -427,6 +459,7 @@ class SessionTimeoutManager {
         await this.runExtractWithTimeout(messages, sessionId, "Recovery");
         this.clearSession(sessionId, messages);
         delete retries[sessionId];
+        processed += 1;
       } catch (err) {
         const error = String(err?.message || err);
         const priorAttempts = Math.max(0, Number(retries[sessionId]?.attemptCount || 0));
@@ -444,6 +477,7 @@ class SessionTimeoutManager {
           delay_ms: delayMs,
           error
         });
+        processed += 1;
       }
     }
     this.writeStaleSweepState({
@@ -470,7 +504,18 @@ class SessionTimeoutManager {
   queueExtractionSignal(sessionId, label, meta) {
     if (!sessionId) return;
     const signalMeta = this.buildOriginHintMeta(meta);
-    if (!this.hasUnprocessedSessionMessages(sessionId)) {
+    const source = String(signalMeta?.source || "").trim().toLowerCase();
+    const forceQueueSources = /* @__PURE__ */ new Set([
+      "command_log",
+      "command_hook",
+      "command_generic",
+      "before_compaction",
+      "before_reset",
+      "session_end",
+      "transcript_update"
+    ]);
+    const forceQueue = forceQueueSources.has(source);
+    if (!forceQueue && !this.hasUnprocessedSessionMessages(sessionId)) {
       this.writeQuaidLog("signal_queue_skipped_already_cleared", sessionId, {
         label: String(label || "Signal"),
         ...signalMeta ? { meta: signalMeta } : {}
@@ -800,6 +845,12 @@ class SessionTimeoutManager {
       if (this.failHard) throw err;
     }).then(async () => {
       await this.processPendingExtractionSignals();
+      if (this.listSignalFiles().length > 0) {
+        this.writeQuaidLog("stale_sweep_skipped_pending_signals", void 0, {
+          pending_signal_count: this.listSignalFiles().length
+        });
+        return;
+      }
       await this.recoverStaleBuffers();
     }).catch((err) => {
       safeLog(this.logger, `[memory][timeout] worker tick failed: ${String(err?.message || err)}`);

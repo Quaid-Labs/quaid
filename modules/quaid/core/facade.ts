@@ -302,6 +302,7 @@ export type QuaidFacade = {
 
   // --- Memory notes (state management) ---
   addMemoryNote: (sessionId: string, text: string, category: string) => void;
+  hasPendingMemoryNotes: (sessionId: string) => boolean;
   getAndClearMemoryNotes: (sessionId: string) => string[];
   runExtractionPipeline: (
     messages: unknown[],
@@ -2434,6 +2435,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
   function withNotesLock<T>(sessionId: string, fn: () => T): T {
     const lockPath = `${getNotesPath(sessionId)}.lock`;
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
     let fd: number | undefined;
     let lastErr: unknown;
     for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -2515,17 +2517,30 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     });
   }
 
+  function hasPendingMemoryNotes(sessionId: string): boolean {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return false;
+    const inMemory = _memoryNotes.get(sid);
+    if (Array.isArray(inMemory) && inMemory.length > 0) return true;
+    try {
+      const onDisk = JSON.parse(fs.readFileSync(getNotesPath(sid), "utf8"));
+      return Array.isArray(onDisk) && onDisk.some((n: unknown) => typeof n === "string" && n.trim().length > 0);
+    } catch {
+      return false;
+    }
+  }
+
   async function runExtractionPipeline(
     messages: unknown[],
     label: string,
     sessionId?: string,
   ): Promise<ExtractionPipelineResult | null> {
     const rows = Array.isArray(messages) ? messages : [];
-    if (rows.length === 0) {
-      return null;
-    }
     const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
     const allNotes = Array.from(new Set([...sessionNotes]));
+    if (rows.length === 0 && allNotes.length === 0) {
+      return null;
+    }
     const fullTranscript = buildTranscript(rows);
     if (!fullTranscript.trim() && allNotes.length === 0) {
       return null;
@@ -3249,6 +3264,7 @@ ${lines.join("\n")}
 
     // Memory notes
     addMemoryNote,
+    hasPendingMemoryNotes,
     getAndClearMemoryNotes,
     runExtractionPipeline,
 

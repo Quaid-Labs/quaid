@@ -1932,6 +1932,7 @@ export function createQuaidFacade(deps) {
     }
     function withNotesLock(sessionId, fn) {
         const lockPath = `${getNotesPath(sessionId)}.lock`;
+        fs.mkdirSync(path.dirname(lockPath), { recursive: true });
         let fd;
         let lastErr;
         for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -2024,13 +2025,28 @@ export function createQuaidFacade(deps) {
             return merged;
         });
     }
+    function hasPendingMemoryNotes(sessionId) {
+        const sid = String(sessionId || "").trim();
+        if (!sid)
+            return false;
+        const inMemory = _memoryNotes.get(sid);
+        if (Array.isArray(inMemory) && inMemory.length > 0)
+            return true;
+        try {
+            const onDisk = JSON.parse(fs.readFileSync(getNotesPath(sid), "utf8"));
+            return Array.isArray(onDisk) && onDisk.some((n) => typeof n === "string" && n.trim().length > 0);
+        }
+        catch {
+            return false;
+        }
+    }
     async function runExtractionPipeline(messages, label, sessionId) {
         const rows = Array.isArray(messages) ? messages : [];
-        if (rows.length === 0) {
-            return null;
-        }
         const sessionNotes = sessionId ? getAndClearMemoryNotes(sessionId) : [];
         const allNotes = Array.from(new Set([...sessionNotes]));
+        if (rows.length === 0 && allNotes.length === 0) {
+            return null;
+        }
         const fullTranscript = buildTranscript(rows);
         if (!fullTranscript.trim() && allNotes.length === 0) {
             return null;
@@ -2668,6 +2684,7 @@ ${lines.join("\n")}
         buildDocsSearchNotificationPayload,
         // Memory notes
         addMemoryNote,
+        hasPendingMemoryNotes,
         getAndClearMemoryNotes,
         runExtractionPipeline,
         // Project catalog

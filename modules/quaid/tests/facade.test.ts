@@ -685,7 +685,31 @@ describe("QuaidFacade", () => {
     // Notes may not round-trip through disk in test env, but the interface works
     // Just verify the methods exist and are callable
     expect(typeof facade.addMemoryNote).toBe("function");
+    expect(typeof facade.hasPendingMemoryNotes).toBe("function");
     expect(typeof facade.getAndClearMemoryNotes).toBe("function");
+  });
+
+  it("hasPendingMemoryNotes tracks queued session notes", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-notes-"));
+    const facade = createQuaidFacade(makeMockDeps({ workspace }));
+    expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(false);
+    facade.addMemoryNote("sess-notes-1", "My sister is Shannon", "fact");
+    expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(true);
+    const drained = facade.getAndClearMemoryNotes("sess-notes-1");
+    expect(drained.length).toBeGreaterThan(0);
+    expect(facade.hasPendingMemoryNotes("sess-notes-1")).toBe(false);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("runExtractionPipeline runs for notes-only sessions", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-notes-only-"));
+    const execExtractPipeline = vi.fn(async () => JSON.stringify({ facts_stored: 0, facts_skipped: 0, edges_created: 0 }));
+    const facade = createQuaidFacade(makeMockDeps({ workspace, execExtractPipeline }));
+    facade.addMemoryNote("sess-notes-2", "My mother's name is Nora", "fact");
+    const out = await facade.runExtractionPipeline([], "CompactionSignal", "sess-notes-2");
+    expect(out).not.toBeNull();
+    expect(execExtractPipeline).toHaveBeenCalledTimes(1);
+    await rm(workspace, { recursive: true, force: true });
   });
 
   // -----------------------------------------------------------------------

@@ -92,4 +92,31 @@ describe("chat flow integration", () => {
     expect(calls.every((c) => c.sessionId === sessionId)).toBe(true);
     expect(calls.every((c) => c.messages.length >= 2)).toBe(true);
   });
+
+  it("processes command signals when session has pending notes but no transcript delta", async () => {
+    const workspace = makeWorkspace("quaid-chat-flow-notes-");
+    const calls: Array<{ sessionId?: string; label?: string; messages: any[] }> = [];
+    const pendingNotes = new Set<string>(["session-notes-only-1"]);
+    const manager = new SessionTimeoutManager({
+      workspace,
+      timeoutMinutes: 10,
+      readSessionMessages: () => [],
+      listSessionActivity: () => [],
+      hasPendingSessionNotes: (sid: string) => pendingNotes.has(sid),
+      extract: async (messages, sessionId, label) => {
+        calls.push({ messages, sessionId, label });
+      },
+      isBootstrapOnly: () => false,
+      logger: () => {},
+    });
+
+    manager.queueExtractionSignal("session-notes-only-1", "CompactionSignal", { source: "command_log" });
+    await manager.processPendingExtractionSignals();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sessionId).toBe("session-notes-only-1");
+    expect(calls[0]?.label).toBe("CompactionSignal");
+    expect(Array.isArray(calls[0]?.messages)).toBe(true);
+    expect(calls[0]?.messages.length).toBe(0);
+  });
 });

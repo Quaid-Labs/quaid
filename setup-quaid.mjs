@@ -206,8 +206,8 @@ if (INSTALL_SOURCE === "artifact" && !INSTALL_ARTIFACT) {
 
 // --- Constants ---
 const VERSION = "0.2.15-alpha";
-const HOOKS_PR_URL = "https://github.com/openclaw/openclaw"; // Hooks merged in PR #13287
-const MIN_GATEWAY_VERSION = "2026.2.10";
+const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/releases/tag/v2026.3.7";
+const MIN_GATEWAY_VERSION = "2026.3.7";
 const PROJECT_URL = "https://github.com/quaid-labs/quaid";
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
 function which(cmd) {
@@ -1352,7 +1352,7 @@ async function step1_preflight() {
       s.stop(C.red("Memory hooks missing"), 2);
       note(
         `Your gateway is missing the memory hooks Quaid needs.\n` +
-        `These were added to OpenClaw in PR #13287.\n\n` +
+        `Quaid now requires OpenClaw ${MIN_GATEWAY_VERSION}+ lifecycle hook support.\n\n` +
         `Update your gateway to the latest version:\n` +
         `  npm install -g openclaw\n\n` +
         `Or check: ${HOOKS_PR_URL}`,
@@ -2804,7 +2804,23 @@ function baseUrlFor(provider) {
 }
 
 function findGateway() {
-  for (const candidate of discoverOpenClawRoots()) {
+  const rawCandidates = discoverOpenClawRoots();
+  const candidates = rawCandidates.filter((candidate) => !/\.npm-backup/i.test(path.basename(candidate)));
+  const usable = candidates.length > 0 ? candidates : rawCandidates;
+
+  // Prefer the package root backing the currently active CLI binary.
+  // This avoids picking stale npm-backup trees during e2e bootstrap.
+  for (const cli of ["openclaw", "clawdbot"]) {
+    const cliBin = shell(`command -v ${cli} 2>/dev/null`) || "";
+    if (!cliBin) continue;
+    const real = fs.existsSync(cliBin) ? fs.realpathSync(cliBin) : cliBin;
+    const cliRoot = findPackageRootFrom(real);
+    if (cliRoot && usable.includes(cliRoot)) {
+      return cliRoot;
+    }
+  }
+
+  for (const candidate of usable) {
     if (fs.existsSync(path.join(candidate, "package.json"))) {
       return candidate;
     }

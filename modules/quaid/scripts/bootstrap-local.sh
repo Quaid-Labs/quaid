@@ -98,7 +98,7 @@ Options:
   --detach-worktree      Leave runtime workspace detached (legacy behavior)
   --worktree-remote <r>  Remote to fetch before creating worktree (default: origin)
   --openclaw-source <p>  OpenClaw source checkout path (default: ~/quaid/openclaw-source)
-  --openclaw-ref <ref>   OpenClaw git ref/tag/sha to checkout (e.g. v2026.3.2-beta.1)
+  --openclaw-ref <ref>   OpenClaw git ref/tag/sha to checkout (e.g. v2026.3.7)
   --no-openclaw-refresh  Skip refreshing OpenClaw source checkout
   --no-openclaw-install  Skip installing OpenClaw CLI from source
 USAGE

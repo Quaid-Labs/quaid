@@ -1020,6 +1020,7 @@ const facade = createQuaidFacade({
   resolveMostRecentSessionId,
   timeoutSessionStorePath: () => path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json"),
   timeoutSessionTranscriptDirs: () => [
+    path.join(WORKSPACE, "logs", "quaid", "sessions"),
     path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
     path.join(os.homedir(), ".openclaw", "sessions"),
   ],
@@ -2039,6 +2040,7 @@ notify_user(f"📁 Project registered: {project_label}")
       shouldSkipText: (text: string) => shouldSkipTranscriptText(text),
       readSessionMessages: (sessionId: string) => facade.readTimeoutSessionMessages(sessionId),
       listSessionActivity: () => facade.listTimeoutSessionActivity(),
+      hasPendingSessionNotes: (sessionId: string) => facade.hasPendingMemoryNotes(sessionId),
       logger: (msg: string) => {
         const lowered = String(msg || "").toLowerCase();
         if (lowered.includes("fail") || lowered.includes("error")) {
