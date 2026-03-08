@@ -1414,6 +1414,7 @@ export function createQuaidFacade(deps) {
         if (!Array.isArray(messages) || messages.length === 0)
             return null;
         const tail = messages.slice(-8);
+        const tailOffset = messages.length - tail.length;
         for (let i = tail.length - 1; i >= 0; i--) {
             const msg = tail[i];
             if (!msg || typeof msg !== "object")
@@ -1434,18 +1435,18 @@ export function createQuaidFacade(deps) {
             if (role === "user") {
                 const command = detectExplicitLifecycleUserCommand(text);
                 if (command === "/new" || command === "/reset" || command === "/restart") {
-                    return { label: "ResetSignal", source: "user_command", signature: `cmd:${command}` };
+                    return { label: "ResetSignal", source: "user_command", signature: `cmd:${command}`, messageIndex: tailOffset + i };
                 }
                 if (command === "/compact") {
-                    return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}` };
+                    return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}`, messageIndex: tailOffset + i };
                 }
             }
             if (/(^|\s)\/(new|reset|restart)(\s|$)/i.test(normalized)) {
                 const command = normalized.match(/\/(new|reset|restart)/i)?.[0]?.toLowerCase() || "/new";
-                return { label: "ResetSignal", source: "system_notice", signature: `cmd:${command}` };
+                return { label: "ResetSignal", source: "system_notice", signature: `cmd:${command}`, messageIndex: tailOffset + i };
             }
             if (/(^|\s)\/compact(\s|$)/i.test(normalized)) {
-                return { label: "CompactionSignal", source: "system_notice", signature: "cmd:/compact" };
+                return { label: "CompactionSignal", source: "system_notice", signature: "cmd:/compact", messageIndex: tailOffset + i };
             }
             if (role === "system") {
                 const hasCompacted = /\bcompacted\b/i.test(normalized);
@@ -1456,6 +1457,7 @@ export function createQuaidFacade(deps) {
                         label: "CompactionSignal",
                         source: "system_notice",
                         signature: `system:${normalized.toLowerCase()}`,
+                        messageIndex: tailOffset + i,
                     };
                 }
                 if (normalizedLc.includes("new session was started via /new or /reset")
@@ -1466,6 +1468,7 @@ export function createQuaidFacade(deps) {
                         label: "ResetSignal",
                         source: "system_notice",
                         signature: "system:new_session_started",
+                        messageIndex: tailOffset + i,
                     };
                 }
             }

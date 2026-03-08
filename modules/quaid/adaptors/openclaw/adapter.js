@@ -1106,6 +1106,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       priority: 10
     });
     console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");
+    const transcriptLifecycleCursor = /* @__PURE__ */ new Map();
     const runtimeEvents = api?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update) => {
@@ -1146,6 +1147,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             detected_label: String(detail.label || ""),
             detected_source: String(detail.source || ""),
             detected_signature: String(detail.signature || ""),
+            detected_message_index: Number.isFinite(detail.messageIndex) ? Number(detail.messageIndex) : -1,
             parsed_session_id: sessionId,
             session_file: sessionFile,
             message_count: messages.length,
@@ -1158,6 +1160,24 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             console.log(`[quaid][signal] transcript_update missing session id file=${sessionFile}`);
             return;
           }
+          const detectedMessageIndex = Number.isFinite(detail.messageIndex) ? Number(detail.messageIndex) : messages.length - 1;
+          const replayCursorKey = `${sessionId}:${detail.label}:${detail.signature}`;
+          const priorMessageIndex = transcriptLifecycleCursor.get(replayCursorKey);
+          if (priorMessageIndex != null && detectedMessageIndex <= priorMessageIndex) {
+            writeHookTrace("hook.transcript_update.skipped", {
+              reason: "transcript_signal_replay",
+              detected_label: String(detail.label || ""),
+              detected_signature: String(detail.signature || ""),
+              detected_message_index: detectedMessageIndex,
+              prior_message_index: priorMessageIndex,
+              session_file: sessionFile
+            });
+            console.log(
+              `[quaid][signal] skipped replay ${detail.label} session=${sessionId} source=transcript_update index=${detectedMessageIndex} prior=${priorMessageIndex}`
+            );
+            return;
+          }
+          transcriptLifecycleCursor.set(replayCursorKey, detectedMessageIndex);
           if (!facade.shouldProcessLifecycleSignal(sessionId, detail)) {
             console.log(`[quaid][signal] suppressed duplicate ${detail.label} session=${sessionId} source=transcript_update`);
             return;
