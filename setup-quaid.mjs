@@ -207,6 +207,7 @@ if (INSTALL_SOURCE === "artifact" && !INSTALL_ARTIFACT) {
 // --- Constants ---
 const VERSION = "0.2.15-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw"; // Hooks merged in PR #13287
+const MIN_GATEWAY_VERSION = "2026.2.10";
 const PROJECT_URL = "https://github.com/quaid-labs/quaid";
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
 function which(cmd) {
@@ -1333,9 +1334,22 @@ async function step1_preflight() {
       s.stop(C.red("Gateway not found"), 2);
       bail("Could not locate the OpenClaw gateway installation.");
     }
+    const gwVersion = readGatewayVersion(gwDir);
+    if (!isVersionAtLeast(gwVersion, MIN_GATEWAY_VERSION)) {
+      s.stop(C.red("Gateway version unsupported"), 2);
+      note(
+        `Your OpenClaw version is below Quaid's required minimum.\n\n` +
+        `Installed: ${gwVersion || "unknown"}\n` +
+        `Required: ${MIN_GATEWAY_VERSION}+\n\n` +
+        `Update with:\n` +
+        `  npm install -g openclaw\n`,
+        "Gateway update required"
+      );
+      bail("Unsupported OpenClaw version. Update OpenClaw and re-run.");
+    }
     const hasHooks = gatewayHasHooks(gwDir);
     if (!hasHooks) {
-      s.stop(AGENT_MODE ? C.yellow("Memory hooks missing") : C.red("Memory hooks missing"), 2);
+      s.stop(C.red("Memory hooks missing"), 2);
       note(
         `Your gateway is missing the memory hooks Quaid needs.\n` +
         `These were added to OpenClaw in PR #13287.\n\n` +
@@ -1344,10 +1358,7 @@ async function step1_preflight() {
         `Or check: ${HOOKS_PR_URL}`,
         "Gateway update required"
       );
-      if (!AGENT_MODE) {
-        bail("Gateway hooks required. Update OpenClaw and re-run.");
-      }
-      log.warn("OpenClaw memory hooks are missing in agent mode; continuing with install.");
+      bail("Gateway hooks required. Update OpenClaw and re-run.");
     }
     s.stop(C.green("Gateway hooks present"));
   }
@@ -2811,119 +2822,56 @@ function gatewayHasHooks(gwDir) {
   return false;
 }
 
+function parseVersionTriplet(raw) {
+  const m = String(raw || "").trim().match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function compareVersionTriplets(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] > b[i]) return 1;
+    if (a[i] < b[i]) return -1;
+  }
+  return 0;
+}
+
+function isVersionAtLeast(actualRaw, minimumRaw) {
+  const actual = parseVersionTriplet(actualRaw);
+  const minimum = parseVersionTriplet(minimumRaw);
+  if (!actual || !minimum) return false;
+  return compareVersionTriplets(actual, minimum) >= 0;
+}
+
+function readGatewayVersion(gwDir) {
+  try {
+    const pkgPath = path.join(gwDir, "package.json");
+    const raw = fs.readFileSync(pkgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return String(parsed?.version || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 function enableRequiredOpenClawHooks() {
   const cli = canRun("openclaw") ? "openclaw" : (canRun("clawdbot") ? "clawdbot" : "");
   if (!cli) {
-    log.warn("OpenClaw CLI not found; skipping explicit hook enable.");
-    return;
+    throw new Error("OpenClaw CLI not found; cannot enable required hooks.");
   }
 
-  // Support canonical names plus compatibility aliases observed across gateway builds.
-  const requiredHooks = [
-    ["bootstrap-extra-files", "bot-strap-extra-files"],
-  ];
-  const optionalHookSets = [
-    ["quaid-workflow"],
-    ["quaid-session-workflow"],
-    ["quaid-reset-signal"],
-    ["quaid-workspace-workflow"],
-    ["quaid-workspace-hooks"],
-  ];
-
-  const discoverOptionalQuaidHooks = () => {
-    try {
-      const listRes = runCliWithTimeout(cli, ["hooks", "list", "--json"], 20_000);
-      if (listRes.status !== 0) return [];
-      const raw = String(listRes.stdout || "");
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      if (start < 0 || end <= start) return [];
-      const parsed = JSON.parse(raw.slice(start, end + 1));
-      const hooks = Array.isArray(parsed?.hooks) ? parsed.hooks : [];
-      const names = hooks
-        .map((h) => String(h?.name || "").trim())
-        .filter(Boolean)
-        .filter((n) => /quaid/i.test(n));
-      return [...new Set(names)];
-    } catch {
-      return [];
-    }
-  };
-
-  for (const discovered of discoverOptionalQuaidHooks()) {
-    optionalHookSets.push([discovered]);
-  }
-
-  const hookSets = [...requiredHooks, ...optionalHookSets];
-  let forcedAny = false;
-
+  // Keep installer behavior strict and production-faithful: no alias fallback and no
+  // direct openclaw.json edits. If required hooks cannot be enabled via CLI, install fails.
+  const requiredHooks = ["bootstrap-extra-files"];
   log.info("Explicitly enabling required OpenClaw hooks: bootstrap-extra-files");
-  const forceEnableHook = (hookName) => {
-    const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-    const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
-    try {
-      const raw = fs.readFileSync(cfgPath, "utf8");
-      const parsed = JSON.parse(raw);
-      if (!parsed.hooks || typeof parsed.hooks !== "object") parsed.hooks = {};
-      if (!parsed.hooks.internal || typeof parsed.hooks.internal !== "object") parsed.hooks.internal = {};
-      if (!parsed.hooks.internal.entries || typeof parsed.hooks.internal.entries !== "object") {
-        parsed.hooks.internal.entries = {};
-      }
-      if (!parsed.hooks.internal.entries[hookName] || typeof parsed.hooks.internal.entries[hookName] !== "object") {
-        parsed.hooks.internal.entries[hookName] = {};
-      }
-      parsed.hooks.internal.entries[hookName].enabled = true;
-      fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
-      fs.renameSync(tmpPath, cfgPath);
-      return true;
-    } catch {
-      return false;
-    } finally {
-      try {
-        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-      } catch {}
+  for (const hookName of requiredHooks) {
+    const res = runCliWithTimeout(cli, ["hooks", "enable", hookName], 25_000);
+    const out = `${String(res.stdout || "")}\n${String(res.stderr || "")}`;
+    if (res.status === 0 || /already enabled/i.test(out)) {
+      log.info(`Hook enabled: ${hookName}`);
+      continue;
     }
-  };
-  for (const candidates of hookSets) {
-    let enabled = false;
-    let lastErr = "";
-    for (const hookName of candidates) {
-      const res = runCliWithTimeout(cli, ["hooks", "enable", hookName], 25_000);
-      if (res.status === 0) {
-        const label = hookName === "bot-strap-extra-files" ? "bootstrap-extra-files" : hookName;
-        log.info(`Hook enabled: ${label}`);
-        enabled = true;
-        break;
-      }
-      lastErr = renderCliFailure(res, 25_000);
-      // Not found or unknown hook name: try alias fallback.
-      if (/not found|unknown|no such hook|invalid/i.test(lastErr)) continue;
-      // Eligible/state failures should still be surfaced but do not fail install.
-      break;
-    }
-    if (!enabled) {
-      const canonical = candidates[0];
-      if (forceEnableHook(canonical)) {
-        if (lastErr) {
-          log.warn(`Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed: ${lastErr}).`);
-        } else {
-          log.warn(`Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed).`);
-        }
-        forcedAny = true;
-      } else if (lastErr) {
-        log.warn(`Could not enable hook '${canonical}': ${lastErr}`);
-      } else {
-        log.warn(`Could not enable hook '${canonical}'`);
-      }
-    }
-  }
-  if (forcedAny) {
-    const restart = runCliWithTimeout(cli, ["gateway", "restart"], 30_000);
-    if (restart.status === 0) {
-      log.info("Restarted OpenClaw gateway to apply forced hook state");
-    } else {
-      log.warn("Could not auto-restart OpenClaw gateway after forced hook enable. Restart manually.");
-    }
+    throw new Error(`Could not enable required hook '${hookName}': ${renderCliFailure(res, 25_000)}`);
   }
 }
 
