@@ -779,6 +779,51 @@ function _sanitizeOpenClawMemorySlot() {
   }
 }
 
+function _sanitizeOpenClawPluginInstallSources() {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const plugins = parsed?.plugins;
+    if (!plugins || typeof plugins !== "object") return false;
+    const installs = plugins.installs;
+    if (!installs || typeof installs !== "object") return false;
+
+    let changed = false;
+    for (const [pluginId, installRec] of Object.entries(installs)) {
+      if (!installRec || typeof installRec !== "object") continue;
+      const source = String(installRec.source || "").trim().toLowerCase();
+      if (!source) continue;
+      if (source === "npm" || source === "archive" || source === "path") continue;
+
+      // OpenClaw beta validates installs.<id>.source as enum(npm|archive|path).
+      // Older installs wrote "local"; normalize that forward-compatible value.
+      if (source === "local") {
+        installRec.source = "path";
+        changed = true;
+        continue;
+      }
+
+      // Unknown/legacy source values can hard-fail all plugin CLI commands.
+      // Drop the invalid install record and let plugin install repopulate it.
+      delete installs[pluginId];
+      changed = true;
+    }
+
+    if (!changed) return false;
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
 function _ensureOpenClawPluginsAllowQuaid() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -906,6 +951,7 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
 
   // Pre-clean stale extension/config so plugin CLI can run even when previous state is invalid.
   removeStaleExtensionDir();
+  _sanitizeOpenClawPluginInstallSources();
   _sanitizeOpenClawQuaidPluginEntry();
   _removeOpenClawPluginsAllowQuaid();
   _sanitizeOpenClawMemorySlot();
@@ -1759,7 +1805,7 @@ async function step4_embeddings() {
 // =============================================================================
 // Step 5: Systems Configuration
 // =============================================================================
-async function step5_systems(advancedSetup = false) {
+async function step5_systems() {
   stepHeader(5, 8, "SYSTEMS", STEP_QUOTES.systems);
 
   const sysInfo = {
@@ -1776,12 +1822,12 @@ async function step5_systems(advancedSetup = false) {
     projects: {
       label: "Projects & Docs",
       desc: "Auto-update project docs when source files change",
-      detail: "Writes to: projects/*/PROJECT.md, registered docs. Monitors git diffs and updates docs via LLM. Disable if another tool manages your docs.",
+      detail: "Writes to: projects/*/PROJECT.md, registered docs. Monitors git diffs and updates docs via LLM.",
     },
     workspace: {
       label: "Workspace",
       desc: "Core markdown health monitoring (bloat, drift, staleness)",
-      detail: "Reads+writes: SOUL.md, USER.md, MEMORY.md, etc. Monitors line counts, detects drift, suggests cleanups. Disable if you manage these files manually.",
+      detail: "Reads+writes: SOUL.md, USER.md, MEMORY.md, etc. Monitors line counts, detects drift, suggests cleanups.",
     },
   };
 
@@ -3451,8 +3497,8 @@ function notifyInstallCompletion(owner, models, embeddings, systems) {
 function notifyInstallWarmupNotice() {
   if (String(process.env.QUAID_INSTALL_NOTIFY_PROGRESS || "1").trim() === "0") return;
   sendInstallerNotification(
-    "⏳ Quaid install is entering gateway warmup.\n" +
-    "This pause is expected and can take 2-5 minutes while OpenClaw/plugin routes come back online."
+    "⏳ Quaid install needs to restart the OpenClaw gateway to apply changes.\n" +
+    "This pause is expected and can take 2-5 minutes while the gateway comes back online."
   );
 }
 
@@ -3474,8 +3520,8 @@ async function main() {
     notifyInstallCheckpoint(3, 8, "models", `Deep=${models.highModel}, Fast=${models.lowModel}.`, "Brains selected.");
     const embeddings = await step4_embeddings();
     notifyInstallCheckpoint(4, 8, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
-    const systems = await step5_systems(models.advancedSetup);
-    notifyInstallCheckpoint(5, 8, "systems", "Subsystem toggles captured (memory/journal/projects/workspace).", "Switchboard locked.");
+    const systems = await step5_systems();
+    notifyInstallCheckpoint(5, 8, "systems", "Systems locked: memory/journal/projects/workspace (all required).", "Switchboard locked.");
     const schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
     notifyInstallCheckpoint(
       6, 8, "janitor",
@@ -3483,7 +3529,7 @@ async function main() {
       "Night shift assigned. Warmup can take a minute or two."
     );
     notifyInstallWarmupNotice();
-    log.info("Heads up: moving into install/warmup. A 2-5 minute pause here is expected while the gateway/plugin route comes back online.");
+    log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
     notifyInstallCheckpoint(7, 8, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
     await step8_validate(owner, models, embeddings, systems);
