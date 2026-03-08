@@ -1441,11 +1441,11 @@ export function createQuaidFacade(deps) {
                     return { label: "CompactionSignal", source: "user_command", signature: `cmd:${command}`, messageIndex: tailOffset + i };
                 }
             }
-            if (/(^|\s)\/(new|reset|restart)(\s|$)/i.test(normalized)) {
+            if (/^\/(new|reset|restart)(?:\s|$)/i.test(normalized)) {
                 const command = normalized.match(/\/(new|reset|restart)/i)?.[0]?.toLowerCase() || "/new";
                 return { label: "ResetSignal", source: "system_notice", signature: `cmd:${command}`, messageIndex: tailOffset + i };
             }
-            if (/(^|\s)\/compact(\s|$)/i.test(normalized)) {
+            if (/^\/compact(?:\s|$)/i.test(normalized)) {
                 return { label: "CompactionSignal", source: "system_notice", signature: "cmd:/compact", messageIndex: tailOffset + i };
             }
             if (role === "system") {
