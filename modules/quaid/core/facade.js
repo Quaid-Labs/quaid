@@ -858,7 +858,14 @@ export function createQuaidFacade(deps) {
     function parseSessionIdFromTranscriptPath(sessionFile) {
         const base = path.basename(String(sessionFile || ""));
         const match = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-        return match ? match[0].toLowerCase() : "";
+        if (match) {
+            return match[0].toLowerCase();
+        }
+        const stem = base.replace(/\.jsonl$/i, "").trim();
+        if (!stem || /\s/.test(stem)) {
+            return "";
+        }
+        return stem.toLowerCase();
     }
     function resolveMemoryStoreSessionId(ctx) {
         const context = ctx && typeof ctx === "object"

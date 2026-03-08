@@ -633,6 +633,15 @@ export class SessionTimeoutManager {
       "transcript_update",
     ]);
     const forceQueue = forceQueueSources.has(source);
+    this.writeQuaidLog("signal_queue_received", sessionId, {
+      label: String(label || "Signal"),
+      source: source || "unknown",
+      force_queue: forceQueue,
+      has_meta: Boolean(signalMeta),
+      has_unprocessed_messages: this.hasUnprocessedSessionMessages(sessionId),
+      has_pending_notes: this.hasPendingSessionNotesSource(sessionId),
+      ...(signalMeta ? { meta: signalMeta } : {}),
+    });
     if (!forceQueue && !this.hasUnprocessedSessionMessages(sessionId)) {
       this.writeQuaidLog("signal_queue_skipped_already_cleared", sessionId, {
         label: String(label || "Signal"),
@@ -746,6 +755,7 @@ export class SessionTimeoutManager {
       try {
         this.writeQuaidLog("signal_process_begin", sessionId, {
           label,
+          attempt_count: attemptCount,
           ...(meta ? { meta } : {}),
         });
         await this.extractSessionFromSourceDirect(sessionId, label);
