@@ -1397,6 +1397,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             detected_signature: String(detail.signature || ""),
             parsed_session_id: sessionId,
             session_file: sessionFile,
+            message_count: messages.length,
+            tail: messages.slice(-5).map((m: any) => ({
+              role: String(m?.role || ""),
+              text: String(facade.getMessageText(m) || "").slice(0, 200),
+            })),
           });
           if (!sessionId) {
             console.log(`[quaid][signal] transcript_update missing session id file=${sessionFile}`);

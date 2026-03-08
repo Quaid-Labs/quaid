@@ -1888,6 +1888,9 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         .replace(/^\[[^\]]+\]\s*/, "")
         .trim();
       const normalizedLc = normalized.toLowerCase();
+      const hasSlashLifecycleCommand = /(^|\s)\/(new|reset|restart|compact)(\s|$)/i.test(normalized);
+      const isLifecycleCandidateRole = role === "user" || role === "system";
+      if (!isLifecycleCandidateRole && !hasSlashLifecycleCommand) continue;
 
       if (role === "user") {
         const command = detectExplicitLifecycleUserCommand(text);
@@ -1933,6 +1936,9 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           };
         }
       }
+      // Only evaluate the most recent lifecycle-candidate line.
+      // This avoids replaying stale /new or /compact commands that are still in transcript tail.
+      return null;
     }
     return null;
   }

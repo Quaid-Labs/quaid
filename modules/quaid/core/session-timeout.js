@@ -78,6 +78,34 @@ function isEligibleConversationMessage(msg, shouldSkipText) {
   if (msg.role === "assistant" && isExtractionJsonAssistantPayload(text)) return false;
   return true;
 }
+function hasLifecycleSignalEvidence(messages, label) {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  const normalizedLabel = String(label || "").trim().toLowerCase();
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const role = String(msg.role || "").trim().toLowerCase();
+    const text = messageText(msg).trim();
+    if (!text) continue;
+    const normalized = text.replace(/\[\[[^\]]+\]\]\s*/g, "").replace(/^\[[^\]]+\]\s*/, "").trim();
+    const normalizedLc = normalized.toLowerCase();
+    if (normalizedLabel === "resetsignal" || normalizedLabel === "reset") {
+      if (role === "user" && /^\/(new|reset|restart)(?:\s|$)/i.test(normalized)) return true;
+      if (normalizedLc.includes("new session was started via /new or /reset") || normalizedLc.includes("a new session was started via /new or /reset") || normalizedLc.includes("new session was started") && normalizedLc.includes("/new") || normalizedLc.includes("session startup sequence") && normalizedLc.includes("/new")) {
+        return true;
+      }
+      continue;
+    }
+    if (normalizedLabel === "compactionsignal" || normalizedLabel === "compaction") {
+      if (role === "user" && /^\/compact(?:\s|$)/i.test(normalized)) return true;
+      if (/(^|\s)\/compact(\s|$)/i.test(normalized)) return true;
+      const hasCompacted = /\bcompacted\b/i.test(normalized);
+      const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
+      const hasContext = /\bcontext\b/i.test(normalized);
+      if (hasCompacted && (hasDelta || hasContext)) return true;
+    }
+  }
+  return false;
+}
 function filterEligibleMessages(messages, shouldSkipText) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
   return messages.filter((msg) => isEligibleConversationMessage(msg, shouldSkipText));
@@ -326,7 +354,7 @@ class SessionTimeoutManager {
       this.queueExtractionFromSession(sid, fallback, this.timeoutMinutes);
     }, this.timeoutMinutes * 60 * 1e3);
   }
-  async extractSessionFromSourceDirect(sessionId, label, fallbackMessages) {
+  async extractSessionFromSourceDirect(sessionId, label, fallbackMessages, signalMeta) {
     if (!sessionId) return false;
     const sourceMessages = this.readSourceSessionMessages(sessionId);
     const sourceUnprocessed = this.filterReplayedMessages(sessionId, sourceMessages);
@@ -343,6 +371,15 @@ class SessionTimeoutManager {
     });
     const source = sourceUnprocessed.length > 0 ? "source_session_messages" : allowFallback && fallback.length > 0 ? "fallback_event_messages" : hasPendingNotes ? "memory_notes_only" : "none";
     const messages = sourceUnprocessed.length > 0 ? sourceUnprocessed : allowFallback ? fallback : [];
+    const signalSource = String(signalMeta?.source || "").trim().toLowerCase();
+    if (source === "source_session_messages" && signalSource === "transcript_update" && (String(label || "").toLowerCase() === "resetsignal" || String(label || "").toLowerCase() === "compactionsignal") && !hasLifecycleSignalEvidence(messages, label)) {
+      this.writeQuaidLog("signal_skip_no_lifecycle_evidence", sessionId, {
+        label,
+        source: signalSource,
+        message_count: messages.length
+      });
+      return false;
+    }
     if (!messages.length) {
       if (hasPendingNotes) {
         this.writeQuaidLog("extract_begin", sessionId, { label, message_count: 0, source, notes_only: true });
@@ -670,7 +707,7 @@ class SessionTimeoutManager {
           attempt_count: attemptCount,
           ...meta ? { meta } : {}
         });
-        await this.extractSessionFromSourceDirect(sessionId, label);
+        await this.extractSessionFromSourceDirect(sessionId, label, void 0, signal.meta);
         this.writeQuaidLog("signal_process_done", sessionId, {
           label,
           ...meta ? { meta } : {}
