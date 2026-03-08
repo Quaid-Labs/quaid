@@ -6,6 +6,14 @@ function signalPriority(label) {
   if (normalized === "compactionsignal" || normalized === "compaction") return 2;
   return 1;
 }
+function signalSourcePriority(source) {
+  const normalized = String(source || "").trim().toLowerCase();
+  if (normalized === "before_compaction") return 5;
+  if (normalized === "command_hook" || normalized === "command_log" || normalized === "command_generic") return 4;
+  if (normalized === "before_reset" || normalized === "session_end") return 3;
+  if (normalized === "transcript_update") return 1;
+  return 2;
+}
 function safeLog(logger, message) {
   try {
     if (logger) {
@@ -551,17 +559,21 @@ class SessionTimeoutManager {
       const signalPath = this.signalPath(sessionId);
       if (fs.existsSync(signalPath)) {
         let existingLabel = "Signal";
+        let existingSource = "";
         let existingAttemptCount = 0;
         try {
           const existing = JSON.parse(fs.readFileSync(signalPath, "utf8"));
           existingLabel = String(existing?.label || "Signal");
+          existingSource = String(existing?.meta?.source || "");
           existingAttemptCount = Math.max(0, Number(existing?.attemptCount || 0));
         } catch (err) {
           safeLog(this.logger, `[memory][timeout] failed to parse existing extraction signal ${signalPath}: ${String(err?.message || err)}`);
         }
         const incomingPriority = signalPriority(signal.label);
         const existingPriority = signalPriority(existingLabel);
-        if (incomingPriority > existingPriority) {
+        const incomingSourcePriority = signalSourcePriority(source);
+        const existingSourcePriority = signalSourcePriority(existingSource);
+        if (incomingPriority > existingPriority || incomingPriority === existingPriority && incomingSourcePriority > existingSourcePriority) {
           signal.attemptCount = 0;
           fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 384 });
           this.writeQuaidLog("signal_file_write", sessionId, {
@@ -573,6 +585,8 @@ class SessionTimeoutManager {
           this.writeQuaidLog("signal_queue_promoted", sessionId, {
             from: existingLabel,
             to: signal.label,
+            from_source: existingSource || "unknown",
+            to_source: source || "unknown",
             previous_attempt_count: existingAttemptCount,
             ...signalMeta ? { meta: signalMeta } : {}
           });
@@ -580,6 +594,8 @@ class SessionTimeoutManager {
           this.writeQuaidLog("signal_queue_coalesced", sessionId, {
             label: signal.label,
             existing_label: existingLabel,
+            source: source || "unknown",
+            existing_source: existingSource || "unknown",
             reason: "already_pending",
             ...signalMeta ? { meta: signalMeta } : {}
           });
