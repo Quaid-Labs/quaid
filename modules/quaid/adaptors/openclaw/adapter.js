@@ -478,6 +478,7 @@ function parseSessionMessagesJsonl(sessionFile) {
       console.warn(`[quaid] session file line parse failed: ${String(err?.message || err)}`);
     }
   }
+  console.log(`[quaid][timeout][parse] file=${sessionFile} lines=${lines.length} messages=${messages.length}`);
   return messages;
 }
 const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py");
@@ -844,9 +845,10 @@ subprocess.run(["python3", ${JSON.stringify(PROJECT_UPDATER)}, "process-event", 
   resolveMostRecentSessionId,
   timeoutSessionStorePath: () => path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json"),
   timeoutSessionTranscriptDirs: () => [
-    path.join(WORKSPACE, "logs", "quaid", "sessions"),
     path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
-    path.join(os.homedir(), ".openclaw", "sessions")
+    path.join(os.homedir(), ".openclaw", "sessions"),
+    // Keep runtime log transcripts as a last-resort fallback only.
+    path.join(WORKSPACE, "logs", "quaid", "sessions")
   ],
   readSessionMessagesFile: (sessionFile) => parseSessionMessagesJsonl(sessionFile),
   listCompactionSessions,

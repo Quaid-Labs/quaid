@@ -1439,12 +1439,24 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     for (const [, entry] of entries) {
       if (String(entry?.sessionId || "").trim() !== sid) continue;
       const transcriptPath = resolveTimeoutSessionTranscriptPath(entry, sid);
-      if (!transcriptPath) return [];
-      return deps.readSessionMessagesFile?.(transcriptPath) || readMessagesFromSessionJsonl(transcriptPath);
+      if (!transcriptPath) {
+        console.log(`[quaid][timeout][source] session=${sid} transcript=none store_entry=true`);
+        return [];
+      }
+      const rows = deps.readSessionMessagesFile?.(transcriptPath) || readMessagesFromSessionJsonl(transcriptPath);
+      const count = Array.isArray(rows) ? rows.length : 0;
+      console.log(`[quaid][timeout][source] session=${sid} transcript=${transcriptPath} store_entry=true rows=${count}`);
+      return rows;
     }
     const fallbackPath = resolveTimeoutSessionTranscriptPath({}, sid);
-    if (!fallbackPath) return [];
-    return deps.readSessionMessagesFile?.(fallbackPath) || readMessagesFromSessionJsonl(fallbackPath);
+    if (!fallbackPath) {
+      console.log(`[quaid][timeout][source] session=${sid} transcript=none store_entry=false`);
+      return [];
+    }
+    const rows = deps.readSessionMessagesFile?.(fallbackPath) || readMessagesFromSessionJsonl(fallbackPath);
+    const count = Array.isArray(rows) ? rows.length : 0;
+    console.log(`[quaid][timeout][source] session=${sid} transcript=${fallbackPath} store_entry=false rows=${count}`);
+    return rows;
   }
 
   function listTimeoutSessionActivity(): Array<{ sessionId: string; lastActivityMs: number }> {

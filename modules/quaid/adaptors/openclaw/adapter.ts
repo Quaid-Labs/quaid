@@ -565,6 +565,7 @@ function parseSessionMessagesJsonl(sessionFile: string): any[] {
       console.warn(`[quaid] session file line parse failed: ${String((err as Error)?.message || err)}`);
     }
   }
+  console.log(`[quaid][timeout][parse] file=${sessionFile} lines=${lines.length} messages=${messages.length}`);
   return messages;
 }
 
@@ -1020,9 +1021,10 @@ const facade = createQuaidFacade({
   resolveMostRecentSessionId,
   timeoutSessionStorePath: () => path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json"),
   timeoutSessionTranscriptDirs: () => [
-    path.join(WORKSPACE, "logs", "quaid", "sessions"),
     path.join(os.homedir(), ".openclaw", "agents", "main", "sessions"),
     path.join(os.homedir(), ".openclaw", "sessions"),
+    // Keep runtime log transcripts as a last-resort fallback only.
+    path.join(WORKSPACE, "logs", "quaid", "sessions"),
   ],
   readSessionMessagesFile: (sessionFile: string) => parseSessionMessagesJsonl(sessionFile),
   listCompactionSessions,

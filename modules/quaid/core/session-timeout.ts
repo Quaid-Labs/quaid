@@ -412,6 +412,14 @@ export class SessionTimeoutManager {
     const fallback = this.filterReplayedMessages(sessionId, filterEligibleMessages(fallbackMessages || [], this.shouldSkipText));
     const allowFallback = !this.failHard;
     const hasPendingNotes = this.hasPendingSessionNotesSource(sessionId);
+    this.writeQuaidLog("extract_source_snapshot", sessionId, {
+      label,
+      source_messages: sourceMessages.length,
+      source_unprocessed: sourceUnprocessed.length,
+      fallback_messages: fallback.length,
+      has_pending_notes: hasPendingNotes,
+      fail_hard: this.failHard,
+    });
 
     const source = sourceUnprocessed.length > 0
       ? "source_session_messages"
