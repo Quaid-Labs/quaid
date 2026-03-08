@@ -12,6 +12,7 @@ OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
 # Default E2E gate to the OpenClaw beta lane we validate against in canary.
 # Keep overridable for bisects via --openclaw-ref / QUAID_E2E_OPENCLAW_REF.
 OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-v2026.3.2-beta.1}"
+MIN_OPENCLAW_VERSION="${QUAID_E2E_MIN_OPENCLAW_VERSION:-2026.2.10}"
 
 PROFILE_TEST="${QUAID_E2E_PROFILE_TEST:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
 PROFILE_SRC="${QUAID_E2E_PROFILE_SRC:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
@@ -862,6 +863,37 @@ if ! command -v openclaw >/dev/null 2>&1; then
   skip_e2e "missing-openclaw-cli"
 fi
 
+require_min_openclaw_version() {
+  local actual
+  actual="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r' | xargs || true)"
+  if [[ -z "$actual" ]]; then
+    echo "[e2e] ERROR: could not determine OpenClaw version from 'openclaw --version'" >&2
+    return 1
+  fi
+  if ! python3 - <<'PY' "$actual" "$MIN_OPENCLAW_VERSION"
+import re
+import sys
+actual = str(sys.argv[1] or "").strip()
+minimum = str(sys.argv[2] or "").strip()
+def parse(v):
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", v)
+    if not m:
+        return None
+    return tuple(int(x) for x in m.groups())
+a = parse(actual)
+b = parse(minimum)
+if a is None or b is None or a < b:
+    raise SystemExit(1)
+PY
+  then
+    echo "[e2e] ERROR: unsupported OpenClaw version. installed='${actual}' required='${MIN_OPENCLAW_VERSION}+'" >&2
+    return 1
+  fi
+  echo "[e2e] OpenClaw version OK: ${actual} (required ${MIN_OPENCLAW_VERSION}+)"
+}
+
+require_min_openclaw_version
+
 start_gateway_safe() {
   # install + start is idempotent and handles "service not loaded" states.
   openclaw gateway install >/dev/null 2>&1 || true
@@ -887,92 +919,32 @@ enable_required_openclaw_hooks() {
   elif command -v clawdbot >/dev/null 2>&1; then
     cli="clawdbot"
   else
-    echo "[e2e] WARN: OpenClaw CLI not found; cannot enable required hooks." >&2
-    return 0
+    echo "[e2e] ERROR: OpenClaw CLI not found; cannot enable required hooks." >&2
+    return 1
   fi
 
-  local hook_pairs=(
-    "bootstrap-extra-files:bot-strap-extra-files:required"
-    "session-memory:session-memoey:required"
-    "quaid-workflow::optional"
-    "quaid-session-workflow::optional"
-    "quaid-reset-signal::optional"
-    "quaid-workspace-workflow::optional"
-    "quaid-workspace-hooks::optional"
-  )
-  local pair canonical alias mode out out_file
-  force_enable_hook() {
-    local hook_name="$1"
-    python3 - "$hook_name" <<'PY'
-import json
-import os
-import sys
-
-hook = sys.argv[1]
-cfg = os.path.expanduser("~/.openclaw/openclaw.json")
-try:
-    with open(cfg, "r", encoding="utf-8") as f:
-        data = json.load(f)
-except Exception:
-    raise SystemExit(1)
-hooks = data.setdefault("hooks", {})
-internal = hooks.setdefault("internal", {})
-entries = internal.setdefault("entries", {})
-entry = entries.setdefault(hook, {})
-entry["enabled"] = True
-tmp = f"{cfg}.tmp.{os.getpid()}"
-with open(tmp, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-os.replace(tmp, cfg)
-PY
-  }
-  for pair in "${hook_pairs[@]}"; do
-    canonical="${pair%%:*}"
-    alias="${pair#*:}"
-    alias="${alias%%:*}"
-    mode="${pair##*:}"
-    if [[ "$alias" == "$canonical" ]]; then
-      alias=""
-    fi
-
+  # Keep E2E strict and production-faithful: no alias fallback and no direct
+  # config force-enable writes. Required hooks must enable via CLI.
+  local required_hooks=("bootstrap-extra-files")
+  local hook out_file out
+  for hook in "${required_hooks[@]}"; do
     out_file="$(mktemp -t quaid-e2e-hook.XXXXXX)"
-    if "$cli" hooks enable "$canonical" >"$out_file" 2>&1; then
+    if "$cli" hooks enable "$hook" >"$out_file" 2>&1; then
       rm -f "$out_file"
-      echo "[e2e] Hook enabled: ${canonical}"
+      echo "[e2e] Hook enabled: ${hook}"
       continue
     fi
     out="$(cat "$out_file" 2>/dev/null || true)"
     rm -f "$out_file"
-
-    if [[ -n "$alias" ]]; then
-      out_file="$(mktemp -t quaid-e2e-hook.XXXXXX)"
-      if "$cli" hooks enable "$alias" >"$out_file" 2>&1; then
-        rm -f "$out_file"
-        echo "[e2e] Hook enabled: ${canonical} (via alias '${alias}')"
-        continue
-      fi
-      out="$(cat "$out_file" 2>/dev/null || true)"
-      rm -f "$out_file"
-    fi
-
-    if force_enable_hook "$canonical"; then
-      echo "[e2e] Hook force-enabled in config: ${canonical}"
+    if [[ "$out" == *"already enabled"* || "$out" == *"Already enabled"* ]]; then
+      echo "[e2e] Hook enabled: ${hook}"
       continue
     fi
-
-    if [[ "$mode" == "required" ]]; then
-      echo "[e2e] WARN: failed to enable required hook '${canonical}' via ${cli}; continuing." >&2
-      if [[ -n "${out:-}" ]]; then
-        echo "[e2e] WARN: ${out}" >&2
-      fi
-    else
-      if [[ -n "${out:-}" ]] && [[ "$out" != *"not found"* ]] && [[ "$out" != *"unknown"* ]]; then
-        echo "[e2e] WARN: optional hook '${canonical}' enable error: ${out}" >&2
-      else
-        echo "[e2e] Hook optional/missing: ${canonical}"
-      fi
+    echo "[e2e] ERROR: failed to enable required hook '${hook}' via ${cli}" >&2
+    if [[ -n "${out:-}" ]]; then
+      echo "[e2e] ERROR: ${out}" >&2
     fi
+    return 1
   done
 }
 

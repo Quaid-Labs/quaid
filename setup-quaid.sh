@@ -345,6 +345,40 @@ check_gateway_hooks() {
     GATEWAY_DIR="$gw_path"
     local gw_version=""
     gw_version=$(python3 -c "import json; print(json.load(open('${gw_path}/package.json')).get('version',''))" 2>/dev/null || true)
+    local version_ok=""
+    version_ok=$(python3 - <<'PY' "$gw_version" "$MIN_GATEWAY_VERSION"
+import re
+import sys
+actual = str(sys.argv[1] or "").strip()
+minimum = str(sys.argv[2] or "").strip()
+def parse(v):
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", v)
+    if not m:
+        return None
+    return tuple(int(x) for x in m.groups())
+a = parse(actual)
+b = parse(minimum)
+if a is None or b is None:
+    print("no")
+else:
+    print("yes" if a >= b else "no")
+PY
+    )
+    if [[ "$version_ok" != "yes" ]]; then
+        echo ""
+        error "OpenClaw version is below Quaid's required minimum."
+        if [[ -n "$gw_version" ]]; then
+            echo -e "  Installed: ${YELLOW}${gw_version}${RESET}"
+        else
+            echo -e "  Installed: ${YELLOW}unknown${RESET}"
+        fi
+        echo -e "  Required:  ${GREEN}${MIN_GATEWAY_VERSION}+${RESET}"
+        echo ""
+        echo "  Update with:"
+        echo "    npm install -g openclaw"
+        echo ""
+        return 1
+    fi
 
     # If hooks are already present, we're done
     if _gateway_has_hooks "$gw_path"; then
@@ -386,72 +420,22 @@ enable_required_openclaw_hooks() {
         return 0
     fi
 
-    info "Explicitly enabling required OpenClaw hooks: bootstrap-extra-files, session-memory"
-
-    _force_enable_openclaw_hook() {
-        local hook_name="$1"
-        python3 - "$hook_name" <<'PY'
-import json, os, sys
-hook_name = str(sys.argv[1] or "").strip()
-if not hook_name:
-    raise SystemExit(1)
-cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
-try:
-    data = json.load(open(cfg_path, "r", encoding="utf-8"))
-except Exception:
-    raise SystemExit(1)
-hooks = data.setdefault("hooks", {})
-internal = hooks.setdefault("internal", {})
-entries = internal.setdefault("entries", {})
-entry = entries.get(hook_name)
-if not isinstance(entry, dict):
-    entry = {}
-    entries[hook_name] = entry
-entry["enabled"] = True
-tmp_path = f"{cfg_path}.tmp-{os.getpid()}"
-with open(tmp_path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-os.replace(tmp_path, cfg_path)
-PY
-    }
-
-    # Each row: canonical:alias (alias supports historical/typo variants in some gateway builds)
-    local hook_pairs=(
-        "bootstrap-extra-files:bot-strap-extra-files"
-        "session-memory:session-memoey"
-    )
-    local forced_any=false
-    local pair canonical alias last_err
-    for pair in "${hook_pairs[@]}"; do
-        canonical="${pair%%:*}"
-        alias="${pair##*:}"
-        if _run_with_timeout_capture 25 "$cli" hooks enable "$canonical" >/dev/null 2>&1; then
-            info "Hook enabled: ${canonical}"
+    info "Explicitly enabling required OpenClaw hooks: bootstrap-extra-files"
+    local required_hooks=("bootstrap-extra-files")
+    local hook out
+    for hook in "${required_hooks[@]}"; do
+        if _run_with_timeout_capture 25 "$cli" hooks enable "$hook" >/dev/null 2>&1; then
+            info "Hook enabled: ${hook}"
             continue
         fi
-        last_err="$(_run_with_timeout_capture 25 "$cli" hooks enable "$canonical" 2>&1 || true)"
-        if [[ "$last_err" =~ [Nn]ot\ found|[Uu]nknown|[Nn]o\ such\ hook|[Ii]nvalid ]]; then
-            if _run_with_timeout_capture 25 "$cli" hooks enable "$alias" >/dev/null 2>&1; then
-                info "Hook enabled: ${canonical}"
-                continue
-            fi
-            last_err="$(_run_with_timeout_capture 25 "$cli" hooks enable "$alias" 2>&1 || true)"
-        fi
-        if _force_enable_openclaw_hook "$canonical"; then
-            warn "Hook '${canonical}' was force-enabled in ~/.openclaw/openclaw.json (CLI enable failed: ${last_err})"
-            forced_any=true
+        out="$(_run_with_timeout_capture 25 "$cli" hooks enable "$hook" 2>&1 || true)"
+        if [[ "$out" =~ [Aa]lready\ enabled ]]; then
+            info "Hook enabled: ${hook}"
             continue
         fi
-        warn "Could not enable hook '${canonical}': ${last_err}"
+        error "Could not enable required hook '${hook}': ${out}"
+        return 1
     done
-    if $forced_any; then
-        if _run_with_timeout_capture 30 "$cli" gateway restart >/dev/null 2>&1; then
-            info "Restarted OpenClaw gateway to apply forced hook state"
-        else
-            warn "Could not auto-restart OpenClaw gateway after forced hook enable. Restart manually."
-        fi
-    fi
 }
 
 # --- Ollama URL resolution ---
