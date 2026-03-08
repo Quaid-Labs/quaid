@@ -45,6 +45,15 @@ run_optional_repo_checks() {
   fi
 }
 
+# Remove transient pytest temp sandboxes before bootstrap e2e.
+# These trees can contain non-regular entries (for example pytest's `current`)
+# that some installer copy paths cannot mirror on all filesystems (ENOTSUP).
+cleanup_pytest_run_artifacts() {
+  local local_tmp="${ROOT_DIR}/.tmp/pytest-runs"
+  local runtime_tmp="${REPO_ROOT}/test/modules/quaid/.tmp/pytest-runs"
+  rm -rf "$local_tmp" "$runtime_tmp" 2>/dev/null || true
+}
+
 # Best-effort TS dependency probe for clean dev workspaces.
 has_vitest() {
   node -e "require.resolve('vitest/package.json')" >/dev/null 2>&1
@@ -135,6 +144,7 @@ if [[ "$MODE" == "full" ]]; then
   run_stage "Python regression suite (parallel isolated)" python3 scripts/run_pytests.py --mode regression --workers 4 --timeout 600
 
   # Bootstrap-driven end-to-end auth matrix (gateway/runtime wiring).
+  cleanup_pytest_run_artifacts
   E2E_MATRIX_SCRIPT="${QUAID_E2E_MATRIX_SCRIPT:-$ROOT_DIR/scripts/run-quaid-e2e-matrix.sh}"
   E2E_PATHS="${QUAID_E2E_PATHS:-openai-oauth,openai-api,anthropic-api}"
   if [[ -x "$E2E_MATRIX_SCRIPT" ]]; then

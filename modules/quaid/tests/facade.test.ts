@@ -1342,6 +1342,7 @@ describe("QuaidFacade", () => {
       label: "ResetSignal",
       source: "user_command",
       signature: "cmd:/new",
+      messageIndex: 0,
     });
   });
 
@@ -1354,6 +1355,7 @@ describe("QuaidFacade", () => {
       label: "CompactionSignal",
       source: "system_notice",
       signature: "system:compacted (37k -> 5.0k) context 5.0k/200k",
+      messageIndex: 0,
     });
   });
 
@@ -1365,7 +1367,8 @@ describe("QuaidFacade", () => {
     expect(signal).toEqual({
       label: "ResetSignal",
       source: "system_notice",
-      signature: "cmd:/new",
+      signature: "system:new_session_started",
+      messageIndex: 0,
     });
   });
 
@@ -1378,6 +1381,7 @@ describe("QuaidFacade", () => {
       label: "ResetSignal",
       source: "system_notice",
       signature: "cmd:/new",
+      messageIndex: 0,
     });
   });
 
