@@ -1427,6 +1427,10 @@ export function createQuaidFacade(deps) {
                 .replace(/^\[[^\]]+\]\s*/, "")
                 .trim();
             const normalizedLc = normalized.toLowerCase();
+            const hasSlashLifecycleCommand = /(^|\s)\/(new|reset|restart|compact)(\s|$)/i.test(normalized);
+            const isLifecycleCandidateRole = role === "user" || role === "system";
+            if (!isLifecycleCandidateRole && !hasSlashLifecycleCommand)
+                continue;
             if (role === "user") {
                 const command = detectExplicitLifecycleUserCommand(text);
                 if (command === "/new" || command === "/reset" || command === "/restart") {
@@ -1465,6 +1469,7 @@ export function createQuaidFacade(deps) {
                     };
                 }
             }
+            return null;
         }
         return null;
     }
