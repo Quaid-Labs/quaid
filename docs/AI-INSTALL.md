@@ -136,6 +136,25 @@ Minimum survey fields:
 - Janitor schedule choice
 - Workspace file import choice
 
+### Model Selection Guidance (Mandatory)
+
+When discussing model choices with the user, explain the two-tier roles first:
+
+- `Fast reasoning model`: cheaper/faster path for routing, reranking, and lightweight classification.
+- `Deep reasoning model`: higher-quality path for extraction, review, and heavier synthesis work.
+
+For supported provider lanes (Anthropic/OpenAI), Quaid provides suggested model defaults. In that case:
+
+- include those deep/fast defaults in the pre-install survey
+- let the user override if they want
+- no extra model-selection discussion is required
+
+If the user is using an unsupported provider/model lane for their gateway (for example Gemini, Kimi/K2.5, or other custom routes), Quaid does not provide suggested fast/deep defaults. In that case the agent must:
+
+- tell the user manual fast/deep model selection is required
+- discuss budget, latency, and quality tradeoffs briefly
+- collect explicit deep and fast model IDs from the user before install
+
 Only execute install after the user confirms or edits these values.
 This is mandatory even when using `--agent` non-interactive mode.
 

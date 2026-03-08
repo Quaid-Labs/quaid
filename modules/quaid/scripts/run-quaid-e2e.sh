@@ -9,7 +9,9 @@ ENV_FILE="${QUAID_E2E_ENV_FILE:-${PLUGIN_ROOT}/.env.e2e}"
 E2E_WS="${HOME}/quaid/test"
 DEV_WS="${HOME}/quaid/dev"
 OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
-OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-}"
+# Default E2E gate to the OpenClaw beta lane we validate against in canary.
+# Keep overridable for bisects via --openclaw-ref / QUAID_E2E_OPENCLAW_REF.
+OPENCLAW_REF="${QUAID_E2E_OPENCLAW_REF:-v2026.3.2-beta.1}"
 
 PROFILE_TEST="${QUAID_E2E_PROFILE_TEST:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
 PROFILE_SRC="${QUAID_E2E_PROFILE_SRC:-${BOOTSTRAP_ROOT}/profiles/runtime-profile.local.quaid.json}"
@@ -648,6 +650,17 @@ if [[ -f "$ENV_FILE" ]]; then
   set -a; source "$ENV_FILE"; set +a
 fi
 
+# Keep embedding mode consistent across the entire e2e lane. Mixing real and
+# mock embeddings in one workspace can create vec_nodes dimension drift
+# (e.g., 4096 vs 128), which causes janitor review FIX upserts to fail.
+JANITOR_MOCK_EMBEDDINGS_FLAG="$(printf '%s' "${QUAID_E2E_JANITOR_MOCK_EMBEDDINGS:-1}" | tr '[:upper:]' '[:lower:]' | xargs)"
+if [[ "$JANITOR_MOCK_EMBEDDINGS_FLAG" == "1" || "$JANITOR_MOCK_EMBEDDINGS_FLAG" == "true" || "$JANITOR_MOCK_EMBEDDINGS_FLAG" == "yes" || "$JANITOR_MOCK_EMBEDDINGS_FLAG" == "on" ]]; then
+  export MOCK_EMBEDDINGS=1
+  echo "[e2e] MOCK_EMBEDDINGS enabled for full lane (dimension consistency)."
+else
+  unset MOCK_EMBEDDINGS
+fi
+
 # One-time key ingestion for e2e-only secrets.
 # Preferred vars are E2E_TEST_KEY_OPENAI / E2E_TEST_KEY_ANTHROPIC to avoid
 # accidental consumption by non-e2e code paths.
@@ -1172,16 +1185,16 @@ if anthropic_api_key:
 
     # For anthropic-api path, pin default agent model to Anthropic so the
     # gateway does not fail over to OpenAI when OPENAI_API_KEY is absent.
+    # Cost policy for e2e lanes: keep Anthropic on Haiku-only.
     if auth_path == "anthropic-api":
-        openclaw.setdefault("agentDefaults", {})["modelPrimary"] = "anthropic/claude-opus-4-6"
+        openclaw.setdefault("agentDefaults", {})["modelPrimary"] = "anthropic/claude-haiku-4-5"
         provider_defaults = openclaw.setdefault("providerDefaults", {})
         anthropic_defaults = provider_defaults.setdefault("anthropic", {})
-        anthropic_defaults["modelPrimary"] = "anthropic/claude-opus-4-6"
-        if not isinstance(anthropic_defaults.get("modelFallbacks"), list) or not anthropic_defaults["modelFallbacks"]:
-            anthropic_defaults["modelFallbacks"] = ["anthropic/claude-haiku-4-5"]
+        anthropic_defaults["modelPrimary"] = "anthropic/claude-haiku-4-5"
+        anthropic_defaults["modelFallbacks"] = ["anthropic/claude-haiku-4-5"]
         for agent in openclaw.get("agentList", []):
             if isinstance(agent, dict):
-                agent["modelPrimary"] = "anthropic/claude-opus-4-6"
+                agent["modelPrimary"] = "anthropic/claude-haiku-4-5"
 
 with open(out, "w", encoding="utf-8") as f:
     json.dump(obj, f, indent=2)
@@ -4568,13 +4581,6 @@ try:
     env["QUAID_DOCS_UPDATE_TIMEOUT_SECONDS"] = str(int(os.environ.get("QUAID_E2E_DOCS_UPDATE_TIMEOUT", "30") or "30"))
     env["QUAID_DOCS_TRANSCRIPT_TIMEOUT_SECONDS"] = str(int(os.environ.get("QUAID_E2E_DOCS_TRANSCRIPT_TIMEOUT", "30") or "30"))
     env["QUAID_JANITOR_SKIP_NOTIFY"] = str(int(os.environ.get("QUAID_E2E_JANITOR_SKIP_NOTIFY", "1") or "1"))
-    janitor_mock_embeddings = str(os.environ.get("QUAID_E2E_JANITOR_MOCK_EMBEDDINGS", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-    if janitor_mock_embeddings:
-        # Keep janitor e2e deterministic and fast across hosts where local
-        # embedding models vary or are too slow for lane budgets.
-        env["MOCK_EMBEDDINGS"] = "1"
-    else:
-        env.pop("MOCK_EMBEDDINGS", None)
     configured_parallel = {
         "enabled": None,
         "llmWorkers": None,
