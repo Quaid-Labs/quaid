@@ -30,6 +30,7 @@ function parseInstallArgs(argv) {
     githubRepo: "",
     artifact: "",
     agent: false,
+    claudeCode: false,
     help: false,
     errors: [],
   };
@@ -153,6 +154,10 @@ function parseInstallArgs(argv) {
       }
       continue;
     }
+    if (arg === "--claude-code") {
+      opts.claudeCode = true;
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       opts.help = true;
       continue;
@@ -173,6 +178,7 @@ Options:
   --github-repo <r>   GitHub repo for github source (default: quaid-labs/quaid)
   --artifact <path>   Local file path or URL to .tar.gz when --source artifact
   --agent             Non-interactive agent mode (accepts sane defaults)
+  --claude-code       Install for Claude Code (hooks + OAuth provider)
   -h, --help          Show this help
 `);
   process.exit(0);
@@ -321,7 +327,8 @@ function detectWorkspaceFromCli() {
     readWorkspaceFromOpenClawConfig()
   );
 }
-const IS_OPENCLAW = !!(process.env.CLAWDBOT_WORKSPACE || which("clawdbot") || which("openclaw"));
+const IS_CLAUDE_CODE = INSTALL_ARGS.claudeCode || process.env.QUAID_INSTALL_CLAUDE_CODE === "1";
+const IS_OPENCLAW = !IS_CLAUDE_CODE && !!(process.env.CLAWDBOT_WORKSPACE || which("clawdbot") || which("openclaw"));
 const WORKSPACE =
   INSTALL_ARGS.workspace ||
   process.env.QUAID_WORKSPACE ||
@@ -347,6 +354,22 @@ const OLLAMA_BASE_URL = (process.env.OLLAMA_URL || "http://localhost:11434")
   .replace(/\/+$/, "");
 const OLLAMA_TAGS_URL = `${OLLAMA_BASE_URL}/api/tags`;
 const OLLAMA_PS_URL = `${OLLAMA_BASE_URL}/api/ps`;
+
+// Mutable platform override — set by interactive platform selection prompt.
+// Allows the prompt to override IS_OPENCLAW / IS_CLAUDE_CODE after they're set.
+let _platformOverride = "";
+
+/**
+ * Check if current install platform matches the given name.
+ * Respects both CLI flags and interactive selection.
+ */
+function _isPlatform(name) {
+  if (_platformOverride) return _platformOverride === name;
+  if (name === "claude-code") return IS_CLAUDE_CODE;
+  if (name === "openclaw") return IS_OPENCLAW;
+  if (name === "standalone") return !IS_OPENCLAW && !IS_CLAUDE_CODE;
+  return false;
+}
 
 // Python env setup — always set canonical Quaid root, plus workspace hint.
 const PY_ENV_SETUP =
@@ -1345,7 +1368,53 @@ async function step1_preflight() {
 
   const s = spinner();
 
-  if (IS_OPENCLAW) {
+  // --- Platform selection ---
+  // If not explicitly set via CLI flag, ask in interactive mode.
+  if (!IS_OPENCLAW && !IS_CLAUDE_CODE && !AGENT_MODE && !_testAnswers) {
+    const platform = handleCancel(await select({
+      message: "Which platform are you installing Quaid for?",
+      options: [
+        { value: "standalone", label: "Standalone", hint: "local-only runtime (default)" },
+        { value: "claude-code", label: "Claude Code", hint: "hooks + OAuth for Claude Code CLI" },
+        { value: "openclaw", label: "OpenClaw", hint: "gateway-integrated runtime" },
+      ],
+    }));
+    if (platform === "claude-code") {
+      // Promote to IS_CLAUDE_CODE for the rest of the install
+      // We can't reassign const, so use a module-level mutable flag.
+      _platformOverride = "claude-code";
+    } else if (platform === "openclaw") {
+      _platformOverride = "openclaw";
+    }
+  }
+
+  if (_isPlatform("claude-code")) {
+    // --- Claude Code mode ---
+    s.start("Checking Claude Code...");
+    const hasClaude = canRun("claude");
+    if (!hasClaude) {
+      s.stop(C.yellow("Claude Code CLI not found"), 2);
+      log.warn("Install Claude Code: https://docs.anthropic.com/en/docs/claude-code");
+      log.warn("Continuing anyway — CLI is needed at runtime, not install time.");
+    }
+    // Check OAuth credentials
+    const credsPath = path.join(os.homedir(), ".claude", ".credentials.json");
+    if (fs.existsSync(credsPath)) {
+      try {
+        const creds = JSON.parse(fs.readFileSync(credsPath, "utf8"));
+        if (creds?.claudeAiOauth?.accessToken) {
+          s.stop(C.green("Claude Code") + C.dim(" — OAuth credentials found"));
+        } else {
+          s.stop(C.yellow("Claude Code") + C.dim(" — no OAuth token, run 'claude login'"));
+        }
+      } catch {
+        s.stop(C.yellow("Claude Code") + C.dim(" — credentials unreadable"));
+      }
+    } else {
+      s.stop(C.yellow("Claude Code") + C.dim(" — no credentials, run 'claude login' first"));
+    }
+    fs.mkdirSync(WORKSPACE, { recursive: true });
+  } else if (_isPlatform("openclaw")) {
     // --- OpenClaw installed ---
     s.start("Scanning for OpenClaw...");
     if (!canRun("clawdbot") && !canRun("openclaw")) {
@@ -1506,7 +1575,7 @@ async function step1_preflight() {
   s.stop(C.green("sqlite-vec"));
 
   // --- Gateway hooks (OpenClaw only) ---
-  if (IS_OPENCLAW) {
+  if (_isPlatform("openclaw")) {
     s.start("Checking gateway memory hooks...");
     const gwDir = findGateway();
     if (!gwDir) {
@@ -1651,14 +1720,15 @@ async function step3_models() {
 
   const forcedProvider = String(process.env.QUAID_INSTALL_PROVIDER || "").trim().toLowerCase();
   let provider = "anthropic";
-  let adapterType = IS_OPENCLAW ? "openclaw" : "standalone";
+  let adapterType = _isPlatform("claude-code") ? "claude-code" : _isPlatform("openclaw") ? "openclaw" : "standalone";
   if (advancedSetup) {
     adapterType = handleCancel(await select({
       message: "Agent system adapter",
       initialValue: adapterType,
       options: [
-        { value: "openclaw", label: "openclaw", hint: "gateway-integrated runtime" },
         { value: "standalone", label: "standalone", hint: "local-only runtime" },
+        { value: "claude-code", label: "claude-code", hint: "Claude Code hooks + OAuth" },
+        { value: "openclaw", label: "openclaw", hint: "gateway-integrated runtime" },
       ],
     }));
     provider = handleCancel(await select({
@@ -2325,6 +2395,9 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     }
     await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 8_000);
     enableRequiredOpenClawHooks();
+  }
+  if (_isPlatform("claude-code")) {
+    setupClaudeCodeHooks();
   }
 
   // sqlite-vec is required and already checked in preflight; re-verify here.
@@ -3043,6 +3116,79 @@ function ensureQuaidCliShim(pluginDirPath) {
   }
 }
 
+function setupClaudeCodeHooks() {
+  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
+  let settings = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    } catch {
+      settings = {};
+    }
+  }
+
+  if (!settings.hooks) settings.hooks = {};
+
+  // Resolve the quaid binary path. Use absolute paths so multiple installs
+  // can coexist — each instance's hooks point to its own quaid script.
+  // QUAID_HOME sets the data directory; QUAID_ADAPTER forces claude-code
+  // adapter even if the config says standalone/openclaw (enables shared DB).
+  const quaidBin = path.join(PLUGIN_DIR, "quaid");
+  const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
+  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_ADAPTER=claude-code`;
+
+  const desiredHooks = {
+    UserPromptSubmit: [{
+      matcher: "",
+      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-inject` }],
+    }],
+    PreCompact: [{
+      matcher: "",
+      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract --precompact` }],
+    }],
+    SessionStart: [{
+      matcher: "compact",
+      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-inject-compact` }],
+    }],
+    SessionEnd: [{
+      matcher: "",
+      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract` }],
+    }],
+  };
+
+  let changed = false;
+  for (const [event, hookList] of Object.entries(desiredHooks)) {
+    if (!settings.hooks[event]) {
+      settings.hooks[event] = hookList;
+      changed = true;
+    } else {
+      // Check if quaid hooks already exist for this event
+      const existingCmds = new Set();
+      for (const entry of settings.hooks[event]) {
+        for (const h of (entry.hooks || [])) {
+          existingCmds.add(h.command || "");
+        }
+      }
+      for (const entry of hookList) {
+        for (const h of (entry.hooks || [])) {
+          if (!existingCmds.has(h.command)) {
+            settings.hooks[event].push(entry);
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (changed) {
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    log.info(`Claude Code hooks configured in ${settingsPath}`);
+  } else {
+    log.info("Claude Code hooks already configured");
+  }
+}
+
 async function tryBrewInstall(pkg, label) {
   if (AGENT_MODE) {
     log.warn(`Agent mode: skipping auto-install for ${label}. Install manually: brew install ${pkg}`);
@@ -3092,7 +3238,7 @@ async function tryBrewInstall(pkg, label) {
 }
 
 function writeConfig(owner, models, embeddings, systems, janitorPolicies = null) {
-  const resolvedAdapterType = models.adapterType || (IS_OPENCLAW ? "openclaw" : "standalone");
+  const resolvedAdapterType = models.adapterType || (_isPlatform("claude-code") ? "claude-code" : _isPlatform("openclaw") ? "openclaw" : "standalone");
   const policies = janitorPolicies || {
     coreMarkdownWrites: "ask",
     projectDocsWrites: "ask",
@@ -3108,9 +3254,9 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       // Include module path explicitly; pathlib rglob does not reliably recurse
       // into symlinked plugin dirs across environments.
       paths: ["modules/quaid", "plugins"],
-      allowList: ["memorydb.core", "docsdb.core", "core.extract", "openclaw.adapter"],
+      allowList: ["memorydb.core", "docsdb.core", "core.extract", "openclaw.adapter", "claude_code.adapter"],
       slots: {
-        adapter: resolvedAdapterType === "openclaw" ? "openclaw.adapter" : "",
+        adapter: resolvedAdapterType === "openclaw" ? "openclaw.adapter" : resolvedAdapterType === "claude-code" ? "claude_code.adapter" : "",
         ingest: ["core.extract"],
         dataStores: ["memorydb.core", "docsdb.core"],
       },

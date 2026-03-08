@@ -54,6 +54,23 @@ elif [[ ":${PYTHONPATH}:" != *":${SCRIPT_DIR}:"* ]]; then
 fi
 
 case "$CMD" in
+  # Lifecycle hooks (adapter-agnostic)
+  hook-inject)
+    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" inject "$@"
+    ;;
+  hook-inject-compact)
+    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" inject-compact "$@"
+    ;;
+  hook-extract)
+    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" extract "$@"
+    ;;
+  hook-search)
+    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" search "$@"
+    ;;
+  hook-session-init)
+    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" session-init "$@"
+    ;;
+
   # Janitor commands
   janitor)
     exec python3 "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
@@ -153,6 +170,13 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     echo "Projects:"
     echo "  registry [cmd]       Project/doc registry CLI"
     echo "  updater [cmd]        Project event processor"
+    echo ""
+    echo "Hooks:"
+    echo "  hook-inject          Inject memories on user prompt"
+    echo "  hook-inject-compact  Re-inject after compaction"
+    echo "  hook-extract         Extract knowledge from transcript"
+    echo "  hook-search <query>  Search memories + docs"
+    echo "  hook-session-init    Inject project docs at session start"
     echo ""
     echo "Config:"
     echo "  config               Show configuration summary"

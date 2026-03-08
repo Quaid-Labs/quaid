@@ -141,6 +141,11 @@ def recall(
         >>> for m in memories:
         ...     print(f"{m['similarity']:.2f} {m['text']}")
     """
+    # Short queries produce low-quality recall results — skip entirely.
+    if len(query.strip().split()) < 3:
+        logger.debug("[api.recall] query too short (%d words), returning empty", len(query.strip().split()))
+        return []
+
     return _memory().recall(
         query=query,
         owner_id=owner_id,

@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Quaid hook entry points — adapter-agnostic lifecycle integration.
+
+Generic hook handlers invoked by host platforms (Claude Code, OpenClaw, etc.)
+via the quaid CLI. Reads JSON from stdin, writes to stdout/stderr.
+
+Hook commands:
+    inject          Recall memories for a user message (stdin: JSON with "prompt")
+    inject-compact  Re-inject critical memories after compaction
+    extract         Extract knowledge from a conversation transcript
+    search          Interactive search across memories + docs
+    session-init    Collect and output project docs for session start injection
+
+Usage:
+    quaid hook-inject             (reads JSON from stdin)
+    quaid hook-inject-compact     (reads JSON from stdin)
+    quaid hook-extract [--precompact]  (reads JSON from stdin)
+    quaid hook-search "query"
+    quaid hook-session-init       (outputs project context to stdout)
+"""
+
+import argparse
+import glob as glob_mod
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Dict, List
+
+# Ensure plugin root is importable
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+
+def _get_owner_id() -> str:
+    """Resolve owner ID from env or config."""
+    owner = os.environ.get("QUAID_OWNER", "").strip()
+    if owner:
+        return owner
+    try:
+        from config import get_config
+        return get_config().users.default_owner
+    except Exception:
+        return "default"
+
+
+def _format_memories(memories: List[Dict]) -> str:
+    """Format recalled memories as readable context text."""
+    if not memories:
+        return ""
+    lines = ["[Quaid Memory Context]"]
+    for i, mem in enumerate(memories, 1):
+        text = mem.get("text", "")
+        sim = mem.get("similarity", 0)
+        category = mem.get("category", "fact")
+        lines.append(f"  {i}. [{category}] {text} (relevance: {sim:.2f})")
+    return "\n".join(lines)
+
+
+def hook_inject(args):
+    """Recall memories for each user message and inject as context.
+
+    Reads hook JSON from stdin:
+        {"prompt": "...", "cwd": "...", "session_id": "..."}
+
+    Writes to stdout:
+        {"additionalContext": "..."} (for hosts that support structured output)
+    """
+    try:
+        hook_input = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        return
+
+    query = hook_input.get("prompt", "").strip()
+    if not query:
+        return
+
+    try:
+        from core.interface.api import recall
+        owner = _get_owner_id()
+        memories = recall(
+            query=query,
+            owner_id=owner,
+            limit=10,
+            use_reranker=False,  # Keep hook fast
+        )
+        if not memories:
+            return
+
+        context = _format_memories(memories)
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": context,
+            }
+        }))
+    except Exception as e:
+        print(f"[quaid][hook-inject] error: {e}", file=sys.stderr)
+
+
+def hook_inject_compact(args):
+    """Re-inject critical memories after context compaction.
+
+    Reads hook JSON from stdin:
+        {"cwd": "...", "session_id": "..."}
+
+    Writes plain text to stdout.
+    """
+    try:
+        hook_input = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        hook_input = {}
+
+    cwd = hook_input.get("cwd", os.getcwd())
+
+    try:
+        from core.interface.api import recall
+        owner = _get_owner_id()
+        # No user message available — recall based on workspace context
+        memories = recall(
+            query=f"project context for {cwd}",
+            owner_id=owner,
+            limit=10,
+            use_reranker=False,
+        )
+        if memories:
+            print(_format_memories(memories))
+    except Exception as e:
+        print(f"[quaid][hook-inject-compact] error: {e}", file=sys.stderr)
+
+
+def hook_extract(args):
+    """Extract knowledge from a conversation transcript.
+
+    Reads hook JSON from stdin:
+        {"transcript_path": "...", "session_id": "...", "cwd": "..."}
+
+    Logs results to stderr.
+    """
+    try:
+        hook_input = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        hook_input = {}
+
+    transcript_path = hook_input.get("transcript_path", "")
+    session_id = hook_input.get("session_id", "unknown")
+    is_precompact = args.precompact if hasattr(args, "precompact") else False
+    label = "hook-precompact" if is_precompact else "hook-session-end"
+
+    if not transcript_path:
+        print(f"[quaid][{label}] no transcript_path in hook input", file=sys.stderr)
+        return
+
+    transcript_path = os.path.expanduser(transcript_path)
+    if not os.path.isfile(transcript_path):
+        print(f"[quaid][{label}] transcript not found: {transcript_path}", file=sys.stderr)
+        return
+
+    try:
+        from lib.adapter import get_adapter
+        from ingest.extract import extract_from_transcript
+
+        adapter = get_adapter()
+        transcript = adapter.parse_session_jsonl(Path(transcript_path))
+
+        if not transcript.strip():
+            print(f"[quaid][{label}] empty transcript after parsing", file=sys.stderr)
+            return
+
+        owner = _get_owner_id()
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id=owner,
+            label=label,
+            session_id=session_id,
+        )
+
+        print(
+            f"[quaid][{label}] extracted: "
+            f"{result['facts_stored']} stored, "
+            f"{result['facts_skipped']} skipped, "
+            f"{result['edges_created']} edges",
+            file=sys.stderr,
+        )
+    except Exception as e:
+        print(f"[quaid][{label}] error: {e}", file=sys.stderr)
+
+
+def _get_projects_dir() -> Path:
+    """Resolve the projects directory from adapter."""
+    try:
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+        return adapter.quaid_home() / "projects"
+    except Exception:
+        home = os.environ.get("QUAID_HOME", "").strip()
+        return Path(home) / "projects" if home else Path.home() / "quaid" / "projects"
+
+
+def hook_session_init(args):
+    """Collect and output project docs for session start injection.
+
+    Scans projects/<name>/ subdirectories for TOOLS.md and AGENTS.md.
+    Also collects USER.md, SOUL.md, and MEMORY.md from the quaid project.
+    Outputs concatenated content to stdout for additionalContext injection.
+    """
+    projects_dir = _get_projects_dir()
+    if not projects_dir.is_dir():
+        print(f"[quaid][session-init] projects dir not found: {projects_dir}", file=sys.stderr)
+        return
+
+    sections: List[str] = []
+
+    # 1. Collect USER.md, SOUL.md, MEMORY.md from projects/quaid/
+    quaid_project = projects_dir / "quaid"
+    for special_file in ("USER.md", "SOUL.md", "MEMORY.md"):
+        fpath = quaid_project / special_file
+        if fpath.is_file():
+            content = fpath.read_text(encoding="utf-8").strip()
+            if content:
+                sections.append(f"--- {special_file} ---\n{content}")
+
+    # 2. Collect TOOLS.md and AGENTS.md from all project subdirs
+    try:
+        subdirs = sorted(
+            [d for d in projects_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
+            key=lambda d: (0 if d.name == "quaid" else 1, d.name),
+        )
+    except OSError:
+        subdirs = []
+
+    for project_dir in subdirs:
+        project_name = project_dir.name
+        for doc_file in ("TOOLS.md", "AGENTS.md"):
+            fpath = project_dir / doc_file
+            if fpath.is_file():
+                content = fpath.read_text(encoding="utf-8").strip()
+                if content:
+                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
+
+    if not sections:
+        print("[quaid][session-init] no project docs found", file=sys.stderr)
+        return
+
+    context = "\n\n".join(sections)
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": context,
+        }
+    }))
+
+
+def hook_search(args):
+    """Search memories and docs, print results to stdout.
+
+    Usage: quaid hook-search "query"
+    """
+    query = " ".join(args.query) if hasattr(args, "query") and args.query else ""
+    if not query:
+        print("Usage: quaid hook-search \"query\"", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        from core.interface.api import recall, projects_search_docs
+        owner = _get_owner_id()
+
+        # Search memories
+        memories = recall(query=query, owner_id=owner, limit=5)
+
+        # Search docs
+        doc_results = projects_search_docs(query=query, limit=3)
+
+        # Format output
+        if memories:
+            print("=== Memory Results ===")
+            for i, mem in enumerate(memories, 1):
+                text = mem.get("text", "")
+                sim = mem.get("similarity", 0)
+                cat = mem.get("category", "fact")
+                print(f"  {i}. [{cat}] {text} (relevance: {sim:.2f})")
+
+        chunks = doc_results.get("chunks", [])
+        if chunks:
+            print("\n=== Documentation Results ===")
+            for i, chunk in enumerate(chunks, 1):
+                title = chunk.get("title", "untitled")
+                text = chunk.get("text", "")[:200]
+                print(f"  {i}. [{title}] {text}")
+
+        if not memories and not chunks:
+            print("No results found.")
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Quaid hook entry points for platform lifecycle integration",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    subparsers.add_parser("inject", help="Recall + inject memories for a user message")
+    subparsers.add_parser("inject-compact", help="Re-inject memories after compaction")
+    subparsers.add_parser("session-init", help="Inject project docs at session start")
+
+    extract_parser = subparsers.add_parser("extract", help="Extract knowledge from transcript")
+    extract_parser.add_argument(
+        "--precompact", action="store_true",
+        help="Flag indicating this is a pre-compaction extraction",
+    )
+
+    search_parser = subparsers.add_parser("search", help="Search memories + docs")
+    search_parser.add_argument("query", nargs="*", help="Search query")
+
+    args = parser.parse_args()
+
+    if args.command == "inject":
+        hook_inject(args)
+    elif args.command == "inject-compact":
+        hook_inject_compact(args)
+    elif args.command == "session-init":
+        hook_session_init(args)
+    elif args.command == "extract":
+        hook_extract(args)
+    elif args.command == "search":
+        hook_search(args)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

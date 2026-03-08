@@ -9,11 +9,15 @@ if TYPE_CHECKING:
 
 
 def create_adapter(kind: str) -> "QuaidAdapter":
-    normalized = str(kind or "").strip().lower()
+    normalized = str(kind or "").strip().lower().replace("-", "_")
     if normalized == "openclaw":
         from adaptors.openclaw.adapter import OpenClawAdapter
         return OpenClawAdapter()
+    if normalized in ("claude_code", "claudecode"):
+        from adaptors.claude_code.adapter import ClaudeCodeAdapter
+        return ClaudeCodeAdapter()
     raise RuntimeError(
         f"Unsupported adapter type for adaptors.factory: {kind!r}. "
-        "Only 'openclaw' is constructed here; 'standalone' is handled in lib.adapter.get_adapter()."
+        "Supported: 'openclaw', 'claude-code'. "
+        "'standalone' is handled in lib.adapter.get_adapter()."
     )

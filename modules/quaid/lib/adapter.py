@@ -10,6 +10,8 @@ Provides an abstract interface that Quaid modules call for:
 Built-in adapters currently include:
 - StandaloneAdapter: works anywhere (~/quaid/)
 - Additional host-specific adapters from `adaptors/` (for gateway/runtime integrations)
+  - OpenClawAdapter: for OpenClaw gateway runtime
+  - ClaudeCodeAdapter: for Claude Code sessions (hooks + CLI)
 
 Adapter selection (get_adapter()):
 1. config/memory.json adapter type  (required)
@@ -599,7 +601,8 @@ def get_adapter() -> QuaidAdapter:
     """Get the current adapter (resolved on first call).
 
     Selection:
-    1. config/memory.json adapter.type  (required)
+    1. QUAID_ADAPTER env var (runtime override — allows shared DB with different adapters)
+    2. config/memory.json adapter.type
     """
     global _adapter
     if _adapter is not None:
@@ -607,7 +610,13 @@ def get_adapter() -> QuaidAdapter:
     with _adapter_lock:
         if _adapter is not None:
             return _adapter
-        kind = _read_adapter_type_from_config()
+        # Runtime override: QUAID_ADAPTER env var takes precedence over config.
+        # This allows multiple platforms (e.g. Claude Code + OpenClaw) to share
+        # the same QUAID_HOME/database while using different adapter types.
+        env_adapter = os.environ.get("QUAID_ADAPTER", "").strip().lower()
+        kind = env_adapter if env_adapter in ("standalone", "openclaw", "claude-code") else ""
+        if not kind:
+            kind = _read_adapter_type_from_config()
         if kind == "standalone":
             _adapter = StandaloneAdapter()
             return _adapter
