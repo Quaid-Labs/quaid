@@ -223,11 +223,16 @@ def _get_projects_dir() -> Path:
 
 
 def hook_session_init(args):
-    """Collect and output project docs for session start injection.
+    """Collect project docs and write to .claude/rules/ for durable caching.
+
+    Claude Code auto-loads .claude/rules/*.md into context at session start,
+    caches them via prompt caching, and preserves them through compaction.
+    This is more reliable than injecting via additionalContext (which is
+    ephemeral and lost on compaction).
 
     Scans projects/<name>/ subdirectories for TOOLS.md and AGENTS.md.
     Also collects USER.md, SOUL.md, and MEMORY.md from the quaid project.
-    Outputs concatenated content to stdout for additionalContext injection.
+    Writes the combined content to .claude/rules/quaid-projects.md.
     """
     projects_dir = _get_projects_dir()
     if not projects_dir.is_dir():
@@ -272,13 +277,29 @@ def hook_session_init(args):
     if janitor_warning:
         sections.insert(0, janitor_warning)
 
-    context = "\n\n".join(sections)
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": context,
-        }
-    }))
+    # 4. Write to .claude/rules/ so Claude Code caches it and preserves
+    #    through compaction. The file is regenerated on each session start
+    #    to pick up any project doc changes.
+    rules_dir = Path(os.environ.get("QUAID_RULES_DIR", "")).strip() if os.environ.get("QUAID_RULES_DIR") else None
+    if not rules_dir:
+        # Default: .claude/rules/ relative to cwd (the CC project root)
+        rules_dir = Path.cwd() / ".claude" / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+
+    rules_file = rules_dir / "quaid-projects.md"
+    content = "# Quaid Project Context\n\n" + "\n\n".join(sections) + "\n"
+
+    # Only write if content changed (avoid unnecessary file churn)
+    try:
+        existing = rules_file.read_text(encoding="utf-8") if rules_file.is_file() else ""
+    except OSError:
+        existing = ""
+
+    if content != existing:
+        rules_file.write_text(content, encoding="utf-8")
+        print(f"[quaid][session-init] updated {rules_file}", file=sys.stderr)
+    else:
+        print(f"[quaid][session-init] {rules_file} up to date", file=sys.stderr)
 
 
 def hook_search(args):
