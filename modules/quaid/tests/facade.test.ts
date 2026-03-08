@@ -816,12 +816,12 @@ describe("QuaidFacade", () => {
     ).toBe("d06519e2e0ce");
   });
 
-  it("parseSessionIdFromTranscriptPath extracts UUID session ids", () => {
+  it("parseSessionIdFromTranscriptPath extracts UUIDs and falls back to filename stem", () => {
     const facade = createQuaidFacade(makeMockDeps());
     expect(
       facade.parseSessionIdFromTranscriptPath("/tmp/sessions/ABC-123-5f2a1b2c-4d7e-49de-a6f5-5c63b5a5b36b.jsonl"),
     ).toBe("5f2a1b2c-4d7e-49de-a6f5-5c63b5a5b36b");
-    expect(facade.parseSessionIdFromTranscriptPath("/tmp/sessions/no-id.jsonl")).toBe("");
+    expect(facade.parseSessionIdFromTranscriptPath("/tmp/sessions/no-id.jsonl")).toBe("no-id");
   });
 
   it("resolveMemoryStoreSessionId falls back from context key to main/recent sessions", () => {

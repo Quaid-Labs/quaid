@@ -1139,7 +1139,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             });
             return;
           }
-          const sessionId = facade.parseSessionIdFromTranscriptPath(sessionFile) || String(update?.sessionId || "").trim();
+          const sessionId = facade.parseSessionIdFromTranscriptPath(sessionFile) || facade.resolveLifecycleHookSessionId(
+            {
+              sessionId: String(update?.sessionId || "").trim(),
+              sessionKey: String(update?.sessionKey || update?.targetSessionKey || "").trim()
+            },
+            void 0,
+            []
+          ) || String(update?.sessionId || "").trim();
           writeHookTrace("hook.transcript_update.detected", {
             update_session_id: String(update?.sessionId || ""),
             detected_label: String(detail.label || ""),
@@ -1232,11 +1239,18 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         });
       }
     };
-    api.on("message:received", async (event, ctx) => {
-      await handleSlashLifecycleFromMessage(event, ctx, "message:received");
-    });
-    api.on("message:preprocessed", async (event, ctx) => {
-      await handleSlashLifecycleFromMessage(event, ctx, "message:preprocessed");
+    registerInternalHookChecked("message", async (event, ctx) => {
+      const action = String(event?.action || "").trim().toLowerCase();
+      if (action === "received") {
+        await handleSlashLifecycleFromMessage(event, ctx, "message:received");
+        return;
+      }
+      if (action === "preprocessed") {
+        await handleSlashLifecycleFromMessage(event, ctx, "message:preprocessed");
+      }
+    }, {
+      name: "message-command-memory-extraction",
+      priority: 10
     });
     const handleLifecycleCommandHook = async (action, event, ctx) => {
       try {
