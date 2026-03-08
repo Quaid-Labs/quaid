@@ -902,6 +902,44 @@ describe("QuaidFacade", () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
+  it("listTimeoutSessionActivity includes transcript-only sessions missing from store", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-timeout-activity-fallback-"));
+    const sessionsDir = path.join(workspace, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "qa-live-timeout-123.jsonl");
+    await writeFile(transcriptPath, JSON.stringify({ role: "user", content: "ping" }) + "\n", "utf8");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeFile(storePath, JSON.stringify({}), "utf8");
+    const facade = createQuaidFacade(makeMockDeps({
+      timeoutSessionStorePath: () => storePath,
+      timeoutSessionTranscriptDirs: () => [sessionsDir],
+    }));
+    const rows = facade.listTimeoutSessionActivity();
+    const byId = new Map(rows.map((r) => [r.sessionId, r.lastActivityMs]));
+    expect((byId.get("qa-live-timeout-123") || 0) > 0).toBe(true);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  it("listTimeoutSessionActivity ignores missing fallback transcript dirs even under failHard", async () => {
+    const workspace = await mkdtemp(path.join(tmpdir(), "quaid-facade-timeout-activity-enoent-"));
+    const sessionsDir = path.join(workspace, "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "qa-live-timeout-enoent.jsonl");
+    await writeFile(transcriptPath, JSON.stringify({ role: "user", content: "ping" }) + "\n", "utf8");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeFile(storePath, JSON.stringify({}), "utf8");
+    const missingDir = path.join(workspace, "missing-sessions-dir");
+    const facade = createQuaidFacade(makeMockDeps({
+      isFailHardEnabled: vi.fn(() => true),
+      timeoutSessionStorePath: () => storePath,
+      timeoutSessionTranscriptDirs: () => [missingDir, sessionsDir],
+    }));
+    const rows = facade.listTimeoutSessionActivity();
+    const byId = new Map(rows.map((r) => [r.sessionId, r.lastActivityMs]));
+    expect((byId.get("qa-live-timeout-enoent") || 0) > 0).toBe(true);
+    await rm(workspace, { recursive: true, force: true });
+  });
+
   it("resolveSessionForCompaction prefers matching session then default-session fallback", () => {
     const facade = createQuaidFacade(makeMockDeps({
       listCompactionSessions: () => ([

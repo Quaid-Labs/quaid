@@ -1115,6 +1115,17 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
           const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
+          const sessionId = facade.parseSessionIdFromTranscriptPath(sessionFile) || facade.resolveLifecycleHookSessionId(
+            {
+              sessionId: String(update?.sessionId || "").trim(),
+              sessionKey: String(update?.sessionKey || update?.targetSessionKey || "").trim()
+            },
+            void 0,
+            []
+          ) || String(update?.sessionId || "").trim();
+          if (sessionId) {
+            timeoutManager.onAgentEnd(messages, sessionId, { source: "transcript_update" });
+          }
           const hasExtractionPrompt = messages.some(
             (m) => /^Extract memorable facts and journal entries from this conversation chunk:/i.test(
               String(facade.getMessageText(m) || "").trim()
@@ -1147,14 +1158,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             });
             return;
           }
-          const sessionId = facade.parseSessionIdFromTranscriptPath(sessionFile) || facade.resolveLifecycleHookSessionId(
-            {
-              sessionId: String(update?.sessionId || "").trim(),
-              sessionKey: String(update?.sessionKey || update?.targetSessionKey || "").trim()
-            },
-            void 0,
-            []
-          ) || String(update?.sessionId || "").trim();
           writeHookTrace("hook.transcript_update.detected", {
             update_session_id: String(update?.sessionId || ""),
             detected_label: String(detail.label || ""),

@@ -1014,6 +1014,7 @@ export function createQuaidFacade(deps) {
   function listTimeoutSessionActivity() {
     const store = readTimeoutSessionStore();
     const rows = [];
+    const seen = new Set();
     const entries = Object.entries(store || {});
     for (const [, entry] of entries) {
       const sid = String(entry?.sessionId || "").trim();
@@ -1021,6 +1022,7 @@ export function createQuaidFacade(deps) {
       const updatedAtMs = parseTimeoutSessionUpdatedAtMs(entry);
       if (updatedAtMs !== null) {
         rows.push({ sessionId: sid, lastActivityMs: updatedAtMs });
+        seen.add(sid);
         continue;
       }
       const transcriptPath = resolveTimeoutSessionTranscriptPath(entry, sid);
@@ -1029,12 +1031,43 @@ export function createQuaidFacade(deps) {
         const stat = fs.statSync(transcriptPath);
         if (Number.isFinite(stat.mtimeMs) && stat.mtimeMs > 0) {
           rows.push({ sessionId: sid, lastActivityMs: stat.mtimeMs });
+          seen.add(sid);
         }
       } catch (err) {
         if (deps.isFailHardEnabled()) {
           throw err;
         }
         console.warn(`[quaid][timeout] session mtime read failed for ${sid}: ${String(err?.message || err)}`);
+      }
+    }
+    // Fallback for sessions that are present as transcript JSONL files but absent
+    // from sessions.json (observed in some OpenClaw pathways with explicit session IDs).
+    for (const dirRaw of deps.timeoutSessionTranscriptDirs?.() || []) {
+      const dir = String(dirRaw || "").trim();
+      if (!dir) continue;
+      let names = [];
+      try {
+        names = fs.readdirSync(dir);
+      } catch (err) {
+        // Transcript fallback directories are optional across OpenClaw versions/install shapes.
+        // Never fail this sweep because one optional directory is missing/unreadable.
+        continue;
+      }
+      for (const name of names) {
+        if (!name.endsWith(".jsonl")) continue;
+        const sid = String(name.slice(0, -6) || "").trim();
+        if (!sid || seen.has(sid)) continue;
+        const transcriptPath = path.join(dir, name);
+        try {
+          const stat = fs.statSync(transcriptPath);
+          if (Number.isFinite(stat.mtimeMs) && stat.mtimeMs > 0) {
+            rows.push({ sessionId: sid, lastActivityMs: stat.mtimeMs });
+            seen.add(sid);
+          }
+        } catch (err) {
+          // File may disappear between readdir and stat; ignore and continue scanning.
+          continue;
+        }
       }
     }
     return rows;

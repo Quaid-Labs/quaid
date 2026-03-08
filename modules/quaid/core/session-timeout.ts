@@ -240,6 +240,7 @@ export class SessionTimeoutManager {
   private eventFilePath: string;
   private workerTimer: ReturnType<typeof setInterval> | null = null;
   private chain: Promise<void> = Promise.resolve();
+  private workerChain: Promise<void> = Promise.resolve();
   private failHard: boolean;
   private extractTimeoutMs: number;
   private maxSignalRetries: number;
@@ -1069,7 +1070,7 @@ export class SessionTimeoutManager {
   }
 
   private triggerWorkerTick(): void {
-    this.chain = this.chain
+    this.workerChain = this.workerChain
       .catch((err: unknown) => {
         safeLog(this.logger, `[memory][timeout] previous worker chain error: ${String((err as Error)?.message || err)}`);
         if (this.failHard) throw err;
