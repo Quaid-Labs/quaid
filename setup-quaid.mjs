@@ -2821,7 +2821,6 @@ function enableRequiredOpenClawHooks() {
   // Support canonical names plus compatibility aliases observed across gateway builds.
   const requiredHooks = [
     ["bootstrap-extra-files", "bot-strap-extra-files"],
-    ["session-memory", "session-memoey"],
   ];
   const optionalHookSets = [
     ["quaid-workflow"],
@@ -2858,7 +2857,7 @@ function enableRequiredOpenClawHooks() {
   const hookSets = [...requiredHooks, ...optionalHookSets];
   let forcedAny = false;
 
-  log.info("Explicitly enabling required OpenClaw hooks: bootstrap-extra-files, session-memory");
+  log.info("Explicitly enabling required OpenClaw hooks: bootstrap-extra-files");
   const forceEnableHook = (hookName) => {
     const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
     const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -2891,8 +2890,7 @@ function enableRequiredOpenClawHooks() {
     for (const hookName of candidates) {
       const res = runCliWithTimeout(cli, ["hooks", "enable", hookName], 25_000);
       if (res.status === 0) {
-        const label = hookName === "bot-strap-extra-files" ? "bootstrap-extra-files" :
-          (hookName === "session-memoey" ? "session-memory" : hookName);
+        const label = hookName === "bot-strap-extra-files" ? "bootstrap-extra-files" : hookName;
         log.info(`Hook enabled: ${label}`);
         enabled = true;
         break;
