@@ -2128,53 +2128,79 @@ async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAsk
     scheduleHour = parseInt(hour);
   }
 
-  // Write janitor schedule to HEARTBEAT.md (the bot reads this on wake)
-  const scheduled = installHeartbeatSchedule(scheduleHour);
+  const ampm = scheduleHour === 0 ? "12:00 AM"
+             : scheduleHour < 12 ? `${scheduleHour}:00 AM`
+             : scheduleHour === 12 ? "12:00 PM"
+             : `${scheduleHour - 12}:00 PM`;
 
-  if (scheduled) {
-    const ampm = scheduleHour === 0 ? "12:00 AM"
-               : scheduleHour < 12 ? `${scheduleHour}:00 AM`
-               : scheduleHour === 12 ? "12:00 PM"
-               : `${scheduleHour - 12}:00 PM`;
-    log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via HEARTBEAT.md`);
+  let scheduled = false;
+
+  if (_isPlatform("claude-code")) {
+    // Claude Code: schedule via launchd plist (macOS) since there is no
+    // gateway heartbeat. The janitor uses the OAuth token from
+    // ~/.claude/.credentials.json — no API key env var needed.
+    scheduled = installLaunchdSchedule(scheduleHour);
+    if (scheduled) {
+      log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via launchd`);
+    } else {
+      log.warn("Could not install launchd schedule.");
+      log.warn(`Run manually: quaid janitor --apply --task all`);
+    }
+
+    const scheduleLines = [
+      C.yellow("The janitor is scheduled via macOS launchd."),
+      C.yellow("It uses your Claude Code OAuth token — no API key needed."),
+      "",
+      C.bold("The launchd agent runs daily and applies janitor maintenance."),
+      C.bold("It will review pending facts, deduplicate, and maintain your"),
+      C.bold("knowledge base automatically."),
+      "",
+      C.dim("To check status: launchctl list | grep quaid"),
+      C.dim("To unload: launchctl unload ~/Library/LaunchAgents/com.quaid.janitor.plist"),
+    ];
+    note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
+
+    handleCancel(await confirm({
+      message: "I understand — the janitor runs nightly via launchd.",
+      initialValue: true,
+    }));
   } else {
-    log.warn("Could not update HEARTBEAT.md automatically.");
-    log.warn("Add this to your HEARTBEAT.md manually:");
-    log.warn(C.dim(`  Janitor check: if ${scheduleHour}:00, run quaid janitor --apply --task all`));
+    // OpenClaw / Standalone: schedule via HEARTBEAT.md (bot reads on wake)
+    scheduled = installHeartbeatSchedule(scheduleHour);
+
+    if (scheduled) {
+      log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via HEARTBEAT.md`);
+    } else {
+      log.warn("Could not update HEARTBEAT.md automatically.");
+      log.warn("Add this to your HEARTBEAT.md manually:");
+      log.warn(C.dim(`  Janitor check: if ${scheduleHour}:00, run quaid janitor --apply --task all`));
+    }
+
+    // Persistent warning — DO NOT REMOVE. The user must understand this.
+    const scheduleLines = [
+      C.yellow("The janitor runs via your bot's HEARTBEAT system."),
+      C.yellow("This keeps your API key secure — never stored in cron or launchd."),
+      "",
+      C.bold("Your bot reads HEARTBEAT.md on each wake, checks the time,"),
+      C.bold("and runs the janitor with secure key injection."),
+    ];
+
+    scheduleLines.push(
+      "",
+      C.bold("If Quaid warns the janitor hasn't run recently, check that"),
+      C.bold("your bot's heartbeat is active and the entry is in HEARTBEAT.md."),
+      C.bold("Ask your agent to fix it."),
+      "",
+      C.dim("Want cron instead? Set your API key in .env and ask your"),
+      C.dim("agent to configure it. (Not recommended — less secure.)"),
+    );
+    note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
+
+    handleCancel(await confirm({
+      message: "I understand — the janitor runs from the bot's heartbeat.",
+      initialValue: true,
+    }));
   }
-
-  // Persistent warning — DO NOT REMOVE. The user must understand this.
-  const scheduleLines = [
-    C.yellow("The janitor runs via your bot's HEARTBEAT system."),
-    C.yellow("This keeps your API key secure — never stored in cron or launchd."),
-    "",
-    C.bold("Your bot reads HEARTBEAT.md on each wake, checks the time,"),
-    C.bold("and runs the janitor with secure key injection."),
-  ];
-
-  // Cloud embeddings key passthrough — uncomment when cloud embedding backend ships
-  // if (embeddings.embedModel === "text-embedding-3-small") {
-  //   scheduleLines.push("");
-  //   scheduleLines.push(C.yellow("You chose cloud embeddings (OpenAI API)."));
-  //   scheduleLines.push(C.yellow("OPENAI_API_KEY must also be passed through the heartbeat"));
-  //   scheduleLines.push(C.yellow("to your janitor calls (embedding backfill + re-embed)."));
-  // }
-
-  scheduleLines.push(
-    "",
-    C.bold("If Quaid warns the janitor hasn't run recently, check that"),
-    C.bold("your bot's heartbeat is active and the entry is in HEARTBEAT.md."),
-    C.bold("Ask your agent to fix it."),
-    "",
-    C.dim("Want cron instead? Set your API key in .env and ask your"),
-    C.dim("agent to configure it. (Not recommended — less secure.)"),
-  );
-  note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
-
-  handleCancel(await confirm({
-    message: "I understand — the janitor runs from the bot's heartbeat.",
-    initialValue: true,
-  }));
 
   const approvalPolicies = janitorAskFirst
     ? {
@@ -2317,6 +2343,93 @@ function installHeartbeatSchedule(hour) {
 
     content = content.trimEnd() + "\n" + janitorBlock;
     fs.writeFileSync(heartbeatPath, content);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function installLaunchdSchedule(hour) {
+  // macOS launchd plist for nightly janitor.
+  // Uses Claude Code's OAuth token (via ~/.claude/.credentials.json) —
+  // no API key env var needed. The quaid CLI resolves QUAID_HOME and
+  // adapter type from embedded env vars.
+  if (process.platform !== "darwin") {
+    log.warn("launchd is macOS-only. Install a cron job manually for this platform.");
+    return false;
+  }
+
+  const quaidBin = path.join(PLUGIN_DIR, "quaid");
+  const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
+  const label = "com.quaid.janitor";
+  const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
+  const logPath = path.join(LOGS_DIR, "janitor", "launchd.log");
+  const errPath = path.join(LOGS_DIR, "janitor", "launchd-err.log");
+
+  // Ensure log directory exists
+  fs.mkdirSync(path.join(LOGS_DIR, "janitor"), { recursive: true });
+
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${quaidCmd}</string>
+    <string>janitor</string>
+    <string>--task</string>
+    <string>all</string>
+    <string>--apply</string>
+    <string>--time-budget</string>
+    <string>3600</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>QUAID_HOME</key>
+    <string>${WORKSPACE}</string>
+    <key>QUAID_ADAPTER</key>
+    <string>claude-code</string>
+    <key>PYTHONPATH</key>
+    <string>${PLUGIN_DIR}</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>${hour}</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${logPath}</string>
+  <key>StandardErrorPath</key>
+  <string>${errPath}</string>
+  <key>Nice</key>
+  <integer>10</integer>
+</dict>
+</plist>
+`;
+
+  try {
+    // Unload existing if present
+    if (fs.existsSync(plistPath)) {
+      spawnSync("launchctl", ["unload", plistPath], { stdio: "pipe" });
+    }
+
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, plist);
+
+    // Load the new schedule
+    const loadResult = spawnSync("launchctl", ["load", plistPath], { stdio: "pipe" });
+    if (loadResult.status !== 0) {
+      log.warn("launchctl load failed — you may need to load manually:");
+      log.warn(C.dim(`  launchctl load ${plistPath}`));
+      return false;
+    }
+
     return true;
   } catch {
     return false;
@@ -3138,6 +3251,12 @@ function setupClaudeCodeHooks() {
   const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_ADAPTER=claude-code`;
 
   const desiredHooks = {
+    SessionStart: [
+      {
+        matcher: "",
+        hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-session-init` }],
+      },
+    ],
     UserPromptSubmit: [{
       matcher: "",
       hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-inject` }],
@@ -3146,11 +3265,11 @@ function setupClaudeCodeHooks() {
       matcher: "",
       hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract --precompact` }],
     }],
-    SessionStart: [{
+    PostToolUse: [{
       matcher: "compact",
-      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-inject-compact` }],
+      hooks: [{ type: "command", command: `echo '[quaid] post-compaction re-injection is a TODO' >&2` }],
     }],
-    SessionEnd: [{
+    Stop: [{
       matcher: "",
       hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract` }],
     }],

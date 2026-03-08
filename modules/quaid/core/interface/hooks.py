@@ -185,6 +185,32 @@ def hook_extract(args):
         print(f"[quaid][{label}] error: {e}", file=sys.stderr)
 
 
+def _check_janitor_health() -> str:
+    """Check if the janitor has run recently. Returns a warning string or empty."""
+    try:
+        from lib.adapter import get_adapter
+        home = get_adapter().quaid_home()
+        checkpoint = home / ".quaid" / "runtime" / "janitor" / "checkpoint.json"
+        if not checkpoint.is_file():
+            return "[Quaid Warning] Janitor has never run. Run: quaid janitor --task all --apply"
+
+        import json as _json
+        import time
+        data = _json.loads(checkpoint.read_text(encoding="utf-8"))
+        last_ts = data.get("last_completed_at", "")
+        if not last_ts:
+            return "[Quaid Warning] Janitor has never completed successfully."
+
+        from datetime import datetime, timezone
+        last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+        age_days = (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400
+        if age_days > 3:
+            return f"[Quaid Warning] Janitor last ran {age_days:.0f} days ago. Check launchd: launchctl list | grep quaid"
+    except Exception:
+        pass
+    return ""
+
+
 def _get_projects_dir() -> Path:
     """Resolve the projects directory from adapter."""
     try:
@@ -241,10 +267,15 @@ def hook_session_init(args):
         print("[quaid][session-init] no project docs found", file=sys.stderr)
         return
 
+    # 3. Check janitor health and prepend warning if stale
+    janitor_warning = _check_janitor_health()
+    if janitor_warning:
+        sections.insert(0, janitor_warning)
+
     context = "\n\n".join(sections)
     print(json.dumps({
         "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
+            "hookEventName": "SessionStart",
             "additionalContext": context,
         }
     }))
