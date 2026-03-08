@@ -134,6 +134,17 @@ _EVENT_NAME_ALIASES: Dict[str, str] = {
     "before_reset": "session.reset",
 }
 
+# OpenClaw exposes a few gateway hook event names that do not map 1:1 to the
+# runtime event bus names in EVENT_REGISTRY. Treat these as valid declarations
+# so standalone Python entrypoints (janitor/extract) do not fail config load.
+_ADAPTER_NATIVE_EVENTS: set[str] = {
+    "session",
+    "session:compact:before",
+    "command",
+    "message",
+    "message:preprocessed",
+}
+
 
 def _canonical_event_name(name: str) -> str:
     token = str(name or "").strip()
@@ -180,6 +191,8 @@ def validate_declared_event_contract(
     errors: List[str] = []
     for plugin_id, exported in declared.items():
         for raw_name in exported:
+            if raw_name in _ADAPTER_NATIVE_EVENTS:
+                continue
             canonical = _canonical_event_name(raw_name)
             if canonical in known:
                 continue
