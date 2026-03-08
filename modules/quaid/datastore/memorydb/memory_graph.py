@@ -2762,7 +2762,8 @@ def route_query(query: str, timeout_ms: Optional[int] = None, max_retries: Optio
         try:
             from config import get_config
 
-            timeout_ms = int(getattr(get_config().retrieval, "hyde_timeout_ms", 15000) or 15000)
+            cfg_hyde_timeout = getattr(get_config().retrieval, "hyde_timeout_ms", 15000)
+            timeout_ms = int(15000 if cfg_hyde_timeout is None else cfg_hyde_timeout)
         except Exception:
             timeout_ms = 15000
 
@@ -2772,8 +2773,10 @@ def route_query(query: str, timeout_ms: Optional[int] = None, max_retries: Optio
         try:
             from config import get_config
             retrieval_cfg = get_config().retrieval
-            cfg_timeout_ms = int(getattr(retrieval_cfg, "hyde_timeout_ms", 15000) or 15000)
-            cfg_max_retries = int(getattr(retrieval_cfg, "hyde_max_retries", 1) or 1)
+            cfg_timeout = getattr(retrieval_cfg, "hyde_timeout_ms", 15000)
+            cfg_timeout_ms = int(15000 if cfg_timeout is None else cfg_timeout)
+            cfg_retries = getattr(retrieval_cfg, "hyde_max_retries", 1)
+            cfg_max_retries = int(1 if cfg_retries is None else cfg_retries)
         except Exception:
             cfg_timeout_ms = 15000
             cfg_max_retries = 1
@@ -3124,6 +3127,18 @@ def _rerank_with_cross_encoder(query: str, results: List[tuple], config_retrieva
 def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, config_retrieval=None) -> List[tuple]:
     """Batch rerank via fast-reasoning LLM call — single call for all candidates."""
     from lib.llm_clients import call_fast_reasoning
+    start_monotonic = time.monotonic()
+
+    # Hard wall timeout: reranker must not block the user path.
+    # If timeout is hit, return best-so-far (original candidate ranking).
+    reranker_timeout_ms = 3000
+    if config_retrieval:
+        try:
+            reranker_timeout_ms = int(getattr(config_retrieval, "reranker_timeout_ms", reranker_timeout_ms) or reranker_timeout_ms)
+        except Exception:
+            reranker_timeout_ms = 3000
+    reranker_timeout_ms = max(250, reranker_timeout_ms)
+    timeout_seconds = max(1, int((reranker_timeout_ms + 999) // 1000))
 
     # Build numbered candidate list
     lines = []
@@ -3143,9 +3158,18 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
 
     try:
         response, _duration = call_fast_reasoning(
-            prompt, max_tokens=200, timeout=10,
+            prompt, max_tokens=200, timeout=timeout_seconds,
             system_prompt="You are a relevance judge. Respond ONLY with a numbered list of 0-5 scores."
         )
+
+        elapsed_ms = int((time.monotonic() - start_monotonic) * 1000)
+        if elapsed_ms > reranker_timeout_ms:
+            logger.warning(
+                "[memory][reranker] timeout exceeded (%sms > %sms); returning original ranking (upstream fast LLM timeout/latency)",
+                elapsed_ms,
+                reranker_timeout_ms,
+            )
+            return [(node, score) for node, score in candidates]
 
         if not response:
             return [(node, score) for node, score in candidates]
@@ -3194,7 +3218,15 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
                 pass  # Inhibition is best-effort
 
         return reranked
-    except Exception:
+    except Exception as exc:
+        elapsed_ms = int((time.monotonic() - start_monotonic) * 1000)
+        if elapsed_ms >= reranker_timeout_ms:
+            logger.warning(
+                "[memory][reranker] timeout/failure after %sms (limit=%sms): %s; returning original ranking",
+                elapsed_ms,
+                reranker_timeout_ms,
+                str(exc),
+            )
         return [(node, score) for node, score in candidates]
 
 

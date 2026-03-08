@@ -1868,6 +1868,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         .replace(/\[\[[^\]]+\]\]\s*/g, "")
         .replace(/^\[[^\]]+\]\s*/, "")
         .trim();
+      const normalizedLc = normalized.toLowerCase();
 
       if (role === "user") {
         const command = detectExplicitLifecycleUserCommand(text);
@@ -1879,6 +1880,15 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         }
       }
 
+      // Some runtime paths persist slash-command markers outside user-role messages.
+      if (/(^|\s)\/(new|reset|restart)(\s|$)/i.test(normalized)) {
+        const command = normalized.match(/\/(new|reset|restart)/i)?.[0]?.toLowerCase() || "/new";
+        return { label: "ResetSignal", source: "system_notice", signature: `cmd:${command}` };
+      }
+      if (/(^|\s)\/compact(\s|$)/i.test(normalized)) {
+        return { label: "CompactionSignal", source: "system_notice", signature: "cmd:/compact" };
+      }
+
       if (role === "system") {
         const hasCompacted = /\bcompacted\b/i.test(normalized);
         const hasDelta = /\(\s*[\d.]+k?\s*(?:->|→)\s*[\d.]+k?\s*\)/i.test(normalized);
@@ -1888,6 +1898,19 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
             label: "CompactionSignal",
             source: "system_notice",
             signature: `system:${normalized.toLowerCase()}`,
+          };
+        }
+        // OpenClaw /new session reset can surface as a system bootstrap notice.
+        if (
+          normalizedLc.includes("new session was started via /new or /reset")
+          || normalizedLc.includes("a new session was started via /new or /reset")
+          || (normalizedLc.includes("new session was started") && normalizedLc.includes("/new"))
+          || (normalizedLc.includes("session startup sequence") && normalizedLc.includes("/new"))
+        ) {
+          return {
+            label: "ResetSignal",
+            source: "system_notice",
+            signature: "system:new_session_started",
           };
         }
       }
@@ -2821,11 +2844,32 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     if (!retryDecision.retry) return primary;
     const expanded = buildExpandedRecallQuery(query);
     if (expanded === query) return primary;
+    const retryBudgetRaw = Number(((deps.getMemoryConfig() || {}).retrieval || {}).retry_budget_ms ?? 3000);
+    const retryBudgetMs = Number.isFinite(retryBudgetRaw) ? Math.max(0, Math.floor(retryBudgetRaw)) : 3000;
+    if (retryBudgetMs <= 0) {
+      console.log("[quaid][facade][recall] retry skipped (retry_budget_ms=0)");
+      return primary;
+    }
+    const retryStartedAt = Date.now();
     console.log(
-      `[quaid][facade][recall] retry reasons=${retryDecision.reasons.join(",")} expanded="${expanded.slice(0, 160)}"`,
+      `[quaid][facade][recall] retry reasons=${retryDecision.reasons.join(",")} expanded="${expanded.slice(0, 160)}" budget_ms=${retryBudgetMs}`,
     );
-    const secondary = await recall({ ...opts, query: expanded });
-    return mergeRecallResults(primary, secondary, limit);
+    try {
+      const elapsed = Date.now() - retryStartedAt;
+      const remainingMs = Math.max(1, retryBudgetMs - elapsed);
+      const secondary = await Promise.race<MemoryResult[]>([
+        recall({ ...opts, query: expanded }),
+        new Promise<MemoryResult[]>((_, reject) =>
+          setTimeout(() => reject(new Error(`retry budget exceeded (${retryBudgetMs}ms)`)), remainingMs),
+        ),
+      ]);
+      return mergeRecallResults(primary, secondary, limit);
+    } catch (err) {
+      console.warn(
+        `[quaid][facade][recall] retry bailed: ${String((err as Error)?.message || err)}; returning primary`,
+      );
+      return primary;
+    }
   }
 
   function formatMemoriesForInjection(memories: MemoryResult[]): string {

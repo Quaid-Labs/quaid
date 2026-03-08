@@ -603,6 +603,62 @@ describe("QuaidFacade", () => {
     expect(execPython).toHaveBeenCalledTimes(2);
   });
 
+  it("recallWithToolRetry skips retry when retry_budget_ms is 0", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command !== "search") return "{}";
+      return JSON.stringify([
+        { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
+      ]);
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false, retry_budget_ms: 0 },
+      })),
+    }));
+    const results = await facade.recallWithToolRetry({
+      query: "who leads project alpha",
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      limit: 5,
+    });
+    expect(results).toHaveLength(1);
+    expect(execPython).toHaveBeenCalledTimes(1);
+  });
+
+  it("recallWithToolRetry returns primary when retry exceeds budget", async () => {
+    const execPython = vi.fn(async (command: string) => {
+      if (command !== "search") return "{}";
+      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "search").length;
+      if (callCount === 1) {
+        return JSON.stringify([
+          { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
+        ]);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return JSON.stringify([
+        { text: "Alice leads the project alpha roadmap", category: "fact", similarity: 0.84 },
+      ]);
+    });
+    const facade = createQuaidFacade(makeMockDeps({
+      execPython,
+      getMemoryConfig: vi.fn(() => ({
+        retrieval: { failHard: false, retry_budget_ms: 1 },
+      })),
+    }));
+    const results = await facade.recallWithToolRetry({
+      query: "who leads project alpha",
+      routeStores: false,
+      datastores: ["vector_basic"],
+      expandGraph: false,
+      limit: 5,
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0].text).toContain("misc unrelated fragment");
+    expect(execPython).toHaveBeenCalledTimes(2);
+  });
+
   it("formatMemoriesForInjection sorts by date and includes domain/confidence markers", () => {
     const facade = createQuaidFacade(makeMockDeps({
       getMemoryConfig: vi.fn(() => ({
@@ -1260,6 +1316,30 @@ describe("QuaidFacade", () => {
       label: "CompactionSignal",
       source: "system_notice",
       signature: "system:compacted (37k -> 5.0k) context 5.0k/200k",
+    });
+  });
+
+  it("detectLifecycleSignal identifies reset from system startup notice", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const signal = facade.detectLifecycleSignal([
+      { role: "system", content: "A new session was started via /new or /reset. Execute your Session Startup sequence now." },
+    ]);
+    expect(signal).toEqual({
+      label: "ResetSignal",
+      source: "system_notice",
+      signature: "cmd:/new",
+    });
+  });
+
+  it("detectLifecycleSignal identifies lifecycle slash command outside user role", () => {
+    const facade = createQuaidFacade(makeMockDeps());
+    const signal = facade.detectLifecycleSignal([
+      { role: "assistant", content: "[system] /new" },
+    ]);
+    expect(signal).toEqual({
+      label: "ResetSignal",
+      source: "system_notice",
+      signature: "cmd:/new",
     });
   });
 
