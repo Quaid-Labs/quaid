@@ -96,6 +96,7 @@ const QUAID_NOTES_DIR = path.join(QUAID_RUNTIME_DIR, "notes");
 const QUAID_INJECTION_LOG_DIR = path.join(QUAID_RUNTIME_DIR, "injection");
 const QUAID_NOTIFY_DIR = path.join(QUAID_RUNTIME_DIR, "notify");
 const QUAID_LOGS_DIR = path.join(WORKSPACE, "logs");
+const QUAID_HOOK_TRACE_PATH = path.join(QUAID_LOGS_DIR, "quaid-hook-trace.jsonl");
 const QUAID_JANITOR_DIR = path.join(QUAID_LOGS_DIR, "janitor");
 const PENDING_INSTALL_MIGRATION_PATH = path.join(QUAID_JANITOR_DIR, "pending-install-migration.json");
 const PENDING_APPROVAL_REQUESTS_PATH = path.join(QUAID_JANITOR_DIR, "pending-approval-requests.json");
@@ -109,6 +110,29 @@ for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECT
     fs.mkdirSync(p, { recursive: true });
   } catch (err: unknown) {
     console.error(`[quaid][startup] failed to create runtime dir: ${p}`, (err as Error)?.message || String(err));
+  }
+}
+
+function _jsonSafe(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '"[unserializable]"';
+  }
+}
+
+function writeHookTrace(event: string, data: Record<string, unknown> = {}): void {
+  const payload = {
+    ts: new Date().toISOString(),
+    event,
+    ...data,
+  };
+  try {
+    fs.appendFileSync(QUAID_HOOK_TRACE_PATH, `${_jsonSafe(payload)}\n`, "utf8");
+  } catch (err: unknown) {
+    console.warn(
+      `[quaid][trace] write failed event=${event} err=${String((err as Error)?.message || err)}`
+    );
   }
 }
 
@@ -911,7 +935,11 @@ function preprocessTranscriptText(text: string): string {
     .trim();
 }
 
-function shouldSkipTranscriptText(_role: "user" | "assistant", text: string): boolean {
+function shouldSkipTranscriptText(roleOrText: "user" | "assistant" | string, maybeText?: string): boolean {
+  // Keep compatibility with both callback shapes:
+  // - transcript formatter: shouldSkipText(role, text)
+  // - session-timeout manager: shouldSkipText(text)
+  const text = typeof maybeText === "string" ? maybeText : String(roleOrText || "");
   if (!text) return true;
   if (text.startsWith("GatewayRestart:") || text.startsWith("System:")) return true;
   if (text.includes('"kind": "restart"')) return true;
@@ -2050,13 +2078,27 @@ notify_user(f"📁 Project registered: {project_label}")
       // Wait for in-flight extraction if requested
       const queuedExtraction = facade.getQueuedExtractionPromise();
       if (waitForExtraction && queuedExtraction) {
+        const waitStartedAt = Date.now();
+        writeHookTrace("recall.wait_for_extraction.start", {
+          source: sourceTag,
+          query_preview: String(query || "").slice(0, 160),
+        });
         let raceTimer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
             queuedExtraction,
             new Promise<void>((_, rej) => { raceTimer = setTimeout(() => rej(new Error("timeout")), 60_000); })
           ]);
+          writeHookTrace("recall.wait_for_extraction.done", {
+            source: sourceTag,
+            wait_ms: Date.now() - waitStartedAt,
+          });
         } catch (err: unknown) {
+          writeHookTrace("recall.wait_for_extraction.error", {
+            source: sourceTag,
+            wait_ms: Date.now() - waitStartedAt,
+            error: String((err as Error)?.message || err),
+          });
           if (isFailHardEnabled()) {
             throw err;
           }
@@ -2096,8 +2138,17 @@ notify_user(f"📁 Project registered: {project_label}")
     // Shared memory extraction logic — used by both compaction and reset hooks
     const extractMemoriesFromMessages = async (messages: any[], label: string, sessionId?: string) => {
       console.log(`[quaid][extract] start label=${label} session=${sessionId || "unknown"} message_count=${messages.length}`);
+      writeHookTrace("extract.start", {
+        label,
+        session_id: sessionId || "",
+        message_count: messages.length,
+      });
       if (!messages.length) {
         console.log(`[quaid] ${label}: no messages to analyze`);
+        writeHookTrace("extract.skip_empty_messages", {
+          label,
+          session_id: sessionId || "",
+        });
         return;
       }
 
@@ -2120,6 +2171,11 @@ notify_user(f"📁 Project registered: {project_label}")
         showProcessingStart: getMemoryConfig().notifications?.showProcessingStart !== false,
       });
       if (startNotify) {
+        writeHookTrace("extract.notify_start", {
+          label,
+          session_id: sessionId || "",
+          trigger: startNotify.triggerDesc,
+        });
         spawnNotifyScript(`
 from core.runtime.notify import notify_user
 notify_user("🧠 Processing memories from ${startNotify.triggerDesc}...")
@@ -2132,6 +2188,11 @@ notify_user("🧠 Processing memories from ${startNotify.triggerDesc}...")
       } catch (err: unknown) {
         const msg = String((err as Error)?.message || err);
         console.error(`[quaid] ${label} extraction failed: ${msg}`);
+        writeHookTrace("extract.pipeline_error", {
+          label,
+          session_id: sessionId || "",
+          error: msg.slice(0, 500),
+        });
         // Extraction is best-effort at this adapter boundary. Lower layers still
         // enforce failHard semantics where configured, but we avoid crashing the
         // active gateway/session loop on background extraction failures.
@@ -2140,6 +2201,10 @@ notify_user("🧠 Processing memories from ${startNotify.triggerDesc}...")
 
       if (!extractionResult) {
         console.log(`[quaid] ${label}: empty transcript after filtering`);
+        writeHookTrace("extract.skip_empty_after_filter", {
+          label,
+          session_id: sessionId || "",
+        });
         return;
       }
       const factDetails = extractionResult.factDetails || [];
@@ -2154,6 +2219,15 @@ notify_user("🧠 Processing memories from ${startNotify.triggerDesc}...")
         `facts_len=${factDetails.length} first_status=${firstFactStatus} ` +
         `stored=${stored} skipped=${skipped} edges=${edgesCreated}`,
       );
+      writeHookTrace("extract.pipeline_done", {
+        label,
+        session_id: sessionId || "",
+        fact_count: factDetails.length,
+        stored,
+        skipped,
+        edges_created: edgesCreated,
+        trigger_type: triggerFromExtraction,
+      });
       console.log(`[quaid] ${label} extraction complete: ${stored} stored, ${skipped} skipped, ${edgesCreated} edges`);
       console.log(`[quaid][extract] done label=${label} session=${sessionId || "unknown"} stored=${stored} skipped=${skipped} edges=${edgesCreated}`);
 
@@ -2178,6 +2252,13 @@ notify_user("🧠 Processing memories from ${startNotify.triggerDesc}...")
       if (!suppressBacklogNotify
         && facade.shouldNotifyFeature("extraction", "summary")
         && triggerType === "compaction") {
+        writeHookTrace("extract.notify_compaction_batched", {
+          session_id: dedupeSession,
+          trigger_type: triggerType,
+          stored,
+          skipped,
+          edges_created: edgesCreated,
+        });
         // OpenClaw may emit many compaction-related micro-sessions in bursts.
         // Batch notification output so one user-triggered compact does not spam.
         facade.queueCompactionExtractionSummary(
@@ -2197,6 +2278,16 @@ notify_user(${JSON.stringify(summary)}, channel_override=_resolve_channel("extra
         && (factDetails.length > 0 || hasSnippets || hasJournalEntries || alwaysNotifyCompletion)
         && facade.shouldNotifyFeature("extraction", "summary")
         && facade.shouldEmitExtractionNotify(completionDedupeKey)) {
+        writeHookTrace("extract.notify_completion", {
+          session_id: dedupeSession,
+          trigger_type: triggerType,
+          stored,
+          skipped,
+          edges_created: edgesCreated,
+          has_snippets: hasSnippets,
+          has_journal_entries: hasJournalEntries,
+          always_notify_completion: alwaysNotifyCompletion,
+        });
         try {
           const payload = facade.buildExtractionCompletionNotificationPayload({
             stored,
@@ -2231,7 +2322,23 @@ notify_memory_extraction(
           }
         } catch (notifyErr: unknown) {
           console.warn(`[quaid] Extraction notification skipped: ${(notifyErr as Error).message}`);
+          writeHookTrace("extract.notify_completion_error", {
+            session_id: dedupeSession,
+            trigger_type: triggerType,
+            error: String((notifyErr as Error)?.message || notifyErr),
+          });
         }
+      } else {
+        writeHookTrace("extract.notify_completion_suppressed", {
+          session_id: dedupeSession,
+          trigger_type: triggerType,
+          suppress_backlog_notify: suppressBacklogNotify,
+          should_notify_feature: facade.shouldNotifyFeature("extraction", "summary"),
+          fact_count: factDetails.length,
+          has_snippets: hasSnippets,
+          has_journal_entries: hasJournalEntries,
+          always_notify_completion: alwaysNotifyCompletion,
+        });
       }
 
       if (triggerType === "timeout") {
@@ -2259,8 +2366,17 @@ notify_memory_extraction(
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const extractionSessionId = sessionId || facade.extractSessionId(messages, ctx);
+        writeHookTrace("hook.before_compaction.received", {
+          hook_session_id: sessionId || "",
+          extraction_session_id: extractionSessionId || "",
+          event_message_count: messages.length,
+          conversation_message_count: conversationMessages.length,
+        });
         if (conversationMessages.length === 0) {
           console.log(`[quaid] before_compaction: empty/internal hook payload; deferring to timeout source session=${extractionSessionId || "unknown"}`);
+          writeHookTrace("hook.before_compaction.empty_payload", {
+            extraction_session_id: extractionSessionId || "",
+          });
         } else {
           console.log(`[quaid] before_compaction hook triggered, ${messages.length} messages, session=${sessionId || "unknown"}`);
         }
@@ -2289,8 +2405,16 @@ notify_memory_extraction(
                   ),
                 });
                 console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
+                writeHookTrace("hook.before_compaction.signal_queued", {
+                  extraction_session_id: extractionSessionId || "",
+                  source: "before_compaction",
+                });
               } else {
                 console.log(`[quaid][signal] suppressed duplicate CompactionSignal session=${extractionSessionId}`);
+                writeHookTrace("hook.before_compaction.signal_suppressed", {
+                  extraction_session_id: extractionSessionId || "",
+                  reason: "duplicate",
+                });
               }
             } else {
               const extracted = await timeoutManager.extractSessionFromLog(
@@ -2301,9 +2425,16 @@ notify_memory_extraction(
               console.log(
                 `[quaid][signal] empty-hook-payload fallback session=${extractionSessionId} extracted=${extracted ? "yes" : "no"}`
               );
+              writeHookTrace("hook.before_compaction.empty_payload_fallback", {
+                extraction_session_id: extractionSessionId || "",
+                extracted,
+              });
             }
           } else {
             console.log("[quaid] Compaction: memory extraction skipped — memory system disabled");
+            writeHookTrace("hook.before_compaction.skip_memory_disabled", {
+              extraction_session_id: extractionSessionId || "",
+            });
           }
 
           if (conversationMessages.length === 0) {
@@ -2345,6 +2476,11 @@ notify_memory_extraction(
         facade.queueExtraction(doExtraction, "compaction")
           .catch((doErr: unknown) => {
             console.error(`[quaid][compaction] extraction_failed session=${sessionId || "unknown"} err=${String((doErr as Error)?.message || doErr)}`);
+            writeHookTrace("hook.before_compaction.extraction_failed", {
+              hook_session_id: sessionId || "",
+              extraction_session_id: extractionSessionId || "",
+              error: String((doErr as Error)?.message || doErr),
+            });
             if (isFailHardEnabled()) {
               throw doErr;
             }
@@ -2354,6 +2490,10 @@ notify_memory_extraction(
           throw err;
         }
         console.error("[quaid] before_compaction hook failed:", err);
+        writeHookTrace("hook.before_compaction.error", {
+          hook_session_id: String(ctx?.sessionId || ""),
+          error: String((err as Error)?.message || err),
+        });
       }
     }, {
       name: "compaction-memory-extraction",
@@ -2366,10 +2506,25 @@ notify_memory_extraction(
         try {
           const messages: any[] = event?.messages || [];
           const sessionId = facade.resolveLifecycleHookSessionId(event, ctx, messages);
+          writeHookTrace("hook.command.received", {
+            command: commandAction,
+            hook_session_id: sessionId || "",
+            message_count: messages.length,
+          });
           if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
+            writeHookTrace("hook.command.skipped", {
+              command: commandAction,
+              hook_session_id: sessionId || "",
+              reason: "invalid_or_internal_session",
+            });
             return;
           }
           if (!isSystemEnabled("memory")) {
+            writeHookTrace("hook.command.skipped", {
+              command: commandAction,
+              hook_session_id: sessionId,
+              reason: "memory_disabled",
+            });
             return;
           }
           const signature = `hook:command_${commandAction}`;
@@ -2379,6 +2534,11 @@ notify_memory_extraction(
             signature,
           })) {
             console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${sessionId} source=command:${commandAction}`);
+            writeHookTrace("hook.command.signal_suppressed", {
+              command: commandAction,
+              hook_session_id: sessionId,
+              reason: "duplicate",
+            });
             return;
           }
           facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
@@ -2389,11 +2549,20 @@ notify_memory_extraction(
             hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
           });
           console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:${commandAction}`);
+          writeHookTrace("hook.command.signal_queued", {
+            command: commandAction,
+            hook_session_id: sessionId,
+          });
         } catch (err: unknown) {
           if (isFailHardEnabled()) {
             throw err;
           }
           console.error(`[quaid] command:${commandAction} hook failed:`, err);
+          writeHookTrace("hook.command.error", {
+            command: commandAction,
+            hook_session_id: String(ctx?.sessionId || ""),
+            error: String((err as Error)?.message || err),
+          });
         }
       }, {
         name: `command-${commandAction}-memory-extraction`,
@@ -2413,8 +2582,19 @@ notify_memory_extraction(
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const extractionSessionId = facade.resolveLifecycleHookSessionId(event, ctx, conversationMessages);
+        writeHookTrace("hook.before_reset.received", {
+          hook_session_id: sessionId || "",
+          extraction_session_id: extractionSessionId || "",
+          reason: String(reason || "unknown"),
+          event_message_count: messages.length,
+          conversation_message_count: conversationMessages.length,
+        });
         if (!extractionSessionId) {
           console.log(`[quaid] before_reset: skip unresolved session id session=${sessionId || "unknown"}`);
+          writeHookTrace("hook.before_reset.skipped", {
+            hook_session_id: sessionId || "",
+            reason: "unresolved_session_id",
+          });
           return;
         }
         if (conversationMessages.length === 0) {
@@ -2442,11 +2622,22 @@ notify_memory_extraction(
                 conversation_message_count: conversationMessages.length,
               });
               console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
+              writeHookTrace("hook.before_reset.signal_queued", {
+                extraction_session_id: extractionSessionId,
+                reason: String(reason || "unknown"),
+              });
             } else {
               console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${extractionSessionId}`);
+              writeHookTrace("hook.before_reset.signal_suppressed", {
+                extraction_session_id: extractionSessionId,
+                reason: "duplicate",
+              });
             }
           } else {
             console.log("[quaid] Reset: memory extraction skipped — memory system disabled");
+            writeHookTrace("hook.before_reset.skip_memory_disabled", {
+              extraction_session_id: extractionSessionId,
+            });
           }
 
           // Auto-update docs from transcript (non-fatal)
@@ -2481,6 +2672,11 @@ notify_memory_extraction(
         facade.queueExtraction(doExtraction, "reset")
           .catch((doErr: unknown) => {
             console.error(`[quaid][reset] extraction_failed session=${sessionId || "unknown"} err=${String((doErr as Error)?.message || doErr)}`);
+            writeHookTrace("hook.before_reset.extraction_failed", {
+              hook_session_id: sessionId || "",
+              extraction_session_id: extractionSessionId,
+              error: String((doErr as Error)?.message || doErr),
+            });
             if (isFailHardEnabled()) {
               throw doErr;
             }
@@ -2490,6 +2686,10 @@ notify_memory_extraction(
           throw err;
         }
         console.error("[quaid] before_reset hook failed:", err);
+        writeHookTrace("hook.before_reset.error", {
+          hook_session_id: String(ctx?.sessionId || ""),
+          error: String((err as Error)?.message || err),
+        });
       }
     }, {
       name: "reset-memory-extraction",
@@ -2503,10 +2703,23 @@ notify_memory_extraction(
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();
         const messageCount = Number(event?.messageCount || 0);
+        writeHookTrace("hook.session_end.received", {
+          hook_session_id: sessionId,
+          hook_session_key: sessionKey,
+          message_count: Number.isFinite(messageCount) ? messageCount : 0,
+        });
         if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
+          writeHookTrace("hook.session_end.skipped", {
+            hook_session_id: sessionId,
+            reason: "invalid_or_internal_session",
+          });
           return;
         }
         if (!isSystemEnabled("memory")) {
+          writeHookTrace("hook.session_end.skipped", {
+            hook_session_id: sessionId,
+            reason: "memory_disabled",
+          });
           return;
         }
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
@@ -2515,6 +2728,10 @@ notify_memory_extraction(
           signature: "hook:session_end",
         })) {
           console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${sessionId} source=session_end`);
+          writeHookTrace("hook.session_end.signal_suppressed", {
+            hook_session_id: sessionId,
+            reason: "duplicate",
+          });
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
@@ -2527,11 +2744,19 @@ notify_memory_extraction(
         console.log(
           `[quaid][signal] queued ResetSignal session=${sessionId} source=session_end key=${sessionKey || "unknown"}`
         );
+        writeHookTrace("hook.session_end.signal_queued", {
+          hook_session_id: sessionId,
+          hook_session_key: sessionKey,
+        });
       } catch (err: unknown) {
         if (isFailHardEnabled()) {
           throw err;
         }
         console.error("[quaid] session_end hook failed:", err);
+        writeHookTrace("hook.session_end.error", {
+          hook_session_id: String(event?.sessionId || ctx?.sessionId || ""),
+          error: String((err as Error)?.message || err),
+        });
       }
     }, {
       name: "session-end-memory-extraction",
