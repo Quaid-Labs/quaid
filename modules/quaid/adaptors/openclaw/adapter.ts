@@ -1090,7 +1090,46 @@ const quaidPlugin = {
       if (contractDecl.enabled) {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
       }
-      return api.registerHook(eventName as any, handler, options);
+      console.log(
+        `[quaid][debug][hook.register] event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")}`
+      );
+      writeHookTrace("hook.register", {
+        hook_event: eventName,
+        name: String(options?.name || ""),
+        priority: Number(options?.priority || 0),
+      });
+      const wrappedHandler = async (...args: any[]) => {
+        const event = args?.[0];
+        const ctx = args?.[1];
+        const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
+        const messageCount = Array.isArray(event?.messages) ? event.messages.length : 0;
+        writeHookTrace("hook.debug.invoke", {
+          hook_event: eventName,
+          session_id: sessionId,
+          message_count: messageCount,
+          has_event: Boolean(event),
+          has_ctx: Boolean(ctx),
+        });
+        console.log(
+          `[quaid][debug][hook.invoke] event=${eventName} session=${sessionId || "unknown"} messages=${messageCount}`
+        );
+        try {
+          const out = await handler(...args);
+          writeHookTrace("hook.debug.complete", {
+            hook_event: eventName,
+            session_id: sessionId,
+          });
+          return out;
+        } catch (err: unknown) {
+          writeHookTrace("hook.debug.error", {
+            hook_event: eventName,
+            session_id: sessionId,
+            error: String((err as Error)?.message || err),
+          });
+          throw err;
+        }
+      };
+      return api.registerHook(eventName as any, wrappedHandler, options);
     };
     const registerToolChecked = (factory: () => any) => {
       const spec = factory();
@@ -1319,11 +1358,46 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
           const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
+          writeHookTrace("hook.transcript_update.received", {
+            update_session_id: String(update?.sessionId || ""),
+            session_file: sessionFile,
+            message_count: messages.length,
+          });
           const detail = facade.detectLifecycleSignal(messages);
-          if (!detail) return;
+          if (!detail) {
+            const tail = messages.slice(-5).map((m: any) => ({
+              role: String(m?.role || ""),
+              text: String(facade.getMessageText(m) || "").slice(0, 200),
+            }));
+            writeHookTrace("hook.transcript_update.no_signal", {
+              update_session_id: String(update?.sessionId || ""),
+              session_file: sessionFile,
+              message_count: messages.length,
+              tail,
+            });
+            return;
+          }
+          // Reset/new should be sourced from direct command/message hooks.
+          // Transcript fallback can drift into internal extraction sessions.
+          if (detail.label === "ResetSignal" && detail.source === "system_notice") {
+            writeHookTrace("hook.transcript_update.skipped", {
+              reason: "reset_signal_handled_by_command_or_message_hook",
+              detected_source: String(detail.source || ""),
+              session_file: sessionFile,
+            });
+            return;
+          }
           const sessionId =
             facade.parseSessionIdFromTranscriptPath(sessionFile) ||
             String(update?.sessionId || "").trim();
+          writeHookTrace("hook.transcript_update.detected", {
+            update_session_id: String(update?.sessionId || ""),
+            detected_label: String(detail.label || ""),
+            detected_source: String(detail.source || ""),
+            detected_signature: String(detail.signature || ""),
+            parsed_session_id: sessionId,
+            session_file: sessionFile,
+          });
           if (!sessionId) {
             console.log(`[quaid][signal] transcript_update missing session id file=${sessionFile}`);
             return;
@@ -1342,6 +1416,235 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       });
       console.log("[quaid] Registered runtime.events.onSessionTranscriptUpdate lifecycle fallback");
     }
+
+    // Direct slash-command capture: command:new/reset/compact can arrive as message events
+    // before transcript files settle; bind extraction to the active user session.
+    const handleSlashLifecycleFromMessage = async (event: any, ctx: any, sourceEvent: "message:received" | "message:preprocessed") => {
+      try {
+        const text = String(
+          facade.getMessageText(event?.message || event) ||
+          event?.text ||
+          event?.content ||
+          ""
+        ).trim();
+        if (!text) return;
+        const normalized = text.toLowerCase();
+        let commandAction: "new" | "reset" | "compact" | null = null;
+        let lifecycleSignal: "ResetSignal" | "CompactionSignal" | null = null;
+        if (normalized === "/new" || normalized.startsWith("/new ")) {
+          commandAction = "new";
+          lifecycleSignal = "ResetSignal";
+        } else if (normalized === "/reset" || normalized.startsWith("/reset ")) {
+          commandAction = "reset";
+          lifecycleSignal = "ResetSignal";
+        } else if (normalized === "/compact" || normalized.startsWith("/compact ")) {
+          commandAction = "compact";
+          lifecycleSignal = "CompactionSignal";
+        }
+        if (!commandAction || !lifecycleSignal) return;
+        const sessionId = facade.resolveMemoryStoreSessionId(ctx);
+        writeHookTrace("hook.message.command_detected", {
+          source_event: sourceEvent,
+          command: commandAction,
+          text: text.slice(0, 120),
+          hook_session_id: sessionId || "",
+        });
+        if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled("memory")) {
+          return;
+        }
+        const signature = `msg:${sourceEvent}:command_${commandAction}`;
+        if (!facade.shouldProcessLifecycleSignal(sessionId, {
+          label: lifecycleSignal,
+          source: "hook",
+          signature,
+        })) {
+          writeHookTrace("hook.message.signal_suppressed", {
+            source_event: sourceEvent,
+            command: commandAction,
+            hook_session_id: sessionId,
+            reason: "duplicate",
+          });
+          return;
+        }
+        facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
+        timeoutManager.queueExtractionSignal(sessionId, lifecycleSignal, {
+          source: sourceEvent,
+          command: commandAction,
+          hook_session_id: sessionId,
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+        });
+        console.log(`[quaid][signal] queued ${lifecycleSignal} session=${sessionId} source=${sourceEvent} command=${commandAction}`);
+        writeHookTrace("hook.message.signal_queued", {
+          source_event: sourceEvent,
+          command: commandAction,
+          hook_session_id: sessionId,
+        });
+      } catch (err: unknown) {
+        if (isFailHardEnabled()) throw err;
+        console.error(`[quaid] ${sourceEvent} command detector failed:`, err);
+        writeHookTrace("hook.message.error", {
+          source_event: sourceEvent,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    };
+    api.on("message:received", async (event: any, ctx: any) => {
+      await handleSlashLifecycleFromMessage(event, ctx, "message:received");
+    });
+    api.on("message:preprocessed", async (event: any, ctx: any) => {
+      await handleSlashLifecycleFromMessage(event, ctx, "message:preprocessed");
+    });
+
+    // Primary lifecycle command path on supported OpenClaw builds.
+    // Keep this explicit hook path to avoid transcript/session drift.
+    const handleLifecycleCommandHook = async (
+      action: "new" | "reset",
+      event: any,
+      ctx: any
+    ) => {
+      try {
+        const sessionId = facade.resolveLifecycleHookSessionId(event, ctx);
+        writeHookTrace("hook.command.received", {
+          action,
+          hook_session_id: sessionId || "",
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+        });
+        if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled("memory")) {
+          return;
+        }
+        const signature = `hook:command_${action}`;
+        if (!facade.shouldProcessLifecycleSignal(sessionId, {
+          label: "ResetSignal",
+          source: "hook",
+          signature,
+        })) {
+          writeHookTrace("hook.command.signal_suppressed", {
+            action,
+            hook_session_id: sessionId,
+            reason: "duplicate",
+          });
+          return;
+        }
+        facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
+        timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
+          source: `command:${action}`,
+          command: action,
+          hook_session_id: sessionId,
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+        });
+        console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:${action}`);
+        writeHookTrace("hook.command.signal_queued", {
+          action,
+          hook_session_id: sessionId,
+        });
+      } catch (err: unknown) {
+        if (isFailHardEnabled()) throw err;
+        console.error(`[quaid] command:${action} hook failed:`, err);
+        writeHookTrace("hook.command.error", {
+          action,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    };
+    registerInternalHookChecked("command", async (event: any, ctx: any) => {
+      const action = String(event?.action || "").trim().toLowerCase();
+      if (action === "new" || action === "reset") {
+        await handleLifecycleCommandHook(action, event, ctx);
+        return;
+      }
+      if (action !== "compact") {
+        return;
+      }
+      try {
+        const sessionId = facade.resolveLifecycleHookSessionId(event, ctx);
+        writeHookTrace("hook.command.received", {
+          action,
+          hook_session_id: sessionId || "",
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+        });
+        if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled("memory")) {
+          return;
+        }
+        if (!facade.shouldProcessLifecycleSignal(sessionId, {
+          label: "CompactionSignal",
+          source: "hook",
+          signature: "hook:command_compact",
+        })) {
+          writeHookTrace("hook.command.signal_suppressed", {
+            action,
+            hook_session_id: sessionId,
+            reason: "duplicate",
+          });
+          return;
+        }
+        facade.markLifecycleSignalFromHook(sessionId, "CompactionSignal");
+        timeoutManager.queueExtractionSignal(sessionId, "CompactionSignal", {
+          source: "command:compact",
+          command: action,
+          hook_session_id: sessionId,
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+        });
+        console.log(`[quaid][signal] queued CompactionSignal session=${sessionId} source=command:${action}`);
+        writeHookTrace("hook.command.signal_queued", {
+          action,
+          hook_session_id: sessionId,
+        });
+      } catch (err: unknown) {
+        if (isFailHardEnabled()) throw err;
+        console.error("[quaid] command:compact hook failed:", err);
+        writeHookTrace("hook.command.error", {
+          action,
+          error: String((err as Error)?.message || err),
+        });
+      }
+    }, {
+      name: "command-memory-extraction",
+      priority: 10,
+    });
+    registerInternalHookChecked("command:new", async (event: any, ctx: any) => {
+      await handleLifecycleCommandHook("new", event, ctx);
+    }, {
+      name: "command-new-memory-extraction",
+      priority: 10,
+    });
+    registerInternalHookChecked("command:reset", async (event: any, ctx: any) => {
+      await handleLifecycleCommandHook("reset", event, ctx);
+    }, {
+      name: "command-reset-memory-extraction",
+      priority: 10,
+    });
+    registerInternalHookChecked("session", async (event: any, ctx: any) => {
+      try {
+        const action = String(event?.action || "").trim().toLowerCase();
+        if (action !== "compact:before") {
+          return;
+        }
+        const sessionId = facade.resolveLifecycleHookSessionId(event, ctx);
+        if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled("memory")) {
+          return;
+        }
+        if (!facade.shouldProcessLifecycleSignal(sessionId, {
+          label: "CompactionSignal",
+          source: "hook",
+          signature: "hook:session_action_compact_before",
+        })) {
+          return;
+        }
+        facade.markLifecycleSignalFromHook(sessionId, "CompactionSignal");
+        timeoutManager.queueExtractionSignal(sessionId, "CompactionSignal", {
+          source: "session:compact:before",
+          hook_session_id: sessionId,
+          hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
+        });
+        console.log(`[quaid][signal] queued CompactionSignal session=${sessionId} source=session action=compact:before`);
+      } catch (err: unknown) {
+        if (isFailHardEnabled()) throw err;
+        console.error("[quaid] session hook failed:", err);
+      }
+    }, {
+      name: "session-memory-extraction",
+      priority: 10,
+    });
 
     // Register memory tools (gated by memory system)
     if (isSystemEnabled("memory")) {
@@ -1613,14 +1916,29 @@ Only use when the user EXPLICITLY asks you to remember something (e.g., "remembe
             const { text, category = "fact" } = params || {};
             // Resolve session ID from context
             const sessionId = facade.resolveMemoryStoreSessionId(ctx);
+            writeHookTrace("memory_store.requested", {
+              session_id: sessionId,
+              category: String(category || "fact"),
+              text_len: String(text || "").trim().length,
+              tool_call_id: String(_toolCallId || ""),
+            });
             facade.addMemoryNote(sessionId, text, category);
             console.log(`[quaid] memory_store: queued note for session ${sessionId}: "${text.slice(0, 60)}..."`);
+            writeHookTrace("memory_store.queued", {
+              session_id: sessionId,
+              category: String(category || "fact"),
+              text_preview: String(text || "").slice(0, 120),
+            });
             return {
               content: [{ type: "text", text: `Noted for memory extraction: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" — will be processed with full quality review at next compaction.` }],
               details: { action: "queued", sessionId },
             };
           } catch (err: unknown) {
             console.error("[quaid] memory_store error:", err);
+            writeHookTrace("memory_store.error", {
+              session_id: String(ctx?.sessionId || ""),
+              error: String((err as Error)?.message || err),
+            });
             if (isFailHardEnabled()) {
               throw err;
             }
@@ -2502,75 +2820,8 @@ notify_memory_extraction(
       priority: 10
     });
 
-    // Primary reset/new capture path for gateway-driven resets.
-    for (const commandAction of ["reset", "new"] as const) {
-      registerInternalHookChecked(`command:${commandAction}`, async (event: any, ctx: any) => {
-        try {
-          const messages: any[] = event?.messages || [];
-          const sessionId = facade.resolveLifecycleHookSessionId(event, ctx, messages);
-          writeHookTrace("hook.command.received", {
-            command: commandAction,
-            hook_session_id: sessionId || "",
-            message_count: messages.length,
-          });
-          if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
-            writeHookTrace("hook.command.skipped", {
-              command: commandAction,
-              hook_session_id: sessionId || "",
-              reason: "invalid_or_internal_session",
-            });
-            return;
-          }
-          if (!isSystemEnabled("memory")) {
-            writeHookTrace("hook.command.skipped", {
-              command: commandAction,
-              hook_session_id: sessionId,
-              reason: "memory_disabled",
-            });
-            return;
-          }
-          const signature = `hook:command_${commandAction}`;
-          if (!facade.shouldProcessLifecycleSignal(sessionId, {
-            label: "ResetSignal",
-            source: "hook",
-            signature,
-          })) {
-            console.log(`[quaid][signal] suppressed duplicate ResetSignal session=${sessionId} source=command:${commandAction}`);
-            writeHookTrace("hook.command.signal_suppressed", {
-              command: commandAction,
-              hook_session_id: sessionId,
-              reason: "duplicate",
-            });
-            return;
-          }
-          facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
-          timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
-            source: "command_hook",
-            command: commandAction,
-            hook_session_id: sessionId,
-            hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
-          });
-          console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:${commandAction}`);
-          writeHookTrace("hook.command.signal_queued", {
-            command: commandAction,
-            hook_session_id: sessionId,
-          });
-        } catch (err: unknown) {
-          if (isFailHardEnabled()) {
-            throw err;
-          }
-          console.error(`[quaid] command:${commandAction} hook failed:`, err);
-          writeHookTrace("hook.command.error", {
-            command: commandAction,
-            hook_session_id: String(ctx?.sessionId || ""),
-            error: String((err as Error)?.message || err),
-          });
-        }
-      }, {
-        name: `command-${commandAction}-memory-extraction`,
-        priority: 10,
-      });
-    }
+    // command:new/reset hooks are inconsistent across runtime variants.
+    // We use message event capture above for reset lifecycle detection.
 
     // Register reset hook — compatibility fallback for older runtimes.
     // Primary reset/new boundary path is session_end below.
