@@ -1361,6 +1361,19 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
           const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
+          const hasExtractionPrompt = messages.some((m: any) =>
+            /^Extract memorable facts and journal entries from this conversation chunk:/i.test(
+              String(facade.getMessageText(m) || "").trim()
+            )
+          );
+          if (hasExtractionPrompt) {
+            writeHookTrace("hook.transcript_update.skipped", {
+              reason: "internal_extraction_transcript",
+              session_file: sessionFile,
+              message_count: messages.length,
+            });
+            return;
+          }
           writeHookTrace("hook.transcript_update.received", {
             update_session_id: String(update?.sessionId || ""),
             session_file: sessionFile,
