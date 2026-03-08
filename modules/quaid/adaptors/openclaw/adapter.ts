@@ -1379,16 +1379,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             });
             return;
           }
-          // Reset/new should be sourced from direct command/message hooks.
-          // Transcript fallback can drift into internal extraction sessions.
-          if (detail.label === "ResetSignal" && detail.source === "system_notice") {
-            writeHookTrace("hook.transcript_update.skipped", {
-              reason: "reset_signal_handled_by_command_or_message_hook",
-              detected_source: String(detail.source || ""),
-              session_file: sessionFile,
-            });
-            return;
-          }
           const sessionId =
             facade.parseSessionIdFromTranscriptPath(sessionFile) ||
             facade.resolveLifecycleHookSessionId(

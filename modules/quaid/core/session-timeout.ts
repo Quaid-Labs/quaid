@@ -207,6 +207,7 @@ export class SessionTimeoutManager {
   private extractTimeoutMs: number;
   private maxSignalRetries: number;
   private maxStaleRecoverPerTick: number;
+  private signalSourceCounts: Record<string, number> = {};
   private readonly staleRecoveryInitialBackoffMs = 5000;
   private readonly staleRecoveryMaxBackoffMs = 5 * 60 * 1000;
 
@@ -640,6 +641,9 @@ export class SessionTimeoutManager {
     if (!sessionId) return;
     const signalMeta = this.buildOriginHintMeta(meta);
     const source = String(signalMeta?.source || "").trim().toLowerCase();
+    const sourceKey = source || "unknown";
+    const sourceCount = (this.signalSourceCounts[sourceKey] || 0) + 1;
+    this.signalSourceCounts[sourceKey] = sourceCount;
     const forceQueueSources = new Set([
       "command_log",
       "command_hook",
@@ -652,7 +656,8 @@ export class SessionTimeoutManager {
     const forceQueue = forceQueueSources.has(source);
     this.writeQuaidLog("signal_queue_received", sessionId, {
       label: String(label || "Signal"),
-      source: source || "unknown",
+      source: sourceKey,
+      source_count: sourceCount,
       force_queue: forceQueue,
       has_meta: Boolean(signalMeta),
       has_unprocessed_messages: this.hasUnprocessedSessionMessages(sessionId),
