@@ -63,8 +63,12 @@
           "before_agent_start",
           "agent_end",
           "before_compaction",
+          "session",
+          "session:compact:before",
+          "command",
           "before_reset",
           "session_end",
+          "message:preprocessed",
           "command:reset",
           "command:new"
         ]
