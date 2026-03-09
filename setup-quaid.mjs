@@ -2165,6 +2165,31 @@ async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAsk
         message: "I understand — the janitor runs nightly via launchd.",
         initialValue: true,
       }));
+    } else if (process.platform === "win32") {
+      // Windows: install via Task Scheduler (schtasks)
+      scheduled = installWindowsScheduledTask(scheduleHour);
+      if (scheduled) {
+        log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via Task Scheduler`);
+      } else {
+        log.warn("Could not install scheduled task.");
+        log.warn(`Run manually: quaid janitor --apply --task all`);
+      }
+
+      const scheduleLines = [
+        C.yellow("The janitor is scheduled via Windows Task Scheduler."),
+        C.yellow("It uses your Claude Code OAuth token — no API key needed."),
+        "",
+        C.bold("The scheduled task runs daily and applies janitor maintenance."),
+        "",
+        C.dim("To check: schtasks /query /tn QuaidJanitor"),
+        C.dim("To remove: schtasks /delete /tn QuaidJanitor /f"),
+      ];
+      note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
+
+      handleCancel(await confirm({
+        message: "I understand — the janitor runs nightly via Task Scheduler.",
+        initialValue: true,
+      }));
     } else {
       // Linux/other: install crontab entry
       scheduled = installCrontabSchedule(scheduleHour);
@@ -2458,6 +2483,48 @@ function installLaunchdSchedule(hour) {
     }
 
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function installWindowsScheduledTask(hour) {
+  // Windows Task Scheduler for nightly janitor.
+  const quaidBin = path.join(PLUGIN_DIR, "quaid");
+  const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
+  const taskName = "QuaidJanitor";
+  const logPath = path.join(LOGS_DIR, "janitor", "schtasks.log");
+
+  fs.mkdirSync(path.join(LOGS_DIR, "janitor"), { recursive: true });
+
+  // Build a wrapper script that sets env vars and runs janitor
+  const batchPath = path.join(PLUGIN_DIR, "janitor-scheduled.bat");
+  const batchContent = `@echo off
+set QUAID_HOME=${WORKSPACE}
+set QUAID_ADAPTER=claude-code
+set PYTHONPATH=${PLUGIN_DIR}
+"${quaidCmd}" janitor --task all --apply --time-budget 3600 >> "${logPath}" 2>&1
+`;
+
+  try {
+    fs.writeFileSync(batchPath, batchContent);
+
+    // Delete existing task if present (ignore errors)
+    spawnSync("schtasks", ["/delete", "/tn", taskName, "/f"], { stdio: "pipe" });
+
+    // Create daily task
+    const startTime = `${String(hour).padStart(2, "0")}:30`;
+    const result = spawnSync("schtasks", [
+      "/create",
+      "/tn", taskName,
+      "/tr", batchPath,
+      "/sc", "daily",
+      "/st", startTime,
+      "/rl", "LIMITED",
+      "/f",
+    ], { stdio: "pipe" });
+
+    return result.status === 0;
   } catch {
     return false;
   }
