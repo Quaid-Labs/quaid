@@ -132,7 +132,6 @@ Minimum survey fields:
   - Include explicit user confirmation if proceeding without Ollama (degraded recall)
 - Notifications level + per-feature verbosity
 - Notification routing channel
-- Core systems note (memory, journal, projects, workspace are always on by policy)
 - Janitor apply mode/policies
 - Janitor schedule choice
 - Workspace file import choice
@@ -213,7 +212,6 @@ Minimum required summary fields:
 - LLM provider (`models.llmProvider`) and selected deep/fast models (`models.deepReasoning`, `models.fastReasoning`)
 - Notification settings (`notifications.level`, plus `notifications.janitor|extraction|retrieval.verbosity`)
 - Notification routing channel (`notifications.<feature>.channel`)
-- Core systems: always on by policy (`memory`, `journal`, `projects`, `workspace`)
 - Embedding provider/model (`models.embeddingsProvider`, `ollama.embeddingModel`)
 - Janitor apply mode/policies (`janitor.applyMode`, `janitor.approvalPolicies.*`)
 - Janitor schedule choice (or explicit "not scheduled")
@@ -222,6 +220,9 @@ The summary should also tell the user where to edit settings:
 
 - Interactive editor: `quaid config edit`
 - Config file: `<workspace>/config/memory.json`
+
+Do not present `memory`, `journal`, `projects`, or `workspace` as a survey field or configurable install choice.
+Those systems are always on by policy and should only be described if the user explicitly asks.
 
 ## Verification
 

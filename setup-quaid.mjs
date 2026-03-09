@@ -3458,7 +3458,6 @@ function notifyInstallCompletion(owner, models, embeddings, systems) {
     `Models: deep=${models.highModel}, fast=${models.lowModel}`,
     `Embeddings: ${embeddings.embedModel}`,
     `Notification channel: ${models.notifChannel || "last_used"}`,
-    "Core systems: memory, journal, projects, workspace (always on)",
     "No memory mutants detected.",
   ].join("\n");
   sendInstallerNotification(summary);
