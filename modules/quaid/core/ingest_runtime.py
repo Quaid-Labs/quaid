@@ -50,7 +50,7 @@ def run_extract_from_transcript(
     *,
     transcript: str,
     owner_id: str,
-    label: str = "mcp",
+    label: str = "cli",
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     from ingest.extract import extract_from_transcript

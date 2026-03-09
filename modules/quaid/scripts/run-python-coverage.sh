@@ -31,7 +31,7 @@ done
 python3 -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 python -m pip install --quiet --upgrade pip
-python -m pip install --quiet pytest coverage mcp
+python -m pip install --quiet pytest coverage
 
 if [[ "$MODE" == "full" ]]; then
   TEST_FILES=$(find tests -maxdepth 1 -type f -name 'test_*.py' | sort)

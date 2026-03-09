@@ -3,8 +3,7 @@
 Quaid Extraction Module — Extract memories from conversation transcripts.
 
 Sends a transcript to Opus for fact/edge/snippet/journal extraction, then
-stores everything via the existing Python infrastructure. This is the Python
-equivalent of the extraction pipeline in index.ts.
+stores everything via the existing Python infrastructure.
 
 Entry points:
     - extract_from_transcript(): Core extraction function
