@@ -7,7 +7,6 @@
 #   quaid stats
 #   quaid get-edges <node_id>
 #   quaid janitor --task all --dry-run
-#   quaid mcp-server
 #   quaid docs search "query"
 #   quaid docs check
 #   quaid registry list --project quaid
@@ -79,12 +78,6 @@ case "$CMD" in
   # Janitor commands
   janitor)
     exec python3 "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
-    ;;
-
-  # MCP server (deprecated — use CLI commands instead)
-  mcp-server|mcp)
-    echo "[quaid] MCP server is deprecated. Use CLI commands directly." >&2
-    exec python3 "$SCRIPT_DIR/core/interface/mcp_server.py" "$@"
     ;;
 
   # Session commands
