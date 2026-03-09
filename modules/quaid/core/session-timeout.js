@@ -1,19 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-function signalPriority(label) {
-  const normalized = String(label || "").trim().toLowerCase();
-  if (normalized === "resetsignal" || normalized === "reset") return 3;
-  if (normalized === "compactionsignal" || normalized === "compaction") return 2;
-  return 1;
-}
-function signalSourcePriority(source) {
-  const normalized = String(source || "").trim().toLowerCase();
-  if (normalized === "before_compaction") return 5;
-  if (normalized === "command_hook" || normalized === "command_log" || normalized === "command_generic") return 4;
-  if (normalized === "before_reset" || normalized === "session_end") return 3;
-  if (normalized === "transcript_update") return 1;
-  return 2;
-}
 function safeLog(logger, message) {
   try {
     if (logger) {
@@ -154,24 +140,16 @@ class SessionTimeoutManager {
   pendingFallbackMessages = null;
   pendingSessionId;
   sessionCursorDir;
-  pendingSignalDir;
-  workerLockPath;
-  workerLockToken;
   staleSweepStatePath;
   installStatePath;
-  ownsWorkerLock = false;
   logDir;
   sessionLogDir;
   logFilePath;
   eventFilePath;
-  workerTimer = null;
   chain = Promise.resolve();
-  workerChain = Promise.resolve();
   failHard;
   extractTimeoutMs;
-  maxSignalRetries;
   maxStaleRecoverPerTick;
-  signalSourceCounts = {};
   staleRecoveryInitialBackoffMs = 5e3;
   staleRecoveryMaxBackoffMs = 5 * 60 * 1e3;
   constructor(opts) {
@@ -215,9 +193,6 @@ class SessionTimeoutManager {
     this.logDir = path.resolve(String(opts.logDir || path.join(opts.workspace, "logs", "runtime")));
     this.sessionLogDir = path.join(this.logDir, "sessions");
     this.sessionCursorDir = path.join(opts.workspace, "data", "session-cursors");
-    this.pendingSignalDir = path.join(opts.workspace, "data", "pending-extraction-signals");
-    this.workerLockPath = path.join(opts.workspace, "data", "session-timeout-worker.lock");
-    this.workerLockToken = `${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     this.staleSweepStatePath = path.join(opts.workspace, "data", "stale-sweep-state.json");
     this.installStatePath = path.join(opts.workspace, "data", "installed-at.json");
     this.logFilePath = path.join(this.logDir, "session-timeout.log");
@@ -239,10 +214,6 @@ class SessionTimeoutManager {
       process.env.SESSION_EXTRACT_TIMEOUT_MS || process.env.QUAID_SESSION_EXTRACT_TIMEOUT_MS || ""
     );
     this.extractTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? Math.floor(configuredTimeoutMs) : 6e5;
-    const configuredSignalRetries = Number(
-      process.env.SIGNAL_MAX_RETRIES || process.env.QUAID_SIGNAL_MAX_RETRIES || ""
-    );
-    this.maxSignalRetries = Number.isFinite(configuredSignalRetries) && configuredSignalRetries >= 0 ? Math.floor(configuredSignalRetries) : 3;
     const configuredStaleRecoverPerTick = Number(
       process.env.STALE_RECOVERY_MAX_PER_TICK || process.env.QUAID_STALE_RECOVERY_MAX_PER_TICK || ""
     );
@@ -251,7 +222,6 @@ class SessionTimeoutManager {
       fs.mkdirSync(this.logDir, { recursive: true });
       fs.mkdirSync(this.sessionLogDir, { recursive: true });
       fs.mkdirSync(this.sessionCursorDir, { recursive: true });
-      fs.mkdirSync(this.pendingSignalDir, { recursive: true });
       fs.mkdirSync(path.dirname(this.staleSweepStatePath), { recursive: true });
       fs.mkdirSync(path.dirname(this.installStatePath), { recursive: true });
     } catch (err) {
@@ -546,360 +516,6 @@ class SessionTimeoutManager {
     const multiplier = 2 ** (attempt - 1);
     return Math.min(this.staleRecoveryInitialBackoffMs * multiplier, this.staleRecoveryMaxBackoffMs);
   }
-  buildOriginHintMeta(meta) {
-    if (meta && typeof meta === "object") return meta;
-    const stack = String(new Error().stack || "");
-    const lines = stack.split("\n").map((s) => s.trim()).filter(Boolean);
-    const caller = lines.find(
-      (line) => !line.includes("buildOriginHintMeta") && !line.includes("queueExtractionSignal") && !line.includes("SessionTimeoutManager.")
-    );
-    if (!caller) return void 0;
-    return { origin_hint: caller.slice(0, 240) };
-  }
-  queueExtractionSignal(sessionId, label, meta) {
-    if (!sessionId) return;
-    const signalMeta = this.buildOriginHintMeta(meta);
-    const source = String(signalMeta?.source || "").trim().toLowerCase();
-    const sourceKey = source || "unknown";
-    const sourceCount = (this.signalSourceCounts[sourceKey] || 0) + 1;
-    this.signalSourceCounts[sourceKey] = sourceCount;
-    const forceQueueSources = /* @__PURE__ */ new Set([
-      "command_log",
-      "command_hook",
-      "command_generic",
-      "before_compaction",
-      "before_reset",
-      "session_end",
-      "transcript_update"
-    ]);
-    const forceQueue = forceQueueSources.has(source);
-    this.writeQuaidLog("signal_queue_received", sessionId, {
-      label: String(label || "Signal"),
-      source: sourceKey,
-      source_count: sourceCount,
-      force_queue: forceQueue,
-      has_meta: Boolean(signalMeta),
-      has_unprocessed_messages: this.hasUnprocessedSessionMessages(sessionId),
-      has_pending_notes: this.hasPendingSessionNotesSource(sessionId),
-      ...signalMeta ? { meta: signalMeta } : {}
-    });
-    if (!forceQueue && !this.hasUnprocessedSessionMessages(sessionId)) {
-      this.writeQuaidLog("signal_queue_skipped_already_cleared", sessionId, {
-        label: String(label || "Signal"),
-        ...signalMeta ? { meta: signalMeta } : {}
-      });
-      return;
-    }
-    const signal = {
-      sessionId,
-      label: String(label || "Signal"),
-      queuedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      attemptCount: 0,
-      ...signalMeta ? { meta: signalMeta } : {}
-    };
-    try {
-      fs.mkdirSync(this.pendingSignalDir, { recursive: true });
-      const signalPath = this.signalPath(sessionId);
-      if (fs.existsSync(signalPath)) {
-        let existingLabel = "Signal";
-        let existingSource = "";
-        let existingAttemptCount = 0;
-        try {
-          const existing = JSON.parse(fs.readFileSync(signalPath, "utf8"));
-          existingLabel = String(existing?.label || "Signal");
-          existingSource = String(existing?.meta?.source || "");
-          existingAttemptCount = Math.max(0, Number(existing?.attemptCount || 0));
-        } catch (err) {
-          safeLog(this.logger, `[memory][timeout] failed to parse existing extraction signal ${signalPath}: ${String(err?.message || err)}`);
-        }
-        const incomingPriority = signalPriority(signal.label);
-        const existingPriority = signalPriority(existingLabel);
-        const incomingSourcePriority = signalSourcePriority(source);
-        const existingSourcePriority = signalSourcePriority(existingSource);
-        if (incomingPriority > existingPriority || incomingPriority === existingPriority && incomingSourcePriority > existingSourcePriority) {
-          signal.attemptCount = 0;
-          fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 384 });
-          this.writeQuaidLog("signal_file_write", sessionId, {
-            op: "promote_overwrite",
-            path: signalPath,
-            label: signal.label,
-            has_meta: Boolean(signalMeta)
-          });
-          this.writeQuaidLog("signal_queue_promoted", sessionId, {
-            from: existingLabel,
-            to: signal.label,
-            from_source: existingSource || "unknown",
-            to_source: source || "unknown",
-            previous_attempt_count: existingAttemptCount,
-            ...signalMeta ? { meta: signalMeta } : {}
-          });
-        } else {
-          this.writeQuaidLog("signal_queue_coalesced", sessionId, {
-            label: signal.label,
-            existing_label: existingLabel,
-            source: source || "unknown",
-            existing_source: existingSource || "unknown",
-            reason: "already_pending",
-            ...signalMeta ? { meta: signalMeta } : {}
-          });
-        }
-        this.triggerWorkerTick();
-        return;
-      }
-      fs.writeFileSync(signalPath, JSON.stringify(signal), { mode: 384 });
-      this.writeQuaidLog("signal_file_write", sessionId, {
-        op: "create",
-        path: signalPath,
-        label: signal.label,
-        has_meta: Boolean(signalMeta)
-      });
-      this.writeQuaidLog("signal_queued", sessionId, {
-        label: signal.label,
-        ...signalMeta ? { meta: signalMeta } : {}
-      });
-      this.triggerWorkerTick();
-    } catch (err) {
-      this.writeQuaidLog("signal_queue_error", sessionId, {
-        label: signal.label,
-        ...signalMeta ? { meta: signalMeta } : {},
-        error: String(err?.message || err)
-      });
-    }
-  }
-  async processPendingExtractionSignals() {
-    this.recoverOrphanedSignalClaims();
-    for (const filePath of this.listSignalFiles()) {
-      const lockedPath = this.claimSignalFile(filePath);
-      if (!lockedPath) {
-        continue;
-      }
-      this.writeQuaidLog("signal_file_claimed", path.basename(filePath, ".json"), {
-        from: filePath,
-        to: lockedPath
-      });
-      let signal = null;
-      try {
-        signal = JSON.parse(fs.readFileSync(lockedPath, "utf8"));
-      } catch (err) {
-        safeLog(this.logger, `[memory][timeout] dropping malformed extraction signal ${lockedPath}: ${String(err?.message || err)}`);
-        try {
-          fs.unlinkSync(lockedPath);
-        } catch (unlinkErr) {
-          safeLog(this.logger, `[memory][timeout] failed to delete malformed extraction signal ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
-        }
-        continue;
-      }
-      const sessionId = String(signal?.sessionId || path.basename(filePath, ".json")).trim();
-      const label = String(signal?.label || "Signal");
-      const attemptCount = Math.max(0, Number(signal?.attemptCount || 0));
-      const meta = signal?.meta && typeof signal.meta === "object" ? signal.meta : void 0;
-      if (!sessionId) {
-        try {
-          fs.unlinkSync(lockedPath);
-        } catch (unlinkErr) {
-          safeLog(this.logger, `[memory][timeout] failed to delete signal without session id ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
-        }
-        continue;
-      }
-      let restoredClaim = false;
-      try {
-        this.writeQuaidLog("signal_process_begin", sessionId, {
-          label,
-          attempt_count: attemptCount,
-          ...meta ? { meta } : {}
-        });
-        await this.extractSessionFromSourceDirect(sessionId, label, void 0, signal.meta);
-        this.writeQuaidLog("signal_process_done", sessionId, {
-          label,
-          ...meta ? { meta } : {}
-        });
-      } catch (err) {
-        this.writeQuaidLog("signal_process_error", sessionId, {
-          label,
-          ...meta ? { meta } : {},
-          error: String(err?.message || err)
-        });
-        const nextAttemptCount = attemptCount + 1;
-        const canRetry = nextAttemptCount <= this.maxSignalRetries;
-        try {
-          const originalPath = filePath;
-          if (canRetry && !fs.existsSync(originalPath) && fs.existsSync(lockedPath)) {
-            const nextSignal = {
-              sessionId,
-              label,
-              queuedAt: String(signal?.queuedAt || (/* @__PURE__ */ new Date()).toISOString()),
-              attemptCount: nextAttemptCount,
-              ...meta ? { meta } : {}
-            };
-            fs.writeFileSync(lockedPath, JSON.stringify(nextSignal), { mode: 384 });
-            fs.renameSync(lockedPath, originalPath);
-            restoredClaim = true;
-            this.writeQuaidLog("signal_file_write", sessionId, {
-              op: "retry_requeue",
-              path: originalPath,
-              label,
-              has_meta: Boolean(meta)
-            });
-            this.writeQuaidLog("signal_process_requeued", sessionId, {
-              label,
-              attempt_count: nextAttemptCount,
-              max_retries: this.maxSignalRetries,
-              ...meta ? { meta } : {}
-            });
-          } else if (!canRetry) {
-            this.writeQuaidLog("signal_process_dropped", sessionId, {
-              label,
-              attempt_count: nextAttemptCount,
-              max_retries: this.maxSignalRetries,
-              reason: "max_retries_exceeded",
-              ...meta ? { meta } : {}
-            });
-          }
-        } catch (restoreErr) {
-          safeLog(this.logger, `[memory][timeout] failed restoring signal claim ${lockedPath}: ${String(restoreErr?.message || restoreErr)}`);
-          if (restoreErr?.code !== "ENOENT") {
-            throw restoreErr;
-          }
-        }
-        if (this.failHard) {
-          throw err;
-        }
-      } finally {
-        try {
-          if (!restoredClaim && fs.existsSync(lockedPath)) {
-            fs.unlinkSync(lockedPath);
-          }
-        } catch (unlinkErr) {
-          safeLog(this.logger, `[memory][timeout] failed cleaning claimed signal ${lockedPath}: ${String(unlinkErr?.message || unlinkErr)}`);
-          if (this.failHard && unlinkErr?.code !== "ENOENT") {
-            throw unlinkErr;
-          }
-        }
-      }
-    }
-  }
-  startWorker(heartbeatSeconds = 30) {
-    this.stopWorker();
-    if (!this.tryAcquireWorkerLock()) {
-      this.writeQuaidLog("worker_start_skipped", void 0, {
-        reason: "lock_held",
-        lock_path: this.workerLockPath
-      });
-      return false;
-    }
-    const sec = Number.isFinite(heartbeatSeconds) ? Math.max(5, Math.floor(heartbeatSeconds)) : 30;
-    this.workerTimer = setInterval(() => this.triggerWorkerTick(), sec * 1e3);
-    if (typeof this.workerTimer.unref === "function") {
-      this.workerTimer.unref();
-    }
-    this.writeQuaidLog("worker_started", void 0, {
-      heartbeat_seconds: sec,
-      lock_path: this.workerLockPath,
-      leader_pid: process.pid
-    });
-    this.triggerWorkerTick();
-    return true;
-  }
-  stopWorker() {
-    const hadTimer = Boolean(this.workerTimer);
-    if (this.workerTimer) {
-      clearInterval(this.workerTimer);
-      this.workerTimer = null;
-    }
-    const released = this.releaseWorkerLock();
-    if (hadTimer || released) {
-      this.writeQuaidLog("worker_stopped");
-    }
-  }
-  isPidAlive(pid) {
-    if (!Number.isFinite(pid) || pid <= 0) return false;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  tryAcquireWorkerLock() {
-    if (this.ownsWorkerLock) return true;
-    try {
-      fs.mkdirSync(path.dirname(this.workerLockPath), { recursive: true });
-    } catch (err) {
-      safeLog(this.logger, `[memory][timeout] failed to initialize worker lock directory: ${String(err?.message || err)}`);
-      if (this.failHard) {
-        throw err;
-      }
-      return false;
-    }
-    const payload = {
-      pid: process.pid,
-      token: this.workerLockToken,
-      started_at: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    try {
-      fs.writeFileSync(this.workerLockPath, JSON.stringify(payload), { mode: 384, flag: "wx" });
-      this.ownsWorkerLock = true;
-      return true;
-    } catch (err) {
-      const code = err?.code;
-      if (code !== "EEXIST") return false;
-    }
-    try {
-      const raw = fs.readFileSync(this.workerLockPath, "utf8");
-      const existing = JSON.parse(raw);
-      const existingPid = Number(existing?.pid || 0);
-      if (this.isPidAlive(existingPid)) return false;
-      const verifyRaw = fs.readFileSync(this.workerLockPath, "utf8");
-      const verify = JSON.parse(verifyRaw);
-      if (Number(verify?.pid || 0) !== existingPid || String(verify?.token || "") !== String(existing?.token || "")) {
-        return false;
-      }
-      try {
-        fs.unlinkSync(this.workerLockPath);
-      } catch (unlinkErr) {
-        safeLog(this.logger, `[memory][timeout] failed removing stale worker lock ${this.workerLockPath}: ${String(unlinkErr?.message || unlinkErr)}`);
-        if (this.failHard && unlinkErr?.code !== "ENOENT") {
-          throw unlinkErr;
-        }
-      }
-      fs.writeFileSync(this.workerLockPath, JSON.stringify(payload), { mode: 384, flag: "wx" });
-      this.ownsWorkerLock = true;
-      this.writeQuaidLog("worker_lock_stale_recovered", void 0, { stale_pid: existingPid || void 0 });
-      return true;
-    } catch (err) {
-      safeLog(this.logger, `[memory][timeout] failed stale-worker lock recovery: ${String(err?.message || err)}`);
-      if (this.failHard) {
-        throw err;
-      }
-      return false;
-    }
-  }
-  releaseWorkerLock() {
-    if (!this.ownsWorkerLock) return false;
-    try {
-      const raw = fs.readFileSync(this.workerLockPath, "utf8");
-      const existing = JSON.parse(raw);
-      if (existing?.token && existing.token !== this.workerLockToken) {
-        this.ownsWorkerLock = false;
-        return false;
-      }
-    } catch (err) {
-      safeLog(this.logger, `[memory][timeout] failed validating worker lock before release: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-    try {
-      fs.unlinkSync(this.workerLockPath);
-    } catch (err) {
-      safeLog(this.logger, `[memory][timeout] failed releasing worker lock ${this.workerLockPath}: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-    }
-    this.ownsWorkerLock = false;
-    return true;
-  }
   queueExtractionFromSession(sessionId, fallbackMessages, timeoutMinutes) {
     this.chain = this.chain.catch((err) => {
       safeLog(this.logger, `[memory][timeout] previous extraction chain error: ${String(err?.message || err)}`);
@@ -915,111 +531,6 @@ class SessionTimeoutManager {
       safeLog(this.logger, `[memory][timeout] extraction queue failed: ${String(err?.message || err)}`);
       if (this.failHard) throw err;
     });
-  }
-  triggerWorkerTick() {
-    this.workerChain = this.workerChain.catch((err) => {
-      safeLog(this.logger, `[memory][timeout] previous worker chain error: ${String(err?.message || err)}`);
-      if (this.failHard) throw err;
-    }).then(async () => {
-      await this.processPendingExtractionSignals();
-      if (this.listSignalFiles().length > 0) {
-        this.writeQuaidLog("stale_sweep_skipped_pending_signals", void 0, {
-          pending_signal_count: this.listSignalFiles().length
-        });
-        return;
-      }
-      await this.recoverStaleBuffers();
-    }).catch((err) => {
-      safeLog(this.logger, `[memory][timeout] worker tick failed: ${String(err?.message || err)}`);
-      if (this.failHard) throw err;
-    });
-  }
-  signalPath(sessionId) {
-    const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
-    return path.join(this.pendingSignalDir, `${safeSessionId}.json`);
-  }
-  listSignalFiles() {
-    try {
-      if (!fs.existsSync(this.pendingSignalDir)) return [];
-      return fs.readdirSync(this.pendingSignalDir).filter((f) => f.endsWith(".json")).map((f) => path.join(this.pendingSignalDir, f));
-    } catch (err) {
-      safeLog(this.logger, `[memory][timeout] failed listing signal files: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-      return [];
-    }
-  }
-  listSignalClaimFiles() {
-    try {
-      if (!fs.existsSync(this.pendingSignalDir)) return [];
-      return fs.readdirSync(this.pendingSignalDir).filter((f) => /\.json\.processing\.\d+$/.test(f)).map((f) => path.join(this.pendingSignalDir, f));
-    } catch (err) {
-      safeLog(this.logger, `[memory][timeout] failed listing signal claim files: ${String(err?.message || err)}`);
-      if (this.failHard && err?.code !== "ENOENT") {
-        throw err;
-      }
-      return [];
-    }
-  }
-  recoverOrphanedSignalClaims() {
-    for (const lockedPath of this.listSignalClaimFiles()) {
-      const m = lockedPath.match(/^(.*\.json)\.processing\.(\d+)$/);
-      if (!m) continue;
-      const originalPath = m[1];
-      const ownerPid = Number(m[2]);
-      if (this.isPidAlive(ownerPid)) continue;
-      try {
-        if (fs.existsSync(originalPath)) {
-          fs.unlinkSync(lockedPath);
-          this.writeQuaidLog("signal_file_recover_skip", path.basename(originalPath, ".json"), {
-            reason: "original_exists",
-            orphan: lockedPath
-          });
-          continue;
-        }
-        try {
-          const raw = JSON.parse(fs.readFileSync(lockedPath, "utf8"));
-          if (raw && typeof raw === "object") {
-            const priorLabel = String(raw.label || "Signal");
-            const priorMeta = raw.meta && typeof raw.meta === "object" ? raw.meta : {};
-            const patched = {
-              sessionId: String(raw.sessionId || path.basename(originalPath, ".json")),
-              label: priorLabel.toLowerCase().includes("recover") ? priorLabel : "RecoverySignal",
-              queuedAt: String(raw.queuedAt || (/* @__PURE__ */ new Date()).toISOString()),
-              attemptCount: Math.max(0, Number(raw.attemptCount || 0)),
-              meta: {
-                ...priorMeta,
-                source: "orphan_recovery",
-                recovered_orphan: true,
-                original_label: priorLabel
-              }
-            };
-            fs.writeFileSync(lockedPath, JSON.stringify(patched), { mode: 384 });
-          }
-        } catch {
-        }
-        fs.renameSync(lockedPath, originalPath);
-        this.writeQuaidLog("signal_file_recovered", path.basename(originalPath, ".json"), {
-          from: lockedPath,
-          to: originalPath
-        });
-      } catch (err) {
-        safeLog(this.logger, `[memory][timeout] failed recovering orphaned signal claim ${lockedPath}: ${String(err?.message || err)}`);
-        if (this.failHard && err?.code !== "ENOENT") {
-          throw err;
-        }
-      }
-    }
-  }
-  claimSignalFile(filePath) {
-    const lockedPath = `${filePath}.processing.${process.pid}`;
-    try {
-      fs.renameSync(filePath, lockedPath);
-      return lockedPath;
-    } catch {
-      return null;
-    }
   }
   cursorPath(sessionId) {
     const safeSessionId = String(sessionId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_");
