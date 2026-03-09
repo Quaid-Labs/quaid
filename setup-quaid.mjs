@@ -209,6 +209,96 @@ const VERSION = "0.2.15-alpha";
 const HOOKS_PR_URL = "https://github.com/openclaw/openclaw/releases/tag/v2026.3.7";
 const MIN_GATEWAY_VERSION = "2026.3.7";
 const PROJECT_URL = "https://github.com/quaid-labs/quaid";
+const TOTAL_INSTALL_STEPS = 7;
+
+// AI agents: this is the canonical pre-install survey contract.
+// Only include fields listed here when presenting a survey to a human.
+// Everything not listed here is out of scope for the survey.
+const AGENT_SURVEY_CONTRACT = {
+  sourceOfTruth: "setup-quaid.mjs",
+  rule: "Only the fields listed here belong in the pre-install survey.",
+  fields: [
+    {
+      id: "owner_name",
+      label: "Owner name",
+      source: "step2_owner()",
+      required: true,
+      notes: [
+        "Use the human's real name, not the system username.",
+      ],
+    },
+    {
+      id: "workspace_path",
+      label: "Workspace path",
+      source: "WORKSPACE resolution + installer args",
+      required: true,
+    },
+    {
+      id: "adapter_type",
+      label: "Adapter type",
+      source: "adapter detection in step3_models()",
+      required: true,
+    },
+    {
+      id: "llm_models",
+      label: "LLM provider + deep/fast models",
+      source: "step3_models()",
+      required: true,
+      notes: [
+        "For supported Anthropic/OpenAI lanes, include installer defaults unless the user overrides them.",
+        "For unsupported/custom lanes, collect explicit deep and fast model IDs from the user.",
+      ],
+    },
+    {
+      id: "embeddings",
+      label: "Embeddings provider/model",
+      source: "step4_embeddings()",
+      required: true,
+      notes: [
+        "Include the RAM snapshot used for recommendation.",
+        "Include whether Ollama is installed/running.",
+        "Include whether the installer will attempt Ollama install/start.",
+        "If proceeding without Ollama, require explicit user approval because recall degrades.",
+      ],
+    },
+    {
+      id: "notifications",
+      label: "Notification level + per-feature verbosity",
+      source: "step3_models() notification prompts",
+      required: true,
+      notes: [
+        "If a non-default level requires Advanced Setup, state that explicitly in the survey.",
+      ],
+    },
+    {
+      id: "notification_channel",
+      label: "Notification routing channel",
+      source: "resolvePinnedNotificationRoute() + installer env overrides",
+      required: true,
+      notes: [
+        "For OpenClaw installs, survey the explicit runtime notification channel.",
+        "Do not rely on implicit last_used during install.",
+      ],
+    },
+    {
+      id: "janitor",
+      label: "Janitor apply mode/policies",
+      source: "step3_models() + step6_schedule()",
+      required: true,
+    },
+    {
+      id: "janitor_schedule",
+      label: "Janitor schedule choice",
+      source: "step6_schedule()",
+      required: true,
+    },
+  ],
+  notes: [
+    "Do not add survey sections for internal installer steps with no user choice.",
+    "Do not use test-only controls like QUAID_TEST_ANSWERS in normal AI install guidance unless explicitly running a test harness.",
+    "Workspace file import is not a standalone survey field unless the installer actually prompts for it.",
+  ],
+};
 // Detect mode: OpenClaw (has gateway+agent infra) vs Standalone (just Quaid)
 function which(cmd) {
   return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
@@ -1142,7 +1232,7 @@ function stepHeader(num, total, title, quote) {
 // Step 1: Pre-flight Checks
 // =============================================================================
 async function step1_preflight() {
-  stepHeader(1, 8, "PREFLIGHT", STEP_QUOTES.preflight);
+  stepHeader(1, TOTAL_INSTALL_STEPS, "PREFLIGHT", STEP_QUOTES.preflight);
   intro(C.dim("Checking your system..."));
 
   log.info(C.dim(`Workspace: ${WORKSPACE}`));
@@ -1419,7 +1509,7 @@ async function step1_preflight() {
 // Step 2: Detect Owner
 // =============================================================================
 async function step2_owner() {
-  stepHeader(2, 8, "IDENTITY", STEP_QUOTES.identity);
+  stepHeader(2, TOTAL_INSTALL_STEPS, "IDENTITY", STEP_QUOTES.identity);
 
   log.info(C.bold("Every memory is stored against an owner name."));
   log.info(C.bold("This is how Quaid keeps memories namespaced — one owner per person."));
@@ -1449,7 +1539,7 @@ async function step2_owner() {
 // Step 3: Models + Notifications
 // =============================================================================
 async function step3_models() {
-  stepHeader(3, 8, "MODELS", STEP_QUOTES.models);
+  stepHeader(3, TOTAL_INSTALL_STEPS, "MODELS", STEP_QUOTES.models);
 
   log.info(C.dim("Quaid uses two LLM tiers: deep reasoning (extraction, review)"));
   log.info(C.dim("and fast reasoning (reranking, classification)."));
@@ -1612,7 +1702,7 @@ async function step3_models() {
 // Step 4: Embeddings
 // =============================================================================
 async function step4_embeddings() {
-  stepHeader(4, 8, "EMBEDDINGS", STEP_QUOTES.embeddings);
+  stepHeader(4, TOTAL_INSTALL_STEPS, "EMBEDDINGS", STEP_QUOTES.embeddings);
 
   log.info(C.dim("Embeddings power semantic search — turning text into vectors"));
   log.info(C.dim("so Quaid can find relevant memories by meaning, not just keywords."));
@@ -1823,7 +1913,7 @@ async function step4_embeddings() {
 // Step 5: Janitor Schedule
 // =============================================================================
 async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAskFirst = true) {
-  stepHeader(5, 7, "JANITOR", STEP_QUOTES.janitor);
+  stepHeader(5, TOTAL_INSTALL_STEPS, "JANITOR", STEP_QUOTES.janitor);
 
   log.info(C.dim("The janitor runs nightly: reviewing new facts, deduplication,"));
   log.info(C.dim("contradiction detection, memory decay, and doc updates."));
@@ -2077,7 +2167,7 @@ function installHeartbeatSchedule(hour) {
 // Step 7: Install & Migrate
 // =============================================================================
 async function step7_install(pluginSrc, owner, models, embeddings, systems, janitorPolicies = null) {
-  stepHeader(6, 7, "INSTALL", STEP_QUOTES.install);
+  stepHeader(6, TOTAL_INSTALL_STEPS, "INSTALL", STEP_QUOTES.install);
 
   const s = spinner();
   let postInstallStateStabilized = false;
@@ -2616,7 +2706,7 @@ print(len(found))
 // Step 8: Validation
 // =============================================================================
 async function step8_validate(owner, models, embeddings, systems) {
-  stepHeader(7, 7, "VALIDATION", STEP_QUOTES.validate);
+  stepHeader(7, TOTAL_INSTALL_STEPS, "VALIDATION", STEP_QUOTES.validate);
 
   const s = spinner();
   s.start("Running health checks...");
@@ -3434,28 +3524,28 @@ async function main() {
       log.info("Agent mode enabled: using non-interactive defaults where prompts are normally required.");
       log.info(`Workspace override: ${WORKSPACE}`);
     }
-    notifyInstallCheckpoint(0, 7, "boot", "Installer started in agent mode.", "Spinning up Rekall vibes...");
+    notifyInstallCheckpoint(0, TOTAL_INSTALL_STEPS, "boot", "Installer started in agent mode.", "Spinning up Rekall vibes...");
     const pluginSrc = await step1_preflight();
-    notifyInstallCheckpoint(1, 7, "preflight", "Dependencies checked and plugin source resolved.", "All systems nominal.");
+    notifyInstallCheckpoint(1, TOTAL_INSTALL_STEPS, "preflight", "Dependencies checked and plugin source resolved.", "All systems nominal.");
     const owner = await step2_owner();
-    notifyInstallCheckpoint(2, 7, "identity", `Owner tagged as ${owner.display}.`, "Memory now has a name.");
+    notifyInstallCheckpoint(2, TOTAL_INSTALL_STEPS, "identity", `Owner tagged as ${owner.display}.`, "Memory now has a name.");
     const models = await step3_models();
-    notifyInstallCheckpoint(3, 7, "models", `Deep=${models.highModel}, Fast=${models.lowModel}.`, "Brains selected.");
+    notifyInstallCheckpoint(3, TOTAL_INSTALL_STEPS, "models", `Deep=${models.highModel}, Fast=${models.lowModel}.`, "Brains selected.");
     const embeddings = await step4_embeddings();
-    notifyInstallCheckpoint(4, 7, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
+    notifyInstallCheckpoint(4, TOTAL_INSTALL_STEPS, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
     const systems = { memory: true, journal: true, projects: true, workspace: true };
     const schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
     notifyInstallCheckpoint(
-      5, 7, "janitor",
+      5, TOTAL_INSTALL_STEPS, "janitor",
       "Janitor policy and schedule configured. Next step may pause while gateway/plugin restarts and warms up.",
       "Night shift assigned. Warmup can take a minute or two."
     );
     notifyInstallWarmupNotice();
     log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
-    notifyInstallCheckpoint(6, 7, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
+    notifyInstallCheckpoint(6, TOTAL_INSTALL_STEPS, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
     await step8_validate(owner, models, embeddings, systems);
-    notifyInstallCheckpoint(7, 7, "validation", "Smoke checks passed.", "No richters spotted.");
+    notifyInstallCheckpoint(7, TOTAL_INSTALL_STEPS, "validation", "Smoke checks passed.", "No richters spotted.");
     notifyInstallCompletion(owner, models, embeddings, systems);
 
     // In test mode, write results for the test runner to verify

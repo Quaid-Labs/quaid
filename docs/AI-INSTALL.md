@@ -25,8 +25,14 @@ That file defines:
 - Which questions/prompts are asked
 - Which defaults are used
 - Which flags/env vars alter behavior
+- Which fields belong in the human pre-install survey
 
 If an agent needs to predict prompts or run non-interactively, it should use `setup-quaid.mjs` as the canonical reference.
+In particular, agents should follow the `AGENT_SURVEY_CONTRACT` block in that file.
+
+Do not maintain a separate survey template in agent memory.
+Do not infer survey sections from internal installer functions.
+If `setup-quaid.mjs` changes, the survey must change with it.
 
 ## Recommended Entry Point
 
@@ -119,22 +125,8 @@ Before running install, the AI agent must run a short pre-install survey with th
 
 Show all planned answers (including defaults) and ask: "Do you want to change any of these before I run install?"
 
-Minimum survey fields:
-
-- Owner name (`users.defaultOwner`) as a human name, not system username
-- Workspace path
-- Adapter type
-- LLM provider + deep/fast models
-- Embeddings provider/model
-  - Include RAM snapshot the agent used for recommendation
-  - Include whether Ollama is installed/running
-  - Include whether the agent will attempt Ollama install/start
-  - Include explicit user confirmation if proceeding without Ollama (degraded recall)
-- Notifications level + per-feature verbosity
-- Notification routing channel
-- Janitor apply mode/policies
-- Janitor schedule choice
-- Workspace file import choice
+The list of required survey fields lives in `setup-quaid.mjs` under `AGENT_SURVEY_CONTRACT`.
+Agents must derive the survey from that contract instead of reproducing a second field list here.
 
 ### Model Selection Guidance (Mandatory)
 
