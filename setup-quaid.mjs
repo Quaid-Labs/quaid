@@ -269,7 +269,6 @@ const STEP_QUOTES = {
   identity:   "If I am not me, then who the hell am I?",
   models:     "What is it that you want, Mr. Quaid?",
   embeddings: "Ever heard of Rekall? They sell fake memories.",
-  systems:    "A man is defined by his actions, not his memory.",
   janitor:    "No wonder you have nightmares, you're always here.",
   install:    "See you at the party, Richter!",
   validate:   "Baby, you make me wish I had three hands.",
@@ -1821,55 +1820,10 @@ async function step4_embeddings() {
 }
 
 // =============================================================================
-// Step 5: Systems Configuration
-// =============================================================================
-async function step5_systems() {
-  stepHeader(5, 8, "SYSTEMS", STEP_QUOTES.systems);
-
-  const sysInfo = {
-    memory: {
-      label: "Memory",
-      desc: "Extract and recall facts from conversations",
-      detail: "Writes to: data/memory.db. Calls LLM on compaction/reset for extraction, and on recall for reranking.",
-    },
-    journal: {
-      label: "Journal",
-      desc: "Personality evolution via snippets + reflective journal",
-      detail: "Writes to: journal/*.journal.md, *.snippets.md, SOUL.md, USER.md. Nightly deep-reasoning distillation merges learnings into core markdown.",
-    },
-    projects: {
-      label: "Projects & Docs",
-      desc: "Auto-update project docs when source files change",
-      detail: "Writes to: projects/*/PROJECT.md, registered docs. Monitors git diffs and updates docs via LLM.",
-    },
-    workspace: {
-      label: "Workspace",
-      desc: "Core markdown health monitoring (bloat, drift, staleness)",
-      detail: "Reads+writes: SOUL.md, USER.md, MEMORY.md, etc. Monitors line counts, detects drift, suggests cleanups.",
-    },
-  };
-
-  // Show what each system does
-  note(
-    Object.values(sysInfo).map(s =>
-      `${C.bcyan(s.label)} — ${s.desc}\n${C.dim(s.detail)}`
-    ).join("\n\n"),
-    C.bmag("SUBSYSTEMS")
-  );
-
-  log.info(C.bold("All 4 systems are enabled by policy."));
-  log.info(C.bold("Installer no longer supports subsystem disablement."));
-  const systems = { memory: true, journal: true, projects: true, workspace: true };
-  log.success(`Enabled: ${C.bcyan("memory, journal, projects, workspace")} ${C.dim("(required)")}`);
-
-  return systems;
-}
-
-// =============================================================================
-// Step 6: Janitor Schedule
+// Step 5: Janitor Schedule
 // =============================================================================
 async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAskFirst = true) {
-  stepHeader(6, 8, "JANITOR", STEP_QUOTES.janitor);
+  stepHeader(5, 7, "JANITOR", STEP_QUOTES.janitor);
 
   log.info(C.dim("The janitor runs nightly: reviewing new facts, deduplication,"));
   log.info(C.dim("contradiction detection, memory decay, and doc updates."));
@@ -2123,7 +2077,7 @@ function installHeartbeatSchedule(hour) {
 // Step 7: Install & Migrate
 // =============================================================================
 async function step7_install(pluginSrc, owner, models, embeddings, systems, janitorPolicies = null) {
-  stepHeader(7, 8, "INSTALL", STEP_QUOTES.install);
+  stepHeader(6, 7, "INSTALL", STEP_QUOTES.install);
 
   const s = spinner();
   let postInstallStateStabilized = false;
@@ -2662,7 +2616,7 @@ print(len(found))
 // Step 8: Validation
 // =============================================================================
 async function step8_validate(owner, models, embeddings, systems) {
-  stepHeader(8, 8, "VALIDATION", STEP_QUOTES.validate);
+  stepHeader(7, 7, "VALIDATION", STEP_QUOTES.validate);
 
   const s = spinner();
   s.start("Running health checks...");
@@ -3480,29 +3434,28 @@ async function main() {
       log.info("Agent mode enabled: using non-interactive defaults where prompts are normally required.");
       log.info(`Workspace override: ${WORKSPACE}`);
     }
-    notifyInstallCheckpoint(0, 8, "boot", "Installer started in agent mode.", "Spinning up Rekall vibes...");
+    notifyInstallCheckpoint(0, 7, "boot", "Installer started in agent mode.", "Spinning up Rekall vibes...");
     const pluginSrc = await step1_preflight();
-    notifyInstallCheckpoint(1, 8, "preflight", "Dependencies checked and plugin source resolved.", "All systems nominal.");
+    notifyInstallCheckpoint(1, 7, "preflight", "Dependencies checked and plugin source resolved.", "All systems nominal.");
     const owner = await step2_owner();
-    notifyInstallCheckpoint(2, 8, "identity", `Owner tagged as ${owner.display}.`, "Memory now has a name.");
+    notifyInstallCheckpoint(2, 7, "identity", `Owner tagged as ${owner.display}.`, "Memory now has a name.");
     const models = await step3_models();
-    notifyInstallCheckpoint(3, 8, "models", `Deep=${models.highModel}, Fast=${models.lowModel}.`, "Brains selected.");
+    notifyInstallCheckpoint(3, 7, "models", `Deep=${models.highModel}, Fast=${models.lowModel}.`, "Brains selected.");
     const embeddings = await step4_embeddings();
-    notifyInstallCheckpoint(4, 8, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
-    const systems = await step5_systems();
-    notifyInstallCheckpoint(5, 8, "systems", "Systems locked: memory/journal/projects/workspace (all required).", "Switchboard locked.");
+    notifyInstallCheckpoint(4, 7, "embeddings", `Embedding model set to ${embeddings.embedModel}.`, "Semantic radar online.");
+    const systems = { memory: true, journal: true, projects: true, workspace: true };
     const schedule = await step6_schedule(embeddings, models.advancedSetup, models.janitorAskFirst);
     notifyInstallCheckpoint(
-      6, 8, "janitor",
+      5, 7, "janitor",
       "Janitor policy and schedule configured. Next step may pause while gateway/plugin restarts and warms up.",
       "Night shift assigned. Warmup can take a minute or two."
     );
     notifyInstallWarmupNotice();
     log.info("Heads up: OpenClaw gateway now needs a restart to apply changes. A 2-5 minute pause here is expected while it comes back online.");
     await step7_install(pluginSrc, owner, models, embeddings, systems, schedule?.approvalPolicies || null);
-    notifyInstallCheckpoint(7, 8, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
+    notifyInstallCheckpoint(6, 7, "install", "Plugin installed, config written, migration/registration complete.", "Blueprint phase complete.");
     await step8_validate(owner, models, embeddings, systems);
-    notifyInstallCheckpoint(8, 8, "validation", "Smoke checks passed.", "No richters spotted.");
+    notifyInstallCheckpoint(7, 7, "validation", "Smoke checks passed.", "No richters spotted.");
     notifyInstallCompletion(owner, models, embeddings, systems);
 
     // In test mode, write results for the test runner to verify
