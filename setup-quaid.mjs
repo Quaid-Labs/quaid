@@ -3201,6 +3201,30 @@ except Exception as e:
     s.stop(C.yellow("Smoke test partial — store OK, recall needs embeddings"));
   }
 
+  // Claude Code: start extraction daemon so it's ready for first session
+  if (_isPlatform("claude-code")) {
+    s.start("Starting extraction daemon...");
+    const daemonScript = `
+import os, sys
+${PY_ENV_SETUP}
+sys.path.insert(0, '.')
+try:
+    from core.extraction_daemon import ensure_alive
+    ensure_alive()
+    print('OK')
+except Exception as e:
+    print(f'warn: {e}', file=sys.stderr)
+    print('SKIP')
+`;
+    const daemon = spawnSync("python3", ["-c", daemonScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    const daemonResult = (daemon.stdout || "").trim();
+    if (daemonResult === "OK") {
+      s.stop(C.green("Extraction daemon started"));
+    } else {
+      s.stop(C.yellow("Extraction daemon skipped — will start on first hook invocation"));
+    }
+  }
+
   const nextSteps = [
     `${C.bcyan("→")} Facts are extracted automatically on context compaction and new sessions`,
     `${C.bcyan("→")} The nightly janitor reviews, deduplicates, and maintains memories`,
@@ -3399,6 +3423,10 @@ function setupClaudeCodeHooks() {
       matcher: "",
       hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract --precompact` }],
     }],
+    SessionEnd: [{
+      matcher: "",
+      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract` }],
+    }],
   };
 
   let changed = false;
@@ -3579,6 +3607,19 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       recencyDecayDays: 90,
       useHyde: true,
       traversal: { useBeam: true, beamWidth: 5, maxDepth: 2, hopDecay: 0.7 },
+      domains: {
+        personal: "identity, preferences, relationships, life events",
+        technical: "code, infra, APIs, architecture",
+        project: "project status, tasks, files, milestones",
+        work: "job/team/process decisions not deeply technical",
+        health: "training, injuries, routines, wellness",
+        finance: "budgeting, purchases, salary, bills",
+        travel: "trips, moves, places, logistics",
+        schedule: "dates, appointments, deadlines",
+        research: "options considered, comparisons, tradeoff analysis",
+        household: "home, chores, food planning, shared logistics",
+        legal: "contracts, policy, and regulatory constraints",
+      },
     },
     logging: {
       enabled: true,
