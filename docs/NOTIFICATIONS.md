@@ -13,6 +13,10 @@ Each feature supports:
 - `summary`
 - `full`
 
+Each feature may also pin a delivery channel.
+For OpenClaw installs, prefer an explicit channel such as `telegram` over `last_used` during install and first-run setup.
+The OpenClaw adapter resolves that channel to the most recent routable session target when sending.
+
 ## Recommended Preset (Normal)
 
 `normal` is the recommended default for alpha:

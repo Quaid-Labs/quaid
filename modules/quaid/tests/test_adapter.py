@@ -330,6 +330,29 @@ class TestOpenClawAdapter:
         assert info.channel == "telegram"
         assert info.target == "12345"
 
+    def test_get_last_channel_falls_back_to_recent_routable_session(self, tmp_path, monkeypatch):
+        import json
+        sessions_file = tmp_path / "sessions.json"
+        sessions_file.write_text(json.dumps({
+            "agent:main:main": {
+                "lastTo": "heartbeat",
+                "updatedAt": 100,
+            },
+            "agent:main:telegram:direct:<telegram-id>": {
+                "lastChannel": "telegram",
+                "lastTo": "telegram:<telegram-id>",
+                "lastAccountId": "default",
+                "updatedAt": 200,
+            },
+        }))
+        monkeypatch.setattr(OpenClawAdapter, "_find_sessions_json", lambda self: sessions_file)
+        adapter = OpenClawAdapter()
+        info = adapter.get_last_channel()
+        assert info is not None
+        assert info.channel == "telegram"
+        assert info.target == "telegram:<telegram-id>"
+        assert info.session_key == "agent:main:telegram:direct:<telegram-id>"
+
     def test_get_sessions_dir(self, tmp_path, monkeypatch):
         sessions_dir = tmp_path / ".openclaw" / "sessions"
         sessions_dir.mkdir(parents=True)
@@ -618,6 +641,35 @@ class TestNotifyEdgeCases:
             assert "--channel" in cmd
             idx = cmd.index("--channel")
             assert cmd[idx + 1] == "discord"
+
+    def test_notify_channel_override_resolves_recent_route_for_channel(self, tmp_path, monkeypatch):
+        import json
+        sessions_file = tmp_path / "sessions.json"
+        sessions_file.write_text(json.dumps({
+            "agent:main:main": {
+                "lastTo": "heartbeat",
+                "updatedAt": 100,
+            },
+            "agent:main:telegram:direct:<telegram-id>": {
+                "lastChannel": "telegram",
+                "lastTo": "telegram:<telegram-id>",
+                "lastAccountId": "default",
+                "updatedAt": 200,
+            },
+        }))
+        monkeypatch.setattr(OpenClawAdapter, "_find_sessions_json", lambda self: sessions_file)
+        adapter = OpenClawAdapter()
+        monkeypatch.setattr(adapter, "_resolve_message_cli", lambda: "openclaw")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        with patch("adaptors.openclaw.adapter.subprocess.run", return_value=mock_result) as mock_run:
+            result = adapter.notify("test", channel_override="telegram")
+            assert result is True
+            cmd = mock_run.call_args[0][0]
+            channel_idx = cmd.index("--channel")
+            target_idx = cmd.index("--target")
+            assert cmd[channel_idx + 1] == "telegram"
+            assert cmd[target_idx + 1] == "telegram:<telegram-id>"
 
     def test_notify_non_default_account(self, monkeypatch):
         """Non-default account_id adds --account flag."""

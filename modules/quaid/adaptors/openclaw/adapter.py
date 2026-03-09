@@ -26,6 +26,54 @@ class OpenClawAdapter(QuaidAdapter):
 
     _MAIN_SESSION_KEY = "agent:main:main"
 
+    @staticmethod
+    def _score_session_row(session: dict, fallback_mtime_ms: float) -> float:
+        """Prefer most recently updated user-routable session rows."""
+        ts = session.get("updatedAt")
+        try:
+            return float(ts)
+        except (TypeError, ValueError):
+            return float(fallback_mtime_ms)
+
+    def _pick_recent_channel_info(
+        self, sessions: dict, fallback_mtime_ms: float, preferred_channel: str = ""
+    ) -> Optional[ChannelInfo]:
+        preferred = str(preferred_channel or "").strip().lower()
+        best: Optional[tuple[float, ChannelInfo]] = None
+        for session_key, session in sessions.items():
+            if not isinstance(session_key, str) or not isinstance(session, dict):
+                continue
+            channel = str(session.get("lastChannel") or "").strip()
+            target = str(session.get("lastTo") or "").strip()
+            account_id = str(session.get("lastAccountId") or "default").strip() or "default"
+            if not channel or not target:
+                continue
+            if preferred and channel.lower() != preferred:
+                continue
+            score = self._score_session_row(session, fallback_mtime_ms)
+            info = ChannelInfo(
+                channel=channel,
+                target=target,
+                account_id=account_id,
+                session_key=session_key,
+            )
+            if best is None or score > best[0]:
+                best = (score, info)
+        return best[1] if best else None
+
+    def _resolve_channel_route(self, preferred_channel: str = "") -> Optional[ChannelInfo]:
+        sessions_path = self._find_sessions_json()
+        if not sessions_path:
+            return None
+        try:
+            file_mtime_ms = sessions_path.stat().st_mtime * 1000.0
+            with open(sessions_path) as f:
+                sessions = json.load(f)
+            return self._pick_recent_channel_info(sessions, file_mtime_ms, preferred_channel=preferred_channel)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[notify] Error reading sessions: {e}", file=sys.stderr)
+            return None
+
     def _resolve_message_cli(self) -> Optional[str]:
         """Resolve message CLI binary path for notification delivery."""
         explicit = os.environ.get("QUAID_MESSAGE_CLI", "").strip()
@@ -80,6 +128,8 @@ class OpenClawAdapter(QuaidAdapter):
             return True
 
         info = self.get_last_channel()
+        if channel_override and (not info or str(info.channel).strip().lower() != str(channel_override).strip().lower()):
+            info = self._resolve_channel_route(channel_override) or info
         if not info:
             print("[notify] No last channel found", file=sys.stderr)
             return False
@@ -137,24 +187,26 @@ class OpenClawAdapter(QuaidAdapter):
         try:
             with open(sessions_path) as f:
                 sessions = json.load(f)
+            file_mtime_ms = sessions_path.stat().st_mtime * 1000.0
 
             session = sessions.get(session_key)
-            if not session:
-                return None
+            if isinstance(session, dict):
+                channel = str(session.get("lastChannel") or "").strip()
+                target = str(session.get("lastTo") or "").strip()
+                account_id = str(session.get("lastAccountId") or "default").strip() or "default"
+                if channel and target:
+                    return ChannelInfo(
+                        channel=channel,
+                        target=target,
+                        account_id=account_id,
+                        session_key=session_key,
+                    )
 
-            channel = session.get("lastChannel")
-            target = session.get("lastTo")
-            account_id = session.get("lastAccountId", "default")
-
-            if not channel or not target:
-                return None
-
-            return ChannelInfo(
-                channel=channel,
-                target=target,
-                account_id=account_id,
-                session_key=session_key,
-            )
+            # OpenClaw often stores the real user channel on the active
+            # conversation session, not on agent:main:main. Fall back to the
+            # most recently updated routable session row instead of failing
+            # closed on installer/first-run notifications.
+            return self._pick_recent_channel_info(sessions, file_mtime_ms)
         except (json.JSONDecodeError, IOError) as e:
             print(f"[notify] Error reading sessions: {e}", file=sys.stderr)
             return None

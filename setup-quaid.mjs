@@ -1553,8 +1553,14 @@ async function step3_models() {
   } else {
     log.info(C.dim("Notifications: normal (recommended)"));
   }
-  log.info(C.dim("Notifications are sent on whatever channel you use to talk to your bot."));
-  log.info(C.dim("You can ask your agent to change this anytime — just say \"change notification level\"."));
+  const pinnedNotifyRoute = IS_OPENCLAW ? resolvePinnedNotificationRoute() : null;
+  const notifChannel = pinnedNotifyRoute?.channel || "last_used";
+  if (IS_OPENCLAW && pinnedNotifyRoute?.channel) {
+    log.info(C.dim(`Notifications will be pinned to the OpenClaw channel '${pinnedNotifyRoute.channel}' during install.`));
+  } else if (IS_OPENCLAW) {
+    log.warn("No active OpenClaw notification route detected; falling back to last_used until a channel is established.");
+  }
+  log.info(C.dim("You can ask your agent to change notification routing or level anytime."));
 
   const preset = (() => {
     if (notifLevel === "quiet") return { janitor: "off", extraction: "off", retrieval: "off" };
@@ -1595,6 +1601,7 @@ async function step3_models() {
     baseUrl: baseUrlFor(provider),
     notifLevel,
     notifConfig,
+    notifChannel,
     advancedSetup,
     adapterType,
     janitorAskFirst,
@@ -3062,9 +3069,9 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     },
     notifications: {
       level: models.notifLevel,
-      janitor: { verbosity: models.notifConfig?.janitor ?? "summary", channel: "last_used" },
-      extraction: { verbosity: models.notifConfig?.extraction ?? "summary", channel: "last_used" },
-      retrieval: { verbosity: models.notifConfig?.retrieval ?? "off", channel: "last_used" },
+      janitor: { verbosity: models.notifConfig?.janitor ?? "summary", channel: models.notifChannel || "last_used" },
+      extraction: { verbosity: models.notifConfig?.extraction ?? "summary", channel: models.notifChannel || "last_used" },
+      retrieval: { verbosity: models.notifConfig?.retrieval ?? "off", channel: models.notifChannel || "last_used" },
       projectCreate: { enabled: true },
       fullText: false,
       showProcessingStart: false,
@@ -3355,6 +3362,10 @@ function _resolveInstallerNotifyOverride() {
   return { channel, target, account };
 }
 
+function resolvePinnedNotificationRoute() {
+  return _resolveInstallerNotifyOverride() || _resolveLastChannelFromSessions();
+}
+
 function sendInstallerNotification(message) {
   if (!AGENT_MODE || !IS_OPENCLAW) return false;
   if (String(process.env.QUAID_INSTALL_NOTIFY || "1").trim() === "0") return false;
@@ -3440,17 +3451,14 @@ function notifyInstallCheckpoint(step, total, title, detail, funLine = "") {
 
 function notifyInstallCompletion(owner, models, embeddings, systems) {
   if (String(process.env.QUAID_INSTALL_NOTIFY_COMPLETE || "1").trim() === "0") return;
-  const enabledSystems = Object.entries(systems || {})
-    .filter(([, enabled]) => !!enabled)
-    .map(([name]) => name)
-    .join(", ");
   const summary = [
     "✅ Quaid install complete.",
     `Owner: ${owner.display}`,
     `Workspace: ${WORKSPACE}`,
     `Models: deep=${models.highModel}, fast=${models.lowModel}`,
     `Embeddings: ${embeddings.embedModel}`,
-    `Systems: ${enabledSystems}`,
+    `Notification channel: ${models.notifChannel || "last_used"}`,
+    "Core systems: memory, journal, projects, workspace (always on)",
     "No memory mutants detected.",
   ].join("\n");
   sendInstallerNotification(summary);

@@ -131,7 +131,8 @@ Minimum survey fields:
   - Include whether the agent will attempt Ollama install/start
   - Include explicit user confirmation if proceeding without Ollama (degraded recall)
 - Notifications level + per-feature verbosity
-- Enabled systems
+- Notification routing channel
+- Core systems note (memory, journal, projects, workspace are always on by policy)
 - Janitor apply mode/policies
 - Janitor schedule choice
 - Workspace file import choice
@@ -148,6 +149,21 @@ For supported provider lanes (Anthropic/OpenAI), Quaid provides suggested model 
 - include those deep/fast defaults in the pre-install survey
 - let the user override if they want
 - no extra model-selection discussion is required
+
+### Notification Routing Guidance (Mandatory)
+
+For OpenClaw installs, do not leave Quaid runtime notifications on implicit `last_used` during install.
+The installer or agent should pin Quaid notifications to an explicit OpenClaw channel based on the active user route.
+
+- include the planned notification routing channel in the pre-install survey
+- if installer progress needs explicit delivery, set:
+  - `QUAID_INSTALL_NOTIFY_CHANNEL`
+  - `QUAID_INSTALL_NOTIFY_TARGET`
+  - optionally `QUAID_INSTALL_NOTIFY_ACCOUNT`
+- for Telegram-driven installs, the expected runtime channel is usually `telegram`
+- the adapter is responsible for resolving that channel to the proper recent session target at send time
+
+If the active OpenClaw user route cannot be determined, the agent must say so clearly before install instead of pretending notifications are guaranteed.
 
 If the user is using an unsupported provider/model lane for their gateway (for example Gemini, Kimi/K2.5, or other custom routes), Quaid does not provide suggested fast/deep defaults. In that case the agent must:
 
@@ -196,7 +212,8 @@ Minimum required summary fields:
 - Adapter type (`adapter.type`)
 - LLM provider (`models.llmProvider`) and selected deep/fast models (`models.deepReasoning`, `models.fastReasoning`)
 - Notification settings (`notifications.level`, plus `notifications.janitor|extraction|retrieval.verbosity`)
-- Enabled systems (`systems.memory|journal|projects|workspace`)
+- Notification routing channel (`notifications.<feature>.channel`)
+- Core systems: always on by policy (`memory`, `journal`, `projects`, `workspace`)
 - Embedding provider/model (`models.embeddingsProvider`, `ollama.embeddingModel`)
 - Janitor apply mode/policies (`janitor.applyMode`, `janitor.approvalPolicies.*`)
 - Janitor schedule choice (or explicit "not scheduled")
