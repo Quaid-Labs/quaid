@@ -16,6 +16,7 @@ from lib.adapter import (
     StandaloneAdapter,
     TestAdapter,
     ChannelInfo,
+    get_owner_id,
     get_adapter,
     set_adapter,
     reset_adapter,
@@ -209,6 +210,25 @@ class TestStandaloneAdapter:
         url = standalone.get_install_url()
         assert "quaid-labs/quaid" in url
         assert "install.sh" in url
+
+
+class TestOwnerResolution:
+    def test_get_owner_id_reads_quaid_home_config(self, tmp_path, monkeypatch):
+        from config import reload_config
+
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "memory.json").write_text(
+            """
+            {
+              "adapter": {"type": "claude-code"},
+              "users": {"defaultOwner": "solomon-steadman"}
+            }
+            """.strip()
+        )
+        reload_config()
+        assert get_owner_id() == "solomon-steadman"
 
 
 # ---------------------------------------------------------------------------
