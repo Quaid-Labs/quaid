@@ -53,22 +53,26 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     vi.unstubAllEnvs();
   });
 
-  it("allows only one timeout worker leader per workspace", () => {
-    const workspace = makeWorkspace("quaid-timeout-leader-");
+  it("clears an active timeout buffer when agent start fires", () => {
+    vi.useFakeTimers();
+    const workspace = makeWorkspace("quaid-timeout-agent-start-");
     const source = createSourceState();
+    const manager = buildManager({ workspace, timeoutMinutes: 10, source });
 
-    const managerA = buildManager({ workspace, timeoutMinutes: 10, source });
-    const managerB = buildManager({ workspace, timeoutMinutes: 10, source });
+    manager.onAgentEnd(
+      [
+        { role: "user", content: "remember this", timestamp: Date.now() },
+        { role: "assistant", content: "ok", timestamp: Date.now() + 1 },
+      ],
+      "session-agent-start",
+    );
 
-    expect(managerA.startWorker(30)).toBe(true);
-    expect(managerB.startWorker(30)).toBe(false);
-
-    managerA.stopWorker();
-    expect(managerB.startWorker(30)).toBe(true);
-    managerB.stopWorker();
+    expect((manager as any).timer).toBeTruthy();
+    manager.onAgentStart();
+    expect((manager as any).timer).toBeNull();
   });
 
-  it("coalesces duplicate extraction signals and promotes Reset over Compaction", () => {
+  it("requires explicit lifecycle evidence before transcript-update reset extraction", async () => {
     const workspace = makeWorkspace("quaid-timeout-signal-");
     const source = createSourceState();
     source.messagesBySession.set("session-1", [
@@ -77,12 +81,10 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     ]);
 
     const manager = buildManager({ workspace, timeoutMinutes: 10, source });
-    manager.queueExtractionSignal("session-1", "Compaction");
-    manager.queueExtractionSignal("session-1", "Reset");
-
-    const signalPath = path.join(workspace, "data", "pending-extraction-signals", "session-1.json");
-    const queued = JSON.parse(fs.readFileSync(signalPath, "utf8"));
-    expect(queued.label).toBe("Reset");
+    const ok = await (manager as any).extractSessionFromSourceDirect("session-1", "ResetSignal", [], {
+      source: "transcript_update",
+    });
+    expect(ok).toBe(false);
   });
 
   it("extracts from source session messages and writes cursor", async () => {
@@ -364,11 +366,12 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     expect(calls[0]?.label).toBe("Timeout");
   });
 
-  it("recovers orphaned signal claim files and processes them", async () => {
-    const workspace = makeWorkspace("quaid-timeout-orphan-claim-");
+  it("allows transcript-update lifecycle extraction when transcript contains command evidence", async () => {
+    const workspace = makeWorkspace("quaid-timeout-lifecycle-evidence-");
     const source = createSourceState();
     source.messagesBySession.set("session-orphan", [
       { id: "u1", role: "user", content: "recover me", timestamp: Date.now() - 5000 },
+      { id: "u2", role: "user", content: "/new", timestamp: Date.now() - 4000 },
     ]);
 
     const calls: Array<{ sid?: string; label?: string }> = [];
@@ -381,51 +384,43 @@ describe("SessionTimeoutManager (cursor + source)", () => {
       },
     });
 
-    const pendingDir = path.join(workspace, "data", "pending-extraction-signals");
-    fs.mkdirSync(pendingDir, { recursive: true });
-    const claimedPath = path.join(pendingDir, "session-orphan.json.processing.999999");
-    fs.writeFileSync(
-      claimedPath,
-      JSON.stringify({
-        sessionId: "session-orphan",
-        label: "Reset",
-        queuedAt: new Date().toISOString(),
-      }),
-      "utf8",
-    );
+    const ok = await (manager as any).extractSessionFromSourceDirect("session-orphan", "ResetSignal", [], {
+      source: "transcript_update",
+    });
 
-    await manager.processPendingExtractionSignals();
-
+    expect(ok).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.sid).toBe("session-orphan");
-    expect(calls[0]?.label).toBe("RecoverySignal");
-    expect(fs.existsSync(claimedPath)).toBe(false);
+    expect(calls[0]?.label).toBe("ResetSignal");
   });
 
-  it("drops signal immediately when max retry budget is zero", async () => {
-    vi.stubEnv("QUAID_SIGNAL_MAX_RETRIES", "0");
-    const workspace = makeWorkspace("quaid-timeout-zero-retry-");
+  it("extracts notes-only sessions without transcript messages", async () => {
+    const workspace = makeWorkspace("quaid-timeout-notes-only-");
     const source = createSourceState();
-    source.messagesBySession.set("session-drop", [
-      { id: "u1", role: "user", content: "this will fail", timestamp: Date.now() - 1000 },
-    ]);
+    const pendingNotes = new Set<string>(["session-drop"]);
+    const calls: Array<{ sid?: string; label?: string; messages: any[] }> = [];
 
-    const manager = buildManager({
+    const manager = new SessionTimeoutManager({
       workspace,
       timeoutMinutes: 60,
-      source,
-      extract: async () => {
-        throw new Error("forced failure");
+      isBootstrapOnly: () => false,
+      logger: () => {},
+      readSessionMessages: () => [],
+      listSessionActivity: () => [],
+      hasPendingSessionNotes: (sid: string) => pendingNotes.has(sid),
+      extract: async (messages, sid, label) => {
+        calls.push({ sid, label, messages });
       },
     });
-    ;(manager as any).failHard = false;
 
-    manager.queueExtractionSignal("session-drop", "Reset");
-    await manager.processPendingExtractionSignals();
-
-    const pendingDir = path.join(workspace, "data", "pending-extraction-signals");
-    const files = fs.readdirSync(pendingDir).filter((f) => f.includes("session-drop"));
-    expect(files).toEqual([]);
+    const ok = await (manager as any).extractSessionFromSourceDirect("session-drop", "CompactionSignal", [], {
+      source: "transcript_update",
+    });
+    expect(ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.sid).toBe("session-drop");
+    expect(calls[0]?.label).toBe("CompactionSignal");
+    expect(calls[0]?.messages).toEqual([]);
   });
 
   it("filters internal system maintenance traffic from source extraction payload", async () => {

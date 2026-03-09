@@ -143,7 +143,7 @@ if [[ ! -f "$PROFILE" ]]; then
   exit 1
 fi
 
-WORKSPACE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["workspace"])' "$PROFILE")"
+WORKSPACE="$(python3 -c 'import json,sys,pathlib; raw=json.load(open(sys.argv[1], encoding="utf-8"))["runtime"]["workspace"]; print(pathlib.Path(str(raw)).expanduser())' "$PROFILE")"
 if [[ -z "$WORKTREE_SOURCE" ]]; then
   WORKSPACE_PARENT="$(dirname "$WORKSPACE")"
   if is_git_repo_or_worktree "${WORKSPACE_PARENT}/dev"; then

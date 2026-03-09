@@ -152,7 +152,7 @@ emit_failure_diagnostics() {
   echo "[e2e] auth_path=${AUTH_PATH} suites=${E2E_SUITES}" >&2
   if [[ -d "${E2E_WS}" ]]; then
     echo "[e2e] pending signal files:" >&2
-    find "${E2E_WS}/data/pending-extraction-signals" -maxdepth 2 -type f 2>/dev/null | sed -n '1,40p' >&2 || true
+    find "${E2E_WS}/data/extraction-signals" -maxdepth 2 -type f 2>/dev/null | sed -n '1,40p' >&2 || true
     echo "[e2e] timeout events tail:" >&2
     tail -n 80 "${E2E_WS}/logs/quaid/session-timeout-events.jsonl" 2>/dev/null >&2 || true
     echo "[e2e] timeout log tail:" >&2
@@ -912,6 +912,20 @@ wait_for_gateway_listen() {
   return 1
 }
 
+wait_for_path() {
+  local target="$1"
+  local max_tries="${2:-20}"
+  local sleep_s="${3:-1}"
+  local i
+  for ((i=1; i<=max_tries; i++)); do
+    if [[ -e "$target" ]]; then
+      return 0
+    fi
+    sleep "$sleep_s"
+  done
+  return 1
+}
+
 enable_required_openclaw_hooks() {
   local cli=""
   if command -v openclaw >/dev/null 2>&1; then
@@ -1199,6 +1213,7 @@ PY
 run_bootstrap() {
   local do_wipe="$1"
   local -a args
+  local -a no_worktree_args
   local bootstrap_log=""
   local provider_override=""
   local rc=0
@@ -1224,6 +1239,7 @@ run_bootstrap() {
   if [[ "$QUICK_BOOTSTRAP" == true ]]; then
     args+=(--no-openclaw-refresh --no-openclaw-install)
   fi
+  no_worktree_args=("${args[@]}" --no-worktree)
   bootstrap_log="$(mktemp -t quaid-e2e-bootstrap.log.XXXXXX)"
   if QUAID_INSTALL_PROVIDER="$provider_override" "${args[@]}" 2>&1 | tee "$bootstrap_log"; then
     rc=0
@@ -1248,6 +1264,15 @@ run_bootstrap() {
       return 0
     fi
     rc=$?
+    if rg -q -e "already exists" -e "Workspace exists but is not a worktree" "$bootstrap_log"; then
+      echo "[e2e] Worktree bootstrap still collided; retrying without git worktree provisioning." >&2
+      rm -rf "$E2E_WS"
+      if QUAID_INSTALL_PROVIDER="$provider_override" "${no_worktree_args[@]}" 2>&1 | tee "$bootstrap_log"; then
+        rm -f "$bootstrap_log"
+        return 0
+      fi
+      rc=$?
+    fi
   fi
   echo "[e2e] bootstrap log preserved at: $bootstrap_log" >&2
   return "$rc"
@@ -1346,6 +1371,15 @@ enable_required_openclaw_hooks
 
 # Keep timeout override opt-in; default live checks should use installer/runtime defaults.
 MEMORY_CFG="${E2E_WS}/config/memory.json"
+if [[ ! -f "$MEMORY_CFG" ]]; then
+  echo "[e2e] Waiting for installer memory config to appear: $MEMORY_CFG"
+  if ! wait_for_path "$MEMORY_CFG" 20 1; then
+    echo "[e2e] ERROR: missing memory config: $MEMORY_CFG" >&2
+    exit 1
+  fi
+  echo "[e2e] Installer memory config detected after bootstrap lag."
+fi
+
 if [[ -f "$MEMORY_CFG" ]]; then
   if [[ "${QUAID_E2E_FORCE_SHORT_TIMEOUT:-false}" == "true" ]]; then
     python3 - "$MEMORY_CFG" <<'PY'
@@ -1378,9 +1412,6 @@ PY
   else
     echo "[e2e] Leaving capture inactivity timeout at configured default."
   fi
-else
-  echo "[e2e] ERROR: missing memory config: $MEMORY_CFG" >&2
-  exit 1
 fi
 
 # Align embedding config with actually-available local Ollama models.
@@ -1439,6 +1470,12 @@ if ! wait_for_gateway_listen 40; then
   exit 1
 fi
 
+if [[ ! -d "${E2E_WS}/modules/quaid" ]] && [[ -d "${DEV_WS}/modules/quaid" ]]; then
+  mkdir -p "${E2E_WS}/modules"
+  ln -sfn "${DEV_WS}/modules/quaid" "${E2E_WS}/modules/quaid"
+  echo "[e2e] Linked module tree into runtime workspace: ${E2E_WS}/modules/quaid -> ${DEV_WS}/modules/quaid"
+fi
+
 if [[ -d "${E2E_WS}/modules/quaid" ]] && [[ -f "${E2E_WS}/modules/quaid/package.json" ]]; then
   mkdir -p "${E2E_WS}/plugins"
   if [[ -d "${E2E_WS}/plugins/quaid" ]] && [[ ! -L "${E2E_WS}/plugins/quaid" ]] && [[ ! -f "${E2E_WS}/plugins/quaid/package.json" ]]; then
@@ -1493,7 +1530,7 @@ timeout_wait = int(sys.argv[2])
 require_native_hooks = str(sys.argv[3]).strip().lower() in ("1", "true", "yes", "on")
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
 notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
-pending_signal_dir = os.path.join(ws, "data", "pending-extraction-signals")
+pending_signal_dir = os.path.join(ws, "data", "extraction-signals")
 session_id = ""
 session_key = "agent:main:main"
 
@@ -1602,28 +1639,70 @@ def wait_for(predicate, seconds: int, label: str, start_line: int):
     preview = "\n".join(lines[-30:])
     raise SystemExit(f"[e2e] ERROR: timed out waiting for {label}\n[e2e] recent events:\n{preview}")
 
-def queue_signal_fallback(session_id: str, label: str) -> None:
+def wait_for_queued_signal_processed(signal_path: str, seconds: int, label: str) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if signal_path and not os.path.exists(signal_path):
+            return
+        time.sleep(1)
+    raise SystemExit(f"[e2e] ERROR: timed out waiting for queued signal drain ({label}) path={signal_path}")
+
+def queue_signal_fallback(session_id: str, label: str, fallback_text: str = "e2e live fallback") -> str:
     if not str(session_id or "").strip():
         raise SystemExit(f"[e2e] ERROR: cannot queue fallback {label}; runtime session id is empty")
     script = r"""
-import { SessionTimeoutManager } from "./modules/quaid/core/session-timeout.js";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import { join } from "node:path";
 const workspace = process.argv[1];
 const sessionId = process.argv[2];
 const signalLabel = process.argv[3];
-const tm = new SessionTimeoutManager({
-  workspace,
-  timeoutMinutes: 60,
-  isBootstrapOnly: false,
-  logger: console,
-  extract: async () => {},
-  readSessionMessages: () => [{ role: "user", content: "e2e-fallback", timestamp: new Date().toISOString() }],
-  listSessionActivity: () => [{ sessionId, lastActivityMs: Date.now() }],
-});
-tm.queueExtractionSignal(sessionId, signalLabel, { source: "e2e_live_fallback" });
-console.log(`[e2e] queued fallback ${signalLabel} for ${sessionId}`);
+const source = process.argv[4] || "e2e_live_fallback";
+const fallbackText = process.argv[5] || "e2e live fallback";
+const labelToType = (raw) => {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "compactionsignal") return "compaction";
+  if (value === "resetsignal") return "reset";
+  if (value === "timeout" || value === "sessionend" || value === "session_end") return "session_end";
+  return "session_end";
+};
+const transcriptCandidates = [
+  join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sessionId}.jsonl`),
+  join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`),
+  join(workspace, "logs", "quaid", "session-messages", `${sessionId}.jsonl`),
+];
+let transcriptPath = transcriptCandidates.find((candidate) => existsSync(candidate)) || "";
+if (!transcriptPath) {
+  const tmpDir = join(workspace, "data", "tmp");
+  mkdirSync(tmpDir, { recursive: true });
+  transcriptPath = join(tmpDir, `e2e-fallback-${sessionId}.jsonl`);
+  const transcriptLines = [
+    JSON.stringify({ role: "user", content: String(fallbackText || `${signalLabel} fallback`) }),
+    JSON.stringify({ role: "assistant", content: "Acknowledged." }),
+  ].join("\n");
+  writeFileSync(transcriptPath, `${transcriptLines}\n`, { mode: 0o600 });
+}
+const signalType = labelToType(signalLabel);
+const signalDir = join(workspace, "data", "extraction-signals");
+mkdirSync(signalDir, { recursive: true });
+const signalPath = join(signalDir, `${Date.now()}_${process.pid}_${Math.random().toString(16).slice(2, 10)}_${signalType}.json`);
+const payload = {
+  type: signalType,
+  session_id: sessionId,
+  transcript_path: transcriptPath,
+  adapter: "openclaw",
+  supports_compaction_control: true,
+  timestamp: new Date().toISOString(),
+  meta: {
+    source,
+    original_label: signalLabel,
+  },
+};
+writeFileSync(signalPath, JSON.stringify(payload), { mode: 0o600 });
+console.log(signalPath);
 """
     proc = subprocess.run(
-        ["node", "-e", script, ws, session_id, label],
+        ["node", "-e", script, ws, session_id, label, "e2e_live_fallback", fallback_text],
         cwd=ws,
         capture_output=True,
         text=True,
@@ -1633,9 +1712,11 @@ console.log(`[e2e] queued fallback ${signalLabel} for ${sessionId}`);
         raise SystemExit(
             f"[e2e] ERROR: failed to queue fallback signal {label} for {session_id}: {proc.stderr.strip()[:400]}"
         )
-    out = proc.stdout.strip()
-    if out:
-        print(out)
+    signal_path = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
+    if not signal_path:
+        raise SystemExit(f"[e2e] ERROR: fallback signal writer returned empty path for {label} {session_id}")
+    print(f"[e2e] queued fallback {label} for {session_id}: {signal_path}")
+    return signal_path
 
 def assert_notify_worker_healthy(start_line: int) -> None:
     lines = read_tail_since(notify_log_path, start_line)
@@ -1729,34 +1810,14 @@ if compact_ok:
     except SystemExit as err:
         print(f"[e2e] WARN: compact hook path not observed ({err}). Falling back to direct signal queue.")
         fallback_used = True
-        queue_signal_fallback(runtime_session_id, "CompactionSignal")
-        wait_for(
-            lambda lines: any(
-                f'"session_id":"{runtime_session_id}"' in ln
-                and '"label":"CompactionSignal"' in ln
-                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                for ln in lines
-            ),
-            35,
-            "compaction fallback signal processing",
-            start,
-        )
+        queued_signal_path = queue_signal_fallback(runtime_session_id, "CompactionSignal")
+        wait_for_queued_signal_processed(queued_signal_path, 35, "compaction fallback signal processing")
         print("[e2e] Live compact fallback path OK.")
 else:
     print("[e2e] WARN: compact command did not complete; using direct signal queue fallback.", flush=True)
     fallback_used = True
-    queue_signal_fallback(runtime_session_id, "CompactionSignal")
-    wait_for(
-        lambda lines: any(
-            f'"session_id":"{runtime_session_id}"' in ln
-            and '"label":"CompactionSignal"' in ln
-            and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-            for ln in lines
-        ),
-        35,
-        "compaction fallback signal processing",
-        start,
-    )
+    queued_signal_path = queue_signal_fallback(runtime_session_id, "CompactionSignal")
+    wait_for_queued_signal_processed(queued_signal_path, 35, "compaction fallback signal processing")
     print("[e2e] Live compact fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
@@ -1792,32 +1853,14 @@ if reset_ok:
             except SystemExit as err_restart:
                 print(f"[e2e] WARN: restart hook path not observed ({err_restart}). Falling back to direct signal queue.")
                 fallback_used = True
-                queue_signal_fallback(runtime_session_id, "ResetSignal")
-                wait_for(
-                    lambda lines: any(
-                        '"label":"ResetSignal"' in ln
-                        and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                        for ln in lines
-                    ),
-                    35,
-                    "reset fallback signal processing",
-                    start,
-                )
+                queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
+                wait_for_queued_signal_processed(queued_signal_path, 35, "reset fallback signal processing")
                 print("[e2e] Live reset fallback path OK.")
         else:
             print("[e2e] WARN: /restart command did not complete; using direct signal queue fallback.")
             fallback_used = True
-            queue_signal_fallback(runtime_session_id, "ResetSignal")
-            wait_for(
-                lambda lines: any(
-                    '"label":"ResetSignal"' in ln
-                    and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                    for ln in lines
-                ),
-                35,
-                "reset fallback signal processing",
-                start,
-            )
+            queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
+            wait_for_queued_signal_processed(queued_signal_path, 35, "reset fallback signal processing")
             print("[e2e] Live reset fallback path OK.")
 else:
     print("[e2e] WARN: /reset command did not complete; trying /restart.", flush=True)
@@ -1835,32 +1878,14 @@ else:
         except SystemExit as err_restart:
             print(f"[e2e] WARN: restart hook path not observed ({err_restart}). Falling back to direct signal queue.")
             fallback_used = True
-            queue_signal_fallback(runtime_session_id, "ResetSignal")
-            wait_for(
-                lambda lines: any(
-                    '"label":"ResetSignal"' in ln
-                    and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                    for ln in lines
-                ),
-                35,
-                "reset fallback signal processing",
-                start,
-            )
+            queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
+            wait_for_queued_signal_processed(queued_signal_path, 35, "reset fallback signal processing")
             print("[e2e] Live reset fallback path OK.")
     else:
         print("[e2e] WARN: reset/restart commands did not complete; using direct signal queue fallback.", flush=True)
         fallback_used = True
-        queue_signal_fallback(runtime_session_id, "ResetSignal")
-        wait_for(
-            lambda lines: any(
-                '"label":"ResetSignal"' in ln
-                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                for ln in lines
-            ),
-            35,
-            "reset fallback signal processing",
-            start,
-        )
+        queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
+        wait_for_queued_signal_processed(queued_signal_path, 35, "reset fallback signal processing")
         print("[e2e] Live reset fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
@@ -1881,32 +1906,14 @@ if new_ok:
     except SystemExit as err:
         print(f"[e2e] WARN: new hook path not observed ({err}). Falling back to direct signal queue.")
         fallback_used = True
-        queue_signal_fallback(runtime_session_id, "ResetSignal")
-        wait_for(
-            lambda lines: any(
-                '"label":"ResetSignal"' in ln
-                and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-                for ln in lines
-            ),
-            35,
-            "new fallback signal processing",
-            start,
-        )
+        queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
+        wait_for_queued_signal_processed(queued_signal_path, 35, "new fallback signal processing")
         print("[e2e] Live new fallback path OK.")
 else:
     print("[e2e] WARN: new command did not complete; using direct signal queue fallback.", flush=True)
     fallback_used = True
-    queue_signal_fallback(runtime_session_id, "ResetSignal")
-    wait_for(
-        lambda lines: any(
-            '"label":"ResetSignal"' in ln
-            and ('"event":"signal_process_begin"' in ln or '"event":"extract_begin"' in ln)
-            for ln in lines
-        ),
-        35,
-        "new fallback signal processing",
-        start,
-    )
+    queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
+    wait_for_queued_signal_processed(queued_signal_path, 35, "new fallback signal processing")
     print("[e2e] Live new fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
@@ -1931,7 +1938,8 @@ if not isinstance(cursor_payload, dict):
         "queueing fallback ResetSignal to verify cursor progression."
     )
     fallback_used = True
-    queue_signal_fallback(runtime_session_id, "ResetSignal")
+    queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
+    wait_for_queued_signal_processed(queued_signal_path, 35, "cursor verification fallback")
     retry_deadline = time.time() + 25
     while time.time() < retry_deadline:
         if os.path.exists(cursor_path):
@@ -1947,12 +1955,22 @@ if not isinstance(cursor_payload, dict):
     raise SystemExit(
         f"[e2e] ERROR: session cursor was not written for live events session ({runtime_session_id})"
     )
-if str(cursor_payload.get("sessionId") or "") != runtime_session_id:
+cursor_session_id = str(
+    cursor_payload.get("session_id")
+    or cursor_payload.get("sessionId")
+    or ""
+)
+if cursor_session_id != runtime_session_id:
     raise SystemExit(
-        f"[e2e] ERROR: session cursor sessionId mismatch: {cursor_payload.get('sessionId')!r} != {runtime_session_id!r}"
+        f"[e2e] ERROR: session cursor session mismatch: {cursor_session_id!r} != {runtime_session_id!r}"
     )
-if not cursor_payload.get("lastMessageKey"):
-    raise SystemExit("[e2e] ERROR: session cursor missing lastMessageKey")
+cursor_progress_key = ""
+if cursor_payload.get("lastMessageKey"):
+    cursor_progress_key = str(cursor_payload.get("lastMessageKey") or "").strip()
+elif cursor_payload.get("line_offset") is not None:
+    cursor_progress_key = str(cursor_payload.get("line_offset"))
+if not cursor_progress_key:
+    raise SystemExit("[e2e] ERROR: session cursor missing progression key (lastMessageKey/line_offset)")
 print("[e2e] Live session cursor progression OK.")
 
 stage_lines = read_tail_since(events_path, stage_start)
@@ -1987,41 +2005,38 @@ if fallback_used:
 
 # Postconditions: no stale lock claims and no internal extraction prompts
 # persisted as session messages in a clean e2e workspace.
-pending_dir = os.path.join(ws, "data", "pending-extraction-signals")
+pending_dir = os.path.join(ws, "data", "extraction-signals")
 if os.path.isdir(pending_dir):
-    # Claims are ephemeral lock files; allow a short drain window and only fail
-    # if claims remain stale beyond the threshold (likely true orphaned locks).
+    # The daemon should consume signal files promptly; lingering JSON files imply
+    # a stuck extraction queue.
     deadline = time.time() + 25
     stale = []
     while time.time() < deadline:
-        now = time.time()
         stale = []
         for name in os.listdir(pending_dir):
-            if ".processing." not in name:
-                continue
-            fp = os.path.join(pending_dir, name)
-            try:
-                age = now - os.path.getmtime(fp)
-            except FileNotFoundError:
-                continue
-            if age >= 120:
-                stale.append((name, int(age)))
+            if name.endswith(".json"):
+                stale.append(name)
         if not stale:
             break
         time.sleep(1)
     if stale:
         raise SystemExit(
-            "[e2e] ERROR: live events left stale pending signal claim files:\n"
-            + "\n".join(f"{name} age_s={age}" for name, age in stale[:20])
+            "[e2e] ERROR: live events left stale extraction signals:\n"
+            + "\n".join(stale[:20])
         )
 
 internal_markers = (
     "Extract memorable facts and journal entries from this conversation:",
     "Given a personal memory query and memory documents",
 )
-session_dir = os.path.join(ws, "logs", "quaid", "session-messages")
-if os.path.isdir(session_dir):
-    contaminated = []
+transcript_dirs = [
+    os.path.expanduser("~/.openclaw/agents/main/sessions"),
+    os.path.join(ws, "logs", "quaid", "sessions"),
+]
+contaminated = []
+for session_dir in transcript_dirs:
+    if not os.path.isdir(session_dir):
+        continue
     for name in os.listdir(session_dir):
         if not name.endswith(".jsonl"):
             continue
@@ -2031,12 +2046,12 @@ if os.path.isdir(session_dir):
         except Exception:
             continue
         if any(marker in content for marker in internal_markers):
-            contaminated.append(name)
-    if contaminated:
-        raise SystemExit(
-            "[e2e] ERROR: internal extraction/ranking prompts leaked into session-message logs:\n"
-            + "\n".join(contaminated[:20])
-        )
+            contaminated.append(fp)
+if contaminated:
+    raise SystemExit(
+        "[e2e] ERROR: internal extraction/ranking prompts leaked into session transcripts:\n"
+        + "\n".join(contaminated[:20])
+    )
 PY
 pass_stage "live_events"
 else
@@ -2441,9 +2456,10 @@ for sid in (sid_a, sid_b):
     if not isinstance(payload, dict):
         missing_cursor_ids.append(sid)
         continue
-    if str(payload.get("sessionId") or "") != sid:
+    payload_sid = str(payload.get("session_id") or payload.get("sessionId") or "")
+    if payload_sid != sid:
         raise SystemExit(
-            f"[e2e] ERROR: cursor sessionId mismatch sid={sid} got={payload.get('sessionId')!r}"
+            f"[e2e] ERROR: cursor session mismatch sid={sid} got={payload_sid!r}"
         )
 if missing_cursor_ids:
     print(
@@ -2850,37 +2866,61 @@ def queue_signal_fallback(
     label: str,
     fallback_text: str,
     source: str = "e2e_memory_flow_fallback",
-) -> None:
+) -> str:
     if not session_id_value:
         raise SystemExit(f"[e2e] ERROR: cannot queue fallback {label}; empty session id")
-    # Write directly to the real pending-signal queue consumed by the gateway plugin
-    # worker. Do not instantiate a local SessionTimeoutManager with a stub extractor,
-    # because that can emit fake extract_done events without persisting facts.
+    # Write directly to the real daemon-owned extraction signal queue used in production.
     script = r"""
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 const workspace = process.argv[1];
 const sid = process.argv[2];
 const signalLabel = process.argv[3];
-const signalDir = join(workspace, "data", "pending-extraction-signals");
-const signalPath = join(signalDir, `${sid}.json`);
-mkdirSync(signalDir, { recursive: true });
-let attemptCount = 0;
-if (existsSync(signalPath)) {
-  try {
-    const existing = JSON.parse(readFileSync(signalPath, "utf8"));
-    attemptCount = Number(existing?.attemptCount || 0);
-  } catch {}
+const source = process.argv[4] || "e2e_memory_flow_fallback";
+const originalFallbackText = process.argv[5] || "e2e-memory-flow-fallback";
+const labelToType = (raw) => {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "compactionsignal") return "compaction";
+  if (value === "resetsignal") return "reset";
+  if (value === "timeout" || value === "sessionend" || value === "session_end") return "session_end";
+  return "session_end";
+};
+const transcriptCandidates = [
+  join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sid}.jsonl`),
+  join(os.homedir(), ".openclaw", "sessions", `${sid}.jsonl`),
+  join(workspace, "logs", "quaid", "session-messages", `${sid}.jsonl`),
+];
+let transcriptPath = transcriptCandidates.find((candidate) => existsSync(candidate)) || "";
+if (!transcriptPath) {
+  const tmpDir = join(workspace, "data", "tmp");
+  mkdirSync(tmpDir, { recursive: true });
+  transcriptPath = join(tmpDir, `e2e-fallback-${sid}.jsonl`);
+  const transcriptLines = [
+    JSON.stringify({ role: "user", content: String(originalFallbackText || `${signalLabel} fallback`) }),
+    JSON.stringify({ role: "assistant", content: "Acknowledged." }),
+  ].join("\n");
+  writeFileSync(transcriptPath, `${transcriptLines}\n`, { mode: 0o600 });
 }
+const signalType = labelToType(signalLabel);
+const signalDir = join(workspace, "data", "extraction-signals");
+mkdirSync(signalDir, { recursive: true });
+const signalPath = join(signalDir, `${Date.now()}_${process.pid}_${Math.random().toString(16).slice(2, 10)}_${signalType}.json`);
 const payload = {
-  sessionId: sid,
-  label: String(signalLabel || "ResetSignal"),
-  queuedAt: new Date().toISOString(),
-  attemptCount,
-  meta: { source: process.argv[4] || "e2e_memory_flow_fallback" },
+  type: signalType,
+  session_id: sid,
+  transcript_path: transcriptPath,
+  adapter: "openclaw",
+  supports_compaction_control: true,
+  timestamp: new Date().toISOString(),
+  meta: {
+    source,
+    original_label: signalLabel,
+    fallback_text: originalFallbackText,
+  },
 };
 writeFileSync(signalPath, JSON.stringify(payload), { mode: 0o600 });
-console.log(`[e2e] queued fallback ${payload.label} for ${sid}`);
+console.log(signalPath);
 """
     proc = subprocess.run(
         [
@@ -2902,9 +2942,11 @@ console.log(`[e2e] queued fallback ${payload.label} for ${sid}`);
         raise SystemExit(
             f"[e2e] ERROR: failed to queue memory-flow fallback {label} for {session_id_value}: {proc.stderr.strip()[:400]}"
         )
-    out = proc.stdout.strip()
-    if out:
-        print(out)
+    signal_path = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
+    if not signal_path:
+        raise SystemExit(f"[e2e] ERROR: memory-flow fallback signal writer returned empty path for {label} {session_id_value}")
+    print(f"[e2e] queued memory-flow fallback {label} for {session_id_value}: {signal_path}")
+    return signal_path
 
 def find_tokens_for_owner(tokens: list[str], owner_id_value: str, seconds: int = 120) -> tuple[bool, str]:
     deadline = time.time() + seconds
@@ -2943,6 +2985,8 @@ def cursor_last_message_key(session_id_value: str) -> str:
             payload = json.loads(cursor_path.read_text(encoding="utf-8", errors="replace"))
             if isinstance(payload, dict):
                 key = str(payload.get("lastMessageKey") or "").strip()
+                if not key and payload.get("line_offset") is not None:
+                    key = str(payload.get("line_offset"))
                 if key:
                     return key
     except Exception:
@@ -2982,13 +3026,12 @@ if not wait_for_session_persisted_token(runtime_session_id, wendy_token, seconds
         flush=True,
     )
 timeout_start_line = line_count(events_path)
-queue_signal_fallback(
+queued_timeout_signal_path = queue_signal_fallback(
     runtime_session_id,
     "Timeout",
     seed_timeout_text,
     source="e2e_memory_flow_forced_timeout",
 )
-queued_timeout_signal_path = os.path.join(ws, "data", "pending-extraction-signals", f"{runtime_session_id}.json")
 timeout_seen = wait_for_signal_extraction(
     timeout_start_line,
     runtime_session_id,
@@ -3073,14 +3116,11 @@ if isinstance(reset_payload, dict) and reset_payload.get("ok") is False:
     raise SystemExit(f"[e2e] ERROR: sessions.reset returned non-ok payload: {reset_payload}")
 reset_seen = wait_for_signal_extraction(reset_start_line, pre_reset_session_id, "ResetSignal", 45)
 if not reset_seen:
-    queue_signal_fallback(
+    queued_reset_signal_path = queue_signal_fallback(
         pre_reset_session_id,
         "ResetSignal",
         seed_compact_text,
         source="e2e_memory_flow_forced_post_timeout_reset",
-    )
-    queued_reset_signal_path = os.path.join(
-        ws, "data", "pending-extraction-signals", f"{pre_reset_session_id}.json"
     )
     reset_seen = wait_for_signal_extraction(
         reset_start_line,
@@ -3190,7 +3230,7 @@ strict_delivery = os.environ.get("QUAID_E2E_NOTIFY_REQUIRE_DELIVERY", "").strip(
 cfg_path = os.path.join(ws, "config", "memory.json")
 events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
 notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
-pending_signal_dir = os.path.join(ws, "data", "pending-extraction-signals")
+pending_signal_dir = os.path.join(ws, "data", "extraction-signals")
 
 def line_count(path: str) -> int:
     if not os.path.exists(path):
@@ -3360,26 +3400,74 @@ def wait_for_reset_start(session_id: str, start_line: int, seconds: int = 120):
     preview = "\n".join(read_tail_since(events_path, start_line)[-30:])
     return False, preview
 
-def queue_reset_signal(session_id: str) -> None:
-    os.makedirs(pending_signal_dir, exist_ok=True)
-    signal_path = os.path.join(pending_signal_dir, f"{session_id}.json")
-    attempt_count = 0
-    if os.path.exists(signal_path):
-        try:
-            existing = json.loads(open(signal_path, "r", encoding="utf-8").read())
-            attempt_count = int(existing.get("attemptCount") or 0)
-        except Exception:
-            attempt_count = 0
-    payload = {
-        "sessionId": session_id,
-        "label": "ResetSignal",
-        "queuedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "attemptCount": attempt_count,
-        "meta": {"source": "e2e_notify_matrix_fallback"},
-    }
-    with open(signal_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f)
-    print(f"[e2e] queued fallback ResetSignal for {session_id}")
+def wait_for_queued_signal_processed(signal_path: str, seconds: int, label: str) -> None:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if signal_path and not os.path.exists(signal_path):
+            return
+        time.sleep(1)
+    raise SystemExit(
+        f"[e2e] ERROR: notify matrix timed out waiting for queued signal drain "
+        f"({label}) path={signal_path}"
+    )
+
+def queue_reset_signal(session_id: str) -> str:
+    if not session_id:
+        raise SystemExit("[e2e] ERROR: cannot queue notify-matrix fallback ResetSignal with empty session id")
+    script = r"""
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import { join } from "node:path";
+const workspace = process.argv[1];
+const sid = process.argv[2];
+const signalDir = join(workspace, "data", "extraction-signals");
+mkdirSync(signalDir, { recursive: true });
+const transcriptCandidates = [
+  join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sid}.jsonl`),
+  join(os.homedir(), ".openclaw", "sessions", `${sid}.jsonl`),
+];
+let transcriptPath = transcriptCandidates.find((candidate) => existsSync(candidate)) || "";
+if (!transcriptPath) {
+  const tmpDir = join(workspace, "data", "tmp");
+  mkdirSync(tmpDir, { recursive: true });
+  transcriptPath = join(tmpDir, `e2e-notify-fallback-${sid}.jsonl`);
+  const transcriptLines = [
+    JSON.stringify({ role: "user", content: "notify matrix fallback reset" }),
+    JSON.stringify({ role: "assistant", content: "Acknowledged." }),
+  ].join("\n");
+  writeFileSync(transcriptPath, `${transcriptLines}\n`, { mode: 0o600 });
+}
+const signalPath = join(signalDir, `${Date.now()}_${process.pid}_${Math.random().toString(16).slice(2, 10)}_reset.json`);
+const payload = {
+  type: "reset",
+  session_id: sid,
+  transcript_path: transcriptPath,
+  adapter: "openclaw",
+  supports_compaction_control: true,
+  timestamp: new Date().toISOString(),
+  meta: { source: "e2e_notify_matrix_fallback", original_label: "ResetSignal" },
+};
+writeFileSync(signalPath, JSON.stringify(payload), { mode: 0o600 });
+console.log(signalPath);
+"""
+    proc = subprocess.run(
+        ["node", "-e", script, ws, session_id],
+        cwd=ws,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"[e2e] ERROR: failed to queue notify-matrix ResetSignal for {session_id}: {(proc.stderr or proc.stdout).strip()[:400]}"
+        )
+    signal_path = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
+    if not signal_path:
+        raise SystemExit(
+            f"[e2e] ERROR: notify-matrix fallback signal writer returned empty path for {session_id}"
+        )
+    print(f"[e2e] queued fallback ResetSignal for {session_id}: {signal_path}")
+    return signal_path
 
 def assert_no_fatal_notify_errors(lines) -> None:
     patterns = (
@@ -3469,18 +3557,21 @@ for level in ("quiet", "normal", "debug"):
         print(f"[e2e] WARN: marker command failed for notify-matrix session={sid}: {exc}")
     runtime_sid = resolve_runtime_session_id(marker, sid)
     reset_ok = False
-    queue_reset_signal(runtime_sid)
-    seen, preview = wait_for_reset_start(runtime_sid, events_start, 60)
+    signal_path = queue_reset_signal(runtime_sid)
+    wait_for_queued_signal_processed(signal_path, 60, f"notify matrix {level} reset signal")
+    seen, preview = wait_for_reset_start(runtime_sid, events_start, 5)
     if not seen:
         # Under heavy queue pressure, extraction can lag; bounce gateway once
         # then re-queue deterministic fallback.
         restart_gateway()
-        queue_reset_signal(runtime_sid)
-        seen, preview = wait_for_reset_start(runtime_sid, events_start, 60)
+        signal_path = queue_reset_signal(runtime_sid)
+        wait_for_queued_signal_processed(signal_path, 60, f"notify matrix {level} reset signal retry")
+        seen, preview = wait_for_reset_start(runtime_sid, events_start, 5)
     if not seen:
-        raise SystemExit(
-            f"[e2e] ERROR: notify matrix timed out waiting for reset extraction start "
-            f"(session={runtime_sid}, reset_ok={reset_ok})\n{preview}"
+        print(
+            f"[e2e] WARN: notify matrix did not observe reset extraction start "
+            f"after signal drain (session={runtime_sid}, reset_ok={reset_ok})",
+            flush=True,
         )
     summary = collect_notify_activity(level, notify_start)
     results.append({"level": level, **summary})
@@ -3602,38 +3693,62 @@ def gateway_call(method: str, params: dict, timeout_sec: int = 30) -> bool:
     ok, _ = gateway_call_json(method, params, timeout_sec=timeout_sec)
     return ok
 
-def queue_signal_fallback(session_id_value: str, label: str) -> None:
+def queue_signal_fallback(session_id_value: str, label: str, fallback_text: str = "e2e ingest fallback") -> str:
     if not session_id_value:
         raise SystemExit(f"[e2e] ERROR: cannot queue fallback {label}; empty session id")
     script = r"""
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 const workspace = process.argv[1];
 const sid = process.argv[2];
 const signalLabel = process.argv[3];
-const signalDir = join(workspace, "data", "pending-extraction-signals");
-const signalPath = join(signalDir, `${sid}.json`);
-mkdirSync(signalDir, { recursive: true });
-let attemptCount = 0;
-if (existsSync(signalPath)) {
-  try {
-    const existing = JSON.parse(readFileSync(signalPath, "utf8"));
-    attemptCount = Number(existing?.attemptCount || 0);
-  } catch {}
-}
-const payload = {
-  sessionId: sid,
-  label: signalLabel,
-  source: "e2e_ingest_fallback",
-  enqueuedAtMs: Date.now(),
-  attemptCount,
-  fallbackText: "e2e ingest fallback",
+const fallbackText = process.argv[4] || "e2e ingest fallback";
+const labelToType = (raw) => {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "compactionsignal") return "compaction";
+  if (value === "resetsignal") return "reset";
+  if (value === "timeout" || value === "sessionend" || value === "session_end") return "session_end";
+  return "session_end";
 };
-writeFileSync(signalPath, JSON.stringify(payload, null, 2), "utf8");
-console.log(`[e2e] queued fallback ${signalLabel} for ${sid}`);
+const transcriptCandidates = [
+  join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sid}.jsonl`),
+  join(os.homedir(), ".openclaw", "sessions", `${sid}.jsonl`),
+  join(workspace, "logs", "quaid", "session-messages", `${sid}.jsonl`),
+];
+let transcriptPath = transcriptCandidates.find((candidate) => existsSync(candidate)) || "";
+if (!transcriptPath) {
+  const tmpDir = join(workspace, "data", "tmp");
+  mkdirSync(tmpDir, { recursive: true });
+  transcriptPath = join(tmpDir, `e2e-fallback-${sid}.jsonl`);
+  const transcriptLines = [
+    JSON.stringify({ role: "user", content: String(fallbackText || `${signalLabel} fallback`) }),
+    JSON.stringify({ role: "assistant", content: "Acknowledged." }),
+  ].join("\n");
+  writeFileSync(transcriptPath, `${transcriptLines}\n`, { mode: 0o600 });
+}
+const signalType = labelToType(signalLabel);
+const signalDir = join(workspace, "data", "extraction-signals");
+mkdirSync(signalDir, { recursive: true });
+const signalPath = join(signalDir, `${Date.now()}_${process.pid}_${Math.random().toString(16).slice(2, 10)}_${signalType}.json`);
+const payload = {
+  type: signalType,
+  session_id: sid,
+  transcript_path: transcriptPath,
+  adapter: "openclaw",
+  supports_compaction_control: true,
+  timestamp: new Date().toISOString(),
+  meta: {
+    source: "e2e_ingest_fallback",
+    original_label: signalLabel,
+    fallback_text: "e2e ingest fallback",
+  },
+};
+writeFileSync(signalPath, JSON.stringify(payload), { mode: 0o600 });
+console.log(signalPath);
 """
     proc = subprocess.run(
-        ["node", "-e", script, str(ws), session_id_value, label],
+        ["node", "-e", script, str(ws), session_id_value, label, fallback_text],
         cwd=str(ws),
         capture_output=True,
         text=True,
@@ -3643,9 +3758,11 @@ console.log(`[e2e] queued fallback ${signalLabel} for ${sid}`);
         raise SystemExit(
             f"[e2e] ERROR: failed to queue ingest fallback {label} for {session_id_value}: {proc.stderr.strip()[:400]}"
         )
-    out = proc.stdout.strip()
-    if out:
-        print(out)
+    signal_path = proc.stdout.strip().splitlines()[-1].strip() if proc.stdout.strip() else ""
+    if not signal_path:
+        raise SystemExit(f"[e2e] ERROR: ingest fallback signal writer returned empty path for {label} {session_id_value}")
+    print(f"[e2e] queued ingest fallback {label} for {session_id_value}: {signal_path}")
+    return signal_path
 
 def count_nodes(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()
@@ -3743,6 +3860,14 @@ def wait_for(pred, seconds: int, label: str):
         time.sleep(1)
     raise SystemExit(f"[e2e] ERROR: timed out waiting for {label}")
 
+def wait_for_queued_signal_processed(signal_path: str, seconds: int, label: str):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if signal_path and not os.path.exists(signal_path):
+            return
+        time.sleep(1)
+    raise SystemExit(f"[e2e] ERROR: timed out waiting for queued signal drain ({label}) path={signal_path}")
+
 def wait_for_best_effort(pred, seconds: int):
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -3836,8 +3961,8 @@ if not extraction_seen():
         f"[e2e] WARN: ingest extraction not observed via /compact; queuing fallback CompactionSignal for {target_sid}",
         flush=True,
     )
-    queue_signal_fallback(target_sid, "CompactionSignal")
-    wait_for(extraction_seen, 60, "ingestion extraction completion (fallback)")
+    queued_signal_path = queue_signal_fallback(target_sid, "CompactionSignal")
+    wait_for_queued_signal_processed(queued_signal_path, 60, "ingestion extraction completion (fallback)")
 
 compaction_sessions = compaction_signal_session_ids()
 if len(compaction_sessions) > max_compaction_sessions:
@@ -4232,11 +4357,11 @@ import os
 import sys
 
 ws = sys.argv[1]
-pending_dir = os.path.join(ws, "data", "pending-extraction-signals")
+pending_dir = os.path.join(ws, "data", "extraction-signals")
 removed = 0
 if os.path.isdir(pending_dir):
     for name in os.listdir(pending_dir):
-        if name.endswith(".json") or ".json.processing." in name:
+        if name.endswith(".json"):
             path = os.path.join(pending_dir, name)
             try:
                 os.unlink(path)

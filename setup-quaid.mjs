@@ -2625,20 +2625,6 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
-  if (IS_OPENCLAW) {
-    s.start("Registering Quaid plugin in OpenClaw...");
-    const reg = _registerOpenClawQuaidPlugin(PLUGIN_DIR);
-    if (!reg.ok) {
-      s.stop(C.red("OpenClaw plugin registration failed"));
-      throw new Error(reg.reason || "openclaw plugins install/enable failed");
-    }
-    s.stop(C.green("OpenClaw plugin registered"));
-    if (_ensureOpenClawPluginsAllowQuaid()) {
-      log.info("Ensured plugins.allow includes: quaid");
-    }
-    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 8_000);
-    enableRequiredOpenClawHooks();
-  }
   if (_isPlatform("claude-code")) {
     // Create per-instance identity directory for SOUL.md, USER.md, MEMORY.md
     const identityDir = path.join(WORKSPACE, "claude-code", "identity");
@@ -2842,6 +2828,21 @@ except Exception as e:
 `;
   spawnSync("python3", ["-c", storeScript], { cwd: PLUGIN_DIR, stdio: "pipe" });
   s.stop(C.green(`Owner node: ${owner.display}`));
+
+  if (IS_OPENCLAW) {
+    s.start("Registering Quaid plugin in OpenClaw...");
+    const reg = _registerOpenClawQuaidPlugin(PLUGIN_DIR);
+    if (!reg.ok) {
+      s.stop(C.red("OpenClaw plugin registration failed"));
+      throw new Error(reg.reason || "openclaw plugins install/enable failed");
+    }
+    s.stop(C.green("OpenClaw plugin registered"));
+    if (_ensureOpenClawPluginsAllowQuaid()) {
+      log.info("Ensured plugins.allow includes: quaid");
+    }
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 8_000);
+    enableRequiredOpenClawHooks();
+  }
 
   // Migration
   let migrationCompleted = false;
