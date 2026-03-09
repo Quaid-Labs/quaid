@@ -2139,31 +2139,58 @@ async function step6_schedule(embeddings = {}, advancedSetup = false, janitorAsk
     // Claude Code: schedule via launchd plist (macOS) since there is no
     // gateway heartbeat. The janitor uses the OAuth token from
     // ~/.claude/.credentials.json — no API key env var needed.
-    scheduled = installLaunchdSchedule(scheduleHour);
-    if (scheduled) {
-      log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via launchd`);
+    if (process.platform === "darwin") {
+      scheduled = installLaunchdSchedule(scheduleHour);
+      if (scheduled) {
+        log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via launchd`);
+      } else {
+        log.warn("Could not install launchd schedule.");
+        log.warn(`Run manually: quaid janitor --apply --task all`);
+      }
+
+      const scheduleLines = [
+        C.yellow("The janitor is scheduled via macOS launchd."),
+        C.yellow("It uses your Claude Code OAuth token — no API key needed."),
+        "",
+        C.bold("The launchd agent runs daily and applies janitor maintenance."),
+        C.bold("It will review pending facts, deduplicate, and maintain your"),
+        C.bold("knowledge base automatically."),
+        "",
+        C.dim("To check status: launchctl list | grep quaid"),
+        C.dim("To unload: launchctl unload ~/Library/LaunchAgents/com.quaid.janitor.plist"),
+      ];
+      note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
+
+      handleCancel(await confirm({
+        message: "I understand — the janitor runs nightly via launchd.",
+        initialValue: true,
+      }));
     } else {
-      log.warn("Could not install launchd schedule.");
-      log.warn(`Run manually: quaid janitor --apply --task all`);
+      // Linux/other: install crontab entry
+      scheduled = installCrontabSchedule(scheduleHour);
+      if (scheduled) {
+        log.success(`Janitor scheduled for ${C.bcyan(ampm)} daily via crontab`);
+      } else {
+        log.warn("Could not install crontab schedule.");
+        log.warn(`Run manually: quaid janitor --apply --task all`);
+      }
+
+      const scheduleLines = [
+        C.yellow("The janitor is scheduled via crontab."),
+        C.yellow("It uses your Claude Code OAuth token — no API key needed."),
+        "",
+        C.bold("The cron job runs daily and applies janitor maintenance."),
+        "",
+        C.dim("To check: crontab -l | grep quaid"),
+        C.dim("To remove: crontab -l | grep -v quaid | crontab -"),
+      ];
+      note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
+
+      handleCancel(await confirm({
+        message: "I understand — the janitor runs nightly via crontab.",
+        initialValue: true,
+      }));
     }
-
-    const scheduleLines = [
-      C.yellow("The janitor is scheduled via macOS launchd."),
-      C.yellow("It uses your Claude Code OAuth token — no API key needed."),
-      "",
-      C.bold("The launchd agent runs daily and applies janitor maintenance."),
-      C.bold("It will review pending facts, deduplicate, and maintain your"),
-      C.bold("knowledge base automatically."),
-      "",
-      C.dim("To check status: launchctl list | grep quaid"),
-      C.dim("To unload: launchctl unload ~/Library/LaunchAgents/com.quaid.janitor.plist"),
-    ];
-    note(scheduleLines.join("\n"), C.bmag("JANITOR SCHEDULING"));
-
-    handleCancel(await confirm({
-      message: "I understand — the janitor runs nightly via launchd.",
-      initialValue: true,
-    }));
   } else {
     // OpenClaw / Standalone: schedule via HEARTBEAT.md (bot reads on wake)
     scheduled = installHeartbeatSchedule(scheduleHour);
@@ -2436,6 +2463,45 @@ function installLaunchdSchedule(hour) {
   }
 }
 
+function installCrontabSchedule(hour) {
+  // Linux/other: crontab entry for nightly janitor.
+  const quaidBin = path.join(PLUGIN_DIR, "quaid");
+  const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
+  const logPath = path.join(LOGS_DIR, "janitor", "cron.log");
+
+  fs.mkdirSync(path.join(LOGS_DIR, "janitor"), { recursive: true });
+
+  const envVars = `QUAID_HOME='${WORKSPACE}' QUAID_ADAPTER=claude-code PYTHONPATH='${PLUGIN_DIR}'`;
+  const cronLine = `30 ${hour} * * * ${envVars} ${quaidCmd} janitor --task all --apply --time-budget 3600 >> ${logPath} 2>&1`;
+  const marker = "# quaid-janitor";
+
+  try {
+    const existing = shell("crontab -l 2>/dev/null") || "";
+
+    // Already installed?
+    if (existing.includes(marker)) {
+      // Replace existing entry
+      const lines = existing.split("\n").filter(l => !l.includes(marker) && l.trim() !== "");
+      lines.push(`${cronLine} ${marker}`);
+      const { status } = spawnSync("crontab", ["-"], {
+        input: lines.join("\n") + "\n",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      return status === 0;
+    }
+
+    // Add new entry
+    const newCrontab = existing.trimEnd() + "\n" + `${cronLine} ${marker}` + "\n";
+    const { status } = spawnSync("crontab", ["-"], {
+      input: newCrontab,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return status === 0;
+  } catch {
+    return false;
+  }
+}
+
 // =============================================================================
 // Step 7: Install & Migrate
 // =============================================================================
@@ -2510,6 +2576,12 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     enableRequiredOpenClawHooks();
   }
   if (_isPlatform("claude-code")) {
+    // Create per-instance identity directory for SOUL.md, USER.md, MEMORY.md
+    const identityDir = path.join(WORKSPACE, "claude-code", "identity");
+    if (!fs.existsSync(identityDir)) {
+      fs.mkdirSync(identityDir, { recursive: true });
+      log.info(`Created identity directory: ${identityDir}`);
+    }
     setupClaudeCodeHooks();
   }
 
