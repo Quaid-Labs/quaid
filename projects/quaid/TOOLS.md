@@ -7,36 +7,48 @@ Project Description: Quaid is an active knowledge layer for agentic systems. Use
 `TOOLS.md` explains how to use tools effectively.
 It is not a full API schema or implementation spec.
 
-## Tool Surface
+## CLI Interface
 
-The `quaid` CLI is the canonical interface for all adapters. Each platform maps
-to the same CLI commands:
+All agents interact with Quaid through the `quaid` CLI. No tool registration
+needed — agents call CLI commands via their shell/Bash tool.
 
-| CLI Command | OpenClaw Tool | MCP Tool | Description |
-|-------------|--------------|----------|-------------|
-| `quaid recall "query"` | `memory_recall` | `memory_recall` | Search memories |
-| `quaid store "text"` | `memory_store` | `memory_store` | Store a memory |
-| `quaid search "query"` | — | `memory_search` | Fast search (no rerank) |
-| `quaid delete-node <id>` | `memory_forget` | `memory_forget` | Delete a memory |
-| `quaid create-edge ...` | — | `memory_create_edge` | Create relationship |
-| `quaid stats` | — | `memory_stats` | Database statistics |
-| `quaid docs search "q"` | `projects_search` | `projects_search` | Search project docs |
-| `quaid docs list` | `docs_list` | — | List registered docs |
-| `quaid registry list` | `project_list` | — | List projects |
-| `quaid registry create-project` | `project_create` | — | Create a project |
-| `quaid hook-search "q"` | — | — | Search memories + docs |
+### Memory Commands
+- `quaid recall "query"` — Search memories (semantic + graph traversal + reranking)
+- `quaid store "text"` — Store a new memory
+- `quaid search "query"` — Fast search (no reranking)
+- `quaid stats` — Database statistics and health
+- `quaid delete-node <id>` — Delete a specific memory
+- `quaid create-edge <from> <to> <label>` — Create a relationship edge
 
-**Adapter-specific surfaces** (not CLI-accessible):
+### Documentation Commands
+- `quaid docs search "query"` — Search project documentation (RAG)
+- `quaid docs list` — List registered docs
+- `quaid docs check` — Check for stale docs
+- `quaid docs update` — Update stale docs from source diffs
 
-OpenClaw tools (registered via gateway):
-- `docs_read`, `docs_register`, `session_recall`
+### Project Commands
+- `quaid registry list` — List all projects
+- `quaid registry create-project <name>` — Create a new project
+- `quaid global-registry list` — Cross-instance project registry
+- `quaid updater doc-health <project> [--dry-run]` — Evaluate doc lifecycle
 
-MCP server tools (`core/interface/mcp_server.py`):
-- `memory_extract`, `memory_write`, `memory_get`
-- `memory_domain_list`, `memory_domain_register`
-- `memory_provider`, `memory_capabilities`
-- `memory_event_emit`, `memory_event_list`, `memory_event_process`, `memory_event_capabilities`
-- `session_recall`
+### Combined Search
+- `quaid hook-search "query"` — Search memories + docs together
+
+### Adapter-Specific Surfaces
+
+Some adapters expose richer tool surfaces beyond CLI:
+
+OpenClaw (registered via gateway): `memory_recall`, `memory_store`,
+`memory_forget`, `projects_search`, `docs_read`, `docs_register`,
+`project_create`, `project_list`, `session_recall`
+
+MCP server (`core/interface/mcp_server.py`): `memory_recall`, `memory_store`,
+`memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`,
+`memory_stats`, `memory_domain_list`, `memory_domain_register`,
+`memory_extract`, `memory_write`, `projects_search`, `session_recall`,
+`memory_event_emit`, `memory_event_list`, `memory_event_process`,
+`memory_provider`, `memory_capabilities`, `memory_event_capabilities`
 
 ## Plugin Contract Surfaces
 
