@@ -44,7 +44,7 @@ It reflects broad areas of active focus, not delivery guarantees.
   - Prioritize low-risk, auditable migration flows.
 
 - **Host coverage beyond OpenClaw**
-  - Expand and validate MCP usage across more clients.
+  - Deepen Claude Code and OpenClaw adapter coverage.
   - Increase adapter portability while preserving behavior guarantees.
 
 ## Longer-Horizon Work
@@ -60,7 +60,7 @@ It reflects broad areas of active focus, not delivery guarantees.
 
 ## Explicit Non-Goals (for now)
 
-- Broad claims of full compatibility across all MCP hosts before validation.
+- Broad claims of full compatibility across unvalidated host runtimes before validation.
 - Heavy platform-specific promises without repeatable install/test coverage.
 - Roadmap commitments tied to specific release dates.
 

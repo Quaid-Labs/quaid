@@ -23,7 +23,7 @@ Use this as the go/no-go gate for prelaunch and release candidates.
 ## 2) Core Test Gates
 
 - Python janitor/failHard/provider suites pass:
-  - `python3 -m pytest -q tests/test_janitor_apply_mode.py tests/test_janitor_benchmark_review_gate.py tests/test_janitor_lifecycle.py tests/test_maintenance_parallelism.py tests/test_llm_clients.py tests/test_mcp_server.py tests/test_provider_selection.py tests/test_providers.py`
+  - `python3 -m pytest -q tests/test_janitor_apply_mode.py tests/test_janitor_benchmark_review_gate.py tests/test_janitor_lifecycle.py tests/test_maintenance_parallelism.py tests/test_llm_clients.py tests/test_provider_selection.py tests/test_providers.py`
 - TypeScript orchestrator/session timeout integration passes:
   - `node test-runner.js tests/knowledge-orchestrator.test.ts tests/session-timeout-manager.test.ts`
 

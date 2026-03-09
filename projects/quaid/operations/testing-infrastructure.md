@@ -20,7 +20,7 @@ This document defines the current test stack, execution commands, and pass/fail 
 
 ### 2) Python Integration Tier (opt-in)
 - Marker: `integration`
-- Includes cross-module/process tests (for example MCP process orchestration).
+- Includes cross-module/process tests (for example adapter/daemon orchestration).
 
 ### 3) Python Regression Tier (opt-in)
 - Marker: `regression`
@@ -71,7 +71,7 @@ This document defines the current test stack, execution commands, and pass/fail 
   - Raise notification level only when explicitly testing notification UX.
 - Auth/key model:
   - In host mode (OpenClaw), Quaid uses gateway-managed auth profiles.
-  - Standalone MCP/CLI tests can use local env keys (`.env`) when needed.
+  - Standalone CLI tests can use local env keys (`.env`) when needed.
 
 ## Standard Commands
 
