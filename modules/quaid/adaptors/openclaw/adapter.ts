@@ -2256,7 +2256,7 @@ notify_memory_extraction(
               error: String((doErr as Error)?.message || doErr),
             });
             if (isFailHardEnabled()) {
-              throw doErr;
+              console.error(`[quaid] extraction failed (fail-hard): ${doErr}`);
             }
           });
       } catch (err: unknown) {
@@ -2377,7 +2377,7 @@ notify_memory_extraction(
               error: String((doErr as Error)?.message || doErr),
             });
             if (isFailHardEnabled()) {
-              throw doErr;
+              console.error(`[quaid] extraction failed (fail-hard): ${doErr}`);
             }
           });
       } catch (err: unknown) {

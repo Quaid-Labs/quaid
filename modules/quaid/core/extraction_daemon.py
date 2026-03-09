@@ -23,17 +23,39 @@ Lifecycle:
 Adapters ensure the daemon is alive on session init and launch it if not.
 """
 
+import fcntl
 import json
 import logging
+import logging.handlers
 import os
+import re
 import signal
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Ensure plugin root is importable (B060)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 logger = logging.getLogger("quaid.daemon")
+
+# Valid signal types (B062)
+VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end")
+
+# Session ID validation (B008)
+_SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+
+# Max lines to read from a transcript per extraction (B033)
+MAX_TRANSCRIPT_LINES = 50_000
+
+# Max carryover facts to keep (B056)
+MAX_CARRYOVER_FACTS = 50
+
+# Max signals to process per poll cycle (B031)
+MAX_SIGNALS_PER_POLL = 100
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -41,7 +63,8 @@ logger = logging.getLogger("quaid.daemon")
 
 def _quaid_home() -> Path:
     env = os.environ.get("QUAID_HOME", "").strip()
-    return Path(env) if env else Path.home() / "quaid"
+    # B022: Always resolve to absolute path
+    return Path(env).resolve() if env else Path.home() / "quaid"
 
 
 def _signal_dir() -> Path:
@@ -62,6 +85,13 @@ def _carryover_dir() -> Path:
     return d
 
 
+def _tmp_dir() -> Path:
+    """Per-instance temp directory (B030: avoid world-readable /tmp)."""
+    d = _quaid_home() / "data" / "tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _pid_path() -> Path:
     return _quaid_home() / "data" / "extraction-daemon.pid"
 
@@ -73,7 +103,39 @@ def _log_path() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# PID file management
+# Atomic file writes (B004)
+# ---------------------------------------------------------------------------
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Write content atomically via temp file + os.replace()."""
+    tmp_path = path.with_suffix(f".tmp.{os.getpid()}")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(str(tmp_path), str(path))
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Session ID validation (B008)
+# ---------------------------------------------------------------------------
+
+def _validate_session_id(session_id: str) -> str:
+    """Validate and sanitize session_id to prevent path traversal."""
+    if not session_id or not _SESSION_ID_RE.match(session_id):
+        # Generate a safe fallback (B045)
+        safe = f"unknown-{int(time.time())}-{os.getpid()}"
+        logger.warning("invalid session_id %r, using fallback: %s", session_id, safe)
+        return safe
+    return session_id
+
+
+# ---------------------------------------------------------------------------
+# PID file management (B001: flock for atomicity)
 # ---------------------------------------------------------------------------
 
 def read_pid() -> Optional[int]:
@@ -97,7 +159,7 @@ def read_pid() -> Optional[int]:
 
 def write_pid(pid: int) -> None:
     _pid_path().parent.mkdir(parents=True, exist_ok=True)
-    _pid_path().write_text(str(pid))
+    _atomic_write(_pid_path(), str(pid))
 
 
 def remove_pid() -> None:
@@ -124,6 +186,14 @@ def write_signal(
     Called by adapter hooks (CC, OC) when extraction should happen.
     Returns the path to the signal file.
     """
+    # B062: Validate signal type
+    if signal_type not in VALID_SIGNAL_TYPES:
+        logger.warning("unknown signal type %r, defaulting to session_end", signal_type)
+        signal_type = "session_end"
+
+    # B008: Validate session_id
+    session_id = _validate_session_id(session_id)
+
     payload = {
         "type": signal_type,
         "session_id": session_id,
@@ -134,15 +204,15 @@ def write_signal(
         "meta": meta or {},
     }
     sig_dir = _signal_dir()
-    # Use timestamp + PID for uniqueness
-    fname = f"{int(time.time() * 1000)}_{os.getpid()}_{signal_type}.json"
+    # B047: Use UUID suffix for uniqueness (avoids ms-level collision)
+    fname = f"{int(time.time() * 1000)}_{os.getpid()}_{uuid.uuid4().hex[:8]}_{signal_type}.json"
     sig_path = sig_dir / fname
-    sig_path.write_text(json.dumps(payload), encoding="utf-8")
+    _atomic_write(sig_path, json.dumps(payload))
     return sig_path
 
 
 def read_pending_signals() -> List[Dict[str, Any]]:
-    """Read all pending signal files, sorted by timestamp."""
+    """Read pending signal files, sorted by timestamp, capped at MAX_SIGNALS_PER_POLL."""
     sig_dir = _signal_dir()
     if not sig_dir.is_dir():
         return []
@@ -161,37 +231,53 @@ def read_pending_signals() -> List[Dict[str, Any]]:
                 f.unlink()
             except OSError:
                 pass
+        if len(signals) >= MAX_SIGNALS_PER_POLL:
+            break
     return signals
 
 
 def mark_signal_processed(signal_data: Dict[str, Any]) -> None:
     """Remove a processed signal file."""
     sig_path = signal_data.get("_signal_path", "")
-    if sig_path:
-        try:
-            Path(sig_path).unlink()
-        except OSError:
-            pass
+    if not sig_path:
+        return
+    sig = Path(sig_path)
+    # B037: Containment check — only delete files within signal directory
+    try:
+        if not sig.resolve().is_relative_to(_signal_dir().resolve()):
+            logger.warning("refusing to delete signal outside signal dir: %s", sig_path)
+            return
+    except (ValueError, OSError):
+        return
+    try:
+        sig.unlink()
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
 # Cursors
 # ---------------------------------------------------------------------------
 
-def read_cursor(session_id: str) -> int:
-    """Read extraction cursor (line offset) for a session."""
+def read_cursor(session_id: str) -> Dict[str, Any]:
+    """Read extraction cursor for a session. Returns dict with line_offset and transcript_path."""
+    session_id = _validate_session_id(session_id)
     cursor_file = _cursor_dir() / f"{session_id}.json"
     if not cursor_file.is_file():
-        return 0
+        return {"line_offset": 0, "transcript_path": ""}
     try:
         data = json.loads(cursor_file.read_text(encoding="utf-8"))
-        return int(data.get("line_offset", 0))
+        return {
+            "line_offset": int(data.get("line_offset", 0)),
+            "transcript_path": data.get("transcript_path", ""),
+        }
     except (json.JSONDecodeError, ValueError, OSError):
-        return 0
+        return {"line_offset": 0, "transcript_path": ""}
 
 
 def write_cursor(session_id: str, line_offset: int, transcript_path: str) -> None:
     """Write extraction cursor after processing."""
+    session_id = _validate_session_id(session_id)
     cursor_file = _cursor_dir() / f"{session_id}.json"
     payload = {
         "session_id": session_id,
@@ -200,7 +286,7 @@ def write_cursor(session_id: str, line_offset: int, transcript_path: str) -> Non
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     try:
-        cursor_file.write_text(json.dumps(payload), encoding="utf-8")
+        _atomic_write(cursor_file, json.dumps(payload))
     except OSError as e:
         logger.error("cursor write failed for %s: %s", session_id, e)
 
@@ -211,6 +297,7 @@ def write_cursor(session_id: str, line_offset: int, transcript_path: str) -> Non
 
 def read_carryover(session_id: str) -> List[Dict[str, Any]]:
     """Read carryover facts from previous chunk extractions."""
+    session_id = _validate_session_id(session_id)
     carry_file = _carryover_dir() / f"{session_id}.json"
     if not carry_file.is_file():
         return []
@@ -223,6 +310,10 @@ def read_carryover(session_id: str) -> List[Dict[str, Any]]:
 
 def write_carryover(session_id: str, facts: List[Dict[str, Any]]) -> None:
     """Write carryover facts for the next chunk extraction."""
+    session_id = _validate_session_id(session_id)
+    # B056: Cap carryover to prevent unbounded growth
+    if len(facts) > MAX_CARRYOVER_FACTS:
+        facts = facts[-MAX_CARRYOVER_FACTS:]
     carry_file = _carryover_dir() / f"{session_id}.json"
     payload = {
         "session_id": session_id,
@@ -230,13 +321,14 @@ def write_carryover(session_id: str, facts: List[Dict[str, Any]]) -> None:
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     try:
-        carry_file.write_text(json.dumps(payload), encoding="utf-8")
+        _atomic_write(carry_file, json.dumps(payload))
     except OSError as e:
         logger.error("carryover write failed for %s: %s", session_id, e)
 
 
 def clear_carryover(session_id: str) -> None:
     """Clear carryover on compaction/reset (logical boundary)."""
+    session_id = _validate_session_id(session_id)
     carry_file = _carryover_dir() / f"{session_id}.json"
     try:
         carry_file.unlink()
@@ -249,13 +341,23 @@ def clear_carryover(session_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def read_transcript_slice(transcript_path: str, from_line: int) -> List[str]:
-    """Read transcript lines starting at from_line offset."""
+    """Read transcript lines starting at from_line offset.
+
+    Caps at MAX_TRANSCRIPT_LINES to prevent OOM (B033).
+    Uses errors='replace' to handle non-UTF8 content (B041).
+    """
     lines = []
     try:
-        with open(transcript_path, "r", encoding="utf-8") as f:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
                 if i >= from_line:
                     lines.append(line)
+                    if len(lines) >= MAX_TRANSCRIPT_LINES:
+                        logger.warning(
+                            "transcript %s: capped at %d lines (from offset %d)",
+                            transcript_path, MAX_TRANSCRIPT_LINES, from_line,
+                        )
+                        break
     except OSError as e:
         logger.error("failed reading transcript %s: %s", transcript_path, e)
     return lines
@@ -263,7 +365,7 @@ def read_transcript_slice(transcript_path: str, from_line: int) -> List[str]:
 
 def count_transcript_lines(transcript_path: str) -> int:
     try:
-        with open(transcript_path, "r", encoding="utf-8") as f:
+        with open(transcript_path, "r", encoding="utf-8", errors="replace") as f:
             return sum(1 for _ in f)
     except OSError:
         return 0
@@ -285,12 +387,42 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     transcript_path = signal_data.get("transcript_path", "")
     label = f"daemon-{signal_type}"
 
+    # B062: Skip unknown signal types
+    if signal_type not in VALID_SIGNAL_TYPES:
+        logger.warning("[%s] unknown signal type, skipping", label)
+        mark_signal_processed(signal_data)
+        return
+
+    # B008: Validate session_id
+    session_id = _validate_session_id(session_id)
+
     if not transcript_path or not os.path.isfile(transcript_path):
         logger.warning("[%s] transcript not found: %s", label, transcript_path)
         mark_signal_processed(signal_data)
         return
 
-    cursor_offset = read_cursor(session_id)
+    # B057: Read cursor and compare transcript_path
+    cursor_data = read_cursor(session_id)
+    cursor_offset = cursor_data["line_offset"]
+    cursor_transcript = cursor_data["transcript_path"]
+
+    # If transcript path changed (file rotation), reset cursor
+    if cursor_transcript and cursor_transcript != transcript_path:
+        logger.info(
+            "[%s] session %s: transcript path changed (%s -> %s), resetting cursor",
+            label, session_id, cursor_transcript, transcript_path,
+        )
+        cursor_offset = 0
+
+    # B055: Detect cursor > file length (file truncation/rotation)
+    total_lines = count_transcript_lines(transcript_path)
+    if cursor_offset > total_lines:
+        logger.warning(
+            "[%s] session %s: cursor offset %d > file length %d (file truncated?), resetting cursor",
+            label, session_id, cursor_offset, total_lines,
+        )
+        cursor_offset = 0
+
     new_lines = read_transcript_slice(transcript_path, cursor_offset)
 
     if not new_lines:
@@ -299,9 +431,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         mark_signal_processed(signal_data)
         return
 
-    # Write lines to temp file for the adapter's JSONL parser
+    # B030: Write lines to temp file in QUAID_HOME/data/tmp/ (not /tmp)
+    tmp_dir = _tmp_dir()
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
+        mode="w", suffix=".jsonl", delete=False, encoding="utf-8",
+        dir=str(tmp_dir),
     ) as tmp:
         tmp.writelines(new_lines)
         tmp_path = tmp.name
@@ -314,6 +448,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         if not transcript_text.strip():
             logger.info("[%s] session %s: empty transcript after parsing", label, session_id)
             write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+            # B002: Mark processed only on success path
             mark_signal_processed(signal_data)
             return
 
@@ -341,27 +476,41 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             result.get("edges_created", 0),
         )
 
-        # Advance cursor
-        write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
-
-        # Carryover management: clear on compaction/reset, persist otherwise
-        if signal_type in ("compaction", "reset"):
-            clear_carryover(session_id)
-        else:
-            # Persist the carry_facts accumulated during extraction
-            # extract_from_transcript modifies carry_facts in place
+        # B054: Only advance cursor if extraction completed all chunks
+        chunks_processed = result.get("chunks_processed", 0)
+        chunks_total = result.get("chunks_total", 0)
+        if chunks_total > 0 and chunks_processed < chunks_total:
+            logger.warning(
+                "[%s] session %s: extraction incomplete (%d/%d chunks), "
+                "NOT advancing cursor to allow retry",
+                label, session_id, chunks_processed, chunks_total,
+            )
+            # Still write carryover so next attempt has context
             write_carryover(session_id, carry_facts)
+        else:
+            # Advance cursor
+            write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
+
+            # Carryover management: clear on compaction/reset, persist otherwise
+            if signal_type in ("compaction", "reset"):
+                clear_carryover(session_id)
+            else:
+                # Persist the carry_facts accumulated during extraction
+                # extract_from_transcript modifies carry_facts in place
+                write_carryover(session_id, carry_facts)
+
+        # B002: Mark processed only on success
+        mark_signal_processed(signal_data)
 
     except Exception as e:
-        logger.error("[%s] session %s: extraction failed: %s", label, session_id, e,
-                     exc_info=True)
+        # B002: Do NOT mark_signal_processed here — leave signal for retry
+        logger.error("[%s] session %s: extraction failed (signal preserved for retry): %s",
+                     label, session_id, e, exc_info=True)
     finally:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
-
-    mark_signal_processed(signal_data)
 
 
 # ---------------------------------------------------------------------------
@@ -369,14 +518,8 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def _get_owner_id() -> str:
-    owner = os.environ.get("QUAID_OWNER", "").strip()
-    if owner:
-        return owner
-    try:
-        from lib.config import get_config
-        return get_config().users.default_owner
-    except Exception:
-        return "default"
+    from lib.adapter import get_owner_id
+    return get_owner_id()
 
 
 # ---------------------------------------------------------------------------
@@ -564,55 +707,111 @@ def ensure_alive() -> int:
 
 
 def start_daemon() -> int:
-    """Start the daemon as a background process. Returns child PID."""
-    existing = read_pid()
-    if existing is not None:
-        logger.info("daemon already running (pid=%d)", existing)
-        return existing
+    """Start the daemon as a background process. Returns child PID.
 
-    # Double-fork to fully detach
-    pid = os.fork()
-    if pid > 0:
-        # Parent: wait briefly for child to write PID, then return
-        time.sleep(0.2)
-        return read_pid() or pid
-
-    # First child: create new session
-    os.setsid()
-
-    pid2 = os.fork()
-    if pid2 > 0:
-        os._exit(0)
-
-    # Second child: this is the daemon
-    # Redirect stdio to log file
-    log_file = _log_path()
-    sys.stdout.flush()
-    sys.stderr.flush()
-
-    with open(log_file, "a") as lf:
-        os.dup2(lf.fileno(), sys.stdout.fileno())
-        os.dup2(lf.fileno(), sys.stderr.fileno())
-
-    # Close stdin
-    devnull = os.open(os.devnull, os.O_RDONLY)
-    os.dup2(devnull, sys.stdin.fileno())
-    os.close(devnull)
-
-    # Set up logging to the log file
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
-        force=True,
-    )
+    Uses flock on PID file to prevent concurrent starts (B001).
+    """
+    # B001: Acquire exclusive lock on PID file to prevent TOCTOU race
+    pid_file = _pid_path()
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        daemon_loop()
-    except Exception as e:
-        logger.error("daemon crashed: %s", e, exc_info=True)
+        lock_fd = os.open(str(pid_file), os.O_RDWR | os.O_CREAT)
+    except OSError as e:
+        logger.error("cannot open PID file for locking: %s", e)
+        # Fall back to checking existing PID
+        existing = read_pid()
+        return existing if existing else -1
+
+    try:
+        # Non-blocking exclusive lock
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        # Another process holds the lock — daemon is starting or running
+        os.close(lock_fd)
+        existing = read_pid()
+        if existing is not None:
+            return existing
+        # Lock held but no valid PID — wait briefly and retry
+        time.sleep(0.5)
+        os.close(lock_fd) if False else None  # already closed above
+        existing = read_pid()
+        return existing if existing else -1
+
+    try:
+        # Re-check PID under lock
+        existing = read_pid()
+        if existing is not None:
+            return existing
+
+        # Double-fork to fully detach
+        pid = os.fork()
+        if pid > 0:
+            # B005: Parent waits on first child to prevent zombie
+            os.waitpid(pid, 0)
+            # Wait briefly for grandchild to write PID
+            time.sleep(0.3)
+            return read_pid() or pid
+
+        # First child: create new session
+        os.setsid()
+
+        # B029: Set restrictive umask for all files created by daemon
+        os.umask(0o077)
+
+        # B059: chdir to QUAID_HOME for stable cwd
+        try:
+            os.chdir(str(_quaid_home()))
+        except OSError:
+            pass
+
+        pid2 = os.fork()
+        if pid2 > 0:
+            os._exit(0)
+
+        # Second child: this is the daemon
+        # Redirect stdio to log file
+        log_file = _log_path()
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        with open(log_file, "a") as lf:
+            os.dup2(lf.fileno(), sys.stdout.fileno())
+            os.dup2(lf.fileno(), sys.stderr.fileno())
+
+        # Close stdin
+        devnull = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(devnull, sys.stdin.fileno())
+        os.close(devnull)
+
+        # B027: Set up logging with rotation (10MB per file, 3 backups)
+        handler = logging.handlers.RotatingFileHandler(
+            str(log_file), maxBytes=10 * 1024 * 1024, backupCount=3,
+        )
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(name)s] %(levelname)s %(message)s"
+        ))
+        root_logger = logging.getLogger()
+        root_logger.handlers.clear()
+        root_logger.addHandler(handler)
+        root_logger.setLevel(logging.INFO)
+
+        try:
+            daemon_loop()
+        except Exception as e:
+            logger.error("daemon crashed: %s", e, exc_info=True)
+        finally:
+            remove_pid()
+            os._exit(0)
     finally:
-        remove_pid()
-        os._exit(0)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(lock_fd)
+        except OSError:
+            pass
 
 
 def stop_daemon() -> bool:

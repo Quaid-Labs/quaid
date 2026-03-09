@@ -373,8 +373,8 @@ function _isPlatform(name) {
 
 // Python env setup — always set canonical Quaid root, plus workspace hint.
 const PY_ENV_SETUP =
-  `os.environ['QUAID_HOME'] = '${WORKSPACE}'\n` +
-  `os.environ['CLAWDBOT_WORKSPACE'] = '${WORKSPACE}'`;
+  `os.environ['QUAID_HOME'] = ${JSON.stringify(WORKSPACE)}\n` +
+  `os.environ['CLAWDBOT_WORKSPACE'] = ${JSON.stringify(WORKSPACE)}`;
 
 // Step-specific quotes — each tied to the step's theme
 const STEP_QUOTES = {
@@ -2829,8 +2829,6 @@ print('[+] Datastore init hooks complete')
 
   // Create owner Person node
   s.start("Creating owner node...");
-  const safeDisplay = owner.display.replace(/'/g, "\\'");
-  const safeId = owner.id.replace(/'/g, "\\'");
   const storeScript = `
 import os, sys
 ${PY_ENV_SETUP}
@@ -2838,7 +2836,7 @@ os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.memorydb.memory_graph import store
 try:
-    store('${safeDisplay}', owner_id='${safeId}', category='person', source='installer')
+    store(${JSON.stringify(owner.display)}, owner_id=${JSON.stringify(owner.id)}, category='person', source='installer')
 except Exception as e:
     print(f'warn: {e}', file=sys.stderr)
 `;

@@ -24,6 +24,7 @@ import glob as glob_mod
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -31,16 +32,7 @@ from typing import Dict, List
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
-def _get_owner_id() -> str:
-    """Resolve owner ID from env or config."""
-    owner = os.environ.get("QUAID_OWNER", "").strip()
-    if owner:
-        return owner
-    try:
-        from config import get_config
-        return get_config().users.default_owner
-    except Exception:
-        return "default"
+from lib.adapter import get_owner_id as _get_owner_id
 
 
 def _format_memories(memories: List[Dict]) -> str:
@@ -139,7 +131,7 @@ def hook_extract(args):
         hook_input = {}
 
     transcript_path = hook_input.get("transcript_path", "")
-    session_id = hook_input.get("session_id", "unknown")
+    session_id = hook_input.get("session_id", "") or f"unknown-{int(time.time())}-{os.getpid()}"
     is_precompact = args.precompact if hasattr(args, "precompact") else False
     signal_type = "compaction" if is_precompact else "session_end"
     label = f"hook-{signal_type}"
@@ -228,7 +220,8 @@ def _get_projects_dir() -> Path:
         return adapter.projects_dir()
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
-        return Path(home) / "projects" if home else Path.home() / "quaid" / "projects"
+        base = Path(home).resolve() if home else Path.home() / "quaid"
+        return base / "projects"
 
 
 def _get_identity_dir() -> Path:
@@ -240,7 +233,7 @@ def _get_identity_dir() -> Path:
     except Exception:
         # Fallback: quaid_home root (backward compat with standalone)
         home = os.environ.get("QUAID_HOME", "").strip()
-        return Path(home) if home else Path.home() / "quaid"
+        return Path(home).resolve() if home else Path.home() / "quaid"
 
 
 def hook_session_init(args):
@@ -326,10 +319,15 @@ def hook_session_init(args):
     # 4. Write to .claude/rules/ so Claude Code caches it and preserves
     #    through compaction. The file is regenerated on each session start
     #    to pick up any project doc changes.
-    rules_dir = Path(os.environ.get("QUAID_RULES_DIR", "")).strip() if os.environ.get("QUAID_RULES_DIR") else None
-    if not rules_dir:
-        # Default: .claude/rules/ relative to cwd (the CC project root)
-        rules_dir = Path.cwd() / ".claude" / "rules"
+    rules_env = os.environ.get("QUAID_RULES_DIR", "").strip()
+    if rules_env:
+        rules_dir = Path(rules_env)
+    else:
+        # B061: Use cwd from hook stdin (CC provides project root there),
+        # falling back to os.getcwd() if not available
+        hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
+        base = Path(hook_cwd) if hook_cwd else Path.cwd()
+        rules_dir = base / ".claude" / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
 
     rules_file = rules_dir / "quaid-projects.md"
