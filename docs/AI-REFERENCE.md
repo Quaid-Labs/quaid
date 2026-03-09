@@ -19,10 +19,10 @@ Full installer guidance: [`docs/AI-INSTALL.md`](AI-INSTALL.md).
 
 ## System Overview
 
-Quaid is a graph-based persistent knowledge layer for AI agents. It works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a deep integration for [OpenClaw](https://github.com/openclaw/openclaw). Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
+Quaid is a graph-based persistent knowledge layer for AI agents. It ships with deep host integrations for [OpenClaw](https://github.com/openclaw/openclaw) and Claude Code, plus a standalone CLI. Backed by SQLite with sqlite-vec for vector search, FTS5 for full-text search, and an LLM-powered nightly maintenance pipeline ("janitor").
 
 **Architecture stack:**
-- **Interfaces:** MCP server (stdio, any MCP client), CLI (`quaid` commands), OpenClaw plugin (TypeScript hooks)
+- **Interfaces:** CLI (`quaid` commands), OpenClaw plugin (TypeScript hooks), Claude Code adapter/hooks
 - **Backend:** Python modules for graph operations, extraction, retrieval, maintenance, docs, and project tracking
 - **Storage:** SQLite database with WAL mode, sqlite-vec ANN index, FTS5 full-text index
 - **Embeddings:** Ollama local server (qwen3-embedding:8b, 4096 dimensions)
@@ -72,7 +72,6 @@ Write request
 | `core/runtime/events.py` | Queue-backed runtime event bus | `emit_event()`, `list_events()`, `process_events()`, `get_event_registry()` |
 | `core/runtime/notify.py` | User notifications via adapter/runtime context | `notify_user()`, retrieval/extraction/janitor/doc notifications |
 | `core/runtime/logger.py` | Structured JSONL logger with rotation | `Logger`, `rotate_logs()`, `memory_logger`, `janitor_logger` |
-| `core/interface/mcp_server.py` | MCP server surface | `memory_extract`, `memory_store`, `memory_recall`, `memory_write`, `memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`, `memory_stats`, `projects_search`, `session_recall`, `memory_provider`, `memory_capabilities`, `memory_event_*` |
 | `core/interface/api.py` | Public API facade | `store()`, `recall()`, `search()`, `create_edge()`, `forget()`, `get_memory()`, `stats()`, `extract_transcript()`, `projects_search_docs()` |
 | `lib/llm_clients.py` | Canonical LLM client wrapper with prompt parsing/usage tracking | `call_deep_reasoning()`, `call_fast_reasoning()`, `call_llm()`, `parse_json_response()` |
 | `core/llm/clients.py` | Compatibility alias to canonical LLM client module | module alias to `lib.llm_clients` |
@@ -542,7 +541,6 @@ quaid stats                   # Database statistics
 quaid health                  # Detailed KB health metrics
 quaid janitor [opts]          # Run janitor pipeline (--dry-run, --task <name>)
 quaid event [subcmd]          # Event bus (emit/list/process/capabilities)
-quaid mcp-server              # Start MCP server (stdio transport)
 ```
 
 ### Python Module CLIs (Advanced)
@@ -608,7 +606,7 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `QUAID_OWNER` | Owner identity for MCP server and CLI | `"default"` |
+| `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations | `"default"` |
 | `QUAID_HOME` | Root directory for standalone mode | `~/quaid/` |
 | `adapter.type` (in `config/memory.json`) | Select adapter: `standalone` or `openclaw` | Required |
 | `CLAWDBOT_WORKSPACE` | Workspace root hint (for OpenClaw paths) | Optional |
@@ -663,8 +661,6 @@ API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOM
 | `test_adapter.py` | Platform adapter layer (55 tests: selection, paths, credentials, notifications) |
 | `test_coverage_gaps.py` | Coverage gap identification |
 | `test_extract.py` | Extraction module (transcript parsing, pipeline, dry-run) |
-| `test_mcp_server.py` | MCP server tool definitions and responses |
-| `test_mcp_integration.py` | MCP store-recall round-trip integration tests |
 | `test_integration.py` | Cross-module integration tests |
 | `test_protected_regions.py` | Protected region handling |
 | `test_batch2_data_quality.py` | Data quality checks |
@@ -788,7 +784,7 @@ python3 core/lifecycle/janitor.py --task all --apply
 - Started as inline memory extraction in an OpenClaw plugin
 - Evolved: sqlite-vec vectors, FTS5, graph traversal, janitor pipeline
 - 81+ bugs fixed across 9 production rounds + 3 stress test rounds + 1 journal round + 6 benchmark analysis rounds
-- Key architectural milestones: crash-safe merges, dual learning system, RRF fusion, BEAM graph search, prompt caching, output-aware batching, MCP server, standalone CLI
+- Key architectural milestones: crash-safe merges, dual learning system, RRF fusion, BEAM graph search, prompt caching, output-aware batching, extraction daemon, standalone CLI
 - ~39K lines of code: 18K Python, 13K tests, 5K TS/JS, 3.1K vitest
 
 ---

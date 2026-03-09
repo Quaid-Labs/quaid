@@ -23,14 +23,14 @@ Every session starts ready to work. Project docs, architecture decisions, tool g
 - Runs a nightly janitor that reviews, deduplicates, resolves contradictions, and decays stale memories
 - Keeps project docs and personality files current without manual maintenance
 
-Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integration is [OpenClaw](https://github.com/openclaw/openclaw); standalone MCP/CLI flows are supported, and MCP client coverage outside OpenClaw should currently be treated as experimental.
+Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integrations are [OpenClaw](https://github.com/openclaw/openclaw), Claude Code, and the standalone CLI.
 
 **Interface surfaces:**
 - **OpenClaw adapter** — lifecycle hooks + tool integration (most mature path)
-- **MCP server** — host-agnostic tool surface for any MCP-capable client *(experimental coverage outside OpenClaw)*
+- **Claude Code adapter** — hook-driven integration with durable session-init and daemon signaling
 - **CLI** — direct operational control for extraction, recall, janitor, docs, and events
 
-Runtime event capabilities are discoverable (`memory_event_capabilities`, `quaid event capabilities`) so orchestration can adapt to host/runtime support instead of assuming fixed behavior.
+Runtime event capabilities are discoverable via `quaid event capabilities` so orchestration can adapt to host/runtime support instead of assuming fixed behavior.
 
 ---
 
@@ -158,7 +158,7 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 - [Ollama](https://ollama.ai) (for local embeddings)
 - For OpenClaw integration: [OpenClaw](https://github.com/openclaw/openclaw) gateway
 - Gateway-managed provider auth (OAuth/API key) when running inside an agentic host like OpenClaw
-- Optional standalone auth/config when running via MCP/CLI outside a host gateway
+- Optional standalone auth/config when running via CLI outside a host gateway
 
 ---
 
@@ -185,7 +185,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Architecture Guide](docs/ARCHITECTURE.md) — How Quaid works under the hood
 - [Vision](VISION.md) — Project scope, guardrails, and non-goals
 - [AI Agent Reference](docs/AI-REFERENCE.md) — Complete system index for AI assistants
-- [Interface Contract](docs/INTERFACES.md) — MCP/CLI/adapter capability model and event contract
+- [Interface Contract](docs/INTERFACES.md) — CLI/adapter capability model and event contract
 - [Benchmark Results](docs/BENCHMARKS.md) — Full LoCoMo evaluation with per-category breakdowns
 - [Notification Strategy](docs/NOTIFICATIONS.md) — Feature-level notification model and delayed request flow
 - [Provider Modes](docs/PROVIDER-MODES.md) — Provider routing and cost-safety guidance

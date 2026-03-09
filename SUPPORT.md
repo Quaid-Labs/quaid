@@ -8,7 +8,7 @@
 ## What to Include
 
 - Quaid version
-- Host/runtime (OpenClaw, MCP client, standalone CLI)
+- Host/runtime (OpenClaw, Claude Code, standalone CLI)
 - OS and environment details
 - Steps to reproduce
 - Expected vs actual behavior

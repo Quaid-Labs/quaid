@@ -14,7 +14,7 @@ This doc defines where bootstrap automation lives, how it relates to `~/quaid/de
 
 ## Credentials and auth
 - Host mode (OpenClaw): use gateway auth profiles (OAuth/API key) configured by bootstrap profile application.
-- Standalone mode (MCP/CLI outside host runtime): use local env keys (`.env`) where needed.
+- Standalone mode (CLI outside host runtime): use local env keys (`.env`) where needed.
 - Secrets must stay in local-only bootstrap profile files (`profiles/*.local.json`) and never be committed into `~/quaid/dev`.
 
 ## Notification safety for automation

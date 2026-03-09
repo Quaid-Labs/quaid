@@ -2,7 +2,7 @@
   "_comment": "Quaid Memory Plugin — Configuration Template. Copy to config/memory.json and customize.",
   "adapter": {
     "type": "standalone",
-    "_notes": "Required. Set to 'standalone' for local CLI/MCP installs, or 'openclaw' when running under OpenClaw."
+    "_notes": "Required. Set to 'standalone' for local CLI installs, 'openclaw' when running under OpenClaw, or the relevant adapter id for other host integrations."
   },
 
   "plugins": {

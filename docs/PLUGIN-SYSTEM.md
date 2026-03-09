@@ -13,7 +13,7 @@ Plugins are the long-term mechanism for extension in three zones:
 - ingest pipelines
 - datastores
 
-MCP/CLI remain interface surfaces. They are not a replacement for internal plugin contracts.
+CLI and adapter surfaces remain external interfaces. They are not a replacement for internal plugin contracts.
 
 ## Contract (v1)
 

@@ -29,7 +29,6 @@
 ### 3) Runtime code map (`modules/quaid/`)
 - `adaptors/openclaw/adapter.ts`: tool registration and runtime hook wiring.
 - `adaptors/openclaw/adapter.py`: Python adaptor bridge and lifecycle wiring.
-- `core/interface/mcp_server.py`: MCP tool surface.
 - `datastore/memorydb/`: memory graph, schema, janitor maintenance.
 - `datastore/docsdb/`: docs registry/search/update pipelines.
 - `core/lifecycle/`: janitor/workspace lifecycle orchestration.

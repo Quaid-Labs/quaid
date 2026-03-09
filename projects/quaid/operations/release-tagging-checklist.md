@@ -3,7 +3,6 @@
 ## 1) Pre-tag checks
 - Run deterministic + integration + syntax gates.
 - Run focused regression suite:
-  - `tests/test_mcp_integration.py`
   - `tests/test_providers.py`
   - `tests/test_soul_snippets.py`
 - Run e2e bootstrap flow at least once with quiet notifications.

@@ -1,4 +1,4 @@
-# Interface Contract (MCP / CLI / Adapter)
+# Interface Contract (CLI / Adapter)
 
 This document defines Quaid's external interface model for host adapters and runtime orchestration.
 
@@ -6,13 +6,11 @@ This document defines Quaid's external interface model for host adapters and run
 
 - Keep core behavior adapter-independent.
 - Make capabilities discoverable (not assumed).
-- Keep MCP and CLI surfaces aligned enough that automation can be ported between them.
 - Support new adapters without changing core contracts.
 
 ## Surfaces
 
 - `OpenClaw adapter` (`modules/quaid/adaptors/openclaw/adapter.ts`): richest integration path, lifecycle hooks + tools.
-- `MCP server` (`modules/quaid/core/interface/mcp_server.py`): host-agnostic RPC tools.
 - `CLI wrapper` (`modules/quaid/quaid`): operational entrypoint to Python modules.
 
 ## Plugin Foundation (Phase 1)
@@ -42,9 +40,8 @@ This keeps migration risk low while locking extension contracts before public ex
 
 - Source: `modules/quaid/core/runtime/events.py` (`get_event_registry()`)
 - Discovery:
-  - MCP: `memory_event_capabilities`
   - CLI: `quaid event capabilities`
-  - OpenClaw adapter: no direct event-capability tool (use MCP/CLI surfaces)
+  - OpenClaw adapter: no direct event-capability tool (use CLI surface)
 
 Each event includes `delivery_mode`:
 - `active`: safe to trigger and process immediately.
@@ -119,23 +116,19 @@ Docs/project registry forward-compat surface:
 - `notification.delayed`
 - `memory.force_compaction`
 
-## MCP vs CLI mapping
+## CLI Event Mapping
 
 ### Event operations
 
 - Emit:
-  - MCP: `memory_event_emit`
   - CLI: `quaid event emit --name ... --payload ...`
   - Dispatch control: `dispatch=auto|immediate|queued` (`--dispatch` in CLI)
   - `auto` behavior: active events process immediately, passive events stay queued
 - List:
-  - MCP: `memory_event_list`
   - CLI: `quaid event list`
 - Process:
-  - MCP: `memory_event_process`
   - CLI: `quaid event process`
 - Capabilities:
-  - MCP: `memory_event_capabilities`
   - CLI: `quaid event capabilities`
 
 ## Adapter requirements (future adapters)
@@ -146,11 +139,10 @@ For adapter parity, a new adapter should support:
 2. Providing a tool surface for:
    - read recall
    - write note/store
-   - optional event controls (recommended via MCP/CLI passthrough, not adapter-specific tools)
+   - optional event controls (recommended via CLI passthrough, not adapter-specific tools)
 3. Respecting capability discovery (do not assume all event handlers/features exist).
 
 ## Known gaps
 
-- MCP and OpenClaw tool schemas are still partly hand-maintained (not fully generated from registry metadata).
 - CLI currently routes through Python modules directly; not all surfaces are normalized as a single API package.
 - Event processing uses a queue-backed local store today; distributed/remote event transport is not yet implemented.

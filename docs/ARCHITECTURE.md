@@ -2,7 +2,7 @@
 
 Quaid is a persistent knowledge layer for AI agents. It extracts personal and project-relevant facts from conversations, stores them in a local SQLite graph, retrieves them when relevant, and maintains quality through a nightly janitor pipeline. Everything runs locally -- no cloud memory services, no external databases.
 
-Quaid works with any system that supports [MCP](https://modelcontextprotocol.io) (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) and ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw) for the deepest integration.
+Quaid ships with a guided installer for [OpenClaw](https://github.com/openclaw/openclaw), a Claude Code adapter, and a standalone CLI for direct operations.
 
 This document is for engineers who want to understand how the system works.
 
@@ -19,31 +19,29 @@ This document is for engineers who want to understand how the system works.
 7. [Dual Learning System](#7-dual-learning-system)
 8. [Projects System](#8-projects-system)
 9. [Configuration](#9-configuration)
-10. [MCP Server](#10-mcp-server)
 
 ---
 
 ## 1. System Overview
 
-Quaid exposes its knowledge layer through three interfaces: an **MCP server** (works with any MCP-compatible client), a **CLI** (standalone, no gateway needed), and an **OpenClaw plugin** (deepest integration with automatic lifecycle hooks).
+Quaid exposes its knowledge layer through three interfaces: a **CLI** (standalone, no gateway needed), an **OpenClaw plugin** (deepest integration with automatic lifecycle hooks), and a **Claude Code adapter** (hook-driven host integration).
 
 ### High-Level Architecture
 
 ```
-     MCP Client             CLI               OpenClaw Gateway
-    (Claude Desktop,    (quaid search,           |
-     Cursor, etc.)      quaid search, ...)   Lifecycle hooks
-          |                  |               (compaction, reset,
-          v                  v                agent turn)
-    +----------+      +----------+               |
-    |MCP Server|      | extract  |       +-------+-------+
-    | (stdio)  |      | .py CLI  |       | adaptors/     |
-    |          |      |          |       | openclaw/     |
-    |          |      |          |       | index.ts      |
-    +----+-----+      +----+-----+       | (TS plugin)   |
-         |                 |             +-------+-------+
-         +--------+--------+--------------------+
-                  |
+     CLI                OpenClaw Gateway        Claude Code
+ (quaid search,             |                   hooks / rules
+  quaid store, ...)    Lifecycle hooks               |
+          |            (compaction, reset,          |
+          v             agent turn)                 v
+    +----------+             |               +------+------+
+    | extract  |      +------+-------+       | adaptors/   |
+    | .py CLI  |      | adaptors/     |      | claude_code |
+    |          |      | openclaw/     |      |             |
+    +----+-----+      | index.ts      |      +------+------+
+         |            | (TS plugin)   |             |
+         +------------+-------+--------+-------------+
+                              |
            +------v------+           +----------+
            |  Python API  |           | Retrieval|
            | (core/interface/api.py)  | Pipeline |
@@ -59,9 +57,11 @@ Quaid exposes its knowledge layer through three interfaces: an **MCP server** (w
 
 ### Three Main Loops
 
-**Extraction** -- Triggered by context compaction, session reset, direct CLI module invocation (`python3 ingest/extract.py`), or MCP tool call (`memory_extract`). A deep-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
+**Extraction** -- Triggered by context compaction, session reset, direct CLI module invocation (`python3 ingest/extract.py`), or adapter lifecycle signals. A deep-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
 
-**Retrieval** -- Fires before each agent turn (OpenClaw), on `memory_recall` MCP tool call, or via `quaid search` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
+**Retrieval** -- Fires before each agent turn (OpenClaw / Claude Code) or via `quaid search` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
+
+Project knowledge retrieval remains a first-class path: host adapters expose `projects_search` where appropriate, and the CLI exposes the same capability through `quaid docs search`.
 
 **Maintenance** -- A nightly janitor pipeline reviews pending facts, deduplicates near-identical memories, resolves contradictions, decays stale memories, updates documentation, and runs structural health checks.
 
@@ -82,8 +82,8 @@ Quaid also exposes a queue-backed event bus for adapter-independent orchestratio
 
 - Event queue and handlers are implemented in `modules/quaid/core/runtime/events.py`.
 - Adapter lifecycle hooks emit events like `session.new`, `session.reset`, and `session.compaction`.
-- CLI and MCP both support emitting/listing/processing events so orchestration can be tested and automated outside gateway hooks.
-- Event capabilities are discoverable via a registry (`event capabilities`, `memory_event_capabilities`) so orchestration can adapt strategy based on what this runtime supports.
+- CLI supports emitting/listing/processing events so orchestration can be tested and automated outside gateway hooks.
+- Event capabilities are discoverable via a registry (`quaid event capabilities`) so orchestration can adapt strategy based on what this runtime supports.
 
 ### Data Flow
 
@@ -121,8 +121,8 @@ Conversation messages
 Extraction can be triggered from any of Quaid's three interfaces:
 
 - **OpenClaw plugin** (`modules/quaid/adaptors/openclaw/adapter.ts`): Compaction extraction uses gateway hook `before_compaction` (context being compacted). Reset/new extraction is routed via OpenClaw internal workspace hooks (`command:new`, `command:reset`) that queue `ResetSignal` for Quaid processing, due to upstream typed-hook boundary issues for `before_reset` (https://github.com/openclaw/openclaw/issues/23895). Programmatic compaction is available via gateway RPC `sessions.compact`.
-- **MCP server** (`modules/quaid/core/interface/mcp_server.py`): The `memory_extract` tool accepts a plain text transcript and runs the full pipeline.
 - **CLI module** (`modules/quaid/ingest/extract.py`): `python3 ingest/extract.py <file>` accepts JSONL session files or plain text transcripts.
+- **Claude Code adapter** (`modules/quaid/adaptors/claude_code/`): Hook output is translated into daemon signals and session-init context.
 
 All three paths converge on the same extraction logic and produce identical results.
 
@@ -747,7 +747,7 @@ These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and 
 |----------|---------|
 | `QUAID_HOME` | Root directory for standalone mode (default `~/quaid/`) |
 | `adapter.type` (in `config/memory.json`) | Select adapter: `standalone` or `openclaw` (required) |
-| `QUAID_OWNER` | Owner identity for MCP server and CLI (default `"default"`) |
+| `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations (default `"default"`) |
 | `CLAWDBOT_WORKSPACE` | Root workspace hint for OpenClaw integrations |
 | `MEMORY_DB_PATH` | Override database path |
 | `OLLAMA_URL` | Override Ollama endpoint |
@@ -857,72 +857,6 @@ Every LLM call accumulates into per-run counters (`_usage_input_tokens`, `_usage
 ### Notifications
 
 Quaid includes a notification system (`modules/quaid/core/runtime/notify.py`) that sends status updates for extraction, retrieval, janitor runs, and documentation changes. Notifications support four verbosity levels (quiet, normal, verbose, debug) with per-feature overrides, and are routed to the user's last active communication channel. To change the notification level, ask your agent or edit `config/memory.json`. For full details on verbosity presets, channel routing, and per-feature configuration, see [AI-REFERENCE.md](AI-REFERENCE.md).
-
----
-
-## 10. MCP Server
-
-The MCP server (`modules/quaid/core/interface/mcp_server.py`) exposes Quaid's knowledge layer as tools over the [Model Context Protocol](https://modelcontextprotocol.io) stdio transport. This is the primary integration path for clients that support MCP (Claude Desktop, Claude Code, Cursor, Windsurf, etc.).
-
-### Architecture
-
-```
-MCP Client (Claude Desktop, Cursor, etc.)
-    |
-    | JSON-RPC over stdio
-    |
-    v
-core/interface/mcp_server.py (FastMCP)
-    |
-    +-- memory_extract  -> ingest/extract.py -> lib/llm_clients.py + core/services/memory_service.py
-    +-- memory_store    -> core/interface/api.py
-    +-- memory_recall   -> core/interface/api.py
-    +-- memory_write    -> core/interface/api.py
-    +-- memory_search   -> core/interface/api.py
-    +-- memory_get      -> core/interface/api.py
-    +-- memory_forget   -> core/interface/api.py
-    +-- memory_create_edge -> core/interface/api.py
-    +-- memory_stats    -> core/interface/api.py
-    +-- projects_search -> datastore/docsdb/rag.py
-    +-- session_recall  -> core/interface/mcp_server.py
-```
-
-### Tools
-
-| Tool | Purpose | API Cost |
-|------|---------|----------|
-| `memory_extract` | Full Opus-powered extraction from transcript | ~$0.05-0.20 |
-| `memory_store` | Store a single fact | Free (local embedding only) |
-| `memory_recall` | Full retrieval pipeline (HyDE + reranking) | ~$0.01 (reranker) |
-| `memory_write` | Generic datastore write interface (`vector`/`graph`) | Free |
-| `memory_search` | Fast keyword search (no reranking) | Free |
-| `memory_get` | Fetch a memory by ID | Free |
-| `memory_forget` | Delete a memory | Free |
-| `memory_create_edge` | Create a relationship edge | Free |
-| `memory_stats` | Database statistics | Free |
-| `projects_search` | Search project documentation via RAG | Free |
-| `session_recall` | List/load extracted session transcripts | Free |
-
-### Stdout Isolation
-
-MCP uses stdout for JSON-RPC communication. The server redirects Python's `sys.stdout` to `sys.stderr` at startup to prevent stray print statements from corrupting the protocol stream. This is critical because several modules (`memory_graph.py`, `lib/embeddings.py`) print status messages during normal operation.
-
-### Owner Identity
-
-The `QUAID_OWNER` environment variable sets the owner identity for all operations. This maps to the `owner_id` field in the database, enabling multi-user setups where each user's memories are namespaced.
-
-### Multi-User Runtime Guardrails
-
-When `identity.mode=multi_user`:
-
-1. Core enforces fail-fast write contracts for identity envelopes (`source_channel`, `source_conversation_id`, `source_author_id`).
-2. Core enforces fail-fast read contracts (`viewer_entity_id`) before scoped recall filtering.
-3. Identity resolver and privacy policy are single-registration hooks (duplicate registrations raise immediately).
-4. Core bootstraps datastore-owned default hooks (`memorydb-default`) at memory-service startup to avoid silent unhooked operation.
-
-This keeps multi-user surfaces observable under stress: missing wiring and malformed context raise explicit errors instead of degrading silently.
-
----
 
 ## Appendix: File Reference
 

@@ -9,7 +9,6 @@ Purpose: evaluate current `quaid` CLI commands for practical runtime value in al
 - `store`, `edge`
 - `stats`, `doctor`
 - `janitor`
-- `mcp-server`
 - `docs` (search/check/update/changelog)
 - `registry` / `project` / `projects`
 - `config` (now includes interactive menu)
