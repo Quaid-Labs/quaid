@@ -87,12 +87,7 @@ def hook_inject(args):
             return
 
         context = _format_memories(memories)
-        print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit",
-                "additionalContext": context,
-            }
-        }))
+        print(json.dumps({"additionalContext": context}))
     except Exception as e:
         print(f"[quaid][hook-inject] error: {e}", file=sys.stderr)
 
