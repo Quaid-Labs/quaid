@@ -38,6 +38,15 @@ hooks/runtime set it per-invocation to avoid cross-instance collisions.
 - `quaid global-registry list` — Cross-instance project registry
 - `quaid updater doc-health <project> [--dry-run]` — Evaluate doc lifecycle
 
+### Project File Placement
+When working with a project, decide whether files belong **in the project directory** or should be **linked externally**:
+
+- **In the project dir**: files that are owned by the project and don't need to live elsewhere. Examples: essays, notes, standalone docs, project-specific configs.
+- **In `docs/` subdirectory**: project documentation goes here (architecture docs, reference guides, operational runbooks). Created automatically with each project.
+- **Linked externally**: code files that must live in specific repo paths. Register them with `quaid docs register <path> --project <name>` so the project tracks them without moving them.
+
+Rule of thumb: if the file only makes sense in the context of this project, put it in the project directory. If it has to live in a specific location for code/build reasons, link it via the registry.
+
 ### Combined Search
 - `quaid hook-search "query"` — Search memories + docs together
 

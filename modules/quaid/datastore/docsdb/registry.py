@@ -83,12 +83,15 @@ PROJECT_MD_TEMPLATE = """# Project: {label}
 
 ### In This Directory
 <!-- Auto-discovered — all files in this directory belong to this project -->
+<!-- Place project-owned files here. Documentation goes in docs/ -->
 
 ### External Files
+<!-- Link files that live outside this project dir (e.g., source code in repo paths) -->
 | File | Purpose | Auto-Update |
 |------|---------|-------------|
 
 ## Documents
+<!-- Project documentation lives in docs/ subdirectory -->
 | Document | Tracks | Auto-Update |
 |----------|--------|-------------|
 
@@ -714,6 +717,8 @@ class DocsRegistry:
         home_abs = self._resolve_path(home)
         _validate_inside_workspace(home_abs, "project directory")
         home_abs.mkdir(parents=True, exist_ok=True)
+        # Create docs/ subdirectory for project documentation
+        (home_abs / "docs").mkdir(exist_ok=True)
 
         exclude_list = exclude or ["*.db", "*.log", "*.pyc", "__pycache__/"]
         exclude_lines = "\n".join(f"- {pat}" for pat in exclude_list)

@@ -360,6 +360,175 @@ def _apply_updates(
     return updates_applied
 
 
+def evaluate_doc_health(
+    project_name: str,
+    dry_run: bool = False,
+) -> Dict:
+    """Decision matrix: evaluate which docs to create, update, or archive.
+
+    One deep LLM call that examines:
+    - PROJECT.md and current docs
+    - Recent PROJECT.log entries
+    - Files changed in recent sessions
+    - Gaps: areas with code but no documentation
+
+    Returns decisions:
+    - create: new docs to scaffold for undocumented areas
+    - update: existing docs needing refresh (extends staleness check)
+    - archive: obsolete docs to soft-delete
+
+    This is called from the janitor or manually — not on every event.
+    """
+    result = {
+        "project": project_name,
+        "create": [],
+        "update": [],
+        "archive": [],
+        "dry_run": dry_run,
+        "error": None,
+    }
+
+    cfg = get_config()
+    defn = cfg.projects.definitions.get(project_name)
+    if not defn:
+        result["error"] = f"Project '{project_name}' not found"
+        return result
+
+    registry = DocsRegistry()
+    project_dir = _resolve_path(defn.home_dir)
+    project_md_path = project_dir / "PROJECT.md"
+
+    if not project_md_path.exists():
+        result["error"] = f"PROJECT.md not found at {project_md_path}"
+        return result
+
+    project_md = project_md_path.read_text()
+
+    # Gather existing docs
+    docs = registry.list_docs(project=project_name)
+    doc_listing = "\n".join(
+        f"- {d['file_path']}: {d.get('description', '')}" for d in docs
+    ) or "(no docs registered)"
+
+    # Gather recent project log entries
+    log_path = project_dir / PROJECT_HISTORY_FILENAME
+    recent_log = ""
+    if log_path.exists():
+        lines = log_path.read_text().strip().split("\n")
+        recent_log = "\n".join(lines[-30:])  # Last 30 entries
+
+    # Gather source roots for gap analysis
+    source_roots = defn.source_roots or []
+    source_listing = ", ".join(source_roots) or "(none configured)"
+
+    # Build the decision prompt
+    prompt = f"""You are a project documentation health evaluator.
+
+Given the current state of the "{project_name}" project, decide what documentation actions are needed.
+
+## Current PROJECT.md
+{project_md[:3000]}
+
+## Registered Documents
+{doc_listing}
+
+## Recent Project Log (last 30 entries)
+{recent_log or "(no log entries)"}
+
+## Source Roots
+{source_listing}
+
+## Your Task
+Analyze the project state and return a JSON object with these arrays:
+
+- "create": docs that SHOULD exist but don't. Each entry: {{"path": "docs/suggested-name.md", "title": "Doc Title", "reason": "why this doc is needed"}}
+- "update": existing docs that seem outdated based on log activity. Each entry: {{"path": "existing/path.md", "reason": "what needs updating"}}
+- "archive": docs that appear obsolete or redundant. Each entry: {{"path": "existing/path.md", "reason": "why this can be archived"}}
+
+Rules:
+- New docs MUST be placed in the docs/ subdirectory (e.g., "docs/architecture.md", "docs/api-reference.md")
+- Only suggest creating docs for areas with clear, sustained activity (not one-off mentions)
+- Only suggest archiving docs that are clearly obsolete (missing source files, deprecated features)
+- Be conservative — fewer, high-confidence decisions are better than many speculative ones
+- Return empty arrays if no action is needed
+
+Respond with JSON only, no markdown fences."""
+
+    try:
+        from lib.adapter import get_adapter
+        provider = get_adapter().get_llm_provider()
+        llm_result = provider.llm_call(
+            system=prompt,
+            user="Evaluate documentation health and return decisions as JSON.",
+            tier="deep",
+            max_tokens=1500,
+        )
+        output = str(llm_result.get("text", "")).strip()
+
+        # Parse JSON from output
+        json_match = re.search(r"\{[\s\S]*\}", output)
+        if json_match:
+            decisions = json.loads(json_match.group())
+            result["create"] = decisions.get("create", [])
+            result["update"] = decisions.get("update", [])
+            result["archive"] = decisions.get("archive", [])
+        else:
+            result["error"] = "LLM returned non-JSON output"
+            return result
+
+    except Exception as e:
+        result["error"] = f"LLM call failed: {e}"
+        return result
+
+    if dry_run:
+        print(f"\n[doc-health] {project_name} (dry run):")
+        for action in ("create", "update", "archive"):
+            items = result[action]
+            if items:
+                print(f"  {action}:")
+                for item in items:
+                    print(f"    - {item.get('path', '?')}: {item.get('reason', '')}")
+        return result
+
+    # Apply create decisions: scaffold new docs
+    for item in result["create"]:
+        doc_path = item.get("path", "")
+        title = item.get("title", "Untitled")
+        if not doc_path:
+            continue
+        full_path = project_dir / doc_path
+        if full_path.exists():
+            continue  # Don't overwrite
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(f"# {title}\n\n<!-- Auto-created by project updater -->\n\n")
+        # Register in doc registry
+        try:
+            rel = str(full_path.relative_to(_workspace()))
+            registry.register(
+                file_path=rel,
+                project=project_name,
+                asset_type="doc",
+                title=title,
+                registered_by="doc-health-evaluator",
+            )
+            print(f"  Created: {doc_path}")
+        except Exception as e:
+            print(f"  Created {doc_path} but registry failed: {e}")
+
+    # Apply archive decisions: soft-delete in registry
+    for item in result["archive"]:
+        doc_path = item.get("path", "")
+        if not doc_path:
+            continue
+        try:
+            registry.unregister(doc_path)
+            print(f"  Archived: {doc_path}")
+        except Exception as e:
+            print(f"  Archive failed for {doc_path}: {e}")
+
+    return result
+
+
 def _refresh_file_list(registry: DocsRegistry, project_name: str, cfg) -> None:
     """Refresh the Files & Assets section of PROJECT.md."""
     defn = cfg.projects.definitions.get(project_name)
