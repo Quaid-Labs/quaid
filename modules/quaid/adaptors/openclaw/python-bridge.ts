@@ -38,6 +38,68 @@ type PythonBridgeConfig = {
   pluginRoot?: string;
 };
 
+/**
+ * Create a CLI-based executor that routes through the `quaid` binary.
+ *
+ * This is the canonical callpath — both Claude Code and OpenClaw adapters
+ * converge on the same CLI surface. The quaid script handles PYTHONPATH,
+ * QUAID_HOME, and adapter routing internally.
+ */
+export function createCliBridgeExecutor(config: { workspace: string; pluginRoot?: string }) {
+  const explicitRoot = String(config.pluginRoot || "").trim();
+  const modernRoot = path.join(config.workspace, "modules", "quaid");
+  const legacyRoot = path.join(config.workspace, "plugins", "quaid");
+  const pluginRoot = explicitRoot || (fs.existsSync(modernRoot) ? modernRoot : legacyRoot);
+  const quaidBin = path.join(pluginRoot, "quaid");
+  const bin = fs.existsSync(quaidBin) ? quaidBin : "quaid";
+
+  return async function execCli(command: string, args: string[] = []): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn(bin, [command, ...args], {
+        cwd: config.workspace,
+        env: {
+          ...process.env,
+          QUAID_HOME: config.workspace,
+        },
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          proc.kill("SIGTERM");
+          reject(new Error(`CLI bridge timeout after ${PYTHON_BRIDGE_TIMEOUT_MS}ms: ${command} ${args.join(" ")}`));
+        }
+      }, PYTHON_BRIDGE_TIMEOUT_MS);
+
+      proc.stdout.on("data", (data) => { stdout += data; });
+      proc.stderr.on("data", (data) => { stderr += data; });
+
+      proc.on("close", (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          const detail = _formatBridgeErrorDetail(stderr.trim(), stdout.trim());
+          reject(new Error(`CLI error (exit=${String(code)}): ${detail}`));
+        }
+      });
+
+      proc.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  };
+}
+
 export function createPythonBridgeExecutor(config: PythonBridgeConfig) {
   const explicitRoot = String(config.pluginRoot || "").trim();
   const modernRoot = path.join(config.workspace, "modules", "quaid");

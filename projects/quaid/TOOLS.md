@@ -7,40 +7,36 @@ Project Description: Quaid is an active knowledge layer for agentic systems. Use
 `TOOLS.md` explains how to use tools effectively.
 It is not a full API schema or implementation spec.
 
-## Current Tool Surface
+## Tool Surface
 
-OpenClaw adapter tool surface:
-- `memory_recall`
-- `memory_store`
-- `memory_forget`
-- `projects_search`
-- `docs_read`
-- `docs_list`
-- `docs_register`
-- `project_create`
-- `project_list`
-- `session_recall`
+The `quaid` CLI is the canonical interface for all adapters. Each platform maps
+to the same CLI commands:
 
-MCP server tool surface (`core/interface/mcp_server.py`):
-- `memory_extract`
-- `memory_store`
-- `memory_recall`
-- `memory_domain_list`
-- `memory_domain_register`
-- `memory_write`
-- `memory_search`
-- `memory_get`
-- `memory_forget`
-- `memory_create_edge`
-- `memory_stats`
-- `projects_search`
+| CLI Command | OpenClaw Tool | MCP Tool | Description |
+|-------------|--------------|----------|-------------|
+| `quaid recall "query"` | `memory_recall` | `memory_recall` | Search memories |
+| `quaid store "text"` | `memory_store` | `memory_store` | Store a memory |
+| `quaid search "query"` | — | `memory_search` | Fast search (no rerank) |
+| `quaid delete-node <id>` | `memory_forget` | `memory_forget` | Delete a memory |
+| `quaid create-edge ...` | — | `memory_create_edge` | Create relationship |
+| `quaid stats` | — | `memory_stats` | Database statistics |
+| `quaid docs search "q"` | `projects_search` | `projects_search` | Search project docs |
+| `quaid docs list` | `docs_list` | — | List registered docs |
+| `quaid registry list` | `project_list` | — | List projects |
+| `quaid registry create-project` | `project_create` | — | Create a project |
+| `quaid hook-search "q"` | — | — | Search memories + docs |
+
+**Adapter-specific surfaces** (not CLI-accessible):
+
+OpenClaw tools (registered via gateway):
+- `docs_read`, `docs_register`, `session_recall`
+
+MCP server tools (`core/interface/mcp_server.py`):
+- `memory_extract`, `memory_write`, `memory_get`
+- `memory_domain_list`, `memory_domain_register`
+- `memory_provider`, `memory_capabilities`
+- `memory_event_emit`, `memory_event_list`, `memory_event_process`, `memory_event_capabilities`
 - `session_recall`
-- `memory_provider`
-- `memory_capabilities`
-- `memory_event_emit`
-- `memory_event_list`
-- `memory_event_process`
-- `memory_event_capabilities`
 
 ## Plugin Contract Surfaces
 
