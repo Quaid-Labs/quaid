@@ -203,9 +203,10 @@ def _check_janitor_health() -> str:
 
         from datetime import datetime, timezone
         last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-        age_days = (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400
-        if age_days > 3:
-            return f"[Quaid Warning] Janitor last ran {age_days:.0f} days ago. Check launchd: launchctl list | grep quaid"
+        age_hours = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+        if age_hours > 24:
+            age_display = f"{age_hours / 24:.0f} days" if age_hours > 48 else f"{age_hours:.0f} hours"
+            return f"[Quaid Warning] Janitor last ran {age_display} ago. Stale janitor causes memory/doc drift. Run: quaid janitor --task all --apply"
     except Exception:
         pass
     return ""
