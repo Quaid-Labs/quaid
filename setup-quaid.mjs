@@ -2441,8 +2441,6 @@ function installLaunchdSchedule(hour) {
   <dict>
     <key>QUAID_HOME</key>
     <string>${WORKSPACE}</string>
-    <key>QUAID_ADAPTER</key>
-    <string>claude-code</string>
     <key>PYTHONPATH</key>
     <string>${PLUGIN_DIR}</string>
     <key>PATH</key>
@@ -2501,7 +2499,6 @@ function installWindowsScheduledTask(hour) {
   const batchPath = path.join(PLUGIN_DIR, "janitor-scheduled.bat");
   const batchContent = `@echo off
 set QUAID_HOME=${WORKSPACE}
-set QUAID_ADAPTER=claude-code
 set PYTHONPATH=${PLUGIN_DIR}
 "${quaidCmd}" janitor --task all --apply --time-budget 3600 >> "${logPath}" 2>&1
 `;
@@ -2538,7 +2535,7 @@ function installCrontabSchedule(hour) {
 
   fs.mkdirSync(path.join(LOGS_DIR, "janitor"), { recursive: true });
 
-  const envVars = `QUAID_HOME='${WORKSPACE}' QUAID_ADAPTER=claude-code PYTHONPATH='${PLUGIN_DIR}'`;
+  const envVars = `QUAID_HOME='${WORKSPACE}' PYTHONPATH='${PLUGIN_DIR}'`;
   const cronLine = `30 ${hour} * * * ${envVars} ${quaidCmd} janitor --task all --apply --time-budget 3600 >> ${logPath} 2>&1`;
   const marker = "# quaid-janitor";
 
@@ -3383,11 +3380,11 @@ function setupClaudeCodeHooks() {
 
   // Resolve the quaid binary path. Use absolute paths so multiple installs
   // can coexist — each instance's hooks point to its own quaid script.
-  // QUAID_HOME sets the data directory; QUAID_ADAPTER forces claude-code
-  // adapter even if the config says standalone/openclaw (enables shared DB).
+  // QUAID_HOME sets the instance silo — adapter type is read from
+  // QUAID_HOME/config/memory.json, not from a separate env var.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
-  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_ADAPTER=claude-code`;
+  const envPrefix = `QUAID_HOME='${WORKSPACE}'`;
 
   const desiredHooks = {
     SessionStart: [

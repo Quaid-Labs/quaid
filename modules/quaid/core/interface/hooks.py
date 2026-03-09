@@ -162,10 +162,15 @@ def hook_extract(args):
         except Exception as e:
             print(f"[quaid][{label}] daemon ensure_alive failed: {e}", file=sys.stderr)
 
-        # Determine adapter type for compaction control advertisement
-        adapter_name = os.environ.get("QUAID_ADAPTER", "").strip()
-        # CC has no compaction control; OC does
-        supports_compaction = adapter_name.lower() in ("openclaw",)
+        # Determine adapter type from config for compaction control advertisement
+        try:
+            from lib.adapter import get_adapter
+            adapter = get_adapter()
+            adapter_name = type(adapter).__name__.replace("Adapter", "").lower()
+        except Exception:
+            adapter_name = "unknown"
+        # OC can force compaction; CC cannot
+        supports_compaction = adapter_name in ("openclaw",)
 
         sig_path = write_signal(
             signal_type=signal_type,

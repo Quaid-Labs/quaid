@@ -67,10 +67,7 @@ def _save(data: Dict[str, Any]) -> None:
 
 
 def _adapter_name() -> str:
-    """Get current adapter instance name."""
-    override = os.environ.get("QUAID_ADAPTER", "").strip()
-    if override:
-        return override.replace("-", "_").replace(" ", "_")
+    """Get current adapter instance name from config."""
     try:
         from lib.adapter import get_adapter
         return type(get_adapter()).__name__.replace("Adapter", "").lower()
