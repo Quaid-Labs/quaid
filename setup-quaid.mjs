@@ -2883,7 +2883,7 @@ for fname in files:
         line = line.strip().lstrip('- ')
         if line and not line.startswith('#') and len(line) > 15:
             cat = 'preference' if any(w in line.lower() for w in ['prefer', 'like', 'enjoy', 'favorite']) else 'fact'
-            store(line, owner_id='${safeId}', category=cat, source='migration')
+            store(line, owner_id='${owner.id}', category=cat, source='migration')
             total += 1
 print(total)
 ` : `
@@ -2919,7 +2919,7 @@ Document ({fname}):\\n{content}"""
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict) and 'fact' in item:
-                    store(item['fact'], owner_id='${safeId}', category=item.get('category', 'fact'), source='migration')
+                    store(item['fact'], owner_id='${owner.id}', category=item.get('category', 'fact'), source='migration')
                     total += 1
 print(total)
 `;
