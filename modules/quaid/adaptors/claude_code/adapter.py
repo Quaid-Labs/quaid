@@ -72,6 +72,14 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
         return None
 
+    def identity_dir(self) -> Path:
+        """Per-instance identity directory for SOUL.md, USER.md, MEMORY.md.
+
+        Identity files are per-install (not shared across platforms) so each
+        adapter instance gets its own copy under <quaid_home>/<silo>/identity/.
+        """
+        return self.quaid_home() / "claude-code" / "identity"
+
     def get_sessions_dir(self) -> Optional[Path]:
         d = Path.home() / ".claude" / "projects"
         return d if d.is_dir() else None
