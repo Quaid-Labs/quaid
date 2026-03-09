@@ -71,6 +71,11 @@ case "$CMD" in
     exec python3 "$SCRIPT_DIR/core/interface/hooks.py" session-init "$@"
     ;;
 
+  # Extraction daemon
+  daemon)
+    exec python3 "$SCRIPT_DIR/core/extraction_daemon.py" "$@"
+    ;;
+
   # Janitor commands
   janitor)
     exec python3 "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
@@ -206,6 +211,7 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     echo ""
     echo "Maintenance:"
     echo "  janitor [args]       Run janitor pipeline"
+    echo "  daemon [cmd]         Extraction daemon (start|stop|status|run)"
     echo ""
     echo "Docs:"
     echo "  docs search <query>  Search RAG docs"

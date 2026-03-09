@@ -370,6 +370,7 @@ def extract_from_transcript(
     write_snippets: bool = True,
     write_journal: bool = True,
     dry_run: bool = False,
+    carry_facts: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Extract memories from a conversation transcript using Opus.
 
@@ -467,7 +468,11 @@ def extract_from_transcript(
     all_snippets: Dict[str, List[str]] = {}
     all_journal: Dict[str, str] = {}
     all_project_logs: Dict[str, List[str]] = {}
-    carry_facts: List[Dict[str, Any]] = []
+    # carry_facts enables cross-invocation carryover: the daemon passes in
+    # facts from previous extraction runs in the same session so chunk
+    # context is maintained across compaction boundaries.
+    if carry_facts is None:
+        carry_facts = []
     extract_deadline = time.time() + MAX_EXTRACT_WALL_SECONDS
 
     for ci, chunk in enumerate(transcript_chunks):
