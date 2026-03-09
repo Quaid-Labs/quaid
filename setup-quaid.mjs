@@ -609,6 +609,96 @@ function renderCliFailure(res, timeoutMs = null) {
   return String(res?.stderr || res?.stdout || "").trim() || "unknown error";
 }
 
+function _safeTrim(value) {
+  return String(value || "").trim();
+}
+
+function _gatewayStatusSnapshot(cli) {
+  const statusRes = runCliWithTimeout(cli, ["gateway", "status"], 20_000);
+  const probeRes = runCliWithTimeout(cli, ["gateway", "probe"], 10_000);
+  const statusText = [_safeTrim(statusRes.stdout), _safeTrim(statusRes.stderr)].filter(Boolean).join("\n");
+  const probeText = [_safeTrim(probeRes.stdout), _safeTrim(probeRes.stderr)].filter(Boolean).join("\n");
+  const health = _gatewayHttpCode("/health", "GET", null);
+  const responses = _gatewayHttpCode("/v1/responses", "POST", "{}");
+  const pluginLlm = _gatewayHttpCode("/plugins/quaid/llm", "POST", "{}");
+  return {
+    statusRes,
+    probeRes,
+    statusText,
+    probeText,
+    health,
+    responses,
+    pluginLlm,
+  };
+}
+
+function _formatGatewaySnapshot(snapshot) {
+  const parts = [
+    `health=${snapshot.health}`,
+    `responses=${snapshot.responses}`,
+    `plugin=${snapshot.pluginLlm}`,
+  ];
+  if (snapshot.statusText) parts.push(`status=${snapshot.statusText.replace(/\s+/g, " ").trim()}`);
+  if (snapshot.probeText) parts.push(`probe=${snapshot.probeText.replace(/\s+/g, " ").trim()}`);
+  return parts.join(" | ");
+}
+
+function _gatewayServiceLooksMissing(snapshot) {
+  const text = `${snapshot.statusText}\n${snapshot.probeText}`.toLowerCase();
+  return text.includes("service not installed")
+    || text.includes("service unit not found")
+    || text.includes("could not find service");
+}
+
+function _gatewayServiceLooksStopped(snapshot) {
+  const text = `${snapshot.statusText}\n${snapshot.probeText}`.toLowerCase();
+  return text.includes("not loaded")
+    || text.includes("reachable: no")
+    || text.includes("econnrefused")
+    || text.includes("connect failed");
+}
+
+async function ensureGatewayReadyOrThrow(cli, context, timeoutMs = 12_000) {
+  if (!IS_OPENCLAW || !cli) return;
+  if (await waitForGatewayWarmup(timeoutMs)) return;
+
+  let snapshot = _gatewayStatusSnapshot(cli);
+  log.warn(`Gateway warmup failed during ${context}: ${_formatGatewaySnapshot(snapshot)}`);
+
+  if (_gatewayServiceLooksMissing(snapshot)) {
+    log.warn("Gateway service appears missing after restart; attempting service install recovery.");
+    const installRes = runCliWithTimeout(cli, ["gateway", "install"], 30_000);
+    if (installRes.status !== 0) {
+      const msg = renderCliFailure(installRes, 30_000);
+      throw new Error(`gateway service missing after ${context}; auto-recovery failed during install: ${msg || "unknown error"}`);
+    }
+    const restartRes = runCliWithTimeout(cli, ["gateway", "restart"], 30_000);
+    if (restartRes.status !== 0) {
+      const msg = renderCliFailure(restartRes, 30_000);
+      throw new Error(`gateway service recovered but restart failed during ${context}: ${msg || "unknown error"}`);
+    }
+    if (await waitForGatewayWarmup(30_000)) return;
+    snapshot = _gatewayStatusSnapshot(cli);
+  } else if (_gatewayServiceLooksStopped(snapshot)) {
+    log.warn("Gateway service appears installed but not healthy; attempting restart recovery.");
+    const restartRes = runCliWithTimeout(cli, ["gateway", "restart"], 30_000);
+    if (restartRes.status !== 0) {
+      const msg = renderCliFailure(restartRes, 30_000);
+      throw new Error(`gateway restart recovery failed during ${context}: ${msg || "unknown error"}`);
+    }
+    if (await waitForGatewayWarmup(30_000)) return;
+    snapshot = _gatewayStatusSnapshot(cli);
+  }
+
+  const detail = _formatGatewaySnapshot(snapshot);
+  const message =
+    `Gateway failed to become healthy during ${context}. ${detail}. `
+    + "Run `openclaw gateway status` and `openclaw gateway install` on this host before retrying install.";
+  log.error(message);
+  sendInstallerNotification(`❌ Quaid install stopped: ${message}`);
+  throw new Error(message);
+}
+
 function canRun(cmd) {
   return spawnSync("sh", ["-c", `command -v '${cmd.replace(/'/g, "'\\''")}'`], { stdio: "pipe" }).status === 0;
 }
@@ -2233,9 +2323,7 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
     if (_ensureOpenClawPluginsAllowQuaid()) {
       log.info("Ensured plugins.allow includes: quaid");
     }
-    if (!(await waitForGatewayWarmup(8000))) {
-      log.warn("Gateway warmup timed out after plugin registration; hook enable will continue in best-effort mode.");
-    }
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 8_000);
     enableRequiredOpenClawHooks();
   }
 
@@ -2454,9 +2542,7 @@ except Exception as e:
     if (doMigrate) {
       if (IS_OPENCLAW) {
         log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
-        if (!(await waitForGatewayWarmup())) {
-          log.warn("Gateway warmup timed out; proceeding with migration in best-effort mode.");
-        }
+        await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "workspace migration");
       }
       s.start("Extracting facts from workspace files...");
       const useMock = process.env.QUAID_TEST_MOCK_MIGRATION === "1";
@@ -2760,9 +2846,7 @@ c.close()
   // Smoke test
   if (IS_OPENCLAW) {
     log.info("Waiting for OpenClaw gateway/plugin route to finish warming up...");
-    if (!(await waitForGatewayWarmup())) {
-      log.warn("Gateway warmup timed out; smoke test will run in best-effort mode.");
-    }
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "validation smoke test");
   }
   s.start("Smoke test (store + recall)...");
   const smokeSafeId = owner.id.replace(/'/g, "\\'");
