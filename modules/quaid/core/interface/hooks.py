@@ -123,13 +123,120 @@ def hook_inject_compact(args):
         print(f"[quaid][hook-inject-compact] error: {e}", file=sys.stderr)
 
 
+def _cursor_dir() -> Path:
+    """Directory for extraction cursor files."""
+    home = os.environ.get("QUAID_HOME", "").strip()
+    base = Path(home) if home else Path.home() / "quaid"
+    d = base / "data" / "session-cursors"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _read_cursor(session_id: str) -> int:
+    """Read the extraction cursor for a session (line offset into transcript)."""
+    cursor_file = _cursor_dir() / f"{session_id}.json"
+    if not cursor_file.is_file():
+        return 0
+    try:
+        data = json.loads(cursor_file.read_text(encoding="utf-8"))
+        return int(data.get("line_offset", 0))
+    except (json.JSONDecodeError, ValueError, OSError):
+        return 0
+
+
+def _write_cursor(session_id: str, line_offset: int, transcript_path: str) -> None:
+    """Write the extraction cursor after successful extraction."""
+    import time
+    cursor_file = _cursor_dir() / f"{session_id}.json"
+    payload = {
+        "session_id": session_id,
+        "line_offset": line_offset,
+        "transcript_path": transcript_path,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    try:
+        cursor_file.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError as e:
+        print(f"[quaid] cursor write failed: {e}", file=sys.stderr)
+
+
+def _count_transcript_lines(transcript_path: str) -> int:
+    """Count total lines in a transcript JSONL file."""
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
+def _extract_from_offset(transcript_path: str, session_id: str, offset: int,
+                          label: str) -> None:
+    """Extract knowledge from transcript starting at line offset."""
+    from lib.adapter import get_adapter
+    from ingest.extract import extract_from_transcript
+
+    # Read only lines past the cursor
+    lines = []
+    with open(transcript_path, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i >= offset:
+                lines.append(line)
+
+    if not lines:
+        print(f"[quaid][{label}] no new content past cursor (offset={offset})", file=sys.stderr)
+        return
+
+    # Write the subset to a temp file for the adapter's parser
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False,
+                                      encoding="utf-8") as tmp:
+        tmp.writelines(lines)
+        tmp_path = tmp.name
+
+    try:
+        adapter = get_adapter()
+        transcript = adapter.parse_session_jsonl(Path(tmp_path))
+
+        if not transcript.strip():
+            print(f"[quaid][{label}] empty transcript after parsing (offset={offset})", file=sys.stderr)
+            return
+
+        owner = _get_owner_id()
+        result = extract_from_transcript(
+            transcript=transcript,
+            owner_id=owner,
+            label=label,
+            session_id=session_id,
+        )
+
+        # Update cursor to end of transcript
+        total_lines = offset + len(lines)
+        _write_cursor(session_id, total_lines, transcript_path)
+
+        print(
+            f"[quaid][{label}] extracted: "
+            f"{result['facts_stored']} stored, "
+            f"{result['facts_skipped']} skipped, "
+            f"{result['edges_created']} edges "
+            f"(lines {offset}-{total_lines})",
+            file=sys.stderr,
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 def hook_extract(args):
     """Extract knowledge from a conversation transcript.
 
     Reads hook JSON from stdin:
         {"transcript_path": "...", "session_id": "...", "cwd": "..."}
 
-    Logs results to stderr.
+    Uses cursor-based extraction: only processes lines past the last
+    extraction point. Writes cursor after successful extraction so
+    the next invocation (or orphan sweep) picks up where we left off.
     """
     try:
         hook_input = json.load(sys.stdin)
@@ -139,7 +246,7 @@ def hook_extract(args):
     transcript_path = hook_input.get("transcript_path", "")
     session_id = hook_input.get("session_id", "unknown")
     is_precompact = args.precompact if hasattr(args, "precompact") else False
-    label = "hook-precompact" if is_precompact else "hook-session-end"
+    label = "hook-precompact" if is_precompact else "hook-extract"
 
     if not transcript_path:
         print(f"[quaid][{label}] no transcript_path in hook input", file=sys.stderr)
@@ -151,33 +258,58 @@ def hook_extract(args):
         return
 
     try:
-        from lib.adapter import get_adapter
-        from ingest.extract import extract_from_transcript
-
-        adapter = get_adapter()
-        transcript = adapter.parse_session_jsonl(Path(transcript_path))
-
-        if not transcript.strip():
-            print(f"[quaid][{label}] empty transcript after parsing", file=sys.stderr)
-            return
-
-        owner = _get_owner_id()
-        result = extract_from_transcript(
-            transcript=transcript,
-            owner_id=owner,
-            label=label,
-            session_id=session_id,
-        )
-
-        print(
-            f"[quaid][{label}] extracted: "
-            f"{result['facts_stored']} stored, "
-            f"{result['facts_skipped']} skipped, "
-            f"{result['edges_created']} edges",
-            file=sys.stderr,
-        )
+        offset = _read_cursor(session_id)
+        _extract_from_offset(transcript_path, session_id, offset, label)
     except Exception as e:
         print(f"[quaid][{label}] error: {e}", file=sys.stderr)
+
+
+def _sweep_orphaned_sessions(current_session_id: str) -> None:
+    """Check for previous sessions with un-extracted transcript tails.
+
+    Called during session-init. Looks at cursor files, checks if the
+    transcript has grown past the cursor, and extracts the remainder.
+    Skips the current session (which is just starting).
+    """
+    cursor_dir = _cursor_dir()
+    if not cursor_dir.is_dir():
+        return
+
+    try:
+        cursor_files = list(cursor_dir.glob("*.json"))
+    except OSError:
+        return
+
+    for cursor_file in cursor_files:
+        try:
+            data = json.loads(cursor_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError, OSError):
+            continue
+
+        sid = data.get("session_id", "")
+        if not sid or sid == current_session_id:
+            continue
+
+        tp = data.get("transcript_path", "")
+        if not tp or not os.path.isfile(tp):
+            continue
+
+        offset = int(data.get("line_offset", 0))
+        total = _count_transcript_lines(tp)
+
+        if total <= offset:
+            continue  # Fully extracted
+
+        # There's un-extracted content — extract the tail
+        print(
+            f"[quaid][orphan-sweep] session {sid}: {total - offset} lines "
+            f"past cursor, extracting...",
+            file=sys.stderr,
+        )
+        try:
+            _extract_from_offset(tp, sid, offset, "orphan-sweep")
+        except Exception as e:
+            print(f"[quaid][orphan-sweep] error for {sid}: {e}", file=sys.stderr)
 
 
 def _check_janitor_health() -> str:
@@ -251,7 +383,24 @@ def hook_session_init(args):
     Collects identity files (USER.md, SOUL.md, MEMORY.md) from the adapter's
     per-instance identity directory (not the shared project dir).
     Writes the combined content to .claude/rules/quaid-projects.md.
+
+    Also sweeps for orphaned sessions (previous sessions whose transcripts
+    have un-extracted content past the extraction cursor).
     """
+    # Read hook input to get current session_id for orphan sweep
+    try:
+        hook_input = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        hook_input = {}
+
+    current_session_id = hook_input.get("session_id", "")
+
+    # Sweep orphaned sessions before loading docs
+    try:
+        _sweep_orphaned_sessions(current_session_id)
+    except Exception as e:
+        print(f"[quaid][session-init] orphan sweep error: {e}", file=sys.stderr)
+
     projects_dir = _get_projects_dir()
     if not projects_dir.is_dir():
         print(f"[quaid][session-init] projects dir not found: {projects_dir}", file=sys.stderr)
