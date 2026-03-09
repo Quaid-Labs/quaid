@@ -99,6 +99,11 @@ case "$CMD" in
     exec python3 "$SCRIPT_DIR/datastore/docsdb/registry.py" "$@"
     ;;
 
+  # Global project registry (cross-instance tracking)
+  global-registry)
+    exec python3 "$SCRIPT_DIR/lib/project_registry.py" "$@"
+    ;;
+
   # Project updater
   updater)
     exec python3 "$SCRIPT_DIR/datastore/docsdb/project_updater.py" "$@"
@@ -169,6 +174,7 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     echo ""
     echo "Projects:"
     echo "  registry [cmd]       Project/doc registry CLI"
+    echo "  global-registry [cmd] Cross-instance project registry"
     echo "  updater [cmd]        Project event processor"
     echo ""
     echo "Hooks:"
