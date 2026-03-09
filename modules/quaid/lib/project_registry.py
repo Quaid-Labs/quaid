@@ -118,8 +118,11 @@ def register(
     return entry
 
 
-def link(name: str, instance: Optional[str] = None) -> bool:
+def link(name: str, instance: Optional[str] = None, create_symlink: bool = False) -> bool:
     """Add an instance to a project's tracking list.
+
+    If create_symlink=True, creates a symlink in the current adapter's
+    projects/ directory pointing to the canonical project path.
 
     Returns True if the link was added, False if already linked or project
     not found.
@@ -136,7 +139,37 @@ def link(name: str, instance: Optional[str] = None) -> bool:
     entry.setdefault("instances", []).append(instance)
     entry["updated_at"] = datetime.now().isoformat()
     _save(data)
+
+    if create_symlink:
+        _create_project_symlink(name, entry["canonical_path"])
+
     return True
+
+
+def _create_project_symlink(name: str, canonical_path: str) -> None:
+    """Create a symlink in the adapter's projects/ dir to the canonical path."""
+    try:
+        from lib.adapter import get_adapter
+        projects_dir = get_adapter().projects_dir()
+    except Exception:
+        home = os.environ.get("QUAID_HOME", "").strip()
+        root = Path(home) if home else Path.home() / "quaid"
+        projects_dir = root / "projects"
+
+    link_path = projects_dir / name
+    canonical = Path(canonical_path)
+
+    if link_path.exists():
+        if link_path.is_symlink() and link_path.resolve() == canonical.resolve():
+            return  # Already correct
+        # Don't overwrite existing real directories
+        if not link_path.is_symlink():
+            return
+
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    if link_path.is_symlink():
+        link_path.unlink()
+    link_path.symlink_to(canonical)
 
 
 def unlink(name: str, instance: Optional[str] = None) -> bool:
@@ -228,6 +261,7 @@ def main():
     p_link = sub.add_parser("link", help="Link current instance to a project")
     p_link.add_argument("name", help="Project name")
     p_link.add_argument("--instance", help="Instance name (default: current adapter)")
+    p_link.add_argument("--symlink", action="store_true", help="Create symlink in projects/ dir")
 
     p_unlink = sub.add_parser("unlink", help="Unlink instance from a project")
     p_unlink.add_argument("name", help="Project name")
@@ -269,8 +303,10 @@ def main():
         print(f"Registered '{args.name}' -> {entry['canonical_path']}")
 
     elif args.command == "link":
-        if link(args.name, args.instance):
+        if link(args.name, args.instance, create_symlink=args.symlink):
             print(f"Linked '{args.name}' to {args.instance or _adapter_name()}")
+            if args.symlink:
+                print(f"  Symlink created in projects/ directory")
         else:
             print(f"Already linked or project not found.", file=sys.stderr)
             sys.exit(1)
