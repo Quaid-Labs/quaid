@@ -76,9 +76,41 @@ case "$CMD" in
     exec python3 "$SCRIPT_DIR/core/lifecycle/janitor.py" "$@"
     ;;
 
-  # MCP server
+  # MCP server (deprecated — use CLI commands instead)
   mcp-server|mcp)
+    echo "[quaid] MCP server is deprecated. Use CLI commands directly." >&2
     exec python3 "$SCRIPT_DIR/core/interface/mcp_server.py" "$@"
+    ;;
+
+  # Session commands
+  session)
+    exec python3 "$SCRIPT_DIR/ingest/session_logs_ingest.py" "$@"
+    ;;
+
+  # Domain management
+  domain)
+    SUBCMD="${1:-list}"
+    shift 2>/dev/null || true
+    case "$SUBCMD" in
+      list)     exec python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR')
+from core.interface.api import list_domains
+import json
+print(json.dumps(list_domains(), indent=2))
+" "$@" ;;
+      register) exec python3 -c "
+import sys; sys.path.insert(0, '$SCRIPT_DIR')
+from core.interface.api import register_domain
+import json
+name = sys.argv[1] if len(sys.argv) > 1 else ''
+desc = sys.argv[2] if len(sys.argv) > 2 else ''
+if not name:
+    print('Usage: quaid domain register <name> [description]', file=sys.stderr)
+    sys.exit(1)
+print(json.dumps(register_domain(name, desc), indent=2))
+" "$@" ;;
+      *)        echo "Usage: quaid domain {list|register <name> [description]}"; exit 1 ;;
+    esac
     ;;
 
   # Docs subsystem
@@ -87,10 +119,11 @@ case "$CMD" in
     shift 2>/dev/null || true
     case "$SUBCMD" in
       search)  exec python3 "$SCRIPT_DIR/datastore/docsdb/rag.py" search "$@" ;;
+      list)    exec python3 "$SCRIPT_DIR/datastore/docsdb/registry.py" list "$@" ;;
       check)   exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" check "$@" ;;
       update)  exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" update-stale "$@" ;;
       changelog) exec python3 "$SCRIPT_DIR/datastore/docsdb/updater.py" changelog "$@" ;;
-      *)       echo "Usage: quaid docs {search|check|update|changelog} [args...]"; exit 1 ;;
+      *)       echo "Usage: quaid docs {search|list|check|update|changelog} [args...]"; exit 1 ;;
     esac
     ;;
 
@@ -162,12 +195,21 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     echo "  search-all <query>   Search memories + docs"
     echo "  event [subcmd]       Event bus (emit/list/process/capabilities)"
     echo ""
+    echo ""
+    echo "Sessions:"
+    echo "  session list         List recent sessions"
+    echo "  session load <id>    Load a session transcript"
+    echo ""
+    echo "Domains:"
+    echo "  domain list          List knowledge domains"
+    echo "  domain register      Register a new domain"
+    echo ""
     echo "Maintenance:"
     echo "  janitor [args]       Run janitor pipeline"
-    echo "  mcp-server           Start MCP server (stdio)"
     echo ""
     echo "Docs:"
     echo "  docs search <query>  Search RAG docs"
+    echo "  docs list            List registered docs"
     echo "  docs check           Check doc staleness"
     echo "  docs update --apply  Update stale docs"
     echo "  docs changelog       View update history"

@@ -12,6 +12,12 @@ It is not a full API schema or implementation spec.
 All agents interact with Quaid through the `quaid` CLI. No tool registration
 needed — agents call CLI commands via their shell/Bash tool.
 
+**Required environment:** Set `QUAID_HOME` to your instance directory before
+running CLI commands. Each adapter instance (Claude Code, OpenClaw, etc.) has
+its own `QUAID_HOME` silo with its own config, database, and identity files.
+Do NOT set `QUAID_HOME` globally in shell profile — let each adapter's
+hooks/runtime set it per-invocation to avoid cross-instance collisions.
+
 ### Memory Commands
 - `quaid recall "query"` — Search memories (semantic + graph traversal + reranking)
 - `quaid store "text"` — Store a new memory
@@ -35,20 +41,18 @@ needed — agents call CLI commands via their shell/Bash tool.
 ### Combined Search
 - `quaid hook-search "query"` — Search memories + docs together
 
-### Adapter-Specific Surfaces
+### Session Commands
+- `quaid session list` — List recent extracted sessions
+- `quaid session load <id>` — Load a session transcript
 
-Some adapters expose richer tool surfaces beyond CLI:
+### Domain Management
+- `quaid domain list` — List registered knowledge domains
+- `quaid domain register <name> [--description "..."]` — Register a new domain
 
-OpenClaw (registered via gateway): `memory_recall`, `memory_store`,
-`memory_forget`, `projects_search`, `docs_read`, `docs_register`,
-`project_create`, `project_list`, `session_recall`
-
-MCP server (`core/interface/mcp_server.py`): `memory_recall`, `memory_store`,
-`memory_search`, `memory_get`, `memory_forget`, `memory_create_edge`,
-`memory_stats`, `memory_domain_list`, `memory_domain_register`,
-`memory_extract`, `memory_write`, `projects_search`, `session_recall`,
-`memory_event_emit`, `memory_event_list`, `memory_event_process`,
-`memory_provider`, `memory_capabilities`, `memory_event_capabilities`
+### Maintenance
+- `quaid janitor --task all --dry-run` — Preview janitor maintenance
+- `quaid janitor --task all --apply` — Run janitor maintenance
+- `quaid doctor` — Health check
 
 ## Plugin Contract Surfaces
 
@@ -74,39 +78,32 @@ Strict-mode behavior:
 - `plugins.strict=true` enforces fail-fast on undeclared tool/event registrations.
 - `plugins.strict=false` downgrades declaration mismatches to warnings.
 - `plugins.strict` is independent from `retrieval.fail_hard`: plugin contract validation vs memory/LLM fail policy.
-- MCP tool contract is declaration-validated at server startup (`core/interface/mcp_server.py`); strict mode raises on drift, non-strict logs warnings.
+- Plugin contracts are declaration-validated at startup; strict mode raises on drift, non-strict logs warnings.
 
-## Core Tools and Param Maps
+## Core Commands and Parameters
 
-### `memory_recall`
+### `quaid recall "query"`
 Use this for user facts, relationships, timelines, and project-state recall.
+Full recall pipeline with semantic search, graph traversal, and reranking.
 
-Parameter map:
-- `query` (string): natural-language recall query.
-- `options.limit` (number): max result count (clamped by config).
-- `options.datastores` (array): choose stores (`vector`, `vector_basic`, `vector_technical`, `graph`, `journal`, `project`).
-- `options.graph.expand` (bool): graph traversal toggle.
-- `options.graph.depth` (number): graph traversal depth (1-3 practical range).
-- `options.routing.enabled` (bool): enable routed/plan-first recall (`total_recall`).
-- `options.routing.reasoning` (`fast|deep`): router reasoning tier.
-- `options.routing.intent` (`general|agent_actions|relationship|technical`): intent bias.
-- `options.routing.failOpen` (bool): router failure behavior (`true` = continue with non-routed fallback on router errors, `false` = raise).
-- `options.filters.project` (string): optional project filter.
-- `options.filters.docs` (string[]): optional docs filter when project store is involved.
-- `options.filters.dateFrom` / `options.filters.dateTo` (YYYY-MM-DD).
-- `options.filters.domain` (object map): domain filter map.
+### `quaid search "query"`
+Fast search (semantic + FTS, no reranking). Useful for quick lookups.
+
+Flags (shared by `recall` and `search`):
+- `--limit N` — max result count (default: 5).
+- `--project <name>` — filter by project.
+- `--date-from YYYY-MM-DD` / `--date-to YYYY-MM-DD` — date range filter.
+- `--domain-filter '{"all": true}'` — domain filter JSON.
   - default: `{"all": true}` (all tagged + untagged memories)
   - strict example: `{"technical": true}` (only technical-tagged memories)
   - rule: if any domain key is `true`, `all` is ignored and only true domains are included.
-- `options.filters.domainBoost` (array|string->number map, optional): preferential scoring boost by domain.
-  - list form example: `["technical","project"]` (defaults to `1.3x` each)
-  - map form example: `{"technical": 1.5, "research": 1.2}`
+- `--domain-boost '["technical","project"]'` — preferential scoring boost by domain.
+  - list form: `["technical","project"]` (defaults to `1.3x` each)
+  - map form: `{"technical": 1.5, "research": 1.2}`
   - boost applies as multiplier to scored matches before final ranking.
-  - guidance: prefer `domainBoost` for broad recall; use strict `domain` filtering only when you are certain non-target domains should be excluded.
-- MCP `memory_recall` path (`core/interface/mcp_server.py`) also supports `domain_json` (stringified JSON object, for example `{"all": true}` or `{"technical": true}`).
-- MCP `memory_recall` also supports `domain_boost_json` (stringified JSON array/object, for example `["technical"]` or `{"technical": 1.4}`).
-- `options.ranking.sourceTypeBoosts` (object): optional source-type weighting.
-- `options.datastoreOptions.<store>`: per-store options.
+  - guidance: prefer `--domain-boost` for broad recall; use strict `--domain-filter` only when you are certain non-target domains should be excluded.
+- `--json` — JSON output.
+- `--debug` — show scoring breakdown.
 
 <!-- AUTO-GENERATED:DOMAIN-LIST:START -->
 Available domains (from datastore `domain_registry` active rows):
@@ -125,7 +122,7 @@ Available domains (from datastore `domain_registry` active rows):
 
 Domain list maintenance:
 - Source of truth is datastore `domain_registry` (`active=1`).
-- `memory_domain_register` updates the registry and triggers TOOLS domain block sync automatically.
+- `quaid domain register` updates the registry and triggers TOOLS domain block sync automatically.
 
 Use cases:
 - relationship questions (`family`, `who is X`, `how are X and Y connected`)
@@ -137,111 +134,72 @@ Recommended usage patterns:
 - Known technical query: target `vector_technical` + `project`
 - Ambiguous query: use routed recall (`total_recall` path)
 - Agent-action query: use routed recall with `agent_actions` intent
-- Known-scope query (work/technical/health/project/etc.): add `options.filters.domainBoost` first (preferred over strict `domain` filter).
-- Multi-domain query: include all relevant domains in `domainBoost` (for example `{"work": 1.3, "technical": 1.3}`).
-- Use strict `options.filters.domain` only when non-target domains must be excluded.
+- Known-scope query (work/technical/health/project/etc.): add `--domain-boost` first (preferred over strict `--domain-filter`).
+- Multi-domain query: include all relevant domains in `--domain-boost` (for example `'{"work": 1.3, "technical": 1.3}'`).
+- Use strict `--domain-filter` only when non-target domains must be excluded.
 
-### `session_recall`
+### `quaid session list` / `quaid session load <id>`
 Use this for recent-session discovery and transcript retrieval.
 
-Parameter map:
-- `action` (`list|load`):
-  - `list`: returns recent extracted sessions.
-  - `load`: loads one session transcript by `session_id`. OpenClaw path falls back to extracted facts for that `session_id` when raw transcript is unavailable; MCP path returns an error payload when transcript data is missing.
-- `session_id` (string): required for `load`. Pattern: `[a-zA-Z0-9_-]{1,128}`.
-- `limit` (number): list size for `action=list` (default 5, max 20).
+- `quaid session list [--limit 5]` — list recent extracted sessions
+- `quaid session load --session-id <id>` — load a session transcript
 
 “Load last session” workflow:
-1. call `session_recall` with `action="list", limit=1`
+1. `quaid session list --limit 1`
 2. take returned session id
-3. call `session_recall` with `action="load", session_id="<id>"`
+3. `quaid session load --session-id <id>`
 
-### `projects_search`
+### `quaid docs search "query"`
 Use this for project docs and implementation references.
 
-Parameter map:
-- `query` (string, required): semantic search query.
-- `limit` (number, optional): max hits (default `5`).
-- `project` (string, optional): restrict search to one project.
-- `docs` (string array, optional, OpenClaw adapter path only): optional doc path/name filters to narrow RAG scope.
-- MCP path (`core/interface/mcp_server.py`) supports `query`, `limit`, and `project` only.
+- `quaid docs search "query"` — semantic search across all project docs
+- `quaid docs search "query" --project quaid` — restrict to one project
 
 Use cases:
 - finding where a feature is documented
 - project-scoped architecture questions
-- searching a specific project (`project=quaid`) before opening docs
+- searching a specific project before opening docs
 
 Notes:
-- `projects_search` is docs-focused and project-aware.
-- `memory_recall` can include `project` store, but `projects_search` is still the better doc workflow for broad doc lookup.
+- Docs search is focused on project documentation and is project-aware.
+- `quaid recall` can include the `project` store, but docs search is better for broad doc lookup.
 - Project history is append-only in `projects/<project>/PROJECT.log`; Docs/RAG indexes `PROJECT.log` alongside Markdown docs.
 
-### `memory_store`
+### `quaid store "text"`
 Use this only for explicit/manual memory insertion when needed.
 Default behavior should favor automatic extraction.
-Behavior differs by surface:
-- OpenClaw adapter path queues the note for extraction at compaction/reset.
-- MCP path stores immediately.
 
-Parameter map:
-- `text` (string): exact memory note text to queue for extraction.
-- `category` (`preference|fact|decision|entity|other`, optional): lightweight hint.
-- OpenClaw runtime path: accepts only `text` and optional `category`.
-- MCP path (`core/interface/mcp_server.py`) also accepts:
-  - `confidence` (number, optional, default `0.5`)
-  - `knowledge_type` (string, optional, default `"fact"`)
-  - `source` (string, optional, default `"mcp"`)
-  - `pinned` (boolean, optional, default `false`)
-  - `domains_json` (stringified JSON array, optional, for example `["technical","project"]`)
+- `quaid store "the fact to store"` — store a memory
+- `quaid store "the fact" --category fact` — store with category hint
 
-### `memory_domain_list` (MCP)
-Lists domain registry entries from datastore (`domain_registry` table).
+Categories: `preference`, `fact`, `decision`, `entity`, `other`
 
-Parameter map:
-- `active_only` (boolean, optional, default `true`): include only active domains.
+### `quaid domain list` / `quaid domain register`
+Manage knowledge domains for memory categorization.
 
-### `memory_domain_register` (MCP)
-Registers or updates a domain in datastore and automatically refreshes the TOOLS domain block.
+- `quaid domain list` — list active domains
+- `quaid domain register <name> "description"` — register a new domain
 
-Parameter map:
-- `domain` (string, required): domain id (normalized to lowercase snake-like token).
-- `description` (string, optional): brief guidance shown in extraction/tool context.
-- `active` (boolean, optional, default `true`): enable/disable the domain.
-- `admin_token` (string, optional): required only when `QUAID_DOMAIN_ADMIN_TOKEN` is configured.
-
-Policy:
-- disabled only when `QUAID_ENABLE_DOMAIN_REGISTER=0|false|no|off`.
-- if `QUAID_DOMAIN_ADMIN_TOKEN` is set, calls must provide matching `admin_token`.
-
-### `memory_forget`
+### `quaid delete-node <id>`
 Use this for explicit deletion requests.
 
-Parameter map:
-- OpenClaw runtime path: `memoryId` (string) to delete one specific memory by id.
-- MCP path (`core/interface/mcp_server.py`): `node_id` (string) to delete one specific memory by id.
-- `query` (string): delete matching memories by query.
+- `quaid delete-node <node_id>` — delete a specific memory by ID
 
-### Docs/Project Admin Tools
-- `docs_read`
-  - `identifier` (string): doc path or title.
-- `docs_list`
-  - `project` (optional string), `type` (optional string).
-- `docs_register`
-  - `file_path` (required workspace-relative path), plus optional `project`, `title`, `description`, `auto_update`, `source_files`.
-  - `auto_update` defaults to `false`; set it to `true` only for docs that should be drift-tracked from mapped source files.
-- `project_create`
-  - `name` (required; validated by `registry.py` regex `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`; kebab-case is recommended for consistency), plus optional `label`, `description`, `source_roots`.
-  - successful creates emit a user notification by default; toggle with `notifications.projectCreate.enabled` (or `notifications.project_create.enabled`).
-- `project_list`
-  - no parameters.
+### Docs/Project Admin Commands
+- `quaid docs list [--project <name>]` — list registered docs
+- `quaid docs search "query"` — search project documentation
+- `quaid docs check` — check for stale docs
+- `quaid docs update --apply` — update stale docs from source diffs
+- `quaid registry create-project <name> [--label ...] [--source-roots ...]` — create a project
+- `quaid registry list` — list all projects
+- `quaid registry register <file_path> --project <name>` — register a doc
+- `quaid updater doc-health <project> [--dry-run]` — evaluate doc lifecycle
 
 Project placement policy:
-- Before creating any non-temporary file, an agent should first place it inside an existing tracked project whenever possible.
-- If no existing project fits, the agent should create/register a project (via `project_create`) and place the file there so Quaid can track/index it.
-- Temporary or scratch files are the exception: place them in workspace-visible `temp/` or `scratch/`.
-- When creating files in `temp/` or `scratch/`, explicitly tell the user these are temporary/untracked project artifacts.
+- Before creating any non-temporary file, place it inside an existing tracked project whenever possible.
+- If no existing project fits, create one with `quaid registry create-project` and place the file there.
+- Temporary or scratch files go in `temp/` or `scratch/` — explicitly tell the user these are untracked.
 - If a temp/scratch file becomes durable, move it into a tracked project.
-- `projects/`, `temp/`, and `scratch/` are datastore-contract-owned workspace dirs (`docsdb` init/config hooks); installer keeps a fallback guard to create them if hook execution is bypassed.
 
 ## Knowledge Stores
 
@@ -268,12 +226,12 @@ Project placement policy:
 
 ### Technical status question
 1. Recall from `vector_technical` + `project`.
-2. If still ambiguous, run `projects_search` scoped to the project.
+2. If still ambiguous, run `quaid docs search` scoped to the project.
 3. For project/work-specific prompts, add `domainBoost` first (for example `{"technical": 1.3, "project": 1.3, "work": 1.3}`).
 
 ### Previous-session reference looks missing
-1. Run `memory_recall` first with specific entities.
-2. If still missing and user clearly means the latest session: `session_recall(action=list, limit=1)` then `session_recall(action=load, session_id=...)`.
+1. Run `quaid recall` first with specific entities.
+2. If still missing and user clearly means the latest session: `quaid session list --limit 1` then `quaid session load --session-id <id>`.
 
 ### Conflicting or stale facts
 1. Recall with recency-sensitive ranking.
@@ -283,36 +241,41 @@ Project placement policy:
 ## Operational Commands (Operator Reference)
 
 ```bash
-cd modules/quaid
-
 # Recall and inspection
-python3 datastore/memorydb/memory_graph.py search "query" --owner quaid --limit 50 --min-similarity 0.6
-python3 datastore/memorydb/memory_graph.py search-graph "query" --owner quaid
-python3 datastore/memorydb/memory_graph.py search-graph-aware "query" --owner quaid
-python3 datastore/memorydb/memory_graph.py stats
-python3 datastore/memorydb/memory_graph.py health
-python3 core/runtime/plugin_health.py
+quaid search "query"
+quaid recall "query"
+quaid stats
+quaid health
 
 # Manual memory operations
-python3 datastore/memorydb/memory_graph.py store "text" --owner quaid --category fact
-python3 datastore/memorydb/memory_graph.py fact-history <node_id>
-python3 datastore/memorydb/memory_graph.py get-edges <node_id>
+quaid store "text"
+quaid get-edges <node_id>
+quaid get-node <node_id>
+quaid delete-node <node_id>
 
-# Project docs search
-python3 datastore/docsdb/rag.py search "query"
-python3 datastore/docsdb/registry.py list --project quaid
+# Project docs
+quaid docs search "query"
+quaid docs check
+quaid docs update --apply
+quaid registry list --project quaid
 
 # Janitor maintenance
-python3 core/lifecycle/janitor.py --task all --dry-run
-python3 core/lifecycle/janitor.py --task all --apply
-python3 core/lifecycle/janitor.py --task review --apply --approve
-python3 core/lifecycle/janitor.py --task journal --apply --force-distill
-python3 core/lifecycle/janitor.py --task all --apply --time-budget 1800 --token-budget 12000
+quaid janitor --task all --dry-run
+quaid janitor --task all --apply
+quaid janitor --task all --apply --time-budget 1800 --token-budget 12000
 
-# Contract/docs consistency
-python3 scripts/sync-tools-domain-block.py
-node scripts/check-docs-consistency.mjs
-npm run check:boundaries
+# Project lifecycle
+quaid updater doc-health <project> --dry-run
+quaid global-registry list
+
+# Sessions and domains
+quaid session list
+quaid session load <id>
+quaid domain list
+quaid domain register <name> "description"
+
+# Health check
+quaid doctor
 ```
 
 ## Related Docs
