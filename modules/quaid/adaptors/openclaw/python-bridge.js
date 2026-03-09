@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn } from "child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 function _resolveTimeoutMs(name, fallbackMs) {
@@ -12,9 +12,65 @@ const PYTHON_BRIDGE_TIMEOUT_MS = _resolveTimeoutMs("QUAID_PYTHON_BRIDGE_TIMEOUT_
 function _formatBridgeErrorDetail(stderrText, stdoutText) {
   const timeoutHint = /timed out|timeout|Gateway LLM proxy transient error|URLError|TimeoutError/i.test(stderrText) ? "[hint] upstream llm timeout/connection issue detected" : "";
   const compactStderr = stderrText.length > 900 ? `${stderrText.slice(0, 420)} ... [truncated] ... ${stderrText.slice(-420)}` : stderrText;
-  return [timeoutHint, compactStderr ? `stderr: ${compactStderr}` : "", stdoutText ? `stdout: ${stdoutText}` : ""].filter(Boolean).join(" | ").slice(0, 2e3);
+  return [
+    timeoutHint,
+    compactStderr ? `stderr: ${compactStderr}` : "",
+    stdoutText ? `stdout: ${stdoutText}` : ""
+  ].filter(Boolean).join(" | ").slice(0, 2e3);
 }
-export function createPythonBridgeExecutor(config) {
+function createCliBridgeExecutor(config) {
+  const explicitRoot = String(config.pluginRoot || "").trim();
+  const modernRoot = path.join(config.workspace, "modules", "quaid");
+  const legacyRoot = path.join(config.workspace, "plugins", "quaid");
+  const pluginRoot = explicitRoot || (fs.existsSync(modernRoot) ? modernRoot : legacyRoot);
+  const quaidBin = path.join(pluginRoot, "quaid");
+  const bin = fs.existsSync(quaidBin) ? quaidBin : "quaid";
+  return async function execCli(command, args = []) {
+    return new Promise((resolve, reject) => {
+      const proc = spawn(bin, [command, ...args], {
+        cwd: config.workspace,
+        env: {
+          ...process.env,
+          QUAID_HOME: config.workspace
+        }
+      });
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          proc.kill("SIGTERM");
+          reject(new Error(`CLI bridge timeout after ${PYTHON_BRIDGE_TIMEOUT_MS}ms: ${command} ${args.join(" ")}`));
+        }
+      }, PYTHON_BRIDGE_TIMEOUT_MS);
+      proc.stdout.on("data", (data) => {
+        stdout += data;
+      });
+      proc.stderr.on("data", (data) => {
+        stderr += data;
+      });
+      proc.on("close", (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          const detail = _formatBridgeErrorDetail(stderr.trim(), stdout.trim());
+          reject(new Error(`CLI error (exit=${String(code)}): ${detail}`));
+        }
+      });
+      proc.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+  };
+}
+function createPythonBridgeExecutor(config) {
   const explicitRoot = String(config.pluginRoot || "").trim();
   const modernRoot = path.join(config.workspace, "modules", "quaid");
   const legacyRoot = path.join(config.workspace, "plugins", "quaid");
@@ -77,3 +133,8 @@ export function createPythonBridgeExecutor(config) {
     });
   };
 }
+export {
+  PYTHON_BRIDGE_TIMEOUT_MS,
+  createCliBridgeExecutor,
+  createPythonBridgeExecutor
+};
