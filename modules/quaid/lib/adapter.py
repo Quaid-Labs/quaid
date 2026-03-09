@@ -70,6 +70,15 @@ class QuaidAdapter(abc.ABC):
     def projects_dir(self) -> Path:
         return self.quaid_home() / "projects"
 
+    def identity_dir(self) -> Path:
+        """Per-instance identity files (SOUL.md, USER.md, MEMORY.md).
+
+        Defaults to quaid_home() for backward compatibility. Adapters with
+        per-install silos (e.g. ClaudeCodeAdapter) override this to return
+        their silo's identity/ subdirectory.
+        """
+        return self.quaid_home()
+
     def core_markdown_dir(self) -> Path:
         return self.quaid_home()
 

@@ -189,13 +189,22 @@ def _check_janitor_health() -> str:
     """Check if the janitor has run recently. Returns a warning string or empty."""
     try:
         from lib.adapter import get_adapter
-        home = get_adapter().quaid_home()
-        checkpoint = home / ".quaid" / "runtime" / "janitor" / "checkpoint.json"
+        logs_dir = get_adapter().logs_dir()
+        # Janitor writes per-task checkpoints; check the 'all' task as primary
+        checkpoint = logs_dir / "janitor" / "checkpoint-all.json"
         if not checkpoint.is_file():
-            return "[Quaid Warning] Janitor has never run. Run: quaid janitor --task all --apply"
+            # Fall back to any checkpoint file
+            janitor_dir = logs_dir / "janitor"
+            if janitor_dir.is_dir():
+                checkpoints = sorted(janitor_dir.glob("checkpoint-*.json"))
+                if checkpoints:
+                    checkpoint = checkpoints[-1]
+                else:
+                    return "[Quaid Warning] Janitor has never run. Run: quaid janitor --task all --apply"
+            else:
+                return "[Quaid Warning] Janitor has never run. Run: quaid janitor --task all --apply"
 
         import json as _json
-        import time
         data = _json.loads(checkpoint.read_text(encoding="utf-8"))
         last_ts = data.get("last_completed_at", "")
         if not last_ts:
@@ -217,10 +226,22 @@ def _get_projects_dir() -> Path:
     try:
         from lib.adapter import get_adapter
         adapter = get_adapter()
-        return adapter.quaid_home() / "projects"
+        return adapter.projects_dir()
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
         return Path(home) / "projects" if home else Path.home() / "quaid" / "projects"
+
+
+def _get_identity_dir() -> Path:
+    """Resolve the per-instance identity directory from adapter."""
+    try:
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+        return adapter.identity_dir()
+    except Exception:
+        # Fallback: quaid_home root (backward compat with standalone)
+        home = os.environ.get("QUAID_HOME", "").strip()
+        return Path(home) if home else Path.home() / "quaid"
 
 
 def hook_session_init(args):
@@ -232,7 +253,8 @@ def hook_session_init(args):
     ephemeral and lost on compaction).
 
     Scans projects/<name>/ subdirectories for TOOLS.md and AGENTS.md.
-    Also collects USER.md, SOUL.md, and MEMORY.md from the quaid project.
+    Collects identity files (USER.md, SOUL.md, MEMORY.md) from the adapter's
+    per-instance identity directory (not the shared project dir).
     Writes the combined content to .claude/rules/quaid-projects.md.
     """
     projects_dir = _get_projects_dir()
@@ -242,10 +264,10 @@ def hook_session_init(args):
 
     sections: List[str] = []
 
-    # 1. Collect USER.md, SOUL.md, MEMORY.md from projects/quaid/
-    quaid_project = projects_dir / "quaid"
+    # 1. Collect identity files (SOUL.md, USER.md, MEMORY.md) from instance silo
+    identity_dir = _get_identity_dir()
     for special_file in ("USER.md", "SOUL.md", "MEMORY.md"):
-        fpath = quaid_project / special_file
+        fpath = identity_dir / special_file
         if fpath.is_file():
             content = fpath.read_text(encoding="utf-8").strip()
             if content:

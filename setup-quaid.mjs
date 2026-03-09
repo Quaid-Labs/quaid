@@ -3265,14 +3265,6 @@ function setupClaudeCodeHooks() {
       matcher: "",
       hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract --precompact` }],
     }],
-    PostToolUse: [{
-      matcher: "compact",
-      hooks: [{ type: "command", command: `echo '[quaid] post-compaction re-injection is a TODO' >&2` }],
-    }],
-    Stop: [{
-      matcher: "",
-      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract` }],
-    }],
   };
 
   let changed = false;
