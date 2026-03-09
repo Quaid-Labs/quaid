@@ -146,7 +146,7 @@ function _envTimeoutMs(name: string, fallbackMs: number): number {
 
 const EXTRACT_PIPELINE_TIMEOUT_MS = _envTimeoutMs("QUAID_EXTRACT_PIPELINE_TIMEOUT_MS", 300_000);
 const EVENTS_EMIT_TIMEOUT_MS = _envTimeoutMs("QUAID_EVENTS_TIMEOUT_MS", 300_000);
-const QUICK_PROJECT_SUMMARY_TIMEOUT_MS = _envTimeoutMs("QUAID_PROJECT_SUMMARY_TIMEOUT_MS", 60_000);
+// QUICK_PROJECT_SUMMARY_TIMEOUT_MS removed — project events now emitted from Python extraction.
 
 function buildPythonEnv(extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
   const sep = process.platform === "win32" ? ";" : ":";
@@ -576,7 +576,7 @@ function parseSessionMessagesJsonl(sessionFile: string): any[] {
 const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py");
 const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
-const PROJECT_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/project_updater.py");
+// PROJECT_UPDATER removed — project events now emitted from Python extraction.
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 const _sessionModelOverrideCache = new Map<string, string>();
 
@@ -987,24 +987,7 @@ const facade = createQuaidFacade({
     _spawnWithTimeout(EVENTS_SCRIPT, cmd, args, "events", {
       QUAID_HOME: WORKSPACE, CLAWDBOT_WORKSPACE: WORKSPACE,
     }, EVENTS_EMIT_TIMEOUT_MS),
-  emitProjectEventBackground: (eventPath: string, projectHint: string | null) => {
-    const bgApiKey = _getAnthropicCredential();
-    const logFile = path.join(WORKSPACE, "logs/project-updater.log");
-    const launched = spawnDetachedScript({
-      scriptDir: QUAID_NOTIFY_DIR,
-      logFile,
-      scriptPrefix: "",
-      scriptBody: `import subprocess\nsubprocess.run(["python3", ${JSON.stringify(PROJECT_UPDATER)}, "process-event", ${JSON.stringify(eventPath)}], check=False)\n`,
-      env: buildPythonEnv({ ...(bgApiKey ? { ANTHROPIC_API_KEY: bgApiKey } : {}) }),
-      interpreter: "python3",
-      filePrefix: "project-updater",
-      fileExtension: ".py",
-    });
-    if (!launched) {
-      throw new Error("failed to launch detached project-updater worker");
-    }
-    console.log(`[quaid] Emitted project event -> ${projectHint || "unknown"}`);
-  },
+  // emitProjectEventBackground removed — project events now emitted from Python extraction.
   callLLM: callConfiguredLLM,
   getDefaultLLMProvider: getGatewayDefaultProvider,
   adapterName: "openclaw_adapter",
@@ -2869,15 +2852,8 @@ notify_memory_extraction(
             console.error("[quaid] Compaction doc update failed:", (err as Error).message);
           }
 
-          // Emit project event for background processing (non-fatal)
-          try {
-            await facade.emitProjectEvent(conversationMessages, "compact", uniqueSessionId, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
-          } catch (err: unknown) {
-            if (isFailHardEnabled()) {
-              throw err;
-            }
-            console.error("[quaid] Compaction project event failed:", (err as Error).message);
-          }
+          // Project events are now emitted from extract_from_transcript() in Python.
+          // The extraction call already identifies projects and produces summaries.
 
           // Record compaction timestamp and reset injection dedup list (memory system).
           if (isSystemEnabled("memory") && uniqueSessionId) {
@@ -3002,15 +2978,7 @@ notify_memory_extraction(
               console.error("[quaid] Reset doc update failed:", (err as Error).message);
             }
 
-            // Emit project event for background processing (non-fatal)
-            try {
-              await facade.emitProjectEvent(conversationMessages, "reset", uniqueSessionId, QUICK_PROJECT_SUMMARY_TIMEOUT_MS);
-            } catch (err: unknown) {
-              if (isFailHardEnabled()) {
-                throw err;
-              }
-              console.error("[quaid] Reset project event failed:", (err as Error).message);
-            }
+            // Project events are now emitted from extract_from_transcript() in Python.
           }
           console.log(`[quaid][reset] extraction_end session=${sessionId || "unknown"}`);
         };

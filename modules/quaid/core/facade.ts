@@ -68,7 +68,6 @@ export type QuaidFacadeDeps = {
   readSessionMessagesFile?: (sessionFile: string) => any[];
   listCompactionSessions?: () => Array<{ key: string; sessionId: string }>;
   requestSessionCompaction?: (sessionKey: string) => { ok: boolean; compacted?: unknown; raw?: string };
-  emitProjectEventBackground?: (eventPath: string, projectHint: string | null) => void;
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
@@ -331,11 +330,6 @@ export type QuaidFacade = {
   maybeForceCompactionAfterTimeout: (sessionId?: string) => void;
   filterConversationMessages: (messages: unknown[]) => unknown[];
   buildTranscript: (messages: unknown[]) => string;
-  extractFilePaths: (messages: unknown[]) => string[];
-  summarizeProjectSession: (
-    messages: unknown[],
-    timeoutMs?: number,
-  ) => Promise<{ project_name: string | null; text: string }>;
   isResetBootstrapOnlyConversation: (messages: unknown[], bootstrapPrompt?: string) => boolean;
   isVectorRecallResult: (result: MemoryResult) => boolean;
   updateDocsFromTranscript: (
@@ -344,19 +338,10 @@ export type QuaidFacade = {
     sessionId?: string,
     tempDir?: string,
   ) => Promise<void>;
-  stageProjectEvent: (
-    messages: unknown[],
-    trigger: string,
-    sessionId?: string,
-    stagingDirOverride?: string,
-    summaryTimeoutMs?: number,
-  ) => Promise<{ eventPath: string; projectHint: string | null } | null>;
-  emitProjectEvent: (
-    messages: unknown[],
-    trigger: string,
-    sessionId?: string,
-    summaryTimeoutMs?: number,
-  ) => Promise<void>;
+  // stageProjectEvent and emitProjectEvent removed — project events are now
+  // emitted from extract_from_transcript() in Python (ingest/extract.py).
+  // The extraction call already identifies projects and produces summaries,
+  // eliminating the redundant summarizeProjectSession LLM call.
 
   // --- Stubs (typed, not yet implemented) ---
   detectLifecycleSignal: (messages: unknown[]) => LifecycleSignal | null;
@@ -1638,58 +1623,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     return transcript.join("\n\n");
   }
 
-  function extractFilePaths(messages: unknown[]): string[] {
-    const paths = new Set<string>();
-    for (const msg of messages) {
-      const text = getMessageText(msg);
-      if (!text) continue;
-      const matches = text.match(/(?:^|\s)((?:\/[\w.-]+)+|(?:[\w.-]+\/)+[\w.-]+)/gm);
-      if (!matches) continue;
-      for (const match of matches) {
-        const candidate = match.trim();
-        if (candidate.includes("/") && !candidate.startsWith("http") && candidate.length < 200) {
-          paths.add(candidate);
-        }
-      }
-    }
-    return Array.from(paths);
-  }
-
-  async function summarizeProjectSession(
-    messages: unknown[],
-    timeoutMs: number = FAST_ROUTER_TIMEOUT_MS,
-  ): Promise<{ project_name: string | null; text: string }> {
-    const transcript = buildTranscript(messages);
-    if (!transcript || transcript.length < 20) {
-      return { project_name: null, text: "" };
-    }
-    try {
-      const llm = await deps.callLLM(
-        `You summarize coding sessions. Given a conversation, identify: 1) What project was being worked on (use one of the available project names, or null if unclear), 2) Brief summary of what changed/was discussed. Available projects: ${projectCatalogReader.getProjectNames().join(", ")}. Use these EXACT names. Respond with JSON only: {"project_name": "name-or-null", "text": "brief summary"}`,
-        `Summarize this session:\n\n${transcript.slice(0, 4000)}`,
-        "fast",
-        300,
-        timeoutMs,
-      );
-      const output = String(llm?.text || "").trim();
-      const jsonMatch = output.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          return {
-            project_name: typeof parsed.project_name === "string" ? parsed.project_name : null,
-            text: typeof parsed.text === "string" ? parsed.text : "",
-          };
-        } catch {}
-      }
-    } catch (err: unknown) {
-      console.error("[quaid][facade] Quick project summary failed:", (err as Error).message);
-      if (deps.isFailHardEnabled()) {
-        throw err;
-      }
-    }
-    return { project_name: null, text: transcript.slice(0, 500) };
-  }
+  // extractFilePaths, summarizeProjectSession, stageProjectEvent, and
+  // emitProjectEvent removed. Project event emission is now handled by
+  // extract_from_transcript() in Python (ingest/extract.py), which already
+  // has the project name, summary, and file paths from the extraction output.
+  // This eliminates a redundant LLM call per compact/reset.
 
   function isResetBootstrapOnlyConversation(
     messages: unknown[],
@@ -1787,67 +1725,6 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     }
   }
 
-  async function stageProjectEvent(
-    messages: unknown[],
-    trigger: string,
-    sessionId?: string,
-    stagingDirOverride?: string,
-    summaryTimeoutMs: number = FAST_ROUTER_TIMEOUT_MS,
-  ): Promise<{ eventPath: string; projectHint: string | null } | null> {
-    if (!deps.isSystemEnabled("projects")) {
-      return null;
-    }
-    const memConfig = deps.getMemoryConfig();
-    if (!memConfig.projects?.enabled) {
-      return null;
-    }
-    const summary = await summarizeProjectSession(messages, summaryTimeoutMs);
-    const event = {
-      project_hint: summary.project_name || null,
-      files_touched: extractFilePaths(messages),
-      summary: summary.text,
-      trigger,
-      session_id: sessionId,
-      timestamp: new Date().toISOString(),
-    };
-    const stagingDir = stagingDirOverride
-      ? path.resolve(stagingDirOverride)
-      : path.join(deps.workspace, memConfig.projects.stagingDir || "projects/staging/");
-    if (!fs.existsSync(stagingDir)) {
-      fs.mkdirSync(stagingDir, { recursive: true });
-    }
-    const eventPath = path.join(stagingDir, `${Date.now()}-${trigger}.json`);
-    fs.writeFileSync(eventPath, JSON.stringify(event, null, 2));
-    return { eventPath, projectHint: summary.project_name || null };
-  }
-
-  async function emitProjectEvent(
-    messages: unknown[],
-    trigger: string,
-    sessionId?: string,
-    summaryTimeoutMs: number = 15_000,
-  ): Promise<void> {
-    const staged = await stageProjectEvent(messages, trigger, sessionId, undefined, summaryTimeoutMs);
-    if (!staged) {
-      return;
-    }
-    const spawnProjectEvent = deps.emitProjectEventBackground;
-    if (typeof spawnProjectEvent !== "function") {
-      if (deps.isFailHardEnabled()) {
-        throw new Error("[quaid][facade] emitProjectEventBackground callback is required");
-      }
-      console.warn("[quaid][facade] project event background callback not configured; staged event left for janitor.");
-      return;
-    }
-    try {
-      spawnProjectEvent(staged.eventPath, staged.projectHint);
-    } catch (err: unknown) {
-      if (deps.isFailHardEnabled()) {
-        throw err;
-      }
-      console.warn(`[quaid][facade] project event background dispatch failed: ${String((err as Error)?.message || err)}`);
-    }
-  }
 
   function detectExplicitLifecycleUserCommand(text: string): "/new" | "/reset" | "/restart" | "/compact" | null {
     if (!text) return null;
@@ -3412,13 +3289,9 @@ ${lines.join("\n")}
     maybeForceCompactionAfterTimeout,
     filterConversationMessages,
     buildTranscript,
-    extractFilePaths,
-    summarizeProjectSession,
     isResetBootstrapOnlyConversation,
     isVectorRecallResult,
     updateDocsFromTranscript,
-    stageProjectEvent,
-    emitProjectEvent,
 
     // Stubs
     detectLifecycleSignal,

@@ -93,6 +93,67 @@ def _get_owner_id(override: Optional[str] = None) -> str:
         return "default"
 
 
+def _emit_project_events(
+    project_logs: Dict[str, List[str]],
+    facts: List[Dict[str, Any]],
+    trigger: str,
+    session_id: Optional[str] = None,
+) -> None:
+    """Emit project events to staging/ for the project updater.
+
+    Called after extraction completes. Builds event JSONs from the extraction
+    output (project_logs + facts) so the project updater can check doc
+    staleness and apply updates. This replaces the separate LLM call that
+    OpenClaw's emitProjectEvent() used to make.
+    """
+    try:
+        cfg = get_config()
+        if not getattr(cfg.projects, "enabled", True):
+            return
+    except Exception:
+        return
+
+    try:
+        from lib.runtime_context import get_workspace_dir
+        workspace = get_workspace_dir()
+    except Exception as exc:
+        logger.debug("[extract] cannot resolve workspace for project events: %s", exc)
+        return
+
+    staging_dir = workspace / (cfg.projects.staging_dir or "projects/staging/")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect file paths mentioned in facts for this project
+    files_by_project: Dict[str, List[str]] = {}
+    for fact in facts:
+        proj = fact.get("project")
+        if not proj:
+            continue
+        keywords = str(fact.get("keywords", ""))
+        text = str(fact.get("text", ""))
+        # Extract anything that looks like a file path from the fact
+        for token in (keywords + " " + text).split():
+            if "/" in token and not token.startswith("http") and len(token) < 200:
+                files_by_project.setdefault(proj, []).append(token)
+
+    for project_name, entries in project_logs.items():
+        event = {
+            "project_hint": project_name,
+            "files_touched": list(set(files_by_project.get(project_name, []))),
+            "summary": "; ".join(entries),
+            "trigger": trigger.lower(),
+            "session_id": session_id or "unknown",
+            "timestamp": datetime.now().isoformat(),
+        }
+        ts = int(time.time() * 1000)
+        event_path = staging_dir / f"{ts}-{trigger.lower()}.json"
+        try:
+            event_path.write_text(json.dumps(event, indent=2))
+            logger.info("[extract] emitted project event: %s -> %s", trigger, project_name)
+        except Exception as exc:
+            logger.warning("[extract] failed to write project event: %s", exc)
+
+
 def parse_session_jsonl(path: str) -> str:
     """Parse a platform session JSONL file into a human-readable transcript."""
     return runtime_parse_session_jsonl(Path(path))
@@ -708,6 +769,17 @@ def extract_from_transcript(
             )
         except Exception as exc:
             logger.warning("[extract] %s: project log append failed: %s", label, exc, exc_info=True)
+
+        # Emit project events for the project updater pipeline.
+        # This replaces the separate LLM call in OpenClaw's emitProjectEvent() —
+        # extraction already identified projects and produced summaries.
+        if not dry_run:
+            _emit_project_events(
+                project_logs=result["project_logs"],
+                facts=all_facts,
+                trigger=trigger,
+                session_id=session_id,
+            )
 
     logger.info(
         f"[extract] {label}: {result['facts_stored']} stored, "
