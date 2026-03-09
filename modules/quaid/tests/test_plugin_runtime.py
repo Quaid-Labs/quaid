@@ -236,6 +236,39 @@ def test_discover_plugin_manifests_with_allowlist(tmp_path: Path):
     assert [m.plugin_id for m in manifests] == ["adapter.b"]
 
 
+def test_discover_plugin_manifests_dedupes_plugin_ids_by_path_order(tmp_path: Path):
+    src_root = tmp_path / "modules" / "quaid" / "adaptors" / "openclaw"
+    runtime_root = tmp_path / "plugins" / "quaid" / "adaptors" / "openclaw"
+    src_root.mkdir(parents=True)
+    runtime_root.mkdir(parents=True)
+
+    src_manifest = {
+        "plugin_api_version": 1,
+        "plugin_id": "openclaw.adapter",
+        "plugin_type": "adapter",
+        "module": "adaptors.openclaw",
+        "description": "source tree copy",
+        "capabilities": _contract_caps("OpenClaw Adapter"),
+    }
+    runtime_manifest = {
+        **src_manifest,
+        "description": "runtime tree copy",
+    }
+
+    (src_root / "plugin.json").write_text(json.dumps(src_manifest), encoding="utf-8")
+    (runtime_root / "plugin.json").write_text(json.dumps(runtime_manifest), encoding="utf-8")
+
+    manifests, errors = discover_plugin_manifests(
+        paths=["modules/quaid", "plugins"],
+        strict=True,
+        workspace_root=tmp_path,
+    )
+
+    assert not errors
+    assert [m.plugin_id for m in manifests] == ["openclaw.adapter"]
+    assert "modules/quaid" in manifests[0].source_path
+
+
 def test_discover_plugin_manifests_non_strict_collects_all_errors(tmp_path: Path):
     plugins_dir = tmp_path / "plugins"
     good_dir = plugins_dir / "good"

@@ -666,7 +666,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                     process_signal(sig)
                 except Exception as e:
                     logger.error("failed processing signal: %s", e, exc_info=True)
-                    mark_signal_processed(sig)
+                    # Preserve the signal for a future retry. Outer-loop exceptions
+                    # mean we do not know whether processing was durable.
 
             # Periodic idle session check
             now = time.time()
@@ -687,7 +688,8 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 process_signal(sig)
             except Exception as e:
                 logger.error("shutdown signal processing failed: %s", e)
-                mark_signal_processed(sig)
+                # Preserve the signal across shutdown so the next daemon instance
+                # can retry it instead of dropping extraction work.
 
     finally:
         remove_pid()
@@ -749,9 +751,14 @@ def start_daemon() -> int:
         if pid > 0:
             # B005: Parent waits on first child to prevent zombie
             os.waitpid(pid, 0)
-            # Wait briefly for grandchild to write PID
-            time.sleep(0.3)
-            return read_pid() or pid
+            # Wait briefly for grandchild to write PID. Avoid returning the
+            # first-child PID because it exits immediately and is not usable.
+            for _ in range(20):
+                time.sleep(0.1)
+                running_pid = read_pid()
+                if running_pid is not None:
+                    return running_pid
+            return -1
 
         # First child: create new session
         os.setsid()
@@ -770,6 +777,15 @@ def start_daemon() -> int:
             os._exit(0)
 
         # Second child: this is the daemon
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(lock_fd)
+        except OSError:
+            pass
+
         # Redirect stdio to log file
         log_file = _log_path()
         sys.stdout.flush()

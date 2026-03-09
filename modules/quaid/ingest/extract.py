@@ -81,8 +81,17 @@ def _load_extraction_prompt(domain_defs: Optional[Dict[str, str]] = None) -> str
 
 def _get_owner_id(override: Optional[str] = None) -> str:
     """Resolve owner ID from override, config, or default."""
-    from lib.adapter import get_owner_id
-    return get_owner_id(override=override)
+    if override:
+        return override
+    owner = os.environ.get("QUAID_OWNER", "").strip()
+    if owner:
+        return owner
+    try:
+        return get_config().users.default_owner
+    except Exception as exc:
+        if is_fail_hard_enabled():
+            raise RuntimeError(f"extract owner resolution failed: {exc}") from exc
+        return "default"
 
 
 def _emit_project_events(
@@ -430,21 +439,10 @@ def extract_from_transcript(
     if not isinstance(domain_defs, dict):
         domain_defs = {}
     if not domain_defs:
-        logger.warning(
-            "[extract] No active domains found in retrieval config; "
-            "falling back to default extraction domains: %s",
-            list(DEFAULT_EXTRACTION_DOMAINS.keys()),
-        )
-        domain_defs = DEFAULT_EXTRACTION_DOMAINS
+        raise RuntimeError("No active domains are registered in retrieval config")
     allowed_domains = {str(k).strip() for k in domain_defs.keys() if str(k).strip()}
     if not allowed_domains:
-        logger.warning(
-            "[extract] Domain keys resolved to empty set after stripping; "
-            "falling back to default extraction domains: %s",
-            list(DEFAULT_EXTRACTION_DOMAINS.keys()),
-        )
-        domain_defs = DEFAULT_EXTRACTION_DOMAINS
-        allowed_domains = set(DEFAULT_EXTRACTION_DOMAINS.keys())
+        raise RuntimeError("No active domains are registered in retrieval config")
 
     # Load extraction prompt
     system_prompt = _load_extraction_prompt(domain_defs)

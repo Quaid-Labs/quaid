@@ -500,7 +500,8 @@ def get_owner_id(override: Optional[str] = None) -> str:
     Resolution order:
     1. Explicit *override* argument (if non-empty).
     2. ``QUAID_OWNER`` environment variable.
-    3. ``lib.config.get_config().users.default_owner``.
+    3. ``config.get_config().users.default_owner`` loaded from the active
+       ``QUAID_HOME`` instance config.
     4. Fallback to ``"default"``.
     """
     if override:
@@ -509,7 +510,7 @@ def get_owner_id(override: Optional[str] = None) -> str:
     if owner:
         return owner
     try:
-        from lib.config import get_config
+        from config import get_config
         return get_config().users.default_owner
     except Exception:
         return "default"

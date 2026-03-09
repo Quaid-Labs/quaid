@@ -312,6 +312,7 @@ def discover_plugin_manifests(
     allowed = {str(x).strip() for x in (allowlist or []) if str(x).strip()}
     manifests: List[PluginManifest] = []
     errors: List[str] = []
+    seen_plugin_ids: set[str] = set()
     for base in resolved_paths:
         if not base.exists():
             continue
@@ -327,6 +328,13 @@ def discover_plugin_manifests(
                     continue
                 if not manifest.enabled:
                     continue
+                # Path order is authoritative. If the same plugin_id appears in
+                # multiple configured roots (for example a runtime plugin tree plus
+                # a linked source checkout used for tests), keep the first match and
+                # ignore later duplicates.
+                if manifest.plugin_id in seen_plugin_ids:
+                    continue
+                seen_plugin_ids.add(manifest.plugin_id)
                 manifests.append(manifest)
             except Exception as exc:
                 msg = f"Invalid plugin manifest {manifest_path}: {exc}"

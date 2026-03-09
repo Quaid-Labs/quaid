@@ -447,9 +447,12 @@ class MemoryGraph:
 
             if not table_exists:
                 # Detect dimension from first existing embedding in the DB
-                sample = conn.execute(
-                    "SELECT embedding FROM nodes WHERE embedding IS NOT NULL LIMIT 1"
-                ).fetchone()
+                try:
+                    sample = conn.execute(
+                        "SELECT embedding FROM nodes WHERE embedding IS NOT NULL LIMIT 1"
+                    ).fetchone()
+                except sqlite3.OperationalError:
+                    return  # Schema not initialized yet — defer vec setup
                 if not sample:
                     return  # No embeddings yet — defer table creation
                 dim = len(sample["embedding"]) // 4  # 4 bytes per float32
