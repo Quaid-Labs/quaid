@@ -105,6 +105,68 @@ const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 90_000;
 
+// Daemon signal infrastructure — writes extraction signals for the shared Python daemon
+const DAEMON_SIGNAL_DIR = path.join(WORKSPACE, "data", "extraction-signals");
+const sessionTranscriptPaths = new Map<string, string>();
+
+function writeDaemonSignal(
+  sessionId: string,
+  signalType: "compaction" | "reset" | "session_end",
+  meta?: Record<string, any>,
+): string | null {
+  if (!sessionId) return null;
+  const transcriptPath = sessionTranscriptPaths.get(sessionId) || "";
+  if (!transcriptPath) {
+    // Try to resolve from OC sessions directory
+    const ocSessionFile = path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`);
+    if (fs.existsSync(ocSessionFile)) {
+      sessionTranscriptPaths.set(sessionId, ocSessionFile);
+    }
+  }
+  const resolvedPath = sessionTranscriptPaths.get(sessionId) || "";
+  if (!resolvedPath) {
+    console.warn(`[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping signal`);
+    return null;
+  }
+
+  try {
+    fs.mkdirSync(DAEMON_SIGNAL_DIR, { recursive: true });
+  } catch {}
+
+  const payload = {
+    type: signalType,
+    session_id: sessionId,
+    transcript_path: resolvedPath,
+    adapter: "openclaw",
+    supports_compaction_control: true,
+    timestamp: new Date().toISOString(),
+    meta: meta || {},
+  };
+  const fname = `${Date.now()}_${process.pid}_${signalType}.json`;
+  const sigPath = path.join(DAEMON_SIGNAL_DIR, fname);
+  try {
+    fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 0o600 });
+    console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
+    return sigPath;
+  } catch (err: unknown) {
+    console.error(`[quaid][daemon-signal] write failed: ${String((err as Error)?.message || err)}`);
+    return null;
+  }
+}
+
+function ensureDaemonAlive(): void {
+  try {
+    const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+    execFileSync(quaidBin, ["daemon", "start"], {
+      encoding: "utf-8",
+      timeout: 10_000,
+      env: buildPythonEnv(),
+    });
+  } catch (err: unknown) {
+    console.warn(`[quaid][daemon] ensure_alive failed: ${String((err as Error)?.message || err)}`);
+  }
+}
+
 for (const p of [QUAID_RUNTIME_DIR, QUAID_TMP_DIR, QUAID_NOTES_DIR, QUAID_INJECTION_LOG_DIR, QUAID_NOTIFY_DIR, QUAID_LOGS_DIR]) {
   try {
     fs.mkdirSync(p, { recursive: true });
@@ -1343,6 +1405,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         try {
           const sessionFile = String(update?.sessionFile || "").trim();
           if (!sessionFile || !fs.existsSync(sessionFile)) return;
+          // Track transcript path for daemon signal writing
+          const trackSessionId = String(update?.sessionId || "").trim();
+          if (trackSessionId) sessionTranscriptPaths.set(trackSessionId, sessionFile);
           const messages = readSessionMessagesFile(sessionFile);
           if (!Array.isArray(messages) || messages.length === 0) return;
           const sessionId =
@@ -1356,6 +1421,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               [],
             ) ||
             String(update?.sessionId || "").trim();
+
+          // Track resolved sessionId → transcript file for daemon signals
+          if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);
 
           // Keep timeout extraction on the real-time path by treating transcript updates
           // as activity boundaries; stale-sweep recovery should stay a fallback only.
@@ -1446,10 +1514,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           ) {
             lastTranscriptSessionHint = { sessionId, seenAtMs: Date.now() };
           }
-          timeoutManager.queueExtractionSignal(sessionId, detail.label, {
-            source: "transcript_update",
-          });
-          console.log(`[quaid][signal] queued ${detail.label} session=${sessionId} source=transcript_update`);
+          const daemonType = detail.label.toLowerCase().includes("reset") ? "reset" as const : "compaction" as const;
+          writeDaemonSignal(sessionId, daemonType, { source: "transcript_update" });
+          console.log(`[quaid][signal] daemon signal ${daemonType} session=${sessionId} source=transcript_update`);
         } catch (err: unknown) {
           console.error("[quaid] transcript_update fallback failed:", err);
         }
@@ -1508,13 +1575,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
-        timeoutManager.queueExtractionSignal(sessionId, lifecycleSignal, {
+        const daemonSigType = lifecycleSignal.toLowerCase().includes("reset") ? "reset" as const : "compaction" as const;
+        writeDaemonSignal(sessionId, daemonSigType, {
           source: sourceEvent,
           command: commandAction,
           hook_session_id: sessionId,
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
         });
-        console.log(`[quaid][signal] queued ${lifecycleSignal} session=${sessionId} source=${sourceEvent} command=${commandAction}`);
+        console.log(`[quaid][signal] daemon signal ${daemonSigType} session=${sessionId} source=${sourceEvent} command=${commandAction}`);
         writeHookTrace("hook.message.signal_queued", {
           source_event: sourceEvent,
           command: commandAction,
@@ -1605,13 +1673,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
-        timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
+        writeDaemonSignal(sessionId, "reset", {
           source: `command:${action}`,
           command: action,
           hook_session_id: sessionId,
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
         });
-        console.log(`[quaid][signal] queued ResetSignal session=${sessionId} source=command:${action}`);
+        console.log(`[quaid][signal] daemon signal reset session=${sessionId} source=command:${action}`);
         writeHookTrace("hook.command.signal_queued", {
           action,
           hook_session_id: sessionId,
@@ -1657,13 +1725,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, "CompactionSignal");
-        timeoutManager.queueExtractionSignal(sessionId, "CompactionSignal", {
+        writeDaemonSignal(sessionId, "compaction", {
           source: "command:compact",
           command: action,
           hook_session_id: sessionId,
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
         });
-        console.log(`[quaid][signal] queued CompactionSignal session=${sessionId} source=command:${action}`);
+        console.log(`[quaid][signal] daemon signal compaction session=${sessionId} source=command:${action}`);
         writeHookTrace("hook.command.signal_queued", {
           action,
           hook_session_id: sessionId,
@@ -1710,12 +1778,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, "CompactionSignal");
-        timeoutManager.queueExtractionSignal(sessionId, "CompactionSignal", {
+        writeDaemonSignal(sessionId, "compaction", {
           source: "session:compact:before",
           hook_session_id: sessionId,
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || ""),
         });
-        console.log(`[quaid][signal] queued CompactionSignal session=${sessionId} source=session action=compact:before`);
+        console.log(`[quaid][signal] daemon signal compaction session=${sessionId} source=session action=compact:before`);
       } catch (err: unknown) {
         if (isFailHardEnabled()) throw err;
         console.error("[quaid] session hook failed:", err);
@@ -1749,23 +1817,26 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         console.log(msg);
       },
-      extract: async (msgs: any[], sid?: string, label?: string) => {
-        const queuedExtraction = facade.queueExtraction(
-          () => extractMemoriesFromMessages(msgs, label || "Timeout", sid),
-          "timeout",
-        );
-        await queuedExtraction;
+      extract: async (_msgs: any[], sid?: string, label?: string) => {
+        // Extraction now delegated to the shared Python daemon.
+        // The timeout manager calls this on idle-session timeout;
+        // write a daemon signal so the daemon handles it.
+        if (sid) {
+          writeDaemonSignal(sid, "compaction", {
+            source: "timeout_extract",
+            label: label || "Timeout",
+          });
+          console.log(`[quaid][timeout] daemon signal for idle session=${sid} label=${label || "Timeout"}`);
+        }
       },
     });
-    const signalWorkerHeartbeatSecRaw = Number(process.env.QUAID_SIGNAL_WORKER_HEARTBEAT_SECONDS || "30");
-    const signalWorkerHeartbeatSec = Number.isFinite(signalWorkerHeartbeatSecRaw) && signalWorkerHeartbeatSecRaw > 0
-      ? Math.floor(signalWorkerHeartbeatSecRaw)
-      : 30;
-    const signalWorkerStarted = timeoutManager.startWorker(signalWorkerHeartbeatSec);
-    console.log(
-      `[quaid][timeout] signal worker ${signalWorkerStarted ? "started" : "leader_exists"} `
-      + `heartbeat_seconds=${signalWorkerHeartbeatSec}`,
-    );
+    // TS signal worker disabled — shared Python daemon processes extraction signals.
+    // The daemon is started on boot and polls data/extraction-signals/ for work.
+    // timeoutManager.startWorker() is no longer called.
+
+    // Start the shared extraction daemon
+    ensureDaemonAlive();
+    console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
 
     // Shared recall abstraction — used by both memory_recall tool and auto-inject
     async function recallMemories(opts: RecallOptions): Promise<MemoryResult[]> {
@@ -2096,7 +2167,7 @@ notify_memory_extraction(
                 signature: "hook:before_compaction",
               })) {
                 facade.markLifecycleSignalFromHook(extractionSessionId, "CompactionSignal");
-                timeoutManager.queueExtractionSignal(extractionSessionId, "CompactionSignal", {
+                writeDaemonSignal(extractionSessionId, "compaction", {
                   source: "before_compaction",
                   hook_session_id: String(sessionId || ""),
                   extraction_session_id: String(extractionSessionId || ""),
@@ -2106,7 +2177,7 @@ notify_memory_extraction(
                     (m: any) => String(facade.getMessageText(m) || "").toLowerCase().includes("compacted (")
                   ),
                 });
-                console.log(`[quaid][signal] queued CompactionSignal session=${extractionSessionId}`);
+                console.log(`[quaid][signal] daemon signal compaction session=${extractionSessionId}`);
                 writeHookTrace("hook.before_compaction.signal_queued", {
                   extraction_session_id: extractionSessionId || "",
                   source: "before_compaction",
@@ -2119,17 +2190,18 @@ notify_memory_extraction(
                 });
               }
             } else {
-              const extracted = await timeoutManager.extractSessionFromLog(
-                extractionSessionId,
-                "CompactionSignal",
-                messages,
-              );
+              // Empty hook payload — still write daemon signal; daemon reads transcript from disk
+              const sigPath = writeDaemonSignal(extractionSessionId, "compaction", {
+                source: "before_compaction_empty_payload",
+                hook_session_id: String(sessionId || ""),
+                extraction_session_id: String(extractionSessionId || ""),
+              });
               console.log(
-                `[quaid][signal] empty-hook-payload fallback session=${extractionSessionId} extracted=${extracted ? "yes" : "no"}`
+                `[quaid][signal] daemon signal compaction (empty-payload) session=${extractionSessionId} wrote=${sigPath ? "yes" : "no"}`
               );
-              writeHookTrace("hook.before_compaction.empty_payload_fallback", {
+              writeHookTrace("hook.before_compaction.empty_payload_daemon_signal", {
                 extraction_session_id: extractionSessionId || "",
-                extracted,
+                signal_written: Boolean(sigPath),
               });
             }
           } else {
@@ -2241,7 +2313,7 @@ notify_memory_extraction(
               signature: "hook:before_reset",
             })) {
               facade.markLifecycleSignalFromHook(extractionSessionId, "ResetSignal");
-              timeoutManager.queueExtractionSignal(extractionSessionId, "ResetSignal", {
+              writeDaemonSignal(extractionSessionId, "reset", {
                 source: "before_reset",
                 hook_session_id: String(sessionId || ""),
                 extraction_session_id: String(extractionSessionId || ""),
@@ -2249,7 +2321,7 @@ notify_memory_extraction(
                 event_message_count: messages.length,
                 conversation_message_count: conversationMessages.length,
               });
-              console.log(`[quaid][signal] queued ResetSignal session=${extractionSessionId}`);
+              console.log(`[quaid][signal] daemon signal reset session=${extractionSessionId}`);
               writeHookTrace("hook.before_reset.signal_queued", {
                 extraction_session_id: extractionSessionId,
                 reason: String(reason || "unknown"),
@@ -2355,14 +2427,14 @@ notify_memory_extraction(
           return;
         }
         facade.markLifecycleSignalFromHook(sessionId, "ResetSignal");
-        timeoutManager.queueExtractionSignal(sessionId, "ResetSignal", {
+        writeDaemonSignal(sessionId, "session_end", {
           source: "session_end",
           hook_session_id: sessionId,
           hook_session_key: sessionKey,
           message_count: Number.isFinite(messageCount) ? messageCount : 0,
         });
         console.log(
-          `[quaid][signal] queued ResetSignal session=${sessionId} source=session_end key=${sessionKey || "unknown"}`
+          `[quaid][signal] daemon signal session_end session=${sessionId} key=${sessionKey || "unknown"}`
         );
         writeHookTrace("hook.session_end.signal_queued", {
           hook_session_id: sessionId,
