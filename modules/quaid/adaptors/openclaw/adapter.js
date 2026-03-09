@@ -85,9 +85,16 @@ function writeDaemonSignal(sessionId, signalType, meta) {
   if (!sessionId) return null;
   const transcriptPath = sessionTranscriptPaths.get(sessionId) || "";
   if (!transcriptPath) {
-    const ocSessionFile = path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`);
-    if (fs.existsSync(ocSessionFile)) {
-      sessionTranscriptPaths.set(sessionId, ocSessionFile);
+    const candidates = [
+      path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sessionId}.jsonl`),
+      path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`),
+      path.join(WORKSPACE, "logs", "quaid", "sessions", `${sessionId}.jsonl`)
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        sessionTranscriptPaths.set(sessionId, candidate);
+        break;
+      }
     }
   }
   const resolvedPath = sessionTranscriptPaths.get(sessionId) || "";

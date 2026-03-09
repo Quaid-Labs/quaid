@@ -117,10 +117,17 @@ function writeDaemonSignal(
   if (!sessionId) return null;
   const transcriptPath = sessionTranscriptPaths.get(sessionId) || "";
   if (!transcriptPath) {
-    // Try to resolve from OC sessions directory
-    const ocSessionFile = path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`);
-    if (fs.existsSync(ocSessionFile)) {
-      sessionTranscriptPaths.set(sessionId, ocSessionFile);
+    // Try to resolve from OC sessions directories (multiple locations)
+    const candidates = [
+      path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sessionId}.jsonl`),
+      path.join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`),
+      path.join(WORKSPACE, "logs", "quaid", "sessions", `${sessionId}.jsonl`),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        sessionTranscriptPaths.set(sessionId, candidate);
+        break;
+      }
     }
   }
   const resolvedPath = sessionTranscriptPaths.get(sessionId) || "";
