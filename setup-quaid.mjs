@@ -1397,21 +1397,28 @@ async function step1_preflight() {
       log.warn("Install Claude Code: https://docs.anthropic.com/en/docs/claude-code");
       log.warn("Continuing anyway — CLI is needed at runtime, not install time.");
     }
-    // Check OAuth credentials
+    // Check OAuth credentials — prefer long-lived token from `claude setup-token`
+    const envToken = (process.env.CLAUDE_CODE_OAUTH_TOKEN || "").trim();
     const credsPath = path.join(os.homedir(), ".claude", ".credentials.json");
-    if (fs.existsSync(credsPath)) {
+    if (envToken) {
+      s.stop(C.green("Claude Code") + C.dim(" — CLAUDE_CODE_OAUTH_TOKEN set (preferred)"));
+    } else if (fs.existsSync(credsPath)) {
       try {
         const creds = JSON.parse(fs.readFileSync(credsPath, "utf8"));
         if (creds?.claudeAiOauth?.accessToken) {
           s.stop(C.green("Claude Code") + C.dim(" — OAuth credentials found"));
+          log.info("Tip: for headless/server installs, run 'claude setup-token' for a long-lived token,");
+          log.info("     then set CLAUDE_CODE_OAUTH_TOKEN in your environment.");
         } else {
-          s.stop(C.yellow("Claude Code") + C.dim(" — no OAuth token, run 'claude login'"));
+          s.stop(C.yellow("Claude Code") + C.dim(" — no OAuth token"));
+          log.warn("Run 'claude setup-token' (preferred) or 'claude login' to authenticate.");
         }
       } catch {
         s.stop(C.yellow("Claude Code") + C.dim(" — credentials unreadable"));
       }
     } else {
-      s.stop(C.yellow("Claude Code") + C.dim(" — no credentials, run 'claude login' first"));
+      s.stop(C.yellow("Claude Code") + C.dim(" — no credentials found"));
+      log.warn("Run 'claude setup-token' (preferred) or 'claude login' to authenticate.");
     }
     fs.mkdirSync(WORKSPACE, { recursive: true });
   } else if (_isPlatform("openclaw")) {

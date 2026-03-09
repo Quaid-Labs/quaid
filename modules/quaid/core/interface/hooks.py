@@ -55,7 +55,7 @@ def hook_inject(args):
         {"prompt": "...", "cwd": "...", "session_id": "..."}
 
     Writes to stdout:
-        {"additionalContext": "..."} (for hosts that support structured output)
+        {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "..."}}
     """
     try:
         hook_input = json.load(sys.stdin)
@@ -79,7 +79,15 @@ def hook_inject(args):
             return
 
         context = _format_memories(memories)
-        print(json.dumps({"additionalContext": context}))
+        # Claude Code UserPromptSubmit: additionalContext must be inside
+        # hookSpecificOutput with hookEventName for structured injection.
+        # Plain text stdout also works but hookSpecificOutput is more reliable.
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": context,
+            }
+        }))
     except Exception as e:
         print(f"[quaid][hook-inject] error: {e}", file=sys.stderr)
 

@@ -1,9 +1,13 @@
 """LLM providers for the Claude Code adapter.
 
-ClaudeCodeOAuthLLMProvider — Direct API calls using Claude Code's OAuth
-access token from ~/.claude/.credentials.json. Handles token refresh
-automatically. Falls back to ClaudeCodeLLMProvider (claude -p subprocess)
-with a noisy stderr warning if OAuth is completely unavailable.
+3-layer authentication fallback:
+  1. CLAUDE_CODE_OAUTH_TOKEN env var (explicit override)
+  2. On-disk OAuth token from ~/.claude/.credentials.json (with refresh)
+  3. ANTHROPIC_API_KEY env var (direct API key)
+
+Fail-hard behavior:
+  - failHard=true:  fail immediately at the first gate that fails, no fallback
+  - failHard=false: fall through all 3 layers with loud stderr warnings at each step
 """
 
 import json
@@ -16,7 +20,8 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
 
-from lib.providers import ClaudeCodeLLMProvider, LLMProvider, LLMResult
+from lib.fail_policy import is_fail_hard_enabled
+from lib.providers import AnthropicLLMProvider, LLMProvider, LLMResult
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +31,10 @@ _TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token"
 _CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 # Refresh 5 minutes before expiry (same buffer Claude Code uses)
 _REFRESH_BUFFER_MS = 300_000
+
+# Track warnings per-process to avoid spam on every LLM call
+_warned_oauth: bool = False
+_warned_api_key: bool = False
 
 
 def _read_credentials() -> Optional[dict]:
@@ -60,13 +69,7 @@ def _write_credentials(oauth_block: dict) -> bool:
 
 
 def _refresh_token(refresh_token: str) -> Optional[dict]:
-    """Exchange a refresh token for a new access token.
-
-    POST https://platform.claude.com/v1/oauth/token
-    {grant_type: "refresh_token", refresh_token: "...", client_id: "..."}
-
-    Returns updated OAuth block on success, None on failure.
-    """
+    """Exchange a refresh token for a new access token."""
     endpoint = os.environ.get("CLAUDE_CODE_CUSTOM_OAUTH_URL", _TOKEN_ENDPOINT)
     client_id = os.environ.get("CLAUDE_CODE_OAUTH_CLIENT_ID", _CLIENT_ID)
 
@@ -163,17 +166,51 @@ def _get_valid_token() -> Tuple[Optional[str], str]:
     return new_block["accessToken"], "refreshed"
 
 
+def _warn_oauth_fallback(reason: str) -> None:
+    """Emit a loud, user-facing warning about OAuth failure. Once per process."""
+    global _warned_oauth
+    if _warned_oauth:
+        return
+    _warned_oauth = True
+    print(
+        f"\n[quaid][WARNING] OAuth token unavailable ({reason}).\n"
+        f"  Claude Code's on-disk token (~/.claude/.credentials.json) is expired\n"
+        f"  and could not be refreshed. This is a known Claude Code issue — the\n"
+        f"  running session refreshes in-memory but doesn't persist to disk.\n"
+        f"\n"
+        f"  Falling back to ANTHROPIC_API_KEY.\n"
+        f"  To fix: run 'claude login' or set CLAUDE_CODE_OAUTH_TOKEN.\n",
+        file=sys.stderr,
+    )
+
+
+def _warn_api_key_fallback() -> None:
+    """Emit a loud warning when falling back to API key. Once per process."""
+    global _warned_api_key
+    if _warned_api_key:
+        return
+    _warned_api_key = True
+    print(
+        f"\n[quaid][WARNING] Using ANTHROPIC_API_KEY fallback for LLM calls.\n"
+        f"  This uses your personal API quota instead of your Claude Code subscription.\n"
+        f"  To use subscription: run 'claude login' or set CLAUDE_CODE_OAUTH_TOKEN.\n",
+        file=sys.stderr,
+    )
+
+
 class ClaudeCodeOAuthLLMProvider(LLMProvider):
-    """Direct Anthropic API calls using Claude Code's OAuth access token.
+    """3-layer auth fallback for Claude Code LLM calls.
 
-    Token lifecycle:
-    1. Read from CLAUDE_CODE_OAUTH_TOKEN env or ~/.claude/.credentials.json
-    2. If expired, refresh via platform.claude.com/v1/oauth/token
-    3. If refresh fails, fall back to claude -p with noisy warning
-    4. On 401 during API call, attempt one refresh+retry before fallback
+    Layer 1: CLAUDE_CODE_OAUTH_TOKEN env var (explicit override)
+    Layer 2: On-disk OAuth from ~/.claude/.credentials.json (with refresh)
+    Layer 3: ANTHROPIC_API_KEY env var (direct API key, uses personal quota)
 
-    Falls back to ClaudeCodeLLMProvider (claude -p subprocess) if OAuth
-    is completely unavailable.
+    Fail-hard (retrieval.failHard=true):
+        Fails at the first gate. No fallback chain.
+
+    Fail-soft (retrieval.failHard=false):
+        Falls through all 3 layers with loud stderr warnings.
+        If all 3 fail, raises RuntimeError.
     """
 
     ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -186,15 +223,21 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
     ):
         self._deep_model = deep_model
         self._fast_model = fast_model
-        self._fallback: Optional[ClaudeCodeLLMProvider] = None
+        self._api_key_provider: Optional[AnthropicLLMProvider] = None
 
-    def _get_fallback(self) -> ClaudeCodeLLMProvider:
-        if self._fallback is None:
-            self._fallback = ClaudeCodeLLMProvider(
-                deep_model=self._deep_model,
-                fast_model=self._fast_model,
-            )
-        return self._fallback
+    def _get_api_key_provider(self) -> Optional[AnthropicLLMProvider]:
+        """Layer 3: API key fallback provider."""
+        if self._api_key_provider is not None:
+            return self._api_key_provider
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            return None
+        self._api_key_provider = AnthropicLLMProvider(
+            api_key=api_key,
+            deep_model=self._deep_model,
+            fast_model=self._fast_model,
+        )
+        return self._api_key_provider
 
     def _resolve_model(self, model_tier: str) -> str:
         if model_tier == "fast" and self._fast_model:
@@ -203,7 +246,7 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
 
     def _api_call(self, token: str, model: str, messages: list,
                   max_tokens: int, timeout: float) -> LLMResult:
-        """Make a single API call with the given token."""
+        """Make a single API call with the given OAuth token."""
         system_prompt = ""
         user_message = ""
         for m in messages:
@@ -277,28 +320,12 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             truncated=data.get("stop_reason", "") == "max_tokens",
         )
 
-    def _fallback_with_warning(self, messages, model_tier, max_tokens, timeout,
-                               reason: str):
-        """Fall back to claude -p with a noisy stderr warning."""
-        print(
-            f"[quaid][WARN] OAuth unavailable ({reason}); falling back to claude -p "
-            "(slower due to subprocess overhead). "
-            "Run 'claude login' to refresh your Claude Code credentials.",
-            file=sys.stderr,
-        )
-        return self._get_fallback().llm_call(
-            messages, model_tier=model_tier,
-            max_tokens=max_tokens, timeout=timeout,
-        )
-
-    def llm_call(self, messages, model_tier="deep",
-                 max_tokens=4000, timeout=600):
+    def _try_oauth_call(self, messages, model_tier, max_tokens, timeout):
+        """Attempt OAuth-based API call (layers 1+2). Returns result or raises."""
         token, status = _get_valid_token()
 
         if not token:
-            return self._fallback_with_warning(
-                messages, model_tier, max_tokens, timeout, reason=status,
-            )
+            raise _OAuthUnavailable(status)
 
         model = self._resolve_model(model_tier)
 
@@ -306,25 +333,18 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             return self._api_call(token, model, messages, max_tokens, timeout)
         except urllib.error.HTTPError as e:
             if e.code != 401:
-                logger.error("Anthropic API HTTP %d", e.code)
                 raise
 
-            # 401 — try one refresh+retry before falling back
+            # 401 — try one refresh+retry
             logger.info("[claude-code-oauth] 401 on API call, attempting token refresh")
             oauth = _read_credentials()
             refresh_tok = oauth.get("refreshToken", "") if oauth else ""
             if not refresh_tok:
-                return self._fallback_with_warning(
-                    messages, model_tier, max_tokens, timeout,
-                    reason="401 and no refresh token",
-                )
+                raise _OAuthUnavailable("401_no_refresh_token") from e
 
             new_block = _refresh_token(refresh_tok)
             if not new_block:
-                return self._fallback_with_warning(
-                    messages, model_tier, max_tokens, timeout,
-                    reason="401 and refresh failed",
-                )
+                raise _OAuthUnavailable("401_refresh_failed") from e
 
             _write_credentials(new_block)
             try:
@@ -332,16 +352,57 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                     new_block["accessToken"], model, messages, max_tokens, timeout,
                 )
             except Exception:
-                return self._fallback_with_warning(
-                    messages, model_tier, max_tokens, timeout,
-                    reason="401 persisted after refresh",
-                )
+                raise _OAuthUnavailable("401_persisted_after_refresh") from e
+
+    def llm_call(self, messages, model_tier="deep",
+                 max_tokens=4000, timeout=600):
+        fail_hard = is_fail_hard_enabled()
+
+        # --- Layer 1+2: OAuth (env token or on-disk with refresh) ---
+        try:
+            return self._try_oauth_call(messages, model_tier, max_tokens, timeout)
+        except _OAuthUnavailable as e:
+            reason = str(e)
+            if fail_hard:
+                raise RuntimeError(
+                    f"OAuth unavailable ({reason}) and failHard is enabled. "
+                    f"Set CLAUDE_CODE_OAUTH_TOKEN, run 'claude login', "
+                    f"or set ANTHROPIC_API_KEY and disable failHard."
+                ) from e
+            _warn_oauth_fallback(reason)
         except Exception as e:
-            logger.error("Anthropic OAuth API error: %s", e)
-            raise
+            if fail_hard:
+                raise
+            logger.error("[claude-code-oauth] Unexpected error: %s", e)
+            _warn_oauth_fallback(f"error: {e}")
+
+        # --- Layer 3: ANTHROPIC_API_KEY fallback ---
+        api_provider = self._get_api_key_provider()
+        if api_provider:
+            _warn_api_key_fallback()
+            return api_provider.llm_call(
+                messages, model_tier=model_tier,
+                max_tokens=max_tokens, timeout=timeout,
+            )
+
+        # All 3 layers exhausted
+        raise RuntimeError(
+            "All LLM auth methods failed.\n"
+            "  Layer 1: CLAUDE_CODE_OAUTH_TOKEN not set\n"
+            "  Layer 2: On-disk OAuth token expired, refresh failed\n"
+            "  Layer 3: ANTHROPIC_API_KEY not set\n"
+            "\n"
+            "Fix: run 'claude login', or set CLAUDE_CODE_OAUTH_TOKEN, "
+            "or set ANTHROPIC_API_KEY."
+        )
 
     def get_profiles(self):
         return {
             "deep": {"model": self._deep_model, "available": True},
             "fast": {"model": self._fast_model, "available": True},
         }
+
+
+class _OAuthUnavailable(Exception):
+    """Internal signal: OAuth path failed, try next layer."""
+    pass

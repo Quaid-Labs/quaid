@@ -312,10 +312,15 @@ def _retry_delay_for_error(exc: BaseException, fallback_delay: float) -> float:
 
 def _key_fp() -> str:
     """Return short fingerprint for active auth env (never the raw secret)."""
-    token = (
-        str(os.environ.get("ANTHROPIC_API_KEY", "")).strip()
-        or str(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")).strip()
-    )
+    # Check known auth env vars in priority order.
+    # NOTE: adapter-specific vars (CLAUDE_CODE_OAUTH_TOKEN) should eventually
+    # be injected by the adapter, not hard-coded here.
+    for var in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        token = str(os.environ.get(var, "")).strip()
+        if token:
+            break
+    else:
+        token = ""
     if not token:
         return "missing"
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]

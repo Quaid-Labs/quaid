@@ -331,7 +331,14 @@ class AnthropicLLMProvider(LLMProvider):
 
 
 class ClaudeCodeLLMProvider(LLMProvider):
-    """Wraps the ``claude -p`` CLI.  Uses the user's Claude Code subscription."""
+    """Wraps the ``claude -p`` CLI.  Uses the user's Claude Code subscription.
+
+    DEPRECATED: Prefer ``adaptors.claude_code.providers.ClaudeCodeOAuthLLMProvider``
+    which uses direct API calls with 3-layer auth fallback (OAuth env → on-disk
+    token → API key). This subprocess provider is slower and has CC-specific token
+    loading logic that should not live in shared ``lib/``. Kept for backward
+    compatibility until all callers migrate.
+    """
 
     # Map full model IDs to claude CLI aliases
     _MODEL_ALIASES = {
