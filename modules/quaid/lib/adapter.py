@@ -271,7 +271,7 @@ class StandaloneAdapter(QuaidAdapter):
         if self._home is not None:
             return self._home
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env) if env else Path.home() / "quaid"
+        return Path(env).resolve() if env else Path.home() / "quaid"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
                dry_run: bool = False) -> bool:
@@ -492,6 +492,27 @@ def read_env_file(env_file: Path, var_name: str) -> Optional[str]:
 def _read_env_file(env_file: Path, var_name: str) -> Optional[str]:
     """Backward-compatible alias for older imports."""
     return read_env_file(env_file, var_name)
+
+
+def get_owner_id(override: Optional[str] = None) -> str:
+    """Resolve owner ID from override, env var, config, or default.
+
+    Resolution order:
+    1. Explicit *override* argument (if non-empty).
+    2. ``QUAID_OWNER`` environment variable.
+    3. ``lib.config.get_config().users.default_owner``.
+    4. Fallback to ``"default"``.
+    """
+    if override:
+        return override
+    owner = os.environ.get("QUAID_OWNER", "").strip()
+    if owner:
+        return owner
+    try:
+        from lib.config import get_config
+        return get_config().users.default_owner
+    except Exception:
+        return "default"
 
 
 # ---------------------------------------------------------------------------

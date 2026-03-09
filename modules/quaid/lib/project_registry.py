@@ -39,7 +39,7 @@ def _registry_path() -> Path:
         return get_adapter().quaid_home() / "project-registry.json"
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
-        root = Path(home) if home else Path.home() / "quaid"
+        root = Path(home).resolve() if home else Path.home() / "quaid"
         return root / "project-registry.json"
 
 
@@ -150,7 +150,7 @@ def _create_project_symlink(name: str, canonical_path: str) -> None:
         projects_dir = get_adapter().projects_dir()
     except Exception:
         home = os.environ.get("QUAID_HOME", "").strip()
-        root = Path(home) if home else Path.home() / "quaid"
+        root = Path(home).resolve() if home else Path.home() / "quaid"
         projects_dir = root / "projects"
 
     link_path = projects_dir / name

@@ -81,16 +81,8 @@ def _load_extraction_prompt(domain_defs: Optional[Dict[str, str]] = None) -> str
 
 def _get_owner_id(override: Optional[str] = None) -> str:
     """Resolve owner ID from override, config, or default."""
-    if override:
-        return override
-    try:
-        cfg = get_config()
-        return cfg.users.default_owner
-    except Exception as exc:
-        if is_fail_hard_enabled():
-            raise RuntimeError("Failed to resolve extract owner from config") from exc
-        logger.warning("[extract] owner resolution failed; defaulting to 'default': %s", exc)
-        return "default"
+    from lib.adapter import get_owner_id
+    return get_owner_id(override=override)
 
 
 def _emit_project_events(
@@ -401,6 +393,8 @@ def extract_from_transcript(
         "project_logs": {},
         "project_log_metrics": {},
         "dry_run": dry_run,
+        "chunks_processed": 0,
+        "chunks_total": 0,
     }
 
     if not transcript or not transcript.strip():
@@ -426,21 +420,31 @@ def extract_from_transcript(
 
     # Resolve active domains once, before any LLM calls, and use this same snapshot
     # for both prompt injection and output validation.
+    DEFAULT_EXTRACTION_DOMAINS = {
+        "personal": "identity, preferences, relationships, life events",
+        "technical": "code, infra, APIs, architecture",
+        "project": "project status, tasks, files, milestones",
+    }
     retrieval_cfg = get_config().retrieval
     domain_defs = getattr(retrieval_cfg, "domains", {}) or {}
     if not isinstance(domain_defs, dict):
         domain_defs = {}
     if not domain_defs:
-        raise RuntimeError(
-            "No active domains are registered for extraction. "
-            "Configure domains through the memorydb contract before running extraction."
+        logger.warning(
+            "[extract] No active domains found in retrieval config; "
+            "falling back to default extraction domains: %s",
+            list(DEFAULT_EXTRACTION_DOMAINS.keys()),
         )
+        domain_defs = DEFAULT_EXTRACTION_DOMAINS
     allowed_domains = {str(k).strip() for k in domain_defs.keys() if str(k).strip()}
     if not allowed_domains:
-        raise RuntimeError(
-            "No active domains are registered for extraction. "
-            "Configure domains through the memorydb contract before running extraction."
+        logger.warning(
+            "[extract] Domain keys resolved to empty set after stripping; "
+            "falling back to default extraction domains: %s",
+            list(DEFAULT_EXTRACTION_DOMAINS.keys()),
         )
+        domain_defs = DEFAULT_EXTRACTION_DOMAINS
+        allowed_domains = set(DEFAULT_EXTRACTION_DOMAINS.keys())
 
     # Load extraction prompt
     system_prompt = _load_extraction_prompt(domain_defs)
@@ -457,6 +461,8 @@ def extract_from_transcript(
     if len(transcript_chunks) > MAX_CHUNKS:
         logger.warning(f"[extract] {label}: transcript too large ({len(transcript_chunks)} chunks), capping at {MAX_CHUNKS}")
         transcript_chunks = transcript_chunks[:MAX_CHUNKS]
+
+    result["chunks_total"] = len(transcript_chunks)
 
     if len(transcript_chunks) > 1:
         logger.info(f"[extract] {label}: splitting into {len(transcript_chunks)} chunks")
@@ -562,6 +568,8 @@ def extract_from_transcript(
             cleaned = [str(it).strip() for it in items if isinstance(it, str) and str(it).strip()]
             if cleaned:
                 all_project_logs.setdefault(str(project_name), []).extend(cleaned)
+
+        result["chunks_processed"] += 1
 
     facts = all_facts
     logger.info(f"[extract] {label}: LLM returned {len(facts)} candidate facts{f' from {len(transcript_chunks)} chunks' if len(transcript_chunks) > 1 else ''}")
