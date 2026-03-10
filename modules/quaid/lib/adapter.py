@@ -105,6 +105,45 @@ class QuaidAdapter(abc.ABC):
         """
         ...
 
+    def auth_token_path(self) -> Optional[Path]:
+        """Path where this adapter stores its long-lived auth token.
+
+        Returns None if the adapter does not use token-file auth (e.g. the
+        OpenClaw adapter where the gateway owns credentials).
+        Subclasses that need a persistent token override this.
+        """
+        return None
+
+    def read_auth_token(self) -> Optional[str]:
+        """Read the adapter's stored auth token from disk.
+
+        Returns the token string or None if no token file exists.
+        """
+        p = self.auth_token_path()
+        if p is None or not p.is_file():
+            return None
+        try:
+            token = p.read_text(encoding="utf-8").strip()
+            return token if token else None
+        except (IOError, OSError):
+            return None
+
+    def store_auth_token(self, token: str) -> Path:
+        """Write a long-lived auth token to the adapter-owned path.
+
+        Returns the path where the token was written.
+        Raises ValueError if this adapter does not support token-file auth.
+        """
+        p = self.auth_token_path()
+        if p is None:
+            raise ValueError(
+                f"{type(self).__name__} does not support token-file auth"
+            )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(token.strip() + "\n", encoding="utf-8")
+        p.chmod(0o600)
+        return p
+
     # ---- Sessions ----
 
     @abc.abstractmethod

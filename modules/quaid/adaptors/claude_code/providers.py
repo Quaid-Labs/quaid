@@ -113,6 +113,21 @@ def _refresh_token(refresh_token: str) -> Optional[dict]:
     return new_block
 
 
+def _read_token_file() -> Optional[str]:
+    """Read a long-lived token from the adapter's auth token path.
+
+    The CC adapter stores its token at QUAID_HOME/config/adapters/claude-code/.auth-token.
+    This is the recommended auth method for long-running processes like the
+    extraction daemon, since it re-reads the file on every call.
+    """
+    try:
+        from lib.adapter import get_adapter
+        return get_adapter().read_auth_token()
+    except Exception as e:
+        logger.debug("[claude-code-oauth] adapter token read error: %s", e)
+        return None
+
+
 def _get_valid_token() -> Tuple[Optional[str], str]:
     """Get a valid OAuth access token, refreshing if needed.
 
@@ -124,10 +139,15 @@ def _get_valid_token() -> Tuple[Optional[str], str]:
         - "refresh_failed": token expired and refresh failed
         - "no_refresh_token": token expired but no refresh token available
     """
-    # 1. Check env var override (no expiry management)
+    # 1a. Check env var override (no expiry management)
     env_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
     if env_token:
         return env_token, "ok"
+
+    # 1b. Check config-driven token file (long-lived, re-read each call)
+    file_token = _read_token_file()
+    if file_token:
+        return file_token, "ok"
 
     # 2. Read from credentials file
     oauth = _read_credentials()
@@ -175,11 +195,11 @@ def _warn_oauth_fallback(reason: str) -> None:
     print(
         f"\n[quaid][WARNING] OAuth token unavailable ({reason}).\n"
         f"  Claude Code's on-disk token (~/.claude/.credentials.json) is expired\n"
-        f"  and could not be refreshed. This is a known Claude Code issue — the\n"
-        f"  running session refreshes in-memory but doesn't persist to disk.\n"
+        f"  and could not be refreshed.\n"
         f"\n"
         f"  Falling back to ANTHROPIC_API_KEY.\n"
-        f"  To fix: run 'claude login' or set CLAUDE_CODE_OAUTH_TOKEN.\n",
+        f"  To fix: run 'claude setup-token', then 'quaid config set-auth <token>'\n"
+        f"  to store it in the adapter's auth path.\n",
         file=sys.stderr,
     )
 
@@ -193,7 +213,8 @@ def _warn_api_key_fallback() -> None:
     print(
         f"\n[quaid][WARNING] Using ANTHROPIC_API_KEY fallback for LLM calls.\n"
         f"  This uses your personal API quota instead of your Claude Code subscription.\n"
-        f"  To use subscription: run 'claude login' or set CLAUDE_CODE_OAUTH_TOKEN.\n",
+        f"  To use subscription: run 'claude setup-token', then\n"
+        f"  'quaid config set-auth <token>'.\n",
         file=sys.stderr,
     )
 
@@ -385,14 +406,15 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                 max_tokens=max_tokens, timeout=timeout,
             )
 
-        # All 3 layers exhausted
+        # All layers exhausted
         raise RuntimeError(
             "All LLM auth methods failed.\n"
-            "  Layer 1: CLAUDE_CODE_OAUTH_TOKEN not set\n"
+            "  Layer 1a: CLAUDE_CODE_OAUTH_TOKEN env var not set\n"
+            "  Layer 1b: No adapter auth token (run 'quaid config set-auth <token>')\n"
             "  Layer 2: On-disk OAuth token expired, refresh failed\n"
             "  Layer 3: ANTHROPIC_API_KEY not set\n"
             "\n"
-            "Fix: run 'claude login', or set CLAUDE_CODE_OAUTH_TOKEN, "
+            "Fix: run 'claude setup-token', then 'quaid config set-auth <token>', "
             "or set ANTHROPIC_API_KEY."
         )
 

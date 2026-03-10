@@ -118,6 +118,7 @@ type ActiveInteractiveSession = {
   sessionId: string;
   sessionFile: string;
   mtimeMs: number;
+  updatedAt: number;
   lastChannel: string;
   lastTo: string;
 };
@@ -209,12 +210,20 @@ function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteract
         sessionId,
         sessionFile,
         mtimeMs,
+        updatedAt: Number(row?.updatedAt || 0),
         lastChannel: String(row?.lastChannel || "").trim(),
         lastTo: String(row?.lastTo || "").trim(),
       };
     })
     .filter((row) => row.sessionId);
-  entries.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  // Prefer updatedAt from sessions.json (authoritative); fall back to transcript mtimeMs
+  // only as tiebreaker. This prevents stale transcripts (touched by preservation/reset)
+  // from outranking the genuinely active session.
+  entries.sort((a, b) => {
+    const uDiff = a.updatedAt - b.updatedAt;
+    if (uDiff !== 0) return uDiff;
+    return a.mtimeMs - b.mtimeMs;
+  });
   return entries[entries.length - 1] || null;
 }
 

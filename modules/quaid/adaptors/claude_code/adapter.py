@@ -72,6 +72,9 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
         return None
 
+    def auth_token_path(self) -> Optional[Path]:
+        return self.quaid_home() / "config" / "adapters" / "claude-code" / ".auth-token"
+
     def identity_dir(self) -> Path:
         """Per-instance identity directory for SOUL.md, USER.md, MEMORY.md.
 

@@ -397,6 +397,9 @@ def main() -> int:
     set_p.add_argument("key", help="Dotted path (e.g. models.fastReasoning)")
     set_p.add_argument("value", help="Value (string/number/true/false/json)")
 
+    auth_p = sub.add_parser("set-auth", help="Store a long-lived auth token for the active adapter")
+    auth_p.add_argument("token", nargs="?", help="Token value (omit to read from stdin)")
+
     args = parser.parse_args()
     cmd = args.cmd or "show"
 
@@ -428,6 +431,27 @@ def main() -> int:
             print(f"Failed to set {args.key}: {err}")
             return 1
         print(f"Set {args.key} in {path}")
+        return 0
+
+    if cmd == "set-auth":
+        token = args.token
+        if not token:
+            import sys as _sys
+            token = _sys.stdin.read().strip()
+        if not token:
+            print("No token provided. Usage: quaid config set-auth <token>")
+            return 1
+        try:
+            from lib.adapter import get_adapter
+            adapter = get_adapter()
+            stored_path = adapter.store_auth_token(token)
+            print(f"Auth token stored at {stored_path}")
+        except ValueError as err:
+            print(f"Error: {err}")
+            return 1
+        except Exception as err:
+            print(f"Failed to store auth token: {err}")
+            return 1
         return 0
 
     parser.print_help()

@@ -62,9 +62,26 @@ def hook_inject(args):
     except (json.JSONDecodeError, ValueError):
         return
 
+    session_id = hook_input.get("session_id", "").strip()
     query = hook_input.get("prompt", "").strip()
     if not query:
         return
+
+    # Ensure a cursor exists for this session so the daemon can discover it
+    # for timeout extraction.  Lightweight: skips if cursor already exists.
+    if session_id:
+        try:
+            from core.extraction_daemon import write_cursor, read_cursor
+            existing = read_cursor(session_id)
+            if not existing.get("transcript_path"):
+                from lib.adapter import get_adapter
+                sessions_dir = get_adapter().get_sessions_dir()
+                if sessions_dir:
+                    for candidate in Path(sessions_dir).rglob(f"{session_id}.jsonl"):
+                        write_cursor(session_id, 0, str(candidate))
+                        break
+        except Exception:
+            pass
 
     try:
         from core.interface.api import recall
@@ -280,6 +297,32 @@ def hook_session_init(args):
             print(f"[quaid][session-init] swept {swept} orphaned session(s)", file=sys.stderr)
     except Exception as e:
         print(f"[quaid][session-init] orphan sweep error: {e}", file=sys.stderr)
+
+    # Seed an initial cursor for the current session so the daemon's idle
+    # check can discover it for timeout extraction.  Without this, new
+    # sessions that never trigger SessionEnd or PreCompact would be invisible
+    # to check_idle_sessions().
+    if current_session_id:
+        try:
+            from core.extraction_daemon import write_cursor, read_cursor
+            existing = read_cursor(current_session_id)
+            if not existing.get("transcript_path"):
+                # Resolve transcript path: adapter.get_sessions_dir() + search
+                transcript_path = ""
+                try:
+                    from lib.adapter import get_adapter
+                    sessions_dir = get_adapter().get_sessions_dir()
+                    if sessions_dir:
+                        for candidate in Path(sessions_dir).rglob(f"{current_session_id}.jsonl"):
+                            transcript_path = str(candidate)
+                            break
+                except Exception:
+                    pass
+                if transcript_path:
+                    write_cursor(current_session_id, 0, transcript_path)
+                    print(f"[quaid][session-init] seeded cursor for {current_session_id}", file=sys.stderr)
+        except Exception as e:
+            print(f"[quaid][session-init] cursor seed error: {e}", file=sys.stderr)
 
     projects_dir = _get_projects_dir()
     if not projects_dir.is_dir():

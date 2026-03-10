@@ -52,7 +52,13 @@
       },
       "auth_requirements": {
         "mode": "declared",
-        "exports": []
+        "exports": ["oauth_token"],
+        "oauth_token": {
+          "description": "Long-lived OAuth token from 'claude setup-token'",
+          "setup_command": "claude setup-token",
+          "store_command": "quaid config set-auth <token>",
+          "required": true
+        }
       },
       "migrations": {
         "mode": "declared",

@@ -151,11 +151,16 @@ function pickActiveInteractiveSession(data) {
       sessionId,
       sessionFile,
       mtimeMs,
+      updatedAt: Number(row?.updatedAt || 0),
       lastChannel: String(row?.lastChannel || "").trim(),
       lastTo: String(row?.lastTo || "").trim()
     };
   }).filter((row) => row.sessionId);
-  entries.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  entries.sort((a, b) => {
+    const uDiff = a.updatedAt - b.updatedAt;
+    if (uDiff !== 0) return uDiff;
+    return a.mtimeMs - b.mtimeMs;
+  });
   return entries[entries.length - 1] || null;
 }
 function latestResetBackup(sessionId) {
