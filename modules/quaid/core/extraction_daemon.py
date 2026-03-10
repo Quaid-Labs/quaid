@@ -401,6 +401,17 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     # B008: Validate session_id
     session_id = _validate_session_id(session_id)
 
+    # Skip extraction for registered subagents — their transcripts are
+    # merged into the parent session's extraction batch instead.
+    try:
+        from core.subagent_registry import is_registered_subagent
+        if is_registered_subagent(session_id):
+            logger.info("[%s] session %s: registered subagent, skipping standalone extraction", label, session_id)
+            mark_signal_processed(signal_data)
+            return
+    except Exception:
+        pass
+
     if not transcript_path or not os.path.isfile(transcript_path):
         logger.warning("[%s] transcript not found: %s", label, transcript_path)
         mark_signal_processed(signal_data)
@@ -457,6 +468,34 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             mark_signal_processed(signal_data)
             return
 
+        # Merge harvestable subagent transcripts into parent extraction
+        harvestable = []
+        try:
+            from core.subagent_registry import get_harvestable, mark_harvested
+            harvestable = get_harvestable(session_id)
+            for child in harvestable:
+                child_path = child.get("transcript_path", "")
+                child_id = child.get("child_id", "")
+                if child_path and os.path.isfile(child_path):
+                    try:
+                        child_text = adapter.parse_session_jsonl(Path(child_path))
+                        if child_text.strip():
+                            transcript_text += (
+                                f"\n\n--- Subagent ({child.get('child_type', 'unknown')}) ---\n"
+                                + child_text
+                            )
+                            logger.info(
+                                "[%s] session %s: merged subagent %s transcript (%d chars)",
+                                label, session_id, child_id, len(child_text),
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "[%s] session %s: failed to parse subagent %s transcript: %s",
+                            label, session_id, child_id, e,
+                        )
+        except Exception as e:
+            logger.warning("[%s] session %s: subagent merge error: %s", label, session_id, e)
+
         # Load carryover from previous extractions in this session
         carry_facts = read_carryover(session_id)
 
@@ -503,6 +542,13 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 # Persist the carry_facts accumulated during extraction
                 # extract_from_transcript modifies carry_facts in place
                 write_carryover(session_id, carry_facts)
+
+        # Mark harvested subagent transcripts after successful extraction
+        try:
+            for child in harvestable:
+                mark_harvested(session_id, child.get("child_id", ""))
+        except Exception as e:
+            logger.warning("[%s] session %s: mark_harvested error: %s", label, session_id, e)
 
         # B002: Mark processed only on success
         mark_signal_processed(signal_data)
@@ -667,6 +713,14 @@ def sweep_orphaned_sessions(current_session_id: str = "") -> int:
         session_id = data.get("session_id", "")
         if not session_id or session_id == current_session_id:
             continue
+
+        # Skip registered subagents — their transcripts are merged into parent extraction
+        try:
+            from core.subagent_registry import is_registered_subagent
+            if is_registered_subagent(session_id):
+                continue
+        except Exception:
+            pass
 
         transcript_path = data.get("transcript_path", "")
         if not transcript_path or not os.path.isfile(transcript_path):

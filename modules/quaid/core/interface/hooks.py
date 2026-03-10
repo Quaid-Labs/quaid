@@ -399,6 +399,78 @@ def hook_search(args):
         sys.exit(1)
 
 
+def hook_subagent_start(args):
+    """Register a subagent in the subagent registry.
+
+    Reads hook JSON from stdin (CC SubagentStart / OC subagent_spawned):
+        {"session_id": "...", "agent_id": "...", "agent_type": "...", ...}
+
+    Registers the child so the daemon knows to:
+      - Skip standalone timeout extraction for this subagent
+      - Merge its transcript into the parent on parent extraction
+    """
+    try:
+        hook_input = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        return
+
+    parent_session_id = hook_input.get("session_id", "").strip()
+    child_id = hook_input.get("agent_id", "").strip()
+    child_type = hook_input.get("agent_type", "").strip()
+
+    if not parent_session_id or not child_id:
+        return
+
+    try:
+        from core.subagent_registry import register
+        register(
+            parent_session_id=parent_session_id,
+            child_id=child_id,
+            child_type=child_type or None,
+        )
+        print(f"[quaid][subagent-start] registered {child_id} under {parent_session_id}", file=sys.stderr)
+    except Exception as e:
+        print(f"[quaid][subagent-start] error: {e}", file=sys.stderr)
+
+
+def hook_subagent_stop(args):
+    """Mark a subagent as complete in the registry.
+
+    Reads hook JSON from stdin (CC SubagentStop / OC subagent_ended):
+        {"session_id": "...", "agent_id": "...", "agent_type": "...",
+         "agent_transcript_path": "...", "last_assistant_message": "...", ...}
+
+    Updates the registry with the transcript path and marks the child
+    as complete/harvestable.
+    """
+    try:
+        hook_input = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        return
+
+    parent_session_id = hook_input.get("session_id", "").strip()
+    child_id = hook_input.get("agent_id", "").strip()
+    transcript_path = hook_input.get("agent_transcript_path", "").strip()
+
+    if not parent_session_id or not child_id:
+        return
+
+    # Expand ~ in transcript path
+    if transcript_path:
+        transcript_path = os.path.expanduser(transcript_path)
+
+    try:
+        from core.subagent_registry import mark_complete
+        mark_complete(
+            parent_session_id=parent_session_id,
+            child_id=child_id,
+            transcript_path=transcript_path or None,
+        )
+        print(f"[quaid][subagent-stop] completed {child_id} under {parent_session_id}", file=sys.stderr)
+    except Exception as e:
+        print(f"[quaid][subagent-stop] error: {e}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Quaid hook entry points for platform lifecycle integration",
@@ -418,6 +490,9 @@ def main():
     search_parser = subparsers.add_parser("search", help="Search memories + docs")
     search_parser.add_argument("query", nargs="*", help="Search query")
 
+    subparsers.add_parser("subagent-start", help="Register subagent in registry")
+    subparsers.add_parser("subagent-stop", help="Mark subagent complete in registry")
+
     args = parser.parse_args()
 
     if args.command == "inject":
@@ -430,6 +505,10 @@ def main():
         hook_extract(args)
     elif args.command == "search":
         hook_search(args)
+    elif args.command == "subagent-start":
+        hook_subagent_start(args)
+    elif args.command == "subagent-stop":
+        hook_subagent_stop(args)
     else:
         parser.print_help()
         sys.exit(1)

@@ -69,6 +69,12 @@ case "$CMD" in
   hook-session-init)
     exec python3 "$SCRIPT_DIR/core/interface/hooks.py" session-init "$@"
     ;;
+  hook-subagent-start)
+    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" subagent-start "$@"
+    ;;
+  hook-subagent-stop)
+    exec python3 "$SCRIPT_DIR/core/interface/hooks.py" subagent-stop "$@"
+    ;;
 
   # Extraction daemon
   daemon)

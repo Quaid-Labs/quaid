@@ -3435,6 +3435,14 @@ function setupClaudeCodeHooks() {
       matcher: "",
       hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-extract` }],
     }],
+    SubagentStart: [{
+      matcher: "",
+      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-subagent-start` }],
+    }],
+    SubagentStop: [{
+      matcher: "",
+      hooks: [{ type: "command", command: `${envPrefix} ${quaidCmd} hook-subagent-stop` }],
+    }],
   };
 
   let changed = false;
