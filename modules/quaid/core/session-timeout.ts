@@ -407,7 +407,16 @@ export class SessionTimeoutManager {
 
     if (this.timeoutMinutes <= 0) return;
 
+    const delayMs = this.timeoutMinutes * 60 * 1000;
+    this.writeQuaidLog("timer_scheduled", sessionId, {
+      timeout_minutes: this.timeoutMinutes,
+      delay_ms: delayMs,
+    });
+
     this.timer = setTimeout(() => {
+      this.writeQuaidLog("timer_callback_entered", this.pendingSessionId || sessionId, {
+        timeout_minutes: this.timeoutMinutes,
+      });
       const sid = this.pendingSessionId;
       const fallback = this.pendingFallbackMessages || [];
       this.timer = null;
@@ -418,7 +427,7 @@ export class SessionTimeoutManager {
         timeout_minutes: this.timeoutMinutes,
       });
       this.queueExtractionFromSession(sid, fallback, this.timeoutMinutes);
-    }, this.timeoutMinutes * 60 * 1000);
+    }, delayMs);
   }
 
   private async extractSessionFromSourceDirect(

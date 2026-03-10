@@ -138,7 +138,7 @@ function isInternalSessionContext(event, ctx) {
   return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:"));
 }
 function pickActiveInteractiveSession(data) {
-  const entries = Object.entries(data || {}).filter(([key, row]) => row && typeof row === "object" && typeof row?.sessionId === "string" && (key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:direct:") || key.startsWith("agent:main:telegram:slash:"))).map(([key, row]) => {
+  const entries = Object.entries(data || {}).filter(([key, row]) => row && typeof row === "object" && typeof row?.sessionId === "string" && (key === "agent:main:main" || key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:direct:") || key.startsWith("agent:main:telegram:slash:"))).map(([key, row]) => {
     const sessionId = String(row?.sessionId || "").trim();
     const sessionFile = getOpenClawSessionFile(sessionId);
     let mtimeMs = 0;
@@ -1205,7 +1205,7 @@ notify_user(${JSON.stringify(message)})
         console.warn(`[quaid] Janitor health alert dispatch failed: ${String(err?.message || err)}`);
       }
       if (timeoutManager) {
-        timeoutManager.onAgentStart(String(ctx?.sessionId || event?.sessionId || ""));
+        timeoutManager.onAgentStart(resolveActiveUserSessionId(event, ctx));
       } else {
         writeHookTrace("hook.before_agent_start.skipped", {
           reason: "timeout_manager_uninitialized",
@@ -1308,6 +1308,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");
     const transcriptLifecycleCursor = /* @__PURE__ */ new Map();
     let lastTranscriptSessionHint = null;
+    let currentInteractiveSession = null;
     const runtimeEvents = api?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update) => {
@@ -1326,13 +1327,32 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             void 0,
             []
           ) || String(update?.sessionId || "").trim();
+          const sessionKey = String(
+            update?.sessionKey || update?.targetSessionKey || resolveSessionKeyForSessionId(sessionId) || ""
+          ).trim();
+          let timeoutActivitySessionId = sessionId;
+          if (sessionKey === "agent:main:main" && currentInteractiveSession?.sessionId && currentInteractiveSession.sessionId !== sessionId) {
+            timeoutActivitySessionId = currentInteractiveSession.sessionId;
+            writeHookTrace("hook.transcript_update.timeout_rerouted", {
+              session_file: sessionFile,
+              parsed_session_id: sessionId,
+              parsed_session_key: sessionKey,
+              rerouted_session_id: timeoutActivitySessionId,
+              rerouted_session_key: currentInteractiveSession.key
+            });
+          }
           if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);
-          if (sessionId && timeoutManager && !isInternalSessionContext({ sessionId }, { sessionId })) {
-            timeoutManager.onAgentEnd(messages, sessionId, { source: "transcript_update" });
+          if (timeoutActivitySessionId && timeoutManager && !isInternalSessionContext(
+            { sessionId: timeoutActivitySessionId, sessionKey },
+            { sessionId: timeoutActivitySessionId, sessionKey }
+          )) {
+            timeoutManager.onAgentEnd(messages, timeoutActivitySessionId, { source: "transcript_update" });
           } else if (sessionId) {
             writeHookTrace("hook.transcript_update.skipped", {
               reason: timeoutManager ? "internal_session" : "timeout_manager_uninitialized",
               parsed_session_id: sessionId,
+              timeout_activity_session_id: timeoutActivitySessionId,
+              parsed_session_key: sessionKey,
               session_file: sessionFile
             });
           }
@@ -1425,7 +1445,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     }
     const sessionIndexMessageCounts = /* @__PURE__ */ new Map();
     const seenSessionIndexCommandKeys = /* @__PURE__ */ new Set();
-    let currentInteractiveSession = null;
     const startSessionIndexWatcher = () => {
       if (sessionIndexWatcherStarted) {
         return;
@@ -1550,6 +1569,23 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       });
       console.log(`[quaid] session index watcher started pollMs=${SESSION_INDEX_POLL_MS}`);
     };
+    const resolveActiveUserSessionId = (event, ctx, messages = []) => {
+      const direct = facade.resolveLifecycleHookSessionId(event, ctx, messages);
+      if (direct && !isInternalSessionContext(event, { ...ctx || {}, sessionId: direct })) {
+        return direct;
+      }
+      if (currentInteractiveSession?.sessionId) {
+        return currentInteractiveSession.sessionId;
+      }
+      const hint = lastTranscriptSessionHint;
+      if (hint?.sessionId) {
+        const ageMs = Date.now() - Number(hint.seenAtMs || 0);
+        if (ageMs >= 0 && ageMs <= 5 * 6e4) {
+          return hint.sessionId;
+        }
+      }
+      return direct;
+    };
     const handleSlashLifecycleFromMessage = async (event, ctx, sourceEvent) => {
       try {
         const text = String(
@@ -1571,7 +1607,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         }
         if (!commandAction || !lifecycleSignal) return;
         const hookMessages = event?.message ? [event.message] : [];
-        const sessionId = facade.resolveLifecycleHookSessionId(event, ctx, hookMessages);
+        const sessionId = resolveActiveUserSessionId(event, ctx, hookMessages);
         writeHookTrace("hook.message.command_detected", {
           source_event: sourceEvent,
           command: commandAction,
@@ -2108,10 +2144,12 @@ notify_memory_extraction(
         const messages = event.messages || [];
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
-        const extractionSessionId = sessionId || facade.extractSessionId(messages, ctx);
+        const fallbackInteractiveSessionId = currentInteractiveSession?.sessionId || "";
+        const extractionSessionId = conversationMessages.length === 0 && fallbackInteractiveSessionId ? fallbackInteractiveSessionId : sessionId || facade.extractSessionId(messages, ctx);
         writeHookTrace("hook.before_compaction.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",
+          fallback_interactive_session_id: fallbackInteractiveSessionId,
           event_message_count: messages.length,
           conversation_message_count: conversationMessages.length
         });
