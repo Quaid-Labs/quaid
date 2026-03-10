@@ -1187,6 +1187,10 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
     }
   }
 
+  // Fresh installs can fail plugin enable if the trust list was cleared during
+  // stale-state cleanup and not restored before enable.
+  _ensureOpenClawPluginsAllowQuaid();
+
   const enableRes = runCliWithTimeout(cli, ["plugins", "enable", "quaid"], 45_000);
   if (enableRes.status !== 0) {
     const msg = renderCliFailure(enableRes, 45_000);

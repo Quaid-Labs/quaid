@@ -991,6 +991,14 @@ class DocsRegistry:
         db_defn = self.get_project_definition(old_name)
         if db_defn:
             db_defn.home_dir = f"projects/{new_name}/"
+            if db_defn.source_roots:
+                updated_roots = []
+                for root in db_defn.source_roots:
+                    if isinstance(root, str) and old_prefix and root.startswith(old_prefix):
+                        updated_roots.append(root.replace(old_prefix, new_prefix, 1))
+                    else:
+                        updated_roots.append(root)
+                db_defn.source_roots = updated_roots
             self.save_project_definition(new_name, db_defn)
             self.delete_project_definition(old_name)
 
@@ -1001,6 +1009,18 @@ class DocsRegistry:
             self._config = None
         except Exception:
             pass
+
+        try:
+            from lib.project_registry import rename as rename_global_project
+            rename_global_project(old_name, new_name, canonical_path=str(_workspace() / "projects" / new_name))
+        except Exception as e:
+            logger.debug("Global project registry rename skipped: %s", e)
+
+        try:
+            from datastore.docsdb.project_updater import refresh_project_md
+            refresh_project_md(new_name)
+        except Exception as e:
+            logger.debug("PROJECT.md refresh after rename skipped: %s", e)
 
         result = {"renamed": renamed, "dir_moved": dir_moved}
         print(f"Renamed project '{old_name}' -> '{new_name}': {renamed} docs updated, dir_moved={dir_moved}")
@@ -1108,6 +1128,12 @@ class DocsRegistry:
             self._config = None
         except Exception:
             pass
+
+        try:
+            from lib.project_registry import remove as remove_global_project
+            remove_global_project(project_name, force=True)
+        except Exception as e:
+            logger.debug("Global project registry delete skipped: %s", e)
 
         result = {"deleted": deleted, "dir_deleted": dir_deleted}
         print(f"Deleted project '{project_name}': {deleted} docs removed, dir_deleted={dir_deleted}")
