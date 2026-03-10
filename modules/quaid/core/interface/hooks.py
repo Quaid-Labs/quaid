@@ -411,7 +411,8 @@ def hook_subagent_start(args):
     """
     try:
         hook_input = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"[quaid][subagent-start] invalid JSON on stdin: {e}", file=sys.stderr)
         return
 
     parent_session_id = hook_input.get("session_id", "").strip()
@@ -445,7 +446,8 @@ def hook_subagent_stop(args):
     """
     try:
         hook_input = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"[quaid][subagent-stop] invalid JSON on stdin: {e}", file=sys.stderr)
         return
 
     parent_session_id = hook_input.get("session_id", "").strip()

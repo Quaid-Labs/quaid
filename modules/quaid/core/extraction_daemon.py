@@ -469,7 +469,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             return
 
         # Merge harvestable subagent transcripts into parent extraction
+        # B010: Cap per-child at 50k chars and total merged at 200k chars
+        MAX_CHILD_CHARS = 50_000
+        MAX_MERGED_CHARS = 200_000
         harvestable = []
+        merged_chars = 0
         try:
             from core.subagent_registry import get_harvestable, mark_harvested
             harvestable = get_harvestable(session_id)
@@ -477,13 +481,22 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 child_path = child.get("transcript_path", "")
                 child_id = child.get("child_id", "")
                 if child_path and os.path.isfile(child_path):
+                    if merged_chars >= MAX_MERGED_CHARS:
+                        logger.warning(
+                            "[%s] session %s: hit merged transcript cap (%d chars), skipping remaining subagents",
+                            label, session_id, merged_chars,
+                        )
+                        break
                     try:
                         child_text = adapter.parse_session_jsonl(Path(child_path))
                         if child_text.strip():
+                            if len(child_text) > MAX_CHILD_CHARS:
+                                child_text = child_text[:MAX_CHILD_CHARS] + "\n[... truncated]"
                             transcript_text += (
                                 f"\n\n--- Subagent ({child.get('child_type', 'unknown')}) ---\n"
                                 + child_text
                             )
+                            merged_chars += len(child_text)
                             logger.info(
                                 "[%s] session %s: merged subagent %s transcript (%d chars)",
                                 label, session_id, child_id, len(child_text),
@@ -628,6 +641,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     timeout_seconds = timeout_minutes * 60
     installed_at_ts = _read_installed_at()
 
+    # B002: Cache registered subagent IDs once instead of scanning per cursor file
     registered_subagents: set = set()
     try:
         from core.subagent_registry import _registry_dir
@@ -640,6 +654,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
     except Exception:
         pass
 
+    # B003: Hoist pending signals read outside the loop
     pending = read_pending_signals()
     pending_session_ids = {s.get("session_id") for s in pending}
 
@@ -654,6 +669,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
             continue
 
+        # Skip registered subagents — their transcripts are merged into parent extraction
         if session_id in registered_subagents:
             continue
 
@@ -676,6 +692,7 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         if idle_seconds < timeout_seconds:
             continue
 
+        # Check if we already have a pending signal for this session
         if session_id in pending_session_ids:
             continue
 
@@ -703,6 +720,19 @@ def sweep_orphaned_sessions(current_session_id: str = "") -> int:
     if not cursor_dir.is_dir():
         return 0
 
+    # B002: Cache registered subagent IDs once
+    registered_subagents: set = set()
+    try:
+        from core.subagent_registry import _registry_dir
+        for p in _registry_dir().glob("*.json"):
+            try:
+                rdata = json.loads(p.read_text(encoding="utf-8"))
+                registered_subagents.update(rdata.get("children", {}).keys())
+            except (json.JSONDecodeError, OSError):
+                continue
+    except Exception:
+        pass
+
     swept = 0
     for cursor_file in cursor_dir.glob("*.json"):
         try:
@@ -715,12 +745,8 @@ def sweep_orphaned_sessions(current_session_id: str = "") -> int:
             continue
 
         # Skip registered subagents — their transcripts are merged into parent extraction
-        try:
-            from core.subagent_registry import is_registered_subagent
-            if is_registered_subagent(session_id):
-                continue
-        except Exception:
-            pass
+        if session_id in registered_subagents:
+            continue
 
         transcript_path = data.get("transcript_path", "")
         if not transcript_path or not os.path.isfile(transcript_path):
@@ -859,7 +885,7 @@ def start_daemon() -> int:
             return existing
         # Lock held but no valid PID — wait briefly and retry
         time.sleep(0.5)
-        os.close(lock_fd) if False else None  # already closed above
+
         existing = read_pid()
         return existing if existing else -1
 
