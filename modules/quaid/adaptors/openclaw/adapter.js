@@ -81,6 +81,146 @@ const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 9e4;
 const DAEMON_SIGNAL_DIR = path.join(WORKSPACE, "data", "extraction-signals");
 const sessionTranscriptPaths = /* @__PURE__ */ new Map();
+const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
+const SESSION_INDEX_POLL_MS = 1e3;
+let sessionIndexWatcherStarted = false;
+let sessionIndexWatcherTimer = null;
+function getOpenClawSessionsBaseDir() {
+  return path.dirname(getOpenClawSessionsPath());
+}
+function getOpenClawSessionFile(sessionId) {
+  return path.join(getOpenClawSessionsBaseDir(), `${sessionId}.jsonl`);
+}
+function getPreservedSessionFile(sessionId) {
+  return path.join(QUAID_SESSION_PRESERVE_DIR, `${sessionId}.jsonl`);
+}
+function isAutoInjectEnabled(config = getMemoryConfig()) {
+  const envValue = String(process.env.MEMORY_AUTO_INJECT ?? "").trim().toLowerCase();
+  if (envValue === "1" || envValue === "true" || envValue === "yes" || envValue === "on") {
+    return true;
+  }
+  if (envValue === "0" || envValue === "false" || envValue === "no" || envValue === "off") {
+    return false;
+  }
+  const configured = config?.retrieval?.autoInject;
+  return configured !== false;
+}
+function readSessionsIndex() {
+  try {
+    const sessionsPath = getOpenClawSessionsPath();
+    if (!fs.existsSync(sessionsPath)) {
+      return {};
+    }
+    return JSON.parse(fs.readFileSync(sessionsPath, "utf8")) || {};
+  } catch {
+    return {};
+  }
+}
+function resolveSessionKeyForSessionId(sessionId) {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return "";
+  const data = readSessionsIndex();
+  for (const [key, row] of Object.entries(data || {})) {
+    if (String(row?.sessionId || "").trim() === sid) {
+      return String(key || "").trim();
+    }
+  }
+  return "";
+}
+function isInternalSessionContext(event, ctx) {
+  const sessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
+  if (facade.isInternalQuaidSession(sessionId)) {
+    return true;
+  }
+  const sessionKey = String(
+    ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(sessionId)
+  ).trim().toLowerCase();
+  return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:"));
+}
+function pickActiveInteractiveSession(data) {
+  const entries = Object.entries(data || {}).filter(([key, row]) => row && typeof row === "object" && typeof row?.sessionId === "string" && (key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:direct:") || key.startsWith("agent:main:telegram:slash:"))).map(([key, row]) => {
+    const sessionId = String(row?.sessionId || "").trim();
+    const sessionFile = getOpenClawSessionFile(sessionId);
+    let mtimeMs = 0;
+    try {
+      mtimeMs = fs.statSync(sessionFile).mtimeMs;
+    } catch {
+    }
+    return {
+      key,
+      sessionId,
+      sessionFile,
+      mtimeMs,
+      lastChannel: String(row?.lastChannel || "").trim(),
+      lastTo: String(row?.lastTo || "").trim()
+    };
+  }).filter((row) => row.sessionId);
+  entries.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  return entries[entries.length - 1] || null;
+}
+function latestResetBackup(sessionId) {
+  const prefix = `${sessionId}.jsonl.reset.`;
+  try {
+    const names = fs.readdirSync(getOpenClawSessionsBaseDir()).filter((name) => name.startsWith(prefix));
+    if (!names.length) return null;
+    names.sort();
+    return path.join(getOpenClawSessionsBaseDir(), names[names.length - 1]);
+  } catch {
+    return null;
+  }
+}
+function preserveSessionTranscript(sessionId, preferredPath, reason) {
+  const candidates = [];
+  const preferred = String(preferredPath || "").trim();
+  if (preferred) {
+    candidates.push(preferred);
+  }
+  candidates.push(getOpenClawSessionFile(sessionId));
+  const resetBackup = latestResetBackup(sessionId);
+  if (resetBackup) {
+    candidates.push(resetBackup);
+  }
+  const deduped = candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
+  const sourcePath = deduped.find((candidate) => fs.existsSync(candidate));
+  if (!sourcePath) {
+    writeHookTrace("session_index.transcript_preserve_missing", {
+      session_id: sessionId,
+      reason,
+      candidates: deduped
+    });
+    return null;
+  }
+  const destPath = getPreservedSessionFile(sessionId);
+  try {
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    fs.copyFileSync(sourcePath, destPath);
+    sessionTranscriptPaths.set(sessionId, destPath);
+    writeHookTrace("session_index.transcript_preserved", {
+      session_id: sessionId,
+      reason,
+      source_path: sourcePath,
+      dest_path: destPath
+    });
+    return destPath;
+  } catch (err) {
+    writeHookTrace("session_index.transcript_preserve_error", {
+      session_id: sessionId,
+      reason,
+      source_path: sourcePath,
+      error: String(err?.message || err)
+    });
+    return null;
+  }
+}
+function extractSessionMessageText(message) {
+  if (!message) return "";
+  if (typeof message.text === "string") return message.text;
+  if (typeof message.content === "string") return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content.map((part) => typeof part?.text === "string" ? part.text : "").filter(Boolean).join(" ").trim();
+  }
+  return "";
+}
 function writeDaemonSignal(sessionId, signalType, meta) {
   if (!sessionId) return null;
   const transcriptPath = sessionTranscriptPaths.get(sessionId) || "";
@@ -927,11 +1067,56 @@ const quaidPlugin = {
     const isSystemEnabled2 = (system) => facade.isSystemEnabled(system);
     const isFailHardEnabled2 = () => facade.isFailHardEnabled();
     const readSessionMessagesFile = (sessionFile) => facade.readSessionMessagesFile(sessionFile);
+    const wrapHookHandler = (registrationType, eventName, handler) => {
+      return async (...args) => {
+        const event = args?.[0];
+        const ctx = args?.[1];
+        const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
+        const messageCount = Array.isArray(event?.messages) ? event.messages.length : 0;
+        writeHookTrace("hook.debug.invoke", {
+          registration_type: registrationType,
+          hook_event: eventName,
+          session_id: sessionId,
+          message_count: messageCount,
+          has_event: Boolean(event),
+          has_ctx: Boolean(ctx)
+        });
+        console.log(
+          `[quaid][debug][hook.invoke] registration=${registrationType} event=${eventName} session=${sessionId || "unknown"} messages=${messageCount}`
+        );
+        try {
+          const out = await handler(...args);
+          writeHookTrace("hook.debug.complete", {
+            registration_type: registrationType,
+            hook_event: eventName,
+            session_id: sessionId
+          });
+          return out;
+        } catch (err) {
+          writeHookTrace("hook.debug.error", {
+            registration_type: registrationType,
+            hook_event: eventName,
+            session_id: sessionId,
+            error: String(err?.message || err)
+          });
+          throw err;
+        }
+      };
+    };
     const onChecked = (eventName, handler, options) => {
       if (contractDecl.enabled) {
         assertDeclaredRegistration("events", eventName, contractDecl.events, strictContracts, (m) => console.warn(m));
       }
-      return api.on(eventName, handler, options);
+      console.log(
+        `[quaid][debug][hook.register] registration=on event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")}`
+      );
+      writeHookTrace("hook.register", {
+        registration_type: "on",
+        hook_event: eventName,
+        name: String(options?.name || ""),
+        priority: Number(options?.priority || 0)
+      });
+      return api.on(eventName, wrapHookHandler("on", eventName, handler), options);
     };
     const registerInternalHookChecked = (eventName, handler, options) => {
       if (contractDecl.enabled) {
@@ -941,42 +1126,12 @@ const quaidPlugin = {
         `[quaid][debug][hook.register] event=${eventName} name=${String(options?.name || "")} priority=${String(options?.priority || "")}`
       );
       writeHookTrace("hook.register", {
+        registration_type: "registerHook",
         hook_event: eventName,
         name: String(options?.name || ""),
         priority: Number(options?.priority || 0)
       });
-      const wrappedHandler = async (...args) => {
-        const event = args?.[0];
-        const ctx = args?.[1];
-        const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
-        const messageCount = Array.isArray(event?.messages) ? event.messages.length : 0;
-        writeHookTrace("hook.debug.invoke", {
-          hook_event: eventName,
-          session_id: sessionId,
-          message_count: messageCount,
-          has_event: Boolean(event),
-          has_ctx: Boolean(ctx)
-        });
-        console.log(
-          `[quaid][debug][hook.invoke] event=${eventName} session=${sessionId || "unknown"} messages=${messageCount}`
-        );
-        try {
-          const out = await handler(...args);
-          writeHookTrace("hook.debug.complete", {
-            hook_event: eventName,
-            session_id: sessionId
-          });
-          return out;
-        } catch (err) {
-          writeHookTrace("hook.debug.error", {
-            hook_event: eventName,
-            session_id: sessionId,
-            error: String(err?.message || err)
-          });
-          throw err;
-        }
-      };
-      return api.registerHook(eventName, wrappedHandler, options);
+      return api.registerHook(eventName, wrapHookHandler("registerHook", eventName, handler), options);
     };
     const registerToolChecked = (factory) => {
       const spec = factory();
@@ -1018,8 +1173,9 @@ const quaidPlugin = {
         `[quaid] stats probe failed: ${String(err?.message || err)}`
       );
     });
+    let timeoutManager = null;
     const beforeAgentStartHandler = async (event, ctx) => {
-      if (facade.isInternalQuaidSession(ctx?.sessionId)) {
+      if (isInternalSessionContext(event, ctx)) {
         return;
       }
       try {
@@ -1048,9 +1204,16 @@ notify_user(${JSON.stringify(message)})
         }
         console.warn(`[quaid] Janitor health alert dispatch failed: ${String(err?.message || err)}`);
       }
-      timeoutManager.onAgentStart();
+      if (timeoutManager) {
+        timeoutManager.onAgentStart(String(ctx?.sessionId || event?.sessionId || ""));
+      } else {
+        writeHookTrace("hook.before_agent_start.skipped", {
+          reason: "timeout_manager_uninitialized",
+          hook_session_id: String(ctx?.sessionId || "")
+        });
+      }
       event.prependContext = facade.injectFullJournalContext(event.prependContext);
-      const autoInjectEnabled = process.env.MEMORY_AUTO_INJECT === "1" || getMemoryConfig2().retrieval?.autoInject === true;
+      const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) {
         return;
       }
@@ -1138,7 +1301,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
     };
     console.log("[quaid] Registering before_agent_start hook for memory injection");
-    registerInternalHookChecked("before_agent_start", beforeAgentStartHandler, {
+    onChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection",
       priority: 10
     });
@@ -1164,8 +1327,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             []
           ) || String(update?.sessionId || "").trim();
           if (sessionId) sessionTranscriptPaths.set(sessionId, sessionFile);
-          if (sessionId) {
+          if (sessionId && timeoutManager && !isInternalSessionContext({ sessionId }, { sessionId })) {
             timeoutManager.onAgentEnd(messages, sessionId, { source: "transcript_update" });
+          } else if (sessionId) {
+            writeHookTrace("hook.transcript_update.skipped", {
+              reason: timeoutManager ? "internal_session" : "timeout_manager_uninitialized",
+              parsed_session_id: sessionId,
+              session_file: sessionFile
+            });
           }
           const hasExtractionPrompt = messages.some(
             (m) => /^Extract memorable facts and journal entries from this conversation chunk:/i.test(
@@ -1254,6 +1423,133 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       });
       console.log("[quaid] Registered runtime.events.onSessionTranscriptUpdate lifecycle fallback");
     }
+    const sessionIndexMessageCounts = /* @__PURE__ */ new Map();
+    const seenSessionIndexCommandKeys = /* @__PURE__ */ new Set();
+    let currentInteractiveSession = null;
+    const startSessionIndexWatcher = () => {
+      if (sessionIndexWatcherStarted) {
+        return;
+      }
+      sessionIndexWatcherStarted = true;
+      const tickSessionIndex = () => {
+        try {
+          const active = pickActiveInteractiveSession(readSessionsIndex());
+          if (!active) {
+            return;
+          }
+          if (currentInteractiveSession && currentInteractiveSession.sessionId !== active.sessionId) {
+            writeHookTrace("session_index.active_session_changed", {
+              from_session_id: currentInteractiveSession.sessionId,
+              from_session_key: currentInteractiveSession.key,
+              to_session_id: active.sessionId,
+              to_session_key: active.key
+            });
+            preserveSessionTranscript(currentInteractiveSession.sessionId, currentInteractiveSession.sessionFile, "session-switch");
+            if (!isInternalSessionContext({ sessionKey: currentInteractiveSession.key }, { sessionId: currentInteractiveSession.sessionId }) && isSystemEnabled2("memory") && facade.shouldProcessLifecycleSignal(currentInteractiveSession.sessionId, {
+              label: "ResetSignal",
+              source: "session_index",
+              signature: `session_index:switch:${currentInteractiveSession.key}`
+            })) {
+              facade.markLifecycleSignalFromHook(currentInteractiveSession.sessionId, "ResetSignal");
+              writeDaemonSignal(currentInteractiveSession.sessionId, "reset", {
+                source: "session_index_switch",
+                prior_session_key: currentInteractiveSession.key,
+                next_session_key: active.key
+              });
+              writeHookTrace("session_index.signal_queued", {
+                signal: "reset",
+                source: "session-switch",
+                session_id: currentInteractiveSession.sessionId,
+                session_key: currentInteractiveSession.key
+              });
+            }
+          }
+          currentInteractiveSession = active;
+          sessionTranscriptPaths.set(active.sessionId, active.sessionFile);
+          const rows = parseSessionMessagesJsonl(active.sessionFile);
+          const priorCount = sessionIndexMessageCounts.get(active.sessionId) || 0;
+          sessionIndexMessageCounts.set(active.sessionId, rows.length);
+          if (rows.length <= priorCount) {
+            return;
+          }
+          const fresh = rows.slice(priorCount);
+          for (let i = 0; i < fresh.length; i += 1) {
+            const text = extractSessionMessageText(fresh[i]).trim().toLowerCase();
+            if (!text) continue;
+            const commandKey = `${active.sessionId}:${priorCount + i}:${text}`;
+            if (seenSessionIndexCommandKeys.has(commandKey)) {
+              continue;
+            }
+            let daemonType = null;
+            let lifecycleSignal = null;
+            let commandName = null;
+            if (text === "/new" || text.startsWith("/new ")) {
+              daemonType = "reset";
+              lifecycleSignal = "ResetSignal";
+              commandName = "new";
+            } else if (text === "/reset" || text.startsWith("/reset ")) {
+              daemonType = "reset";
+              lifecycleSignal = "ResetSignal";
+              commandName = "reset";
+            } else if (text === "/compact" || text.startsWith("/compact ")) {
+              daemonType = "compaction";
+              lifecycleSignal = "CompactionSignal";
+              commandName = "compact";
+            }
+            if (!daemonType || !lifecycleSignal || !commandName) {
+              continue;
+            }
+            seenSessionIndexCommandKeys.add(commandKey);
+            writeHookTrace("session_index.command_detected", {
+              session_id: active.sessionId,
+              session_key: active.key,
+              command: commandName,
+              text: text.slice(0, 120)
+            });
+            if (isInternalSessionContext({ sessionKey: active.key }, { sessionId: active.sessionId }) || !isSystemEnabled2("memory")) {
+              continue;
+            }
+            preserveSessionTranscript(active.sessionId, active.sessionFile, `command-${commandName}`);
+            if (!facade.shouldProcessLifecycleSignal(active.sessionId, {
+              label: lifecycleSignal,
+              source: "session_index",
+              signature: `session_index:command_${commandName}`
+            })) {
+              writeHookTrace("session_index.signal_suppressed", {
+                session_id: active.sessionId,
+                session_key: active.key,
+                command: commandName,
+                reason: "duplicate"
+              });
+              continue;
+            }
+            facade.markLifecycleSignalFromHook(active.sessionId, lifecycleSignal);
+            writeDaemonSignal(active.sessionId, daemonType, {
+              source: `session_index_command_${commandName}`,
+              command: commandName,
+              session_key: active.key
+            });
+            writeHookTrace("session_index.signal_queued", {
+              signal: daemonType,
+              source: `command-${commandName}`,
+              session_id: active.sessionId,
+              session_key: active.key
+            });
+          }
+        } catch (err) {
+          writeHookTrace("session_index.error", {
+            error: String(err?.message || err)
+          });
+        }
+      };
+      void tickSessionIndex();
+      sessionIndexWatcherTimer = setInterval(tickSessionIndex, SESSION_INDEX_POLL_MS);
+      writeHookTrace("session_index.watcher_started", {
+        poll_ms: SESSION_INDEX_POLL_MS,
+        sessions_path: getOpenClawSessionsPath()
+      });
+      console.log(`[quaid] session index watcher started pollMs=${SESSION_INDEX_POLL_MS}`);
+    };
     const handleSlashLifecycleFromMessage = async (event, ctx, sourceEvent) => {
       try {
         const text = String(
@@ -1282,7 +1578,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           text: text.slice(0, 120),
           hook_session_id: sessionId || ""
         });
-        if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled2("memory")) {
+        if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
           return;
         }
         const signature = `msg:${sourceEvent}:command_${commandAction}`;
@@ -1322,17 +1618,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         });
       }
     };
-    registerInternalHookChecked("message", async (event, ctx) => {
-      const action = String(event?.action || "").trim().toLowerCase();
-      if (action === "received") {
-        await handleSlashLifecycleFromMessage(event, ctx, "message:received");
-        return;
-      }
-      if (action === "preprocessed") {
-        await handleSlashLifecycleFromMessage(event, ctx, "message:preprocessed");
-      }
+    onChecked("message_received", async (event, ctx) => {
+      await handleSlashLifecycleFromMessage(event, ctx, "message:received");
     }, {
-      name: "message-command-memory-extraction",
+      name: "message-received-command-memory-extraction",
       priority: 10
     });
     const resolveLifecycleCommandTargetSessionId = (action, event, ctx) => {
@@ -1364,7 +1653,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           previous_session_id: String(event?.previousSessionId || ""),
           transcript_hint_session_id: String(lastTranscriptSessionHint?.sessionId || "")
         });
-        if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled2("memory")) {
+        if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
           return;
         }
         const signature = `hook:command_${action}`;
@@ -1417,7 +1706,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           hook_session_id: sessionId || "",
           hook_session_key: String(event?.sessionKey || ctx?.sessionKey || "")
         });
-        if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled2("memory")) {
+        if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
           return;
         }
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
@@ -1475,7 +1764,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           return;
         }
         const sessionId = facade.resolveLifecycleHookSessionId(event, ctx);
-        if (!sessionId || facade.isInternalQuaidSession(sessionId) || !isSystemEnabled2("memory")) {
+        if (!sessionId || isInternalSessionContext(event, ctx) || !isSystemEnabled2("memory")) {
           return;
         }
         if (!facade.shouldProcessLifecycleSignal(sessionId, {
@@ -1501,7 +1790,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       priority: 10
     });
     void registerToolChecked;
-    const timeoutManager = new SessionTimeoutManager({
+    timeoutManager = new SessionTimeoutManager({
       workspace: WORKSPACE,
       logDir: path.join(QUAID_LOGS_DIR, "quaid"),
       timeoutMinutes: facade.getCaptureTimeoutMinutes(),
@@ -1531,6 +1820,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     });
     ensureDaemonAlive();
     console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
+    startSessionIndexWatcher();
     async function recallMemories(opts) {
       const {
         query,
@@ -1810,9 +2100,9 @@ notify_memory_extraction(
         console.warn(msg);
       }
     };
-    registerInternalHookChecked("before_compaction", async (event, ctx) => {
+    onChecked("before_compaction", async (event, ctx) => {
       try {
-        if (facade.isInternalQuaidSession(ctx?.sessionId)) {
+        if (isInternalSessionContext(event, ctx)) {
           return;
         }
         const messages = event.messages || [];
@@ -1926,9 +2216,9 @@ notify_memory_extraction(
       name: "compaction-memory-extraction",
       priority: 10
     });
-    registerInternalHookChecked("before_reset", async (event, ctx) => {
+    onChecked("before_reset", async (event, ctx) => {
       try {
-        if (facade.isInternalQuaidSession(ctx?.sessionId)) {
+        if (isInternalSessionContext(event, ctx)) {
           return;
         }
         const messages = event.messages || [];
@@ -2031,7 +2321,7 @@ notify_memory_extraction(
       name: "reset-memory-extraction",
       priority: 10
     });
-    registerInternalHookChecked("session_end", async (event, ctx) => {
+    onChecked("session_end", async (event, ctx) => {
       try {
         const sessionId = String(event?.sessionId || ctx?.sessionId || "").trim();
         const sessionKey = String(event?.sessionKey || ctx?.sessionKey || "").trim();
@@ -2041,7 +2331,7 @@ notify_memory_extraction(
           hook_session_key: sessionKey,
           message_count: Number.isFinite(messageCount) ? messageCount : 0
         });
-        if (!sessionId || facade.isInternalQuaidSession(sessionId)) {
+        if (!sessionId || isInternalSessionContext(event, ctx)) {
           writeHookTrace("hook.session_end.skipped", {
             hook_session_id: sessionId,
             reason: "invalid_or_internal_session"
@@ -2234,7 +2524,9 @@ const __test = {
   ),
   markLifecycleSignalFromHook: (sessionId, label) => facade.markLifecycleSignalFromHook(sessionId, label),
   clearLifecycleSignalHistory: () => facade.clearLifecycleSignalHistory(),
-  clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory()
+  clearExtractionNotifyHistory: () => facade.clearExtractionNotifyHistory(),
+  isAutoInjectEnabled,
+  isInternalSessionContext
 };
 export {
   __test,

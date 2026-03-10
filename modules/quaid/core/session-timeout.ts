@@ -75,7 +75,10 @@ function isInternalMaintenancePrompt(text: string): boolean {
   const markers = [
     "extract memorable facts and journal entries from this conversation",
     "given a personal memory query and memory documents",
+    "given a personal memory query, determine if this memory is relevant to the query",
     "rate each document",
+    "generate focused memory-retrieval sub-queries for the user question",
+    "rephrase this question as a declarative statement about someone's personal life",
     "review batch",
     "review the following",
     "you are reviewing",
@@ -332,12 +335,21 @@ export class SessionTimeoutManager {
     this.timeoutMinutes = minutes;
   }
 
-  onAgentStart(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-      this.writeQuaidLog("timer_cleared", undefined, { reason: "agent_start" });
+  onAgentStart(sessionId?: string): void {
+    if (!this.timer) return;
+    const sid = String(sessionId || "").trim();
+    if (sid && this.pendingSessionId && sid !== this.pendingSessionId) {
+      this.writeQuaidLog("timer_preserved", this.pendingSessionId, {
+        reason: "agent_start_other_session",
+        active_session_id: sid,
+      });
+      return;
     }
+    clearTimeout(this.timer);
+    this.timer = null;
+    this.writeQuaidLog("timer_cleared", this.pendingSessionId || sid || undefined, {
+      reason: "agent_start",
+    });
   }
 
   onAgentEnd(messages: any[], sessionId: string, meta?: AgentEndMeta): void {

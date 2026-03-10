@@ -68,7 +68,55 @@ describe("SessionTimeoutManager (cursor + source)", () => {
     );
 
     expect((manager as any).timer).toBeTruthy();
-    manager.onAgentStart();
+    manager.onAgentStart("session-agent-start");
+    expect((manager as any).timer).toBeNull();
+  });
+
+  it("preserves an active timeout buffer when a different session starts", () => {
+    vi.useFakeTimers();
+    const workspace = makeWorkspace("quaid-timeout-other-agent-start-");
+    const source = createSourceState();
+    const manager = buildManager({ workspace, timeoutMinutes: 10, source });
+
+    manager.onAgentEnd(
+      [
+        { role: "user", content: "remember this", timestamp: Date.now() },
+        { role: "assistant", content: "ok", timestamp: Date.now() + 1 },
+      ],
+      "session-pending",
+    );
+
+    const pendingTimer = (manager as any).timer;
+    expect(pendingTimer).toBeTruthy();
+    manager.onAgentStart("session-helper");
+    expect((manager as any).timer).toBe(pendingTimer);
+    expect((manager as any).pendingSessionId).toBe("session-pending");
+  });
+
+  it("ignores retrieval helper transcripts when buffering timeout extraction", () => {
+    vi.useFakeTimers();
+    const workspace = makeWorkspace("quaid-timeout-helper-filter-");
+    const source = createSourceState();
+    const manager = buildManager({ workspace, timeoutMinutes: 1, source });
+
+    manager.onAgentEnd(
+      [
+        {
+          role: "user",
+          content: "Generate focused memory-retrieval sub-queries for the user question.\nRules:\n- Return JSON only",
+          timestamp: Date.now(),
+        },
+        {
+          role: "assistant",
+          content: "{\"queries\":[\"example\"]}",
+          timestamp: Date.now() + 1,
+        },
+      ],
+      "session-helper",
+      { source: "transcript_update" },
+    );
+
+    expect((manager as any).pendingSessionId).toBeUndefined();
     expect((manager as any).timer).toBeNull();
   });
 

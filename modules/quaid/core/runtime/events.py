@@ -142,6 +142,7 @@ _ADAPTER_NATIVE_EVENTS: set[str] = {
     "session:compact:before",
     "command",
     "message",
+    "message_received",
     "message:preprocessed",
 }
 
