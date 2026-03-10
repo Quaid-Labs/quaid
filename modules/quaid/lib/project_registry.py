@@ -227,6 +227,23 @@ def remove(name: str, force: bool = False) -> bool:
     return True
 
 
+def rename(name: str, new_name: str, canonical_path: Optional[str] = None) -> Dict[str, Any]:
+    """Rename a project in the global registry while preserving metadata."""
+    data = _load()
+    if name not in data["projects"]:
+        raise KeyError(name)
+    if new_name in data["projects"] and new_name != name:
+        raise ValueError(f"Project '{new_name}' already exists.")
+
+    entry = dict(data["projects"][name])
+    entry["canonical_path"] = canonical_path or entry.get("canonical_path", "")
+    entry["updated_at"] = datetime.now().isoformat()
+    del data["projects"][name]
+    data["projects"][new_name] = entry
+    _save(data)
+    return entry
+
+
 def tracking_instances(name: str) -> List[str]:
     """Return list of instances tracking a project."""
     entry = lookup(name)
@@ -267,6 +284,11 @@ def main():
     p_rm = sub.add_parser("remove", help="Remove project from registry")
     p_rm.add_argument("name", help="Project name")
     p_rm.add_argument("--force", action="store_true", help="Force remove even if other instances track it")
+
+    p_ren = sub.add_parser("rename", help="Rename a project in the registry")
+    p_ren.add_argument("name", help="Current project name")
+    p_ren.add_argument("new_name", help="New project name")
+    p_ren.add_argument("--path", help="Updated canonical path")
 
     args = parser.parse_args()
 
@@ -322,6 +344,17 @@ def main():
             else:
                 print(f"Project '{args.name}' not found.", file=sys.stderr)
                 sys.exit(1)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == "rename":
+        try:
+            entry = rename(args.name, args.new_name, canonical_path=args.path)
+            print(f"Renamed '{args.name}' -> '{args.new_name}' ({entry['canonical_path']})")
+        except KeyError:
+            print(f"Project '{args.name}' not found.", file=sys.stderr)
+            sys.exit(1)
         except ValueError as e:
             print(str(e), file=sys.stderr)
             sys.exit(1)

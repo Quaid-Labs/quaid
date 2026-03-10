@@ -658,6 +658,112 @@ class TestRenameProjectGuards:
         assert new_defn is not None
         assert new_defn.home_dir == "projects/renamed-proj/"
 
+    def test_rename_updates_source_roots_refreshes_project_md_and_global_registry(self, setup_env, monkeypatch):
+        """rename_project keeps source_roots/global registry in sync and refreshes PROJECT.md."""
+        tmp_path = setup_env
+        r = _get_registry()
+
+        proj_dir = tmp_path / "projects" / "test-project"
+        (proj_dir / "PROJECT.md").write_text(
+            """# Project: Test Project
+
+## Overview
+A test project.
+
+## Files & Assets
+
+### In This Directory
+<!-- Auto-discovered -->
+
+### External Files
+| File | Purpose | Auto-Update |
+|------|---------|-------------|
+
+## Documents
+| Document | Tracks | Auto-Update |
+|----------|--------|-------------|
+
+## Related Projects
+
+## Update Rules
+
+## Exclude
+- *.log
+- *.db
+"""
+        )
+        (proj_dir / "README.md").write_text("# Readme\n")
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+        r.register("projects/test-project/README.md", project="test-project")
+
+        captured = {}
+
+        def fake_global_rename(old_name, new_name, canonical_path=None):
+            captured["old_name"] = old_name
+            captured["new_name"] = new_name
+            captured["canonical_path"] = canonical_path
+            return {"canonical_path": canonical_path}
+
+        monkeypatch.setattr("lib.project_registry.rename", fake_global_rename)
+
+        result = r.rename_project("test-project", "renamed-proj")
+        assert result["renamed"] == 2
+
+        new_defn = r.get_project_definition("renamed-proj")
+        assert new_defn is not None
+        assert new_defn.home_dir == "projects/renamed-proj/"
+        assert new_defn.source_roots == ["src/"]
+
+        renamed_project_md = (tmp_path / "projects" / "renamed-proj" / "PROJECT.md").read_text()
+        assert "projects/renamed-proj/PROJECT.md" in renamed_project_md
+        assert "projects/renamed-proj/README.md" in renamed_project_md
+        assert "projects/test-project/README.md" not in renamed_project_md
+
+        assert captured == {
+            "old_name": "test-project",
+            "new_name": "renamed-proj",
+            "canonical_path": str(tmp_path / "projects" / "renamed-proj"),
+        }
+
+    def test_rename_rewrites_project_prefixed_source_roots(self, setup_env):
+        """rename_project rewrites project-local source_roots to the new home."""
+        r = _get_registry()
+        defn = r.get_project_definition("test-project")
+        assert defn is not None
+        defn.source_roots = ["projects/test-project", "src/", "projects/test-project/docs"]
+        r.save_project_definition("test-project", defn)
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        r.rename_project("test-project", "renamed-proj")
+        renamed = r.get_project_definition("renamed-proj")
+        assert renamed is not None
+        assert renamed.source_roots == [
+            "projects/renamed-proj",
+            "src/",
+            "projects/renamed-proj/docs",
+        ]
+
+    def test_delete_removes_global_registry_entry(self, setup_env, monkeypatch):
+        """delete_project removes the matching global registry entry."""
+        tmp_path = setup_env
+        r = _get_registry()
+        project_dir = tmp_path / "projects" / "test-project"
+        (project_dir / "PROJECT.md").write_text("# Project: Test Project\n")
+        r.register("projects/test-project/PROJECT.md", project="test-project")
+
+        removed = {}
+
+        def fake_global_remove(name, force=False):
+            removed["name"] = name
+            removed["force"] = force
+            return True
+
+        monkeypatch.setattr("lib.project_registry.remove", fake_global_remove)
+
+        result = r.delete_project("test-project")
+        assert result["deleted"] == 1
+        assert removed == {"name": "test-project", "force": True}
+
 
 class TestPathPrefixBoundary:
     """Ensure path matching doesn't have false positives on similar prefixes."""
