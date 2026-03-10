@@ -426,6 +426,25 @@ def test_validate_declared_event_contract_accepts_openclaw_command_aliases(monke
     assert errors == []
 
 
+def test_validate_declared_event_contract_accepts_openclaw_native_message_events(monkeypatch):
+    def _fake_collect_declared_exports(*, registry, slots, surface, strict=False):
+        assert surface == "events"
+        assert strict is True
+        return {"openclaw.adapter": ["message", "message_received", "message:preprocessed"]}
+
+    monkeypatch.setattr(
+        "core.runtime.plugins.collect_declared_exports",
+        _fake_collect_declared_exports,
+    )
+
+    errors = validate_declared_event_contract(
+        registry=object(),
+        slots={"adapter": "openclaw.adapter", "ingest": [], "datastores": []},
+        strict=True,
+    )
+    assert errors == []
+
+
 def test_validate_declared_event_contract_rejects_unknown_declared_events(monkeypatch):
     def _fake_collect_declared_exports(*, registry, slots, surface, strict=False):
         assert surface == "events"

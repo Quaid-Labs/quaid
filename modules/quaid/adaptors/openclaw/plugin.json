@@ -67,6 +67,7 @@
           "session:compact:before",
           "command",
           "message",
+          "message_received",
           "before_reset",
           "session_end",
           "message:preprocessed",

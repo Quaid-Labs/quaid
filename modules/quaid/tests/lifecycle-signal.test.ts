@@ -115,4 +115,37 @@ describe("lifecycle signal detection", () => {
     );
     expect(isBacklog).toBe(false);
   });
+
+  it("uses config-default auto injection unless explicitly disabled", () => {
+    const original = process.env.MEMORY_AUTO_INJECT;
+    delete process.env.MEMORY_AUTO_INJECT;
+
+    expect(__test.isAutoInjectEnabled({ retrieval: {} })).toBe(true);
+    expect(__test.isAutoInjectEnabled({ retrieval: { autoInject: false } })).toBe(false);
+    expect(__test.isAutoInjectEnabled({ retrieval: { autoInject: true } })).toBe(true);
+
+    process.env.MEMORY_AUTO_INJECT = "0";
+    expect(__test.isAutoInjectEnabled({ retrieval: { autoInject: true } })).toBe(false);
+
+    process.env.MEMORY_AUTO_INJECT = "1";
+    expect(__test.isAutoInjectEnabled({ retrieval: { autoInject: false } })).toBe(true);
+
+    if (original === undefined) {
+      delete process.env.MEMORY_AUTO_INJECT;
+    } else {
+      process.env.MEMORY_AUTO_INJECT = original;
+    }
+  });
+
+  it("treats openresponses session keys as internal Quaid work", () => {
+    expect(__test.isInternalSessionContext(
+      { sessionKey: "agent:main:openresponses:abc123" },
+      { sessionId: "89003867-ed94-4bb3-8881-289a63e8250c" },
+    )).toBe(true);
+
+    expect(__test.isInternalSessionContext(
+      { sessionKey: "agent:main:tui-user-session" },
+      { sessionId: "86bea2fc-b843-43b8-94bb-7ffb9a0e9d17" },
+    )).toBe(false);
+  });
 });
