@@ -13,10 +13,12 @@ Design principles:
   - Facts are attributed to the parent session lineage
 """
 
+import fcntl
 import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,6 +54,24 @@ def _read_registry(parent_session_id: str) -> Dict[str, Any]:
         return {"parent_session_id": parent_session_id, "children": {}}
 
 
+@contextmanager
+def _lock_registry(parent_session_id: str):
+    """Context manager for exclusive registry access. B004: prevents concurrent write loss."""
+    lock_file = _registry_dir() / f"{parent_session_id}.lock"
+    fd = None
+    try:
+        fd = open(lock_file, "w")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        if fd:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                fd.close()
+            except OSError:
+                pass
+
+
 def _write_registry(parent_session_id: str, data: Dict[str, Any]) -> None:
     """Write registry file atomically."""
     p = _registry_path(parent_session_id)
@@ -78,21 +98,24 @@ def register(
 
     Called on SubagentStart (CC) or subagent_spawned (OC).
     """
-    data = _read_registry(parent_session_id)
-    children = data.setdefault("children", {})
-    children[child_id] = {
-        "child_id": child_id,
-        "parent_session_id": parent_session_id,
-        "child_type": child_type or "unknown",
-        "transcript_path": child_transcript_path or "",
-        "status": "running",
-        "harvested": False,
-        "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "completed_at": None,
-        "harvested_at": None,
-        **(metadata or {}),
-    }
-    _write_registry(parent_session_id, data)
+    with _lock_registry(parent_session_id):
+        data = _read_registry(parent_session_id)
+        children = data.setdefault("children", {})
+        # B001: Apply metadata first so authoritative fields can't be overwritten
+        entry = {**(metadata or {})}
+        entry.update({
+            "child_id": child_id,
+            "parent_session_id": parent_session_id,
+            "child_type": child_type or "unknown",
+            "transcript_path": child_transcript_path or "",
+            "status": "running",
+            "harvested": False,
+            "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "completed_at": None,
+            "harvested_at": None,
+        })
+        children[child_id] = entry
+        _write_registry(parent_session_id, data)
     logger.info(
         "[subagent-registry] registered child=%s parent=%s type=%s",
         child_id, parent_session_id, child_type,
@@ -109,21 +132,31 @@ def mark_complete(
     Called on SubagentStop (CC) or subagent_ended (OC).
     Updates transcript_path if provided (CC provides it at stop time).
     """
-    data = _read_registry(parent_session_id)
-    children = data.get("children", {})
-    if child_id not in children:
-        # Late registration — register + complete in one shot
-        register(parent_session_id, child_id, transcript_path)
+    with _lock_registry(parent_session_id):
         data = _read_registry(parent_session_id)
         children = data.get("children", {})
+        if child_id not in children:
+            # Late registration — create entry inline (don't call register() to avoid deadlock)
+            children[child_id] = {
+                "child_id": child_id,
+                "parent_session_id": parent_session_id,
+                "child_type": "unknown",
+                "transcript_path": transcript_path or "",
+                "status": "running",
+                "harvested": False,
+                "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "completed_at": None,
+                "harvested_at": None,
+            }
+            data.setdefault("children", children)
 
-    child = children.get(child_id, {})
-    child["status"] = "complete"
-    child["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    if transcript_path:
-        child["transcript_path"] = transcript_path
-    children[child_id] = child
-    _write_registry(parent_session_id, data)
+        child = children.get(child_id, {})
+        child["status"] = "complete"
+        child["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if transcript_path:
+            child["transcript_path"] = transcript_path
+        children[child_id] = child
+        _write_registry(parent_session_id, data)
     logger.info(
         "[subagent-registry] completed child=%s parent=%s",
         child_id, parent_session_id,
@@ -144,14 +177,15 @@ def get_harvestable(parent_session_id: str) -> List[Dict[str, Any]]:
 
 def mark_harvested(parent_session_id: str, child_id: str) -> None:
     """Mark a child's transcript as harvested (extracted)."""
-    data = _read_registry(parent_session_id)
-    children = data.get("children", {})
-    if child_id in children:
-        children[child_id]["harvested"] = True
-        children[child_id]["harvested_at"] = time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-        )
-        _write_registry(parent_session_id, data)
+    with _lock_registry(parent_session_id):
+        data = _read_registry(parent_session_id)
+        children = data.get("children", {})
+        if child_id in children:
+            children[child_id]["harvested"] = True
+            children[child_id]["harvested_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            )
+            _write_registry(parent_session_id, data)
 
 
 def is_registered_subagent(session_id: str) -> bool:

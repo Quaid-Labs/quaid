@@ -230,6 +230,8 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     echo "  hook-extract         Extract knowledge from transcript"
     echo "  hook-search <query>  Search memories + docs"
     echo "  hook-session-init    Inject project docs at session start"
+    echo "  hook-subagent-start  Register subagent in registry"
+    echo "  hook-subagent-stop   Mark subagent complete in registry"
     echo ""
     echo "Config:"
     echo "  config               Show configuration summary"
