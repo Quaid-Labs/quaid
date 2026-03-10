@@ -34,6 +34,7 @@ import sys
 import tempfile
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -43,7 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logger = logging.getLogger("quaid.daemon")
 
 # Valid signal types (B062)
-VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end")
+VALID_SIGNAL_TYPES = ("compaction", "reset", "session_end", "timeout")
 
 # Session ID validation (B008)
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
@@ -100,6 +101,10 @@ def _log_path() -> Path:
     d = _quaid_home() / "logs" / "daemon"
     d.mkdir(parents=True, exist_ok=True)
     return d / "extraction-daemon.log"
+
+
+def _install_state_path() -> Path:
+    return _quaid_home() / "data" / "installed-at.json"
 
 
 # ---------------------------------------------------------------------------
@@ -522,16 +527,52 @@ def _get_owner_id() -> str:
     return get_owner_id()
 
 
+def _read_installed_at() -> float:
+    """Read or initialize the install-time lower bound for timeout sweeps."""
+    path = _install_state_path()
+    try:
+        if path.exists():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            installed_at = str(raw.get("installedAt", "")).strip()
+            if installed_at:
+                normalized = installed_at.replace("Z", "+00:00")
+                return datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        pass
+
+    installed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, json.dumps({"installedAt": installed_at}))
+    except Exception:
+        pass
+    return time.time()
+
+
+def _get_idle_timeout_minutes(default: int = 30) -> int:
+    """Read timeout minutes from live config with a safe fallback."""
+    try:
+        from config import get_config
+        cfg = get_config()
+        capture = getattr(cfg, "capture", None)
+        raw = getattr(capture, "inactivity_timeout_minutes", default) if capture is not None else default
+        minutes = int(raw)
+        return max(0, minutes)
+    except Exception:
+        return default
+
+
 # ---------------------------------------------------------------------------
-# Idle session detection (for adapters with compaction control)
+# Idle session detection (timeout extraction)
 # ---------------------------------------------------------------------------
 
 def check_idle_sessions(timeout_minutes: int = 30) -> None:
     """Check for sessions that have been idle beyond the timeout.
 
-    Only generates timeout signals for sessions whose adapters advertise
-    compaction control. Without compaction control, timeout extraction
-    is pointless (context stays bloated anyway).
+    Generates a timeout extraction signal for any session with unextracted
+    content whose transcript hasn't been modified for timeout_minutes.
+    Cursor tracking prevents double extraction, so this is safe regardless
+    of whether the adapter supports compaction control.
     """
     cursor_dir = _cursor_dir()
     if not cursor_dir.is_dir():
@@ -539,6 +580,22 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
 
     now = time.time()
     timeout_seconds = timeout_minutes * 60
+    installed_at_ts = _read_installed_at()
+
+    registered_subagents: set = set()
+    try:
+        from core.subagent_registry import _registry_dir
+        for p in _registry_dir().glob("*.json"):
+            try:
+                rdata = json.loads(p.read_text(encoding="utf-8"))
+                registered_subagents.update(rdata.get("children", {}).keys())
+            except (json.JSONDecodeError, OSError):
+                continue
+    except Exception:
+        pass
+
+    pending = read_pending_signals()
+    pending_session_ids = {s.get("session_id") for s in pending}
 
     for cursor_file in cursor_dir.glob("*.json"):
         try:
@@ -549,6 +606,9 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         session_id = data.get("session_id", "")
         transcript_path = data.get("transcript_path", "")
         if not session_id or not transcript_path or not os.path.isfile(transcript_path):
+            continue
+
+        if session_id in registered_subagents:
             continue
 
         # Check if transcript has grown past cursor
@@ -563,28 +623,24 @@ def check_idle_sessions(timeout_minutes: int = 30) -> None:
         except OSError:
             continue
 
+        if mtime < installed_at_ts:
+            continue
+
         idle_seconds = now - mtime
         if idle_seconds < timeout_seconds:
             continue
 
-        # Check if we already have a pending signal for this session
-        pending = read_pending_signals()
-        already_pending = any(
-            s.get("session_id") == session_id for s in pending
-        )
-        if already_pending:
+        if session_id in pending_session_ids:
             continue
 
-        # Only generate timeout signal if we know this adapter supports
-        # compaction control. Read from the last signal for this session
-        # or from carryover metadata.
-        # For now, skip timeout signals — adapters must opt in explicitly.
-        # This is a placeholder for when OC migration adds compaction control
-        # advertisement to signal metadata.
-        logger.debug(
-            "session %s idle for %.0fs with %d unextracted lines (skipping — "
-            "timeout extraction requires compaction control)",
+        logger.info(
+            "session %s idle for %.0fs with %d unextracted lines, generating timeout signal",
             session_id, idle_seconds, total_lines - cursor_offset,
+        )
+        write_signal(
+            signal_type="timeout",
+            session_id=session_id,
+            transcript_path=transcript_path,
         )
 
 
@@ -669,11 +725,24 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                     # Preserve the signal for a future retry. Outer-loop exceptions
                     # mean we do not know whether processing was durable.
 
-            # Periodic idle session check
+            # Periodic idle session check. Use a timeout-aware cadence so
+            # shorter configured inactivity windows do not wait on a fixed
+            # five-minute sweep interval before becoming eligible.
             now = time.time()
-            if now - last_idle_check > idle_check_interval:
+            configured_timeout_minutes = _get_idle_timeout_minutes()
+            if configured_timeout_minutes > 0:
+                timeout_seconds = configured_timeout_minutes * 60
+                effective_idle_check_interval = max(
+                    poll_interval,
+                    min(idle_check_interval, max(5.0, timeout_seconds / 2.0)),
+                )
+            else:
+                effective_idle_check_interval = idle_check_interval
+
+            if now - last_idle_check > effective_idle_check_interval:
                 try:
-                    check_idle_sessions()
+                    if configured_timeout_minutes > 0:
+                        check_idle_sessions(configured_timeout_minutes)
                 except Exception as e:
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now

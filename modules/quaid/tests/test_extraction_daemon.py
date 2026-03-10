@@ -61,3 +61,91 @@ def test_start_daemon_returns_negative_one_when_pid_file_never_appears(monkeypat
 
     assert result == -1
     assert read_pid_calls >= 2
+
+
+def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
+
+    cursor_dir = tmp_path / "data" / "session-cursors"
+    cursor_dir.mkdir(parents=True, exist_ok=True)
+    (cursor_dir / "sess-1.json").write_text(
+        (
+            '{"session_id":"sess-1","line_offset":1,'
+            f'"transcript_path":"{transcript_path}"'
+            '}'
+        ),
+        encoding="utf-8",
+    )
+
+    now = 1_700_000_000.0
+    os_mtime = now - (31 * 60)
+    transcript_path.touch()
+    pathlib.Path(transcript_path).chmod(0o600)
+    import os
+    os.utime(transcript_path, (os_mtime, os_mtime))
+
+    captured = []
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: now - (2 * 60 * 60))
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda signal_type, session_id, transcript_path, **kwargs: captured.append(
+            {
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "transcript_path": transcript_path,
+            }
+        ),
+    )
+
+    extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+    assert captured == [
+        {
+            "signal_type": "timeout",
+            "session_id": "sess-1",
+            "transcript_path": str(transcript_path),
+        }
+    ]
+
+
+def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypatch, tmp_path):
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
+
+    cursor_dir = tmp_path / "data" / "session-cursors"
+    cursor_dir.mkdir(parents=True, exist_ok=True)
+    (cursor_dir / "sess-1.json").write_text(
+        (
+            '{"session_id":"sess-1","line_offset":1,'
+            f'"transcript_path":"{transcript_path}"'
+            '}'
+        ),
+        encoding="utf-8",
+    )
+
+    now = 1_700_000_000.0
+    installed_at = now - (10 * 60)
+    stale_mtime = now - (31 * 60)
+    transcript_path.touch()
+    import os
+    os.utime(transcript_path, (stale_mtime, stale_mtime))
+
+    captured = []
+    monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+    monkeypatch.setattr(extraction_daemon.time, "time", lambda: now)
+    monkeypatch.setattr(extraction_daemon, "_read_installed_at", lambda: installed_at)
+    monkeypatch.setattr(extraction_daemon, "read_pending_signals", lambda: [])
+    monkeypatch.setattr(
+        extraction_daemon,
+        "write_signal",
+        lambda *args, **kwargs: captured.append((args, kwargs)),
+    )
+
+    extraction_daemon.check_idle_sessions(timeout_minutes=30)
+
+    assert captured == []
