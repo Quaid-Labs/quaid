@@ -8,6 +8,7 @@ ENV_FILE="${QUAID_E2E_ENV_FILE:-${PLUGIN_ROOT}/.env.e2e}"
 
 E2E_WS="${HOME}/quaid/test"
 DEV_WS="${HOME}/quaid/dev"
+E2E_INSTANCE="${QUAID_E2E_INSTANCE:-openclaw}"
 OPENCLAW_SOURCE="${HOME}/quaid/openclaw-source"
 # Default E2E gate to the OpenClaw release lane we validate against in canary.
 # Keep overridable for bisects via --openclaw-ref / QUAID_E2E_OPENCLAW_REF.
@@ -1289,6 +1290,23 @@ echo "[e2e] Bootstrapping e2e workspace: ${E2E_WS}"
 run_bootstrap true
 fi
 
+# Instance isolation: set QUAID_INSTANCE and create per-instance directory tree.
+export QUAID_INSTANCE="${E2E_INSTANCE}"
+export QUAID_HOME="${E2E_WS}"
+_iroot="${E2E_WS}/${E2E_INSTANCE}"
+for _subdir in config data identity journal logs; do
+  mkdir -p "${_iroot}/${_subdir}"
+done
+# Seed instance-level adapter config from flat config if it exists.
+if [[ -f "${E2E_WS}/config/memory.json" ]] && [[ ! -f "${_iroot}/config/memory.json" ]]; then
+  cp "${E2E_WS}/config/memory.json" "${_iroot}/config/memory.json"
+  echo "[e2e] Copied adapter config to instance path: ${_iroot}/config/memory.json"
+elif [[ ! -f "${_iroot}/config/memory.json" ]]; then
+  echo '{"adapter":{"type":"standalone"}}' > "${_iroot}/config/memory.json"
+  echo "[e2e] Created default adapter config at instance path: ${_iroot}/config/memory.json"
+fi
+echo "[e2e] Instance isolation: QUAID_INSTANCE=${E2E_INSTANCE}, root=${_iroot}"
+
 echo "[e2e] Starting gateway on e2e workspace..."
 start_gateway_safe
 if ! wait_for_gateway_listen 40; then
@@ -2148,6 +2166,7 @@ def _spawn_janitor_probe() -> subprocess.Popen:
     env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
     env["QUAID_HOME"] = ws
     env["CLAWDBOT_WORKSPACE"] = ws
+    env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
     janitor_script = os.path.join(ws, "modules", "quaid", "core", "lifecycle", "janitor.py")
     return subprocess.Popen(
         ["python3", janitor_script, "--task", "review", "--dry-run", "--stage-item-cap", "8"],
@@ -2495,6 +2514,7 @@ if isinstance(project_defs, dict) and project_defs:
     updater_env["PYTHONPATH"] = "modules/quaid" + (f":{updater_py_path}" if updater_py_path else "")
     updater_env["QUAID_HOME"] = ws
     updater_env["CLAWDBOT_WORKSPACE"] = ws
+    updater_env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
     updater_script = os.path.join(ws, "modules", "quaid", "datastore", "docsdb", "project_updater.py")
     updater_probe = subprocess.Popen(
         ["python3", updater_script, "process-all"],
@@ -2544,6 +2564,7 @@ cleanup_py_path = cleanup_env.get("PYTHONPATH", "")
 cleanup_env["PYTHONPATH"] = "modules/quaid" + (f":{cleanup_py_path}" if cleanup_py_path else "")
 cleanup_env["QUAID_HOME"] = ws
 cleanup_env["CLAWDBOT_WORKSPACE"] = ws
+cleanup_env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
 cleanup_script = os.path.join(ws, "modules", "quaid", "core", "lifecycle", "janitor.py")
 cleanup_probe = subprocess.Popen(
     ["python3", cleanup_script, "--task", "cleanup", "--apply"],
@@ -2841,6 +2862,7 @@ def run_direct_extract_fallback(
     py_path = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = "modules/quaid" + (f":{py_path}" if py_path else "")
     env["CLAWDBOT_WORKSPACE"] = ws
+    env["QUAID_INSTANCE"] = os.environ.get("QUAID_INSTANCE", "openclaw")
     try:
         proc = subprocess.run(
             cmd,

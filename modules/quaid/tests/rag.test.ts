@@ -1,14 +1,27 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
 import { unlink } from 'fs/promises'
+import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
+const TEST_INSTANCE = process.env.QUAID_INSTANCE || 'pytest-runner'
 const RAG_SCRIPT = path.join(WORKSPACE, "modules/quaid/datastore/docsdb/rag.py")
 const PYTHON_MODULE_ROOT = path.resolve(path.dirname(RAG_SCRIPT), "../..")
 const TEST_FIXTURES_DIR = '/tmp/rag-test-fixtures'
+
+// Ensure instance-aware adapter config exists
+;(() => {
+  const instanceCfgPath = path.join(WORKSPACE, TEST_INSTANCE, "config", "memory.json")
+  try {
+    if (!fs.existsSync(instanceCfgPath)) {
+      fs.mkdirSync(path.dirname(instanceCfgPath), { recursive: true })
+      fs.writeFileSync(instanceCfgPath, '{"adapter":{"type":"standalone"}}', { encoding: "utf-8" })
+    }
+  } catch { /* best effort */ }
+})()
 
 function createUniqueTestDbPath(): string {
   const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -27,6 +40,7 @@ class TestRAGInterface {
           MEMORY_DB_PATH: this.dbPath,
           MOCK_EMBEDDINGS: "1",
           QUAID_HOME: WORKSPACE,
+          QUAID_INSTANCE: TEST_INSTANCE,
           CLAWDBOT_WORKSPACE: WORKSPACE,
           PYTHONPATH: process.env.PYTHONPATH
             ? `${PYTHON_MODULE_ROOT}:${process.env.PYTHONPATH}`
