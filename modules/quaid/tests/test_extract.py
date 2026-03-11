@@ -927,28 +927,3 @@ class TestCLI:
         assert "not found" in result.stderr.lower() or "error" in result.stderr.lower()
 
 
-class TestChunkTranscriptText:
-    """Test _chunk_transcript_text() — splits at turn boundaries."""
-
-    def test_short_transcript(self):
-        from ingest.extract import _chunk_transcript_text
-        text = "User: hello\n\nAssistant: hi"
-        chunks = _chunk_transcript_text(text, max_chars=1000)
-        assert len(chunks) == 1
-        assert chunks[0] == text
-
-    def test_splits_at_double_newline(self):
-        from ingest.extract import _chunk_transcript_text
-        turns = ["User: " + "a" * 200, "Assistant: " + "b" * 200, "User: " + "c" * 200]
-        text = "\n\n".join(turns)
-        chunks = _chunk_transcript_text(text, max_chars=300)
-        assert len(chunks) >= 2
-        # All content present
-        rejoined = "\n\n".join(chunks)
-        assert "a" * 200 in rejoined
-        assert "c" * 200 in rejoined
-
-    def test_empty_transcript(self):
-        from ingest.extract import _chunk_transcript_text
-        chunks = _chunk_transcript_text("", max_chars=1000)
-        assert chunks == [""]

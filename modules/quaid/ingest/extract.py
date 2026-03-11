@@ -167,24 +167,6 @@ def build_transcript(messages: List[Dict[str, str]]) -> str:
     return runtime_build_transcript(messages)
 
 
-def _chunk_transcript_text(transcript: str, max_chars: int = 30_000) -> List[str]:
-    """Split plain text transcript at turn boundaries."""
-    if len(transcript) <= max_chars:
-        return [transcript]
-    chunks: List[str] = []
-    current: List[str] = []
-    size = 0
-    for turn in transcript.split('\n\n'):
-        turn_size = len(turn) + 2
-        if size + turn_size > max_chars and current:
-            chunks.append('\n\n'.join(current))
-            current, size = [], 0
-        current.append(turn)
-        size += turn_size
-    if current:
-        chunks.append('\n\n'.join(current))
-    return chunks
-
 
 def _apply_capture_skip_patterns(transcript: str, patterns: List[str]) -> str:
     """Remove transcript lines matching configured capture skip regex patterns."""
