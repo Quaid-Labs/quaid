@@ -4,7 +4,7 @@ Integrates Quaid as a lifecycle-aware memory layer for Claude Code sessions.
 Uses CLI subcommands via the existing Bash tool + hooks for automation.
 
 - Home dir: QUAID_HOME env or ~/quaid/
-- Notifications: stderr
+- Notifications: deferred via pending file → surfaced in next UserPromptSubmit
 - Credentials: env var → ~/.claude/.credentials.json OAuth token
 - Sessions: ~/.claude/projects/ (Claude Code transcripts)
 - Filtering: <system-reminder> tags, tool blocks, thinking blocks
@@ -31,17 +31,68 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if self._home is not None:
             return self._home
         env = os.environ.get("QUAID_HOME", "").strip()
-        return Path(env) if env else Path.home() / "quaid"
+        return Path(env).resolve() if env else Path.home() / "quaid"
+
+    def _pending_notifications_path(self) -> Path:
+        """Path to the pending notifications file for deferred delivery."""
+        return self.quaid_home() / "data" / "cc-pending-notifications.jsonl"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
                dry_run: bool = False, force: bool = False) -> bool:
+        """Write notification to pending file for next UserPromptSubmit pickup.
+
+        CC has no in-terminal notification channel, so notifications are
+        deferred and surfaced via additionalContext on the next hook_inject().
+        """
         if os.environ.get("QUAID_DISABLE_NOTIFICATIONS") and not force:
             return True
         if dry_run:
             print(f"[notify] (dry-run) {message}", file=sys.stderr)
             return True
-        print(f"[quaid] {message}", file=sys.stderr)
-        return True
+
+        try:
+            pending = self._pending_notifications_path()
+            pending.parent.mkdir(parents=True, exist_ok=True)
+            entry = json.dumps({"message": message, "ts": _now_iso()})
+            with open(pending, "a", encoding="utf-8") as f:
+                f.write(entry + "\n")
+            return True
+        except Exception as e:
+            print(f"[notify] Failed to queue notification: {e}", file=sys.stderr)
+            return False
+
+    def drain_pending_notifications(self, max_age_seconds: int = 3600) -> list[str]:
+        """Read and clear pending notifications. Returns list of message strings."""
+        pending = self._pending_notifications_path()
+        if not pending.is_file():
+            return []
+
+        messages = []
+        try:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            with open(pending, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        # Skip stale notifications
+                        ts = entry.get("ts", "")
+                        if ts and max_age_seconds > 0:
+                            entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            if (now - entry_dt).total_seconds() > max_age_seconds:
+                                continue
+                        messages.append(entry.get("message", ""))
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+            # Clear the file
+            pending.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"[notify] Failed to drain pending notifications: {e}", file=sys.stderr)
+
+        return [m for m in messages if m]
 
     def get_last_channel(self, session_key: str = "") -> None:
         return None
@@ -210,3 +261,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider
         return ClaudeCodeOAuthLLMProvider()
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()

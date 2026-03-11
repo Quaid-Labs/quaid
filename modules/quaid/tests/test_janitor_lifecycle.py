@@ -92,6 +92,11 @@ def test_rag_lifecycle_handles_missing_routine():
 
 
 def test_workspace_lifecycle_returns_phase_and_metrics(monkeypatch, tmp_path):
+    # Force OC adapter maintenance module (workspace audit is OC-specific)
+    monkeypatch.setattr(
+        "core.lifecycle.janitor_lifecycle._resolve_adapter_maintenance_module",
+        lambda default_module="": "adaptors.openclaw.maintenance",
+    )
     monkeypatch.setattr("core.lifecycle.workspace_audit.run_workspace_check", lambda dry_run: {
         "phase": "apply",
         "moved_to_docs": 3,
