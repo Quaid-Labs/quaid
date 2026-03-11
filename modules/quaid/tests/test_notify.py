@@ -65,7 +65,7 @@ class TestNotifyMemoryRecall:
             result = notify_memory_recall(memories, min_similarity=70, dry_run=False)
             assert result is True
             msg = mock_send.call_args[0][0]
-            assert "Memory Context Loaded" in msg
+            assert "Memory Recall" in msg
             assert "Direct Matches" in msg
             assert "[85%]" in msg
             assert "[72%]" in msg
