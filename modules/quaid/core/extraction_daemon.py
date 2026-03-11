@@ -544,13 +544,28 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             carry_facts=carry_facts,
         )
 
+        facts_stored = result.get("facts_stored", 0)
+        facts_skipped = result.get("facts_skipped", 0)
+        edges_created = result.get("edges_created", 0)
+
         logger.info(
             "[%s] session %s: %d stored, %d skipped, %d edges",
-            label, session_id,
-            result.get("facts_stored", 0),
-            result.get("facts_skipped", 0),
-            result.get("edges_created", 0),
+            label, session_id, facts_stored, facts_skipped, edges_created,
         )
+
+        # Send extraction notification (Telegram, stderr, etc.)
+        try:
+            from core.runtime.notify import notify_memory_extraction
+            notify_memory_extraction(
+                facts_stored=facts_stored,
+                facts_skipped=facts_skipped,
+                edges_created=edges_created,
+                trigger=signal_type,
+                details=result.get("facts"),
+                snippet_details=result.get("snippets"),
+            )
+        except Exception as e:
+            logger.warning("[%s] session %s: notification failed: %s", label, session_id, e)
 
         # B054: Only advance cursor if extraction completed all chunks
         chunks_processed = result.get("chunks_processed", 0)

@@ -56,6 +56,9 @@ def hook_inject(args):
 
     Writes to stdout:
         {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "..."}}
+
+    Also drains any pending notifications (from extraction, janitor, etc.)
+    and appends them to the context so Claude can relay them to the user.
     """
     try:
         hook_input = json.load(sys.stdin)
@@ -83,6 +86,10 @@ def hook_inject(args):
         except Exception:
             pass
 
+    # Drain pending notifications (CC deferred notification pattern).
+    # These come from extraction, janitor, etc. that ran between prompts.
+    pending_notes = _drain_pending_notifications()
+
     try:
         from core.interface.api import recall_fast
         owner = _get_owner_id()
@@ -91,21 +98,60 @@ def hook_inject(args):
             owner_id=owner,
             limit=10,
         )
-        if not memories:
+
+        context_parts = []
+
+        # Pending notifications from background processes
+        if pending_notes:
+            context_parts.append(
+                "[Quaid Background Notifications — briefly inform the user about these]\n"
+                + "\n".join(f"• {n}" for n in pending_notes)
+            )
+
+        if memories:
+            context_parts.append(_format_memories(memories))
+            recall_count = len(memories)
+            context_parts.append(
+                f"\n[Quaid: {recall_count} memories loaded for this query]"
+            )
+
+        if not context_parts:
             return
 
-        context = _format_memories(memories)
-        # Claude Code UserPromptSubmit: additionalContext must be inside
-        # hookSpecificOutput with hookEventName for structured injection.
-        # Plain text stdout also works but hookSpecificOutput is more reliable.
+        context = "\n\n".join(context_parts)
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
                 "additionalContext": context,
             }
         }))
+
     except Exception as e:
+        # Still try to surface pending notifications even if recall fails
+        if pending_notes:
+            context = (
+                "[Quaid Background Notifications — briefly inform the user about these]\n"
+                + "\n".join(f"• {n}" for n in pending_notes)
+            )
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": context,
+                }
+            }))
         print(f"[quaid][hook-inject] error: {e}", file=sys.stderr)
+
+
+def _drain_pending_notifications() -> List[str]:
+    """Drain pending notifications from the CC adapter's deferred queue."""
+    try:
+        from lib.adapter import get_adapter
+        adapter = get_adapter()
+        if hasattr(adapter, "drain_pending_notifications"):
+            return adapter.drain_pending_notifications()
+    except Exception:
+        pass
+    return []
 
 
 def hook_inject_compact(args):
