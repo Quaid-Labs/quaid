@@ -566,6 +566,39 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         # B002: Mark processed only on success
         mark_signal_processed(signal_data)
 
+        # Post-extraction hooks: sync project context files to adapter workspaces
+        # and snapshot shadow git for tracked projects.
+        try:
+            from core.sync_engine import sync_all_projects
+            sync_results = sync_all_projects()
+            for sr in sync_results:
+                if sr.copied:
+                    logger.info("[%s] synced %s: %s", label, sr.project, sr.copied)
+        except Exception as e:
+            logger.warning("[%s] post-extraction sync error: %s", label, e)
+
+        snapshots = []
+        try:
+            from core.project_registry import snapshot_all_projects
+            snapshots = snapshot_all_projects()
+            for snap in snapshots:
+                logger.info(
+                    "[%s] shadow snapshot %s: %d changes",
+                    label, snap["project"], len(snap["changes"]),
+                )
+        except Exception as e:
+            logger.warning("[%s] post-extraction shadow git error: %s", label, e)
+
+        # Update project docs from shadow git diffs
+        if snapshots:
+            try:
+                from core.docs_updater_hook import update_project_docs
+                doc_metrics = update_project_docs(snapshots, extraction_result=result)
+                if doc_metrics.get("docs_updated", 0):
+                    logger.info("[%s] docs updated: %s", label, doc_metrics)
+            except Exception as e:
+                logger.warning("[%s] post-extraction docs update error: %s", label, e)
+
     except Exception as e:
         # B002: Do NOT mark_signal_processed here — leave signal for retry
         logger.error("[%s] session %s: extraction failed (signal preserved for retry): %s",

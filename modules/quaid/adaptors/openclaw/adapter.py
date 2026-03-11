@@ -91,6 +91,30 @@ class OpenClawAdapter(QuaidAdapter):
                 return candidate
         return None
 
+    def adapter_id(self) -> str:
+        return "openclaw"
+
+    def get_base_context_files(self):
+        """OC's native context files live at the workspace root."""
+        ws = self.quaid_home()
+        files = {}
+        for name, purpose, max_lines in [
+            ("SOUL.md", "Personality, vibe, interaction style", 80),
+            ("USER.md", "About the user", 150),
+            ("MEMORY.md", "Core memories loaded every session", 100),
+            ("IDENTITY.md", "Name, avatar, minimal identity", 20),
+            ("HEARTBEAT.md", "Periodic task instructions", 50),
+            ("TODO.md", "Planning and task list", 150),
+        ]:
+            fpath = ws / name
+            if fpath.is_file():
+                files[str(fpath)] = {"purpose": purpose, "maxLines": max_lines}
+        return files
+
+    def get_context_sync_target(self):
+        """OC needs bootstrap files copied inside its workspace boundary."""
+        return Path.home() / ".openclaw" / "workspace" / "plugins" / "quaid" / "projects"
+
     def quaid_home(self) -> Path:
         env = os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
         if env:

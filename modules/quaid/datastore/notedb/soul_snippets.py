@@ -40,6 +40,23 @@ from prompt_sets import get_prompt
 def _workspace_dir() -> Path:
     return get_workspace_dir()
 
+def _identity_dir() -> Path:
+    """Resolve Quaid-managed identity dir for snippet/identity file writes.
+
+    Generated identity files (*.snippets.md, SOUL.md, USER.md, MEMORY.md)
+    live in the adapter's identity silo, not the workspace root.
+    Uses the core utility function quaid_identity_dir().
+    See docs/DIRECTORY-STANDARD.md Layer 2.
+    """
+    try:
+        from lib.adapter import get_adapter, quaid_identity_dir
+        adapter = get_adapter()
+        d = quaid_identity_dir(adapter.quaid_home(), adapter.adapter_id())
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except Exception:
+        return get_workspace_dir()
+
 def _backup_dir() -> Path:
     return _workspace_dir() / "backups" / "soul-snippets"
 
@@ -49,6 +66,17 @@ def _project_file_path(filename: str) -> Path:
 
 
 def _root_file_path(filename: str) -> Path:
+    """Resolve a root-level file path.
+
+    For identity files (SOUL.md, USER.md, MEMORY.md, *.snippets.md),
+    use the adapter's identity dir. For everything else, use workspace root.
+    """
+    _IDENTITY_FILES = {
+        "SOUL.md", "USER.md", "MEMORY.md",
+        "SOUL.snippets.md", "USER.snippets.md", "MEMORY.snippets.md",
+    }
+    if filename in _IDENTITY_FILES:
+        return _identity_dir() / filename
     return _workspace_dir() / filename
 
 

@@ -1389,6 +1389,18 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             metrics.end_task("journal")
             print(f"Task completed in {metrics.task_duration('journal'):.2f}s\n")
 
+            # Post-distillation: rotate project and journal logs
+            try:
+                from core.log_rotation import rotate_project_logs, rotate_journal_logs
+                ws = _workspace()
+                proj_archived = rotate_project_logs(ws / "projects")
+                journal_archived = rotate_journal_logs(ws / "journal")
+                if proj_archived or journal_archived:
+                    print(f"  Log rotation: {proj_archived} project entries, {journal_archived} journal entries archived")
+                    applied_changes["log_entries_archived"] = proj_archived + journal_archived
+            except Exception as e:
+                logger.warning("Log rotation error: %s", e)
+
         # --- Task 7: RAG Reindex + Project Discovery (Ollama embeddings) ---
         if task in ("rag", "all") and _system_enabled_or_skip("rag", "Task 7: RAG Reindex") and not _skip_if_over_budget("Task 7: RAG Reindex", 15):
             print("[Task 7: RAG Reindex + Project Discovery]")
