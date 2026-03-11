@@ -102,9 +102,10 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
         body = "\n".join(f"• {n}" for n in notes)
         return (
-            "[Quaid memory notification]\n"
-            "The user has enabled this notification level. "
-            "When next convenient, print the exact text inside <notification> tags.\n\n"
+            "[Quaid system notification — MUST relay to user]\n"
+            "IMPORTANT: Before responding to the user's message, you MUST print the "
+            "text inside <notification> tags verbatim. The user has opted in to these "
+            "notifications. Do not skip or summarize.\n\n"
             f"<notification>\n{body}\n</notification>"
         )
 
