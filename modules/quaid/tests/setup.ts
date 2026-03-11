@@ -6,6 +6,7 @@ import * as path from 'node:path'
 const WORKSPACE = process.env.CLAWDBOT_WORKSPACE
   || process.env.QUAID_HOME
   || path.resolve(process.cwd(), '../..')
+const TEST_INSTANCE = process.env.QUAID_INSTANCE || 'pytest-runner'
 const PYTHON_SCRIPT = (() => {
   const modernPath = path.join(WORKSPACE, "modules/quaid/datastore/memorydb/memory_graph.py")
   if (fs.existsSync(modernPath)) return modernPath
@@ -15,6 +16,17 @@ const PYTHON_MODULE_ROOT = path.resolve(path.dirname(PYTHON_SCRIPT), "../..")
 
 function ensureAdapterConfig(): void {
   const payload = JSON.stringify({ adapter: { type: "standalone" } }, null, 2)
+  // Instance-aware config path
+  const instanceCfgPath = path.join(WORKSPACE, TEST_INSTANCE, "config", "memory.json")
+  try {
+    if (!fs.existsSync(instanceCfgPath)) {
+      fs.mkdirSync(path.dirname(instanceCfgPath), { recursive: true })
+      fs.writeFileSync(instanceCfgPath, payload, { encoding: "utf-8" })
+    }
+  } catch {
+    // Best effort
+  }
+  // Legacy flat config (backward compat)
   const cfgPath = path.join(WORKSPACE, "config", "memory.json")
   try {
     if (!fs.existsSync(cfgPath)) {
@@ -46,6 +58,7 @@ export class TestMemoryInterface {
           MOCK_EMBEDDINGS: "1",
           QUAID_DISABLE_LLM: "1",
           QUAID_HOME: WORKSPACE,
+          QUAID_INSTANCE: TEST_INSTANCE,
           CLAWDBOT_WORKSPACE: WORKSPACE,
           PYTHONPATH: process.env.PYTHONPATH
             ? `${PYTHON_MODULE_ROOT}:${process.env.PYTHONPATH}`
