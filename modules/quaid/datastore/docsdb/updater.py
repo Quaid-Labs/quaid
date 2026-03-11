@@ -732,10 +732,7 @@ def get_git_diff(source_path: str, since_mtime: float) -> str:
             deadline,
         )
         if diff_output.returncode == 0 and diff_output.stdout.strip():
-            # Truncate very large diffs
             diff_text = diff_output.stdout.strip()
-            if len(diff_text) > 8000:
-                diff_text = diff_text[:8000] + "\n... (truncated)"
             parts.append(f"### Diff for {source_path}:\n{diff_text}")
     except TimeoutError:
         logger.warning("Git subprocess budget exhausted while collecting git diff for %s", source_path)

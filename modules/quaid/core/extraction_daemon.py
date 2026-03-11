@@ -491,7 +491,11 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                         child_text = adapter.parse_session_jsonl(Path(child_path))
                         if child_text.strip():
                             if len(child_text) > MAX_CHILD_CHARS:
-                                child_text = child_text[:MAX_CHILD_CHARS] + "\n[... truncated]"
+                                logger.warning(
+                                    "[%s] session %s: subagent %s transcript is very large (%d chars), "
+                                    "extraction chunker will handle splitting",
+                                    label, session_id, child_id, len(child_text),
+                                )
                             transcript_text += (
                                 f"\n\n--- Subagent ({child.get('child_type', 'unknown')}) ---\n"
                                 + child_text

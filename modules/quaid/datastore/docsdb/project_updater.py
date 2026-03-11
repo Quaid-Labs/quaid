@@ -403,6 +403,11 @@ def evaluate_doc_health(
         return result
 
     project_md = project_md_path.read_text()
+    if len(project_md) > 5000:
+        logger.warning(
+            "PROJECT.md for %s is %d chars — consider pruning (expected <5000)",
+            project_name, len(project_md),
+        )
 
     # Gather existing docs
     docs = registry.list_docs(project=project_name)
@@ -427,7 +432,7 @@ def evaluate_doc_health(
 Given the current state of the "{project_name}" project, decide what documentation actions are needed.
 
 ## Current PROJECT.md
-{project_md[:3000]}
+{project_md}
 
 ## Registered Documents
 {doc_listing}

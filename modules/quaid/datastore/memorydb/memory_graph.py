@@ -2759,7 +2759,7 @@ def route_query(query: str, timeout_ms: Optional[int] = None, max_retries: Optio
     if len(query) < 15:
         return query
 
-    prompt = f'Rephrase this question as a declarative statement about someone\'s personal life. Do NOT invent specific names, dates, or places. Keep it general.\n\nQuestion: "{query[:300]}"\n\nStatement:'
+    prompt = f'Rephrase this question as a declarative statement about someone\'s personal life. Do NOT invent specific names, dates, or places. Keep it general.\n\nQuestion: "{query}"\n\nStatement:'
 
     if timeout_ms is None:
         try:
