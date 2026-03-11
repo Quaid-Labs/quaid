@@ -41,13 +41,12 @@ from lib.runtime_context import (
     send_notification as _ctx_send_notification,
 )
 
-# Shared prefix for all notifications (brand-neutral by default)
+# Shared prefix for all notifications
 SYSTEM_LABEL = (
     os.environ.get("MEMORY_SYSTEM_NAME")
     or os.environ.get("QUAID_SYSTEM_NAME")
-    or "Memory"
+    or "Quaid"
 ).strip()
-SYSTEM_HEADER = f"**[{SYSTEM_LABEL}]**"
 MAX_NOTIFY_CHARS = 3500
 logger = logging.getLogger(__name__)
 
@@ -289,7 +288,7 @@ def notify_memory_recall(
         return False
 
     # Build notification message
-    msg_parts = [f"{SYSTEM_HEADER} 🧠 **Memory Context Loaded:**", ""]
+    msg_parts = [f"**[{SYSTEM_LABEL} — Memory Recall]**", ""]
 
     if direct_matches:
         msg_parts.append("**Direct Matches:**")
@@ -363,7 +362,7 @@ def notify_docs_search(
     if not results:
         return False
 
-    msg_parts = [f"{SYSTEM_HEADER} 📚 **Docs Search Results:**", ""]
+    msg_parts = [f"**[{SYSTEM_LABEL} — Docs Search]**", ""]
     msg_parts.append(f"_Query: \"{query}\"_")
     msg_parts.append("")
 
@@ -437,13 +436,13 @@ def notify_memory_extraction(
                 "extraction": "extraction",
                 "new": "new",
             }.get(trigger, trigger)
-            message = f"{SYSTEM_HEADER} 💾 Memory Extraction ({trigger_label}): No facts found."
+            message = f"**[{SYSTEM_LABEL} — Memory Extraction]** ({trigger_label}): No facts found."
         else:
-            message = f"{SYSTEM_HEADER} 💾 Memory Extraction: No facts found."
+            message = f"**[{SYSTEM_LABEL} — Memory Extraction]** No facts found."
         return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("extraction"))
 
     full_text = _notify_full_text()
-    msg_parts = [f"{SYSTEM_HEADER} 💾 **Memory Extraction:**", ""]
+    msg_parts = [f"**[{SYSTEM_LABEL} — Memory Extraction]**", ""]
 
     # Trigger info (full verbosity only)
     if show_trigger:
@@ -537,7 +536,7 @@ def notify_memory_extraction(
     for idx, chunk in enumerate(chunks):
         if idx > 0:
             chunk = (
-                f"{SYSTEM_HEADER} 💾 **Memory Extraction (cont. {idx + 1}/{len(chunks)}):**\n\n"
+                f"**[{SYSTEM_LABEL} — Memory Extraction (cont. {idx + 1}/{len(chunks)})]**\n\n"
                 f"{chunk}"
             )
         if notify_user(chunk, dry_run=dry_run, channel_override=channel):
@@ -547,7 +546,7 @@ def notify_memory_extraction(
 
 def format_janitor_summary_message(metrics: dict, applied_changes: dict) -> str:
     """Format janitor summary content for either direct or delayed delivery."""
-    msg_parts = [f"{SYSTEM_HEADER} 🧹 **Nightly Janitor Complete:**", ""]
+    msg_parts = [f"**[{SYSTEM_LABEL} — Janitor]**", ""]
 
     # Duration and stats
     duration = metrics.get("total_duration_seconds", 0)
@@ -629,7 +628,7 @@ def format_daily_memories_message(memories: list) -> Optional[str]:
         return None
 
     full_text = _notify_full_text()
-    msg_parts = [f"{SYSTEM_HEADER} 📚 **Today's New Memories:**", ""]
+    msg_parts = [f"**[{SYSTEM_LABEL} — Daily Memories]**", ""]
     msg_parts.append(f"_{len(memories)} memories added today_")
     msg_parts.append("")
 
