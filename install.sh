@@ -127,17 +127,34 @@ def satisfies(v, spec):
         if part.startswith(">="):
             if pv < parse_ver(part[2:]):
                 return False
+        elif part.startswith("<="):
+            if pv > parse_ver(part[2:]):
+                return False
+        elif part.startswith(">"):
+            if pv <= parse_ver(part[1:]):
+                return False
         elif part.startswith("<"):
             if pv >= parse_ver(part[1:]):
                 return False
+        elif part.startswith("="):
+            if pv != parse_ver(part[1:]):
+                return False
     return True
 
+# Determine installing quaid version from download URL
+quaid_ver = "unknown"
+latest = matrix.get("latest_quaid", "")
+if latest:
+    quaid_ver = latest
+
 for entry in matrix.get("matrix", []):
-    if entry.get("host") != platform:
+    if entry.get("host", "").lower() != platform.lower():
         continue
     hr = entry.get("host_range", "")
     qr = entry.get("quaid_range", "")
     if not satisfies(version, hr):
+        continue
+    if qr and not satisfies(quaid_ver, qr):
         continue
     status = entry.get("status", "")
     if status == "incompatible" and entry.get("data_risk"):

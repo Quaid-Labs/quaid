@@ -682,6 +682,13 @@ def extract_from_transcript(
             elif store_result.get("status") == "updated":
                 fact_entry["status"] = "updated"
                 result["facts_stored"] += 1
+            elif store_result.get("status") == "blocked":
+                # Circuit breaker tripped mid-extraction — abort remaining facts
+                fact_entry["status"] = "blocked"
+                result["facts_skipped"] += 1
+                result["circuit_breaker"] = store_result.get("reason", "blocked")
+                logger.warning("[extract] circuit breaker tripped mid-extraction, aborting remaining facts")
+                break
             else:
                 fact_entry["status"] = "failed"
                 result["facts_skipped"] += 1
