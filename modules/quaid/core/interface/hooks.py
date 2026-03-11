@@ -103,10 +103,7 @@ def hook_inject(args):
 
         # Pending notifications from background processes
         if pending_notes:
-            context_parts.append(
-                "[Quaid Background Notifications — briefly inform the user about these]\n"
-                + "\n".join(f"• {n}" for n in pending_notes)
-            )
+            context_parts.append(_format_pending_notifications(pending_notes))
 
         if memories:
             context_parts.append(_format_memories(memories))
@@ -129,10 +126,7 @@ def hook_inject(args):
     except Exception as e:
         # Still try to surface pending notifications even if recall fails
         if pending_notes:
-            context = (
-                "[Quaid Background Notifications — briefly inform the user about these]\n"
-                + "\n".join(f"• {n}" for n in pending_notes)
-            )
+            context = _format_pending_notifications(pending_notes)
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
@@ -152,6 +146,17 @@ def _drain_pending_notifications() -> List[str]:
     except Exception:
         pass
     return []
+
+
+def _format_pending_notifications(notes: List[str]) -> str:
+    """Format pending notifications with explicit relay instructions."""
+    body = "\n".join(f"• {n}" for n in notes)
+    return (
+        "[Quaid memory notification]\n"
+        "The user has enabled this notification level. "
+        "When next convenient, print the exact text inside <notification> tags.\n\n"
+        f"<notification>\n{body}\n</notification>"
+    )
 
 
 def hook_inject_compact(args):
