@@ -61,11 +61,17 @@ class ClaudeCodeAdapter(QuaidAdapter):
             print(f"[notify] Failed to queue notification: {e}", file=sys.stderr)
             return False
 
-    def drain_pending_notifications(self, max_age_seconds: int = 3600) -> list[str]:
-        """Read and clear pending notifications. Returns list of message strings."""
+    def get_pending_context(self, max_age_seconds: int = 3600) -> str:
+        """Drain pending notifications and return formatted context for injection.
+
+        CC has no in-terminal notification channel, so notifications are
+        deferred to a file and surfaced via additionalContext on the next
+        UserPromptSubmit hook. Returns formatted context string with relay
+        instructions, or empty string if nothing pending.
+        """
         pending = self._pending_notifications_path()
         if not pending.is_file():
-            return []
+            return ""
 
         messages = []
         try:
@@ -78,7 +84,6 @@ class ClaudeCodeAdapter(QuaidAdapter):
                         continue
                     try:
                         entry = json.loads(line)
-                        # Skip stale notifications
                         ts = entry.get("ts", "")
                         if ts and max_age_seconds > 0:
                             entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -87,12 +92,21 @@ class ClaudeCodeAdapter(QuaidAdapter):
                         messages.append(entry.get("message", ""))
                     except (json.JSONDecodeError, ValueError):
                         continue
-            # Clear the file
             pending.unlink(missing_ok=True)
         except Exception as e:
             print(f"[notify] Failed to drain pending notifications: {e}", file=sys.stderr)
 
-        return [m for m in messages if m]
+        notes = [m for m in messages if m]
+        if not notes:
+            return ""
+
+        body = "\n".join(f"• {n}" for n in notes)
+        return (
+            "[Quaid memory notification]\n"
+            "The user has enabled this notification level. "
+            "When next convenient, print the exact text inside <notification> tags.\n\n"
+            f"<notification>\n{body}\n</notification>"
+        )
 
     def get_last_channel(self, session_key: str = "") -> None:
         return None

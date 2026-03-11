@@ -86,9 +86,9 @@ def hook_inject(args):
         except Exception:
             pass
 
-    # Drain pending notifications (CC deferred notification pattern).
-    # These come from extraction, janitor, etc. that ran between prompts.
-    pending_notes = _drain_pending_notifications()
+    # Ask the adapter for any pending context (e.g. deferred notifications).
+    # Adapters without pending context return empty string.
+    pending_context = _get_pending_context()
 
     try:
         from core.interface.api import recall_fast
@@ -101,16 +101,11 @@ def hook_inject(args):
 
         context_parts = []
 
-        # Pending notifications from background processes
-        if pending_notes:
-            context_parts.append(_format_pending_notifications(pending_notes))
+        if pending_context:
+            context_parts.append(pending_context)
 
         if memories:
             context_parts.append(_format_memories(memories))
-            recall_count = len(memories)
-            context_parts.append(
-                f"\n[Quaid: {recall_count} memories loaded for this query]"
-            )
 
         if not context_parts:
             return
@@ -124,39 +119,31 @@ def hook_inject(args):
         }))
 
     except Exception as e:
-        # Still try to surface pending notifications even if recall fails
-        if pending_notes:
-            context = _format_pending_notifications(pending_notes)
+        # Still try to surface pending context even if recall fails
+        if pending_context:
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": context,
+                    "additionalContext": pending_context,
                 }
             }))
         print(f"[quaid][hook-inject] error: {e}", file=sys.stderr)
 
 
-def _drain_pending_notifications() -> List[str]:
-    """Drain pending notifications from the CC adapter's deferred queue."""
+def _get_pending_context() -> str:
+    """Ask the adapter for any pending context to inject.
+
+    Returns formatted context string ready for additionalContext, or empty string.
+    Each adapter decides its own mechanism (deferred file, queue, etc.).
+    """
     try:
         from lib.adapter import get_adapter
         adapter = get_adapter()
-        if hasattr(adapter, "drain_pending_notifications"):
-            return adapter.drain_pending_notifications()
+        if hasattr(adapter, "get_pending_context"):
+            return adapter.get_pending_context() or ""
     except Exception:
         pass
-    return []
-
-
-def _format_pending_notifications(notes: List[str]) -> str:
-    """Format pending notifications with explicit relay instructions."""
-    body = "\n".join(f"• {n}" for n in notes)
-    return (
-        "[Quaid memory notification]\n"
-        "The user has enabled this notification level. "
-        "When next convenient, print the exact text inside <notification> tags.\n\n"
-        f"<notification>\n{body}\n</notification>"
-    )
+    return ""
 
 
 def hook_inject_compact(args):
