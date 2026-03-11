@@ -4184,6 +4184,328 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
     return merged[: max(1, limit)]
 
 
+def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.5) -> List[str]:
+    """Generate multiple HyDE-style search queries in a single fast LLM call.
+
+    Replaces both route_query() and _plan_recall_queries() for injection path.
+    Returns 1-N declarative search queries (the LLM decides fanout).
+    Falls back to [original_query] on any failure.
+    """
+    clean = " ".join((query or "").split())
+    if not clean or len(clean) < 10:
+        return [clean] if clean else []
+    if not _HAS_LLM_CLIENTS:
+        return [clean]
+
+    prompt = (
+        f"Generate 1 to {max_queries} search queries to find personal memories relevant to this message.\n"
+        "Rules:\n"
+        '- Return JSON only: {"queries": ["..."]}\n'
+        "- Each query must be a short declarative statement (HyDE style), NOT a question.\n"
+        "- First query: rephrase the core intent as a factual statement.\n"
+        "- Additional queries: alternative angles, related entities, or broader context.\n"
+        "- Keep all original names, dates, projects, and entities.\n"
+        "- Only add queries if they would genuinely find different memories.\n"
+        "- Fewer good queries beats more weak ones.\n\n"
+        f"Message: {clean}"
+    )
+
+    try:
+        from lib.llm_clients import call_fast_reasoning
+        result, _ = call_fast_reasoning(
+            prompt=prompt,
+            max_tokens=200,
+            timeout=timeout_s,
+            system_prompt="You output compact JSON for memory retrieval. No prose.",
+            max_retries=0,
+        )
+        parsed = parse_json_response(result)
+        queries = parsed.get("queries") if isinstance(parsed, dict) else None
+        if not isinstance(queries, list):
+            return [clean]
+
+        out: List[str] = []
+        seen = set()
+        for raw in queries:
+            q = " ".join(str(raw or "").split()).strip().strip("\"'")
+            if not q or len(q) < 5:
+                continue
+            key = q.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(q)
+            if len(out) >= max_queries:
+                break
+
+        # Always include the original query in case LLM diverged
+        if clean.lower() not in {q.lower() for q in out}:
+            out.insert(0, clean)
+        return out or [clean]
+    except Exception:
+        return [clean]
+
+
+def recall_fast(
+    query: str,
+    limit: int = 10,
+    privacy: Optional[List[str]] = None,
+    owner_id: Optional[str] = None,
+    min_similarity: Optional[float] = None,
+    current_session_id: Optional[str] = None,
+    compaction_time: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    source_channel: Optional[str] = None,
+    source_conversation_id: Optional[str] = None,
+    source_author_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    subject_entity_id: Optional[str] = None,
+    viewer_entity_id: Optional[str] = None,
+    participant_entity_ids: Optional[List[str]] = None,
+    include_unscoped: bool = True,
+    debug: bool = False,
+    domain: Optional[Dict[str, bool]] = None,
+    domain_boost: Optional[Any] = None,
+    project: Optional[str] = None,
+    timeout_ms: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Fast recall for pre-injection. Parallel fanout with hard time budget.
+
+    Designed for the hook-inject hot path where latency matters more than
+    exhaustive coverage. Uses a single fast LLM call to generate multiple
+    HyDE queries, fans them all out in parallel, and merges results.
+
+    No reranker, no graph traversal, no multi-pass retry — fanout replaces
+    those slower strategies.
+
+    Args:
+        timeout_ms: Overall wall-clock budget in ms. Default from config
+            (retrieval.injection_timeout_ms, default 3000).
+    """
+    import time as _time
+
+    if not query or not query.strip():
+        return []
+
+    # Circuit breaker guard
+    try:
+        from core.compatibility import check_read_allowed
+        from lib.adapter import get_adapter
+        breaker = check_read_allowed(get_adapter().data_dir())
+        if not breaker.allows_reads():
+            logger.warning("recall_fast blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
+            return []
+    except Exception:
+        pass
+
+    # Load config
+    overall_timeout_ms = 3000
+    fanout_max = 5
+    fanout_llm_ms = 1500
+    try:
+        from config import get_config
+        cfg = get_config().retrieval
+        overall_timeout_ms = getattr(cfg, "injection_timeout_ms", 3000)
+        fanout_max = getattr(cfg, "injection_fanout_max", 5)
+        fanout_llm_ms = getattr(cfg, "injection_fanout_llm_ms", 1500)
+    except Exception:
+        pass
+    if timeout_ms is not None:
+        overall_timeout_ms = timeout_ms
+
+    deadline = _time.monotonic() + (overall_timeout_ms / 1000.0)
+
+    # Step 1: Generate fanout queries (single fast LLM call)
+    fanout_start = _time.monotonic()
+    queries = _plan_fanout_queries(
+        query,
+        max_queries=fanout_max,
+        timeout_s=fanout_llm_ms / 1000.0,
+    )
+    fanout_elapsed = (_time.monotonic() - fanout_start) * 1000
+    remaining = deadline - _time.monotonic()
+
+    if remaining <= 0:
+        logger.debug(
+            "[recall_fast] fanout LLM consumed entire budget (%.0fms), "
+            "falling back to single direct search",
+            fanout_elapsed,
+        )
+        queries = [query]
+        remaining = 0.5  # Give at least 500ms for a direct search
+
+    logger.debug(
+        "[recall_fast] fanout produced %d queries in %.0fms, %.0fms remaining: %s",
+        len(queries), fanout_elapsed, remaining * 1000, queries,
+    )
+
+    # Step 2: Fan out all searches in parallel
+    # Build common kwargs for _recall_once (lightweight mode)
+    common_kwargs = dict(
+        limit=min(max(3, limit), 12),
+        privacy=privacy,
+        owner_id=owner_id,
+        min_similarity=min_similarity,
+        use_routing=False,       # HyDE already done in fanout
+        use_aliases=True,
+        use_intent=True,
+        use_multi_pass=False,    # Fanout replaces multi-pass
+        use_reranker=False,      # Too slow for injection
+        current_session_id=current_session_id,
+        compaction_time=compaction_time,
+        date_from=date_from,
+        date_to=date_to,
+        source_channel=source_channel,
+        source_conversation_id=source_conversation_id,
+        source_author_id=source_author_id,
+        actor_id=actor_id,
+        subject_entity_id=subject_entity_id,
+        viewer_entity_id=viewer_entity_id,
+        participant_entity_ids=participant_entity_ids,
+        include_unscoped=include_unscoped,
+        debug=debug,
+        domain=domain,
+        domain_boost=domain_boost,
+        project=project,
+        low_signal_retry=False,
+    )
+
+    search_callables = [
+        (lambda q=q: _recall_once(query=q, **common_kwargs))
+        for q in queries
+    ]
+
+    search_start = _time.monotonic()
+    batches = run_callables(
+        search_callables,
+        max_workers=min(len(queries), 5),
+        pool_name="recall_fast",
+        timeout_seconds=remaining,
+        return_exceptions=True,
+    )
+    search_elapsed = (_time.monotonic() - search_start) * 1000
+
+    # Filter out exceptions
+    valid_batches = []
+    for i, batch in enumerate(batches):
+        if isinstance(batch, Exception):
+            logger.debug("[recall_fast] query %d failed: %s", i, batch)
+        elif isinstance(batch, list):
+            valid_batches.append(batch)
+
+    # Step 3: Merge + deduplicate
+    merged = _merge_recall_batches(valid_batches, limit=limit)
+
+    total_elapsed = (_time.monotonic() - (deadline - overall_timeout_ms / 1000.0)) * 1000
+    if total_elapsed > overall_timeout_ms:
+        logger.debug(
+            "[recall_fast] OVER BUDGET: %.0fms (budget: %dms) — "
+            "fanout: %.0fms, search: %.0fms, queries: %d, results: %d",
+            total_elapsed, overall_timeout_ms,
+            fanout_elapsed, search_elapsed, len(queries), len(merged),
+        )
+    else:
+        logger.debug(
+            "[recall_fast] completed in %.0fms (budget: %dms) — "
+            "fanout: %.0fms, search: %.0fms, queries: %d, results: %d",
+            total_elapsed, overall_timeout_ms,
+            fanout_elapsed, search_elapsed, len(queries), len(merged),
+        )
+
+    # Always attach recall metadata so the consuming LLM knows what was searched
+    for row in merged:
+        if isinstance(row, dict):
+            row["_recall_meta"] = {
+                "mode": "fast",
+                "query": query,
+                "search_queries": queries[:],
+                "fanout_ms": round(fanout_elapsed),
+                "search_ms": round(search_elapsed),
+                "total_ms": round(total_elapsed),
+                "budget_ms": overall_timeout_ms,
+                "over_budget": total_elapsed > overall_timeout_ms,
+            }
+
+    return merged
+
+
+def _drill_plan_queries(
+    query: str,
+    current_results: List[Dict[str, Any]],
+    already_searched: List[str],
+    timeout_s: float = 3.0,
+) -> List[str]:
+    """Given current results, identify gaps and generate new search queries.
+
+    This is the "drilling" step: a tiny LLM call that sees only the query
+    and short result summaries, then suggests queries to fill gaps.
+    """
+    if not _HAS_LLM_CLIENTS:
+        return []
+
+    # Build compact result summary (just text snippets, no full content)
+    result_summary = []
+    for r in current_results[:10]:
+        text = str(r.get("text", ""))[:80]
+        score = float(r.get("similarity", 0))
+        result_summary.append(f"  [{score:.2f}] {text}")
+    summary_text = "\n".join(result_summary) if result_summary else "  (no results)"
+
+    searched_text = "\n".join(f"  - {q}" for q in already_searched[-8:])
+
+    prompt = (
+        "You are a memory retrieval drill agent. Given a query and current results, "
+        "suggest 1-3 NEW search queries to find memories the current results missed.\n\n"
+        f"Original query: {query}\n\n"
+        f"Already searched:\n{searched_text}\n\n"
+        f"Current results:\n{summary_text}\n\n"
+        "Rules:\n"
+        '- Return JSON only: {"queries": ["..."], "done": true/false}\n'
+        '- Set "done": true if the current results fully answer the query.\n'
+        "- Each query must be a declarative statement (HyDE style).\n"
+        "- Try different angles: related entities, temporal context, broader/narrower scope.\n"
+        "- Do NOT repeat queries from the 'already searched' list.\n"
+        "- Keep original names, dates, and entities.\n"
+    )
+
+    try:
+        from lib.llm_clients import call_fast_reasoning
+        result, _ = call_fast_reasoning(
+            prompt=prompt,
+            max_tokens=200,
+            timeout=timeout_s,
+            system_prompt="You output compact JSON for retrieval drilling. No prose.",
+            max_retries=0,
+        )
+        parsed = parse_json_response(result)
+        if not isinstance(parsed, dict):
+            return []
+
+        # If LLM says we're done, stop drilling
+        if parsed.get("done"):
+            return []
+
+        queries = parsed.get("queries")
+        if not isinstance(queries, list):
+            return []
+
+        searched_lower = {q.lower() for q in already_searched}
+        out: List[str] = []
+        for raw in queries:
+            q = " ".join(str(raw or "").split()).strip().strip("\"'")
+            if not q or len(q) < 5:
+                continue
+            if q.lower() in searched_lower:
+                continue
+            out.append(q)
+            if len(out) >= 3:
+                break
+        return out
+    except Exception:
+        return []
+
+
 def recall(
     query: str,
     limit: int = 5,
@@ -4212,15 +4534,28 @@ def recall(
     domain_boost: Optional[Any] = None,
     project: Optional[str] = None,
     low_signal_retry: bool = True,
+    max_turns: int = 3,
+    timeout_ms: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Orchestrated recall surface for LLM/tool callers.
+    """Orchestrated recall with iterative drilling.
 
-    Runs one or more focused recall passes, then merges and deduplicates results.
+    Turn 1: Parallel HyDE fanout (like recall_fast but with reranker + graph).
+    Turn 2+: Evaluate results, identify gaps via small LLM call, search again.
+    Stops when: max_turns reached, quality gate met, time budget exhausted,
+    or drill agent says "done".
+
+    Args:
+        max_turns: Maximum drill turns (default 3). Turn 1 is always the
+            initial fanout. Set to 1 for single-pass behavior.
+        timeout_ms: Overall wall-clock budget in ms. Default 15000 (15s).
+            Benchmarks can increase this for more thorough recall.
     """
+    import time as _time
+
     if not query or not query.strip():
         return []
 
-    # Circuit breaker guard — block reads only in safe_mode
+    # Circuit breaker guard
     try:
         from core.compatibility import check_read_allowed
         from lib.adapter import get_adapter
@@ -4231,18 +4566,29 @@ def recall(
     except Exception:
         pass
 
-    # Pass 1: original query
-    first_batch = _recall_once(
-        query=query,
-        limit=limit,
+    # Load config
+    overall_timeout_ms = timeout_ms if timeout_ms is not None else 15000
+    quality_gate = 0.70
+    try:
+        from config import get_config
+        cfg = get_config().retrieval
+        quality_gate = getattr(cfg, "multi_pass_gate", 0.70)
+    except Exception:
+        pass
+
+    recall_start = _time.monotonic()
+    deadline = recall_start + (overall_timeout_ms / 1000.0)
+    all_searched: List[str] = []
+    all_batches: List[List[Dict[str, Any]]] = []
+    drill_log: List[Dict[str, Any]] = []
+
+    # Common kwargs for _recall_once
+    common_kwargs = dict(
         privacy=privacy,
         owner_id=owner_id,
         min_similarity=min_similarity,
-        use_routing=use_routing,
         use_aliases=use_aliases,
         use_intent=use_intent,
-        use_multi_pass=use_multi_pass,
-        use_reranker=use_reranker,
         current_session_id=current_session_id,
         compaction_time=compaction_time,
         date_from=date_from,
@@ -4259,56 +4605,176 @@ def recall(
         domain=domain,
         domain_boost=domain_boost,
         project=project,
-        low_signal_retry=low_signal_retry,
     )
 
-    planned = _plan_recall_queries(query) if use_routing else [query]
-    planned = [p for p in planned if p and p.strip()]
-    if len(planned) <= 1:
-        return first_batch
-
-    batches: List[List[Dict[str, Any]]] = [first_batch]
-    # Follow-up passes: keep them lightweight to control token/cost.
-    for subq in planned[1:]:
-        sub_batch = _recall_once(
-            query=subq,
-            limit=min(max(3, limit), 12),
-            privacy=privacy,
-            owner_id=owner_id,
-            min_similarity=min_similarity,
-            use_routing=False,
-            use_aliases=use_aliases,
-            use_intent=use_intent,
-            use_multi_pass=False,
-            use_reranker=use_reranker,
-            current_session_id=current_session_id,
-            compaction_time=compaction_time,
-            date_from=date_from,
-            date_to=date_to,
-            source_channel=source_channel,
-            source_conversation_id=source_conversation_id,
-            source_author_id=source_author_id,
-            actor_id=actor_id,
-            subject_entity_id=subject_entity_id,
-            viewer_entity_id=viewer_entity_id,
-            participant_entity_ids=participant_entity_ids,
-            include_unscoped=include_unscoped,
-            debug=debug,
-            domain=domain,
-            domain_boost=domain_boost,
-            project=project,
-            low_signal_retry=False,
+    # --- Turn 1: Parallel fanout ---
+    turn_start = _time.monotonic()
+    if use_routing:
+        fanout_queries = _plan_fanout_queries(
+            query,
+            max_queries=5,
+            timeout_s=min(2.0, max(0.5, (deadline - _time.monotonic()) * 0.3)),
         )
-        batches.append(sub_batch)
+    else:
+        fanout_queries = [query]
+    all_searched.extend(fanout_queries)
 
-    merged = _merge_recall_batches(batches, limit=limit)
-    if debug:
-        for row in merged:
-            if isinstance(row, dict):
-                row.setdefault("_planner", {})
-                row["_planner"]["queries"] = planned[:]
-                row["_planner"]["passes"] = len(batches)
-    return merged
+    remaining = deadline - _time.monotonic()
+    if remaining <= 0.5:
+        # Almost out of time, do single direct search
+        fanout_queries = [query]
+        remaining = 1.0
+
+    # First query gets the full treatment (reranker, graph, multi-pass)
+    # Remaining fanout queries are lightweight
+    search_callables = []
+    for i, q in enumerate(fanout_queries):
+        if i == 0:
+            search_callables.append(lambda q=q: _recall_once(
+                query=q, limit=limit,
+                use_routing=False,  # Already HyDE'd
+                use_multi_pass=use_multi_pass,
+                use_reranker=use_reranker,
+                low_signal_retry=low_signal_retry,
+                **common_kwargs,
+            ))
+        else:
+            search_callables.append(lambda q=q: _recall_once(
+                query=q, limit=min(max(3, limit), 12),
+                use_routing=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                low_signal_retry=False,
+                **common_kwargs,
+            ))
+
+    t1_batches = run_callables(
+        search_callables,
+        max_workers=min(len(search_callables), 5),
+        pool_name="recall_drill",
+        timeout_seconds=remaining,
+        return_exceptions=True,
+    )
+
+    for batch in t1_batches:
+        if isinstance(batch, list):
+            all_batches.append(batch)
+
+    turn_elapsed = (_time.monotonic() - turn_start) * 1000
+    merged = _merge_recall_batches(all_batches, limit=limit * 2)
+    top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
+
+    drill_log.append({
+        "turn": 1,
+        "queries": fanout_queries[:],
+        "results": len(merged),
+        "top_score": round(top_score, 3),
+        "elapsed_ms": round(turn_elapsed),
+    })
+
+    logger.debug(
+        "[recall] turn 1: %d queries, %d results, top=%.3f, %.0fms",
+        len(fanout_queries), len(merged), top_score, turn_elapsed,
+    )
+
+    # --- Turn 2+: Drill loop ---
+    for turn in range(2, max(2, max_turns + 1)):
+        remaining = deadline - _time.monotonic()
+        if remaining < 1.0:
+            logger.debug("[recall] time budget exhausted after turn %d (%.0fms remaining)", turn - 1, remaining * 1000)
+            break
+
+        # Quality gate: stop if top results are strong enough
+        if top_score >= quality_gate and len(merged) >= limit:
+            logger.debug("[recall] quality gate met (top=%.3f >= %.3f), stopping after turn %d", top_score, quality_gate, turn - 1)
+            break
+
+        # Ask drill agent for new queries
+        turn_start = _time.monotonic()
+        drill_budget = min(3.0, remaining * 0.4)  # Reserve 60% of remaining for search
+        new_queries = _drill_plan_queries(
+            query, merged, all_searched, timeout_s=drill_budget,
+        )
+
+        if not new_queries:
+            logger.debug("[recall] drill agent returned no queries or said done, stopping after turn %d", turn - 1)
+            break
+
+        all_searched.extend(new_queries)
+        search_remaining = deadline - _time.monotonic()
+        if search_remaining < 0.5:
+            logger.debug("[recall] no time left for search after drill planning, stopping")
+            break
+
+        # Search new queries in parallel (lightweight)
+        drill_callables = [
+            (lambda q=q: _recall_once(
+                query=q, limit=min(max(3, limit), 12),
+                use_routing=False,
+                use_multi_pass=False,
+                use_reranker=False,
+                low_signal_retry=False,
+                **common_kwargs,
+            ))
+            for q in new_queries
+        ]
+
+        drill_batches = run_callables(
+            drill_callables,
+            max_workers=min(len(drill_callables), 3),
+            pool_name="recall_drill",
+            timeout_seconds=search_remaining,
+            return_exceptions=True,
+        )
+
+        for batch in drill_batches:
+            if isinstance(batch, list):
+                all_batches.append(batch)
+
+        merged = _merge_recall_batches(all_batches, limit=limit * 2)
+        top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
+        turn_elapsed = (_time.monotonic() - turn_start) * 1000
+
+        drill_log.append({
+            "turn": turn,
+            "queries": new_queries[:],
+            "results": len(merged),
+            "top_score": round(top_score, 3),
+            "elapsed_ms": round(turn_elapsed),
+        })
+
+        logger.debug(
+            "[recall] turn %d: %d queries, %d results, top=%.3f, %.0fms",
+            turn, len(new_queries), len(merged), top_score, turn_elapsed,
+        )
+
+    # Final merge to requested limit
+    final = merged[:limit]
+    total_elapsed = (_time.monotonic() - recall_start) * 1000
+
+    if total_elapsed > overall_timeout_ms:
+        logger.debug(
+            "[recall] OVER BUDGET: %.0fms (budget: %dms) — "
+            "turns: %d, total queries: %d, results: %d",
+            total_elapsed, overall_timeout_ms,
+            len(drill_log), len(all_searched), len(final),
+        )
+
+    # Always attach recall metadata so the consuming LLM knows what was searched
+    for row in final:
+        if isinstance(row, dict):
+            row["_recall_meta"] = {
+                "mode": "deliberate",
+                "query": query,
+                "search_queries": list(all_searched),
+                "turns": len(drill_log),
+                "total_ms": round(total_elapsed),
+                "budget_ms": overall_timeout_ms,
+                "over_budget": total_elapsed > overall_timeout_ms,
+                "drill_log": drill_log[:],
+            }
+
+    return final
 
 
 def _check_injection_blocklist(text: str) -> Optional[str]:

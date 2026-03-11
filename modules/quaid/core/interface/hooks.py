@@ -84,13 +84,12 @@ def hook_inject(args):
             pass
 
     try:
-        from core.interface.api import recall
+        from core.interface.api import recall_fast
         owner = _get_owner_id()
-        memories = recall(
+        memories = recall_fast(
             query=query,
             owner_id=owner,
             limit=10,
-            use_reranker=False,  # Keep hook fast
         )
         if not memories:
             return

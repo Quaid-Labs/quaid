@@ -225,6 +225,9 @@ class RetrievalConfig:
     use_hyde: bool = True  # Enable HyDE query expansion by default
     hyde_timeout_ms: int = 15_000  # Fast-tier timeout for HyDE query routing
     hyde_max_retries: int = 1  # Extra retries for HyDE route calls (fail-hard still enforced)
+    injection_timeout_ms: int = 3_000  # Overall wall-clock budget for pre-injection recall
+    injection_fanout_max: int = 5  # Max parallel HyDE queries for injection
+    injection_fanout_llm_ms: int = 1_500  # LLM budget for query fanout within injection
     domains: Dict[str, str] = field(default_factory=dict)  # Domain id -> brief description
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
 
@@ -574,6 +577,9 @@ _KNOWN_RETRIEVAL_KEYS = {
     "use_hyde",
     "hyde_timeout_ms",
     "hyde_max_retries",
+    "injection_timeout_ms",
+    "injection_fanout_max",
+    "injection_fanout_llm_ms",
     "domains",
     "traversal",
     "reranker",
@@ -1131,6 +1137,9 @@ def _load_config_inner() -> MemoryConfig:
         use_hyde=retrieval_data.get('use_hyde', retrieval_data.get('useHyde', True)),
         hyde_timeout_ms=int(retrieval_data.get('hyde_timeout_ms', retrieval_data.get('hydeTimeoutMs', 15000))),
         hyde_max_retries=max(0, int(retrieval_data.get('hyde_max_retries', retrieval_data.get('hydeMaxRetries', 1)))),
+        injection_timeout_ms=int(retrieval_data.get('injection_timeout_ms', retrieval_data.get('injectionTimeoutMs', 3000))),
+        injection_fanout_max=int(retrieval_data.get('injection_fanout_max', retrieval_data.get('injectionFanoutMax', 5))),
+        injection_fanout_llm_ms=int(retrieval_data.get('injection_fanout_llm_ms', retrieval_data.get('injectionFanoutLlmMs', 1500))),
         domains=parsed_domains,
         traversal=traversal,
     )

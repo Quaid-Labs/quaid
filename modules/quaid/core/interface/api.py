@@ -111,6 +111,8 @@ def recall(
     viewer_entity_id: Optional[str] = None,
     participant_entity_ids: Optional[List[str]] = None,
     include_unscoped: bool = True,
+    max_turns: int = 3,
+    timeout_ms: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Recall memories matching a natural language query.
 
@@ -169,6 +171,39 @@ def recall(
         viewer_entity_id=viewer_entity_id,
         participant_entity_ids=participant_entity_ids,
         include_unscoped=include_unscoped,
+        max_turns=max_turns,
+        timeout_ms=timeout_ms,
+    )
+
+
+def recall_fast(
+    query: str,
+    owner_id: str,
+    limit: int = 10,
+    min_similarity: Optional[float] = None,
+    debug: bool = False,
+    domain: Optional[Dict[str, bool]] = None,
+    domain_boost: Optional[Union[List[str], Dict[str, float]]] = None,
+    timeout_ms: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Fast recall for pre-injection. Parallel HyDE fanout with hard time budget.
+
+    Use this for the hook-inject hot path. For deliberate recall (user-initiated
+    search), use recall() which has full graph traversal and reranking.
+    """
+    if len(query.strip().split()) < 3:
+        logger.debug("[api.recall_fast] query too short (%d words), returning empty", len(query.strip().split()))
+        return []
+
+    return _memory().recall_fast(
+        query=query,
+        owner_id=owner_id,
+        limit=limit,
+        min_similarity=min_similarity,
+        debug=debug,
+        domain=domain,
+        domain_boost=domain_boost,
+        timeout_ms=timeout_ms,
     )
 
 

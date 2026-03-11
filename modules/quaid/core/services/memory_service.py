@@ -21,6 +21,7 @@ from core.runtime.identity_runtime import (
 from datastore.facade import (
     store_memory,
     recall_memories,
+    recall_memories_fast,
     search_memories,
     create_edge,
     datastore_stats,
@@ -91,6 +92,38 @@ class DatastoreMemoryService(MemoryServicePort):
         assert_multi_user_runtime_ready(require_read=True)
         viewer_entity_id = kwargs.get("viewer_entity_id")
         results = recall_memories(
+            query=query,
+            owner_id=owner_id,
+            limit=limit,
+            min_similarity=min_similarity,
+            **kwargs,
+        )
+        return filter_recall_results(
+            viewer_entity_id=viewer_entity_id,
+            results=results,
+            context={
+                "owner_id": owner_id,
+                "source_channel": kwargs.get("source_channel"),
+                "source_conversation_id": kwargs.get("source_conversation_id"),
+                "source_author_id": kwargs.get("source_author_id"),
+                "subject_entity_id": kwargs.get("subject_entity_id"),
+                "participant_entity_ids": kwargs.get("participant_entity_ids"),
+            },
+        )
+
+    def recall_fast(
+        self,
+        query: str,
+        owner_id: str,
+        limit: int = 10,
+        min_similarity: Optional[float] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        """Fast recall for pre-injection with parallel fanout."""
+        _ensure_identity_runtime_bootstrap()
+        assert_multi_user_runtime_ready(require_read=True)
+        viewer_entity_id = kwargs.get("viewer_entity_id")
+        results = recall_memories_fast(
             query=query,
             owner_id=owner_id,
             limit=limit,

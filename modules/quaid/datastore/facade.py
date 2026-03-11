@@ -8,6 +8,7 @@ routines should import datastore internals directly from
 from datastore.memorydb.memory_graph import (
     store as store_memory,
     recall as recall_memories,
+    recall_fast as recall_memories_fast,
     search as search_memories,
     stats as datastore_stats,
     list_domains as list_memory_domains,
@@ -20,6 +21,7 @@ from datastore.memorydb.memory_graph import (
 __all__ = [
     "store_memory",
     "recall_memories",
+    "recall_memories_fast",
     "search_memories",
     "datastore_stats",
     "list_memory_domains",
