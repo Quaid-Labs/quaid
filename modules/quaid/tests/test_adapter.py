@@ -88,23 +88,32 @@ class TestStandaloneAdapter:
         adapter = StandaloneAdapter(home=tmp_path)
         assert adapter.quaid_home() == tmp_path
 
-    def test_data_dir(self, standalone, tmp_path):
-        assert standalone.data_dir() == tmp_path / "data"
+    def test_data_dir(self, standalone, tmp_path, monkeypatch):
+        iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        assert standalone.data_dir() == tmp_path / iid / "data"
 
     def test_config_dir(self, standalone, tmp_path):
-        assert standalone.config_dir() == tmp_path / "config"
+        iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        assert standalone.config_dir() == tmp_path / iid / "config"
 
     def test_logs_dir(self, standalone, tmp_path):
-        assert standalone.logs_dir() == tmp_path / "logs"
+        iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        assert standalone.logs_dir() == tmp_path / iid / "logs"
 
     def test_journal_dir(self, standalone, tmp_path):
-        assert standalone.journal_dir() == tmp_path / "journal"
+        iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        assert standalone.journal_dir() == tmp_path / iid / "journal"
 
     def test_projects_dir(self, standalone, tmp_path):
-        assert standalone.projects_dir() == tmp_path / "projects"
+        assert standalone.projects_dir() == tmp_path / "shared" / "projects"
 
     def test_core_markdown_dir(self, standalone, tmp_path):
-        assert standalone.core_markdown_dir() == tmp_path
+        iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        assert standalone.core_markdown_dir() == tmp_path / iid
+
+    def test_instance_root(self, standalone, tmp_path):
+        iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+        assert standalone.instance_root() == tmp_path / iid
 
     def test_notify_stderr(self, standalone, capsys):
         result = standalone.notify("hello world")
@@ -216,8 +225,9 @@ class TestOwnerResolution:
     def test_get_owner_id_reads_quaid_home_config(self, tmp_path, monkeypatch):
         from config import reload_config
 
+        iid = os.environ.get("QUAID_INSTANCE", "pytest-runner")
         monkeypatch.setenv("QUAID_HOME", str(tmp_path))
-        cfg_dir = tmp_path / "config"
+        cfg_dir = tmp_path / iid / "config"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "memory.json").write_text(
             """
@@ -237,19 +247,29 @@ class TestOwnerResolution:
 
 @pytest.mark.adapter_openclaw
 class TestOpenClawAdapter:
-    def test_quaid_home_raises_without_env(self, monkeypatch, tmp_path):
+    def test_quaid_home_from_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QUAID_HOME", str(tmp_path))
+        adapter = OpenClawAdapter()
+        assert adapter.quaid_home() == tmp_path
+
+    def test_quaid_home_default(self, monkeypatch):
+        monkeypatch.delenv("QUAID_HOME", raising=False)
+        adapter = OpenClawAdapter()
+        assert adapter.quaid_home() == Path.home() / "quaid"
+
+    def test_oc_workspace_raises_without_env(self, monkeypatch, tmp_path):
         monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
         with pytest.raises(RuntimeError, match="CLAWDBOT_WORKSPACE"):
-            adapter.quaid_home()
+            adapter.oc_workspace()
 
-    def test_quaid_home_env_override(self, tmp_path, monkeypatch):
+    def test_oc_workspace_env_override(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))
         adapter = OpenClawAdapter()
-        assert adapter.quaid_home() == tmp_path
+        assert adapter.oc_workspace() == tmp_path
 
-    def test_quaid_home_fallback_to_openclaw_json(self, tmp_path, monkeypatch):
+    def test_oc_workspace_fallback_to_openclaw_json(self, tmp_path, monkeypatch):
         """When CLAWDBOT_WORKSPACE unset, falls back to ~/.openclaw/openclaw.json."""
         monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
@@ -262,9 +282,9 @@ class TestOpenClawAdapter:
             "agents": {"defaults": {"workspace": str(workspace)}}
         }))
         adapter = OpenClawAdapter()
-        assert adapter.quaid_home() == workspace
+        assert adapter.oc_workspace() == workspace
 
-    def test_quaid_home_ignores_non_openclaw_config(self, tmp_path, monkeypatch):
+    def test_oc_workspace_ignores_non_openclaw_config(self, tmp_path, monkeypatch):
         """Only ~/.openclaw/openclaw.json is used for workspace fallback."""
         monkeypatch.delenv("CLAWDBOT_WORKSPACE", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
@@ -281,7 +301,7 @@ class TestOpenClawAdapter:
         }))
 
         adapter = OpenClawAdapter()
-        assert adapter.quaid_home() == ws_new
+        assert adapter.oc_workspace() == ws_new
 
     def test_filter_heartbeat(self):
         adapter = OpenClawAdapter()
@@ -576,14 +596,14 @@ class TestEmptyEnvVars:
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
         with pytest.raises(RuntimeError, match="CLAWDBOT_WORKSPACE"):
-            adapter.quaid_home()
+            adapter.oc_workspace()
 
     def test_whitespace_clawdbot_workspace_raises(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CLAWDBOT_WORKSPACE", "   ")
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
         adapter = OpenClawAdapter()
         with pytest.raises(RuntimeError, match="CLAWDBOT_WORKSPACE"):
-            adapter.quaid_home()
+            adapter.oc_workspace()
 
 
 class TestAdapterSelectionEdgeCases:
@@ -1056,9 +1076,9 @@ class TestLogRotation:
         """rotate_logs() creates archive/ dir if it doesn't exist."""
         from core.runtime.logger import rotate_logs, _log_dir, _archive_dir
 
-        # Create a log file with content
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir(parents=True)
+        # Create a log file at the adapter's logs_dir (instance_root/logs)
+        log_dir = standalone.logs_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "test.log"
         log_file.write_text("test entry\n")
 
@@ -1076,8 +1096,8 @@ class TestLogRotation:
         from core.runtime.logger import rotate_logs
         from datetime import datetime
 
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir(parents=True)
+        log_dir = standalone.logs_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "test.log"
         log_file.write_text("test entry\n")
 
@@ -1105,7 +1125,7 @@ class TestAdapterIntegration:
         """config.py should search for config in adapter-relative paths."""
         from config import _config_paths, reload_config
         paths = _config_paths()
-        assert paths[0] == tmp_path / "config" / "memory.json"
+        assert paths[0] == standalone.config_dir() / "memory.json"
 
     def test_notify_delegates_through_adapter(self, standalone, capsys):
         """notify.py should route through adapter.notify()."""

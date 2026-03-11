@@ -16,10 +16,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 @pytest.fixture(autouse=True)
 def workspace_dir(tmp_path):
     """Create a temporary workspace for each test."""
-    from lib.adapter import set_adapter, reset_adapter, StandaloneAdapter
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    from lib.adapter import set_adapter, reset_adapter, TestAdapter
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
 
-    yield tmp_path
+    iroot = adapter.instance_root()
+    (iroot / "identity").mkdir(parents=True, exist_ok=True)
+    yield iroot
 
     reset_adapter()
 
@@ -321,7 +324,7 @@ class TestDistillation:
         assert "project context" in prompt
 
     def test_apply_distillation_additions(self, workspace_dir, mock_config):
-        parent = workspace_dir / "SOUL.md"
+        parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.\n")
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import apply_distillation
@@ -335,7 +338,7 @@ class TestDistillation:
         assert "I value trust deeply." in parent.read_text()
 
     def test_apply_distillation_edits(self, workspace_dir, mock_config):
-        parent = workspace_dir / "SOUL.md"
+        parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nI am a simple bot.\n")
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import apply_distillation
@@ -350,7 +353,7 @@ class TestDistillation:
         assert "I am a simple bot." not in parent.read_text()
 
     def test_apply_distillation_dry_run(self, workspace_dir, mock_config):
-        parent = workspace_dir / "SOUL.md"
+        parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nOriginal content.\n")
         original = parent.read_text()
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
@@ -375,7 +378,7 @@ class TestDistillation:
             "## 2026-02-10 — Reset\n"
             "Today I felt something shift in how I approach problems.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "reasoning": "The shift in problem-solving approach is worth preserving.",
@@ -393,7 +396,7 @@ class TestDistillation:
         assert result["total_entries"] == 1
         assert result["additions"] == 1
         # Dry run: parent file should NOT be changed
-        assert "curiosity" not in (workspace_dir / "SOUL.md").read_text()
+        assert "curiosity" not in (workspace_dir / "identity" / "SOUL.md").read_text()
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_distillation_calls_deep_reasoning_without_model_tier(self, mock_opus, workspace_dir, mock_config):
@@ -405,7 +408,7 @@ class TestDistillation:
             "## 2026-02-10 — Reset\n"
             "Today I felt something shift in how I approach problems.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "reasoning": "The shift is worth preserving.",
@@ -437,7 +440,7 @@ class TestDistillation:
             "## 2026-02-10 — Reset\n"
             "Today I felt something shift.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "reasoning": "Worth preserving.",
@@ -461,7 +464,7 @@ class TestDistillation:
 
     def test_apply_distillation_edits_plus_additions(self, workspace_dir, mock_config):
         """Regression: edits must not be lost when additions are also applied."""
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n\n## Identity\nI am old text.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n\n## Identity\nI am old text.\n")
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import apply_distillation
             result = apply_distillation("SOUL.md", {
@@ -469,7 +472,7 @@ class TestDistillation:
                 "additions": [{"text": "I grow every day.", "after_section": "END"}],
             }, dry_run=False)
 
-        content = (workspace_dir / "SOUL.md").read_text()
+        content = (workspace_dir / "identity" / "SOUL.md").read_text()
         assert result["edits"] == 1
         assert result["additions"] == 1
         # Both edit AND addition must be present
@@ -490,7 +493,7 @@ class TestDistillation:
 
     def test_apply_distillation_edit_not_found(self, workspace_dir, mock_config):
         """apply_distillation recovers anchor misses by appending tagged entry."""
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
@@ -499,14 +502,14 @@ class TestDistillation:
         assert stats["edits"] == 0
         assert stats["recovered_edits"] == 1
         assert len(stats["errors"]) == 0
-        content = (workspace_dir / "SOUL.md").read_text()
+        content = (workspace_dir / "identity" / "SOUL.md").read_text()
         assert "<!-- DISTILL_RECOVERY:" in content
         assert "- replacement" in content
 
     def test_apply_distillation_recovery_dry_run(self, workspace_dir, mock_config):
         """Dry-run recovery should count but not mutate file."""
         original = "# SOUL\n\nI am Alfie.\n"
-        (workspace_dir / "SOUL.md").write_text(original)
+        (workspace_dir / "identity" / "SOUL.md").write_text(original)
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
@@ -514,11 +517,11 @@ class TestDistillation:
             }, dry_run=True)
         assert stats["edits"] == 0
         assert stats["recovered_edits"] == 1
-        assert (workspace_dir / "SOUL.md").read_text() == original
+        assert (workspace_dir / "identity" / "SOUL.md").read_text() == original
 
     def test_apply_distillation_mixed_edit_and_recovery(self, workspace_dir, mock_config):
         """Matching edits apply while unmatched edits recover."""
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nmatch me\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nmatch me\n")
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
@@ -530,13 +533,13 @@ class TestDistillation:
         assert stats["edits"] == 1
         assert stats["recovered_edits"] == 1
         assert len(stats["errors"]) == 0
-        content = (workspace_dir / "SOUL.md").read_text()
+        content = (workspace_dir / "identity" / "SOUL.md").read_text()
         assert "matched edit" in content
         assert "recovered edit" in content
 
     def test_apply_distillation_empty_edit_skipped(self, workspace_dir, mock_config):
         """apply_distillation silently skips edits with empty old_text or new_text."""
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import apply_distillation
             stats = apply_distillation("SOUL.md", {
@@ -548,7 +551,7 @@ class TestDistillation:
         assert stats["edits"] == 0
         assert len(stats["errors"]) == 0
         # File unchanged
-        assert "I am Alfie." in (workspace_dir / "SOUL.md").read_text()
+        assert "I am Alfie." in (workspace_dir / "identity" / "SOUL.md").read_text()
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_distillation_interval_gated(self, mock_opus, workspace_dir, mock_config):
@@ -558,7 +561,7 @@ class TestDistillation:
         (journal_dir / "SOUL.journal.md").write_text(
             "# SOUL Journal\n\n## 2026-02-10 — Reset\nSome reflection.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         # Set distillation state to today (not due yet)
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
@@ -580,7 +583,7 @@ class TestDistillation:
         (journal_dir / "SOUL.journal.md").write_text(
             f"# SOUL Journal\n\n## {recent_date} — Reset\nSome reflection.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "reasoning": "Worth it.", "additions": [], "edits": [],
@@ -605,7 +608,7 @@ class TestDistillation:
         (journal_dir / "SOUL.journal.md").write_text(
             "# SOUL Journal\n\n## 2026-02-10 — Reset\nReflection.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = ("", 0.5)
 
@@ -624,7 +627,7 @@ class TestDistillation:
         (journal_dir / "SOUL.journal.md").write_text(
             "# SOUL Journal\n\n## 2026-02-10 — Reset\nReflection.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = ("This is not JSON at all {{{broken", 0.5)
 
@@ -785,7 +788,7 @@ class TestInsertIntoFileEdgeCases:
     def test_section_not_found_appends_to_end(self, workspace_dir):
         """_insert_into_file appends at end when section heading is not found."""
         from datastore.notedb.soul_snippets import _insert_into_file
-        parent = workspace_dir / "SOUL.md"
+        parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.\n")
         result = _insert_into_file("SOUL.md", "Appended text.", "NonexistentSection")
         assert result is True
@@ -814,7 +817,7 @@ class TestTokenWindowing:
     def test_end_insert_no_trailing_newline(self, workspace_dir):
         """_insert_into_file handles files without trailing newline."""
         from datastore.notedb.soul_snippets import _insert_into_file
-        parent = workspace_dir / "SOUL.md"
+        parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nI am Alfie.")  # No trailing newline
         result = _insert_into_file("SOUL.md", "New line.", "END")
         assert result is True
@@ -937,14 +940,14 @@ class TestMemoryProjectionFromSnippets:
             )
 
         assert result is True
-        memory_path = workspace_dir / "MEMORY.md"
+        memory_path = workspace_dir / "identity" / "MEMORY.md"
         assert memory_path.exists()
         content = memory_path.read_text()
         assert "<!-- generated by quaid memory projection -->" in content
         assert "Selene Pike is Solomon's test grandaunt." in content
 
     def test_memory_snippet_write_does_not_clobber_user_memory_md(self, workspace_dir, mock_config):
-        memory_path = workspace_dir / "MEMORY.md"
+        memory_path = workspace_dir / "identity" / "MEMORY.md"
         memory_path.write_text("# MEMORY\n\nUser-authored durable memory.\n", encoding="utf-8")
 
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
@@ -962,7 +965,7 @@ class TestMemoryProjectionFromSnippets:
         assert memory_path.read_text(encoding="utf-8") == "# MEMORY\n\nUser-authored durable memory.\n"
 
     def test_memory_snippet_write_updates_legacy_generated_projection(self, workspace_dir, mock_config):
-        memory_path = workspace_dir / "MEMORY.md"
+        memory_path = workspace_dir / "identity" / "MEMORY.md"
         memory_path.write_text(
             "# MEMORY\n\n"
             "<!-- generated by quaid live memory projection fallback on example.local -->\n"
@@ -1034,7 +1037,7 @@ class TestMemoryProjectionFromSnippets:
         assert second is False
 
     def test_user_snippet_write_appends_managed_projection_block(self, workspace_dir, mock_config):
-        user_path = workspace_dir / "USER.md"
+        user_path = workspace_dir / "identity" / "USER.md"
         user_path.write_text("# USER\n\nExisting user-authored context.\n", encoding="utf-8")
 
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
@@ -1055,7 +1058,7 @@ class TestMemoryProjectionFromSnippets:
         assert "Alden Rook is Solomon's test godbrother." in content
 
     def test_user_snippet_write_replaces_existing_managed_projection_block(self, workspace_dir, mock_config):
-        user_path = workspace_dir / "USER.md"
+        user_path = workspace_dir / "identity" / "USER.md"
         user_path.write_text(
             "# USER\n\nExisting user-authored context.\n\n"
             "<!-- generated by quaid user snippets projection start -->\n"
@@ -1101,7 +1104,7 @@ class TestLegacyApplyDecisions:
 
     def test_fold_inserts_text(self, workspace_dir, mock_config):
         from datastore.notedb.soul_snippets import apply_decisions
-        parent_path = workspace_dir / "SOUL.md"
+        parent_path = workspace_dir / "identity" / "SOUL.md"
         parent_path.write_text("# SOUL\n\nI am Alfie.\n")
         snippets_path = workspace_dir / "SOUL.snippets.md"
         snippets_path.write_text(
@@ -1157,7 +1160,7 @@ class TestLegacyApplyDecisions:
     def test_at_maxlines_is_non_fatal_and_clears_snippet(self, workspace_dir, mock_config):
         from datastore.notedb.soul_snippets import apply_decisions
 
-        parent_path = workspace_dir / "SOUL.md"
+        parent_path = workspace_dir / "identity" / "SOUL.md"
         parent_path.write_text("# SOUL\n" + "line\n" * 80)  # at limit: 81 lines total
         snippets_path = workspace_dir / "SOUL.snippets.md"
         snippets_path.write_text(
@@ -1216,7 +1219,7 @@ class TestLegacyApplyDecisions:
 class TestInsertIntoFile:
     def test_section_targeted_insert(self, workspace_dir):
         from datastore.notedb.soul_snippets import _insert_into_file
-        parent = workspace_dir / "SOUL.md"
+        parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\n## Identity\n\nI am Alfie.\n\n## Values\n\nI care about truth.\n")
         result = _insert_into_file("SOUL.md", "I am also curious.", "Identity")
         assert result is True
@@ -1228,7 +1231,7 @@ class TestInsertIntoFile:
 
     def test_maxlines_is_soft_target(self, workspace_dir):
         from datastore.notedb.soul_snippets import _insert_into_file
-        parent = workspace_dir / "SOUL.md"
+        parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n" + "line\n" * 9)  # 10 lines
         result = _insert_into_file("SOUL.md", "Should not appear.", "END", max_lines=10)
         assert result is True
@@ -1241,7 +1244,7 @@ class TestInsertIntoFile:
 
     def test_hash_prefixed_text_gets_bullet(self, workspace_dir):
         from datastore.notedb.soul_snippets import _insert_into_file
-        parent = workspace_dir / "SOUL.md"
+        parent = workspace_dir / "identity" / "SOUL.md"
         parent.write_text("# SOUL\n\nContent.\n")
         _insert_into_file("SOUL.md", "# My heading-like text", "END")
         content = parent.read_text()
@@ -1257,7 +1260,7 @@ class TestInsertIntoFile:
 class TestBackupFile:
     def test_creates_backup(self, workspace_dir):
         from datastore.notedb.soul_snippets import backup_file
-        src = workspace_dir / "SOUL.md"
+        src = workspace_dir / "identity" / "SOUL.md"
         src.write_text("# SOUL\nOriginal content.")
         result = backup_file("SOUL.md")
         assert result is not None
@@ -1314,7 +1317,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- I value trust deeply.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "decisions": [
@@ -1330,7 +1333,7 @@ class TestSnippetReview:
         assert result["total_snippets"] == 1
         assert result["folded"] == 1
         # Dry run: parent file should NOT be changed
-        assert "trust" not in (workspace_dir / "SOUL.md").read_text()
+        assert "trust" not in (workspace_dir / "identity" / "SOUL.md").read_text()
 
     @patch("datastore.notedb.soul_snippets.call_deep_reasoning")
     def test_snippet_review_calls_deep_reasoning_without_model_tier(self, mock_opus, workspace_dir, mock_config):
@@ -1340,7 +1343,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- I value trust deeply.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "decisions": [
@@ -1369,7 +1372,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- I notice patterns in my responses.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
 
         mock_opus.return_value = (json.dumps({
             "decisions": [
@@ -1412,7 +1415,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- A snippet.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = ("", 0.5)
 
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
@@ -1430,7 +1433,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- A snippet.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = ("This is not JSON {{{broken", 0.5)
 
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
@@ -1448,7 +1451,7 @@ class TestSnippetReview:
             "## Compaction — 2026-02-10 14:30:22\n"
             "- A snippet.\n"
         )
-        (workspace_dir / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
+        (workspace_dir / "identity" / "SOUL.md").write_text("# SOUL\n\nI am Alfie.\n")
         mock_opus.return_value = (json.dumps({"decisions": []}), 0.5)
 
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):

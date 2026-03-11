@@ -15,14 +15,18 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from lib.adapter import set_adapter, reset_adapter, StandaloneAdapter
+from lib.adapter import set_adapter, reset_adapter, TestAdapter
 
 @contextmanager
 def _wa_adapter_patch(tmp_path):
-    """Context manager that sets the adapter to use tmp_path as quaid home."""
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    """Context manager that sets the adapter to use tmp_path as quaid home.
+
+    Yields the instance root path (where files are resolved).
+    """
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
     try:
-        yield
+        yield adapter.instance_root()
     finally:
         reset_adapter()
 
@@ -207,9 +211,9 @@ class TestWorkspaceAuditProtectedRegions:
             "<!-- /protected -->\n\n"
             "## Values\nI care about truth.\n"
         )
-        (tmp_path / "SOUL.md").write_text(content)
 
-        with _wa_adapter_patch(tmp_path):
+        with _wa_adapter_patch(tmp_path) as iroot:
+            (iroot / "SOUL.md").write_text(content)
             files_content = _read_file_contents(["SOUL.md"])
 
         stripped, ranges = strip_protected_regions(files_content["SOUL.md"])
@@ -229,7 +233,6 @@ class TestWorkspaceAuditProtectedRegions:
             "## Unprotected Section\n"
             "This can be trimmed.\n"
         )
-        (tmp_path / "SOUL.md").write_text(content)
 
         files_config = {
             "SOUL.md": {"purpose": "Personality", "maxLines": 80},
@@ -254,11 +257,12 @@ class TestWorkspaceAuditProtectedRegions:
         }
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _wa_adapter_patch(tmp_path):
+             _wa_adapter_patch(tmp_path) as iroot:
+            (iroot / "SOUL.md").write_text(content)
             from core.lifecycle.workspace_audit import apply_review_decisions
             stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
 
-        result_content = (tmp_path / "SOUL.md").read_text()
+            result_content = (iroot / "SOUL.md").read_text()
         # Protected section should still be present
         assert "Important content that must stay." in result_content
         assert "Protected Section" in result_content
@@ -277,7 +281,6 @@ class TestWorkspaceAuditProtectedRegions:
             "## Old Info\n"
             "Outdated stuff.\n"
         )
-        (tmp_path / "USER.md").write_text(content)
 
         files_config = {
             "USER.md": {"purpose": "User info", "maxLines": 150},
@@ -297,11 +300,12 @@ class TestWorkspaceAuditProtectedRegions:
         }
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _wa_adapter_patch(tmp_path):
+             _wa_adapter_patch(tmp_path) as iroot:
+            (iroot / "USER.md").write_text(content)
             from core.lifecycle.workspace_audit import apply_review_decisions
             stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
 
-        result_content = (tmp_path / "USER.md").read_text()
+            result_content = (iroot / "USER.md").read_text()
         # Protected section should still be present
         assert "Phone: 555-1234" in result_content
         # No memory operations should have been performed on protected content
@@ -316,10 +320,13 @@ class TestWorkspaceAuditProtectedRegions:
 @pytest.fixture(autouse=True)
 def snippets_workspace_dir(tmp_path):
     """Create a temporary workspace for each test."""
-    from lib.adapter import set_adapter, reset_adapter, StandaloneAdapter
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    from lib.adapter import set_adapter, reset_adapter, TestAdapter
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
 
-    yield tmp_path
+    iroot = adapter.instance_root()
+    (iroot / "identity").mkdir(parents=True, exist_ok=True)
+    yield iroot
 
     reset_adapter()
 
@@ -354,7 +361,7 @@ class TestSoulSnippetsProtectedRegions:
 
     def test_distillation_edits_skip_protected(self, snippets_workspace_dir, mock_config):
         """apply_distillation should skip edits targeting text within protected regions."""
-        parent = snippets_workspace_dir / "SOUL.md"
+        parent = snippets_workspace_dir / "identity" / "SOUL.md"
         parent.write_text(
             "# SOUL\n\n"
             "<!-- protected -->\n"
@@ -394,7 +401,7 @@ class TestSoulSnippetsProtectedRegions:
 
     def test_insert_skips_protected_section_heading(self, snippets_workspace_dir, mock_config):
         """_insert_into_file should skip section headings inside protected regions."""
-        parent = snippets_workspace_dir / "SOUL.md"
+        parent = snippets_workspace_dir / "identity" / "SOUL.md"
         parent.write_text(
             "# SOUL\n\n"
             "<!-- protected -->\n"
@@ -417,7 +424,7 @@ class TestSoulSnippetsProtectedRegions:
 
     def test_insert_into_unprotected_section(self, snippets_workspace_dir, mock_config):
         """_insert_into_file should work normally for unprotected sections."""
-        parent = snippets_workspace_dir / "SOUL.md"
+        parent = snippets_workspace_dir / "identity" / "SOUL.md"
         parent.write_text(
             "# SOUL\n\n"
             "<!-- protected -->\n"
@@ -497,7 +504,7 @@ class TestSoulSnippetsProtectedRegions:
             "## 2026-02-10 — Reset\n"
             "I felt a shift today.\n"
         )
-        (snippets_workspace_dir / "SOUL.md").write_text(
+        (snippets_workspace_dir / "identity" / "SOUL.md").write_text(
             "# SOUL\n\n"
             "<!-- protected -->\n"
             "## Core Identity\n"
@@ -535,7 +542,7 @@ class TestSoulSnippetsProtectedRegions:
             "## Compaction -- 2026-02-10 14:30:22\n"
             "- I value authenticity.\n"
         )
-        (snippets_workspace_dir / "SOUL.md").write_text(
+        (snippets_workspace_dir / "identity" / "SOUL.md").write_text(
             "# SOUL\n\n"
             "<!-- protected -->\n"
             "Secret identity.\n"
@@ -620,7 +627,6 @@ class TestProtectedRegionEdgeCases:
             "<!-- /protected -->\n\n"
             "Visible.\n"
         )
-        (tmp_path / "SOUL.md").write_text(content)
 
         files_config = {
             "SOUL.md": {"purpose": "Personality", "maxLines": 80},
@@ -628,7 +634,8 @@ class TestProtectedRegionEdgeCases:
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _wa_adapter_patch(tmp_path):
+             _wa_adapter_patch(tmp_path) as iroot:
+            (iroot / "SOUL.md").write_text(content)
             from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 

@@ -26,11 +26,16 @@ os.environ.setdefault("QUAID_QUIET", "1")
 @pytest.fixture(autouse=True)
 def workspace_dir(tmp_path):
     """Create a temporary workspace for each test."""
-    os.environ["CLAWDBOT_WORKSPACE"] = str(tmp_path)
+    from lib.adapter import set_adapter, reset_adapter, TestAdapter
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    iroot = adapter.instance_root()
+
+    os.environ["CLAWDBOT_WORKSPACE"] = str(iroot)
 
     # Create required directories
-    (tmp_path / "journal").mkdir()
-    (tmp_path / "config").mkdir()
+    (iroot / "journal").mkdir(exist_ok=True)
+    (iroot / "config").mkdir(exist_ok=True)
 
     # Create minimal config
     config = {
@@ -46,13 +51,9 @@ def workspace_dir(tmp_path):
             }
         },
     }
-    (tmp_path / "config" / "memory.json").write_text(json.dumps(config))
+    (iroot / "config" / "memory.json").write_text(json.dumps(config))
 
-    # Set adapter to point at tmp_path
-    from lib.adapter import set_adapter, reset_adapter, StandaloneAdapter
-    set_adapter(StandaloneAdapter(home=tmp_path))
-
-    yield tmp_path
+    yield iroot
 
     reset_adapter()
     if "CLAWDBOT_WORKSPACE" in os.environ:

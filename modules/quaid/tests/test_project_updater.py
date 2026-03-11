@@ -18,16 +18,18 @@ def setup_env(tmp_path, monkeypatch):
     global _tmp_db
     _tmp_db = tmp_path / "test_registry.db"
     monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_db))
-    from lib.adapter import set_adapter, reset_adapter, StandaloneAdapter
-    set_adapter(StandaloneAdapter(home=tmp_path))
-    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))  # kept for backward compat
+    from lib.adapter import set_adapter, reset_adapter, TestAdapter
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    iroot = adapter.instance_root()
+    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(iroot))  # kept for backward compat
 
     # Create directories
-    (tmp_path / "config").mkdir()
-    (tmp_path / "projects" / "staging").mkdir(parents=True)
-    (tmp_path / "projects" / "test-project").mkdir(parents=True)
-    (tmp_path / "src").mkdir()
-    (tmp_path / "docs").mkdir()
+    (iroot / "config").mkdir(exist_ok=True)
+    (iroot / "projects" / "staging").mkdir(parents=True)
+    (iroot / "projects" / "test-project").mkdir(parents=True)
+    (iroot / "src").mkdir()
+    (iroot / "docs").mkdir()
 
     # Create config
     config_data = {
@@ -56,7 +58,7 @@ def setup_env(tmp_path, monkeypatch):
         },
         "rag": {"docsDir": "docs"},
     }
-    (tmp_path / "config" / "memory.json").write_text(json.dumps(config_data))
+    (iroot / "config" / "memory.json").write_text(json.dumps(config_data))
 
     # Create PROJECT.md
     project_md = """# Project: Test Project
@@ -85,14 +87,14 @@ A test project.
 - *.log
 - *.db
 """
-    (tmp_path / "projects" / "test-project" / "PROJECT.md").write_text(project_md)
+    (iroot / "projects" / "test-project" / "PROJECT.md").write_text(project_md)
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     import config as config_mod
-    monkeypatch.setattr(config_mod, "_config_paths", lambda: [tmp_path / "config" / "memory.json"])
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [iroot / "config" / "memory.json"])
     config_mod.reload_config()
 
-    yield tmp_path
+    yield iroot
 
     reset_adapter()
 

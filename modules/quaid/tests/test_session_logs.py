@@ -3,7 +3,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from datastore.memorydb import session_logs
-from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
+from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
 
 def _fake_embedding(text: str):
@@ -20,7 +20,7 @@ def teardown_function():
 
 
 def test_session_log_index_list_load_search(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     monkeypatch.setattr("datastore.memorydb.session_logs._lib_get_embedding", _fake_embedding)
 
@@ -63,7 +63,7 @@ def test_session_log_index_list_load_search(monkeypatch, tmp_path):
 
 
 def test_session_log_last_session_excludes_current(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     monkeypatch.setattr("datastore.memorydb.session_logs._lib_get_embedding", _fake_embedding)
 
@@ -88,7 +88,7 @@ def test_session_log_last_session_excludes_current(monkeypatch, tmp_path):
 
 
 def test_session_log_index_serializes_same_session(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
 
     def _slow_embedding(text: str):

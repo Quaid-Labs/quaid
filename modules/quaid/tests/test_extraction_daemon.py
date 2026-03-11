@@ -1,3 +1,4 @@
+import os
 import pathlib
 
 import pytest
@@ -67,7 +68,8 @@ def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
 
-    cursor_dir = tmp_path / "data" / "session-cursors"
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
     cursor_dir.mkdir(parents=True, exist_ok=True)
     (cursor_dir / "sess-1.json").write_text(
         (
@@ -82,7 +84,6 @@ def test_check_idle_sessions_writes_timeout_signal_for_idle_unextracted_session(
     os_mtime = now - (31 * 60)
     transcript_path.touch()
     pathlib.Path(transcript_path).chmod(0o600)
-    import os
     os.utime(transcript_path, (os_mtime, os_mtime))
 
     captured = []
@@ -117,7 +118,8 @@ def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypat
     transcript_path = tmp_path / "session.jsonl"
     transcript_path.write_text('{"role":"user","content":"hello"}\n{"role":"assistant","content":"hi"}\n', encoding="utf-8")
 
-    cursor_dir = tmp_path / "data" / "session-cursors"
+    instance_id = os.environ.get("QUAID_INSTANCE", "pytest-runner")
+    cursor_dir = tmp_path / instance_id / "data" / "session-cursors"
     cursor_dir.mkdir(parents=True, exist_ok=True)
     (cursor_dir / "sess-1.json").write_text(
         (
@@ -132,7 +134,6 @@ def test_check_idle_sessions_skips_transcripts_older_than_installed_at(monkeypat
     installed_at = now - (10 * 60)
     stale_mtime = now - (31 * 60)
     transcript_path.touch()
-    import os
     os.utime(transcript_path, (stale_mtime, stale_mtime))
 
     captured = []

@@ -105,7 +105,7 @@ class TestEmbeddingsProviderSelection:
         adapter = StandaloneAdapter(home=tmp_path)
         set_adapter(adapter)
         # Make config dir so config loads without error
-        (tmp_path / "config").mkdir(exist_ok=True)
+        adapter.config_dir().mkdir(parents=True, exist_ok=True)
         provider = get_embeddings_provider()
         assert isinstance(provider, OllamaEmbeddingsProvider)
 

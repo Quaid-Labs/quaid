@@ -23,14 +23,18 @@ from config import (
 
 
 from contextlib import contextmanager
-from lib.adapter import set_adapter, reset_adapter, StandaloneAdapter
+from lib.adapter import set_adapter, reset_adapter, TestAdapter
 
 @contextmanager
 def _adapter_patch(tmp_path):
-    """Context manager that sets the adapter to use tmp_path as quaid home."""
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    """Context manager that sets the adapter to use tmp_path as quaid home.
+
+    Yields the instance root path (where files are resolved).
+    """
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
     try:
-        yield
+        yield adapter.instance_root()
     finally:
         reset_adapter()
 
@@ -158,8 +162,6 @@ class TestCheckBloat:
 
     def test_under_limit(self, tmp_path):
         """Files under their maxLines are not flagged."""
-        _create_test_files(tmp_path, {"SOUL.md": 50, "AGENTS.md": 200})
-
         files_config = {
             "SOUL.md": {"purpose": "Personality", "maxLines": 80},
             "AGENTS.md": {"purpose": "System ops", "maxLines": 350},
@@ -167,7 +169,8 @@ class TestCheckBloat:
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            _create_test_files(iroot, {"SOUL.md": 50, "AGENTS.md": 200})
             from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
@@ -180,15 +183,14 @@ class TestCheckBloat:
 
     def test_over_limit(self, tmp_path):
         """Files over their maxLines are flagged."""
-        _create_test_files(tmp_path, {"SOUL.md": 100})
-
         files_config = {
             "SOUL.md": {"purpose": "Personality", "maxLines": 80},
         }
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            _create_test_files(iroot, {"SOUL.md": 100})
             from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
@@ -198,15 +200,14 @@ class TestCheckBloat:
 
     def test_exactly_at_limit(self, tmp_path):
         """File at exactly maxLines is NOT over limit."""
-        _create_test_files(tmp_path, {"TODO.md": 150})
-
         files_config = {
             "TODO.md": {"purpose": "Tasks", "maxLines": 150},
         }
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            _create_test_files(iroot, {"TODO.md": 150})
             from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
@@ -231,15 +232,14 @@ class TestCheckBloat:
 
     def test_purpose_included_in_stats(self, tmp_path):
         """Each entry includes the purpose string."""
-        _create_test_files(tmp_path, {"SOUL.md": 10})
-
         files_config = {
             "SOUL.md": {"purpose": "Personality, vibe, values", "maxLines": 80},
         }
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            _create_test_files(iroot, {"SOUL.md": 10})
             from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
@@ -247,13 +247,6 @@ class TestCheckBloat:
 
     def test_multiple_files_mixed_status(self, tmp_path):
         """Mix of under-limit and over-limit files."""
-        _create_test_files(tmp_path, {
-            "SOUL.md": 90,       # over 80
-            "IDENTITY.md": 15,   # under 20
-            "TOOLS.md": 400,     # over 350
-            "USER.md": 100,      # under 150
-        })
-
         files_config = {
             "SOUL.md": {"purpose": "Personality", "maxLines": 80},
             "IDENTITY.md": {"purpose": "Identity", "maxLines": 20},
@@ -263,7 +256,13 @@ class TestCheckBloat:
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            _create_test_files(iroot, {
+                "SOUL.md": 90,       # over 80
+                "IDENTITY.md": 15,   # under 20
+                "TOOLS.md": 400,     # over 350
+                "USER.md": 100,      # under 150
+            })
             from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
@@ -274,15 +273,14 @@ class TestCheckBloat:
 
     def test_no_max_lines_defaults_to_999(self, tmp_path):
         """File entry without maxLines uses 999 as default."""
-        _create_test_files(tmp_path, {"NOTES.md": 500})
-
         files_config = {
             "NOTES.md": {"purpose": "Random notes"},  # no maxLines key
         }
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            _create_test_files(iroot, {"NOTES.md": 500})
             from core.lifecycle.workspace_audit import check_bloat
             stats = check_bloat()
 
@@ -299,8 +297,6 @@ class TestGetFileLineCounts:
 
     def test_counts_correct(self, tmp_path):
         """Line counts match actual file content."""
-        _create_test_files(tmp_path, {"A.md": 10, "B.md": 25})
-
         files_config = {
             "A.md": {"purpose": "A", "maxLines": 100},
             "B.md": {"purpose": "B", "maxLines": 100},
@@ -308,7 +304,8 @@ class TestGetFileLineCounts:
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            _create_test_files(iroot, {"A.md": 10, "B.md": 25})
             from core.lifecycle.workspace_audit import get_file_line_counts
             counts = get_file_line_counts()
             assert counts["A.md"] == 10
@@ -329,15 +326,14 @@ class TestGetFileLineCounts:
 
     def test_empty_file_has_zero_lines(self, tmp_path):
         """Empty file has 0 lines."""
-        (tmp_path / "EMPTY.md").write_text("")
-
         files_config = {
             "EMPTY.md": {"purpose": "Empty", "maxLines": 100},
         }
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            (iroot / "EMPTY.md").write_text("")
             from core.lifecycle.workspace_audit import get_file_line_counts
             counts = get_file_line_counts()
             # "".splitlines() returns [] so len is 0
@@ -389,8 +385,6 @@ class TestDetectChangedFiles:
 
     def test_no_previous_mtimes_all_changed(self, tmp_path):
         """With no saved mtimes, all files are changed."""
-        _create_test_files(tmp_path, {"A.md": 5, "B.md": 10})
-
         files_config = {
             "A.md": {"purpose": "A", "maxLines": 100},
             "B.md": {"purpose": "B", "maxLines": 100},
@@ -398,8 +392,9 @@ class TestDetectChangedFiles:
         cfg = _make_config_with_core_md(files=files_config)
 
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path), \
+             _adapter_patch(tmp_path) as iroot, \
              patch("core.lifecycle.workspace_audit.load_last_mtimes", return_value={}):
+            _create_test_files(iroot, {"A.md": 5, "B.md": 10})
             from core.lifecycle.workspace_audit import detect_changed_files
             changed = detect_changed_files()
             assert "A.md" in changed
@@ -407,21 +402,20 @@ class TestDetectChangedFiles:
 
     def test_unchanged_files_not_reported(self, tmp_path):
         """Files with same mtime as last run are not changed."""
-        _create_test_files(tmp_path, {"A.md": 5})
-
         files_config = {
             "A.md": {"purpose": "A", "maxLines": 100},
         }
         cfg = _make_config_with_core_md(files=files_config)
 
-        current_mtime = (tmp_path / "A.md").stat().st_mtime
-
         with patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path), \
-             patch("core.lifecycle.workspace_audit.load_last_mtimes", return_value={"A.md": current_mtime}):
-            from core.lifecycle.workspace_audit import detect_changed_files
-            changed = detect_changed_files()
-            assert "A.md" not in changed
+             _adapter_patch(tmp_path) as iroot:
+            _create_test_files(iroot, {"A.md": 5})
+            current_mtime = (iroot / "A.md").stat().st_mtime
+
+            with patch("core.lifecycle.workspace_audit.load_last_mtimes", return_value={"A.md": current_mtime}):
+                from core.lifecycle.workspace_audit import detect_changed_files
+                changed = detect_changed_files()
+                assert "A.md" not in changed
 
 
 class TestMtimePersistence:
@@ -439,7 +433,6 @@ class TestReviewDecisionApplyLocking:
     def test_apply_review_decisions_locks_file_transaction(self, tmp_path):
         from core.lifecycle.workspace_audit import apply_review_decisions
 
-        (tmp_path / "A.md").write_text("# A\n\n## Trim Me\n\nold content\n")
         cfg = _make_config_with_core_md(files={"A.md": {"purpose": "A", "maxLines": 100}})
         decisions_data = {
             "decisions": [
@@ -452,15 +445,16 @@ class TestReviewDecisionApplyLocking:
             ]
         }
 
-        with _adapter_patch(tmp_path), \
+        with _adapter_patch(tmp_path) as iroot, \
              patch("core.lifecycle.workspace_audit.get_config", return_value=cfg), \
              patch("core.lifecycle.workspace_audit.save_mtimes"), \
              patch("core.lifecycle.workspace_audit.fcntl.flock") as mock_flock:
+            (iroot / "A.md").write_text("# A\n\n## Trim Me\n\nold content\n")
             stats = apply_review_decisions(dry_run=False, decisions_data=decisions_data)
 
         lock_modes = [call.args[1] for call in mock_flock.call_args_list if len(call.args) >= 2]
         assert stats["trimmed"] == 1
-        assert "old content" not in (tmp_path / "A.md").read_text()
+        assert "old content" not in (iroot / "A.md").read_text()
         assert lock_modes.count(fcntl.LOCK_EX) >= 1
         assert lock_modes.count(fcntl.LOCK_UN) >= 1
 
@@ -475,9 +469,9 @@ class TestProjectReviewQueue:
     def test_queue_creates_file(self, tmp_path):
         """Queueing a review creates the JSON file."""
         from core.lifecycle.workspace_audit import _queue_project_review
-        (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
-        with _adapter_patch(tmp_path):
+        with _adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             _queue_project_review(
                 section="My API Docs",
                 source_file="TOOLS.md",
@@ -485,7 +479,7 @@ class TestProjectReviewQueue:
                 project_hint="REST API server",
                 content_preview="## My API\nEndpoints...",
             )
-            pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
             assert pending_file.exists()
             data = json.loads(pending_file.read_text())
             assert len(data) == 1
@@ -499,12 +493,12 @@ class TestProjectReviewQueue:
     def test_queue_appends_to_existing(self, tmp_path):
         """Multiple queues accumulate in the same file."""
         from core.lifecycle.workspace_audit import _queue_project_review
-        (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
-        with _adapter_patch(tmp_path):
+        with _adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             _queue_project_review(section="First", source_file="TOOLS.md")
             _queue_project_review(section="Second", source_file="AGENTS.md")
-            pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
             data = json.loads(pending_file.read_text())
             assert len(data) == 2
             assert data[0]["section"] == "First"
@@ -513,11 +507,11 @@ class TestProjectReviewQueue:
     def test_queue_handles_corrupt_file(self, tmp_path):
         """If existing file is corrupt, starts fresh (doesn't crash)."""
         from core.lifecycle.workspace_audit import _queue_project_review
-        (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
-        pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
-        pending_file.write_text("{broken json")
-        with _adapter_patch(tmp_path):
+        with _adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
+            pending_file.write_text("{broken json")
             _queue_project_review(section="New", source_file="TOOLS.md")
             data = json.loads(pending_file.read_text())
             assert len(data) == 1
@@ -526,14 +520,14 @@ class TestProjectReviewQueue:
     def test_get_returns_pending(self, tmp_path):
         """get_pending_project_reviews returns queued items without deleting."""
         from core.lifecycle.workspace_audit import _queue_project_review, get_pending_project_reviews
-        (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
-        with _adapter_patch(tmp_path):
+        with _adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             _queue_project_review(section="Test", source_file="TOOLS.md")
             reviews = get_pending_project_reviews()
             assert len(reviews) == 1
             assert reviews[0]["section"] == "Test"
-            pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
             assert pending_file.exists()
 
     def test_get_returns_empty_for_missing_file(self, tmp_path):
@@ -546,31 +540,32 @@ class TestProjectReviewQueue:
     def test_get_returns_empty_for_corrupt_file(self, tmp_path):
         """get_pending_project_reviews returns [] if file is corrupt."""
         from core.lifecycle.workspace_audit import get_pending_project_reviews
-        (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
-        pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
-        pending_file.write_text("not valid json!")
-        with _adapter_patch(tmp_path):
+        with _adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
+            pending_file.write_text("not valid json!")
             assert get_pending_project_reviews() == []
 
     def test_get_logs_warning_for_corrupt_file(self, tmp_path, caplog):
         from core.lifecycle.workspace_audit import get_pending_project_reviews
-        (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
-        pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
-        pending_file.write_text("not valid json!")
-        with _adapter_patch(tmp_path), caplog.at_level("WARNING"):
-            assert get_pending_project_reviews() == []
+        with _adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
+            pending_file.write_text("not valid json!")
+            with caplog.at_level("WARNING"):
+                assert get_pending_project_reviews() == []
         assert any("pending project reviews" in rec.message for rec in caplog.records)
 
     def test_clear_deletes_file(self, tmp_path):
         """clear_pending_project_reviews removes the file."""
         from core.lifecycle.workspace_audit import _queue_project_review, clear_pending_project_reviews
-        (tmp_path / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
 
-        with _adapter_patch(tmp_path):
+        with _adapter_patch(tmp_path) as iroot:
+            (iroot / "logs" / "janitor").mkdir(parents=True, exist_ok=True)
             _queue_project_review(section="Test", source_file="TOOLS.md")
-            pending_file = tmp_path / "logs" / "janitor" / "pending-project-review.json"
+            pending_file = iroot / "logs" / "janitor" / "pending-project-review.json"
             assert pending_file.exists()
             clear_pending_project_reviews()
             assert not pending_file.exists()

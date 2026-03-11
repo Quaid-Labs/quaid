@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 from ingest import session_logs_ingest
-from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
+from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
 
 def setup_function():
@@ -14,7 +14,7 @@ def teardown_function():
 
 
 def test_ingest_from_transcript_path(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
 
     captured = {}
@@ -55,7 +55,7 @@ def test_ingest_from_transcript_path(monkeypatch, tmp_path):
 
 
 def test_call_session_logs_cli_includes_exit_code_and_streams(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
 
     def _fake_run(*_args, **_kwargs):
         return SimpleNamespace(returncode=7, stderr="boom", stdout="fallback")
@@ -74,7 +74,7 @@ def test_call_session_logs_cli_includes_exit_code_and_streams(monkeypatch, tmp_p
 
 
 def test_call_session_logs_cli_uses_module_entrypoint(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     captured = {}
 
     def _fake_run(cmd, **_kwargs):

@@ -55,23 +55,37 @@ class QuaidAdapter(abc.ABC):
 
     @abc.abstractmethod
     def quaid_home(self) -> Path:
-        """Root directory for all Quaid data (config, data, logs, etc.)."""
+        """Root directory containing all Quaid instances (QUAID_HOME)."""
         ...
 
+    def instance_id(self) -> str:
+        """Instance identifier for this adapter's silo.
+
+        Reads from QUAID_INSTANCE env var. Each instance has its own
+        config, data, DB, daemon, and identity under QUAID_HOME/<instance_id>/.
+        """
+        from lib.instance import instance_id as _instance_id
+        return _instance_id()
+
+    def instance_root(self) -> Path:
+        """Resolved instance root: QUAID_HOME / INSTANCE_ID."""
+        return self.quaid_home() / self.instance_id()
+
     def data_dir(self) -> Path:
-        return self.quaid_home() / "data"
+        return self.instance_root() / "data"
 
     def config_dir(self) -> Path:
-        return self.quaid_home() / "config"
+        return self.instance_root() / "config"
 
     def logs_dir(self) -> Path:
-        return self.quaid_home() / "logs"
+        return self.instance_root() / "logs"
 
     def journal_dir(self) -> Path:
-        return self.quaid_home() / "journal"
+        return self.instance_root() / "journal"
 
     def projects_dir(self) -> Path:
-        return self.quaid_home() / "projects"
+        """Shared projects directory (cross-instance)."""
+        return self.quaid_home() / "shared" / "projects"
 
     def adapter_id(self) -> str:
         """Short identifier for this adapter type (e.g. 'claude-code', 'openclaw').
@@ -94,14 +108,14 @@ class QuaidAdapter(abc.ABC):
     def identity_dir(self) -> Path:
         """Per-instance Quaid-managed identity directory.
 
-        Derived from quaid_home() + adapter_id(). This is where Quaid writes
+        Lives at instance_root/identity/. This is where Quaid writes
         generated identity (SOUL.md, USER.md, MEMORY.md, *.snippets.md).
         NOT where platform-native context lives (that's get_base_context_files).
         """
-        return quaid_identity_dir(self.quaid_home(), self.adapter_id())
+        return self.instance_root() / "identity"
 
     def core_markdown_dir(self) -> Path:
-        return self.quaid_home()
+        return self.instance_root()
 
     # ---- Notifications ----
 
@@ -549,27 +563,27 @@ class StandaloneAdapter(QuaidAdapter):
 # ---------------------------------------------------------------------------
 
 def quaid_identity_dir(quaid_home: Path, adapter_id: str) -> Path:
-    """Derive the Quaid-managed identity directory for an adapter.
+    """Derive the Quaid-managed identity directory.
 
-    Identity dir holds generated files: SOUL.md, USER.md, MEMORY.md,
-    *.snippets.md. These are Quaid's output, not platform-native files.
+    DEPRECATED: Use adapter.identity_dir() instead, which routes through
+    instance_root(). This function is kept for backward compat during migration.
 
-    Args:
-        quaid_home: QUAID_HOME root path
-        adapter_id: Adapter type identifier (e.g. 'claude-code', 'openclaw')
-
-    Returns:
-        Path like QUAID_HOME/<adapter_id>/identity/
+    Returns: QUAID_HOME/<instance_id>/identity/ (via instance resolution)
     """
-    if not adapter_id or adapter_id == "standalone":
-        # Backward compat: standalone uses root
-        return quaid_home
-    return quaid_home / adapter_id / "identity"
+    from lib.instance import instance_id as _instance_id
+    try:
+        iid = _instance_id()
+        return quaid_home / iid / "identity"
+    except Exception:
+        # Fallback for contexts where QUAID_INSTANCE isn't set (legacy)
+        if not adapter_id or adapter_id == "standalone":
+            return quaid_home
+        return quaid_home / adapter_id / "identity"
 
 
 def quaid_projects_dir(quaid_home: Path) -> Path:
-    """Canonical projects directory."""
-    return quaid_home / "projects"
+    """Canonical shared projects directory."""
+    return quaid_home / "shared" / "projects"
 
 
 def quaid_tracking_dir(quaid_home: Path) -> Path:
@@ -645,6 +659,9 @@ def get_owner_id(override: Optional[str] = None) -> str:
 class TestAdapter(StandaloneAdapter):
     """Test adapter with canned LLM responses and call recording.
 
+    Creates instance subdirectory structure under home/. The instance name
+    defaults to QUAID_INSTANCE env var (usually "test" from conftest.py).
+
     Usage in tests::
 
         adapter = TestAdapter(tmp_path)
@@ -654,10 +671,26 @@ class TestAdapter(StandaloneAdapter):
     """
     __test__ = False  # Not a pytest test class
 
-    def __init__(self, home: Path, responses: Optional[Dict] = None):
+    def __init__(self, home: Path, responses: Optional[Dict] = None,
+                 instance: Optional[str] = None):
         super().__init__(home=home)
         from lib.providers import TestLLMProvider
         self._llm = TestLLMProvider(responses)
+        self._instance = instance
+
+        # Create instance directory structure
+        iid = self.instance_id()
+        iroot = home / iid
+        (iroot / "config").mkdir(parents=True, exist_ok=True)
+        (iroot / "data").mkdir(parents=True, exist_ok=True)
+        cfg = iroot / "config" / "memory.json"
+        if not cfg.exists():
+            cfg.write_text('{"adapter":{"type":"standalone"}}', encoding="utf-8")
+
+    def instance_id(self) -> str:
+        if self._instance:
+            return self._instance
+        return os.environ.get("QUAID_INSTANCE", "pytest-runner").strip() or "pytest-runner"
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         return self._llm
@@ -676,12 +709,23 @@ _adapter_lock = threading.Lock()
 
 
 def _adapter_config_paths() -> List[Path]:
-    """Candidate config files for adapter selection (priority order)."""
+    """Candidate config files for adapter selection (priority order).
+
+    Instance-aware: checks QUAID_HOME/QUAID_INSTANCE/config/memory.json first.
+    Falls back to legacy flat paths for backward compat during transition.
+    """
     paths: List[Path] = []
 
-    quaid_home = os.environ.get("QUAID_HOME", "").strip()
-    if quaid_home:
-        paths.append(Path(quaid_home) / "config" / "memory.json")
+    home = os.environ.get("QUAID_HOME", "").strip()
+    instance = os.environ.get("QUAID_INSTANCE", "").strip()
+
+    # Primary: instance-specific config
+    if home and instance:
+        paths.append(Path(home) / instance / "config" / "memory.json")
+
+    # Legacy: flat QUAID_HOME/config/memory.json
+    if home:
+        paths.append(Path(home) / "config" / "memory.json")
 
     workspace_root = (
         os.environ.get("QUAID_WORKSPACE", "").strip()

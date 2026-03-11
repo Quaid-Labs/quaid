@@ -17,17 +17,19 @@ _tmp_db = None
 def setup_env(tmp_path, monkeypatch):
     """Set up isolated test environment."""
     global _tmp_db
-    _tmp_db = tmp_path / "test_registry.db"
+    from lib.adapter import set_adapter, reset_adapter, TestAdapter
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
+    iroot = adapter.instance_root()
+
+    _tmp_db = iroot / "test_registry.db"
     monkeypatch.setenv("MEMORY_DB_PATH", str(_tmp_db))
-    # Use adapter for workspace isolation
-    from lib.adapter import set_adapter, reset_adapter, StandaloneAdapter
-    set_adapter(StandaloneAdapter(home=tmp_path))
-    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))  # kept for backward compat
+    monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(iroot))  # kept for backward compat
 
     # Create minimal config
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    projects_dir = tmp_path / "projects" / "staging"
+    config_dir = iroot / "config"
+    config_dir.mkdir(exist_ok=True)
+    projects_dir = iroot / "projects" / "staging"
     projects_dir.mkdir(parents=True)
 
     config_data = {
@@ -58,16 +60,16 @@ def setup_env(tmp_path, monkeypatch):
     (config_dir / "memory.json").write_text(json.dumps(config_data))
 
     # Create project directory
-    (tmp_path / "projects" / "test-project").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "src").mkdir(exist_ok=True)
+    (iroot / "projects" / "test-project").mkdir(parents=True, exist_ok=True)
+    (iroot / "src").mkdir(exist_ok=True)
 
     # Patch config paths to use test config and WORKSPACE in docs_registry
     sys.path.insert(0, str(Path(__file__).parent.parent))
     import config as config_mod
-    monkeypatch.setattr(config_mod, "_config_paths", lambda: [tmp_path / "config" / "memory.json"])
+    monkeypatch.setattr(config_mod, "_config_paths", lambda: [iroot / "config" / "memory.json"])
     config_mod.reload_config()
 
-    yield tmp_path
+    yield iroot
 
     # Reset config cache and adapter so they don't pollute subsequent test files
     config_mod._config = None

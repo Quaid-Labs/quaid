@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Quaid Extraction Daemon — shared extraction coordinator.
+"""Quaid Extraction Daemon — per-instance extraction coordinator.
 
-A long-lived process (one per QUAID_HOME) that processes extraction signals
+A long-lived process (one per QUAID_INSTANCE) that processes extraction signals
 from adapters. Handles chunked extraction with carryover context, cursor
 management, and compaction-aware timeout extraction.
 
-Adapters write signal files to $QUAID_HOME/data/extraction-signals/.
+Adapters write signal files to $QUAID_HOME/$QUAID_INSTANCE/data/extraction-signals/.
 The daemon polls for signals, processes them serially, and advances
 cursors to prevent re-extraction.
 
@@ -21,6 +21,8 @@ Lifecycle:
     quaid daemon status  — Check if PID is alive.
 
 Adapters ensure the daemon is alive on session init and launch it if not.
+Each QUAID_INSTANCE gets its own daemon with its own PID file, signal dir,
+and cursor state.
 """
 
 import fcntl
@@ -63,9 +65,21 @@ MAX_SIGNALS_PER_POLL = 100
 # ---------------------------------------------------------------------------
 
 def _quaid_home() -> Path:
+    """QUAID_HOME root (contains all instances)."""
     env = os.environ.get("QUAID_HOME", "").strip()
     # B022: Always resolve to absolute path
     return Path(env).resolve() if env else Path.home() / "quaid"
+
+
+def _instance_id() -> str:
+    """Current instance identifier from QUAID_INSTANCE env var."""
+    from lib.instance import instance_id
+    return instance_id()
+
+
+def _instance_root() -> Path:
+    """Resolved instance root: QUAID_HOME / QUAID_INSTANCE."""
+    return _quaid_home() / _instance_id()
 
 
 def _get_quaid_version() -> str:
@@ -84,42 +98,42 @@ def _get_quaid_version() -> str:
 
 
 def _signal_dir() -> Path:
-    d = _quaid_home() / "data" / "extraction-signals"
+    d = _instance_root() / "data" / "extraction-signals"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _cursor_dir() -> Path:
-    d = _quaid_home() / "data" / "session-cursors"
+    d = _instance_root() / "data" / "session-cursors"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _carryover_dir() -> Path:
-    d = _quaid_home() / "data" / "extraction-carryover"
+    d = _instance_root() / "data" / "extraction-carryover"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _tmp_dir() -> Path:
     """Per-instance temp directory (B030: avoid world-readable /tmp)."""
-    d = _quaid_home() / "data" / "tmp"
+    d = _instance_root() / "data" / "tmp"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _pid_path() -> Path:
-    return _quaid_home() / "data" / "extraction-daemon.pid"
+    return _instance_root() / "data" / "extraction-daemon.pid"
 
 
 def _log_path() -> Path:
-    d = _quaid_home() / "logs" / "daemon"
+    d = _instance_root() / "logs" / "daemon"
     d.mkdir(parents=True, exist_ok=True)
     return d / "extraction-daemon.log"
 
 
 def _install_state_path() -> Path:
-    return _quaid_home() / "data" / "installed-at.json"
+    return _instance_root() / "data" / "installed-at.json"
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +859,7 @@ def sweep_orphaned_sessions(current_session_id: str = "") -> int:
 
 def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) -> None:
     """Main daemon loop. Polls for signals and processes them."""
-    logger.info("extraction daemon started (pid=%d, home=%s)", os.getpid(), _quaid_home())
+    logger.info("extraction daemon started (pid=%d, home=%s, instance=%s)", os.getpid(), _quaid_home(), _instance_id())
     write_pid(os.getpid())
 
     shutdown_requested = False
@@ -862,7 +876,7 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
 
     # Initialize version watcher and janitor scheduler
     from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
-    home = _quaid_home()
+    home = _instance_root()
     data_dir = home / "data"
     quaid_version = _get_quaid_version()
     version_watcher = VersionWatcher(data_dir=data_dir, quaid_version=quaid_version)
@@ -1107,6 +1121,8 @@ def daemon_status() -> Dict[str, Any]:
         "running": pid is not None,
         "pid": pid,
         "quaid_home": str(_quaid_home()),
+        "instance": _instance_id(),
+        "instance_root": str(_instance_root()),
         "pending_signals": pending,
         "pid_file": str(_pid_path()),
         "log_file": str(_log_path()),

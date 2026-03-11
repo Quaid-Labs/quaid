@@ -13,16 +13,20 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Adapter is set per-test via _adapter_patch — no module-level set needed
-from lib.adapter import set_adapter, reset_adapter, StandaloneAdapter
+from lib.adapter import set_adapter, reset_adapter, TestAdapter
 
 import pytest
 
 @contextmanager
 def _adapter_patch(tmp_path):
-    """Context manager that sets the adapter to use tmp_path as quaid home."""
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    """Context manager that sets the adapter to use tmp_path as quaid home.
+
+    Yields the instance root path (where files are resolved).
+    """
+    adapter = TestAdapter(tmp_path)
+    set_adapter(adapter)
     try:
-        yield
+        yield adapter.instance_root()
     finally:
         reset_adapter()
 
@@ -72,22 +76,22 @@ class TestCheckStaleness:
 
     def test_detects_stale_doc(self, tmp_path):
         """Source file newer than doc → doc is stale."""
-        # Create doc first, then source (so source is newer)
-        doc_file = tmp_path / "docs" / "doc.md"
-        doc_file.parent.mkdir(parents=True)
-        doc_file.write_text("old doc content")
-
-        import time
-        time.sleep(0.05)  # Ensure mtime difference
-
-        src_file = tmp_path / "src.py"
-        src_file.write_text("updated source")
-
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
         )
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            # Create doc first, then source (so source is newer)
+            doc_file = iroot / "docs" / "doc.md"
+            doc_file.parent.mkdir(parents=True)
+            doc_file.write_text("old doc content")
+
+            import time
+            time.sleep(0.05)  # Ensure mtime difference
+
+            src_file = iroot / "src.py"
+            src_file.write_text("updated source")
+
             from datastore.docsdb.updater import check_staleness
             stale = check_staleness()
             assert "docs/doc.md" in stale
@@ -95,49 +99,47 @@ class TestCheckStaleness:
             assert "src.py" in stale["docs/doc.md"].stale_sources
     def test_up_to_date_doc_not_stale(self, tmp_path):
         """Source file older than doc → doc is not stale."""
-        src_file = tmp_path / "src.py"
-        src_file.write_text("source content")
-
-        import time
-        time.sleep(0.05)
-
-        doc_file = tmp_path / "docs" / "doc.md"
-        doc_file.parent.mkdir(parents=True)
-        doc_file.write_text("fresh doc content")
-
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
         )
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            src_file = iroot / "src.py"
+            src_file.write_text("source content")
+
+            import time
+            time.sleep(0.05)
+
+            doc_file = iroot / "docs" / "doc.md"
+            doc_file.parent.mkdir(parents=True)
+            doc_file.write_text("fresh doc content")
+
             from datastore.docsdb.updater import check_staleness
             stale = check_staleness()
             assert stale == {}
 
     def test_missing_doc_ignored(self, tmp_path):
         """If doc file doesn't exist, it's not reported as stale."""
-        src_file = tmp_path / "src.py"
-        src_file.write_text("source content")
-
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/nonexistent.md"]}},
         )
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            src_file = iroot / "src.py"
+            src_file.write_text("source content")
             from datastore.docsdb.updater import check_staleness
             assert check_staleness() == {}
 
     def test_missing_source_ignored(self, tmp_path):
         """If source file doesn't exist, it's not reported."""
-        doc_file = tmp_path / "docs" / "doc.md"
-        doc_file.parent.mkdir(parents=True)
-        doc_file.write_text("doc content")
-
         cfg = _make_test_config(
             source_mapping={"nonexistent.py": {"docs": ["docs/doc.md"]}},
         )
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path):
+             _adapter_patch(tmp_path) as iroot:
+            doc_file = iroot / "docs" / "doc.md"
+            doc_file.parent.mkdir(parents=True)
+            doc_file.write_text("doc content")
             from datastore.docsdb.updater import check_staleness
             assert check_staleness() == {}
 
@@ -197,12 +199,11 @@ class TestGetGitDiff:
 
     def test_handles_git_not_available(self, tmp_path):
         """If git commands fail, returns empty string gracefully."""
-        src_file = tmp_path / "src.py"
-        src_file.write_text("content")
-
-        with _adapter_patch(tmp_path), \
+        with _adapter_patch(tmp_path) as iroot, \
              patch("datastore.docsdb.updater.subprocess.run", side_effect=FileNotFoundError), \
              patch("datastore.docsdb.updater.logger.debug") as log_debug:
+            src_file = iroot / "src.py"
+            src_file.write_text("content")
             from datastore.docsdb.updater import get_git_diff
             result = get_git_diff("src.py", 0.0)
             assert result == ""
@@ -211,12 +212,11 @@ class TestGetGitDiff:
             assert any("Git diff unavailable" in msg for msg in debug_messages)
 
     def test_stops_when_git_budget_exhausted(self, tmp_path, caplog):
-        src_file = tmp_path / "src.py"
-        src_file.write_text("content")
-
-        with _adapter_patch(tmp_path), \
+        with _adapter_patch(tmp_path) as iroot, \
              patch("datastore.docsdb.updater._git_timeout_from_deadline", side_effect=[0.01, None]), \
              patch("datastore.docsdb.updater.subprocess.run", return_value=MagicMock(returncode=0, stdout="", stderr="")) as run_mock:
+            # File must exist at instance root for get_git_diff to proceed
+            (iroot / "src.py").write_text("content")
             from datastore.docsdb.updater import get_git_diff
             caplog.set_level("WARNING")
             result = get_git_diff("src.py", 0.0)
@@ -660,15 +660,16 @@ class TestDriftDetectionFallback:
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
         )
-        doc = tmp_path / "docs" / "doc.md"
-        src = tmp_path / "src.py"
-        doc.parent.mkdir(parents=True, exist_ok=True)
-        doc.write_text("# Doc\n")
-        src.write_text("print('x')\n")
 
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path), \
+             _adapter_patch(tmp_path) as iroot, \
              patch("datastore.docsdb.updater.subprocess.run", side_effect=RuntimeError("git unavailable")):
+            doc = iroot / "docs" / "doc.md"
+            src = iroot / "src.py"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n")
+            src.write_text("print('x')\n")
+
             import datastore.docsdb.updater as updater
 
             caplog.set_level("WARNING")
@@ -681,11 +682,6 @@ class TestDriftDetectionFallback:
         cfg = _make_test_config(
             source_mapping={"src.py": {"docs": ["docs/doc.md"]}},
         )
-        doc = tmp_path / "docs" / "doc.md"
-        src = tmp_path / "src.py"
-        doc.parent.mkdir(parents=True, exist_ok=True)
-        doc.write_text("# Doc\n")
-        src.write_text("print('x')\n")
 
         def _fake_run(cmd, *args, **kwargs):
             command = " ".join(cmd)
@@ -702,9 +698,15 @@ class TestDriftDetectionFallback:
             return MagicMock(stdout="")
 
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path), \
+             _adapter_patch(tmp_path) as iroot, \
              patch("datastore.docsdb.updater.subprocess.run", side_effect=_fake_run), \
              patch("datastore.docsdb.updater._compute_staleness_score", return_value=42.0) as score_mock:
+            doc = iroot / "docs" / "doc.md"
+            src = iroot / "src.py"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text("# Doc\n")
+            src.write_text("print('x')\n")
+
             import datastore.docsdb.updater as updater
 
             caplog.set_level("WARNING")
@@ -723,16 +725,6 @@ class TestDriftDetectionFallback:
                 "src2.py": {"docs": ["docs/doc2.md"]},
             },
         )
-        doc1 = tmp_path / "docs" / "doc1.md"
-        src1 = tmp_path / "src1.py"
-        doc1.parent.mkdir(parents=True, exist_ok=True)
-        doc1.write_text("# Doc 1\n")
-        src1.write_text("print('one')\n")
-
-        doc2 = tmp_path / "docs" / "doc2.md"
-        src2 = tmp_path / "src2.py"
-        doc2.write_text("# Doc 2\n")
-        src2.write_text("print('two')\n")
 
         timeout_seq = [
             0.01,  # doc1 commit ts
@@ -758,10 +750,21 @@ class TestDriftDetectionFallback:
             return MagicMock(stdout="0\n")
 
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             _adapter_patch(tmp_path), \
+             _adapter_patch(tmp_path) as iroot, \
              patch("datastore.docsdb.updater._git_timeout_from_deadline", side_effect=timeout_seq), \
              patch("datastore.docsdb.updater.subprocess.run", side_effect=_fake_run), \
              patch("datastore.docsdb.updater._compute_staleness_score", return_value=77.0):
+            doc1 = iroot / "docs" / "doc1.md"
+            src1 = iroot / "src1.py"
+            doc1.parent.mkdir(parents=True, exist_ok=True)
+            doc1.write_text("# Doc 1\n")
+            src1.write_text("print('one')\n")
+
+            doc2 = iroot / "docs" / "doc2.md"
+            src2 = iroot / "src2.py"
+            doc2.write_text("# Doc 2\n")
+            src2.write_text("print('two')\n")
+
             import datastore.docsdb.updater as updater
             caplog.set_level("WARNING")
             out = updater.detect_drift_from_git()

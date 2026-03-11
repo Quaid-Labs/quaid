@@ -202,6 +202,107 @@ test_invalid_project_name() {
 }
 
 # --------------------------------------------------------------------------
+# Cross-Instance Shared Project Tests
+# --------------------------------------------------------------------------
+
+test_shared_project_cross_instance() {
+    echo ""
+    echo "======================================"
+    echo "Cross-Instance Shared Project Test"
+    echo "======================================"
+    echo ""
+
+    SHARED_PROJECT="shared-live-test-$(date +%s)"
+
+    # --- Phase 1: OC creates and populates project ---
+    echo "Phase 1: OC instance creates project"
+
+    if [[ -z "${QUAID_HOME:-}" ]]; then
+        log_skip "QUAID_HOME not set, cannot test cross-instance"
+        return
+    fi
+
+    # Create source content for OC
+    mkdir -p "$TEST_DIR/shared-src"
+    cat > "$TEST_DIR/shared-src/main.py" <<'PYEOF'
+def hello():
+    return "shared project content"
+PYEOF
+    cat > "$TEST_DIR/shared-src/README.md" <<'MDEOF'
+# Shared Test Project
+This project was created by OC for cross-instance testing.
+MDEOF
+
+    # Create project as OC instance
+    oc_output=$(QUAID_INSTANCE=openclaw "$QUAID_CMD" project create "$SHARED_PROJECT" \
+        -d "Cross-instance shared project test" \
+        -s "$TEST_DIR/shared-src" 2>&1) || true
+
+    if echo "$oc_output" | grep -q "Created project"; then
+        log_pass "OC created shared project"
+    else
+        log_fail "OC project create failed: $oc_output"
+        return
+    fi
+
+    # Compact to flush docs (if compact subcommand exists)
+    compact_output=$(QUAID_INSTANCE=openclaw "$QUAID_CMD" project compact "$SHARED_PROJECT" 2>&1) || true
+    if echo "$compact_output" | grep -qi "compact\|success\|done"; then
+        log_pass "OC project compact succeeded"
+    else
+        log_skip "OC project compact not available or no-op: $compact_output"
+    fi
+
+    # --- Phase 2: CC links to same project and reads it ---
+    echo "Phase 2: CC instance links and reads project"
+
+    # Link CC to the same shared project
+    link_output=$(QUAID_INSTANCE=claude-code "$QUAID_CMD" project link "$SHARED_PROJECT" 2>&1) || true
+    if echo "$link_output" | grep -qi "link\|added\|success"; then
+        log_pass "CC linked to shared project"
+    else
+        log_fail "CC project link failed: $link_output"
+    fi
+
+    # CC should be able to show the project
+    cc_show=$(QUAID_INSTANCE=claude-code "$QUAID_CMD" project show "$SHARED_PROJECT" 2>&1) || true
+    if echo "$cc_show" | grep -q "Cross-instance shared project test"; then
+        log_pass "CC can read OC-created project description"
+    else
+        log_fail "CC cannot read shared project: $cc_show"
+    fi
+
+    # Verify shared project dir exists
+    shared_dir="$QUAID_HOME/shared/projects/$SHARED_PROJECT"
+    if [[ -d "$shared_dir" ]]; then
+        log_pass "shared project dir exists at $shared_dir"
+    else
+        log_skip "shared project dir not at expected path (may use different layout)"
+    fi
+
+    # --- Phase 3: Verify both instances see it in their registries ---
+    echo "Phase 3: Verify registry entries"
+
+    oc_list=$(QUAID_INSTANCE=openclaw "$QUAID_CMD" project list 2>&1) || true
+    if echo "$oc_list" | grep -q "$SHARED_PROJECT"; then
+        log_pass "OC lists shared project"
+    else
+        log_fail "OC doesn't list shared project"
+    fi
+
+    cc_list=$(QUAID_INSTANCE=claude-code "$QUAID_CMD" project list 2>&1) || true
+    if echo "$cc_list" | grep -q "$SHARED_PROJECT"; then
+        log_pass "CC lists shared project"
+    else
+        log_fail "CC doesn't list shared project"
+    fi
+
+    # --- Cleanup ---
+    echo "Cleanup: removing test project"
+    QUAID_INSTANCE=openclaw "$QUAID_CMD" project delete "$SHARED_PROJECT" 2>&1 || true
+}
+
+# --------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------
 
@@ -223,6 +324,9 @@ test_project_sync
 test_project_update
 test_project_delete
 test_invalid_project_name
+
+# Cross-instance tests (run after both OC and CC single-instance tests pass)
+test_shared_project_cross_instance
 
 echo ""
 echo "======================================"

@@ -6,7 +6,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from datastore.memorydb import session_logs
-from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
+from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
 
 def setup_function():
@@ -18,7 +18,7 @@ def teardown_function():
 
 
 def test_index_session_log_embedding_pack_error_fail_hard_behavior(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     monkeypatch.setattr("datastore.memorydb.session_logs._lib_get_embedding", lambda _t: [0.1, 0.2])
     monkeypatch.setattr("datastore.memorydb.session_logs._lib_pack_embedding", lambda _v: (_ for _ in ()).throw(RuntimeError("pack failed")))
@@ -35,7 +35,7 @@ def test_index_session_log_embedding_pack_error_fail_hard_behavior(monkeypatch, 
 
 
 def test_search_session_logs_unpack_error_fail_hard_behavior(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
     monkeypatch.setattr("datastore.memorydb.session_logs._lib_get_embedding", lambda _t: [0.1, 0.2])
 
