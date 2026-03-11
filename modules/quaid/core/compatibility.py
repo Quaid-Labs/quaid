@@ -821,10 +821,14 @@ class JanitorScheduler:
         scheduled_hour, window = self._get_schedule()
         current_hour = datetime.datetime.now().hour
 
-        # Check if we're in the scheduled window
+        # Check if we're in the scheduled window (handles midnight wrap)
         window_start = scheduled_hour - (window // 2)
         window_end = scheduled_hour + (window - window // 2)
-        in_window = window_start <= current_hour < window_end
+        if window_start < 0 or window_end > 23:
+            # Window wraps around midnight — normalize to 0-23
+            in_window = current_hour >= (window_start % 24) or current_hour < (window_end % 24)
+        else:
+            in_window = window_start <= current_hour < window_end
 
         # Also check for catch-up: if checkpoint is >24h old, run regardless
         # of window (daemon may have been down during the window)

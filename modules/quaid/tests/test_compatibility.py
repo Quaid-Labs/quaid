@@ -281,6 +281,59 @@ class TestAdaptiveCheckInterval:
         assert state.untested is False
 
 
+class TestJanitorSchedulerWindow:
+    """Test the midnight-wrapping window calculation."""
+
+    def _make_scheduler(self, tmp_path, hour, window):
+        # Stale checkpoint so catch-up doesn't interfere
+        return JanitorScheduler(
+            data_dir=tmp_path, quaid_home=tmp_path,
+            scheduled_hour=hour, window_hours=window,
+        )
+
+    def test_window_wraps_around_midnight_high(self, tmp_path):
+        """scheduled_hour=23, window=4 → hours 21,22,23,0 should be in window."""
+        import datetime
+        scheduler = self._make_scheduler(tmp_path, 23, 4)
+        scheduler._last_tick = 0
+
+        # Make checkpoint stale
+        cp_dir = tmp_path / "logs" / "janitor"
+        cp_dir.mkdir(parents=True)
+        cp = cp_dir / "checkpoint-all.json"
+        cp.write_text("{}")
+        old_time = time.time() - 172800
+        os.utime(cp, (old_time, old_time))
+
+        # Hour 0 should be in window (wrapped)
+        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run, \
+             patch("datetime.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 0
+            mock_dt.date.today.return_value.isoformat.return_value = "2026-03-11"
+            scheduler.tick()
+            mock_run.assert_called_once()
+
+    def test_window_wraps_around_midnight_low(self, tmp_path):
+        """scheduled_hour=1, window=4 → hours 23,0,1,2 should be in window."""
+        scheduler = self._make_scheduler(tmp_path, 1, 4)
+        scheduler._last_tick = 0
+
+        cp_dir = tmp_path / "logs" / "janitor"
+        cp_dir.mkdir(parents=True)
+        cp = cp_dir / "checkpoint-all.json"
+        cp.write_text("{}")
+        old_time = time.time() - 172800
+        os.utime(cp, (old_time, old_time))
+
+        # Hour 23 should be in window (wrapped)
+        with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run, \
+             patch("datetime.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 23
+            mock_dt.date.today.return_value.isoformat.return_value = "2026-03-11"
+            scheduler.tick()
+            mock_run.assert_called_once()
+
+
 class TestJanitorScheduler:
     def test_skips_when_circuit_breaker_tripped(self, tmp_path):
         write_circuit_breaker(tmp_path, CircuitBreakerState(status=SAFE_MODE))
