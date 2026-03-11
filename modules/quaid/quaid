@@ -131,9 +131,14 @@ print(json.dumps(register_domain(name, desc), indent=2))
     esac
     ;;
 
-  # Registry/projects subsystem
-  registry|project|projects)
+  # Registry/projects subsystem (docs registry)
+  registry)
     exec python3 "$SCRIPT_DIR/datastore/docsdb/registry.py" "$@"
+    ;;
+
+  # Project system (project registry, shadow git, sync)
+  project|projects)
+    exec python3 "$SCRIPT_DIR/core/project_registry_cli.py" "$@"
     ;;
 
   # Global project registry (cross-instance tracking)
@@ -220,7 +225,13 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     echo "  docs changelog       View update history"
     echo ""
     echo "Projects:"
-    echo "  registry [cmd]       Project/doc registry CLI"
+    echo "  project list         List registered projects"
+    echo "  project create       Create a new project"
+    echo "  project show <name>  Show project details"
+    echo "  project delete       Delete a project"
+    echo "  project snapshot     Take shadow git snapshot(s)"
+    echo "  project sync         Sync files to adapter workspaces"
+    echo "  registry [cmd]       Doc registry CLI"
     echo "  global-registry [cmd] Cross-instance project registry"
     echo "  updater [cmd]        Project event processor"
     echo ""

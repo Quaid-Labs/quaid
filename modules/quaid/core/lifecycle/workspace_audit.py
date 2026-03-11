@@ -238,6 +238,18 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
                     "maxLines": _BOOTSTRAP_MAX_LINES,
                 }
 
+    # Include platform-native base context files (Layer 1) for slimming.
+    # These are files the platform owns (CLAUDE.md, OC's SOUL.md, etc.)
+    # that the janitor monitors for bloat but does not create or manage.
+    try:
+        from lib.adapter import get_adapter
+        base_files = get_adapter().get_base_context_files()
+        for path_str, config in base_files.items():
+            if path_str not in files:
+                files[path_str] = config
+    except Exception as e:
+        logger.debug(f"Could not load base context files: {e}")
+
     if not files:
         # Fallback to hardcoded list if config not available
         return {
@@ -613,7 +625,7 @@ def apply_review_decisions(dry_run: bool = True,
                                     source_file=filename,
                                     reason=reason,
                                     project_hint=project_hint,
-                                    content_preview=section_content[:1000],
+                                    content_preview=section_content,
                                 )
                             except Exception as e:
                                 logger.warning(f"Failed to queue project review: {e}")
@@ -667,7 +679,7 @@ def apply_review_decisions(dry_run: bool = True,
                             print(f"  Would store '{section}' from {filename} as {memory_type} memory")
                         else:
                             get_memory_service().store(
-                                text=section_content[:2000],
+                                text=section_content,
                                 category="fact",
                                 source=f"workspace_audit:{filename}",
                                 owner_id=_default_owner_id(),
@@ -831,7 +843,7 @@ def run_workspace_check(dry_run: bool = True) -> Dict[str, Any]:
     decisions_data = parse_json_response(response_text)
     if not isinstance(decisions_data, dict) or "decisions" not in decisions_data:
         print(f"  Failed to parse Opus response as decisions JSON")
-        logger.error(f"Invalid workspace review response: {response_text[:500]}")
+        logger.error(f"Invalid workspace review response: {response_text}")
         return {"phase": "error", "error": "invalid JSON response", "bloat_stats": bloat_stats}
 
     decision_count = len(decisions_data.get("decisions", []))

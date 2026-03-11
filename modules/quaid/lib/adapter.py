@@ -70,14 +70,22 @@ class QuaidAdapter(abc.ABC):
     def projects_dir(self) -> Path:
         return self.quaid_home() / "projects"
 
-    def identity_dir(self) -> Path:
-        """Per-instance identity files (SOUL.md, USER.md, MEMORY.md).
+    def adapter_id(self) -> str:
+        """Short identifier for this adapter type (e.g. 'claude-code', 'openclaw').
 
-        Defaults to quaid_home() for backward compatibility. Adapters with
-        per-install silos (e.g. ClaudeCodeAdapter) override this to return
-        their silo's identity/ subdirectory.
+        Used by core to derive Quaid-managed paths like identity dirs.
+        Must be a valid directory name (lowercase, no spaces).
         """
-        return self.quaid_home()
+        return "standalone"
+
+    def identity_dir(self) -> Path:
+        """Per-instance Quaid-managed identity directory.
+
+        Derived from quaid_home() + adapter_id(). This is where Quaid writes
+        generated identity (SOUL.md, USER.md, MEMORY.md, *.snippets.md).
+        NOT where platform-native context lives (that's get_base_context_files).
+        """
+        return quaid_identity_dir(self.quaid_home(), self.adapter_id())
 
     def core_markdown_dir(self) -> Path:
         return self.quaid_home()
@@ -173,6 +181,29 @@ class QuaidAdapter(abc.ABC):
         project markdown into runtime bootstrap context.
         """
         return []
+
+    def get_base_context_files(self) -> Dict[str, Dict]:
+        """Return platform-native context files for janitor monitoring.
+
+        These are the platform's own personality/instruction files (e.g.
+        CLAUDE.md for CC, SOUL.md/USER.md/MEMORY.md for OC). Quaid does
+        NOT create or manage these — only trims them during maintenance.
+
+        Returns dict mapping file paths to monitoring config::
+
+            {"/path/to/CLAUDE.md": {"purpose": "...", "maxLines": 500}}
+        """
+        return {}
+
+    def get_context_sync_target(self) -> Optional[Path]:
+        """Return directory where project context files should be synced.
+
+        Returns None if this adapter reads directly from QUAID_HOME
+        (no sync needed). Returns a path if files must be copied into
+        the adapter's workspace due to boundary constraints (e.g. OC's
+        workspace boundary guard).
+        """
+        return None
 
     def should_filter_transcript_message(self, text: str) -> bool:
         """Adapter-specific transcript noise filtering."""
@@ -492,6 +523,39 @@ class StandaloneAdapter(QuaidAdapter):
             f"Unknown LLM provider '{provider_id}'. "
             "Valid values: 'claude-code', 'anthropic', 'openai-compatible'."
         )
+
+
+# ---------------------------------------------------------------------------
+# Core path utilities — Quaid-managed directories derived from QUAID_HOME
+# ---------------------------------------------------------------------------
+
+def quaid_identity_dir(quaid_home: Path, adapter_id: str) -> Path:
+    """Derive the Quaid-managed identity directory for an adapter.
+
+    Identity dir holds generated files: SOUL.md, USER.md, MEMORY.md,
+    *.snippets.md. These are Quaid's output, not platform-native files.
+
+    Args:
+        quaid_home: QUAID_HOME root path
+        adapter_id: Adapter type identifier (e.g. 'claude-code', 'openclaw')
+
+    Returns:
+        Path like QUAID_HOME/<adapter_id>/identity/
+    """
+    if not adapter_id or adapter_id == "standalone":
+        # Backward compat: standalone uses root
+        return quaid_home
+    return quaid_home / adapter_id / "identity"
+
+
+def quaid_projects_dir(quaid_home: Path) -> Path:
+    """Canonical projects directory."""
+    return quaid_home / "projects"
+
+
+def quaid_tracking_dir(quaid_home: Path) -> Path:
+    """Shadow git tracking base directory."""
+    return quaid_home / ".git-tracking"
 
 
 # ---------------------------------------------------------------------------

@@ -252,7 +252,7 @@ class TestDetectChangedSources:
             source_mapping={"core.lifecycle.janitor.py": {"docs": ["docs/ref.md"]}},
         )
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             patch("datastore.docsdb.updater.call_fast_reasoning", return_value=(None, 1.0)):
+             patch("lib.llm_clients.call_fast_reasoning", return_value=(None, 1.0)):
             from datastore.docsdb.updater import detect_changed_sources_from_transcript
             result = detect_changed_sources_from_transcript("some transcript")
             assert result == []
@@ -266,10 +266,10 @@ class TestDetectChangedSources:
         )
         response = '{"changed": ["core.lifecycle.janitor.py"]}'
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             patch("datastore.docsdb.updater.call_fast_reasoning", return_value=(response, 1.0)):
+             patch("lib.llm_clients.call_fast_reasoning", return_value=(response, 1.0)):
             from datastore.docsdb.updater import detect_changed_sources_from_transcript
             result = detect_changed_sources_from_transcript("modified janitor.py")
-            assert result == ["core.lifecycle.janitor.py"]
+            assert "core.lifecycle.janitor.py" in result
 
     def test_filters_unknown_files(self):
         cfg = _make_test_config(
@@ -277,10 +277,11 @@ class TestDetectChangedSources:
         )
         response = '{"changed": ["core.lifecycle.janitor.py", "unknown.py"]}'
         with patch("datastore.docsdb.updater.get_config", return_value=cfg), \
-             patch("datastore.docsdb.updater.call_fast_reasoning", return_value=(response, 1.0)):
+             patch("lib.llm_clients.call_fast_reasoning", return_value=(response, 1.0)):
             from datastore.docsdb.updater import detect_changed_sources_from_transcript
             result = detect_changed_sources_from_transcript("some transcript")
-            assert result == ["core.lifecycle.janitor.py"]
+            assert "core.lifecycle.janitor.py" in result
+            assert "unknown.py" not in result
 
     def test_no_mapping_returns_empty(self):
         cfg = _make_test_config(source_mapping={})

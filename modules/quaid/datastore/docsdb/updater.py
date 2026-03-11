@@ -824,23 +824,37 @@ def update_doc_from_diffs(
         print(f"  Skipping {doc_path} — trivial changes: {', '.join(classification['reasons'])}")
         return True  # Success — no update needed
 
-    # For borderline cases (low-confidence "significant"), use Haiku as a cheap gate
+    # For borderline cases (low-confidence "significant"), use Haiku as a cheap gate.
+    # If the diff is large, chunk it and check each chunk — if ANY says YES, proceed.
     if classification["confidence"] < 0.6:
         try:
-            gate_prompt = (
+            from lib.llm_chunked_call import parallel_llm_call, merge_parallel_results
+            gate_system = "Answer with YES or NO first, then one short sentence. No JSON."
+            gate_template = (
                 f"Does this code diff require updating the documentation at {doc_path}?\n"
                 f"Doc purpose: {purpose}\n\n"
-                f"Diff:\n{all_diffs[:2000]}\n\n"
-                f"Answer YES or NO with a one-sentence reason."
+                "Diff:\n{chunk}\n\n"
+                "Answer YES or NO with a one-sentence reason."
             )
-            gate_response, _ = call_fast_reasoning(
-                gate_prompt,
-                max_tokens=50,
+            gate_results = parallel_llm_call(
+                system_prompt=gate_system,
+                content=all_diffs,
+                chunk_prompt_template=gate_template,
+                max_chunk_tokens=500,
+                model_tier="fast",
+                max_response_tokens=50,
                 timeout=10,
-                system_prompt="Answer with YES or NO first, then one short sentence. No JSON.",
             )
-            if gate_response and gate_response.strip().upper().startswith("NO"):
-                print(f"  Haiku gate: skip {doc_path} — {gate_response.strip()}")
+            # If ALL chunks say NO, skip the update
+            all_no = all(
+                r.output and r.output.strip().upper().startswith("NO")
+                for r in gate_results if r.error is None
+            )
+            if gate_results and all_no:
+                first_reason = next(
+                    (r.output.strip() for r in gate_results if r.output), ""
+                )
+                print(f"  Haiku gate: skip {doc_path} — {first_reason}")
                 return True
         except Exception as exc:
             logger.warning("Haiku gate failed for %s: %s", doc_path, exc)
@@ -950,46 +964,61 @@ def update_doc_from_diffs(
 
 
 def detect_changed_sources_from_transcript(transcript: str) -> List[str]:
-    """Use Haiku to detect which monitored source files were modified in a conversation."""
+    """Use Haiku to detect which monitored source files were modified in a conversation.
+
+    For large transcripts, chunks are processed in parallel and results merged.
+    """
     cfg = get_config()
     monitored = list(cfg.docs.source_mapping.keys())
     if not monitored:
         return []
 
-    prompt = (
+    from lib.llm_chunked_call import parallel_llm_call
+
+    system_prompt = (
         "You are analyzing a conversation transcript to determine which source files "
         "were modified during this session.\n\n"
         f"MONITORED FILES:\n{json.dumps(monitored, indent=2)}\n\n"
-        f"CONVERSATION:\n{transcript[:6000]}\n\n"
-        "Which of the monitored files were modified (created, edited, or had significant "
-        "changes discussed and applied) in this conversation?\n\n"
         "Return JSON: {\"changed\": [\"path/to/file1\", \"path/to/file2\"]}\n"
-        "If no monitored files were changed, return: {\"changed\": []}"
+        "If no monitored files were changed in this portion, return: {\"changed\": []}"
     )
 
-    response, duration = call_fast_reasoning(prompt, max_tokens=300, timeout=30.0)
-    if not response:
-        print(f"  Haiku detection failed ({duration:.1f}s)")
-        return []
+    chunk_template = (
+        "Which of the monitored files were modified (created, edited, or had significant "
+        "changes discussed and applied) in this conversation portion?\n\n"
+        "CONVERSATION:\n{chunk}"
+    )
 
-    try:
-        # Parse JSON from response
-        json_str = response
-        if "```" in response:
-            match = __import__("re").search(r"```(?:json)?\s*([\s\S]*?)```", response)
-            if match:
-                json_str = match.group(1).strip()
+    results = parallel_llm_call(
+        system_prompt=system_prompt,
+        content=transcript,
+        chunk_prompt_template=chunk_template,
+        max_chunk_tokens=1500,
+        model_tier="fast",
+        max_response_tokens=300,
+        timeout=30.0,
+    )
 
-        json_match = __import__("re").search(r"\{[\s\S]*\}", json_str)
-        if json_match:
-            data = json.loads(json_match.group(0))
-            changed = data.get("changed", [])
-            # Validate against monitored list
-            return [f for f in changed if f in monitored]
-    except (json.JSONDecodeError, AttributeError):
-        pass
+    all_changed = set()
+    for r in results:
+        if not r.output or r.error:
+            continue
+        try:
+            json_str = r.output
+            if "```" in json_str:
+                match = re.search(r"```(?:json)?\s*([\s\S]*?)```", json_str)
+                if match:
+                    json_str = match.group(1).strip()
+            json_match = re.search(r"\{[\s\S]*\}", json_str)
+            if json_match:
+                data = json.loads(json_match.group(0))
+                for f in data.get("changed", []):
+                    if f in monitored:
+                        all_changed.add(f)
+        except (json.JSONDecodeError, AttributeError):
+            continue
 
-    return []
+    return list(all_changed)
 
 
 def update_doc_from_transcript(
@@ -1029,27 +1058,51 @@ def update_doc_from_transcript(
         "Be surgical - only edit what changed. If nothing needs updating, respond with: NO_CHANGES_NEEDED"
     )
 
-    # Truncate transcript if very long to stay within token limits
-    trunc_transcript = transcript
-    if len(transcript) > 30000:
-        trunc_transcript = transcript[:30000] + "\n\n... (truncated)"
+    # For large transcripts, use waterfall chunking to accumulate edits
+    # without truncation. Each chunk's edits are carried forward.
+    from lib.llm_chunked_call import waterfall_llm_call
+    from lib.tokens import estimate_tokens
 
-    user_message = (
-        f"CURRENT DOCUMENT ({doc_path}):\n\n{current_doc}\n\n"
-        f"CONVERSATION (what was changed and why):\n\n{trunc_transcript}"
-    )
-
-    print(f"  Calling LLM to analyze changes for {doc_path}...")
+    transcript_tokens = estimate_tokens(transcript)
     transcript_update_timeout = float(os.environ.get("QUAID_DOCS_TRANSCRIPT_TIMEOUT_SECONDS", "120") or "120")
-    response, duration = call_deep_reasoning(
-        prompt=user_message,
-        system_prompt=system_prompt,
-        max_tokens=4000,  # Edits are smaller than full doc
-        timeout=transcript_update_timeout,
+
+    chunk_template = (
+        f"CURRENT DOCUMENT ({doc_path}):\n\n{current_doc}\n\n"
+        "Previous edits found so far:\n{carryover}\n\n"
+        "CONVERSATION (what was changed and why):\n{chunk}\n\n"
+        "Output any additional edits needed for this portion."
     )
+
+    print(f"  Calling LLM to analyze changes for {doc_path} ({transcript_tokens} tokens)...")
+
+    if transcript_tokens <= 6000:
+        # Small transcript — single call, no chunking overhead
+        user_message = (
+            f"CURRENT DOCUMENT ({doc_path}):\n\n{current_doc}\n\n"
+            f"CONVERSATION (what was changed and why):\n\n{transcript}"
+        )
+        response, duration = call_deep_reasoning(
+            prompt=user_message,
+            system_prompt=system_prompt,
+            max_tokens=4000,
+            timeout=transcript_update_timeout,
+        )
+    else:
+        # Large transcript — waterfall through chunks
+        response = waterfall_llm_call(
+            system_prompt=system_prompt,
+            content=transcript,
+            chunk_prompt_template=chunk_template,
+            initial_carryover="(none yet)",
+            max_chunk_tokens=6000,
+            model_tier="deep",
+            max_response_tokens=4000,
+            timeout=transcript_update_timeout,
+        )
+        duration = 0.0  # waterfall logs internally
 
     if not response:
-        print(f"  LLM call failed for {doc_path} ({duration:.1f}s)")
+        print(f"  LLM call failed for {doc_path}")
         log_doc_update(doc_path, trigger, sources, "LLM call failed",
                        dry_run, False, chars_before, 0)
         return False
@@ -1086,34 +1139,7 @@ def update_doc_from_transcript(
                        dry_run, False, chars_before, 0)
         return False
 
-    updated_doc = current_doc
-    applied = 0
-    for edit_block in edits:
-        lines = edit_block.strip().split('\n')
-        old_text = None
-        new_text = None
-        for i, line in enumerate(lines):
-            if line.startswith('OLD:'):
-                old_parts = [line[4:].strip()]
-                j = i + 1
-                while j < len(lines) and not lines[j].startswith('NEW:'):
-                    old_parts.append(lines[j])
-                    j += 1
-                old_text = '\n'.join(old_parts).strip()
-            elif line.startswith('NEW:'):
-                new_parts = [line[4:].strip()]
-                for remaining in lines[i+1:]:
-                    new_parts.append(remaining)
-                new_text = '\n'.join(new_parts).strip()
-                break
-
-        if old_text == 'ADD' and new_text:
-            updated_doc = updated_doc.rstrip() + '\n\n' + new_text
-            applied += 1
-        elif old_text and new_text and old_text in updated_doc:
-            updated_doc = updated_doc.replace(old_text, new_text, 1)
-            applied += 1
-
+    updated_doc, applied = apply_edit_blocks(current_doc, edits)
     chars_after = len(updated_doc)
 
     if applied > 0:
@@ -1137,6 +1163,51 @@ def update_doc_from_transcript(
         log_doc_update(doc_path, trigger, sources, "Edits didn't match doc content",
                        dry_run, False, chars_before, 0)
         return False
+
+
+def apply_edit_blocks(doc_text: str, edits: List[str]) -> Tuple[str, int]:
+    """Apply <<<EDIT blocks to a document.
+
+    Parses OLD:/NEW: pairs from each edit block and applies replacements.
+    OLD: 'ADD' appends new content to the end of the document.
+
+    Args:
+        doc_text: Current document content.
+        edits: List of edit block strings (content between <<<EDIT and >>>).
+
+    Returns:
+        (updated_doc, applied_count) tuple.
+    """
+    updated = doc_text
+    applied = 0
+
+    for edit_block in edits:
+        lines = edit_block.strip().split('\n')
+        old_text = None
+        new_text = None
+        for i, line in enumerate(lines):
+            if line.startswith('OLD:'):
+                old_parts = [line[4:].strip()]
+                j = i + 1
+                while j < len(lines) and not lines[j].startswith('NEW:'):
+                    old_parts.append(lines[j])
+                    j += 1
+                old_text = '\n'.join(old_parts).strip()
+            elif line.startswith('NEW:'):
+                new_parts = [line[4:].strip()]
+                for remaining in lines[i+1:]:
+                    new_parts.append(remaining)
+                new_text = '\n'.join(new_parts).strip()
+                break
+
+        if old_text == 'ADD' and new_text:
+            updated = updated.rstrip() + '\n\n' + new_text
+            applied += 1
+        elif old_text and new_text and old_text in updated:
+            updated = updated.replace(old_text, new_text, 1)
+            applied += 1
+
+    return updated, applied
 
 
 def cmd_check(json_output: bool = False) -> Dict[str, StalenessInfo]:

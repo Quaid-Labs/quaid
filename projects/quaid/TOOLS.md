@@ -33,8 +33,17 @@ hooks/runtime set it per-invocation to avoid cross-instance collisions.
 - `quaid docs update` — Update stale docs from source diffs
 
 ### Project Commands
-- `quaid registry list` — List all projects
-- `quaid registry create-project <name>` — Create a new project
+- `quaid project list` — List all registered projects
+- `quaid project create <name> [-d "description"] [-s /path/to/source]` — Create a new project
+- `quaid project show <name>` — Show project details
+- `quaid project update <name> [-d "new desc"] [-s /new/path]` — Update project fields
+- `quaid project delete <name>` — Delete a project (never touches source files)
+- `quaid project snapshot [<name>]` — Take shadow git snapshot(s) for change tracking
+- `quaid project sync` — Sync project context files to adapter workspaces
+
+### Doc Registry Commands
+- `quaid registry list` — List all registered docs
+- `quaid registry create-project <name>` — Create a doc project in the registry
 - `quaid global-registry list` — Cross-instance project registry
 - `quaid updater doc-health <project> [--dry-run]` — Evaluate doc lifecycle
 
@@ -273,7 +282,14 @@ quaid janitor --task all --dry-run
 quaid janitor --task all --apply
 quaid janitor --task all --apply --time-budget 1800 --token-budget 12000
 
-# Project lifecycle
+# Project system
+quaid project list
+quaid project create <name> -d "description" -s /path/to/source
+quaid project show <name>
+quaid project snapshot
+quaid project sync
+
+# Doc lifecycle
 quaid updater doc-health <project> --dry-run
 quaid global-registry list
 

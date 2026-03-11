@@ -72,16 +72,28 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
         return None
 
+    def adapter_id(self) -> str:
+        return "claude-code"
+
     def auth_token_path(self) -> Optional[Path]:
         return self.quaid_home() / "config" / "adapters" / "claude-code" / ".auth-token"
 
-    def identity_dir(self) -> Path:
-        """Per-instance identity directory for SOUL.md, USER.md, MEMORY.md.
-
-        Identity files are per-install (not shared across platforms) so each
-        adapter instance gets its own copy under <quaid_home>/<silo>/identity/.
-        """
-        return self.quaid_home() / "claude-code" / "identity"
+    def get_base_context_files(self):
+        """CLAUDE.md is CC's native context file — janitor can slim it."""
+        # CLAUDE.md lives in the user's project cwd
+        candidates = [
+            Path.cwd() / "CLAUDE.md",
+            Path.cwd() / ".claude" / "CLAUDE.md",
+        ]
+        files = {}
+        for p in candidates:
+            if p.is_file():
+                files[str(p.resolve())] = {
+                    "purpose": "Claude Code project instructions and rules",
+                    "maxLines": 500,
+                }
+                break  # Only the first match
+        return files
 
     def get_sessions_dir(self) -> Optional[Path]:
         d = Path.home() / ".claude" / "projects"
