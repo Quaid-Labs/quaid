@@ -205,6 +205,28 @@ class DocsRAG:
             logger.warning("Error checking if %s needs reindex: %s", file_path, e)
             return True  # When in doubt, reindex
 
+    def _is_archive_log(self, file_path: str) -> bool:
+        """Check if a file is an archived log (e.g. projects/myapp/log/2026-01.log)."""
+        p = Path(file_path)
+        return p.parent.name == "log" and p.suffix == ".log" and p.stem != "PROJECT"
+
+    def _archive_temporal_header(self, file_path: str) -> str:
+        """Generate a temporal context header for archived log files.
+
+        This tells the LLM the content is historical, not current,
+        preventing confusion between past and present state.
+        """
+        p = Path(file_path)
+        month = p.stem  # e.g. "2026-01"
+        # Walk up to find the project name (parent of log/)
+        project_name = p.parent.parent.name
+        return (
+            f"# HISTORICAL LOG — {project_name} — {month}\n\n"
+            f"> These are ARCHIVED log entries from {month}. "
+            f"They reflect past state and may no longer be current. "
+            f"For current state, refer to PROJECT.log.\n\n"
+        )
+
     def index_document(self, file_path: str) -> int:
         """Index a single document, returning number of chunks created."""
         try:
@@ -213,7 +235,11 @@ class DocsRAG:
         except Exception as e:
             logger.warning("Error reading %s: %s", file_path, e)
             return 0
-        
+
+        # Add temporal context for archived log files
+        if self._is_archive_log(file_path):
+            content = self._archive_temporal_header(file_path) + content
+
         # Chunk the content
         chunk_texts = self.chunk_markdown(content)
         if not chunk_texts:
@@ -288,17 +314,27 @@ class DocsRAG:
         return None
 
     def scan_docs_directory(self, docs_dir: str) -> List[str]:
-        """Recursively find indexable docs in directory."""
+        """Recursively find indexable docs in directory.
+
+        Scans for:
+        - Markdown files (*.md)
+        - Current project logs (PROJECT.log)
+        - Archived project logs (log/*.log) — historical entries with temporal context
+        """
         doc_files = []
         docs_path = Path(docs_dir)
-        
+
         if not docs_path.exists():
             print(f"Directory does not exist: {docs_dir}")
             return []
-        
+
         for pattern in ('*.md', 'PROJECT.log'):
             for doc_file in docs_path.rglob(pattern):
                 doc_files.append(str(doc_file.absolute()))
+
+        # Include archived log files (monthly archives from log rotation)
+        for doc_file in docs_path.rglob('log/*.log'):
+            doc_files.append(str(doc_file.absolute()))
 
         return sorted(set(doc_files))
 

@@ -735,7 +735,7 @@ class TestExtractFromTranscript:
         rendered = " ".join(str(arg) for arg in mock_warn.call_args.args)
         assert "edge failed" in rendered
 
-    @patch("ingest.extract._chunk_transcript_text")
+    @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
     @patch("ingest.extract._memory.store")
     def test_chunk_carry_context_passed_to_later_chunks(self, mock_store, mock_llm, mock_chunk):
@@ -775,7 +775,7 @@ class TestExtractFromTranscript:
         assert "Maya changed jobs from TechFlow to Stripe" in second_prompt
 
     @patch("ingest.extract.time.time")
-    @patch("ingest.extract._chunk_transcript_text")
+    @patch("lib.batch_utils.chunk_text_by_tokens")
     @patch("ingest.extract.call_deep_reasoning")
     def test_stops_processing_when_extract_deadline_expires(self, mock_llm, mock_chunk, mock_time):
         from ingest.extract import extract_from_transcript
