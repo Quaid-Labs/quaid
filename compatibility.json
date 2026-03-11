@@ -3,20 +3,24 @@
   "kill_message": null,
   "schema_version": 1,
   "updated_at": "2026-03-11",
+  "latest_quaid": "0.2.15-alpha",
+  "update_message": null,
   "matrix": [
     {
       "host": "openclaw",
       "host_range": ">=2026.3.0",
       "quaid_range": ">=0.2.15-alpha",
       "status": "compatible",
-      "message": ""
+      "message": "",
+      "fix": ""
     },
     {
       "host": "claude-code",
       "host_range": ">=2.0.0",
       "quaid_range": ">=0.2.15-alpha",
       "status": "compatible",
-      "message": ""
+      "message": "",
+      "fix": ""
     }
   ]
 }

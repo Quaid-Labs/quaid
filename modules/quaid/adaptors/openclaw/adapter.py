@@ -172,8 +172,8 @@ class OpenClawAdapter(QuaidAdapter):
         )
 
     def notify(self, message: str, channel_override: Optional[str] = None,
-               dry_run: bool = False) -> bool:
-        if os.environ.get("QUAID_DISABLE_NOTIFICATIONS"):
+               dry_run: bool = False, force: bool = False) -> bool:
+        if os.environ.get("QUAID_DISABLE_NOTIFICATIONS") and not force:
             return True
 
         info = self.get_last_channel()
