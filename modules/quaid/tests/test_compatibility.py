@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 
 from core.compatibility import (
     NORMAL, DEGRADED, SAFE_MODE,
+    CHECK_INTERVAL_NORMAL, CHECK_INTERVAL_UNTESTED,
+    CHECK_INTERVAL_DEGRADED, CHECK_INTERVAL_SAFE_MODE,
     HostInfo, CircuitBreakerState,
     _parse_version, _version_satisfies,
     read_circuit_breaker, write_circuit_breaker, clear_circuit_breaker,
@@ -140,7 +142,8 @@ class TestEvaluateCompatibility:
         state = evaluate_compatibility(info, "0.2.15", matrix)
         assert state.status == SAFE_MODE
 
-    def test_unknown_version_allows_normal(self):
+    def test_unknown_version_silent_by_default(self):
+        """With testing_online=False (hardcoded default), no warnings."""
         info = HostInfo(platform="openclaw", version="2099.1.0")
         matrix = self._matrix(entries=[{
             "host": "openclaw",
@@ -150,9 +153,10 @@ class TestEvaluateCompatibility:
         }])
         state = evaluate_compatibility(info, "0.2.15", matrix)
         assert state.is_normal()
-        assert "Untested" in state.reason
+        assert state.untested is False
+        assert "No data" in state.reason
 
-    def test_wrong_platform_no_match(self):
+    def test_wrong_platform_silent_by_default(self):
         info = HostInfo(platform="claude-code", version="2.1.72")
         matrix = self._matrix(entries=[{
             "host": "openclaw",
@@ -162,14 +166,14 @@ class TestEvaluateCompatibility:
         }])
         state = evaluate_compatibility(info, "0.2.15", matrix)
         assert state.is_normal()
-        assert "Untested" in state.reason
+        assert state.untested is False
 
-    def test_empty_matrix(self):
+    def test_empty_matrix_silent_by_default(self):
         info = HostInfo(platform="openclaw", version="2026.3.7")
         matrix = self._matrix(entries=[])
         state = evaluate_compatibility(info, "0.2.15", matrix)
         assert state.is_normal()
-        assert "Untested" in state.reason
+        assert state.untested is False
 
 
 class TestHostInfo:
@@ -223,6 +227,58 @@ class TestVersionWatcher:
 
         # Full check should have been triggered
         mock_adapter.get_host_info.assert_called_once()
+
+
+class TestAdaptiveCheckInterval:
+    def test_normal_state_uses_24h(self, tmp_path):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        watcher._last_state = CircuitBreakerState(status=NORMAL)
+        assert watcher._check_interval() == CHECK_INTERVAL_NORMAL
+
+    def test_untested_state_uses_1h(self, tmp_path):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        watcher._last_state = CircuitBreakerState(status=NORMAL, untested=True)
+        assert watcher._check_interval() == CHECK_INTERVAL_UNTESTED
+
+    def test_degraded_state_uses_6h(self, tmp_path):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        watcher._last_state = CircuitBreakerState(status=DEGRADED)
+        assert watcher._check_interval() == CHECK_INTERVAL_DEGRADED
+
+    def test_safe_mode_uses_1h(self, tmp_path):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        watcher._last_state = CircuitBreakerState(status=SAFE_MODE)
+        assert watcher._check_interval() == CHECK_INTERVAL_SAFE_MODE
+
+    def test_no_state_defaults_to_untested(self, tmp_path):
+        watcher = VersionWatcher(data_dir=tmp_path, quaid_version="0.2.15")
+        watcher._last_state = None
+        assert watcher._check_interval() == CHECK_INTERVAL_UNTESTED
+
+    def test_untested_flag_persists_through_circuit_breaker(self, tmp_path):
+        state = CircuitBreakerState(
+            status=NORMAL, reason="Untested", untested=True,
+        )
+        write_circuit_breaker(tmp_path, state)
+        loaded = read_circuit_breaker(tmp_path)
+        assert loaded.untested is True
+
+    def test_evaluate_no_match_no_untested_flag_by_default(self):
+        """Default (testing_online=False) — no untested flag."""
+        info = HostInfo(platform="openclaw", version="2099.1.0")
+        matrix = {"matrix": []}
+        state = evaluate_compatibility(info, "0.2.15", matrix)
+        assert state.untested is False
+        assert state.is_normal()
+
+    def test_evaluate_compatible_no_untested_flag(self):
+        info = HostInfo(platform="openclaw", version="2026.3.7")
+        matrix = {"matrix": [{
+            "host": "openclaw", "host_range": ">=2026.3.0",
+            "quaid_range": ">=0.2.0", "status": "compatible",
+        }]}
+        state = evaluate_compatibility(info, "0.2.15", matrix)
+        assert state.untested is False
 
 
 class TestJanitorScheduler:

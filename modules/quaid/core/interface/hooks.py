@@ -367,6 +367,17 @@ def hook_session_init(args):
     if janitor_warning:
         sections.insert(0, janitor_warning)
 
+    # 3b. Check compatibility and prepend warning if degraded/safe
+    try:
+        from core.compatibility import notify_on_use_if_degraded
+        from lib.adapter import get_adapter
+        compat_warning = notify_on_use_if_degraded(get_adapter().data_dir())
+        if compat_warning:
+            sections.insert(0, f"--- SYSTEM WARNING ---\n{compat_warning}")
+            print(f"[quaid][session-init] {compat_warning}", file=sys.stderr)
+    except Exception:
+        pass
+
     # 4. Write to .claude/rules/ so Claude Code caches it and preserves
     #    through compaction. The file is regenerated on each session start
     #    to pick up any project doc changes.

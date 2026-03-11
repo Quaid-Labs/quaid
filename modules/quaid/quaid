@@ -151,6 +151,63 @@ print(json.dumps(register_domain(name, desc), indent=2))
     exec python3 "$SCRIPT_DIR/datastore/docsdb/project_updater.py" "$@"
     ;;
 
+  # Compatibility check
+  compat|compatibility)
+    exec python3 -c "
+import sys, json; sys.path.insert(0, '$SCRIPT_DIR')
+from core.compatibility import (
+    read_circuit_breaker, HostInfo, preflight_compatibility_check,
+    fetch_compatibility_matrix, evaluate_compatibility, _parse_version,
+    NORMAL, DEGRADED, SAFE_MODE,
+)
+from lib.adapter import get_adapter
+
+subcmd = sys.argv[1] if len(sys.argv) > 1 else 'status'
+
+if subcmd == 'status':
+    adapter = get_adapter()
+    data_dir = adapter.data_dir()
+    breaker = read_circuit_breaker(data_dir)
+    info = adapter.get_host_info()
+    print(f'Host: {info.label()}')
+    print(f'Binary: {info.binary_path or \"unknown\"}')
+    print(f'Circuit breaker: {breaker.status}')
+    if breaker.message:
+        print(f'Message: {breaker.message}')
+    if breaker.reason:
+        print(f'Reason: {breaker.reason}')
+elif subcmd == 'check':
+    adapter = get_adapter()
+    info = adapter.get_host_info()
+    # Read quaid version from package.json
+    from pathlib import Path
+    pkg = Path('$SCRIPT_DIR') / 'package.json'
+    qv = 'unknown'
+    if pkg.exists():
+        qv = json.loads(pkg.read_text()).get('version', 'unknown')
+    result = preflight_compatibility_check(
+        info.platform, info.version, qv,
+        cache_dir=adapter.data_dir(),
+    )
+    print(f'Status: {result[\"status\"]}')
+    print(f'OK: {result[\"ok\"]}')
+    print(f'Message: {result[\"message\"]}')
+    if result['fix']:
+        print(f'Fix: {result[\"fix\"]}')
+elif subcmd == 'matrix':
+    adapter = get_adapter()
+    matrix = fetch_compatibility_matrix(adapter.data_dir())
+    if matrix:
+        print(json.dumps(matrix, indent=2))
+    else:
+        print('No matrix available (fetch failed and no cache)')
+        sys.exit(1)
+else:
+    print('Usage: quaid compat {status|check|matrix}')
+    sys.exit(1)
+" "$@"
+    ;;
+
 # Everything else goes to memory_graph.py
 search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|search-all|search-fts|backfill-hashes|health|event)
     exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
@@ -243,6 +300,11 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     echo "  hook-session-init    Inject project docs at session start"
     echo "  hook-subagent-start  Register subagent in registry"
     echo "  hook-subagent-stop   Mark subagent complete in registry"
+    echo ""
+    echo "Compatibility:"
+    echo "  compat status        Show host version and circuit breaker state"
+    echo "  compat check         Run compatibility preflight check"
+    echo "  compat matrix        Show cached compatibility matrix"
     echo ""
     echo "Config:"
     echo "  config               Show configuration summary"

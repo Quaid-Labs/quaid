@@ -60,6 +60,119 @@ else
     info "  (To use with OpenClaw, install it first: npm install -g openclaw)"
 fi
 
+# --- Compatibility preflight ---
+# Detect host platform and version, then check the compatibility matrix.
+HOST_PLATFORM="unknown"
+HOST_VERSION="unknown"
+
+if [[ "$QUAID_MODE" == "openclaw" ]]; then
+    HOST_PLATFORM="openclaw"
+    OC_BIN=""
+    if command -v openclaw &>/dev/null; then
+        OC_BIN="openclaw"
+    elif command -v clawdbot &>/dev/null; then
+        OC_BIN="clawdbot"
+    fi
+    if [[ -n "$OC_BIN" ]]; then
+        HOST_VERSION=$("$OC_BIN" --version 2>/dev/null | awk '{print $NF}' || echo "unknown")
+    fi
+else
+    # Check for Claude Code
+    if command -v claude &>/dev/null; then
+        HOST_PLATFORM="claude-code"
+        HOST_VERSION=$(claude --version 2>/dev/null | awk '{print $NF}' || echo "unknown")
+    fi
+fi
+
+MATRIX_URL="https://raw.githubusercontent.com/Quaid-Labs/quaid/main/compatibility.json"
+
+# Fetch compatibility matrix and run preflight check
+_preflight_ok=true
+if command -v curl &>/dev/null; then
+    _matrix_json=$(curl -fsSL "$MATRIX_URL" 2>/dev/null || echo "")
+elif command -v wget &>/dev/null; then
+    _matrix_json=$(wget -qO- "$MATRIX_URL" 2>/dev/null || echo "")
+else
+    _matrix_json=""
+fi
+
+if [[ -n "$_matrix_json" ]]; then
+    _preflight_result=$(python3 - "$HOST_PLATFORM" "$HOST_VERSION" "$_matrix_json" <<'PYCHECK'
+import sys, json
+
+platform = sys.argv[1]
+version = sys.argv[2]
+try:
+    matrix = json.loads(sys.argv[3])
+except (json.JSONDecodeError, IndexError):
+    print("ok")
+    sys.exit(0)
+
+# Kill switch
+if matrix.get("kill_switch"):
+    msg = matrix.get("kill_message", "Quaid installations are temporarily disabled.")
+    print(f"blocked:{msg}")
+    sys.exit(0)
+
+def parse_ver(v):
+    try:
+        parts = v.split("-")[0].split(".")
+        return tuple(int(x) for x in parts)
+    except (ValueError, AttributeError):
+        return (0,)
+
+def satisfies(v, spec):
+    for part in spec.split():
+        pv = parse_ver(v)
+        if part.startswith(">="):
+            if pv < parse_ver(part[2:]):
+                return False
+        elif part.startswith("<"):
+            if pv >= parse_ver(part[1:]):
+                return False
+    return True
+
+for entry in matrix.get("matrix", []):
+    if entry.get("host") != platform:
+        continue
+    hr = entry.get("host_range", "")
+    qr = entry.get("quaid_range", "")
+    if not satisfies(version, hr):
+        continue
+    status = entry.get("status", "")
+    if status == "incompatible" and entry.get("data_risk"):
+        msg = entry.get("message", "Incompatible host version")
+        fix = entry.get("fix", "")
+        print(f"blocked:{msg}" + (f" Fix: {fix}" if fix else ""))
+        sys.exit(0)
+    elif status == "incompatible":
+        msg = entry.get("message", "Incompatible host version (non-critical)")
+        print(f"warn:{msg}")
+        sys.exit(0)
+
+print("ok")
+PYCHECK
+) || _preflight_result="ok"
+
+    case "$_preflight_result" in
+        blocked:*)
+            error "Compatibility check failed!"
+            error "${_preflight_result#blocked:}"
+            error ""
+            error "Host: $HOST_PLATFORM $HOST_VERSION"
+            error "Please update your host application before installing Quaid."
+            exit 1
+            ;;
+        warn:*)
+            info "Compatibility warning: ${_preflight_result#warn:}"
+            info "Host: $HOST_PLATFORM $HOST_VERSION"
+            info "Proceeding with installation..."
+            ;;
+    esac
+else
+    info "Could not fetch compatibility matrix (offline install). Proceeding..."
+fi
+
 # --- Download ---
 info "Downloading Quaid..."
 mkdir -p "$INSTALL_DIR"

@@ -42,8 +42,12 @@ MATRIX_URL = (
     "https://raw.githubusercontent.com/Quaid-Labs/quaid/main/compatibility.json"
 )
 
-# How often to do a full version + matrix check even without mtime change
-FULL_CHECK_INTERVAL_SECONDS = 86400  # 24 hours
+# Adaptive check intervals based on current state
+CHECK_INTERVAL_NORMAL = 86400       # 24h — known compatible, low urgency
+CHECK_INTERVAL_UNTESTED = 3600      # 1h  — new host version, matrix may update soon
+CHECK_INTERVAL_DEGRADED = 21600     # 6h  — incompatible, fix may be published
+CHECK_INTERVAL_SAFE_MODE = 3600     # 1h  — everything blocked, recover ASAP
+CHECK_INTERVAL_KILL_SWITCH = 3600   # 1h  — global emergency, check for lift
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +74,7 @@ class CircuitBreakerState:
     set_at: Optional[str] = None
     host_version: Optional[str] = None
     message: Optional[str] = None
+    untested: bool = False  # True when no matrix entry matched (unknown combo)
 
     def is_normal(self) -> bool:
         return self.status == NORMAL
@@ -156,6 +161,7 @@ def read_circuit_breaker(data_dir: Path) -> CircuitBreakerState:
             set_at=raw.get("set_at"),
             host_version=raw.get("host_version"),
             message=raw.get("message"),
+            untested=raw.get("untested", False),
         )
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to read circuit breaker: %s", e)
@@ -173,6 +179,7 @@ def write_circuit_breaker(data_dir: Path, state: CircuitBreakerState) -> None:
         "set_at": state.set_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "host_version": state.host_version,
         "message": state.message,
+        "untested": state.untested,
     }
     p.write_text(json.dumps(payload, indent=2) + "\n")
     logger.info("Circuit breaker set to %s: %s", state.status, state.reason or "")
@@ -286,17 +293,33 @@ def evaluate_compatibility(
             break
 
     if matched is None:
-        # No matching entry — unknown combination, warn but allow
-        return CircuitBreakerState(
-            status=NORMAL,
-            reason=f"Untested: {host_info.label()} with Quaid {quaid_version}",
-            set_by="version_watcher",
-            host_version=host_info.version,
-            message=(
-                f"Quaid has not been tested with {host_info.label()}. "
-                "Running in untested mode. If you hit issues, check for updates."
-            ),
-        )
+        # No matching entry — behavior depends on testing_online flag.
+        # When testing is online (we're actively maintaining the matrix),
+        # untested combos get warnings and accelerated rechecking.
+        # When testing is offline, silence — we just don't have data yet.
+        # When True, unmatched version combos get warnings and accelerated
+        # rechecking. Flip this when version-testing agents are operational.
+        testing_online = False
+        if testing_online:
+            return CircuitBreakerState(
+                status=NORMAL,
+                reason=f"Untested: {host_info.label()} with Quaid {quaid_version}",
+                set_by="version_watcher",
+                host_version=host_info.version,
+                message=(
+                    f"Quaid has not been tested with {host_info.label()}. "
+                    "Running in untested mode. If you hit issues, check for updates."
+                ),
+                untested=True,
+            )
+        else:
+            # Testing offline — no warning, no accelerated checking
+            return CircuitBreakerState(
+                status=NORMAL,
+                reason=f"No data: {host_info.label()} with Quaid {quaid_version}",
+                set_by="version_watcher",
+                host_version=host_info.version,
+            )
 
     if matched["status"] == "compatible":
         return CircuitBreakerState(
@@ -433,6 +456,7 @@ class VersionWatcher:
         self._last_full_check: float = 0.0
         self._binary_path: Optional[Path] = None
         self._host_info: Optional[HostInfo] = None
+        self._last_state: Optional[CircuitBreakerState] = None
 
         # Load cached version info
         cache = _version_cache_path(data_dir)
@@ -448,6 +472,25 @@ class VersionWatcher:
                 )
             except (json.JSONDecodeError, OSError):
                 pass
+
+        # Seed last state from circuit breaker on disk
+        self._last_state = read_circuit_breaker(data_dir)
+
+    def _check_interval(self) -> int:
+        """Return the appropriate check interval based on current state.
+
+        Shorter intervals when state is uncertain or bad, so we pick up
+        matrix updates (e.g. new compatible entry) quickly.
+        """
+        if self._last_state is None:
+            return CHECK_INTERVAL_UNTESTED
+        if self._last_state.status == SAFE_MODE:
+            return CHECK_INTERVAL_SAFE_MODE
+        if self._last_state.status == DEGRADED:
+            return CHECK_INTERVAL_DEGRADED
+        if self._last_state.untested:
+            return CHECK_INTERVAL_UNTESTED
+        return CHECK_INTERVAL_NORMAL
 
     def tick(self) -> None:
         """Called on every daemon tick. Cheap mtime check, full check when needed."""
@@ -473,8 +516,13 @@ class VersionWatcher:
             except OSError:
                 pass  # Binary not accessible, skip mtime check
 
-        # Periodic full check (24h)
-        if time.time() - self._last_full_check > FULL_CHECK_INTERVAL_SECONDS:
+        # Periodic check — interval adapts to current state
+        interval = self._check_interval()
+        if time.time() - self._last_full_check > interval:
+            logger.debug(
+                "Periodic compatibility check (interval=%ds, state=%s)",
+                interval, self._last_state.status if self._last_state else "unknown",
+            )
             self._do_full_check()
 
     def _do_full_check(self) -> None:
@@ -507,6 +555,7 @@ class VersionWatcher:
             return
 
         state = evaluate_compatibility(info, self._quaid_version, matrix)
+        self._last_state = state
 
         # Apply circuit breaker and notify on state changes
         current = read_circuit_breaker(self._data_dir)

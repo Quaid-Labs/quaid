@@ -4220,6 +4220,17 @@ def recall(
     if not query or not query.strip():
         return []
 
+    # Circuit breaker guard — block reads only in safe_mode
+    try:
+        from core.compatibility import check_read_allowed
+        from lib.adapter import get_adapter
+        breaker = check_read_allowed(get_adapter().data_dir())
+        if not breaker.allows_reads():
+            logger.warning("recall blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
+            return []
+    except Exception:
+        pass
+
     # Pass 1: original query
     first_batch = _recall_once(
         query=query,
@@ -4401,6 +4412,16 @@ def store(
     Returns:
         Dict with: id, status ("created", "duplicate", "updated"), similarity (if dup)
     """
+    # Circuit breaker guard — block writes if disabled
+    try:
+        from core.compatibility import check_write_allowed
+        from lib.adapter import get_adapter
+        breaker = check_write_allowed(get_adapter().data_dir())
+        if not breaker.allows_writes():
+            return {"id": None, "status": "blocked", "reason": f"circuit_breaker:{breaker.status}"}
+    except Exception:
+        pass
+
     # Input validation
     if not text or not text.strip():
         raise ValueError("Content cannot be empty")

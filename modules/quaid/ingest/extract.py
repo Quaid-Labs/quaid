@@ -373,6 +373,23 @@ def extract_from_transcript(
             dry_run: bool,
         }
     """
+    # Circuit breaker guard — block extraction if writes are disabled
+    try:
+        from core.compatibility import check_write_allowed
+        from lib.adapter import get_adapter
+        breaker = check_write_allowed(get_adapter().data_dir())
+        if not breaker.allows_writes():
+            logger.warning("[extract] blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
+            return {
+                "facts_stored": 0, "facts_skipped": 0, "edges_created": 0,
+                "facts": [], "snippets": {}, "journal": {}, "project_logs": {},
+                "project_log_metrics": {}, "dry_run": dry_run,
+                "chunks_processed": 0, "chunks_total": 0,
+                "circuit_breaker": breaker.status,
+            }
+    except Exception:
+        pass  # If compatibility module unavailable, proceed normally
+
     result = {
         "facts_stored": 0,
         "facts_skipped": 0,
