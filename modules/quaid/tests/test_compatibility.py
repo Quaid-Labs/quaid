@@ -229,9 +229,10 @@ class TestJanitorScheduler:
     def test_skips_when_circuit_breaker_tripped(self, tmp_path):
         write_circuit_breaker(tmp_path, CircuitBreakerState(status=SAFE_MODE))
         scheduler = JanitorScheduler(
-            data_dir=tmp_path, quaid_home=tmp_path, interval_seconds=0,
+            data_dir=tmp_path, quaid_home=tmp_path,
+            scheduled_hour=0, window_hours=24,  # Always in window
         )
-        scheduler._last_check = 0  # Force check
+        scheduler._last_tick = 0  # Force check
 
         with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
             scheduler.tick()
@@ -243,16 +244,16 @@ class TestJanitorScheduler:
         (checkpoint_dir / "checkpoint-all.json").write_text("{}")
 
         scheduler = JanitorScheduler(
-            data_dir=tmp_path, quaid_home=tmp_path, interval_seconds=86400,
+            data_dir=tmp_path, quaid_home=tmp_path,
+            scheduled_hour=0, window_hours=24,
         )
-        scheduler._last_check = 0
+        scheduler._last_tick = 0
 
         with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
             scheduler.tick()
             mock_run.assert_not_called()
 
     def test_triggers_when_checkpoint_stale(self, tmp_path):
-        import os
         checkpoint_dir = tmp_path / "logs" / "janitor"
         checkpoint_dir.mkdir(parents=True)
         cp = checkpoint_dir / "checkpoint-all.json"
@@ -262,10 +263,87 @@ class TestJanitorScheduler:
         os.utime(cp, (old_time, old_time))
 
         scheduler = JanitorScheduler(
-            data_dir=tmp_path, quaid_home=tmp_path, interval_seconds=86400,
+            data_dir=tmp_path, quaid_home=tmp_path,
+            scheduled_hour=0, window_hours=24,
         )
-        scheduler._last_check = 0
+        scheduler._last_tick = 0
 
         with patch("core.compatibility.JanitorScheduler._run_janitor") as mock_run:
             scheduler.tick()
             mock_run.assert_called_once()
+
+
+class TestPreflightCheck:
+    def test_compatible_returns_ok(self, tmp_path):
+        from core.compatibility import preflight_compatibility_check
+        with patch("core.compatibility.fetch_compatibility_matrix", return_value={
+            "matrix": [{
+                "host": "openclaw", "host_range": ">=2026.3.0",
+                "quaid_range": ">=0.2.0", "status": "compatible",
+            }],
+        }):
+            result = preflight_compatibility_check(
+                "openclaw", "2026.3.7", "0.2.15", cache_dir=tmp_path,
+            )
+        assert result["ok"]
+        assert result["status"] == "compatible"
+
+    def test_incompatible_with_data_risk_blocks(self, tmp_path):
+        from core.compatibility import preflight_compatibility_check
+        with patch("core.compatibility.fetch_compatibility_matrix", return_value={
+            "matrix": [{
+                "host": "openclaw", "host_range": ">=2026.5.0",
+                "quaid_range": "<0.3.0", "status": "incompatible",
+                "data_risk": True, "message": "Breaks data",
+                "fix": "Update OC",
+            }],
+        }):
+            result = preflight_compatibility_check(
+                "openclaw", "2026.5.0", "0.2.15", cache_dir=tmp_path,
+            )
+        assert not result["ok"]
+        assert result["status"] == "incompatible"
+        assert "Breaks data" in result["message"]
+
+    def test_kill_switch_blocks(self, tmp_path):
+        from core.compatibility import preflight_compatibility_check
+        with patch("core.compatibility.fetch_compatibility_matrix", return_value={
+            "kill_switch": True, "kill_message": "Emergency", "matrix": [],
+        }):
+            result = preflight_compatibility_check(
+                "openclaw", "2026.3.7", "0.2.15", cache_dir=tmp_path,
+            )
+        assert not result["ok"]
+        assert result["status"] == "kill_switch"
+
+    def test_no_matrix_allows_with_warning(self, tmp_path):
+        from core.compatibility import preflight_compatibility_check
+        with patch("core.compatibility.fetch_compatibility_matrix", return_value=None):
+            result = preflight_compatibility_check(
+                "openclaw", "2026.3.7", "0.2.15", cache_dir=tmp_path,
+            )
+        assert result["ok"]
+        assert result["status"] == "unknown"
+
+
+class TestNotifyOnUse:
+    def test_normal_returns_none(self, tmp_path):
+        from core.compatibility import notify_on_use_if_degraded
+        assert notify_on_use_if_degraded(tmp_path) is None
+
+    def test_degraded_returns_message(self, tmp_path):
+        from core.compatibility import notify_on_use_if_degraded
+        write_circuit_breaker(tmp_path, CircuitBreakerState(
+            status=DEGRADED, message="API changed",
+        ))
+        msg = notify_on_use_if_degraded(tmp_path)
+        assert msg is not None
+        assert "DEGRADED" in msg
+
+    def test_cooldown_prevents_repeat(self, tmp_path):
+        from core.compatibility import notify_on_use_if_degraded
+        write_circuit_breaker(tmp_path, CircuitBreakerState(status=DEGRADED))
+        msg1 = notify_on_use_if_degraded(tmp_path)
+        msg2 = notify_on_use_if_degraded(tmp_path)
+        assert msg1 is not None
+        assert msg2 is None  # Cooled down

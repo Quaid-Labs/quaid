@@ -34,8 +34,8 @@ class ClaudeCodeAdapter(QuaidAdapter):
         return Path(env) if env else Path.home() / "quaid"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
-               dry_run: bool = False) -> bool:
-        if os.environ.get("QUAID_DISABLE_NOTIFICATIONS"):
+               dry_run: bool = False, force: bool = False) -> bool:
+        if os.environ.get("QUAID_DISABLE_NOTIFICATIONS") and not force:
             return True
         if dry_run:
             print(f"[notify] (dry-run) {message}", file=sys.stderr)

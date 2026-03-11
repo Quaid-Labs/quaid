@@ -318,6 +318,102 @@ def evaluate_compatibility(
 
 
 # ---------------------------------------------------------------------------
+# Installer pre-flight check
+# ---------------------------------------------------------------------------
+
+def preflight_compatibility_check(
+    host_platform: str,
+    host_version: str,
+    quaid_version: str,
+    cache_dir: Optional[Path] = None,
+) -> dict:
+    """Pre-install compatibility check. Call from install scripts.
+
+    Fetches the matrix from GitHub (or cache) and evaluates whether the
+    given Quaid version is compatible with the host. Returns a dict:
+
+        {"ok": True/False, "status": str, "message": str, "fix": str}
+
+    If not ok, the installer should print the message and bail.
+
+    Args:
+        host_platform: "openclaw" or "claude-code"
+        host_version: e.g. "2026.3.7"
+        quaid_version: e.g. "0.2.15-alpha"
+        cache_dir: optional dir for matrix cache (temp dir if None)
+    """
+    import tempfile
+
+    if cache_dir is None:
+        cache_dir = Path(tempfile.mkdtemp(prefix="quaid-preflight-"))
+
+    info = HostInfo(platform=host_platform, version=host_version)
+    matrix = fetch_compatibility_matrix(cache_dir)
+
+    if matrix is None:
+        # Can't fetch matrix — allow install with warning
+        return {
+            "ok": True,
+            "status": "unknown",
+            "message": (
+                f"Could not fetch compatibility matrix. "
+                f"Installing Quaid {quaid_version} for {info.label()} in untested mode."
+            ),
+            "fix": "",
+        }
+
+    # Check global kill switch
+    if matrix.get("kill_switch"):
+        return {
+            "ok": False,
+            "status": "kill_switch",
+            "message": matrix.get("kill_message", "Quaid installations are currently suspended."),
+            "fix": "Check https://github.com/Quaid-Labs/quaid for status updates.",
+        }
+
+    state = evaluate_compatibility(info, quaid_version, matrix)
+
+    if state.status == SAFE_MODE:
+        # Find the matching entry to get the fix field
+        fix = ""
+        for entry in matrix.get("matrix", []):
+            if (entry.get("host", "").lower() == host_platform.lower() and
+                    _version_satisfies(host_version, entry.get("host_range", "")) and
+                    _version_satisfies(quaid_version, entry.get("quaid_range", ""))):
+                fix = entry.get("fix", "")
+                break
+        return {
+            "ok": False,
+            "status": "incompatible",
+            "message": (
+                f"Quaid {quaid_version} is incompatible with {info.label()} "
+                f"and may corrupt data. {state.message or ''}"
+            ),
+            "fix": fix or f"Update your host platform or check for a newer Quaid version.",
+        }
+
+    if state.status == DEGRADED:
+        # Allow install but warn
+        return {
+            "ok": True,
+            "status": "degraded",
+            "message": (
+                f"Warning: Quaid {quaid_version} has limited compatibility with "
+                f"{info.label()}. {state.message or ''} "
+                "Installing anyway — extraction/storage may be disabled."
+            ),
+            "fix": "",
+        }
+
+    return {
+        "ok": True,
+        "status": "compatible",
+        "message": f"Quaid {quaid_version} is compatible with {info.label()}.",
+        "fix": "",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Version watcher — integrates into daemon tick cycle
 # ---------------------------------------------------------------------------
 
@@ -412,10 +508,12 @@ class VersionWatcher:
 
         state = evaluate_compatibility(info, self._quaid_version, matrix)
 
-        # Apply circuit breaker
+        # Apply circuit breaker and notify on state changes
         current = read_circuit_breaker(self._data_dir)
         if state.status != current.status or state.reason != current.reason:
+            old_status = current.status
             write_circuit_breaker(self._data_dir, state)
+
             if state.status != NORMAL:
                 logger.warning(
                     "Compatibility: %s — %s",
@@ -423,6 +521,53 @@ class VersionWatcher:
                 )
             else:
                 logger.info("Compatibility: %s", state.reason or "OK")
+
+            # Notify user on state transitions
+            self._notify_state_change(old_status, state)
+
+        # Check for Quaid update availability
+        self._check_quaid_update(matrix)
+
+    def _check_quaid_update(self, matrix: dict) -> None:
+        """Notify user if a newer Quaid version is available."""
+        latest = matrix.get("latest_quaid")
+        if not latest:
+            return
+
+        current = _parse_version(self._quaid_version)
+        available = _parse_version(latest)
+        if available <= current:
+            return  # Already up to date
+
+        # Check if we already notified about this version (don't spam)
+        update_cache = self._data_dir / "quaid-update-notified.json"
+        try:
+            if update_cache.exists():
+                raw = json.loads(update_cache.read_text())
+                if raw.get("version") == latest:
+                    return  # Already notified for this version
+        except (json.JSONDecodeError, OSError):
+            pass
+
+        update_msg = matrix.get("update_message") or (
+            f"Quaid {latest} is available (you have {self._quaid_version}). "
+            "Update for latest fixes and compatibility."
+        )
+
+        logger.info("Quaid update available: %s (current: %s)", latest, self._quaid_version)
+
+        try:
+            from lib.adapter import get_adapter
+            get_adapter().notify(f"[Quaid] {update_msg}", force=True)
+        except Exception as e:
+            logger.debug("Failed to send update notification: %s", e)
+
+        # Record that we notified
+        try:
+            update_cache.parent.mkdir(parents=True, exist_ok=True)
+            update_cache.write_text(json.dumps({"version": latest, "notified_at": time.time()}))
+        except OSError:
+            pass
 
     def _save_version_cache(self) -> None:
         """Persist version info to disk."""
@@ -439,38 +584,184 @@ class VersionWatcher:
         }
         cache.write_text(json.dumps(payload, indent=2) + "\n")
 
+    def _notify_state_change(self, old_status: str, new_state: CircuitBreakerState) -> None:
+        """Send a direct notification to user on circuit breaker state changes.
+
+        Notification policy:
+        - normal → degraded/safe_mode: direct push (user needs to know)
+        - degraded/safe_mode → normal: direct push (good news, recovery)
+        - kill switch activated: direct push (emergency)
+        - untested version (normal with warning): log only, no push
+        """
+        if old_status == new_state.status:
+            return  # No actual state change
+
+        try:
+            from lib.adapter import get_adapter
+            adapter = get_adapter()
+        except Exception:
+            return  # Can't notify if adapter is unavailable
+
+        if new_state.status in (DEGRADED, SAFE_MODE):
+            # Entering degraded or safe mode
+            mode_label = "DEGRADED MODE" if new_state.status == DEGRADED else "SAFE MODE"
+            msg = (
+                f"[Quaid] {mode_label} activated. "
+                f"{new_state.message or new_state.reason or 'Compatibility issue detected.'}"
+            )
+            if new_state.status == DEGRADED:
+                msg += " Recall still works, but extraction and storage are paused."
+            else:
+                msg += " All operations paused to prevent data corruption."
+            try:
+                adapter.notify(msg, force=True)
+            except Exception as e:
+                logger.warning("Failed to send compatibility notification: %s", e)
+
+        elif old_status in (DEGRADED, SAFE_MODE) and new_state.status == NORMAL:
+            # Recovery — back to normal
+            try:
+                adapter.notify(
+                    "[Quaid] Compatibility restored — all operations resumed. "
+                    f"{new_state.reason or ''}",
+                    force=True,
+                )
+            except Exception as e:
+                logger.warning("Failed to send recovery notification: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Session-level notification for ongoing degraded state
+# ---------------------------------------------------------------------------
+
+NOTIFICATION_COOLDOWN_FILE = "compat-last-notified.json"
+
+
+def notify_on_use_if_degraded(data_dir: Path) -> Optional[str]:
+    """Check if we should notify the user about degraded state on this use.
+
+    Call this from session-init hooks or recall entry points. Returns the
+    warning message if the user should be informed, None otherwise.
+
+    Notification policy for ongoing degraded/safe state:
+    - Notifies once per session (tracked by cooldown file with session timestamp)
+    - Returns the message text for the hook/caller to include in output
+    """
+    breaker = read_circuit_breaker(data_dir)
+    if breaker.is_normal():
+        return None
+
+    # Check cooldown — don't repeat within the same session (~30 min window)
+    cooldown_path = data_dir / NOTIFICATION_COOLDOWN_FILE
+    now = time.time()
+    try:
+        if cooldown_path.exists():
+            raw = json.loads(cooldown_path.read_text())
+            last_notified = raw.get("timestamp", 0)
+            if now - last_notified < 1800:  # 30 minutes
+                return None
+    except (json.JSONDecodeError, OSError):
+        pass
+
+    # Update cooldown
+    try:
+        cooldown_path.parent.mkdir(parents=True, exist_ok=True)
+        cooldown_path.write_text(json.dumps({"timestamp": now}))
+    except OSError:
+        pass
+
+    if breaker.status == SAFE_MODE:
+        return (
+            f"Quaid is in SAFE MODE: {breaker.message or 'Compatibility issue detected.'} "
+            "All operations are paused to prevent data corruption. "
+            "Check for Quaid updates."
+        )
+    elif breaker.status == DEGRADED:
+        return (
+            f"Quaid is in DEGRADED MODE: {breaker.message or 'Compatibility issue detected.'} "
+            "Recall works, but extraction and storage are paused. "
+            "Check for Quaid updates."
+        )
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Janitor scheduler — daemon-owned periodic maintenance
 # ---------------------------------------------------------------------------
 
-JANITOR_DEFAULT_INTERVAL_SECONDS = 86400  # 24 hours
 JANITOR_CHECKPOINT_FILE = "logs/janitor/checkpoint-all.json"
+JANITOR_DEFAULT_HOUR = 4        # 4 AM local time
+JANITOR_WINDOW_HOURS = 2        # 2-hour window (3am-5am for default)
+JANITOR_CHECK_INTERVAL = 900    # Check eligibility every 15 minutes
 
 
 class JanitorScheduler:
     """Daemon-owned janitor scheduling. Replaces external cron/heartbeat.
 
-    Checks if janitor has run within the configured interval. If not,
-    triggers a maintenance run. Respects circuit breaker (no janitor in
-    degraded/safe mode).
+    Runs janitor at a configured hour of day (default 4am) within a
+    configurable window. If the daemon was down during the window, catches
+    up on next boot if the checkpoint is stale (>24h old).
+
+    Config keys (in config/memory.json under "janitor"):
+    - scheduled_hour: int (0-23, default 4)
+    - window_hours: int (default 2)
+
+    Respects circuit breaker (no janitor in degraded/safe mode).
     """
 
     def __init__(self, data_dir: Path, quaid_home: Path,
-                 interval_seconds: float = JANITOR_DEFAULT_INTERVAL_SECONDS):
+                 scheduled_hour: Optional[int] = None,
+                 window_hours: Optional[int] = None):
         self._data_dir = data_dir
         self._quaid_home = quaid_home
-        self._interval = interval_seconds
-        self._last_check: float = 0.0
+        self._scheduled_hour = scheduled_hour  # Resolved lazily from config
+        self._window_hours = window_hours
+        self._last_tick: float = 0.0
+        self._ran_today: bool = False
+        self._today_date: Optional[str] = None
+
+    def _get_schedule(self) -> tuple:
+        """Get scheduled hour and window from config or defaults."""
+        hour = self._scheduled_hour
+        window = self._window_hours
+
+        if hour is None or window is None:
+            try:
+                from config import get_config
+                cfg = get_config()
+                janitor_cfg = getattr(cfg, "janitor", None)
+                if janitor_cfg:
+                    if hour is None:
+                        hour = getattr(janitor_cfg, "scheduled_hour", JANITOR_DEFAULT_HOUR)
+                    if window is None:
+                        window = getattr(janitor_cfg, "window_hours", JANITOR_WINDOW_HOURS)
+            except Exception:
+                pass
+
+        return (
+            hour if hour is not None else JANITOR_DEFAULT_HOUR,
+            window if window is not None else JANITOR_WINDOW_HOURS,
+        )
 
     def tick(self) -> None:
         """Called on every daemon tick. Checks if janitor is due."""
+        import datetime
+
         now = time.time()
 
-        # Only check once per interval (don't spam stat() on checkpoint file)
-        if now - self._last_check < min(self._interval, 3600):
+        # Only evaluate every 15 minutes (no need to check more often)
+        if now - self._last_tick < JANITOR_CHECK_INTERVAL:
             return
-        self._last_check = now
+        self._last_tick = now
+
+        # Reset daily tracking
+        today = datetime.date.today().isoformat()
+        if self._today_date != today:
+            self._today_date = today
+            self._ran_today = False
+
+        if self._ran_today:
+            return
 
         # Don't run janitor if circuit breaker is tripped
         breaker = read_circuit_breaker(self._data_dir)
@@ -478,19 +769,39 @@ class JanitorScheduler:
             logger.debug("Janitor skipped: circuit breaker is %s", breaker.status)
             return
 
-        # Check if janitor has run recently
+        scheduled_hour, window = self._get_schedule()
+        current_hour = datetime.datetime.now().hour
+
+        # Check if we're in the scheduled window
+        window_start = scheduled_hour - (window // 2)
+        window_end = scheduled_hour + (window - window // 2)
+        in_window = window_start <= current_hour < window_end
+
+        # Also check for catch-up: if checkpoint is >24h old, run regardless
+        # of window (daemon may have been down during the window)
+        needs_catchup = False
         checkpoint = self._quaid_home / JANITOR_CHECKPOINT_FILE
         if checkpoint.exists():
             try:
                 age = now - checkpoint.stat().st_mtime
-                if age < self._interval:
-                    return  # Ran recently, nothing to do
+                if age < 86400:
+                    return  # Ran within 24h, no action needed
+                needs_catchup = True
             except OSError:
-                pass
+                needs_catchup = True
+        else:
+            needs_catchup = True  # Never ran
 
-        # Time to run janitor
-        logger.info("Janitor due (interval=%ds), triggering maintenance run", self._interval)
+        if not in_window and not needs_catchup:
+            return
+
+        reason = "catch-up (missed window)" if needs_catchup and not in_window else "scheduled"
+        logger.info(
+            "Janitor %s — hour=%d, window=%d-%d, running maintenance",
+            reason, scheduled_hour, window_start, window_end,
+        )
         self._run_janitor()
+        self._ran_today = True
 
     def _run_janitor(self) -> None:
         """Run janitor maintenance in-process."""
