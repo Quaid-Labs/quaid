@@ -13,7 +13,9 @@ from datastore.memorydb.maintenance_ops import JanitorMetrics
 
 
 def test_default_owner_fallback_when_fail_hard_disabled(monkeypatch):
-    monkeypatch.setattr(janitor, "_cfg", SimpleNamespace())
+    cfg = SimpleNamespace()
+    monkeypatch.setattr(janitor, "_cfg", cfg)
+    monkeypatch.setattr(janitor, "get_config", lambda: cfg)
     monkeypatch.setattr(janitor, "is_fail_hard_enabled", lambda: False)
     assert janitor._default_owner_id() == "default"
 

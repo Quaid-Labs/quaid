@@ -313,7 +313,7 @@ def _repair_non_json_extraction_payload(
         "- If no content fits, use empty arrays/objects.\n"
         "- Do not add markdown fences.\n\n"
         "Assistant output to normalize:\n"
-        f"{response_text[:4000]}"
+        f"{response_text}"
     )
     try:
         repaired_text, repair_duration = call_fast_reasoning(
@@ -452,7 +452,12 @@ def extract_from_transcript(
     except Exception as exc:
         logger.warning("[extract] capture.chunk_size config read failed; defaulting to 30000: %s", exc)
         chunk_size = 30_000
-    transcript_chunks = _chunk_transcript_text(transcript, max_chars=chunk_size)
+    # Use batch_utils for consistent chunking across the codebase.
+    # chunk_text_by_tokens splits on \n\n (turn boundaries) and uses
+    # token estimation instead of raw char count.
+    from lib.batch_utils import chunk_text_by_tokens
+    chunk_tokens = chunk_size // 4  # ~4 chars per token
+    transcript_chunks = chunk_text_by_tokens(transcript, max_tokens=chunk_tokens, split_on="\n\n")
 
     MAX_CHUNKS = 10
     if len(transcript_chunks) > MAX_CHUNKS:
@@ -519,7 +524,7 @@ def extract_from_transcript(
 
         parsed = parse_json_response(response_text)
         if not parsed or not isinstance(parsed, dict):
-            logger.error(f"[extract] {label} chunk {ci + 1}: could not parse Opus response: {response_text[:200]}")
+            logger.error(f"[extract] {label} chunk {ci + 1}: could not parse Opus response: {response_text}")
             repaired = _repair_non_json_extraction_payload(
                 response_text=response_text,
                 chunk_index=ci + 1,
@@ -603,7 +608,7 @@ def extract_from_transcript(
         if not domains:
             logger.warning(
                 "[extract] skipped fact with missing required domains array (fact=%r)",
-                text[:120],
+                text,
             )
             result["facts_skipped"] += 1
             result["facts"].append({
@@ -618,7 +623,7 @@ def extract_from_transcript(
                 "[extract] skipped fact with unsupported domains %s (allowed=%s, fact=%r)",
                 invalid_domains,
                 sorted(allowed_domains),
-                text[:120],
+                text,
             )
             result["facts_skipped"] += 1
             result["facts"].append({
@@ -673,7 +678,7 @@ def extract_from_transcript(
 
             elif store_result.get("status") == "duplicate":
                 fact_entry["status"] = "duplicate"
-                fact_entry["reason"] = store_result.get("existing_text", "")[:50]
+                fact_entry["reason"] = store_result.get("existing_text", "")
                 result["facts_skipped"] += 1
             elif store_result.get("status") == "updated":
                 fact_entry["status"] = "updated"
@@ -825,7 +830,7 @@ def _format_human_summary(result: Dict[str, Any]) -> str:
         lines.append("Facts:")
         for i, f in enumerate(result["facts"], 1):
             status = f["status"]
-            text = f["text"][:80]
+            text = f["text"]
             marker = {
                 "stored": "+", "updated": "~", "would_store": "?",
                 "duplicate": "=", "skipped": "-", "failed": "!",
