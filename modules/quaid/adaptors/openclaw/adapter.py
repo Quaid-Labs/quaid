@@ -143,7 +143,7 @@ class OpenClawAdapter(QuaidAdapter):
     def quaid_home(self) -> Path:
         env = os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
         if env:
-            return Path(env)
+            return Path(env).resolve()
         # Fallback: resolve workspace from gateway config when env vars are absent.
         cfg_path = Path.home() / ".openclaw" / "openclaw.json"
         if cfg_path.exists():
@@ -162,7 +162,7 @@ class OpenClawAdapter(QuaidAdapter):
                 if not ws:
                     ws = str(agents.get("defaults", {}).get("workspace", "")).strip()
                 if ws:
-                    return Path(ws)
+                    return Path(ws).resolve()
             except (json.JSONDecodeError, KeyError):
                 pass
         raise RuntimeError(

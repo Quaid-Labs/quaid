@@ -1220,10 +1220,10 @@ notify_user(${JSON.stringify(message)})
       event.prependContext = facade.injectFullJournalContext(event.prependContext);
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) {
-        return;
+        return { prependContext: event.prependContext };
       }
       if (!event.prompt || event.prompt.length < 5) {
-        return;
+        return { prependContext: event.prependContext };
       }
       try {
         const rawPrompt = event.prompt;
@@ -1233,16 +1233,16 @@ notify_user(${JSON.stringify(message)})
           query = rawPrompt;
         }
         if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w)/.test(query)) {
-          return;
+          return { prependContext: event.prependContext };
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
-          return;
+          return { prependContext: event.prependContext };
         }
         if (facade.isInternalMaintenancePrompt(query)) {
-          return;
+          return { prependContext: event.prependContext };
         }
         if (facade.isLowQualityQuery(query)) {
-          return;
+          return { prependContext: event.prependContext };
         }
         const autoInjectK = facade.computeDynamicK();
         const useTotalRecallForInject = facade.isPreInjectionPassEnabled();
@@ -1273,7 +1273,7 @@ notify_user(${JSON.stringify(message)})
           injectLimit,
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
         });
-        if (!injection) return;
+        if (!injection) return { prependContext: event.prependContext };
         const { toInject, prependContext } = injection;
         event.prependContext = prependContext;
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
@@ -1304,6 +1304,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
       }
+      return { prependContext: event.prependContext };
     };
     console.log("[quaid] Registering before_agent_start hook for memory injection");
     onChecked("before_agent_start", beforeAgentStartHandler, {

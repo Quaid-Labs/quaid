@@ -486,14 +486,24 @@ def write_journal_entry(filename: str, content: str, trigger: str = "Compaction"
     if journal_path.exists():
         existing = journal_path.read_text(encoding='utf-8')
 
-    # Dedup: skip if entry for same date+trigger already exists
+    # Dedup: skip if entry with identical content for same date+trigger already exists.
+    # Allow multiple entries per day by appending a sequence number when needed.
     dedup_header = f"## {date_str} — {trigger}"
+    content_stripped = content.strip()
     if dedup_header in existing:
-        logger.info(f"Skipping duplicate journal entry for {filename}: {date_str} — {trigger}")
-        return False
+        # Check if this exact content is already present under any variant of this header
+        if content_stripped in existing:
+            logger.info(f"Skipping duplicate journal entry for {filename}: {date_str} — {trigger} (identical content)")
+            return False
+        # Same date+trigger but new content: append with sequence number
+        seq = 2
+        while f"## {date_str} — {trigger} ({seq})" in existing:
+            seq += 1
+        dedup_header = f"## {date_str} — {trigger} ({seq})"
+        logger.info(f"Appending additional journal entry for {filename}: {dedup_header}")
 
     # Build new entry section
-    new_section = f"\n{dedup_header}\n{content.strip()}\n"
+    new_section = f"\n{dedup_header}\n{content_stripped}\n"
 
     # Prepend header if file is new
     if not existing.strip():

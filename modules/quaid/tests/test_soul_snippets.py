@@ -73,15 +73,26 @@ class TestWriteJournalEntry:
         assert "## 2026-02-10 — Compaction" in content
         assert "Something beautiful happened today." in content
 
-    def test_dedup_by_date_and_trigger(self, workspace_dir, mock_config):
+    def test_dedup_by_date_trigger_and_content(self, workspace_dir, mock_config):
+        with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
+            from datastore.notedb.soul_snippets import write_journal_entry
+            write_journal_entry("SOUL.md", "First entry.", "Compaction", "2026-02-10")
+            # Identical content is still rejected
+            result = write_journal_entry("SOUL.md", "First entry.", "Compaction", "2026-02-10")
+        assert result is False  # Duplicate content
+        content = (workspace_dir / "journal" / "SOUL.journal.md").read_text()
+        assert "First entry." in content
+
+    def test_same_date_trigger_new_content_allowed(self, workspace_dir, mock_config):
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):
             from datastore.notedb.soul_snippets import write_journal_entry
             write_journal_entry("SOUL.md", "First entry.", "Compaction", "2026-02-10")
             result = write_journal_entry("SOUL.md", "Second entry.", "Compaction", "2026-02-10")
-        assert result is False  # Duplicate date+trigger
+        assert result is True  # New content, same date+trigger
         content = (workspace_dir / "journal" / "SOUL.journal.md").read_text()
         assert "First entry." in content
-        assert "Second entry." not in content
+        assert "Second entry." in content
+        assert "## 2026-02-10 — Compaction (2)" in content
 
     def test_different_trigger_same_date_allowed(self, workspace_dir, mock_config):
         with patch("datastore.notedb.soul_snippets.get_config", return_value=mock_config):

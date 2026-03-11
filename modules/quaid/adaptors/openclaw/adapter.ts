@@ -1438,7 +1438,7 @@ const quaidPlugin = {
     let timeoutManager: SessionTimeoutManager | null = null;
 
     // Register lifecycle hooks.
-    const beforeAgentStartHandler = async (event: any, ctx: any) => {
+    const beforeAgentStartHandler = async (event: any, ctx: any): Promise<{ prependContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) {
         return;
       }
@@ -1484,12 +1484,12 @@ notify_user(${JSON.stringify(message)})
 
       if (!autoInjectEnabled) {
         // Explicitly disabled: skip automatic injection for this instance.
-        return;
+        return { prependContext: event.prependContext };
       }
 
       // --- Auto-injection (Mem0-style) — uses shared recall pipeline ---
       if (!event.prompt || event.prompt.length < 5) {
-        return;
+        return { prependContext: event.prependContext };
       }
 
       try {
@@ -1509,19 +1509,19 @@ notify_user(${JSON.stringify(message)})
 
         // Skip system/internal prompts and slash commands
         if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w)/.test(query)) {
-          return;
+          return { prependContext: event.prependContext };
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
-          return;
+          return { prependContext: event.prependContext };
         }
         // Skip janitor/reviewer internal prompts so maintenance flows never trigger auto-injection.
         if (facade.isInternalMaintenancePrompt(query)) {
-          return;
+          return { prependContext: event.prependContext };
         }
 
         // Query quality gate — skip acknowledgments and short messages
         if (facade.isLowQualityQuery(query)) {
-          return;
+          return { prependContext: event.prependContext };
         }
 
         // Auto-inject can either use total_recall (fast planning pass) or plain
@@ -1562,7 +1562,7 @@ notify_user(${JSON.stringify(message)})
           injectLimit,
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION,
         });
-        if (!injection) return;
+        if (!injection) return { prependContext: event.prependContext };
         const { toInject, prependContext } = injection;
         event.prependContext = prependContext;
 
@@ -1594,6 +1594,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error: unknown) {
         console.error("[quaid] Auto-injection error:", error);
       }
+      return { prependContext: event.prependContext };
     };
 
     // Register lifecycle hooks via registerHook (api.on is for event bus signals).
