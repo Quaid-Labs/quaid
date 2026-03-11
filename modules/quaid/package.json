@@ -62,5 +62,10 @@
     "globals": "^16.4.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
+  },
+  "overrides": {
+    "hono": "4.12.7",
+    "@hono/node-server": "1.19.11",
+    "tar": "7.5.11"
   }
 }
