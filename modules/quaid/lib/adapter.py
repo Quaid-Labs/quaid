@@ -33,6 +33,9 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 from lib.fail_policy import is_fail_hard_enabled
 
 if TYPE_CHECKING:
+    from core.compatibility import HostInfo
+
+if TYPE_CHECKING:
     from lib.providers import EmbeddingsProvider, LLMProvider
 
 

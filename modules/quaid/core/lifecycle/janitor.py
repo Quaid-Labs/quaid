@@ -1399,7 +1399,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                     print(f"  Log rotation: {proj_archived} project entries, {journal_archived} journal entries archived")
                     applied_changes["log_entries_archived"] = proj_archived + journal_archived
             except Exception as e:
-                logger.warning("Log rotation error: %s", e)
+                print(f"  Log rotation error: {e}", file=sys.stderr)
 
         # --- Task 7: RAG Reindex + Project Discovery (Ollama embeddings) ---
         if task in ("rag", "all") and _system_enabled_or_skip("rag", "Task 7: RAG Reindex") and not _skip_if_over_budget("Task 7: RAG Reindex", 15):
