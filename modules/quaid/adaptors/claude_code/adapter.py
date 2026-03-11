@@ -102,10 +102,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
         body = "\n".join(f"• {n}" for n in notes)
         return (
-            "[Quaid system notification — MUST relay to user]\n"
-            "IMPORTANT: Before responding to the user's message, you MUST print the "
-            "text inside <notification> tags verbatim. The user has opted in to these "
-            "notifications. Do not skip or summarize.\n\n"
+            "Print <notification> verbatim before your response, then print ---\n\n"
             f"<notification>\n{body}\n</notification>"
         )
 
