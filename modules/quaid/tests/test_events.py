@@ -14,7 +14,7 @@ from core.runtime.events import (
     validate_declared_event_contract,
 )
 from core.runtime.paths import get_runtime_root
-from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
+from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
 
 def setup_function():
@@ -26,7 +26,7 @@ def teardown_function():
 
 
 def test_event_emit_list_and_capabilities(tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     event = emit_event(
         name="session.reset",
@@ -51,7 +51,7 @@ def test_event_emit_list_and_capabilities(tmp_path):
 
 
 def test_event_capability_lookup_has_delivery_mode(tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
     cap_active = get_event_capability("session.reset")
     cap_passive = get_event_capability("notification.delayed")
     cap_janitor = get_event_capability("janitor.run_completed")
@@ -64,7 +64,7 @@ def test_event_capability_lookup_has_delivery_mode(tmp_path):
 
 
 def test_event_process_delayed_notification_queues_llm_request(tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     emit_event(
         name="notification.delayed",
@@ -76,7 +76,7 @@ def test_event_process_delayed_notification_queues_llm_request(tmp_path):
     assert out["processed"] >= 1
     assert out["failed"] == 0
 
-    requests_path = get_runtime_root(tmp_path) / "notes" / "delayed-llm-requests.json"
+    requests_path = get_runtime_root(iroot) / "notes" / "delayed-llm-requests.json"
     assert requests_path.exists()
     payload = json.loads(requests_path.read_text(encoding="utf-8"))
     requests = payload.get("requests") or []
@@ -84,7 +84,7 @@ def test_event_process_delayed_notification_queues_llm_request(tmp_path):
 
 
 def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
     transcript = tmp_path / "transcript.txt"
     transcript.write_text("session transcript", encoding="utf-8")
 
@@ -118,7 +118,7 @@ def test_event_process_docs_ingest_transcript(monkeypatch, tmp_path):
 
 
 def test_event_process_session_ingest_log(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
     called = {}
@@ -158,7 +158,7 @@ def test_event_process_session_ingest_log(monkeypatch, tmp_path):
 
 
 def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     class _Notifications:
         full_text = False
@@ -183,7 +183,7 @@ def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, t
     assert out["processed"] >= 1
     assert out["failed"] == 0
 
-    requests_path = get_runtime_root(tmp_path) / "notes" / "delayed-llm-requests.json"
+    requests_path = get_runtime_root(iroot) / "notes" / "delayed-llm-requests.json"
     payload = json.loads(requests_path.read_text(encoding="utf-8"))
     requests = payload.get("requests") or []
     kinds = [str(r.get("kind", "")) for r in requests]
@@ -192,7 +192,7 @@ def test_event_process_janitor_run_completed_queues_notifications(monkeypatch, t
 
 
 def test_event_process_janitor_daily_digest_is_independently_gated(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     class _Notifications:
         full_text = False
@@ -217,7 +217,7 @@ def test_event_process_janitor_daily_digest_is_independently_gated(monkeypatch, 
     assert out["processed"] >= 1
     assert out["failed"] == 0
 
-    requests_path = get_runtime_root(tmp_path) / "notes" / "delayed-llm-requests.json"
+    requests_path = get_runtime_root(iroot) / "notes" / "delayed-llm-requests.json"
     payload = json.loads(requests_path.read_text(encoding="utf-8"))
     requests = payload.get("requests") or []
     kinds = [str(r.get("kind", "")) for r in requests]
@@ -226,7 +226,7 @@ def test_event_process_janitor_daily_digest_is_independently_gated(monkeypatch, 
 
 
 def test_emit_event_caps_queue_length(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
 
@@ -234,7 +234,7 @@ def test_emit_event_caps_queue_length(monkeypatch, tmp_path):
     for i in range(5):
         emit_event(name="session.reset", payload={"idx": i}, source="pytest")
 
-    queue_path = get_runtime_root(tmp_path) / "events" / "queue.json"
+    queue_path = get_runtime_root(iroot) / "events" / "queue.json"
     payload = json.loads(queue_path.read_text(encoding="utf-8"))
     queued = payload.get("events") or []
     assert len(queued) == 3
@@ -242,14 +242,14 @@ def test_emit_event_caps_queue_length(monkeypatch, tmp_path):
 
 
 def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
 
     monkeypatch.setattr(events, "MAX_HISTORY_JSONL_BYTES", 120)
     monkeypatch.setattr(events, "HISTORY_TRIM_TARGET_BYTES", 60)
 
-    history_path = get_runtime_root(tmp_path) / "events" / "history.jsonl"
+    history_path = get_runtime_root(iroot) / "events" / "history.jsonl"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     seed = "".join(
         json.dumps({"ts": f"t{i}", "op": "seed", "event": {"id": i}}) + "\n"
@@ -269,7 +269,7 @@ def test_emit_event_trims_history_file_before_append(monkeypatch, tmp_path):
 
 
 def test_process_events_handler_error_raises_in_fail_hard(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
 
@@ -293,7 +293,7 @@ def test_process_events_handler_error_raises_in_fail_hard(monkeypatch, tmp_path)
 
 
 def test_process_events_handler_error_marks_failed_when_not_fail_hard(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
 
@@ -318,11 +318,11 @@ def test_process_events_handler_error_marks_failed_when_not_fail_hard(monkeypatc
 
 
 def test_emit_event_raises_on_malformed_queue_when_fail_hard(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
 
-    queue_path = get_runtime_root(tmp_path) / "events" / "queue.json"
+    queue_path = get_runtime_root(iroot) / "events" / "queue.json"
     queue_path.parent.mkdir(parents=True, exist_ok=True)
     queue_path.write_text("{bad json", encoding="utf-8")
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: True)
@@ -332,11 +332,11 @@ def test_emit_event_raises_on_malformed_queue_when_fail_hard(monkeypatch, tmp_pa
 
 
 def test_emit_event_recovers_on_malformed_queue_when_not_fail_hard(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
 
-    queue_path = get_runtime_root(tmp_path) / "events" / "queue.json"
+    queue_path = get_runtime_root(iroot) / "events" / "queue.json"
     queue_path.parent.mkdir(parents=True, exist_ok=True)
     queue_path.write_text("{bad json", encoding="utf-8")
     monkeypatch.setattr(events, "_is_fail_hard_enabled", lambda: False)
@@ -350,7 +350,7 @@ def test_emit_event_recovers_on_malformed_queue_when_not_fail_hard(monkeypatch, 
 
 
 def test_emit_event_raises_on_chmod_failure_when_fail_hard(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter); iroot = adapter.instance_root()
 
     import core.runtime.events as events
 

@@ -25,7 +25,13 @@ def get_adapter_instance() -> "QuaidAdapter":
 
 
 def get_workspace_dir() -> Path:
-    return get_adapter().quaid_home()
+    """Return the active instance root directory.
+
+    This is the per-instance silo (QUAID_HOME/QUAID_INSTANCE), not the
+    QUAID_HOME root. Config, data, logs, and identity all resolve relative
+    to this path.
+    """
+    return get_adapter().instance_root()
 
 
 def get_data_dir() -> Path:

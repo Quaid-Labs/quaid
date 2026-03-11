@@ -708,12 +708,14 @@ class TestDocsRegistryGc:
 
     def _make_registry(self, tmp_path, monkeypatch):
         """Create a DocsRegistry with a test DB."""
-        monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "gc_test.db"))
-        from lib.adapter import set_adapter, StandaloneAdapter
-        set_adapter(StandaloneAdapter(home=tmp_path))
-        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(tmp_path))  # kept for backward compat
+        from lib.adapter import set_adapter, TestAdapter
+        adapter = TestAdapter(tmp_path)
+        set_adapter(adapter)
+        iroot = adapter.instance_root()
+        monkeypatch.setenv("MEMORY_DB_PATH", str(iroot / "gc_test.db"))
+        monkeypatch.setenv("CLAWDBOT_WORKSPACE", str(iroot))  # kept for backward compat
 
-        config_dir = tmp_path / "config"
+        config_dir = iroot / "config"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "memory.json").write_text(json.dumps({
             "projects": {"enabled": True, "projectsDir": "projects/",
@@ -728,7 +730,7 @@ class TestDocsRegistryGc:
         from datastore.docsdb.registry import DocsRegistry
         from config import reload_config
         reload_config()
-        return DocsRegistry(db_path=tmp_path / "gc_test.db")
+        return DocsRegistry(db_path=iroot / "gc_test.db")
 
     def test_gc_identifies_missing_files(self, tmp_path, monkeypatch):
         """GC finds registry entries pointing to nonexistent files."""

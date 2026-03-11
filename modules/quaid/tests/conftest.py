@@ -6,11 +6,22 @@ import pytest
 # Default workspace for tests: repository root, not a machine-specific path.
 _DEFAULT_WORKSPACE = str(Path(__file__).resolve().parents[3])
 _DEFAULT_TEST_HOME = Path(os.environ.get("QUAID_HOME", str(Path(_DEFAULT_WORKSPACE) / ".pytest-home")))
+_DEFAULT_INSTANCE = "pytest-runner"
 
 # Seed an explicit adapter config before collection so import-time adapter
 # resolution never relies on hidden fallbacks.
 if not os.environ.get("QUAID_HOME"):
     os.environ["QUAID_HOME"] = str(_DEFAULT_TEST_HOME)
+if not os.environ.get("QUAID_INSTANCE"):
+    os.environ["QUAID_INSTANCE"] = _DEFAULT_INSTANCE
+
+# Instance-aware config: QUAID_HOME/<instance>/config/memory.json
+_instance_cfg = _DEFAULT_TEST_HOME / _DEFAULT_INSTANCE / "config" / "memory.json"
+_instance_cfg.parent.mkdir(parents=True, exist_ok=True)
+if not _instance_cfg.exists():
+    _instance_cfg.write_text('{"adapter":{"type":"standalone"}}', encoding="utf-8")
+
+# Legacy flat config (backward compat during transition)
 _adapter_cfg = _DEFAULT_TEST_HOME / "config" / "memory.json"
 _adapter_cfg.parent.mkdir(parents=True, exist_ok=True)
 if not _adapter_cfg.exists():
@@ -31,6 +42,12 @@ def _ensure_adapter_clean():
     yield
     reset_adapter()
 
+
+@pytest.fixture(autouse=True)
+def _ensure_instance_env(monkeypatch):
+    """Ensure QUAID_INSTANCE is set unless a test explicitly removes it."""
+    if not os.environ.get("QUAID_INSTANCE"):
+        monkeypatch.setenv("QUAID_INSTANCE", _DEFAULT_INSTANCE)
 
 @pytest.fixture(autouse=True)
 def _ensure_clawdbot_workspace(monkeypatch):

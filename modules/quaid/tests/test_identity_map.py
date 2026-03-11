@@ -1,5 +1,5 @@
 from datastore.memorydb import identity_map
-from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
+from lib.adapter import TestAdapter, reset_adapter, set_adapter
 
 
 def setup_function():
@@ -11,7 +11,7 @@ def teardown_function():
 
 
 def test_identity_handle_upsert_resolve_and_list(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
 
     out = identity_map.upsert_identity_handle(
@@ -43,7 +43,7 @@ def test_identity_handle_upsert_resolve_and_list(monkeypatch, tmp_path):
 
 
 def test_identity_handle_resolution_falls_back_to_channel_scope(monkeypatch, tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
     monkeypatch.setenv("MEMORY_DB_PATH", str(tmp_path / "memory.db"))
 
     identity_map.upsert_identity_handle(

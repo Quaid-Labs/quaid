@@ -120,8 +120,8 @@ class OpenClawAdapter(QuaidAdapter):
         )
 
     def get_base_context_files(self):
-        """OC's native context files live at the workspace root."""
-        ws = self.quaid_home()
+        """OC's native context files live at the OC workspace root."""
+        ws = self.oc_workspace()
         files = {}
         for name, purpose, max_lines in [
             ("SOUL.md", "Personality, vibe, interaction style", 80),
@@ -141,6 +141,17 @@ class OpenClawAdapter(QuaidAdapter):
         return Path.home() / ".openclaw" / "workspace" / "plugins" / "quaid" / "projects"
 
     def quaid_home(self) -> Path:
+        """Root directory containing all Quaid instances (QUAID_HOME)."""
+        env = os.environ.get("QUAID_HOME", "").strip()
+        return Path(env).resolve() if env else Path.home() / "quaid"
+
+    def oc_workspace(self) -> Path:
+        """OpenClaw workspace directory (platform-specific, not Quaid instance root).
+
+        This is where OC stores its own files (SOUL.md, USER.md, etc.) and
+        where the bootstrap boundary guard expects files. NOT the same as
+        quaid_home() or instance_root().
+        """
         env = os.environ.get("CLAWDBOT_WORKSPACE", "").strip()
         if env:
             return Path(env).resolve()
@@ -269,13 +280,13 @@ class OpenClawAdapter(QuaidAdapter):
         if is_fail_hard_enabled():
             return None
 
-        # 2. .env file in workspace root (noisy fallback only when failHard=false)
+        # 2. .env file in OC workspace root (noisy fallback only when failHard=false)
         print(
             f"[adapter][FALLBACK] {env_var_name} not found in env; "
             "attempting workspace .env lookup because failHard is disabled.",
             file=sys.stderr,
         )
-        env_file = self.quaid_home() / ".env"
+        env_file = self.oc_workspace() / ".env"
         if env_file.exists():
             found = read_env_file(env_file, env_var_name)
             if found:

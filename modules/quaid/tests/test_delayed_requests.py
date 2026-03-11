@@ -1,6 +1,6 @@
 import json
 
-from lib.adapter import StandaloneAdapter, reset_adapter, set_adapter
+from lib.adapter import TestAdapter, reset_adapter, set_adapter
 from lib.delayed_requests import queue_delayed_request
 
 
@@ -13,7 +13,8 @@ def teardown_function():
 
 
 def test_queue_delayed_request_writes_runtime_note(tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
+    iroot = adapter.instance_root()
 
     queued = queue_delayed_request(
         "update ready",
@@ -23,7 +24,7 @@ def test_queue_delayed_request_writes_runtime_note(tmp_path):
     )
 
     assert queued is True
-    path = tmp_path / ".quaid" / "runtime" / "notes" / "delayed-llm-requests.json"
+    path = iroot / ".quaid" / "runtime" / "notes" / "delayed-llm-requests.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     requests = payload.get("requests") or []
     assert len(requests) == 1
@@ -32,7 +33,7 @@ def test_queue_delayed_request_writes_runtime_note(tmp_path):
 
 
 def test_queue_delayed_request_dedupes_pending_items(tmp_path):
-    set_adapter(StandaloneAdapter(home=tmp_path))
+    adapter = TestAdapter(tmp_path); set_adapter(adapter)
 
     first = queue_delayed_request("same", kind="janitor", priority="normal", source="pytest")
     second = queue_delayed_request("same", kind="janitor", priority="normal", source="pytest")

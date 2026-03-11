@@ -28,6 +28,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
         self._home = home
 
     def quaid_home(self) -> Path:
+        """Root directory containing all Quaid instances (QUAID_HOME)."""
         if self._home is not None:
             return self._home
         env = os.environ.get("QUAID_HOME", "").strip()
@@ -35,7 +36,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
     def _pending_notifications_path(self) -> Path:
         """Path to the pending notifications file for deferred delivery."""
-        return self.quaid_home() / "data" / "cc-pending-notifications.jsonl"
+        return self.data_dir() / "cc-pending-notifications.jsonl"
 
     def notify(self, message: str, channel_override: Optional[str] = None,
                dry_run: bool = False, force: bool = False) -> bool:

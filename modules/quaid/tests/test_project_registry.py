@@ -62,7 +62,7 @@ class TestCreateProject:
         assert "test-adapter" in entry["instances"]
 
         # Canonical dir created
-        canonical = tmp_path / "projects" / "my-app"
+        canonical = tmp_path / "shared" / "projects" / "my-app"
         assert canonical.is_dir()
         assert (canonical / "docs").is_dir()
         assert (canonical / "PROJECT.md").is_file()
@@ -125,7 +125,7 @@ class TestDeleteProject:
 
         delete_project("my-app")
         assert get_project("my-app") is None
-        assert not (tmp_path / "projects" / "my-app").exists()
+        assert not (tmp_path / "shared" / "projects" / "my-app").exists()
 
     def test_rejects_unknown(self, mock_adapter):
         with pytest.raises(KeyError):

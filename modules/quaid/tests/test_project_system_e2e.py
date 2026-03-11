@@ -28,7 +28,7 @@ def project_env(tmp_path):
     """Set up a complete project system environment."""
     quaid_home = tmp_path / "quaid-home"
     quaid_home.mkdir()
-    (quaid_home / "projects").mkdir()
+    (quaid_home / "shared" / "projects").mkdir(parents=True)
     (quaid_home / "config").mkdir()
     (quaid_home / "config" / "memory.json").write_text("{}")
 
@@ -46,7 +46,7 @@ def project_env(tmp_path):
     adapter.quaid_home.return_value = quaid_home
     adapter.adapter_id.return_value = "test-adapter"
     adapter.get_context_sync_target.return_value = oc_workspace
-    adapter.projects_dir.return_value = quaid_home / "projects"
+    adapter.projects_dir.return_value = quaid_home / "shared" / "projects"
 
     with patch("lib.adapter.get_adapter", return_value=adapter):
         yield {
@@ -77,7 +77,7 @@ class TestProjectSystemE2E:
         assert entry["source_root"] == str(project_env["user_code"])
 
         # Canonical dir created with structure
-        canonical = project_env["quaid_home"] / "projects" / "my-app"
+        canonical = project_env["quaid_home"] / "shared" / "projects" / "my-app"
         assert canonical.is_dir()
         assert (canonical / "docs").is_dir()
         assert (canonical / "PROJECT.md").is_file()
@@ -141,7 +141,7 @@ class TestProjectSystemE2E:
         create_project("my-app", description="Test")
 
         # Add a TOOLS.md to the canonical project dir
-        canonical = project_env["quaid_home"] / "projects" / "my-app"
+        canonical = project_env["quaid_home"] / "shared" / "projects" / "my-app"
         (canonical / "TOOLS.md").write_text("# My App Tools\n\nTool docs here.\n")
 
         # Sync to OC workspace
