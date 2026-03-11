@@ -68,6 +68,21 @@ def _quaid_home() -> Path:
     return Path(env).resolve() if env else Path.home() / "quaid"
 
 
+def _get_quaid_version() -> str:
+    """Read Quaid version from package.json."""
+    try:
+        pkg = _quaid_home().parent / "package.json"
+        if not pkg.exists():
+            # Try relative to this file
+            pkg = Path(__file__).parent.parent / "package.json"
+        if pkg.exists():
+            data = json.loads(pkg.read_text())
+            return data.get("version", "unknown")
+    except (json.JSONDecodeError, OSError):
+        pass
+    return "unknown"
+
+
 def _signal_dir() -> Path:
     d = _quaid_home() / "data" / "extraction-signals"
     d.mkdir(parents=True, exist_ok=True)
@@ -830,8 +845,31 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
 
     last_idle_check = 0.0
 
+    # Initialize version watcher and janitor scheduler
+    from core.compatibility import VersionWatcher, JanitorScheduler, read_circuit_breaker
+    home = _quaid_home()
+    data_dir = home / "data"
+    quaid_version = _get_quaid_version()
+    version_watcher = VersionWatcher(data_dir=data_dir, quaid_version=quaid_version)
+    janitor_scheduler = JanitorScheduler(data_dir=data_dir, quaid_home=home)
+
     try:
         while not shutdown_requested:
+            # Version watcher tick — cheap mtime check on every iteration
+            try:
+                version_watcher.tick()
+            except Exception as e:
+                logger.debug("version watcher tick failed: %s", e)
+
+            # Check circuit breaker before processing signals
+            breaker = read_circuit_breaker(data_dir)
+            if not breaker.allows_writes():
+                # In degraded/safe mode — skip extraction, just idle
+                if breaker.message:
+                    logger.debug("Circuit breaker %s: %s", breaker.status, breaker.message)
+                time.sleep(poll_interval)
+                continue
+
             # Process pending signals
             signals = read_pending_signals()
             for sig in signals:
@@ -863,6 +901,12 @@ def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) 
                 except Exception as e:
                     logger.error("idle check failed: %s", e)
                 last_idle_check = now
+
+            # Janitor scheduler tick — checks if maintenance is due
+            try:
+                janitor_scheduler.tick()
+            except Exception as e:
+                logger.debug("janitor scheduler tick failed: %s", e)
 
             time.sleep(poll_interval)
 

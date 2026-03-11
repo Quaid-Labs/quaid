@@ -75,6 +75,39 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "claude-code"
 
+    def get_host_info(self):
+        """Detect Claude Code platform version and binary path."""
+        import shutil
+        import subprocess
+        from core.compatibility import HostInfo
+
+        # Find the claude binary
+        binary = shutil.which("claude")
+        if not binary:
+            for candidate in ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"]:
+                if Path(candidate).exists():
+                    binary = candidate
+                    break
+
+        version = "unknown"
+        if binary:
+            try:
+                result = subprocess.run(
+                    [binary, "--version"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    # Output might be "claude v2.1.72" or just "2.1.72"
+                    version = result.stdout.strip().split()[-1].lstrip("v")
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                pass
+
+        return HostInfo(
+            platform="claude-code",
+            version=version,
+            binary_path=binary,
+        )
+
     def auth_token_path(self) -> Optional[Path]:
         return self.quaid_home() / "config" / "adapters" / "claude-code" / ".auth-token"
 

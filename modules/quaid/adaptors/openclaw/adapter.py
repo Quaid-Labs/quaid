@@ -94,6 +94,31 @@ class OpenClawAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "openclaw"
 
+    def get_host_info(self):
+        """Detect OpenClaw platform version and binary path."""
+        from core.compatibility import HostInfo
+
+        # Find the OC binary
+        binary = self._resolve_message_cli()
+        version = "unknown"
+
+        if binary:
+            try:
+                result = subprocess.run(
+                    [binary, "--version"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    version = result.stdout.strip().split()[-1]
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                pass
+
+        return HostInfo(
+            platform="openclaw",
+            version=version,
+            binary_path=binary,
+        )
+
     def get_base_context_files(self):
         """OC's native context files live at the workspace root."""
         ws = self.quaid_home()

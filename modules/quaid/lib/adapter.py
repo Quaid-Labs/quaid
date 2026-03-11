@@ -78,6 +78,16 @@ class QuaidAdapter(abc.ABC):
         """
         return "standalone"
 
+    def get_host_info(self) -> "HostInfo":
+        """Return host platform name, version, and binary path.
+
+        Used by the version watcher for compatibility checking.
+        Binary path is used for cheap mtime-based change detection.
+        Override in subclasses with platform-specific detection.
+        """
+        from core.compatibility import HostInfo
+        return HostInfo(platform=self.adapter_id(), version="unknown")
+
     def identity_dir(self) -> Path:
         """Per-instance Quaid-managed identity directory.
 

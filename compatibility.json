@@ -1,0 +1,22 @@
+{
+  "kill_switch": false,
+  "kill_message": null,
+  "schema_version": 1,
+  "updated_at": "2026-03-11",
+  "matrix": [
+    {
+      "host": "openclaw",
+      "host_range": ">=2026.3.0",
+      "quaid_range": ">=0.2.15-alpha",
+      "status": "compatible",
+      "message": ""
+    },
+    {
+      "host": "claude-code",
+      "host_range": ">=2.0.0",
+      "quaid_range": ">=0.2.15-alpha",
+      "status": "compatible",
+      "message": ""
+    }
+  ]
+}
