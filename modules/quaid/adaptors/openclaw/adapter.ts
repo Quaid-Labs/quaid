@@ -1487,14 +1487,24 @@ notify_user(${JSON.stringify(message)})
         return { prependContext: event.prependContext };
       }
 
-      // --- Auto-injection (Mem0-style) — uses shared recall pipeline ---
-      if (!event.prompt || event.prompt.length < 5) {
+      return { prependContext: event.prependContext };
+    };
+
+    // --- Auto-injection via before_prompt_build ---
+    // OC's before_agent_start fires for subagent sessions without the user's
+    // prompt. before_prompt_build fires per-message with the actual prompt and
+    // messages array, so recall injection works reliably.
+    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string } | undefined> => {
+      if (isInternalSessionContext(event, ctx)) return;
+      const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
+      if (!autoInjectEnabled) return { prependContext: event.prependContext };
+
+      const rawPrompt = String(event.prompt || "").trim();
+      if (rawPrompt.length < 5) {
         return { prependContext: event.prependContext };
       }
 
       try {
-        const rawPrompt = event.prompt;
-
         // Extract actual user message from metadata-wrapped prompts
         let query = rawPrompt
           .replace(/^System:\s*/i, '')
@@ -1524,32 +1534,24 @@ notify_user(${JSON.stringify(message)})
           return { prependContext: event.prependContext };
         }
 
-        // Auto-inject can either use total_recall (fast planning pass) or plain
-        // direct datastores. For project/technical prompts, include technical/project
-        // sources explicitly so implementation facts are not filtered out.
+        // Auto-inject always bypasses the LLM router to keep latency low.
+        // The router adds ~8s of LLM overhead which causes injection to arrive
+        // after the agent has already responded. Direct vector+graph lookup is
+        // sufficient for contextual injection.
         // Dynamic K: 2 * log2(nodeCount) — scales with graph size
         const autoInjectK = facade.computeDynamicK();
-        const useTotalRecallForInject = facade.isPreInjectionPassEnabled();
-        const routerFailOpen = Boolean(
-          getMemoryConfig().retrieval?.routerFailOpen ??
-          getMemoryConfig().retrieval?.router_fail_open ??
-          true
-        );
         const injectLimit = autoInjectK;
         const injectIntent: "general" = "general";
         const injectDomain: DomainFilter = { personal: true };
-        const injectDatastores: KnowledgeDatastore[] | undefined = useTotalRecallForInject
-          ? undefined
-          : ["vector_basic", "graph"];
         const allMemories = await recallMemories({
           query,
           limit: injectLimit,
           expandGraph: true,
-          datastores: injectDatastores,
-          routeStores: useTotalRecallForInject,
+          datastores: ["vector_basic", "graph"],
+          routeStores: false,
           intent: injectIntent,
           domain: injectDomain,
-          failOpen: routerFailOpen,
+          failOpen: true,
           waitForExtraction: false,
           sourceTag: "auto_inject"
         });
@@ -1601,6 +1603,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     console.log("[quaid] Registering before_agent_start hook for memory injection");
     onChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection",
+      priority: 10
+    });
+
+    // before_prompt_build fires per-message with the actual user prompt,
+    // unlike before_agent_start which fires once per subagent session
+    // (often without the prompt). This is where recall-based injection lives.
+    onChecked("before_prompt_build", beforePromptBuildHandler, {
+      name: "memory-injection-prompt-build",
       priority: 10
     });
 

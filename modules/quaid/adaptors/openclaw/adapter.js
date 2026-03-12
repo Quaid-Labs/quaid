@@ -1222,11 +1222,17 @@ notify_user(${JSON.stringify(message)})
       if (!autoInjectEnabled) {
         return { prependContext: event.prependContext };
       }
-      if (!event.prompt || event.prompt.length < 5) {
+      return { prependContext: event.prependContext };
+    };
+    const beforePromptBuildHandler = async (event, ctx) => {
+      if (isInternalSessionContext(event, ctx)) return;
+      const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
+      if (!autoInjectEnabled) return { prependContext: event.prependContext };
+      const rawPrompt = String(event.prompt || "").trim();
+      if (rawPrompt.length < 5) {
         return { prependContext: event.prependContext };
       }
       try {
-        const rawPrompt = event.prompt;
         let query = rawPrompt.replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").trim();
         query = query.replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").trim();
         if (query.length < 3) {
@@ -1245,23 +1251,18 @@ notify_user(${JSON.stringify(message)})
           return { prependContext: event.prependContext };
         }
         const autoInjectK = facade.computeDynamicK();
-        const useTotalRecallForInject = facade.isPreInjectionPassEnabled();
-        const routerFailOpen = Boolean(
-          getMemoryConfig2().retrieval?.routerFailOpen ?? getMemoryConfig2().retrieval?.router_fail_open ?? true
-        );
         const injectLimit = autoInjectK;
         const injectIntent = "general";
         const injectDomain = { personal: true };
-        const injectDatastores = useTotalRecallForInject ? void 0 : ["vector_basic", "graph"];
         const allMemories = await recallMemories({
           query,
           limit: injectLimit,
           expandGraph: true,
-          datastores: injectDatastores,
-          routeStores: useTotalRecallForInject,
+          datastores: ["vector_basic", "graph"],
+          routeStores: false,
           intent: injectIntent,
           domain: injectDomain,
-          failOpen: routerFailOpen,
+          failOpen: true,
           waitForExtraction: false,
           sourceTag: "auto_inject"
         });
@@ -1309,6 +1310,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     console.log("[quaid] Registering before_agent_start hook for memory injection");
     onChecked("before_agent_start", beforeAgentStartHandler, {
       name: "memory-injection",
+      priority: 10
+    });
+    onChecked("before_prompt_build", beforePromptBuildHandler, {
+      name: "memory-injection-prompt-build",
       priority: 10
     });
     console.log("[quaid] agent_end auto-capture disabled; using session_end + compaction hooks");

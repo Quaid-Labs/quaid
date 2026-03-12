@@ -61,6 +61,7 @@
         "mode": "declared",
         "exports": [
           "before_agent_start",
+          "before_prompt_build",
           "agent_end",
           "before_compaction",
           "session",

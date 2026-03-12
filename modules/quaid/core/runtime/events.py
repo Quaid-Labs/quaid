@@ -144,6 +144,7 @@ _ADAPTER_NATIVE_EVENTS: set[str] = {
     "message",
     "message_received",
     "message:preprocessed",
+    "before_prompt_build",
 }
 
 
