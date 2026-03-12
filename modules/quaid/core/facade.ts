@@ -10,7 +10,7 @@ import type { PythonBridgeExec } from "./datastore-bridge.js";
 import { createDatastoreBridge } from "./datastore-bridge.js";
 import { createProjectCatalogReader } from "./project-catalog.js";
 import { createKnowledgeEngine } from "./knowledge-engine.js";
-import type { TotalRecallOptions } from "../orchestrator/default-orchestrator.js";
+import type { TotalRecallOptions, RecallMemoryOpts } from "../orchestrator/default-orchestrator.js";
 import {
   normalizeKnowledgeDatastores,
   renderKnowledgeDatastoreGuidanceForAgents,
@@ -429,19 +429,8 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const llm = await deps.callLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
       return String(llm?.text || "");
     },
-    recallVector: async (query, limit, scope, domainBoost, project, dateFrom, dateTo) => {
-      const results = await recallFromBridge(
-        query, limit, false, 1, scope, domainBoost, project, dateFrom, dateTo,
-      );
-      return results.map((r) => ({ ...r, via: "vector" as const }));
-    },
-    recallGraph: async (query, limit, depth, scope, domainBoost, project, dateFrom, dateTo) => {
-      const results = await recallFromBridge(
-        query, limit, true, depth, scope, domainBoost, project, dateFrom, dateTo,
-      );
-      return results
-        .filter((r) => (r.via || "") === "graph" || r.category === "graph")
-        .map((r) => ({ ...r, via: "graph" as const }));
+    recallMemory: async (query, limit, opts) => {
+      return recallMemoryFromBridge(query, limit, opts as RecallMemoryOpts);
     },
     recallJournalStore: async (query, limit) => {
       const journalConfig = deps.getMemoryConfig().docs?.journal || {};
@@ -2166,49 +2155,47 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   }
 
   // -------------------------------------------------------------------------
-  // Bridge recall helper (calls datastoreBridge.search / searchGraphAware)
+  // Bridge recall helper (calls datastoreBridge.recall with --stores flag)
   // -------------------------------------------------------------------------
 
-  async function recallFromBridge(
+  async function recallMemoryFromBridge(
     query: string,
     limit: number,
-    expandGraph: boolean,
-    graphDepth: number,
-    domain: DomainFilter,
-    domainBoost?: Record<string, number> | string[],
-    project?: string,
-    dateFrom?: string,
-    dateTo?: string,
+    opts: RecallMemoryOpts,
   ): Promise<MemoryResult[]> {
+    const stores = opts.stores || ["vector_basic"];
+    const expandGraph = stores.includes("graph");
     try {
       const args: string[] = [
-        query, "--limit", String(limit), "--json",
+        query, "--limit", String(limit), "--json", "--stores", stores.join(","),
       ];
-      if (domain && typeof domain === "object") {
-        args.push("--domain-filter", JSON.stringify(domain));
+      if (opts.fast) args.push("--fast");
+      if (opts.domain && typeof opts.domain === "object") {
+        args.push("--domain-filter", JSON.stringify(opts.domain));
       }
-      if (domainBoost) {
-        args.push("--domain-boost", JSON.stringify(domainBoost));
+      if (opts.domainBoost) {
+        args.push("--domain-boost", JSON.stringify(opts.domainBoost));
       }
-      if (project) {
-        args.push("--project", project);
+      if (opts.project) {
+        args.push("--project", opts.project);
       }
-      if (dateFrom) {
-        args.push("--date-from", dateFrom);
+      if (opts.dateFrom) {
+        args.push("--date-from", opts.dateFrom);
       }
-      if (dateTo) {
-        args.push("--date-to", dateTo);
+      if (opts.dateTo) {
+        args.push("--date-to", opts.dateTo);
+      }
+      if (expandGraph && opts.depth) {
+        args.push("--depth", String(opts.depth));
+      }
+      if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
+        args.push("--candidate-pool", JSON.stringify(opts.candidatePool));
       }
 
-      let output: string;
-      if (expandGraph) {
-        args.push("--depth", String(graphDepth));
-        output = await datastoreBridge.searchGraphAware(args);
-      } else {
-        output = await datastoreBridge.search(args);
-      }
-
-      return parseMemoryResults(output, expandGraph);
+      const output = await datastoreBridge.recall(args);
+      const results = parseMemoryResults(output, expandGraph);
+      if (!expandGraph) return results.map((r) => ({ ...r, via: "vector" as const }));
+      return results.filter((r) => (r.via || "") === "graph" || r.category === "graph");
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) throw err;
       console.error("[quaid][facade] recall error:", (err as Error).message);
@@ -2631,7 +2618,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
 
     const runRecall = (q: string): Promise<MemoryResult[]> => {
       const recallOpts: TotalRecallOptions = {
-        datastores: selectedStores,
+        datastores: shouldRouteStores ? [] : selectedStores,
         expandGraph,
         graphDepth,
         intent,
@@ -2644,14 +2631,11 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
         docs,
         datastoreOptions,
       };
-      if (shouldRouteStores) {
-        return knowledgeEngine.total_recall(q, limit, {
-          ...recallOpts,
-          reasoning,
-          failOpen,
-        });
-      }
-      return knowledgeEngine.totalRecall(q, limit, recallOpts);
+      return knowledgeEngine.recall(q, limit, {
+        ...recallOpts,
+        reasoning,
+        failOpen,
+      });
     };
 
     return runRecall(query);
@@ -3196,7 +3180,7 @@ ${lines.join("\n")}
     getStatsParsed,
     store: (args) => datastoreBridge.store(args),
     forget: (args) => datastoreBridge.forget(args),
-    searchBySession: (sessionId, limit = 20) => datastoreBridge.search([
+    searchBySession: (sessionId, limit = 20) => datastoreBridge.recall([
       "*",
       "--session-id",
       sessionId,

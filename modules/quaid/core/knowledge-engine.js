@@ -5,6 +5,7 @@ import {
   renderKnowledgeDatastoreGuidanceForAgents
 } from "./knowledge-stores.js";
 function createKnowledgeEngine(deps) {
+  const _vectorStores = /* @__PURE__ */ new Set(["vector", "vector_basic", "vector_technical"]);
   function storeOption(opts, store, key) {
     return opts.datastoreOptions?.[store]?.[key];
   }
@@ -279,7 +280,7 @@ intent: ${intent}`;
     if (!deps.recallProjectStore) return [];
     return deps.recallProjectStore(query, limit, project, docs);
   }
-  async function totalRecall(query, limit, opts) {
+  async function _executeStores(query, limit, opts) {
     const datastores = normalizeKnowledgeDatastores(opts.datastores, opts.expandGraph);
     const all = [];
     const descriptors = {
@@ -290,16 +291,16 @@ intent: ${intent}`;
           const domain = domainRaw && typeof domainRaw === "object" && !Array.isArray(domainRaw) ? domainRaw : ctx.opts.domain || { all: true };
           const projectRaw = storeOption(ctx.opts, "vector", "project");
           const project = typeof projectRaw === "string" && projectRaw.trim() ? projectRaw.trim() : ctx.opts.project;
-          return deps.recallVector(ctx.query, ctx.limit, domain, ctx.opts.domainBoost, project, ctx.opts.dateFrom, ctx.opts.dateTo);
+          return deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector"], domain, domainBoost: ctx.opts.domainBoost, project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast });
         }
       },
       vector_basic: {
         key: "vector_basic",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { personal: true }, void 0, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
+        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_basic"], domain: { personal: true }, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast })
       },
       vector_technical: {
         key: "vector_technical",
-        recall: async (ctx) => deps.recallVector(ctx.query, ctx.limit, { technical: true }, void 0, ctx.opts.project, ctx.opts.dateFrom, ctx.opts.dateTo)
+        recall: async (ctx) => deps.recallMemory(ctx.query, ctx.limit, { stores: ["vector_technical"], domain: { technical: true }, project: ctx.opts.project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast })
       },
       graph: {
         key: "graph",
@@ -310,7 +311,7 @@ intent: ${intent}`;
           const domain = domainRaw && typeof domainRaw === "object" && !Array.isArray(domainRaw) ? domainRaw : ctx.opts.domain || { all: true };
           const projectRaw = storeOption(ctx.opts, "graph", "project");
           const project = typeof projectRaw === "string" && projectRaw.trim() ? projectRaw.trim() : ctx.opts.project;
-          return deps.recallGraph(ctx.query, ctx.limit, depth, domain, ctx.opts.domainBoost, project, ctx.opts.dateFrom, ctx.opts.dateTo);
+          return deps.recallMemory(ctx.query, ctx.limit, { stores: ["graph"], domain, domainBoost: ctx.opts.domainBoost, depth, project, dateFrom: ctx.opts.dateFrom, dateTo: ctx.opts.dateTo, fast: ctx.opts.fast, candidatePool: ctx.candidatePool });
         }
       },
       journal: {
@@ -328,11 +329,15 @@ intent: ${intent}`;
         }
       }
     };
+    const vectorAccumulated = [];
     for (const store of datastores) {
       const descriptor = descriptors[store];
       if (!descriptor) continue;
       try {
-        all.push(...await descriptor.recall({ query, limit, opts }));
+        const candidatePool = !_vectorStores.has(store) && vectorAccumulated.length > 0 ? [...vectorAccumulated] : void 0;
+        const storeResults = await descriptor.recall({ query, limit, opts, candidatePool });
+        all.push(...storeResults);
+        if (_vectorStores.has(store)) vectorAccumulated.push(...storeResults);
       } catch (err) {
         const msg = String(err?.message || err);
         console.warn(`[memory][recall] datastore=${store} failed: ${msg}`);
@@ -353,10 +358,14 @@ intent: ${intent}`;
     merged.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
     return merged.slice(0, limit);
   }
-  async function total_recall(query, limit, opts) {
+  async function recall(query, limit, opts) {
+    const hasExplicitStores = Array.isArray(opts.datastores) && opts.datastores.length > 0;
+    if (opts.fast || hasExplicitStores) {
+      return sanitizeRecallResults(await _executeStores(query, limit, opts)).slice(0, limit);
+    }
     try {
       const plan = await routeRecallPlan(query, opts.expandGraph, opts.reasoning || "fast", opts.intent || "general");
-      const routed = await totalRecall(plan.query, limit, {
+      const routed = await _executeStores(plan.query, limit, {
         ...opts,
         datastores: plan.datastores,
         project: plan.project,
@@ -371,7 +380,7 @@ intent: ${intent}`;
         console.error(
           `[memory][recall-router][FAIL-OPEN] Router prepass failed; using deterministic default recall plan. reason="${reason}" datastores=${fallbackDatastores.join(",")}`
         );
-        const fallbackResults = await totalRecall(query, limit, {
+        const fallbackResults = await _executeStores(query, limit, {
           ...opts,
           datastores: fallbackDatastores
         });
@@ -398,8 +407,7 @@ intent: ${intent}`;
     renderKnowledgeDatastoreGuidanceForAgents,
     routeKnowledgeDatastores,
     routeRecallPlan,
-    totalRecall,
-    total_recall
+    recall
   };
 }
 export {

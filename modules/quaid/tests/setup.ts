@@ -204,7 +204,7 @@ export class TestMemoryInterface {
     if (limit !== 5) {
       args.push('--limit', limit.toString())
     }
-    const result = await this.callPython("search", args)
+    const result = await this.callPython("recall", args)
     
     // Parse output format: "[0.84] [fact](date)[flags][C:0.5] text |ID:id|T:created|VF:vf|VU:vu|P:privacy|O:owner"
     const lines = result.trim().split('\n').filter(line => line.length > 0)
