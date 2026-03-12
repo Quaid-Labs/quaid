@@ -2308,6 +2308,7 @@ def graph_aware_recall(
     domain: Optional[Dict[str, bool]] = None,
     domain_boost: Optional[List[str]] = None,
     project: Optional[str] = None,
+    candidate_pool: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Combined search: vector search + pronoun resolution + bidirectional graph expansion.
 
@@ -2369,15 +2370,18 @@ def graph_aware_recall(
 
     # 2. Vector search (fact-only): keep direct hits strictly factual, then
     # combine with graph traversal discoveries in this graph-aware pathway.
-    direct_all = recall(
-        query,
-        limit=limit * 3,
-        owner_id=owner_id,
-        min_similarity=min_similarity,
-        domain=domain,
-        domain_boost=domain_boost,
-        project=project,
-    )
+    if candidate_pool is not None:
+        direct_all = candidate_pool
+    else:
+        direct_all = recall(
+            query,
+            limit=limit * 3,
+            owner_id=owner_id,
+            min_similarity=min_similarity,
+            domain=domain,
+            domain_boost=domain_boost,
+            project=project,
+        )
     direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
     results["direct_results"] = direct[:limit]  # Ensure limit is respected
     results["source_breakdown"]["vector_count"] = len(results["direct_results"])
@@ -6231,47 +6235,6 @@ if __name__ == "__main__":
         backfill_p.add_argument("--dry-run", action="store_true", help="Preview what would be updated without making changes")
 
         # --- search ---
-        search_p = subparsers.add_parser("search", help="Search memories via recall")
-        search_p.add_argument("query", nargs="+", help="Search query")
-        search_p.add_argument("--owner", default=None, help="Owner ID")
-        search_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
-        search_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
-        search_p.add_argument("--current-session-id", default=None, help="Current session ID for filtering")
-        search_p.add_argument("--compaction-time", default=None, help="Compaction timestamp for filtering")
-        search_p.add_argument("--date-from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
-        search_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
-        search_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
-        search_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
-        search_p.add_argument("--project", default=None, help="Filter by project/domain label")
-        search_p.add_argument("--session-id", default=None, help="Filter results to a specific session ID")
-        search_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
-        search_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
-        search_p.add_argument("--json", action="store_true", help="JSON output")
-
-        # --- search-all ---
-        search_all_p = subparsers.add_parser("search-all", help="Unified memory search (datastore only)")
-        search_all_p.add_argument("query", nargs="+", help="Search query")
-        search_all_p.add_argument("--owner", default=None, help="Owner ID")
-        search_all_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
-        search_all_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
-
-        # --- search-graph ---
-        search_graph_p = subparsers.add_parser("search-graph", help="Memory search with graph expansion")
-        search_graph_p.add_argument("query", nargs="+", help="Search query")
-        search_graph_p.add_argument("--owner", default=None, help="Owner ID")
-        search_graph_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
-
-        # --- search-graph-aware ---
-        search_ga_p = subparsers.add_parser("search-graph-aware", help="Graph-aware search: vector + pronoun resolution + bidirectional expansion")
-        search_ga_p.add_argument("query", nargs="+", help="Search query")
-        search_ga_p.add_argument("--owner", default=None, help="Owner ID")
-        search_ga_p.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
-        search_ga_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
-        search_ga_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
-        search_ga_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
-        search_ga_p.add_argument("--project", default=None, help="Filter by project/domain label")
-        search_ga_p.add_argument("--json", action="store_true", help="JSON output")
-
         # --- store ---
         store_p = subparsers.add_parser("store", help="Store a new memory")
         store_p.add_argument("text", help="Text of the memory to store")
@@ -6335,7 +6298,7 @@ if __name__ == "__main__":
         history_p.add_argument("id", help="Node ID")
 
         # --- recall ---
-        recall_p = subparsers.add_parser("recall", help="Recall memories (same as search)")
+        recall_p = subparsers.add_parser("recall", help="Recall memories (unified recall surface)")
         recall_p.add_argument("query", nargs="+", help="Search query")
         recall_p.add_argument("--owner", default=None, help="Owner ID")
         recall_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
@@ -6344,6 +6307,17 @@ if __name__ == "__main__":
         recall_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
         recall_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
+        recall_p.add_argument("--json", action="store_true", help="JSON output")
+        recall_p.add_argument("--stores", default=None, help="Comma-separated store list: vector_basic,vector_technical,graph")
+        recall_p.add_argument("--fast", action="store_true", help="Fast mode: skip multi-pass, reranker, max_turns=1")
+        recall_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
+        recall_p.add_argument("--session-id", default=None, help="Filter results to a specific session ID")
+        recall_p.add_argument("--current-session-id", default=None, help="Current session ID for filtering")
+        recall_p.add_argument("--compaction-time", default=None, help="Compaction timestamp for filtering")
+        recall_p.add_argument("--date-from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
+        recall_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
+        recall_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
+        recall_p.add_argument("--candidate-pool", default=None, help="JSON array of pre-fetched vector results to pass to graph search")
 
         # --- decay ---
         subparsers.add_parser("decay", help="Run memory decay")
@@ -6457,96 +6431,6 @@ if __name__ == "__main__":
                         count += 1
                 print(f"Backfilled {count} content hashes")
 
-        elif args.command == "search":
-            query = " ".join(args.query)
-
-            if args.archive:
-                from datastore.memorydb.archive_store import search_archive as _search_archive
-                archive_results = _search_archive(query, limit=args.limit)
-                if args.json:
-                    out = []
-                    for r in archive_results:
-                        out.append({
-                            "text": r.get("name", ""),
-                            "category": r.get("type", "?"),
-                            "similarity": 1.0,
-                            "id": r.get("id", ""),
-                            "created_at": r.get("archived_at", ""),
-                            "valid_from": "",
-                            "valid_until": "",
-                            "privacy": r.get("privacy", "shared"),
-                            "owner_id": r.get("owner_id", ""),
-                            "source_type": r.get("source_type", "archive"),
-                            "via": "archive",
-                            "archive_reason": r.get("archive_reason", ""),
-                        })
-                    print(json.dumps(out))
-                else:
-                    for r in archive_results:
-                        print(f"[archive] [{r.get('type', '?')}] {r.get('name', '')} |ID:{r.get('id', '')}|archived:{r.get('archived_at', '')}|reason:{r.get('archive_reason', '')}")
-                    if not archive_results:
-                        print("No archived memories found")
-            elif getattr(args, 'session_id', None):
-                # Session-filtered search: return facts from a specific session
-                mg = MemoryGraph()
-                with mg._get_conn() as conn:
-                    rows = conn.execute(
-                        "SELECT id, type, name, content, extraction_confidence, created_at, privacy, owner_id, session_id "
-                        "FROM nodes WHERE session_id = ? AND owner_id = ? AND status IN ('active', 'approved', 'pending') "
-                        "ORDER BY created_at DESC LIMIT ?",
-                        (args.session_id, args.owner or _get_memory_config().users.default_owner, int(args.limit))
-                    ).fetchall()
-                if args.json:
-                    out = []
-                    for r in rows:
-                        out.append({
-                            "text": r["content"] or r["name"],
-                            "category": r["type"],
-                            "similarity": 1.0,
-                            "id": r["id"],
-                            "created_at": r["created_at"] or "",
-                            "valid_from": "",
-                            "valid_until": "",
-                            "privacy": r["privacy"] or "shared",
-                            "owner_id": r["owner_id"] or "",
-                            "source_type": "",
-                        })
-                    print(json.dumps(out))
-                else:
-                    for r in rows:
-                        conf = r['extraction_confidence'] or 0.5
-                        created = r['created_at'] or ''
-                        date_str = f"({created.split('T')[0]})" if created else ""
-                        print(f"[1.00] [{r['type']}]{date_str}[C:{conf:.1f}] {r['content'] or r['name']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
-                    if not rows:
-                        print("No facts found for this session")
-            else:
-                domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
-                domain_boost = json.loads(getattr(args, "domain_boost", "[]") or "[]")
-                results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, current_session_id=args.current_session_id, compaction_time=args.compaction_time, date_from=getattr(args, 'date_from', None), date_to=getattr(args, 'date_to', None), debug=getattr(args, 'debug', False), domain=domain_filter, domain_boost=domain_boost, project=getattr(args, 'project', None))
-                if args.json:
-                    print(json.dumps(results))
-                else:
-                    # Output format: [similarity] [category](date)[flags][C:confidence] text |ID:id|T:created_at|P:privacy|O:owner_id
-                    for r in results:
-                        flags = []
-                        if r.get('verified'): flags.append('V')
-                        if r.get('pinned'): flags.append('P')
-                        if r.get('valid_until'): flags.append('superseded')
-                        flag_str = f"[{''.join(flags)}]" if flags else ""
-                        conf = r.get('extraction_confidence', 0.5)
-                        created = r.get('created_at', '')
-                        date_str = f"({created.split('T')[0]})" if created else ""
-                        privacy = r.get('privacy', 'shared')
-                        owner = r.get('owner_id', '')
-                        valid_from = r.get('valid_from', '')
-                        valid_until = r.get('valid_until', '')
-                        source_type = r.get('source_type', '') or ''
-                        print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner}|ST:{source_type}")
-                        if r.get('_debug'):
-                            d = r['_debug']
-                            print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
-
         elif args.command == "store":
             try:
                 owner = args.owner or _get_memory_config().users.default_owner
@@ -6640,100 +6524,6 @@ if __name__ == "__main__":
                 print("Error: provide --id <id> or a search query", file=sys.stderr)
                 sys.exit(1)
 
-        elif args.command == "search-all":
-            query = " ".join(args.query)
-            memory_results = recall(query, limit=args.limit, owner_id=args.owner)
-            for r in memory_results:
-                flags = []
-                if r.get('verified'): flags.append('V')
-                if r.get('pinned'): flags.append('P')
-                flag_str = f"[{''.join(flags)}]" if flags else ""
-                print(f"[memory] [{r['similarity']:.2f}] [{r['category']}]{flag_str} {r['text']}")
-            if not memory_results:
-                print("No results found")
-
-        elif args.command == "search-graph":
-            query = " ".join(args.query)
-
-            # Search memory first
-            memory_results = recall(query, limit=args.limit, owner_id=args.owner)
-
-            # Create MemoryGraph instance to get relationships
-            graph = MemoryGraph()
-
-            # Track already seen nodes to avoid duplicates
-            seen_node_ids = {r.get('id') for r in memory_results if r.get('id')}
-
-            # Print original search results
-            for r in memory_results:
-                flags = []
-                if r.get('verified'): flags.append('V')
-                if r.get('pinned'): flags.append('P')
-                flag_str = f"[{''.join(flags)}]" if flags else ""
-                print(f"[memory] [{r['similarity']:.2f}] [{r['category']}]{flag_str} {r['text']}")
-
-            # For each result, find related nodes via graph traversal
-            for result in memory_results:
-                if result.get('id'):
-                    try:
-                        related_nodes = graph.get_related(result['id'], depth=1)
-                        for node, relation, depth in related_nodes:
-                            # Skip if we've already shown this node
-                            if node.id not in seen_node_ids:
-                                seen_node_ids.add(node.id)
-                                print(f"[related:{relation}] {node.name}")
-                    except Exception as e:
-                        # Don't fail the whole search if graph traversal fails
-                        print(f"[graph-error] Failed to get relations for {result['id']}: {e}", file=sys.stderr)
-
-            if not memory_results:
-                print("No results found")
-
-        elif args.command == "search-graph-aware":
-            query = " ".join(args.query)
-
-            results = graph_aware_recall(
-                query,
-                owner_id=args.owner,
-                limit=args.limit,
-                graph_depth=args.depth,
-                domain=json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}'),
-                domain_boost=json.loads(getattr(args, "domain_boost", "[]") or "[]"),
-                project=getattr(args, 'project', None),
-            )
-
-            if args.json:
-                print(json.dumps(results, indent=2))
-            else:
-                # Human-readable output format
-                for r in results["direct_results"]:
-                    flags = []
-                    if r.get('verified'): flags.append('V')
-                    if r.get('pinned'): flags.append('P')
-                    flag_str = f"[{''.join(flags)}]" if flags else ""
-                    print(f"[direct] [{r['similarity']:.2f}] [{r['category']}]{flag_str} {r['text']}")
-
-                for r in results["graph_results"]:
-                    direction = "-->" if r["direction"] == "out" else "<--"
-                    rel = r["relation"]
-                    source = r["source_name"]
-                    target = r["name"]
-                    if r["direction"] == "in":
-                        # Reverse for display: source --rel--> target
-                        print(f"[graph] {target} --{rel}--> {source}")
-                    else:
-                        print(f"[graph] {source} --{rel}--> {target}")
-
-                # Metadata line
-                meta = results["source_breakdown"]
-                pronoun_str = "true" if meta["pronoun_resolved"] else "false"
-                owner_person_str = f' owner_person="{meta["owner_person"]}"' if meta["owner_person"] else ""
-                print(f"[meta] pronoun_resolved={pronoun_str}{owner_person_str}")
-                print(f"[meta] direct_count={meta['vector_count']} graph_count={meta['graph_count']}")
-
-                if not results["direct_results"] and not results["graph_results"]:
-                    print("No results found")
-
         elif args.command == "edge-keywords":
             subcmd = args.subcmd or "list"
 
@@ -6819,21 +6609,149 @@ if __name__ == "__main__":
             query = " ".join(args.query)
             domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
             domain_boost = json.loads(getattr(args, "domain_boost", "[]") or "[]")
-            results = recall(query, limit=args.limit, owner_id=args.owner, min_similarity=args.min_similarity, debug=getattr(args, 'debug', False), domain=domain_filter, domain_boost=domain_boost, project=getattr(args, 'project', None))
+            stores_raw = getattr(args, 'stores', None)
+            stores = [s.strip() for s in stores_raw.split(",")] if stores_raw else []
+            use_fast = getattr(args, 'fast', False)
+            use_json = getattr(args, 'json', False)
+            graph_depth = getattr(args, 'depth', 1)
+            session_id = getattr(args, 'session_id', None)
+            archive = getattr(args, 'archive', False)
+            candidate_pool_raw = getattr(args, 'candidate_pool', None)
+            candidate_pool = json.loads(candidate_pool_raw) if candidate_pool_raw else None
 
-            for r in results:
-                flags = []
-                if r.get('verified'): flags.append('V')
-                if r.get('pinned'): flags.append('P')
-                flag_str = f"[{''.join(flags)}]" if flags else ""
-                conf = r.get('extraction_confidence', 0.5)
-                created = r.get('created_at', '')
-                privacy = r.get('privacy', 'shared')
-                owner = r.get('owner_id', '')
-                print(f"[{r['similarity']:.2f}] [{r['category']}]{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|P:{privacy}|O:{owner}")
-                if r.get('_debug'):
-                    d = r['_debug']
-                    print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+            if archive:
+                from datastore.memorydb.archive_store import search_archive as _search_archive
+                archive_results = _search_archive(query, limit=args.limit)
+                if use_json:
+                    out = []
+                    for r in archive_results:
+                        out.append({
+                            "text": r.get("name", ""),
+                            "category": r.get("type", "?"),
+                            "similarity": 1.0,
+                            "id": r.get("id", ""),
+                            "created_at": r.get("archived_at", ""),
+                            "valid_from": "",
+                            "valid_until": "",
+                            "privacy": r.get("privacy", "shared"),
+                            "owner_id": r.get("owner_id", ""),
+                            "source_type": r.get("source_type", "archive"),
+                            "via": "archive",
+                            "archive_reason": r.get("archive_reason", ""),
+                        })
+                    print(json.dumps(out))
+                else:
+                    for r in archive_results:
+                        print(f"[archive] [{r.get('type', '?')}] {r.get('name', '')} |ID:{r.get('id', '')}|archived:{r.get('archived_at', '')}|reason:{r.get('archive_reason', '')}")
+                    if not archive_results:
+                        print("No archived memories found")
+            elif session_id:
+                # Session-filtered search: return facts from a specific session
+                mg = MemoryGraph()
+                with mg._get_conn() as conn:
+                    rows = conn.execute(
+                        "SELECT id, type, name, content, extraction_confidence, created_at, privacy, owner_id, session_id "
+                        "FROM nodes WHERE session_id = ? AND owner_id = ? AND status IN ('active', 'approved', 'pending') "
+                        "ORDER BY created_at DESC LIMIT ?",
+                        (session_id, args.owner or _get_memory_config().users.default_owner, int(args.limit))
+                    ).fetchall()
+                if use_json:
+                    out = []
+                    for r in rows:
+                        out.append({
+                            "text": r["content"] or r["name"],
+                            "category": r["type"],
+                            "similarity": 1.0,
+                            "id": r["id"],
+                            "created_at": r["created_at"] or "",
+                            "valid_from": "",
+                            "valid_until": "",
+                            "privacy": r["privacy"] or "shared",
+                            "owner_id": r["owner_id"] or "",
+                            "source_type": "",
+                        })
+                    print(json.dumps(out))
+                else:
+                    for r in rows:
+                        conf = r['extraction_confidence'] or 0.5
+                        created = r['created_at'] or ''
+                        date_str = f"({created.split('T')[0]})" if created else ""
+                        print(f"[1.00] [{r['type']}]{date_str}[C:{conf:.1f}] {r['content'] or r['name']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
+                    if not rows:
+                        print("No facts found for this session")
+            elif "graph" in stores:
+                # Graph-aware recall with optional candidate pool
+                results = graph_aware_recall(
+                    query,
+                    owner_id=args.owner,
+                    limit=args.limit,
+                    graph_depth=graph_depth,
+                    domain=domain_filter,
+                    domain_boost=domain_boost,
+                    project=getattr(args, 'project', None),
+                    candidate_pool=candidate_pool,
+                )
+                if use_json:
+                    print(json.dumps(results, indent=2))
+                else:
+                    for r in results.get("direct_results", []):
+                        flags = []
+                        if r.get('verified'): flags.append('V')
+                        if r.get('pinned'): flags.append('P')
+                        flag_str = f"[{''.join(flags)}]" if flags else ""
+                        conf = r.get('extraction_confidence', 0.5)
+                        created = r.get('created_at', '')
+                        privacy = r.get('privacy', 'shared')
+                        owner = r.get('owner_id', '')
+                        print(f"[{r['similarity']:.2f}] [{r.get('category', 'fact')}]{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|P:{privacy}|O:{owner}")
+            else:
+                # Vector recall — determine domain from stores flag
+                if "vector_technical" in stores and "vector_basic" not in stores:
+                    effective_domain = {"technical": True}
+                elif "vector_basic" in stores and "vector_technical" not in stores:
+                    effective_domain = {"personal": True}
+                else:
+                    effective_domain = domain_filter
+
+                recall_kwargs = dict(
+                    limit=args.limit,
+                    owner_id=args.owner,
+                    min_similarity=args.min_similarity,
+                    current_session_id=getattr(args, 'current_session_id', None),
+                    compaction_time=getattr(args, 'compaction_time', None),
+                    date_from=getattr(args, 'date_from', None),
+                    date_to=getattr(args, 'date_to', None),
+                    debug=getattr(args, 'debug', False),
+                    domain=effective_domain,
+                    domain_boost=domain_boost,
+                    project=getattr(args, 'project', None),
+                )
+                if use_fast:
+                    recall_kwargs['use_multi_pass'] = False
+                    recall_kwargs['use_reranker'] = False
+                    recall_kwargs['max_turns'] = 1
+                results = recall(query, **recall_kwargs)
+                if use_json:
+                    print(json.dumps(results))
+                else:
+                    for r in results:
+                        flags = []
+                        if r.get('verified'): flags.append('V')
+                        if r.get('pinned'): flags.append('P')
+                        if r.get('valid_until'): flags.append('superseded')
+                        flag_str = f"[{''.join(flags)}]" if flags else ""
+                        conf = r.get('extraction_confidence', 0.5)
+                        created = r.get('created_at', '')
+                        date_str = f"({created.split('T')[0]})" if created else ""
+                        privacy = r.get('privacy', 'shared')
+                        owner = r.get('owner_id', '')
+                        valid_from = r.get('valid_from', '')
+                        valid_until = r.get('valid_until', '')
+                        source_type = r.get('source_type', '') or ''
+                        print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner}|ST:{source_type}")
+                        if r.get('_debug'):
+                            d = r['_debug']
+                            print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
 
         elif args.command == "add-alias":
             graph = get_graph()

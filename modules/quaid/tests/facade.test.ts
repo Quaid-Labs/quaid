@@ -218,7 +218,7 @@ describe("QuaidFacade", () => {
     }));
     const facade = createQuaidFacade(makeMockDeps({ execPython, getMemoryConfig }));
     await facade.searchBySession("sess-1", 7);
-    expect(execPython).toHaveBeenCalledWith("search", ["*", "--session-id", "sess-1", "--owner", "owner-123", "--limit", "7"]);
+    expect(execPython).toHaveBeenCalledWith("recall", ["*", "--session-id", "sess-1", "--owner", "owner-123", "--limit", "7"]);
   });
 
   it("resolveOwner uses users config speaker/channel mapping", () => {
@@ -487,7 +487,7 @@ describe("QuaidFacade", () => {
 
   it("recall routes through knowledgeEngine when routeStores=false", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command === "search") {
+      if (command === "recall") {
         return JSON.stringify([
           { text: "test fact", category: "fact", similarity: 0.85 },
         ]);
@@ -517,7 +517,7 @@ describe("QuaidFacade", () => {
       truncated: false,
     } satisfies LLMCallResult));
     const execPython = vi.fn(async (command: string) => {
-      if (command === "search") {
+      if (command === "recall") {
         return JSON.stringify([
           { text: "routed fact", category: "fact", similarity: 0.9 },
         ]);
@@ -537,7 +537,7 @@ describe("QuaidFacade", () => {
 
   it("recall forwards domain filter with --domain-filter flag", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command === "search") {
+      if (command === "recall") {
         return JSON.stringify([{ text: "domain fact", category: "fact", similarity: 0.8 }]);
       }
       return "{}";
@@ -551,15 +551,15 @@ describe("QuaidFacade", () => {
       expandGraph: false,
       domain: { personal: true },
     });
-    const searchCall = execPython.mock.calls.find((args) => args[0] === "search");
-    expect(searchCall).toBeTruthy();
-    expect(searchCall?.[1]).toContain("--domain-filter");
-    expect(searchCall?.[1]).not.toContain("--domain");
+    const recallCall = execPython.mock.calls.find((args) => args[0] === "recall");
+    expect(recallCall).toBeTruthy();
+    expect(recallCall?.[1]).toContain("--domain-filter");
+    expect(recallCall?.[1]).not.toContain("--domain");
   });
 
   it("recallWithToolRetry returns primary results when retry heuristics do not trigger", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command !== "search") return "{}";
+      if (command !== "recall") return "{}";
       return JSON.stringify([
         { text: "Alice project plan is current and active", category: "fact", similarity: 0.91 },
       ]);
@@ -579,8 +579,8 @@ describe("QuaidFacade", () => {
 
   it("recallWithToolRetry retries with expanded query and merges results", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command !== "search") return "{}";
-      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "search").length;
+      if (command !== "recall") return "{}";
+      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "recall").length;
       if (callCount === 1) {
         return JSON.stringify([
           { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
@@ -605,7 +605,7 @@ describe("QuaidFacade", () => {
 
   it("recallWithToolRetry skips retry when retry_budget_ms is 0", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command !== "search") return "{}";
+      if (command !== "recall") return "{}";
       return JSON.stringify([
         { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
       ]);
@@ -629,8 +629,8 @@ describe("QuaidFacade", () => {
 
   it("recallWithToolRetry returns primary when retry exceeds budget", async () => {
     const execPython = vi.fn(async (command: string) => {
-      if (command !== "search") return "{}";
-      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "search").length;
+      if (command !== "recall") return "{}";
+      const callCount = execPython.mock.calls.filter(([cmd]) => cmd === "recall").length;
       if (callCount === 1) {
         return JSON.stringify([
           { text: "misc unrelated fragment", category: "fact", similarity: 0.2 },
