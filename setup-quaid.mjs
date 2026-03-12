@@ -359,6 +359,25 @@ const OLLAMA_PS_URL = `${OLLAMA_BASE_URL}/api/ps`;
 // Allows the prompt to override IS_OPENCLAW / IS_CLAUDE_CODE after they're set.
 let _platformOverride = "";
 
+function resolvedInstallerPlatform() {
+  if (_platformOverride) return _platformOverride;
+  if (IS_CLAUDE_CODE) return "claude-code";
+  if (IS_OPENCLAW) return "openclaw";
+  return "standalone";
+}
+
+function resolvedInstallerInstanceId(adapterType = "") {
+  const explicit = String(adapterType || "").trim();
+  if (explicit) return explicit;
+  return resolvedInstallerPlatform();
+}
+
+function syncInstallerInstanceEnv(adapterType = "") {
+  const instance = resolvedInstallerInstanceId(adapterType);
+  process.env.QUAID_INSTANCE = instance;
+  return instance;
+}
+
 /**
  * Check if current install platform matches the given name.
  * Respects both CLI flags and interactive selection.
@@ -374,7 +393,8 @@ function _isPlatform(name) {
 // Python env setup — always set canonical Quaid root, plus workspace hint.
 const PY_ENV_SETUP =
   `os.environ['QUAID_HOME'] = ${JSON.stringify(WORKSPACE)}\n` +
-  `os.environ['CLAWDBOT_WORKSPACE'] = ${JSON.stringify(WORKSPACE)}`;
+  `os.environ['CLAWDBOT_WORKSPACE'] = ${JSON.stringify(WORKSPACE)}\n` +
+  `os.environ['QUAID_INSTANCE'] = ${JSON.stringify(syncInstallerInstanceEnv())}`;
 
 // Step-specific quotes — each tied to the step's theme
 const STEP_QUOTES = {
@@ -928,6 +948,44 @@ function _ensureOpenClawResponsesEndpoint() {
   }
 }
 
+function _ensureOpenClawRuntimeInstanceEnv(instanceId = "openclaw") {
+  const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+  const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const raw = fs.readFileSync(cfgPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed.env || typeof parsed.env !== "object" || Array.isArray(parsed.env)) {
+      parsed.env = {};
+    }
+    if (!parsed.env.vars || typeof parsed.env.vars !== "object" || Array.isArray(parsed.env.vars)) {
+      parsed.env.vars = {};
+    }
+    const nextInstance = String(instanceId || "").trim() || "openclaw";
+    const currentInstance = String(parsed.env.vars.QUAID_INSTANCE || "").trim();
+    const currentHome = String(parsed.env.vars.QUAID_HOME || "").trim();
+    const currentWorkspace = String(parsed.env.vars.CLAWDBOT_WORKSPACE || "").trim();
+    if (
+      currentInstance === nextInstance
+      && currentHome === WORKSPACE
+      && currentWorkspace === WORKSPACE
+    ) {
+      return false;
+    }
+    parsed.env.vars.QUAID_INSTANCE = nextInstance;
+    parsed.env.vars.QUAID_HOME = WORKSPACE;
+    parsed.env.vars.CLAWDBOT_WORKSPACE = WORKSPACE;
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
 function _sanitizeOpenClawQuaidPluginEntry() {
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   const tmpPath = `${cfgPath}.tmp-${process.pid}-${Date.now()}`;
@@ -1390,6 +1448,7 @@ async function step1_preflight() {
     } else if (platform === "openclaw") {
       _platformOverride = "openclaw";
     }
+    syncInstallerInstanceEnv();
   }
 
   if (_isPlatform("claude-code")) {
@@ -1482,6 +1541,9 @@ async function step1_preflight() {
     }
     if (_removeOpenClawPluginsAllowQuaid()) {
       log.info("Removed stale plugins.allow entry for quaid before plugin registration");
+    }
+    if (_ensureOpenClawRuntimeInstanceEnv("openclaw")) {
+      log.info("Seeded OpenClaw config env.vars with QUAID_INSTANCE=openclaw");
     }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
@@ -1757,6 +1819,7 @@ async function step3_models() {
     provider = forcedProvider;
     log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
   }
+  syncInstallerInstanceEnv(adapterType);
 
   if (provider !== "anthropic") {
     log.warn(C.bold("Non-Anthropic providers are experimental. Prompts are tuned for Claude."));
@@ -4056,6 +4119,7 @@ function notifyInstallWarmupNotice() {
 // =============================================================================
 async function main() {
   try {
+    syncInstallerInstanceEnv();
     if (AGENT_MODE) {
       log.info("Agent mode enabled: using non-interactive defaults where prompts are normally required.");
       log.info(`Workspace override: ${WORKSPACE}`);
