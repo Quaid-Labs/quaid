@@ -4401,10 +4401,12 @@ def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.
             system_prompt="You output compact JSON for memory retrieval. No prose.",
             max_retries=0,
         )
+        if result is None:
+            return _finish([clean], "planner_exception_fallback")
         parsed = parse_json_response(result)
         queries = parsed.get("queries") if isinstance(parsed, dict) else None
         if not isinstance(queries, list):
-            return _finish([], "planner_invalid_response")
+            return _finish([clean], "planner_exception_fallback")
 
         out: List[str] = []
         seen = set()
@@ -6565,7 +6567,6 @@ if __name__ == "__main__":
         recall_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
-        recall_p.add_argument("--json", action="store_true", help="JSON output")
         recall_p.add_argument("--stores", default=None, help="Comma-separated store list: vector_basic,vector_technical,graph")
         recall_p.add_argument("--fast", action="store_true", help="Fast mode: skip multi-pass, reranker, max_turns=1")
         recall_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
