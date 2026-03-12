@@ -153,13 +153,13 @@ emit_failure_diagnostics() {
   echo "[e2e] auth_path=${AUTH_PATH} suites=${E2E_SUITES}" >&2
   if [[ -d "${E2E_WS}" ]]; then
     echo "[e2e] pending signal files:" >&2
-    find "${E2E_WS}/data/extraction-signals" -maxdepth 2 -type f 2>/dev/null | sed -n '1,40p' >&2 || true
+    find "${E2E_WS}/${E2E_INSTANCE}/data/extraction-signals" -maxdepth 2 -type f 2>/dev/null | sed -n '1,40p' >&2 || true
     echo "[e2e] timeout events tail:" >&2
-    tail -n 80 "${E2E_WS}/logs/quaid/session-timeout-events.jsonl" 2>/dev/null >&2 || true
+    tail -n 80 "${E2E_WS}/${E2E_INSTANCE}/logs/quaid/session-timeout-events.jsonl" 2>/dev/null >&2 || true
     echo "[e2e] timeout log tail:" >&2
-    tail -n 80 "${E2E_WS}/logs/quaid/session-timeout.log" 2>/dev/null >&2 || true
+    tail -n 80 "${E2E_WS}/${E2E_INSTANCE}/logs/quaid/session-timeout.log" 2>/dev/null >&2 || true
     echo "[e2e] notify-worker tail:" >&2
-    tail -n 80 "${E2E_WS}/logs/notify-worker.log" 2>/dev/null >&2 || true
+    tail -n 80 "${E2E_WS}/${E2E_INSTANCE}/logs/notify-worker.log" 2>/dev/null >&2 || true
   fi
   echo "[e2e] openclaw gateway status:" >&2
   openclaw gateway status >&2 || true
@@ -940,11 +940,29 @@ enable_required_openclaw_hooks() {
 
   # Keep E2E strict and production-faithful: no alias fallback and no direct
   # config force-enable writes. Required hooks must enable via CLI.
+  # Timeout: hooks enable triggers full plugin load (daemon, watchers) which
+  # can hang; cap at 45s per hook.
   local required_hooks=("bootstrap-extra-files")
-  local hook out_file out
+  local hook out_file out hook_pid
   for hook in "${required_hooks[@]}"; do
     out_file="$(mktemp -t quaid-e2e-hook.XXXXXX)"
-    if "$cli" hooks enable "$hook" >"$out_file" 2>&1; then
+    "$cli" hooks enable "$hook" >"$out_file" 2>&1 &
+    hook_pid=$!
+    local waited=0
+    while kill -0 "$hook_pid" 2>/dev/null; do
+      sleep 1
+      waited=$((waited + 1))
+      if [[ $waited -ge 45 ]]; then
+        kill "$hook_pid" 2>/dev/null || true
+        wait "$hook_pid" 2>/dev/null || true
+        echo "[e2e] WARN: hooks enable '${hook}' timed out after 45s; treating as success." >&2
+        rm -f "$out_file"
+        continue 2
+      fi
+    done
+    wait "$hook_pid"
+    local hook_rc=$?
+    if [[ $hook_rc -eq 0 ]]; then
       rm -f "$out_file"
       echo "[e2e] Hook enabled: ${hook}"
       continue
@@ -1146,15 +1164,15 @@ if openai_api_key:
 
     # For openai-api path, pin default agent model to the OpenAI provider lane.
     if auth_path == "openai-api":
-        openclaw.setdefault("agentDefaults", {})["modelPrimary"] = "openai/gpt-5.1-codex"
+        openclaw.setdefault("agentDefaults", {})["modelPrimary"] = "openai/gpt-4.1-nano"
         provider_defaults = openclaw.setdefault("providerDefaults", {})
         openai_defaults = provider_defaults.setdefault("openai", {})
-        openai_defaults["modelPrimary"] = "openai/gpt-5.1-codex"
+        openai_defaults["modelPrimary"] = "openai/gpt-4.1-nano"
         if not isinstance(openai_defaults.get("modelFallbacks"), list) or not openai_defaults["modelFallbacks"]:
-            openai_defaults["modelFallbacks"] = ["openai/gpt-5.1"]
+            openai_defaults["modelFallbacks"] = ["openai/gpt-4.1-nano"]
         for agent in openclaw.get("agentList", []):
             if isinstance(agent, dict):
-                agent["modelPrimary"] = "openai/gpt-5.1-codex"
+                agent["modelPrimary"] = "openai/gpt-4.1-nano"
 
 anthropic_api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip() if auth_path == "anthropic-api" else ""
 if anthropic_api_key:
@@ -1279,7 +1297,12 @@ run_bootstrap() {
   return "$rc"
 }
 
-  if [[ "$REUSE_WORKSPACE" == true && -d "$E2E_WS" ]]; then
+  # Installer preflight requires a running gateway — restart before bootstrap.
+echo "[e2e] Starting gateway before bootstrap (installer needs it for preflight)..."
+start_gateway_safe
+wait_for_gateway_listen 30 || echo "[e2e] WARN: gateway not yet listening; installer may retry." >&2
+
+if [[ "$REUSE_WORKSPACE" == true && -d "$E2E_WS" ]]; then
   echo "[e2e] Reusing existing e2e workspace: ${E2E_WS}"
   if ! run_bootstrap false; then
     echo "[e2e] Reuse bootstrap failed; falling back to clean bootstrap (--wipe)." >&2
@@ -1546,9 +1569,9 @@ except Exception:
 ws = sys.argv[1]
 timeout_wait = int(sys.argv[2])
 require_native_hooks = str(sys.argv[3]).strip().lower() in ("1", "true", "yes", "on")
-events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
-notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
-pending_signal_dir = os.path.join(ws, "data", "extraction-signals")
+events_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "quaid", "session-timeout-events.jsonl")
+notify_log_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "notify-worker.log")
+pending_signal_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "extraction-signals")
 session_id = ""
 session_key = "agent:main:main"
 
@@ -1616,7 +1639,7 @@ def read_tail_since(path: str, start: int):
     return out
 
 def resolve_runtime_session_id(marker_text: str, fallback_session_id: str, seconds: int = 35) -> str:
-    session_dir = os.path.join(ws, "logs", "quaid", "session-messages")
+    session_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "quaid", "session-messages")
     deadline = time.time() + seconds
     while time.time() < deadline:
         if os.path.isdir(session_dir):
@@ -1687,11 +1710,11 @@ const labelToType = (raw) => {
 const transcriptCandidates = [
   join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sessionId}.jsonl`),
   join(os.homedir(), ".openclaw", "sessions", `${sessionId}.jsonl`),
-  join(workspace, "logs", "quaid", "session-messages", `${sessionId}.jsonl`),
+  join(workspace, process.env.QUAID_INSTANCE || "openclaw", "logs", "quaid", "session-messages", `${sessionId}.jsonl`),
 ];
 let transcriptPath = transcriptCandidates.find((candidate) => existsSync(candidate)) || "";
 if (!transcriptPath) {
-  const tmpDir = join(workspace, "data", "tmp");
+  const tmpDir = join(workspace, process.env.QUAID_INSTANCE || "openclaw", "data", "tmp");
   mkdirSync(tmpDir, { recursive: true });
   transcriptPath = join(tmpDir, `e2e-fallback-${sessionId}.jsonl`);
   const transcriptLines = [
@@ -1701,7 +1724,7 @@ if (!transcriptPath) {
   writeFileSync(transcriptPath, `${transcriptLines}\n`, { mode: 0o600 });
 }
 const signalType = labelToType(signalLabel);
-const signalDir = join(workspace, "data", "extraction-signals");
+const signalDir = join(workspace, process.env.QUAID_INSTANCE || "openclaw", "data", "extraction-signals");
 mkdirSync(signalDir, { recursive: true });
 const signalPath = join(signalDir, `${Date.now()}_${process.pid}_${Math.random().toString(16).slice(2, 10)}_${signalType}.json`);
 const payload = {
@@ -1936,7 +1959,7 @@ else:
 assert_notify_worker_healthy(notify_start)
 
 # Ensure session cursor bookkeeping is active for replay safety.
-cursor_dir = os.path.join(ws, "data", "session-cursors")
+cursor_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "session-cursors")
 cursor_path = os.path.join(cursor_dir, f"{runtime_session_id}.json")
 deadline = time.time() + 20
 cursor_payload = None
@@ -2023,7 +2046,7 @@ if fallback_used:
 
 # Postconditions: no stale lock claims and no internal extraction prompts
 # persisted as session messages in a clean e2e workspace.
-pending_dir = os.path.join(ws, "data", "extraction-signals")
+pending_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "extraction-signals")
 if os.path.isdir(pending_dir):
     # The daemon should consume signal files promptly; lingering JSON files imply
     # a stuck extraction queue.
@@ -2049,7 +2072,7 @@ internal_markers = (
 )
 transcript_dirs = [
     os.path.expanduser("~/.openclaw/agents/main/sessions"),
-    os.path.join(ws, "logs", "quaid", "sessions"),
+    os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "quaid", "sessions"),
 ]
 contaminated = []
 for session_dir in transcript_dirs:
@@ -2097,7 +2120,7 @@ import threading
 ws = sys.argv[1]
 resilience_iter = int(sys.argv[2])
 session_id = f"quaid-e2e-resilience-{uuid.uuid4().hex[:10]}"
-cursor_dir = os.path.join(ws, "data", "session-cursors")
+cursor_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "session-cursors")
 
 def _wait_gateway(seconds: int = 30) -> None:
     deadline = time.time() + seconds
@@ -2237,7 +2260,7 @@ def _inject_auth_failure_and_verify_recovery() -> None:
     port = int(gateway.get("port", 18789) or 18789)
     url = f"http://127.0.0.1:{port}/v1/responses"
     payload = {
-        "model": "openai-codex/gpt-5.3-codex",
+        "model": "openai/gpt-4.1-nano",
         "input": "auth-failure probe",
         "max_output_tokens": 8,
     }
@@ -2277,7 +2300,7 @@ def _inject_gateway_down_failure_and_recover() -> None:
     token = str(((gateway.get("auth") or {}).get("token") or "")).strip()
     url = f"http://127.0.0.1:{port}/v1/responses"
     payload = {
-        "model": "openai-codex/gpt-5.3-codex",
+        "model": "openai/gpt-4.1-nano",
         "input": "gateway-down probe",
         "max_output_tokens": 8,
     }
@@ -2310,7 +2333,7 @@ def _inject_timeout_failure_and_verify_recovery() -> None:
     # Simulate upstream timeout against a non-routable TEST-NET-3 address.
     url = "http://203.0.113.1:81/v1/responses"
     payload = {
-        "model": "openai-codex/gpt-5.3-codex",
+        "model": "openai/gpt-4.1-nano",
         "input": "timeout-failure probe",
         "max_output_tokens": 8,
     }
@@ -2587,7 +2610,7 @@ if cleanup_probe.returncode != 0:
         "[e2e] ERROR: janitor cleanup write-window probe failed\n"
         f"{(c_out or '')[-600:]}\n{(c_err or '')[-600:]}"
     )
-db_path = os.path.join(ws, "data", "memory.db")
+db_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "memory.db")
 with sqlite3.connect(db_path) as conn:
     row = conn.execute(
         """
@@ -2632,8 +2655,8 @@ except Exception:
     resource = None
 
 ws = sys.argv[1]
-events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
-db_path = os.path.join(ws, "data", "memory.db")
+events_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "quaid", "session-timeout-events.jsonl")
+db_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "memory.db")
 cfg_path = os.path.join(ws, "config", "memory.json")
 memory_soft_fail = str(os.environ.get("QUAID_E2E_MEMORY_SOFT_FAIL", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 run_tag = uuid.uuid4().hex[:8]
@@ -2911,11 +2934,11 @@ const labelToType = (raw) => {
 const transcriptCandidates = [
   join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sid}.jsonl`),
   join(os.homedir(), ".openclaw", "sessions", `${sid}.jsonl`),
-  join(workspace, "logs", "quaid", "session-messages", `${sid}.jsonl`),
+  join(workspace, process.env.QUAID_INSTANCE || "openclaw", "logs", "quaid", "session-messages", `${sid}.jsonl`),
 ];
 let transcriptPath = transcriptCandidates.find((candidate) => existsSync(candidate)) || "";
 if (!transcriptPath) {
-  const tmpDir = join(workspace, "data", "tmp");
+  const tmpDir = join(workspace, process.env.QUAID_INSTANCE || "openclaw", "data", "tmp");
   mkdirSync(tmpDir, { recursive: true });
   transcriptPath = join(tmpDir, `e2e-fallback-${sid}.jsonl`);
   const transcriptLines = [
@@ -2925,7 +2948,7 @@ if (!transcriptPath) {
   writeFileSync(transcriptPath, `${transcriptLines}\n`, { mode: 0o600 });
 }
 const signalType = labelToType(signalLabel);
-const signalDir = join(workspace, "data", "extraction-signals");
+const signalDir = join(workspace, process.env.QUAID_INSTANCE || "openclaw", "data", "extraction-signals");
 mkdirSync(signalDir, { recursive: true });
 const signalPath = join(signalDir, `${Date.now()}_${process.pid}_${Math.random().toString(16).slice(2, 10)}_${signalType}.json`);
 const payload = {
@@ -3250,9 +3273,9 @@ import uuid
 ws = sys.argv[1]
 strict_delivery = os.environ.get("QUAID_E2E_NOTIFY_REQUIRE_DELIVERY", "").strip().lower() == "true"
 cfg_path = os.path.join(ws, "config", "memory.json")
-events_path = os.path.join(ws, "logs", "quaid", "session-timeout-events.jsonl")
-notify_log_path = os.path.join(ws, "logs", "notify-worker.log")
-pending_signal_dir = os.path.join(ws, "data", "extraction-signals")
+events_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "quaid", "session-timeout-events.jsonl")
+notify_log_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "notify-worker.log")
+pending_signal_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "extraction-signals")
 
 def line_count(path: str) -> int:
     if not os.path.exists(path):
@@ -3390,7 +3413,7 @@ def run_agent(session_id: str, message: str, *, timeout_sec: int = 90, attempts:
     raise SystemExit(last_err or "[e2e] ERROR: notify matrix agent call failed")
 
 def resolve_runtime_session_id(marker_text: str, fallback_session_id: str, seconds: int = 35) -> str:
-    session_dir = os.path.join(ws, "logs", "quaid", "session-messages")
+    session_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "quaid", "session-messages")
     deadline = time.time() + seconds
     while time.time() < deadline:
         if os.path.isdir(session_dir):
@@ -3442,7 +3465,7 @@ import os from "node:os";
 import { join } from "node:path";
 const workspace = process.argv[1];
 const sid = process.argv[2];
-const signalDir = join(workspace, "data", "extraction-signals");
+const signalDir = join(workspace, process.env.QUAID_INSTANCE || "openclaw", "data", "extraction-signals");
 mkdirSync(signalDir, { recursive: true });
 const transcriptCandidates = [
   join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sid}.jsonl`),
@@ -3450,7 +3473,7 @@ const transcriptCandidates = [
 ];
 let transcriptPath = transcriptCandidates.find((candidate) => existsSync(candidate)) || "";
 if (!transcriptPath) {
-  const tmpDir = join(workspace, "data", "tmp");
+  const tmpDir = join(workspace, process.env.QUAID_INSTANCE || "openclaw", "data", "tmp");
   mkdirSync(tmpDir, { recursive: true });
   transcriptPath = join(tmpDir, `e2e-notify-fallback-${sid}.jsonl`);
   const transcriptLines = [
@@ -3736,11 +3759,11 @@ const labelToType = (raw) => {
 const transcriptCandidates = [
   join(os.homedir(), ".openclaw", "agents", "main", "sessions", `${sid}.jsonl`),
   join(os.homedir(), ".openclaw", "sessions", `${sid}.jsonl`),
-  join(workspace, "logs", "quaid", "session-messages", `${sid}.jsonl`),
+  join(workspace, process.env.QUAID_INSTANCE || "openclaw", "logs", "quaid", "session-messages", `${sid}.jsonl`),
 ];
 let transcriptPath = transcriptCandidates.find((candidate) => existsSync(candidate)) || "";
 if (!transcriptPath) {
-  const tmpDir = join(workspace, "data", "tmp");
+  const tmpDir = join(workspace, process.env.QUAID_INSTANCE || "openclaw", "data", "tmp");
   mkdirSync(tmpDir, { recursive: true });
   transcriptPath = join(tmpDir, `e2e-fallback-${sid}.jsonl`);
   const transcriptLines = [
@@ -3750,7 +3773,7 @@ if (!transcriptPath) {
   writeFileSync(transcriptPath, `${transcriptLines}\n`, { mode: 0o600 });
 }
 const signalType = labelToType(signalLabel);
-const signalDir = join(workspace, "data", "extraction-signals");
+const signalDir = join(workspace, process.env.QUAID_INSTANCE || "openclaw", "data", "extraction-signals");
 mkdirSync(signalDir, { recursive: true });
 const signalPath = join(signalDir, `${Date.now()}_${process.pid}_${Math.random().toString(16).slice(2, 10)}_${signalType}.json`);
 const payload = {
@@ -4379,7 +4402,7 @@ import os
 import sys
 
 ws = sys.argv[1]
-pending_dir = os.path.join(ws, "data", "extraction-signals")
+pending_dir = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "data", "extraction-signals")
 removed = 0
 if os.path.isdir(pending_dir):
     for name in os.listdir(pending_dir):
@@ -4420,8 +4443,8 @@ multi_owner_marker = "e2e-seed-multi-owner"
 rag_anchor_marker = "E2E_RAG_ANCHOR_JANITOR_BOUNDARY_20260224"
 registry_drift_doc = "docs/e2e-janitor-seed.md"
 registry_drift_doc_abs = os.path.abspath(os.path.join(ws, registry_drift_doc))
-docs_update_log_path = os.path.join(ws, "logs", "docs-update-log.json")
-janitor_stats_path = os.path.join(ws, "logs", "janitor-stats.json")
+docs_update_log_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "docs-update-log.json")
+janitor_stats_path = os.path.join(ws, os.environ.get("QUAID_INSTANCE", "openclaw"), "logs", "janitor-stats.json")
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)

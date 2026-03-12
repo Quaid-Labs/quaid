@@ -335,6 +335,20 @@ PLUGIN_DIR="${WORKSPACE}/plugins/quaid"
 MODULE_DIR="${WORKSPACE}/modules/quaid"
 ACTIVE_PLUGIN_DIR="${PLUGIN_DIR}"
 
+# Link plugins/quaid -> modules/quaid BEFORE the installer, so that
+# openclaw plugins enable can find the runtime files during preflight.
+if [[ -f "${MODULE_DIR}/package.json" ]]; then
+  mkdir -p "${WORKSPACE}/plugins"
+  if [[ -d "${PLUGIN_DIR}" ]] && [[ ! -L "${PLUGIN_DIR}" ]] && [[ ! -f "${PLUGIN_DIR}/package.json" ]]; then
+    STALE_DIR_BACKUP="${PLUGIN_DIR}.stale.$(date +%Y%m%d-%H%M%S)"
+    mv "${PLUGIN_DIR}" "${STALE_DIR_BACKUP}"
+    echo "Moved stale plugin shim dir: ${PLUGIN_DIR} -> ${STALE_DIR_BACKUP}"
+  fi
+  ln -sfn ../modules/quaid "${PLUGIN_DIR}"
+  ACTIVE_PLUGIN_DIR="${MODULE_DIR}"
+  echo "Linked plugin dir before installer: ${PLUGIN_DIR} -> ../modules/quaid"
+fi
+
 INSTALL_OWNER_NAME="${QUAID_BOOTSTRAP_OWNER_NAME:-Solomon Steadman}"
 INSTALLER_MJS="${WORKTREE_SOURCE}/setup-quaid.mjs"
 if [[ ! -f "${INSTALLER_MJS}" ]] && [[ -f "${WORKSPACE}/setup-quaid.mjs" ]]; then
@@ -350,17 +364,6 @@ if [[ -f "${INSTALLER_MJS}" ]]; then
   )
 else
   echo "WARN: setup-quaid.mjs not found (source=${WORKTREE_SOURCE}, workspace=${WORKSPACE}); skipping installer run."
-fi
-
-if [[ -f "${MODULE_DIR}/package.json" ]]; then
-  mkdir -p "${WORKSPACE}/plugins"
-  if [[ -d "${PLUGIN_DIR}" ]] && [[ ! -L "${PLUGIN_DIR}" ]] && [[ ! -f "${PLUGIN_DIR}/package.json" ]]; then
-    STALE_DIR_BACKUP="${PLUGIN_DIR}.stale.$(date +%Y%m%d-%H%M%S)"
-    mv "${PLUGIN_DIR}" "${STALE_DIR_BACKUP}"
-    echo "Moved stale plugin shim dir: ${PLUGIN_DIR} -> ${STALE_DIR_BACKUP}"
-  fi
-  ln -sfn ../modules/quaid "${PLUGIN_DIR}"
-  ACTIVE_PLUGIN_DIR="${MODULE_DIR}"
 fi
 
 if [[ -f "${MODULE_DIR}/package.json" ]]; then

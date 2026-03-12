@@ -654,7 +654,7 @@ function runStartupSelfCheck(): void {
     console.log(`[quaid][startup] deep model resolved: provider=${deep.provider} model=${deep.model}`);
     const paidProviders = new Set(["openai-compatible"]);
     if (paidProviders.has(deep.provider)) {
-      console.warn(`[quaid][billing] paid provider active for deep reasoning: ${deep.provider}/${deep.model}`);
+      console.log(`[quaid][billing] paid provider active for deep reasoning: ${deep.provider}/${deep.model}`);
     }
   } catch (err: unknown) {
     errors.push(`deep reasoning model resolution failed: ${String((err as Error)?.message || err)}`);
@@ -665,7 +665,7 @@ function runStartupSelfCheck(): void {
     console.log(`[quaid][startup] fast model resolved: provider=${fast.provider} model=${fast.model}`);
     const paidProviders = new Set(["openai-compatible"]);
     if (paidProviders.has(fast.provider)) {
-      console.warn(`[quaid][billing] paid provider active for fast reasoning: ${fast.provider}/${fast.model}`);
+      console.log(`[quaid][billing] paid provider active for fast reasoning: ${fast.provider}/${fast.model}`);
     }
   } catch (err: unknown) {
     errors.push(`fast reasoning model resolution failed: ${String((err as Error)?.message || err)}`);
