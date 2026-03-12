@@ -972,13 +972,14 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
                 registry = get_runtime_registry()
                 if registry is not None and getattr(_cfg, "plugins", None) and _cfg.plugins.enabled:
+                    from lib.instance import quaid_home as _quaid_home
                     p_errors, p_warnings, p_results = run_plugin_contract_surface_collect(
                         registry=registry,
                         slots=_plugin_maintenance_slots(),
                         surface="maintenance",
                         config=_cfg,
                         plugin_config=dict(getattr(_cfg.plugins, "config", {}) or {}),
-                        workspace_root=str(_workspace()),
+                        workspace_root=str(_quaid_home()),
                         strict=bool(getattr(_cfg.plugins, "strict", True)),
                         payload={
                             "stage": stage,

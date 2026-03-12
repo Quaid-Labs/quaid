@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 def collect_plugin_health() -> Dict[str, Any]:
     from config import get_config
-    from lib.runtime_context import get_workspace_dir
+    from lib.instance import quaid_home
     from core.runtime.plugins import (
         get_runtime_registry,
         initialize_plugin_runtime,
@@ -23,7 +23,7 @@ def collect_plugin_health() -> Dict[str, Any]:
     registry = get_runtime_registry()
     init_errors: list[str] = []
     init_warnings: list[str] = []
-    workspace_root = str(get_workspace_dir())
+    workspace_root = str(quaid_home())
     if registry is None:
         registry, init_errors, init_warnings = initialize_plugin_runtime(
             api_version=int(getattr(plugins, "api_version", 1) or 1),

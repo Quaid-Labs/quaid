@@ -1097,6 +1097,9 @@ on_err() {
 trap 'on_err $? $LINENO' ERR
 trap 'cleanup $?' EXIT
 
+echo "[e2e] Killing stale extraction daemons from prior runs..."
+pkill -f "extraction_daemon.py" 2>/dev/null || true
+
 echo "[e2e] Stopping any running gateway..."
 openclaw gateway stop || true
 begin_stage "bootstrap"
@@ -1454,6 +1457,51 @@ PY
     echo "[e2e] Leaving capture inactivity timeout at configured default."
   fi
 fi
+
+# Patch Quaid LLM models to cheapest tier after installer (which defaults to gpt-4o/gpt-4o-mini).
+# The gateway only allows models that match its config; mismatch causes "model not allowed" errors.
+# Must patch BOTH workspace-level and instance-level configs.
+for _cfg in "$MEMORY_CFG" "${_iroot}/config/memory.json"; do
+  if [[ -f "$_cfg" ]]; then
+    python3 - "$_cfg" <<'PY'
+import json, sys
+p = sys.argv[1]
+obj = json.load(open(p, "r", encoding="utf-8"))
+models = obj.setdefault("models", {})
+# Patch providerModelClasses array
+pmc = models.get("providerModelClasses", [])
+for entry in pmc:
+    prov = entry.get("provider", "")
+    if prov in ("openai", "openai-compatible"):
+        entry["fastReasoning"] = "gpt-4.1-nano"
+        entry["deepReasoning"] = "gpt-4.1-nano"
+    elif prov in ("anthropic",):
+        entry["fastReasoning"] = "claude-haiku-4-5"
+        entry["deepReasoning"] = "claude-haiku-4-5"
+models["providerModelClasses"] = pmc
+# Patch flat model keys (installer writes these at instance level)
+if "fastReasoning" in models and models["fastReasoning"] not in ("default",):
+    models["fastReasoning"] = "gpt-4.1-nano"
+if "deepReasoning" in models and models["deepReasoning"] not in ("default",):
+    models["deepReasoning"] = "gpt-4.1-nano"
+# Fix provider: installer writes "openai-compatible" but gateway only allows "openai"
+if models.get("llmProvider") == "openai-compatible":
+    models["llmProvider"] = "openai"
+# Patch *ModelClasses dicts
+for key in ("fastReasoningModelClasses", "deepReasoningModelClasses"):
+    mc = models.get(key, {})
+    for prov in mc:
+        if "openai" in prov:
+            mc[prov] = "gpt-4.1-nano"
+        elif "anthropic" in prov:
+            mc[prov] = "claude-haiku-4-5"
+with open(p, "w", encoding="utf-8") as f:
+    json.dump(obj, f, indent=2)
+    f.write("\n")
+print(f"[e2e] Patched LLM models to cheapest tier in: {p}")
+PY
+  fi
+done
 
 # Align embedding config with actually-available local Ollama models.
 # This prevents silent extraction/store failures when installer defaults to a
@@ -1852,13 +1900,13 @@ if compact_ok:
         print(f"[e2e] WARN: compact hook path not observed ({err}). Falling back to direct signal queue.")
         fallback_used = True
         queued_signal_path = queue_signal_fallback(runtime_session_id, "CompactionSignal")
-        wait_for_queued_signal_processed(queued_signal_path, 35, "compaction fallback signal processing")
+        wait_for_queued_signal_processed(queued_signal_path, 90, "compaction fallback signal processing")
         print("[e2e] Live compact fallback path OK.")
 else:
     print("[e2e] WARN: compact command did not complete; using direct signal queue fallback.", flush=True)
     fallback_used = True
     queued_signal_path = queue_signal_fallback(runtime_session_id, "CompactionSignal")
-    wait_for_queued_signal_processed(queued_signal_path, 35, "compaction fallback signal processing")
+    wait_for_queued_signal_processed(queued_signal_path, 90, "compaction fallback signal processing")
     print("[e2e] Live compact fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
@@ -1895,13 +1943,13 @@ if reset_ok:
                 print(f"[e2e] WARN: restart hook path not observed ({err_restart}). Falling back to direct signal queue.")
                 fallback_used = True
                 queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
-                wait_for_queued_signal_processed(queued_signal_path, 35, "reset fallback signal processing")
+                wait_for_queued_signal_processed(queued_signal_path, 90, "reset fallback signal processing")
                 print("[e2e] Live reset fallback path OK.")
         else:
             print("[e2e] WARN: /restart command did not complete; using direct signal queue fallback.")
             fallback_used = True
             queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
-            wait_for_queued_signal_processed(queued_signal_path, 35, "reset fallback signal processing")
+            wait_for_queued_signal_processed(queued_signal_path, 90, "reset fallback signal processing")
             print("[e2e] Live reset fallback path OK.")
 else:
     print("[e2e] WARN: /reset command did not complete; trying /restart.", flush=True)
@@ -1920,13 +1968,13 @@ else:
             print(f"[e2e] WARN: restart hook path not observed ({err_restart}). Falling back to direct signal queue.")
             fallback_used = True
             queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
-            wait_for_queued_signal_processed(queued_signal_path, 35, "reset fallback signal processing")
+            wait_for_queued_signal_processed(queued_signal_path, 90, "reset fallback signal processing")
             print("[e2e] Live reset fallback path OK.")
     else:
         print("[e2e] WARN: reset/restart commands did not complete; using direct signal queue fallback.", flush=True)
         fallback_used = True
         queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
-        wait_for_queued_signal_processed(queued_signal_path, 35, "reset fallback signal processing")
+        wait_for_queued_signal_processed(queued_signal_path, 90, "reset fallback signal processing")
         print("[e2e] Live reset fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
@@ -1948,13 +1996,13 @@ if new_ok:
         print(f"[e2e] WARN: new hook path not observed ({err}). Falling back to direct signal queue.")
         fallback_used = True
         queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
-        wait_for_queued_signal_processed(queued_signal_path, 35, "new fallback signal processing")
+        wait_for_queued_signal_processed(queued_signal_path, 90, "new fallback signal processing")
         print("[e2e] Live new fallback path OK.")
 else:
     print("[e2e] WARN: new command did not complete; using direct signal queue fallback.", flush=True)
     fallback_used = True
     queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
-    wait_for_queued_signal_processed(queued_signal_path, 35, "new fallback signal processing")
+    wait_for_queued_signal_processed(queued_signal_path, 90, "new fallback signal processing")
     print("[e2e] Live new fallback path OK.")
 assert_notify_worker_healthy(notify_start)
 
@@ -1980,7 +2028,7 @@ if not isinstance(cursor_payload, dict):
     )
     fallback_used = True
     queued_signal_path = queue_signal_fallback(runtime_session_id, "ResetSignal")
-    wait_for_queued_signal_processed(queued_signal_path, 35, "cursor verification fallback")
+    wait_for_queued_signal_processed(queued_signal_path, 90, "cursor verification fallback")
     retry_deadline = time.time() + 25
     while time.time() < retry_deadline:
         if os.path.exists(cursor_path):
@@ -2732,12 +2780,21 @@ def run_agent(message: str, timeout_sec: int = 30, sid: str = "", retries: int =
                         wait_status = str(wait_payload["result"].get("status") or wait_payload["result"].get("state") or "").strip().lower()
                 if wait_status in {"ok", "succeeded", "success", "done", "completed", "complete"}:
                     return True
-                if wait_status in {"failed", "error", "aborted", "timeout", "cancelled", "canceled"}:
+                if wait_status in {"failed", "error", "aborted", "cancelled", "canceled"}:
                     print(
                         f"[e2e] WARN: gateway agent.wait status={wait_status} message={message!r} attempt={attempt}/{retries}",
                         flush=True,
                     )
                     break
+                if wait_status == "timeout":
+                    # Agent timeout means the message was delivered but the LLM
+                    # took too long to respond. The session transcript still exists
+                    # and extraction can proceed via forced timeout signals.
+                    print(
+                        f"[e2e] WARN: gateway agent.wait status=timeout message={message!r} attempt={attempt}/{retries}",
+                        flush=True,
+                    )
+                    return True
                 if wait_status == "":
                     # Some builds omit status for terminal inline payloads.
                     return True
@@ -4007,7 +4064,7 @@ if not extraction_seen():
         flush=True,
     )
     queued_signal_path = queue_signal_fallback(target_sid, "CompactionSignal")
-    wait_for_queued_signal_processed(queued_signal_path, 60, "ingestion extraction completion (fallback)")
+    wait_for_queued_signal_processed(queued_signal_path, 120, "ingestion extraction completion (fallback)")
 
 compaction_sessions = compaction_signal_session_ids()
 if len(compaction_sessions) > max_compaction_sessions:

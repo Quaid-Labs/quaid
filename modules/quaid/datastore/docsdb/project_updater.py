@@ -29,12 +29,14 @@ from config import get_config
 from datastore.docsdb.registry import DocsRegistry
 from datastore.docsdb.updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
 from lib.delayed_requests import queue_delayed_request
-from lib.runtime_context import get_workspace_dir
+from lib.instance import quaid_home
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
 PROJECT_HISTORY_FILENAME = "PROJECT.log"
 
 def _workspace() -> Path:
-    return get_workspace_dir()
+    # Projects are workspace-level (shared across instances), so resolve
+    # relative to QUAID_HOME, not the per-instance root.
+    return quaid_home()
 
 
 def _resolve_path(relative: str) -> Path:

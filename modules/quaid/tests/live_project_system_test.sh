@@ -47,9 +47,9 @@ fi
 TEST_DIR="$(mktemp -d /tmp/quaid-live-test.XXXXXX)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
-log_pass() { echo -e "  ${GREEN}PASS${NC}: $1"; ((PASS_COUNT++)); }
-log_fail() { echo -e "  ${RED}FAIL${NC}: $1"; ((FAIL_COUNT++)); }
-log_skip() { echo -e "  ${YELLOW}SKIP${NC}: $1"; ((SKIP_COUNT++)); }
+log_pass() { echo -e "  ${GREEN}PASS${NC}: $1"; (( ++PASS_COUNT )); }
+log_fail() { echo -e "  ${RED}FAIL${NC}: $1"; (( ++FAIL_COUNT )); }
+log_skip() { echo -e "  ${YELLOW}SKIP${NC}: $1"; (( ++SKIP_COUNT )); }
 
 # Unique project name to avoid collisions
 TEST_PROJECT="live-test-$(date +%s)"

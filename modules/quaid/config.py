@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 from lib.runtime_context import get_workspace_dir
+from lib.instance import quaid_home as _quaid_home
 logger = logging.getLogger(__name__)
 
 
@@ -1467,7 +1468,7 @@ def _load_config_inner() -> MemoryConfig:
             allowlist=plugins.allowlist,
             strict=plugins.strict,
             slots=active_slots,
-            workspace_root=str(_workspace_root()),
+            workspace_root=str(_quaid_home()),
         )
         try:
             event_errors = validate_declared_event_contract(
@@ -1487,7 +1488,7 @@ def _load_config_inner() -> MemoryConfig:
             surface="init",
             config=candidate,
             plugin_config=plugins.config,
-            workspace_root=str(_workspace_root()),
+            workspace_root=str(_quaid_home()),
             strict=plugins.strict,
         )
         plugin_errors.extend(init_errors)
@@ -1506,7 +1507,7 @@ def _load_config_inner() -> MemoryConfig:
             surface="config",
             config=candidate,
             plugin_config=plugins.config,
-            workspace_root=str(_workspace_root()),
+            workspace_root=str(_quaid_home()),
             strict=plugins.strict,
             skip_plugin_ids=sorted(failed_init_plugin_ids),
         )
@@ -1521,7 +1522,7 @@ def _load_config_inner() -> MemoryConfig:
             surface="tool_runtime",
             config=candidate,
             plugin_config=plugins.config,
-            workspace_root=str(_workspace_root()),
+            workspace_root=str(_quaid_home()),
             strict=plugins.strict,
             skip_plugin_ids=sorted(failed_init_plugin_ids),
         )
