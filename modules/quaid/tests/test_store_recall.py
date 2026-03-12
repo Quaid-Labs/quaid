@@ -850,3 +850,43 @@ class TestRecallTelemetry:
         assert meta["mode"] == "fast"
         assert meta["stop_reason"] == "initial_low_information"
         assert meta["bailout_counts"]["initial_low_information"] == 1
+
+    def test_build_branch_telemetry_tracks_parallel_fan_math(self):
+        from datastore.memorydb.memory_graph import _build_branch_telemetry
+
+        summary = _build_branch_telemetry(
+            ["alpha", "beta"],
+            [
+                {
+                    "phases_ms": {
+                        "total_ms": 90,
+                        "search_hybrid_ms": 40,
+                        "graph_traversal_ms": 15,
+                        "reranker_ms": 10,
+                    },
+                    "counts": {"final_results": 3},
+                    "flags": {"used_hyde": True},
+                },
+                {
+                    "phases_ms": {
+                        "total_ms": 30,
+                        "search_hybrid_ms": 10,
+                        "graph_traversal_ms": 0,
+                        "reranker_ms": 0,
+                    },
+                    "counts": {"final_results": 1},
+                    "flags": {"used_hyde": False},
+                },
+            ],
+            wall_ms=100,
+            max_workers=2,
+        )
+
+        assert summary["wall_ms"] == 100
+        assert summary["serial_sum_ms"] == 120
+        assert summary["parallel_speedup_x"] == 1.2
+        assert summary["parallel_efficiency_pct"] == 60.0
+        assert summary["overhead_vs_slowest_ms"] == 10
+        assert summary["fastest_branch"]["query"] == "beta"
+        assert summary["slowest_branch"]["query"] == "alpha"
+        assert summary["branch_total_ms"]["spread_ms"] == 60

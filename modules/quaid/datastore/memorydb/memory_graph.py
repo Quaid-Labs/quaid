@@ -4333,14 +4333,80 @@ def _print_recall_results(results: List[Dict[str, Any]]) -> None:
 def _summarize_phase_stats(phase_values: List[float]) -> Dict[str, int]:
     """Summarize a list of phase durations in ms."""
     if not phase_values:
-        return {"count": 0, "avg_ms": 0, "min_ms": 0, "max_ms": 0, "spread_ms": 0}
+        return {"count": 0, "sum_ms": 0, "avg_ms": 0, "min_ms": 0, "max_ms": 0, "spread_ms": 0}
     values = [max(0, int(round(v))) for v in phase_values]
     return {
         "count": len(values),
+        "sum_ms": sum(values),
         "avg_ms": round(sum(values) / len(values)),
         "min_ms": min(values),
         "max_ms": max(values),
         "spread_ms": max(values) - min(values),
+    }
+
+
+def _build_branch_telemetry(
+    queries: List[str],
+    branch_metas: List[Dict[str, Any]],
+    wall_ms: float,
+    max_workers: int,
+) -> Dict[str, Any]:
+    """Build per-branch telemetry plus parallelism summaries for a fanout turn."""
+    branches: List[Dict[str, Any]] = []
+    for index, meta in enumerate(branch_metas):
+        phases = meta.get("phases_ms") or {}
+        branch = {
+            "index": index,
+            "query": queries[index] if index < len(queries) else meta.get("query"),
+            "total_ms": max(0, int(round(float(phases.get("total_ms", 0) or 0)))),
+            "phases_ms": {
+                str(k): max(0, int(round(float(v))))
+                for k, v in phases.items()
+                if isinstance(v, (int, float))
+            },
+            "counts": {
+                str(k): int(v)
+                for k, v in (meta.get("counts") or {}).items()
+                if isinstance(v, (int, float))
+            },
+            "flags": {
+                str(k): bool(v)
+                for k, v in (meta.get("flags") or {}).items()
+                if isinstance(v, bool)
+            },
+            "intent": meta.get("intent"),
+            "search_query": meta.get("search_query"),
+        }
+        branches.append(branch)
+
+    total_values = [float(branch["total_ms"]) for branch in branches]
+    search_values = [float((branch.get("phases_ms") or {}).get("search_hybrid_ms", 0)) for branch in branches]
+    graph_values = [float((branch.get("phases_ms") or {}).get("graph_traversal_ms", 0)) for branch in branches]
+    reranker_values = [float((branch.get("phases_ms") or {}).get("reranker_ms", 0)) for branch in branches]
+    serial_sum_ms = int(round(sum(total_values))) if total_values else 0
+    fastest_branch = min(branches, key=lambda branch: branch["total_ms"]) if branches else None
+    slowest_branch = max(branches, key=lambda branch: branch["total_ms"]) if branches else None
+    wall_ms_i = max(0, int(round(wall_ms)))
+    speedup_x = round(serial_sum_ms / wall_ms_i, 2) if wall_ms_i > 0 else 0.0
+    efficiency_pct = round((speedup_x / max(1, max_workers)) * 100, 1) if wall_ms_i > 0 else 0.0
+
+    return {
+        "queries": queries[:],
+        "branch_count": len(branches),
+        "max_workers": max_workers,
+        "wall_ms": wall_ms_i,
+        "serial_sum_ms": serial_sum_ms,
+        "saved_vs_serial_ms": max(0, serial_sum_ms - wall_ms_i),
+        "overhead_vs_slowest_ms": max(0, wall_ms_i - int((slowest_branch or {}).get("total_ms", 0))),
+        "parallel_speedup_x": speedup_x,
+        "parallel_efficiency_pct": efficiency_pct,
+        "branch_total_ms": _summarize_phase_stats(total_values),
+        "branch_search_ms": _summarize_phase_stats(search_values),
+        "branch_graph_ms": _summarize_phase_stats(graph_values),
+        "branch_reranker_ms": _summarize_phase_stats(reranker_values),
+        "fastest_branch": fastest_branch,
+        "slowest_branch": slowest_branch,
+        "branches": branches,
     }
 
 
@@ -4530,14 +4596,36 @@ def _drill_plan_queries(
     current_results: List[Dict[str, Any]],
     already_searched: List[str],
     timeout_s: float = 3.0,
-) -> List[str]:
+    return_meta: bool = False,
+) -> Any:
     """Given current results, identify gaps and generate new search queries.
 
     This is the "drilling" step: a tiny LLM call that sees only the query
     and short result summaries, then suggests queries to fill gaps.
     """
+    import time as _time
+    started = _time.monotonic()
+    meta = {
+        "query": query,
+        "timeout_ms": round(timeout_s * 1000),
+        "used_llm": False,
+        "done": False,
+        "bailout_reason": None,
+        "queries_count": 0,
+        "elapsed_ms": 0,
+    }
+
+    def _finish(out: List[str], bailout_reason: Optional[str] = None, done: bool = False):
+        meta["queries_count"] = len(out)
+        meta["bailout_reason"] = bailout_reason
+        meta["done"] = done
+        meta["elapsed_ms"] = round((_time.monotonic() - started) * 1000)
+        if return_meta:
+            return out, meta
+        return out
+
     if not _HAS_LLM_CLIENTS:
-        return []
+        return _finish([], "no_llm_clients")
 
     # Build compact result summary (just text snippets, no full content)
     result_summary = []
@@ -4566,6 +4654,7 @@ def _drill_plan_queries(
 
     try:
         from lib.llm_clients import call_fast_reasoning
+        meta["used_llm"] = True
         result, _ = call_fast_reasoning(
             prompt=prompt,
             max_tokens=200,
@@ -4575,15 +4664,15 @@ def _drill_plan_queries(
         )
         parsed = parse_json_response(result)
         if not isinstance(parsed, dict):
-            return []
+            return _finish([], "invalid_response")
 
         # If LLM says we're done, stop drilling
         if parsed.get("done"):
-            return []
+            return _finish([], "drill_done", done=True)
 
         queries = parsed.get("queries")
         if not isinstance(queries, list):
-            return []
+            return _finish([], "missing_queries")
 
         searched_lower = {q.lower() for q in already_searched}
         out: List[str] = []
@@ -4596,9 +4685,11 @@ def _drill_plan_queries(
             out.append(q)
             if len(out) >= 3:
                 break
-        return out
+        if not out:
+            return _finish([], "planner_returned_empty")
+        return _finish(out)
     except Exception:
-        return []
+        return _finish([], "planner_exception")
 
 
 def recall(
@@ -4812,6 +4903,7 @@ def recall(
                 **common_kwargs,
             ))
 
+    search_started = _time.monotonic()
     t1_batches = run_callables(
         search_callables,
         max_workers=min(len(search_callables), 5),
@@ -4819,6 +4911,7 @@ def recall(
         timeout_seconds=remaining,
         return_exceptions=True,
     )
+    search_wall_ms = (_time.monotonic() - search_started) * 1000
 
     turn1_batch_metas: List[Dict[str, Any]] = []
     for batch in t1_batches:
@@ -4846,27 +4939,14 @@ def recall(
     })
     turn_phase_details.append({
         "turn": 1,
+        "turn_elapsed_ms": round(turn_elapsed),
         "planner": fanout_meta,
-        "fanout": {
-            "queries": fanout_queries[:],
-            "branch_count": len(turn1_batch_metas),
-            "branch_total_ms": _summarize_phase_stats([
-                float((meta.get("phases_ms") or {}).get("total_ms", 0))
-                for meta in turn1_batch_metas
-            ]),
-            "branch_search_ms": _summarize_phase_stats([
-                float((meta.get("phases_ms") or {}).get("search_hybrid_ms", 0))
-                for meta in turn1_batch_metas
-            ]),
-            "branch_graph_ms": _summarize_phase_stats([
-                float((meta.get("phases_ms") or {}).get("graph_traversal_ms", 0))
-                for meta in turn1_batch_metas
-            ]),
-            "branch_reranker_ms": _summarize_phase_stats([
-                float((meta.get("phases_ms") or {}).get("reranker_ms", 0))
-                for meta in turn1_batch_metas
-            ]),
-        },
+        "fanout": _build_branch_telemetry(
+            fanout_queries,
+            turn1_batch_metas,
+            wall_ms=search_wall_ms,
+            max_workers=min(len(search_callables), 5),
+        ),
     })
 
     logger.debug(
@@ -4878,6 +4958,14 @@ def recall(
         stop_reason = fanout_meta.get("bailout_reason") or "planner_returned_empty"
         final = merged[:limit]
         total_elapsed = (_time.monotonic() - recall_start) * 1000
+        total_planner_ms = sum(
+            max(0, int(round(float((turn.get("planner") or {}).get("elapsed_ms", 0) or 0))))
+            for turn in turn_phase_details
+        )
+        total_fanout_wall_ms = sum(
+            max(0, int(round(float((turn.get("fanout") or {}).get("wall_ms", 0) or 0))))
+            for turn in turn_phase_details
+        )
         meta = {
             "mode": "deliberate",
             "query": query,
@@ -4888,6 +4976,18 @@ def recall(
             "over_budget": (total_elapsed > overall_timeout_ms) if overall_timeout_ms is not None else False,
             "drill_log": drill_log[:],
             "turn_details": turn_phase_details[:],
+            "phases_ms": {
+                "planner_ms": total_planner_ms,
+                "fanout_wall_ms": total_fanout_wall_ms,
+                "non_parallel_overhead_ms": max(0, round(total_elapsed) - total_planner_ms - total_fanout_wall_ms),
+                "total_ms": round(total_elapsed),
+            },
+            "serial_work_ms": {
+                "branch_total_ms": sum(
+                    max(0, int(round(float((turn.get("fanout") or {}).get("serial_sum_ms", 0) or 0))))
+                    for turn in turn_phase_details
+                ),
+            },
             "stop_reason": stop_reason,
             "bailout_counts": bailout_counts,
         }
@@ -4912,14 +5012,27 @@ def recall(
         # Ask drill agent for new queries
         turn_start = _time.monotonic()
         drill_budget = min(15.0, remaining * 0.4) if remaining is not None else 15.0
-        new_queries = _drill_plan_queries(
+        planned_drill = _drill_plan_queries(
             query, merged, all_searched, timeout_s=drill_budget,
+            return_meta=True,
         )
+        if isinstance(planned_drill, tuple) and len(planned_drill) == 2:
+            new_queries, drill_meta = planned_drill
+        else:
+            new_queries = planned_drill if isinstance(planned_drill, list) else []
+            drill_meta = {
+                "used_llm": False,
+                "queries_count": len(new_queries),
+                "elapsed_ms": 0,
+                "bailout_reason": None,
+                "done": False,
+            }
 
         if not new_queries:
             logger.debug("[recall] drill agent returned no queries or said done, stopping after turn %d", turn - 1)
-            stop_reason = "drill_done"
-            bailout_counts["drill_done"] += 1
+            stop_reason = "drill_done" if drill_meta.get("done") else (drill_meta.get("bailout_reason") or "drill_done")
+            if stop_reason == "drill_done":
+                bailout_counts["drill_done"] += 1
             break
 
         all_searched.extend(new_queries)
@@ -4944,6 +5057,7 @@ def recall(
             for q in new_queries
         ]
 
+        search_started = _time.monotonic()
         drill_batches = run_callables(
             drill_callables,
             max_workers=min(len(drill_callables), 3),
@@ -4951,6 +5065,7 @@ def recall(
             timeout_seconds=search_remaining,
             return_exceptions=True,
         )
+        search_wall_ms = (_time.monotonic() - search_started) * 1000
 
         drill_batch_metas: List[Dict[str, Any]] = []
         for batch in drill_batches:
@@ -4978,31 +5093,14 @@ def recall(
         })
         turn_phase_details.append({
             "turn": turn,
-            "planner": {
-                "used_llm": True,
-                "queries_count": len(new_queries),
-                "elapsed_ms": round(turn_elapsed),
-            },
-            "fanout": {
-                "queries": new_queries[:],
-                "branch_count": len(drill_batch_metas),
-                "branch_total_ms": _summarize_phase_stats([
-                    float((meta.get("phases_ms") or {}).get("total_ms", 0))
-                    for meta in drill_batch_metas
-                ]),
-                "branch_search_ms": _summarize_phase_stats([
-                    float((meta.get("phases_ms") or {}).get("search_hybrid_ms", 0))
-                    for meta in drill_batch_metas
-                ]),
-                "branch_graph_ms": _summarize_phase_stats([
-                    float((meta.get("phases_ms") or {}).get("graph_traversal_ms", 0))
-                    for meta in drill_batch_metas
-                ]),
-                "branch_reranker_ms": _summarize_phase_stats([
-                    float((meta.get("phases_ms") or {}).get("reranker_ms", 0))
-                    for meta in drill_batch_metas
-                ]),
-            },
+            "turn_elapsed_ms": round(turn_elapsed),
+            "planner": drill_meta,
+            "fanout": _build_branch_telemetry(
+                new_queries,
+                drill_batch_metas,
+                wall_ms=search_wall_ms,
+                max_workers=min(len(drill_callables), 3),
+            ),
         })
 
         logger.debug(
@@ -5025,6 +5123,19 @@ def recall(
         )
 
     # Always attach recall metadata so the consuming LLM knows what was searched
+    total_planner_ms = sum(
+        max(0, int(round(float((turn.get("planner") or {}).get("elapsed_ms", 0) or 0))))
+        for turn in turn_phase_details
+    )
+    total_fanout_wall_ms = sum(
+        max(0, int(round(float((turn.get("fanout") or {}).get("wall_ms", 0) or 0))))
+        for turn in turn_phase_details
+    )
+    total_branch_serial_ms = sum(
+        max(0, int(round(float((turn.get("fanout") or {}).get("serial_sum_ms", 0) or 0))))
+        for turn in turn_phase_details
+    )
+    non_parallel_overhead_ms = max(0, round(total_elapsed) - total_planner_ms - total_fanout_wall_ms)
     meta = {
         "mode": "deliberate",
         "query": query,
@@ -5035,6 +5146,15 @@ def recall(
         "over_budget": (total_elapsed > overall_timeout_ms) if overall_timeout_ms is not None else False,
         "drill_log": drill_log[:],
         "turn_details": turn_phase_details[:],
+        "phases_ms": {
+            "planner_ms": total_planner_ms,
+            "fanout_wall_ms": total_fanout_wall_ms,
+            "non_parallel_overhead_ms": non_parallel_overhead_ms,
+            "total_ms": round(total_elapsed),
+        },
+        "serial_work_ms": {
+            "branch_total_ms": total_branch_serial_ms,
+        },
         "stop_reason": stop_reason,
         "bailout_counts": bailout_counts,
         "fanout_count": len(turn_phase_details[0]["fanout"]["queries"]) if turn_phase_details else 0,
@@ -7040,10 +7160,12 @@ if __name__ == "__main__":
                     recall_kwargs['use_multi_pass'] = False
                     recall_kwargs['use_reranker'] = False
                     recall_kwargs['max_turns'] = 1
-                results = recall(query, **recall_kwargs)
                 if use_json:
-                    print(json.dumps(results))
+                    results, meta = recall(query, return_meta=True, **recall_kwargs)
+                    print(json.dumps({"results": results, "meta": meta}))
                 else:
+                    results = recall(query, **recall_kwargs)
+                if not use_json:
                     for r in results:
                         flags = []
                         if r.get('verified'): flags.append('V')
