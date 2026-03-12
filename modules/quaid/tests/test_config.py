@@ -752,6 +752,7 @@ class TestConfigLoading:
             with patch.dict(os.environ, {"MEMORY_DB_PATH": str(db_path)}, clear=False), \
                  patch.object(config, "_config_paths", lambda: [config_file]), \
                  patch.object(config, "_workspace_root", lambda: tmp_path), \
+                 patch.object(config, "_quaid_home", lambda: tmp_path), \
                  patch("core.plugins.memorydb_contract.sync_tools_domain_block", side_effect=_capture_sync):
                 _ = load_config()
 
@@ -816,7 +817,8 @@ class TestConfigLoading:
             }))
             with patch.dict(os.environ, {"MEMORY_DB_PATH": str(db_path)}, clear=False), \
                  patch.object(config, "_config_paths", lambda: [config_file]), \
-                 patch.object(config, "_workspace_root", lambda: tmp_path):
+                 patch.object(config, "_workspace_root", lambda: tmp_path), \
+                 patch.object(config, "_quaid_home", lambda: tmp_path):
                 _ = load_config()
 
             assert db_path.parent.exists()
@@ -915,7 +917,8 @@ class TestConfigLoading:
 
             with patch.dict(os.environ, {"MEMORY_DB_PATH": str(db_path)}, clear=False), \
                  patch.object(config, "_config_paths", lambda: [config_file]), \
-                 patch.object(config, "_workspace_root", lambda: tmp_path):
+                 patch.object(config, "_workspace_root", lambda: tmp_path), \
+                 patch.object(config, "_quaid_home", lambda: tmp_path):
                 cfg = load_config()
 
             assert cfg.retrieval.domains == {"customx": "custom domain"}

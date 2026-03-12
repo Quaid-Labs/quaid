@@ -979,7 +979,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                         surface="maintenance",
                         config=_cfg,
                         plugin_config=dict(getattr(_cfg.plugins, "config", {}) or {}),
-                        workspace_root=str(_quaid_home()),
+                        workspace_root=str(_workspace()),
                         strict=bool(getattr(_cfg.plugins, "strict", True)),
                         payload={
                             "stage": stage,

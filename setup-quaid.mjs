@@ -3506,11 +3506,12 @@ function setupClaudeCodeHooks() {
 
   // Resolve the quaid binary path. Use absolute paths so multiple installs
   // can coexist — each instance's hooks point to its own quaid script.
-  // QUAID_HOME sets the instance silo — adapter type is read from
-  // QUAID_HOME/config/memory.json, not from a separate env var.
+  // QUAID_HOME sets the instance silo; QUAID_INSTANCE is required by the
+  // Python runtime to resolve the per-instance config and identity dirs.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
-  const envPrefix = `QUAID_HOME='${WORKSPACE}'`;
+  const instanceId = (process.env.QUAID_INSTANCE || "claude-code").trim();
+  const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_INSTANCE='${instanceId}'`;
 
   const desiredHooks = {
     SessionStart: [
