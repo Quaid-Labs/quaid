@@ -850,6 +850,8 @@ class TestRecallTelemetry:
         assert meta["mode"] == "fast"
         assert meta["stop_reason"] == "initial_low_information"
         assert meta["bailout_counts"]["initial_low_information"] == 1
+        assert meta["bailout_counts"]["low_information_message"] == 1
+        assert meta["bailout_counts"]["too_short"] == 0
 
     def test_build_branch_telemetry_tracks_parallel_fan_math(self):
         from datastore.memorydb.memory_graph import _build_branch_telemetry
@@ -890,3 +892,33 @@ class TestRecallTelemetry:
         assert summary["fastest_branch"]["query"] == "beta"
         assert summary["slowest_branch"]["query"] == "alpha"
         assert summary["branch_total_ms"]["spread_ms"] == 60
+        assert summary["branch_mmr_ms"]["sum_ms"] == 0
+
+    def test_plan_fanout_queries_reports_query_shape_and_budget(self):
+        from datastore.memorydb.memory_graph import _plan_fanout_queries
+
+        queries, meta = _plan_fanout_queries(
+            "Trace Maya's career arc from TechFlow to Stripe",
+            return_meta=True,
+        )
+
+        assert isinstance(queries, list)
+        assert meta["query_shape"] in {"broad", "focused", "narrow"}
+        assert meta["fanout_budget"] >= 1
+        assert meta["token_count"] >= 1
+
+    def test_apply_mmr_skips_diversity_loop_when_results_fit_limit(self, tmp_path):
+        from datastore.memorydb.memory_graph import _apply_mmr
+
+        class _Node:
+            def __init__(self, embedding=None):
+                self.embedding = embedding
+
+        graph, _ = _make_graph(tmp_path)
+        n1 = _Node()
+        n2 = _Node()
+        results = [(n1, 0.9), (n2, 0.8)]
+
+        out = _apply_mmr(results, graph, limit=5)
+
+        assert out == results
