@@ -3815,7 +3815,17 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
   };
 
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), JSON.stringify(config, null, 2) + "\n");
+  const configJson = JSON.stringify(config, null, 2) + "\n";
+  fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), configJson);
+
+  // Also write config to instance root so QUAID_INSTANCE runtime finds it.
+  const instanceId = (process.env.QUAID_INSTANCE || "").trim();
+  if (instanceId) {
+    const instanceConfigDir = path.join(WORKSPACE, instanceId, "config");
+    fs.mkdirSync(instanceConfigDir, { recursive: true });
+    fs.writeFileSync(path.join(instanceConfigDir, "memory.json"), configJson);
+    log.info(`Copied config to instance path: ${instanceConfigDir}/memory.json`);
+  }
 }
 
 function copyDirSync(src, dest) {

@@ -859,10 +859,9 @@ class JanitorScheduler:
     def _run_janitor(self) -> None:
         """Run janitor maintenance in-process."""
         try:
-            from core.lifecycle.janitor import run_maintenance
-            run_maintenance(
+            from core.lifecycle.janitor import run_task_optimized
+            run_task_optimized(
                 task="all",
-                apply_mode=True,
                 dry_run=False,
             )
             logger.info("Janitor maintenance completed successfully")
