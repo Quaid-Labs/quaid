@@ -5,7 +5,7 @@ A long-lived process (one per QUAID_INSTANCE) that processes extraction signals
 from adapters. Handles chunked extraction with carryover context, cursor
 management, and compaction-aware timeout extraction.
 
-Adapters write signal files to $QUAID_HOME/$QUAID_INSTANCE/data/extraction-signals/.
+Adapters write signal files to $QUAID_HOME/data/extraction-signals/.
 The daemon polls for signals, processes them serially, and advances
 cursors to prevent re-extraction.
 
@@ -98,7 +98,8 @@ def _get_quaid_version() -> str:
 
 
 def _signal_dir() -> Path:
-    d = _instance_root() / "data" / "extraction-signals"
+    # Signals are written by the adapter at QUAID_HOME level, not per-instance.
+    d = _quaid_home() / "data" / "extraction-signals"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

@@ -16,7 +16,7 @@ machine).
 TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh <target-window> "<message>"
 
 # Verify via shell (from tester's own pane)
-sqlite3 /path/to/memory.db "SELECT ..."
+sqlite3 $QUAID_HOME/data/memory.db "SELECT ..."
 tail -20 /path/to/daemon.log
 quaid recall "query"
 ```
@@ -30,6 +30,25 @@ quaid recall "query"
 - `tmux-msg.sh` available at `~/quaid/util/scripts/tmux-msg.sh`
 - `sqlite3` for DB verification
 - Know the target's QUAID_HOME path and log locations
+
+## Required Start Condition
+
+Do not begin milestone testing against an existing live Quaid install.
+
+Before any run:
+- Preview the current install target and runtime paths first.
+- Uninstall Quaid if it is present.
+- Reinstall Quaid cleanly.
+- Verify the install is stable before starting M1.
+
+Minimum stability check before M1:
+- plugin/bundle exists in the expected runtime path
+- `quaid doctor` or `quaid health` succeeds
+- active DB/log paths are identified and match the running instance
+- daemon starts cleanly
+- one basic agent message succeeds without hanging
+
+If the reinstall is skipped, note that the run is not a clean live install validation.
 
 ### Key paths
 
@@ -54,6 +73,9 @@ quaid recall "query"
 
 The very first thing to validate — can Quaid install from scratch?
 
+This milestone is mandatory unless the user explicitly tells you to skip clean
+install validation for that run.
+
 ### OpenClaw
 
 **Action (from shell, on target machine):**
@@ -72,9 +94,11 @@ openclaw plugin install quaid --source /path/to/quaid/dev/modules/quaid
 openclaw plugin list | grep quaid
 ls ~/.openclaw/workspace/plugins/quaid/   # check bundle timestamp
 QUAID_HOME=~/.openclaw/workspace quaid doctor
+openclaw agent --agent main -m "installation smoke test" 2>&1 | tail -20
 ```
 
-**Pass:** Plugin listed, doctor healthy, QUAID_HOME has config/, data/, logs/.
+**Pass:** Plugin listed, doctor healthy, QUAID_HOME has config/, data/, logs/,
+and a basic OC agent turn completes without hanging.
 
 **Gotcha:** OC plugin install caches old builds. If behavior is stale, compare
 the bundle file timestamp in `plugins/quaid/` against your commit time. Force
@@ -143,7 +167,7 @@ tail -5 $QUAID_HOME/logs/extraction-daemon.log
 quaid recall "PROOFNEW"
 
 # Via DB (more reliable)
-sqlite3 /path/to/memory.db "SELECT id, text, created_at FROM memories WHERE text LIKE '%PROOFNEW%';"
+sqlite3 $QUAID_HOME/data/memory.db "SELECT id, substr(name,1,80), created_at FROM nodes WHERE name LIKE '%PROOFNEW%';"
 ```
 
 **Pass:** Fact containing PROOFNEW token appears in results, created_at is
@@ -210,12 +234,18 @@ TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh <ta
   "Auto-extraction test. My timeout token is PROOFTIMEOUT-$(date +%s)."
 ```
 
-**Do NOT send any lifecycle command.** Wait for the configured timeout
-(check `SESSION_EXTRACT_TIMEOUT_MS` in adapter config — may be 5-15 minutes).
+**Do NOT send any lifecycle command.** Wait for the configured timeout.
+
+**Before testing:** Set `capture.inactivityTimeoutMinutes` to `1` in
+`$QUAID_HOME/$QUAID_INSTANCE/config/memory.json` and restart the gateway so
+the timeout fires in ~1 minute instead of the default 60. Reset it after testing.
+
+You can also override via environment variable `SESSION_EXTRACT_TIMEOUT_MS`
+(value in milliseconds) or `QUAID_SESSION_EXTRACT_TIMEOUT_MS`.
 
 Monitor daemon log for extraction trigger. Then verify:
 ```bash
-sqlite3 /path/to/memory.db "SELECT id, text FROM memories WHERE text LIKE '%PROOFTIMEOUT%';"
+sqlite3 $QUAID_HOME/data/memory.db "SELECT id, substr(name,1,80), created_at FROM nodes WHERE name LIKE '%PROOFTIMEOUT%';"
 ```
 
 **Pass:** Fact stored after inactivity timeout with no explicit trigger.
@@ -315,6 +345,69 @@ ls /tmp/quaid-live-src/main.py       # source file still exists
 
 **Pass:** Project deleted, source files untouched.
 
+### 6e: Cross-Platform Shared Project Context (OC -> CC)
+
+Run this only after **both OC and CC are operational**.
+
+Goal: verify that CC can attach to a project that OC already created and answer
+questions using **Quaid project context / project search**, not by directly
+browsing the HDD first.
+
+**Phase 1 — OC creates the project**
+
+Use OC to create a project with distinctive source content:
+
+```bash
+mkdir -p /tmp/quaid-cross-src
+cat > /tmp/quaid-cross-src/main.py <<'PY'
+def harbor_status():
+    return "North pier beacon is offline"
+PY
+
+TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh <oc-target> \
+  "Run: quaid project create cross-live-test -d 'Cross-instance project context test' -s /tmp/quaid-cross-src"
+```
+
+Verify from shell:
+```bash
+quaid project list | grep cross-live-test
+quaid project show cross-live-test
+```
+
+**Phase 2 — CC loads the existing project naturally**
+
+In CC, do **not** tell it to browse files directly. Ask:
+
+```bash
+TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh <cc-target> \
+  "load the cross-live-test project that is already on this system"
+```
+
+Then ask a project-specific fact question:
+
+```bash
+TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh <cc-target> \
+  "What is the harbor_status detail for that project?"
+```
+
+Then ask for provenance:
+
+```bash
+TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test ~/quaid/util/scripts/tmux-msg.sh <cc-target> \
+  "how did you find that fact"
+```
+
+**Pass:**
+- CC can identify and load the OC-created project.
+- CC answers with the expected fact (for the example above: `North pier beacon is offline`).
+- CC explains that it found the fact through Quaid project context, project recall,
+  injected project memory, project search, or equivalent Quaid-mediated retrieval.
+
+**Fail:**
+- CC says it searched/read files from disk first instead of using project context.
+- CC cannot find the OC-created project.
+- CC cannot answer a fact that should already be available through the shared project system.
+
 ---
 
 ## Milestone 7: Docs + Maintenance
@@ -345,7 +438,7 @@ Run these from the tester pane after any milestone:
 ```sql
 -- Facts stored in this test run (use your PROOF* tokens)
 SELECT id, text, created_at, source_session_id
-FROM memories WHERE text LIKE '%PROOF%' ORDER BY created_at DESC;
+FROM nodes WHERE name LIKE '%PROOF%' ORDER BY created_at DESC;
 
 -- Recent extractions
 SELECT * FROM extraction_log ORDER BY created_at DESC LIMIT 5;
@@ -384,7 +477,7 @@ quaid project delete live-test 2>/dev/null
 rm -rf /tmp/quaid-live-src
 
 # Remove test facts
-for id in $(sqlite3 /path/to/memory.db "SELECT id FROM memories WHERE text LIKE '%PROOF%';"); do
+for id in $(sqlite3 $QUAID_HOME/data/memory.db "SELECT id FROM nodes WHERE name LIKE '%PROOF%';"); do
   quaid delete-node "$id"
 done
 ```
