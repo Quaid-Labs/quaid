@@ -233,6 +233,22 @@ class TestStoreBasic:
         assert out[0]["text"] == "v2"
         assert out[0]["similarity"] == 0.89
 
+    def test_plan_fanout_queries_bails_for_low_information_message(self):
+        import datastore.memorydb.memory_graph as mg
+
+        assert mg._plan_fanout_queries("ok") == []
+        assert mg._plan_fanout_queries("hi") == []
+        assert mg._plan_fanout_queries("sounds good") == []
+
+    def test_plan_fanout_queries_allows_explicit_empty_result(self):
+        import datastore.memorydb.memory_graph as mg
+
+        with patch.object(mg, "_HAS_LLM_CLIENTS", True), \
+             patch.object(mg, "call_fast_reasoning", return_value=('{"queries": []}', 0.01)):
+            out = mg._plan_fanout_queries("thanks", max_queries=5, timeout_s=1.0)
+
+        assert out == []
+
     def test_category_to_type_mapping_decision(self, tmp_path):
         """category='decision' maps to type 'Event'."""
         from datastore.memorydb.memory_graph import store
@@ -810,3 +826,27 @@ class TestTimestampOverride:
             assert node.created_at.startswith("20")  # Year starts with 20xx
             assert node.accessed_at is not None
             assert node.accessed_at.startswith("20")
+
+
+class TestRecallTelemetry:
+    """Telemetry emitted by recall planning/orchestration."""
+
+    def test_plan_fanout_queries_reports_low_information_bailout(self):
+        from datastore.memorydb.memory_graph import _plan_fanout_queries
+
+        queries, meta = _plan_fanout_queries("ok", return_meta=True)
+
+        assert queries == []
+        assert meta["bailout_reason"] == "low_information_message"
+        assert meta["queries_count"] == 0
+        assert meta["elapsed_ms"] >= 0
+
+    def test_recall_fast_returns_meta_for_low_information_query(self):
+        from datastore.memorydb.memory_graph import recall_fast
+
+        results, meta = recall_fast("hi", return_meta=True)
+
+        assert results == []
+        assert meta["mode"] == "fast"
+        assert meta["stop_reason"] == "initial_low_information"
+        assert meta["bailout_counts"]["initial_low_information"] == 1

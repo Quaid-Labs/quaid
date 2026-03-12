@@ -46,6 +46,25 @@ def _sanitize_url_for_logs(url: str) -> str:
         return "<invalid-url>"
 
 
+def _is_anthropic_oauth_token(token: str) -> bool:
+    return str(token or "").strip().startswith("sk-ant-oat")
+
+
+def _anthropic_headers(credential: str) -> dict:
+    headers = {
+        "Content-Type": "application/json",
+        "anthropic-version": AnthropicLLMProvider.ANTHROPIC_VERSION,
+    }
+    betas = ["prompt-caching-2024-07-31"]
+    if _is_anthropic_oauth_token(credential):
+        headers["Authorization"] = f"Bearer {credential}"
+        betas.append("oauth-2025-04-20")
+    else:
+        headers["x-api-key"] = credential
+    headers["anthropic-beta"] = ",".join(betas)
+    return headers
+
+
 def _summarize_error_text(text: str, max_len: int = 300) -> str:
     """Return compact error summary preserving tail context."""
     msg = str(text or "").strip()
@@ -144,11 +163,7 @@ class EmbeddingsProvider(abc.ABC):
 # ═══════════════════════════════════════════════════════════════════════
 
 class AnthropicLLMProvider(LLMProvider):
-    """Calls the Anthropic Messages API directly with an API key.
-
-    Used by platform adapters and any installation that has an API key.
-    Supports prompt caching via cache_control on the system block.
-    """
+    """Calls the Anthropic Messages API directly with an API key or OAuth token."""
 
     ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
     ANTHROPIC_VERSION = "2023-06-01"
@@ -178,11 +193,7 @@ class AnthropicLLMProvider(LLMProvider):
             elif m["role"] == "user":
                 user_message = m["content"]
 
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": self._api_key,
-            "anthropic-version": self.ANTHROPIC_VERSION,
-        }
+        headers = _anthropic_headers(self._api_key)
 
         body = {
             "model": model,
