@@ -2971,6 +2971,12 @@ def _apply_mmr(results: List[tuple], graph, limit: int, mmr_lambda: float = 0.7)
     """
     if len(results) <= 1:
         return results
+    if limit <= 1:
+        return results[:1]
+    if len(results) <= limit:
+        # Nothing needs to be pruned, so skip the expensive pairwise
+        # diversification loop and preserve score order.
+        return results
 
     selected = [results[0]]  # Always keep the top result
     candidates = list(results[1:])
@@ -3767,8 +3773,16 @@ def _recall_once(
 
     # Apply MMR diversity (select diverse top-N from candidates)
     _mmr_lambda = 0.7
+    _mmr_candidate_cap = max(limit * 4, 12)
     if config_retrieval:
         _mmr_lambda = getattr(config_retrieval, 'mmr_lambda', 0.7)
+        _mmr_candidate_cap = max(
+            limit,
+            int(getattr(config_retrieval, 'mmr_candidate_cap', _mmr_candidate_cap) or _mmr_candidate_cap),
+        )
+    _mmr_input_candidates = len(scored_results)
+    if len(scored_results) > _mmr_candidate_cap:
+        scored_results = scored_results[:_mmr_candidate_cap]
     _phase_t0 = _time.monotonic()
     diverse_results = _apply_mmr(scored_results, graph, limit, mmr_lambda=_mmr_lambda)
     _phase_ms["mmr_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
@@ -4135,6 +4149,8 @@ def _recall_once(
         "counts": {
             "initial_candidates": len(results),
             "post_threshold_candidates": len(scored_results),
+            "mmr_input_candidates": _mmr_input_candidates,
+            "mmr_cap": _mmr_candidate_cap,
             "diverse_results": len(diverse_results),
             "co_session_added": _co_session_added,
             "graph_discoveries": _graph_discoveries,
@@ -4345,6 +4361,89 @@ def _summarize_phase_stats(phase_values: List[float]) -> Dict[str, int]:
     }
 
 
+def _summarize_result_coverage(results: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Summarize result breadth so quality-gate behavior is auditable."""
+    categories = set()
+    projects = set()
+    source_types = set()
+    domains = set()
+    temporal_hits = 0
+    total_chars = 0
+
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        category = str(row.get("category") or "").strip()
+        if category:
+            categories.add(category)
+        project = str(row.get("project") or "").strip()
+        if project:
+            projects.add(project)
+        source_type = str(row.get("source_type") or "").strip()
+        if source_type:
+            source_types.add(source_type)
+        for domain in row.get("domains") or []:
+            clean = str(domain or "").strip()
+            if clean:
+                domains.add(clean)
+        if row.get("created_at") or row.get("valid_from") or row.get("valid_until"):
+            temporal_hits += 1
+        total_chars += len(str(row.get("text") or ""))
+
+    result_count = len(results or [])
+    return {
+        "result_count": result_count,
+        "unique_categories": len(categories),
+        "unique_projects": len(projects),
+        "unique_source_types": len(source_types),
+        "unique_domains": len(domains),
+        "temporal_hits": temporal_hits,
+        "text_chars": total_chars,
+        "avg_text_chars": round(total_chars / result_count) if result_count else 0,
+    }
+
+
+def _estimate_fanout_profile(query: str, max_queries: int) -> Dict[str, Any]:
+    """Estimate fanout breadth before paying for multiple retrieval branches."""
+    clean = " ".join((query or "").split())
+    tokens = [tok for tok in clean.split() if tok]
+    lower = clean.lower()
+    named_tokens = [tok for tok in tokens if tok[:1].isupper() and len(tok) > 2]
+
+    signals: List[str] = []
+    if len(tokens) >= 8:
+        signals.append("long_query")
+    if len(named_tokens) >= 2:
+        signals.append("multi_entity")
+    if any(phrase in lower for phrase in [
+        "over time", "what changed", "changed about", "trace ", "timeline",
+        "career arc", "relationship", "week of", "what's new", "whats new",
+        "update me", "catch me up", "summarize", "everything", "why ",
+        "how did", "plan ", "walk me through", "compare",
+    ]):
+        signals.append("broad_intent")
+    if any(word in lower for word in [" and ", " then ", " plus ", " also "]):
+        signals.append("multi_clause")
+
+    if any(sig in signals for sig in ("broad_intent", "multi_entity")) or len(signals) >= 2:
+        shape = "broad"
+        budget = min(max_queries, 5)
+    elif len(tokens) <= 4 and len(named_tokens) <= 1 and not signals:
+        shape = "narrow"
+        budget = min(max_queries, 2)
+    else:
+        shape = "focused"
+        budget = min(max_queries, 3)
+
+    return {
+        "shape": shape,
+        "fanout_budget": max(1, budget),
+        "token_count": len(tokens),
+        "named_entity_tokens": len(named_tokens),
+        "signals": signals,
+    }
+
+
 def _build_branch_telemetry(
     queries: List[str],
     branch_metas: List[Dict[str, Any]],
@@ -4383,6 +4482,7 @@ def _build_branch_telemetry(
     search_values = [float((branch.get("phases_ms") or {}).get("search_hybrid_ms", 0)) for branch in branches]
     graph_values = [float((branch.get("phases_ms") or {}).get("graph_traversal_ms", 0)) for branch in branches]
     reranker_values = [float((branch.get("phases_ms") or {}).get("reranker_ms", 0)) for branch in branches]
+    mmr_values = [float((branch.get("phases_ms") or {}).get("mmr_ms", 0)) for branch in branches]
     serial_sum_ms = int(round(sum(total_values))) if total_values else 0
     fastest_branch = min(branches, key=lambda branch: branch["total_ms"]) if branches else None
     slowest_branch = max(branches, key=lambda branch: branch["total_ms"]) if branches else None
@@ -4404,6 +4504,7 @@ def _build_branch_telemetry(
         "branch_search_ms": _summarize_phase_stats(search_values),
         "branch_graph_ms": _summarize_phase_stats(graph_values),
         "branch_reranker_ms": _summarize_phase_stats(reranker_values),
+        "branch_mmr_ms": _summarize_phase_stats(mmr_values),
         "fastest_branch": fastest_branch,
         "slowest_branch": slowest_branch,
         "branches": branches,
@@ -4426,6 +4527,11 @@ def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.
         "bailout_reason": None,
         "queries_count": 0,
         "elapsed_ms": 0,
+        "query_shape": "unknown",
+        "fanout_budget": max(1, max_queries),
+        "token_count": 0,
+        "named_entity_tokens": 0,
+        "shape_signals": [],
     }
 
     def _finish(out: List[str], bailout_reason: Optional[str] = None):
@@ -4437,6 +4543,13 @@ def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.
         return out
 
     clean = " ".join((query or "").split())
+    profile = _estimate_fanout_profile(clean, max_queries=max_queries)
+    meta["query_shape"] = str(profile["shape"])
+    meta["fanout_budget"] = int(profile["fanout_budget"])
+    meta["token_count"] = int(profile["token_count"])
+    meta["named_entity_tokens"] = int(profile["named_entity_tokens"])
+    meta["shape_signals"] = list(profile["signals"])
+    max_queries = max(1, int(profile["fanout_budget"]))
     if not clean:
         return _finish([], "empty_query")
     if _is_low_information_message(clean):
@@ -4535,7 +4648,14 @@ def recall_fast(
             "turns": 0,
             "total_ms": 0,
             "stop_reason": "empty_query",
-            "bailout_counts": {"initial_low_information": 0, "planner_returned_empty": 0},
+            "bailout_counts": {
+                "initial_low_information": 0,
+                "planner_returned_empty": 0,
+                "empty_query": 1,
+                "low_information_message": 0,
+                "too_short": 0,
+                "no_llm_clients": 0,
+            },
         }
         return ([], meta) if return_meta else []
     if _is_low_information_message(query):
@@ -4545,7 +4665,14 @@ def recall_fast(
             "turns": 0,
             "total_ms": 0,
             "stop_reason": "initial_low_information",
-            "bailout_counts": {"initial_low_information": 1, "planner_returned_empty": 0},
+            "bailout_counts": {
+                "initial_low_information": 1,
+                "planner_returned_empty": 0,
+                "empty_query": 0,
+                "low_information_message": 1,
+                "too_short": 0,
+                "no_llm_clients": 0,
+            },
         }
         return ([], meta) if return_meta else []
 
@@ -4801,6 +4928,10 @@ def recall(
     bailout_counts = {
         "initial_low_information": 0,
         "planner_returned_empty": 0,
+        "empty_query": 0,
+        "low_information_message": 0,
+        "too_short": 0,
+        "no_llm_clients": 0,
         "planner_invalid_response": 0,
         "planner_exception_fallback": 0,
         "drill_done": 0,
@@ -4929,6 +5060,7 @@ def recall(
     turn_elapsed = (_time.monotonic() - turn_start) * 1000
     merged = _merge_recall_batches(all_batches, limit=limit * 2)
     top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
+    turn1_coverage = _summarize_result_coverage(merged)
 
     drill_log.append({
         "turn": 1,
@@ -4936,6 +5068,7 @@ def recall(
         "results": len(merged),
         "top_score": round(top_score, 3),
         "elapsed_ms": round(turn_elapsed),
+        "coverage": turn1_coverage,
     })
     turn_phase_details.append({
         "turn": 1,
@@ -4947,6 +5080,7 @@ def recall(
             wall_ms=search_wall_ms,
             max_workers=min(len(search_callables), 5),
         ),
+        "coverage": turn1_coverage,
     })
 
     logger.debug(
@@ -4987,6 +5121,13 @@ def recall(
                     max(0, int(round(float((turn.get("fanout") or {}).get("serial_sum_ms", 0) or 0))))
                     for turn in turn_phase_details
                 ),
+            },
+            "coverage": _summarize_result_coverage(final),
+            "quality_gate": {
+                "threshold": round(float(quality_gate), 3),
+                "met": False,
+                "top_score": round(top_score, 3),
+                "result_count": len(merged),
             },
             "stop_reason": stop_reason,
             "bailout_counts": bailout_counts,
@@ -5083,6 +5224,7 @@ def recall(
         merged = _merge_recall_batches(all_batches, limit=limit * 2)
         top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
         turn_elapsed = (_time.monotonic() - turn_start) * 1000
+        turn_coverage = _summarize_result_coverage(merged)
 
         drill_log.append({
             "turn": turn,
@@ -5090,6 +5232,7 @@ def recall(
             "results": len(merged),
             "top_score": round(top_score, 3),
             "elapsed_ms": round(turn_elapsed),
+            "coverage": turn_coverage,
         })
         turn_phase_details.append({
             "turn": turn,
@@ -5101,6 +5244,7 @@ def recall(
                 wall_ms=search_wall_ms,
                 max_workers=min(len(drill_callables), 3),
             ),
+            "coverage": turn_coverage,
         })
 
         logger.debug(
@@ -5154,6 +5298,13 @@ def recall(
         },
         "serial_work_ms": {
             "branch_total_ms": total_branch_serial_ms,
+        },
+        "coverage": _summarize_result_coverage(final),
+        "quality_gate": {
+            "threshold": round(float(quality_gate), 3),
+            "met": stop_reason == "quality_gate_met",
+            "top_score": round(top_score, 3),
+            "result_count": len(merged),
         },
         "stop_reason": stop_reason,
         "bailout_counts": bailout_counts,
