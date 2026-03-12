@@ -3429,7 +3429,8 @@ def _recall_once(
     domain_boost: Optional[Any] = None,
     project: Optional[str] = None,
     low_signal_retry: bool = True,
-) -> List[Dict[str, Any]]:
+    return_meta: bool = False,
+) -> Any:
     """
     Recall memories matching a query.
     Returns list of dicts with text, category, similarity.
@@ -3465,6 +3466,25 @@ def _recall_once(
     _reranker_top1_changed = 0
     _reranker_avg_displacement = 0.0
     _graph_discoveries = 0
+    _co_session_added = 0
+    _phase_ms: Dict[str, int] = {
+        "alias_resolution_ms": 0,
+        "intent_classification_ms": 0,
+        "ollama_health_ms": 0,
+        "hyde_ms": 0,
+        "search_hybrid_ms": 0,
+        "fts_fallback_ms": 0,
+        "raw_fts_ms": 0,
+        "scoring_ms": 0,
+        "reranker_ms": 0,
+        "multi_pass_ms": 0,
+        "mmr_ms": 0,
+        "co_session_ms": 0,
+        "graph_traversal_ms": 0,
+        "filtering_ms": 0,
+        "access_update_ms": 0,
+        "total_ms": 0,
+    }
 
     config_retrieval = None
     try:
@@ -3516,15 +3536,19 @@ def _recall_once(
         clean_query = meta_match.group(1).strip()
 
     # Resolve entity aliases in query
+    _phase_t0 = _time.monotonic()
     if use_aliases:
         clean_query = graph.resolve_alias(clean_query, owner_id=owner_id)
+    _phase_ms["alias_resolution_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Classify query intent BEFORE search — used for fusion weights and type boosting
+    _phase_t0 = _time.monotonic()
     if use_intent:
         intent, type_boosts = classify_intent(clean_query)
     else:
         intent = "GENERAL"
         type_boosts = {}
+    _phase_ms["intent_classification_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
     _temporal_fresh_cues = (
         r"\b(latest|currently|current|now|today|most recent|recently|as of)\b"
     )
@@ -3532,7 +3556,9 @@ def _recall_once(
 
     # Fast Ollama health check — skip semantic search entirely if Ollama is down
     # Saves ~30s of embedding timeout waits when Ollama is unreachable
+    _phase_t0 = _time.monotonic()
     _ollama_up = _ollama_healthy()
+    _phase_ms["ollama_health_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Search with buffer for composite scoring + MMR selection
     search_limit = limit * 3
@@ -3546,8 +3572,12 @@ def _recall_once(
         _use_hyde = bool(use_routing) and cfg_use_hyde
         if not _HAS_LLM_CLIENTS:
             _use_hyde = False
+        _phase_t0 = _time.monotonic()
         search_query = route_query(clean_query) if _use_hyde else clean_query
+        _phase_ms["hyde_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+        _phase_t0 = _time.monotonic()
         results = graph.search_hybrid(search_query, limit=search_limit, privacy=privacy, owner_id=owner_id, current_session_id=current_session_id, compaction_time=compaction_time, intent=intent)
+        _phase_ms["search_hybrid_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
     else:
         search_query = clean_query  # No HyDE when embeddings unavailable
         import logging
@@ -3567,6 +3597,7 @@ def _recall_once(
     # FTS fallback: if hybrid search returned nothing (Ollama may be down),
     # fall back to keyword-only search so recall isn't completely broken
     if not results:
+        _phase_t0 = _time.monotonic()
         fts_fallback = graph.search_fts(clean_query, limit=search_limit, owner_id=owner_id)
         for node, fts_rank in fts_fallback:
             # Estimate quality score from rank position
@@ -3574,10 +3605,12 @@ def _recall_once(
             results.append((node, quality))
         if fts_fallback:
             _fts_fallback_used = True
+        _phase_ms["fts_fallback_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Also run FTS on the raw query (before routing) to catch proper nouns
     # that route_query may have dropped or transformed
     elif use_routing and search_query != clean_query:
+        _phase_t0 = _time.monotonic()
         raw_fts = graph.search_fts(clean_query, limit=limit, owner_id=owner_id)
         result_ids = {node.id for node, _ in results}
         for node, fts_rank in raw_fts:
@@ -3585,8 +3618,10 @@ def _recall_once(
                 quality = max(0.5, 1.0 - fts_rank * 0.02)
                 results.append((node, quality))
                 result_ids.add(node.id)
+        _phase_ms["raw_fts_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Apply composite scoring (search relevance + recency + frequency + intent boost)
+    _phase_t0 = _time.monotonic()
     scored_results = []
     debug_info = {} if debug else None
     for node, quality_score in results:
@@ -3621,6 +3656,7 @@ def _recall_once(
                 "valid_from": node.valid_from,
                 "valid_until": node.valid_until,
             }
+    _phase_ms["scoring_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Cross-encoder reranking (if enabled)
     reranker_enabled = False
@@ -3629,6 +3665,7 @@ def _recall_once(
     if use_reranker is not None:
         reranker_enabled = use_reranker
     if reranker_enabled:
+        _phase_t0 = _time.monotonic()
         try:
             _pre_rerank_order = [node.id for node, _ in scored_results[:20]]
             scored_results = _rerank_with_cross_encoder(clean_query, scored_results, config_retrieval)
@@ -3648,6 +3685,7 @@ def _recall_once(
                     _reranker_avg_displacement = sum(displacements) / len(displacements)
         except Exception:
             pass  # Reranking is best-effort; fall back to original scoring
+        _phase_ms["reranker_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Filter by composite score threshold
     scored_results = [
@@ -3664,6 +3702,7 @@ def _recall_once(
         _multi_pass_gate = getattr(config_retrieval, 'multi_pass_gate', 0.70)
     if use_multi_pass and scored_results and scored_results[0][1] < _multi_pass_gate and len(scored_results) < limit:
         _multi_pass_triggered = True
+        _phase_t0 = _time.monotonic()
         # Extract entity names from query for targeted second pass
         entity_terms = [w for w in clean_query.split() if w[0:1].isupper() and len(w) > 2]
         # Also try individual key terms
@@ -3718,6 +3757,7 @@ def _recall_once(
 
         # Re-sort after adding second-pass results
         scored_results.sort(key=lambda x: x[1], reverse=True)
+        _phase_ms["multi_pass_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Filter by minimum similarity before MMR (first-pass results were unfiltered)
     scored_results = [(node, score) for node, score in scored_results if score >= min_similarity]
@@ -3726,7 +3766,9 @@ def _recall_once(
     _mmr_lambda = 0.7
     if config_retrieval:
         _mmr_lambda = getattr(config_retrieval, 'mmr_lambda', 0.7)
+    _phase_t0 = _time.monotonic()
     diverse_results = _apply_mmr(scored_results, graph, limit, mmr_lambda=_mmr_lambda)
+    _phase_ms["mmr_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     output = []
     seen_ids = set()
@@ -3770,6 +3812,7 @@ def _recall_once(
     # Temporal contiguity: facts from the same session were co-encoded
     # and likely share context — surface them as bonus candidates
     if diverse_results:
+        _phase_t0 = _time.monotonic()
         session_ids = {}
         for node, score in diverse_results[:5]:
             if node.session_id and node.session_id not in session_ids:
@@ -3801,6 +3844,7 @@ def _recall_once(
                             # Use a lower threshold for co-session facts (75% of min_similarity)
                             co_threshold = min_similarity * 0.75
                             if co_score >= co_threshold:
+                                _co_session_added += 1
                                 _co_attrs = co_node.attributes if isinstance(co_node.attributes, dict) else {}
                                 output.append({
                                     "text": _sanitize_for_context(co_node.name),
@@ -3817,10 +3861,12 @@ def _recall_once(
                                 })
             except Exception:
                 pass  # Temporal contiguity is best-effort
+        _phase_ms["co_session_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Add related nodes via multi-hop graph traversal
     # Uses BEAM search (scored, pruned) or BFS (exhaustive) based on config
     if diverse_results:
+        _phase_t0 = _time.monotonic()
         _use_beam = True  # Default matches TraversalConfig.use_beam
         _beam_width = 5
         _traversal_depth = 2
@@ -3925,7 +3971,9 @@ def _recall_once(
                             "domains": _domains_from_attrs(_rel_attrs),
                             "project": _rel_attrs.get("project"),
                         })
+        _phase_ms["graph_traversal_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
+    _phase_t0 = _time.monotonic()
     if not include_all_domains:
         if included_domains:
             # Primary path: use indexed node_domains lookup for domain filtering.
@@ -4029,9 +4077,11 @@ def _recall_once(
 
     output.sort(key=lambda x: x["similarity"], reverse=True)
     final_output = output[:limit]
+    _phase_ms["filtering_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Update access stats for returned results (feeds into Ebbinghaus decay)
     if final_output:
+        _phase_t0 = _time.monotonic()
         try:
             result_ids = {r["id"] for r in final_output}
             # Track access for both direct search results and graph-traversal results
@@ -4049,9 +4099,11 @@ def _recall_once(
             graph._update_access(result_nodes, difficulty_map=difficulty_map)
         except Exception:
             pass  # Access tracking is best-effort
+        _phase_ms["access_update_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
 
     # Log recall metrics for observability
     _recall_elapsed_ms = int((_time.monotonic() - _recall_start) * 1000)
+    _phase_ms["total_ms"] = _recall_elapsed_ms
     _similarities = [r["similarity"] for r in final_output]
     _log_recall(
         graph, query, owner_id, intent,
@@ -4071,6 +4123,28 @@ def _recall_once(
     # Low-signal retry: if first pass produced no useful results, retry once with
     # an intent-shaped expanded query. This logic lives in datastore recall so it
     # applies consistently across interfaces, not in harnesses.
+    recall_once_meta = {
+        "query": query,
+        "clean_query": clean_query,
+        "search_query": search_query,
+        "intent": intent,
+        "phases_ms": _phase_ms,
+        "counts": {
+            "initial_candidates": len(results),
+            "post_threshold_candidates": len(scored_results),
+            "diverse_results": len(diverse_results),
+            "co_session_added": _co_session_added,
+            "graph_discoveries": _graph_discoveries,
+            "final_results": len(final_output),
+        },
+        "flags": {
+            "fts_fallback_used": _fts_fallback_used,
+            "multi_pass_triggered": _multi_pass_triggered,
+            "reranker_enabled": reranker_enabled,
+            "used_hyde": bool(_ollama_up and use_routing and _HAS_LLM_CLIENTS),
+        },
+    }
+
     if low_signal_retry:
         low_info_count = sum(1 for r in final_output if _is_low_information_entity_result(r))
         low_signal = (len(final_output) == 0) or (
@@ -4080,7 +4154,7 @@ def _recall_once(
             retry_query = _expand_low_signal_query(clean_query, intent)
             if retry_query and retry_query != clean_query:
                 try:
-                    retry_output = _recall_once(
+                    retry_output, retry_meta = _recall_once(
                         retry_query,
                         limit=limit,
                         privacy=privacy,
@@ -4099,13 +4173,18 @@ def _recall_once(
                         domain=domain,
                         domain_boost=domain_boost,
                         low_signal_retry=False,
+                        return_meta=True,
                     )
                     if len(retry_output) > len(final_output):
-                        return retry_output
+                        retry_meta = dict(retry_meta or {})
+                        retry_meta["retry_from_low_signal"] = True
+                        _attach_recall_meta(retry_output, retry_meta)
+                        return (retry_output, retry_meta) if return_meta else retry_output
                 except Exception:
                     pass
 
-    return final_output
+    _attach_recall_meta(final_output, recall_once_meta)
+    return (final_output, recall_once_meta) if return_meta else final_output
 
 
 def _plan_recall_queries(query: str, max_queries: int = 3) -> List[str]:
@@ -4167,6 +4246,31 @@ def _plan_recall_queries(query: str, max_queries: int = 3) -> List[str]:
         return [clean_query]
 
 
+def _is_low_information_message(query: str) -> bool:
+    """Return True when a message is too low-information to justify retrieval."""
+    clean = " ".join((query or "").strip().lower().split())
+    if not clean:
+        return True
+    if len(clean) <= 3:
+        return True
+    if re.fullmatch(r"[.!?\s]+", clean):
+        return True
+
+    exact = {
+        "ok", "okay", "k", "kk", "hi", "hey", "hello", "yo", "thanks", "thank you",
+        "thx", "cool", "nice", "great", "awesome", "sounds good", "got it", "sure",
+        "yep", "yeah", "yup", "alright", "all right", "lol", "lmao", "haha", "hmm",
+        "bye", "cya",
+    }
+    if clean in exact:
+        return True
+
+    tokens = re.findall(r"[a-z0-9']+", clean)
+    if len(tokens) <= 2 and tokens and all(tok in exact for tok in tokens):
+        return True
+    return False
+
+
 def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> List[Dict[str, Any]]:
     """Merge recall batches by memory id, keeping highest similarity variant."""
     by_id: Dict[str, Dict[str, Any]] = {}
@@ -4188,23 +4292,96 @@ def _merge_recall_batches(batches: List[List[Dict[str, Any]]], limit: int) -> Li
     return merged[: max(1, limit)]
 
 
-def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.5) -> List[str]:
+def _extract_recall_meta(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return shared recall metadata attached to a recall result batch."""
+    for row in results or []:
+        if isinstance(row, dict) and isinstance(row.get("_recall_meta"), dict):
+            return dict(row["_recall_meta"])
+    return {}
+
+
+def _attach_recall_meta(results: List[Dict[str, Any]], meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Attach the same recall metadata to each result row."""
+    for row in results or []:
+        if isinstance(row, dict):
+            row["_recall_meta"] = dict(meta)
+    return results
+
+
+def _print_recall_results(results: List[Dict[str, Any]]) -> None:
+    """Render recall results in the legacy plain-text CLI format."""
+    for r in results:
+        flags = []
+        if r.get('verified'):
+            flags.append('V')
+        if r.get('pinned'):
+            flags.append('P')
+        flag_str = f"[{''.join(flags)}]" if flags else ""
+        conf = r.get('extraction_confidence', 0.5)
+        created = r.get('created_at', '')
+        privacy = r.get('privacy', 'shared')
+        owner = r.get('owner_id', '')
+        print(f"[{r['similarity']:.2f}] [{r['category']}]{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|P:{privacy}|O:{owner}")
+        if r.get('_debug'):
+            d = r['_debug']
+            print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+
+
+def _summarize_phase_stats(phase_values: List[float]) -> Dict[str, int]:
+    """Summarize a list of phase durations in ms."""
+    if not phase_values:
+        return {"count": 0, "avg_ms": 0, "min_ms": 0, "max_ms": 0, "spread_ms": 0}
+    values = [max(0, int(round(v))) for v in phase_values]
+    return {
+        "count": len(values),
+        "avg_ms": round(sum(values) / len(values)),
+        "min_ms": min(values),
+        "max_ms": max(values),
+        "spread_ms": max(values) - min(values),
+    }
+
+
+def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.5, return_meta: bool = False):
     """Generate multiple HyDE-style search queries in a single fast LLM call.
 
     Replaces both route_query() and _plan_recall_queries() for injection path.
-    Returns 1-N declarative search queries (the LLM decides fanout).
-    Falls back to [original_query] on any failure.
+    Returns 1-N declarative search queries (the LLM decides fanout), or []
+    when retrieval should be skipped.
     """
+    import time as _time
+    started = _time.monotonic()
+    meta = {
+        "query": query,
+        "timeout_ms": round(timeout_s * 1000),
+        "used_llm": False,
+        "bailout_reason": None,
+        "queries_count": 0,
+        "elapsed_ms": 0,
+    }
+
+    def _finish(out: List[str], bailout_reason: Optional[str] = None):
+        meta["queries_count"] = len(out)
+        meta["bailout_reason"] = bailout_reason
+        meta["elapsed_ms"] = round((_time.monotonic() - started) * 1000)
+        if return_meta:
+            return out, meta
+        return out
+
     clean = " ".join((query or "").split())
-    if not clean or len(clean) < 10:
-        return [clean] if clean else []
+    if not clean:
+        return _finish([], "empty_query")
+    if _is_low_information_message(clean):
+        return _finish([], "low_information_message")
+    if len(clean) < 10:
+        return _finish([clean], "too_short")
     if not _HAS_LLM_CLIENTS:
-        return [clean]
+        return _finish([clean], "no_llm_clients")
 
     prompt = (
         f"Generate 1 to {max_queries} search queries to find personal memories relevant to this message.\n"
         "Rules:\n"
-        '- Return JSON only: {"queries": ["..."]}\n'
+        '- Return JSON only: {"queries": ["..."]} or {"queries": []}\n'
+        "- If the message is just a greeting, acknowledgement, filler, or otherwise has no meaningful information need, return an empty list.\n"
         "- Each query must be a short declarative statement (HyDE style), NOT a question.\n"
         "- First query: rephrase the core intent as a factual statement.\n"
         "- Additional queries: alternative angles, related entities, or broader context.\n"
@@ -4216,6 +4393,7 @@ def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.
 
     try:
         from lib.llm_clients import call_fast_reasoning
+        meta["used_llm"] = True
         result, _ = call_fast_reasoning(
             prompt=prompt,
             max_tokens=200,
@@ -4226,7 +4404,7 @@ def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.
         parsed = parse_json_response(result)
         queries = parsed.get("queries") if isinstance(parsed, dict) else None
         if not isinstance(queries, list):
-            return [clean]
+            return _finish([], "planner_invalid_response")
 
         out: List[str] = []
         seen = set()
@@ -4242,12 +4420,15 @@ def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.
             if len(out) >= max_queries:
                 break
 
-        # Always include the original query in case LLM diverged
-        if clean.lower() not in {q.lower() for q in out}:
+        # Include the original query as an anchor only when retrieval is
+        # actually warranted.
+        if out and clean.lower() not in {q.lower() for q in out}:
             out.insert(0, clean)
-        return out or [clean]
+        if not out:
+            return _finish([], "planner_returned_empty")
+        return _finish(out)
     except Exception:
-        return [clean]
+        return _finish([clean], "planner_exception_fallback")
 
 
 def recall_fast(
@@ -4273,89 +4454,41 @@ def recall_fast(
     domain_boost: Optional[Any] = None,
     project: Optional[str] = None,
     timeout_ms: Optional[int] = None,
-) -> List[Dict[str, Any]]:
-    """Fast recall for pre-injection. Parallel fanout with hard time budget.
-
-    Designed for the hook-inject hot path where latency matters more than
-    exhaustive coverage. Uses a single fast LLM call to generate multiple
-    HyDE queries, fans them all out in parallel, and merges results.
-
-    No reranker, no graph traversal, no multi-pass retry — fanout replaces
-    those slower strategies.
-
-    Args:
-        timeout_ms: Overall wall-clock budget in ms. Default from config
-            (retrieval.injection_timeout_ms, default 3000).
-    """
-    import time as _time
-
+    return_meta: bool = False,
+) -> Any:
+    """Pre-injection recall: thin wrapper over recall() with single-pass settings."""
     if not query or not query.strip():
-        return []
+        meta = {
+            "mode": "fast",
+            "query": query,
+            "turns": 0,
+            "total_ms": 0,
+            "stop_reason": "empty_query",
+            "bailout_counts": {"initial_low_information": 0, "planner_returned_empty": 0},
+        }
+        return ([], meta) if return_meta else []
+    if _is_low_information_message(query):
+        meta = {
+            "mode": "fast",
+            "query": query,
+            "turns": 0,
+            "total_ms": 0,
+            "stop_reason": "initial_low_information",
+            "bailout_counts": {"initial_low_information": 1, "planner_returned_empty": 0},
+        }
+        return ([], meta) if return_meta else []
 
-    # Circuit breaker guard
-    try:
-        from core.compatibility import check_read_allowed
-        from lib.adapter import get_adapter
-        breaker = check_read_allowed(get_adapter().data_dir())
-        if not breaker.allows_reads():
-            logger.warning("recall_fast blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
-            return []
-    except Exception:
-        pass
-
-    # Load config
-    overall_timeout_ms = 3000
-    fanout_max = 5
-    fanout_llm_ms = 1500
-    try:
-        from config import get_config
-        cfg = get_config().retrieval
-        overall_timeout_ms = getattr(cfg, "injection_timeout_ms", 3000)
-        fanout_max = getattr(cfg, "injection_fanout_max", 5)
-        fanout_llm_ms = getattr(cfg, "injection_fanout_llm_ms", 1500)
-    except Exception:
-        pass
-    if timeout_ms is not None:
-        overall_timeout_ms = timeout_ms
-
-    deadline = _time.monotonic() + (overall_timeout_ms / 1000.0)
-
-    # Step 1: Generate fanout queries (single fast LLM call)
-    fanout_start = _time.monotonic()
-    queries = _plan_fanout_queries(
-        query,
-        max_queries=fanout_max,
-        timeout_s=fanout_llm_ms / 1000.0,
-    )
-    fanout_elapsed = (_time.monotonic() - fanout_start) * 1000
-    remaining = deadline - _time.monotonic()
-
-    if remaining <= 0:
-        logger.debug(
-            "[recall_fast] fanout LLM consumed entire budget (%.0fms), "
-            "falling back to single direct search",
-            fanout_elapsed,
-        )
-        queries = [query]
-        remaining = 0.5  # Give at least 500ms for a direct search
-
-    logger.debug(
-        "[recall_fast] fanout produced %d queries in %.0fms, %.0fms remaining: %s",
-        len(queries), fanout_elapsed, remaining * 1000, queries,
-    )
-
-    # Step 2: Fan out all searches in parallel
-    # Build common kwargs for _recall_once (lightweight mode)
-    common_kwargs = dict(
-        limit=min(max(3, limit), 12),
+    results = recall(
+        query=query,
+        limit=limit,
         privacy=privacy,
         owner_id=owner_id,
         min_similarity=min_similarity,
-        use_routing=False,       # HyDE already done in fanout
+        use_routing=True,
         use_aliases=True,
         use_intent=True,
-        use_multi_pass=False,    # Fanout replaces multi-pass
-        use_reranker=False,      # Too slow for injection
+        use_multi_pass=False,
+        use_reranker=True,
         current_session_id=current_session_id,
         compaction_time=compaction_time,
         date_from=date_from,
@@ -4372,66 +4505,19 @@ def recall_fast(
         domain=domain,
         domain_boost=domain_boost,
         project=project,
-        low_signal_retry=False,
+        low_signal_retry=True,
+        max_turns=1,
+        timeout_ms=timeout_ms,
+        return_meta=True,
     )
-
-    search_callables = [
-        (lambda q=q: _recall_once(query=q, **common_kwargs))
-        for q in queries
-    ]
-
-    search_start = _time.monotonic()
-    batches = run_callables(
-        search_callables,
-        max_workers=min(len(queries), 5),
-        pool_name="recall_fast",
-        timeout_seconds=remaining,
-        return_exceptions=True,
-    )
-    search_elapsed = (_time.monotonic() - search_start) * 1000
-
-    # Filter out exceptions
-    valid_batches = []
-    for i, batch in enumerate(batches):
-        if isinstance(batch, Exception):
-            logger.debug("[recall_fast] query %d failed: %s", i, batch)
-        elif isinstance(batch, list):
-            valid_batches.append(batch)
-
-    # Step 3: Merge + deduplicate
-    merged = _merge_recall_batches(valid_batches, limit=limit)
-
-    total_elapsed = (_time.monotonic() - (deadline - overall_timeout_ms / 1000.0)) * 1000
-    if total_elapsed > overall_timeout_ms:
-        logger.debug(
-            "[recall_fast] OVER BUDGET: %.0fms (budget: %dms) — "
-            "fanout: %.0fms, search: %.0fms, queries: %d, results: %d",
-            total_elapsed, overall_timeout_ms,
-            fanout_elapsed, search_elapsed, len(queries), len(merged),
-        )
+    if isinstance(results, tuple):
+        rows, meta = results
     else:
-        logger.debug(
-            "[recall_fast] completed in %.0fms (budget: %dms) — "
-            "fanout: %.0fms, search: %.0fms, queries: %d, results: %d",
-            total_elapsed, overall_timeout_ms,
-            fanout_elapsed, search_elapsed, len(queries), len(merged),
-        )
-
-    # Always attach recall metadata so the consuming LLM knows what was searched
-    for row in merged:
-        if isinstance(row, dict):
-            row["_recall_meta"] = {
-                "mode": "fast",
-                "query": query,
-                "search_queries": queries[:],
-                "fanout_ms": round(fanout_elapsed),
-                "search_ms": round(search_elapsed),
-                "total_ms": round(total_elapsed),
-                "budget_ms": overall_timeout_ms,
-                "over_budget": total_elapsed > overall_timeout_ms,
-            }
-
-    return merged
+        rows, meta = results, _extract_recall_meta(results)
+    meta = dict(meta or {})
+    meta["mode"] = "fast"
+    _attach_recall_meta(rows, meta)
+    return rows, meta
 
 
 def _drill_plan_queries(
@@ -4540,7 +4626,8 @@ def recall(
     low_signal_retry: bool = True,
     max_turns: int = 3,
     timeout_ms: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+    return_meta: bool = False,
+) -> Any:
     """Orchestrated recall with iterative drilling.
 
     Turn 1: Parallel HyDE fanout (like recall_fast but with reranker + graph).
@@ -4551,13 +4638,27 @@ def recall(
     Args:
         max_turns: Maximum drill turns (default 3). Turn 1 is always the
             initial fanout. Set to 1 for single-pass behavior.
-        timeout_ms: Overall wall-clock budget in ms. Default 15000 (15s).
-            Benchmarks can increase this for more thorough recall.
+        timeout_ms: Optional overall wall-clock budget in ms. If omitted,
+            recall runs until it has enough evidence or completes its turns.
     """
     import time as _time
 
     if not query or not query.strip():
-        return []
+        meta = {
+            "mode": "deliberate",
+            "query": query,
+            "search_queries": [],
+            "turns": 0,
+            "total_ms": 0,
+            "budget_ms": timeout_ms,
+            "over_budget": False,
+            "drill_log": [],
+            "turn_details": [],
+            "stop_reason": "empty_query",
+            "bailout_counts": {},
+            "fanout_count": 0,
+        }
+        return ([], meta) if return_meta else []
 
     # Circuit breaker guard
     try:
@@ -4566,12 +4667,26 @@ def recall(
         breaker = check_read_allowed(get_adapter().data_dir())
         if not breaker.allows_reads():
             logger.warning("recall blocked by circuit breaker (%s): %s", breaker.status, breaker.message)
-            return []
+            meta = {
+                "mode": "deliberate",
+                "query": query,
+                "search_queries": [],
+                "turns": 0,
+                "total_ms": 0,
+                "budget_ms": timeout_ms,
+                "over_budget": False,
+                "drill_log": [],
+                "turn_details": [],
+                "stop_reason": "circuit_breaker",
+                "bailout_counts": {},
+                "fanout_count": 0,
+            }
+            return ([], meta) if return_meta else []
     except Exception:
         pass
 
     # Load config
-    overall_timeout_ms = timeout_ms if timeout_ms is not None else 15000
+    overall_timeout_ms = timeout_ms
     quality_gate = 0.70
     try:
         from config import get_config
@@ -4581,10 +4696,20 @@ def recall(
         pass
 
     recall_start = _time.monotonic()
-    deadline = recall_start + (overall_timeout_ms / 1000.0)
+    deadline = None if overall_timeout_ms is None else (recall_start + (overall_timeout_ms / 1000.0))
     all_searched: List[str] = []
     all_batches: List[List[Dict[str, Any]]] = []
     drill_log: List[Dict[str, Any]] = []
+    turn_phase_details: List[Dict[str, Any]] = []
+    stop_reason = "max_turns"
+    bailout_counts = {
+        "initial_low_information": 0,
+        "planner_returned_empty": 0,
+        "planner_invalid_response": 0,
+        "planner_exception_fallback": 0,
+        "drill_done": 0,
+        "time_budget_exhausted": 0,
+    }
 
     # Common kwargs for _recall_once
     common_kwargs = dict(
@@ -4614,20 +4739,48 @@ def recall(
     # --- Turn 1: Parallel fanout ---
     turn_start = _time.monotonic()
     if use_routing:
-        fanout_queries = _plan_fanout_queries(
+        planned = _plan_fanout_queries(
             query,
             max_queries=5,
-            timeout_s=min(2.0, max(0.5, (deadline - _time.monotonic()) * 0.3)),
+            timeout_s=(
+                min(15.0, max(0.5, (deadline - _time.monotonic()) * 0.3))
+                if deadline is not None
+                else 15.0
+            ),
+            return_meta=True,
         )
+        if isinstance(planned, tuple) and len(planned) == 2:
+            fanout_queries, fanout_meta = planned
+        else:
+            fanout_queries = planned if isinstance(planned, list) else []
+            fanout_meta = {
+                "query": query,
+                "timeout_ms": 0,
+                "used_llm": False,
+                "bailout_reason": None,
+                "queries_count": len(fanout_queries),
+                "elapsed_ms": 0,
+            }
     else:
         fanout_queries = [query]
+        fanout_meta = {
+            "query": query,
+            "timeout_ms": 0,
+            "used_llm": False,
+            "bailout_reason": None,
+            "queries_count": len(fanout_queries),
+            "elapsed_ms": 0,
+        }
+    if fanout_meta.get("bailout_reason") in bailout_counts:
+        bailout_counts[fanout_meta["bailout_reason"]] += 1
     all_searched.extend(fanout_queries)
 
-    remaining = deadline - _time.monotonic()
-    if remaining <= 0.5:
+    remaining = None if deadline is None else (deadline - _time.monotonic())
+    if remaining is not None and remaining <= 0.5:
         # Almost out of time, do single direct search
         fanout_queries = [query]
         remaining = 1.0
+        stop_reason = "near_deadline_fallback"
 
     # First query gets the full treatment (reranker, graph, multi-pass)
     # Remaining fanout queries are lightweight
@@ -4640,6 +4793,7 @@ def recall(
                 use_multi_pass=use_multi_pass,
                 use_reranker=use_reranker,
                 low_signal_retry=low_signal_retry,
+                return_meta=True,
                 **common_kwargs,
             ))
         else:
@@ -4649,6 +4803,7 @@ def recall(
                 use_multi_pass=False,
                 use_reranker=False,
                 low_signal_retry=False,
+                return_meta=True,
                 **common_kwargs,
             ))
 
@@ -4660,9 +4815,18 @@ def recall(
         return_exceptions=True,
     )
 
+    turn1_batch_metas: List[Dict[str, Any]] = []
     for batch in t1_batches:
-        if isinstance(batch, list):
+        if isinstance(batch, tuple) and len(batch) == 2 and isinstance(batch[0], list):
+            rows, meta = batch
+            all_batches.append(rows)
+            if isinstance(meta, dict):
+                turn1_batch_metas.append(meta)
+        elif isinstance(batch, list):
             all_batches.append(batch)
+            meta = _extract_recall_meta(batch)
+            if meta:
+                turn1_batch_metas.append(meta)
 
     turn_elapsed = (_time.monotonic() - turn_start) * 1000
     merged = _merge_recall_batches(all_batches, limit=limit * 2)
@@ -4675,39 +4839,90 @@ def recall(
         "top_score": round(top_score, 3),
         "elapsed_ms": round(turn_elapsed),
     })
+    turn_phase_details.append({
+        "turn": 1,
+        "planner": fanout_meta,
+        "fanout": {
+            "queries": fanout_queries[:],
+            "branch_count": len(turn1_batch_metas),
+            "branch_total_ms": _summarize_phase_stats([
+                float((meta.get("phases_ms") or {}).get("total_ms", 0))
+                for meta in turn1_batch_metas
+            ]),
+            "branch_search_ms": _summarize_phase_stats([
+                float((meta.get("phases_ms") or {}).get("search_hybrid_ms", 0))
+                for meta in turn1_batch_metas
+            ]),
+            "branch_graph_ms": _summarize_phase_stats([
+                float((meta.get("phases_ms") or {}).get("graph_traversal_ms", 0))
+                for meta in turn1_batch_metas
+            ]),
+            "branch_reranker_ms": _summarize_phase_stats([
+                float((meta.get("phases_ms") or {}).get("reranker_ms", 0))
+                for meta in turn1_batch_metas
+            ]),
+        },
+    })
 
     logger.debug(
         "[recall] turn 1: %d queries, %d results, top=%.3f, %.0fms",
         len(fanout_queries), len(merged), top_score, turn_elapsed,
     )
 
+    if not fanout_queries:
+        stop_reason = fanout_meta.get("bailout_reason") or "planner_returned_empty"
+        final = merged[:limit]
+        total_elapsed = (_time.monotonic() - recall_start) * 1000
+        meta = {
+            "mode": "deliberate",
+            "query": query,
+            "search_queries": list(all_searched),
+            "turns": len(drill_log),
+            "total_ms": round(total_elapsed),
+            "budget_ms": overall_timeout_ms,
+            "over_budget": (total_elapsed > overall_timeout_ms) if overall_timeout_ms is not None else False,
+            "drill_log": drill_log[:],
+            "turn_details": turn_phase_details[:],
+            "stop_reason": stop_reason,
+            "bailout_counts": bailout_counts,
+        }
+        _attach_recall_meta(final, meta)
+        return (final, meta) if return_meta else final
+
     # --- Turn 2+: Drill loop ---
     for turn in range(2, max(2, max_turns + 1)):
-        remaining = deadline - _time.monotonic()
-        if remaining < 1.0:
+        remaining = None if deadline is None else (deadline - _time.monotonic())
+        if remaining is not None and remaining < 1.0:
             logger.debug("[recall] time budget exhausted after turn %d (%.0fms remaining)", turn - 1, remaining * 1000)
+            stop_reason = "time_budget_exhausted"
+            bailout_counts["time_budget_exhausted"] += 1
             break
 
         # Quality gate: stop if top results are strong enough
         if top_score >= quality_gate and len(merged) >= limit:
             logger.debug("[recall] quality gate met (top=%.3f >= %.3f), stopping after turn %d", top_score, quality_gate, turn - 1)
+            stop_reason = "quality_gate_met"
             break
 
         # Ask drill agent for new queries
         turn_start = _time.monotonic()
-        drill_budget = min(3.0, remaining * 0.4)  # Reserve 60% of remaining for search
+        drill_budget = min(15.0, remaining * 0.4) if remaining is not None else 15.0
         new_queries = _drill_plan_queries(
             query, merged, all_searched, timeout_s=drill_budget,
         )
 
         if not new_queries:
             logger.debug("[recall] drill agent returned no queries or said done, stopping after turn %d", turn - 1)
+            stop_reason = "drill_done"
+            bailout_counts["drill_done"] += 1
             break
 
         all_searched.extend(new_queries)
-        search_remaining = deadline - _time.monotonic()
-        if search_remaining < 0.5:
+        search_remaining = None if deadline is None else (deadline - _time.monotonic())
+        if search_remaining is not None and search_remaining < 0.5:
             logger.debug("[recall] no time left for search after drill planning, stopping")
+            stop_reason = "time_budget_exhausted"
+            bailout_counts["time_budget_exhausted"] += 1
             break
 
         # Search new queries in parallel (lightweight)
@@ -4718,6 +4933,7 @@ def recall(
                 use_multi_pass=False,
                 use_reranker=False,
                 low_signal_retry=False,
+                return_meta=True,
                 **common_kwargs,
             ))
             for q in new_queries
@@ -4731,9 +4947,18 @@ def recall(
             return_exceptions=True,
         )
 
+        drill_batch_metas: List[Dict[str, Any]] = []
         for batch in drill_batches:
-            if isinstance(batch, list):
+            if isinstance(batch, tuple) and len(batch) == 2 and isinstance(batch[0], list):
+                rows, meta = batch
+                all_batches.append(rows)
+                if isinstance(meta, dict):
+                    drill_batch_metas.append(meta)
+            elif isinstance(batch, list):
                 all_batches.append(batch)
+                meta = _extract_recall_meta(batch)
+                if meta:
+                    drill_batch_metas.append(meta)
 
         merged = _merge_recall_batches(all_batches, limit=limit * 2)
         top_score = float(merged[0].get("similarity", 0)) if merged else 0.0
@@ -4746,6 +4971,34 @@ def recall(
             "top_score": round(top_score, 3),
             "elapsed_ms": round(turn_elapsed),
         })
+        turn_phase_details.append({
+            "turn": turn,
+            "planner": {
+                "used_llm": True,
+                "queries_count": len(new_queries),
+                "elapsed_ms": round(turn_elapsed),
+            },
+            "fanout": {
+                "queries": new_queries[:],
+                "branch_count": len(drill_batch_metas),
+                "branch_total_ms": _summarize_phase_stats([
+                    float((meta.get("phases_ms") or {}).get("total_ms", 0))
+                    for meta in drill_batch_metas
+                ]),
+                "branch_search_ms": _summarize_phase_stats([
+                    float((meta.get("phases_ms") or {}).get("search_hybrid_ms", 0))
+                    for meta in drill_batch_metas
+                ]),
+                "branch_graph_ms": _summarize_phase_stats([
+                    float((meta.get("phases_ms") or {}).get("graph_traversal_ms", 0))
+                    for meta in drill_batch_metas
+                ]),
+                "branch_reranker_ms": _summarize_phase_stats([
+                    float((meta.get("phases_ms") or {}).get("reranker_ms", 0))
+                    for meta in drill_batch_metas
+                ]),
+            },
+        })
 
         logger.debug(
             "[recall] turn %d: %d queries, %d results, top=%.3f, %.0fms",
@@ -4755,8 +5008,10 @@ def recall(
     # Final merge to requested limit
     final = merged[:limit]
     total_elapsed = (_time.monotonic() - recall_start) * 1000
+    if stop_reason == "max_turns" and len(drill_log) < max_turns:
+        stop_reason = "completed"
 
-    if total_elapsed > overall_timeout_ms:
+    if overall_timeout_ms is not None and total_elapsed > overall_timeout_ms:
         logger.debug(
             "[recall] OVER BUDGET: %.0fms (budget: %dms) — "
             "turns: %d, total queries: %d, results: %d",
@@ -4765,20 +5020,22 @@ def recall(
         )
 
     # Always attach recall metadata so the consuming LLM knows what was searched
-    for row in final:
-        if isinstance(row, dict):
-            row["_recall_meta"] = {
-                "mode": "deliberate",
-                "query": query,
-                "search_queries": list(all_searched),
-                "turns": len(drill_log),
-                "total_ms": round(total_elapsed),
-                "budget_ms": overall_timeout_ms,
-                "over_budget": total_elapsed > overall_timeout_ms,
-                "drill_log": drill_log[:],
-            }
-
-    return final
+    meta = {
+        "mode": "deliberate",
+        "query": query,
+        "search_queries": list(all_searched),
+        "turns": len(drill_log),
+        "total_ms": round(total_elapsed),
+        "budget_ms": overall_timeout_ms,
+        "over_budget": (total_elapsed > overall_timeout_ms) if overall_timeout_ms is not None else False,
+        "drill_log": drill_log[:],
+        "turn_details": turn_phase_details[:],
+        "stop_reason": stop_reason,
+        "bailout_counts": bailout_counts,
+        "fanout_count": len(turn_phase_details[0]["fanout"]["queries"]) if turn_phase_details else 0,
+    }
+    _attach_recall_meta(final, meta)
+    return (final, meta) if return_meta else final
 
 
 def _check_injection_blocklist(text: str) -> Optional[str]:
@@ -6306,6 +6563,7 @@ if __name__ == "__main__":
         recall_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
         recall_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
         recall_p.add_argument("--project", default=None, help="Filter by project/domain label")
+        recall_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
         recall_p.add_argument("--json", action="store_true", help="JSON output")
         recall_p.add_argument("--stores", default=None, help="Comma-separated store list: vector_basic,vector_technical,graph")
@@ -6318,6 +6576,20 @@ if __name__ == "__main__":
         recall_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
         recall_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
         recall_p.add_argument("--candidate-pool", default=None, help="JSON array of pre-fetched vector results to pass to graph search")
+
+        recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
+        recall_fast_p.add_argument("query", nargs="+", help="Search query")
+        recall_fast_p.add_argument("--owner", default=None, help="Owner ID")
+        recall_fast_p.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
+        recall_fast_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
+        recall_fast_p.add_argument("--date-from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
+        recall_fast_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
+        recall_fast_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
+        recall_fast_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
+        recall_fast_p.add_argument("--project", default=None, help="Filter by project/domain label")
+        recall_fast_p.add_argument("--timeout-ms", type=int, default=None, help="Override overall fast-recall timeout budget")
+        recall_fast_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
+        recall_fast_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
 
         # --- decay ---
         subparsers.add_parser("decay", help="Run memory decay")
@@ -6752,6 +7024,29 @@ if __name__ == "__main__":
                         if r.get('_debug'):
                             d = r['_debug']
                             print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+
+        elif args.command == "recall-fast":
+            query = " ".join(args.query)
+            domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
+            domain_boost = json.loads(getattr(args, "domain_boost", "[]") or "[]")
+            results, meta = recall_fast(
+                query,
+                limit=args.limit,
+                owner_id=args.owner,
+                min_similarity=args.min_similarity,
+                date_from=getattr(args, "date_from", None),
+                date_to=getattr(args, "date_to", None),
+                debug=getattr(args, "debug", False),
+                domain=domain_filter,
+                domain_boost=domain_boost,
+                project=getattr(args, "project", None),
+                timeout_ms=getattr(args, "timeout_ms", None),
+                return_meta=True,
+            )
+            if args.json:
+                print(json.dumps({"results": results, "meta": meta}))
+            else:
+                _print_recall_results(results)
 
         elif args.command == "add-alias":
             graph = get_graph()

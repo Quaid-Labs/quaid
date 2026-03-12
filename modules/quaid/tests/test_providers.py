@@ -126,6 +126,30 @@ class TestAnthropicLLMProvider:
             req = mock_open.call_args[0][0]
             assert req.get_header("X-api-key") == "sk-test-key"
 
+    def test_llm_call_uses_bearer_for_oauth_token(self):
+        """OAuth tokens should use Authorization bearer, not x-api-key."""
+        p = AnthropicLLMProvider(api_key="sk-ant-oat01-test-oauth-token")
+        response_data = {
+            "content": [{"type": "text", "text": "Hello!"}],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "model": "claude-haiku-4-5",
+            "stop_reason": "end_turn",
+        }
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(response_data).encode()
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("lib.providers.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            p.llm_call(
+                [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+                model_tier="fast", max_tokens=100,
+            )
+            req = mock_open.call_args[0][0]
+            assert req.get_header("Authorization") == "Bearer sk-ant-oat01-test-oauth-token"
+            assert req.get_header("X-api-key") is None
+            assert "oauth-2025-04-20" in (req.get_header("Anthropic-beta") or "")
+
     def test_llm_call_raises_on_error(self):
         """API errors should propagate."""
         p = AnthropicLLMProvider(api_key="sk-test")
