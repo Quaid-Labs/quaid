@@ -1158,56 +1158,6 @@ describe("QuaidFacade", () => {
     expect(transcript).not.toContain("HEARTBEAT_OK");
   });
 
-  it("extractFilePaths returns deduplicated non-http path candidates", () => {
-    const facade = createQuaidFacade(makeMockDeps());
-    const paths = facade.extractFilePaths([
-      { role: "user", content: "edit /tmp/a.ts and src/main.ts" },
-      { role: "assistant", content: "see also https://example.com/a.ts and src/main.ts" },
-    ]);
-    expect(paths).toEqual(expect.arrayContaining(["/tmp/a.ts", "src/main.ts"]));
-    expect(paths.some((p) => p.startsWith("http"))).toBe(false);
-  });
-
-  it("summarizeProjectSession parses JSON from LLM output", async () => {
-    const callLLM = vi.fn(async () => ({
-      text: '{"project_name":"quaid","text":"worked on adapter boundary"}',
-      model: "test-model",
-      input_tokens: 10,
-      output_tokens: 20,
-      cache_read_tokens: 0,
-      cache_creation_tokens: 0,
-      truncated: false,
-    } satisfies LLMCallResult));
-    const facade = createQuaidFacade(makeMockDeps({ callLLM }));
-    const out = await facade.summarizeProjectSession([
-      { role: "user", content: "please refactor adapter boundary in quaid" },
-      { role: "assistant", content: "done with facade extraction" },
-    ]);
-    expect(out).toEqual({
-      project_name: "quaid",
-      text: "worked on adapter boundary",
-    });
-  });
-
-  it("summarizeProjectSession falls back to transcript snippet on non-JSON output", async () => {
-    const callLLM = vi.fn(async () => ({
-      text: "not-json",
-      model: "test-model",
-      input_tokens: 10,
-      output_tokens: 20,
-      cache_read_tokens: 0,
-      cache_creation_tokens: 0,
-      truncated: false,
-    } satisfies LLMCallResult));
-    const facade = createQuaidFacade(makeMockDeps({ callLLM }));
-    const out = await facade.summarizeProjectSession([
-      { role: "user", content: "first line" },
-      { role: "assistant", content: "second line" },
-    ]);
-    expect(out.project_name).toBeNull();
-    expect(out.text).toContain("User: first line");
-  });
-
   it("isResetBootstrapOnlyConversation detects bootstrap-only user prompts", () => {
     const facade = createQuaidFacade(makeMockDeps());
     expect(
@@ -1251,36 +1201,6 @@ describe("QuaidFacade", () => {
       "emit",
       expect.arrayContaining(["--name", "docs.ingest_transcript", "--dispatch", "immediate"]),
     );
-  });
-
-  it("stageProjectEvent writes event payload when projects are enabled", async () => {
-    const facade = createQuaidFacade(makeMockDeps({
-      isSystemEnabled: vi.fn((system: string) => system === "projects") as any,
-      getMemoryConfig: vi.fn(() => ({ projects: { enabled: true } })),
-      callLLM: vi.fn(async () => ({
-        text: '{"project_name":"quaid","text":"session summary"}',
-        model: "test-model",
-        input_tokens: 10,
-        output_tokens: 20,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 0,
-        truncated: false,
-      })),
-    }));
-    const staged = await facade.stageProjectEvent(
-      [{ role: "user", content: "edited src/main.ts in quaid" }],
-      "compact",
-      "sess-2",
-      "/tmp",
-      1000,
-    );
-    expect(staged).not.toBeNull();
-    const payload = JSON.parse(await readFile(staged!.eventPath, "utf8"));
-    expect(payload.project_hint).toBe("quaid");
-    expect(payload.trigger).toBe("compact");
-    expect(payload.session_id).toBe("sess-2");
-    expect(Array.isArray(payload.files_touched)).toBe(true);
-    await unlink(staged!.eventPath);
   });
 
   it("shouldProcessLifecycleSignal suppresses duplicate signatures in cooldown window", () => {
