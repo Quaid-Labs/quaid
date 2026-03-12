@@ -1604,7 +1604,7 @@ Consider running: docs staleness updater (update-stale --apply)`;
     if (!output || !output.trim()) return results;
     try {
       const parsed = JSON.parse(output);
-      const items = Array.isArray(parsed) ? parsed : parsed?.results || parsed?.items || [];
+      const items = Array.isArray(parsed) ? parsed : parsed?.results || parsed?.items || parsed?.direct_results || [];
       for (const item of items) {
         if (!item || typeof item !== "object") continue;
         const text = String(item.text || "").trim();
