@@ -1,6 +1,6 @@
 # Memory-Local Plugin Implementation — Total Recall (quaid)
 <!-- PURPOSE: Implementation details: schema, modules, config, shared lib, CLI, hooks, test suite, projects system -->
-<!-- SOURCES: datastore/memorydb/memory_graph.py, adaptors/openclaw/adapter.ts, datastore/docsdb/rag.py, config.py, datastore/docsdb/registry.py, datastore/docsdb/project_updater.py, config/memory.json -->
+<!-- SOURCES: datastore/memorydb/memory_graph.py, adaptors/openclaw/adapter.ts, datastore/docsdb/rag.py, config.py, datastore/docsdb/registry.py, datastore/docsdb/project_updater.py, config/memory.json, core/compatibility.py, core/subagent_registry.py, core/log_rotation.py, core/docs_updater_hook.py, core/runtime/notify.py, datastore/notedb/soul_snippets.py, datastore/facade.py, core/contracts/, core/plugins/, core/services/memory_service.py, lib/fail_policy.py, lib/providers.py, lib/llm_clients.py, lib/worker_pool.py, lib/delayed_requests.py, lib/runtime_context.py -->
 
 **Status:** Production Ready (updated 2026-02-08)
 **Location:** `modules/quaid/`
@@ -357,6 +357,12 @@ Centralized modules extracted from duplicated code across `datastore/memorydb/me
 | `lib/instance.py` | Zero-dependency instance resolution. Reads `QUAID_HOME` and `QUAID_INSTANCE` env vars only. Public API: `quaid_home()`, `instance_id()`, `instance_root()`, `shared_dir()`, `shared_projects_dir()`, `shared_registry_path()`, `shared_config_path()`, `list_instances()`, `instance_exists()`, `require_instance_exists()`, `validate_instance_id()`. Instance names must match `[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}` and not be reserved words. |
 | `lib/domain_text.py` | Domain ID and description normalization. `normalize_domain_id(value)` lowercases, strips non-alphanumeric chars, applies aliases (`"projects"` → `"project"`, `"family"` → `"personal"`), and returns `None` on invalid input. `sanitize_domain_description(value, *, max_chars=200, allow_truncate=False)` normalizes unicode, strips control characters, and raises `ValueError` when the text exceeds `max_chars` (default behavior). **The default is `allow_truncate=False` — callers must not rely on silent trimming.** Pass `allow_truncate=True` only when reading pre-existing DB rows that may predate the 200-char limit. Also raises `ValueError` on descriptions containing injection-like patterns (e.g., "ignore all previous instructions", "system prompt"). |
 | `datastore/memorydb/archive_store.py` | `archive_node(node, reason)` / `search_archive(query)` — datastore-owned archive writes/reads for `data/memory_archive.db` (`lib/archive.py` remains a compatibility shim). |
+| `lib/fail_policy.py` | `is_fail_hard_enabled()` — reads `retrieval.fail_hard` from config; defaults to `True` when config is unavailable. Used throughout the codebase to gate fallback behavior. Never implement fallback-switching via env vars in product flows — use this helper. |
+| `lib/providers.py` | Provider ABCs and concrete LLM/embeddings implementations. Concrete LLM providers: `AnthropicLLMProvider` (direct API key), `ClaudeCodeLLMProvider` (wraps `claude -p` CLI / subscription), `TestLLMProvider` (canned responses). Embeddings: `OllamaEmbeddingsProvider` (local Ollama), `MockEmbeddingsProvider` (MD5 deterministic vectors). All providers share `LLMResult` dataclass. Platform adapters produce provider instances; callers never instantiate providers directly. |
+| `lib/llm_clients.py` | Unified LLM call interface for janitor and workspace tasks. Key functions: `call_fast_reasoning(prompt, ...)`, `call_deep_reasoning(prompt, ...)`, `parse_json_response(text)` (strips markdown fences). LLM calls are routed through the adapter's `LLMProvider` — no API key management here. Token usage accumulator (`_usage_input_tokens`, `_usage_output_tokens`, `_usage_calls`) resets per janitor run; read at end for cost reporting. Timeout env var overrides: `QUAID_DEEP_REASONING_TIMEOUT` (default 600s), `QUAID_FAST_REASONING_TIMEOUT` (default 120s). |
+| `lib/worker_pool.py` | Shared `ThreadPoolExecutor` registry. `run_callables(callables, *, max_workers, pool_name, timeout_seconds, return_exceptions)` — parallel execution with deterministic output ordering. Named pools are cached (created once, reused across calls). `shutdown_worker_pools()` registered via `atexit`. Used by search and lifecycle prepass for bounded parallelism outside of the LLM scheduler. |
+| `lib/delayed_requests.py` | Delayed-request queue for passive user-facing notifications. Datastore and core callers enqueue items without importing runtime event modules. Queue persisted to `.quaid/runtime/notes/delayed-llm-requests.json` under the workspace dir. Provides file-lock-safe enqueue/dequeue. Used to deliver janitor summaries after the LLM session returns. |
+| `lib/runtime_context.py` | Runtime context port that isolates adapter access behind a single module. Lifecycle, datastore, and ingestor code imports path/provider/session helpers from here rather than touching adapter internals directly. Key functions: `get_workspace_dir()` (active instance root), `get_data_dir()`, `get_logs_dir()`, `get_llm_provider()`, `get_last_channel()`, `send_notification()`, `get_install_url()`. |
 
 All shared library modules use `__all__` exports to define explicit public API boundaries, ensuring clean module interfaces and preventing accidental coupling to internal helpers.
 
@@ -375,6 +381,51 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 - **Slow release:** After successful completion, increments the cap back toward `configured_workers` by 1
 - `QUAID_GLOBAL_LLM_MAX_WORKERS` env var — overrides the global thread pool ceiling (default 32)
 - Singleton access via `get_global_llm_scheduler()`; `reset_global_llm_scheduler()` shuts down and clears it (called at process exit via `atexit`)
+
+**Log rotation (`core/log_rotation.py`):** Token-budget-based rotation for append-only log files (`PROJECT.log`, journal entries). Never splits an entry; always keeps at least the most recent entry.
+- `rotate_log_file(log_file, archive_dir, token_budget)` — keeps recent entries within the budget, archives older entries into monthly files under `log/<YYYY-MM>.log`. Returns `(archived_count, kept_count)`.
+- `rotate_project_logs(projects_dir, **kwargs)` — rotates `PROJECT.log` for all projects under `QUAID_HOME/projects/`. Call after distillation.
+- `rotate_journal_logs(journal_dir, **kwargs)` — rotates `*.journal.md` files; archives into `journal/archive/<stem>/`.
+- Default token budget: 4000 tokens (configurable via `projects.logTokenBudget` in config). Token estimate uses ~4 chars/token (conservative). Rotation is triggered after distillation, not on daemon ticks.
+
+**Datastore facade (`datastore/facade.py`):** Narrow re-export surface for non-datastore modules (adapter, CLI, tests). Exposes `store_memory`, `recall_memories`, `recall_memories_fast`, `search_memories`, `datastore_stats`, `list_memory_domains`, `register_memory_domain`, `forget_memory`, `get_memory_by_id`, `create_edge` — all delegating to `datastore.memorydb.memory_graph`. Janitor and datastore-owned maintenance routines import datastore internals directly; only external callers use this facade.
+
+**Subagent registry (`core/subagent_registry.py`):** Tracks parent/child session relationships so subagent transcripts merge into the parent session's extraction. Adapter-agnostic — both Claude Code and OpenClaw write via lifecycle hooks.
+- Storage: JSON files per parent session under `QUAID_HOME/data/subagent-registry/`; file-locked for concurrent write safety.
+- `register(parent_session_id, child_id, child_transcript_path, child_type, metadata)` — called on `SubagentStart` (CC) / `subagent_spawned` (OC)
+- `mark_complete(parent_session_id, child_id, transcript_path)` — called on `SubagentStop` / `subagent_ended`; late registration handled inline
+- `get_harvestable(parent_session_id)` — returns completed, un-harvested children with transcript paths
+- `mark_harvested(parent_session_id, child_id)` — stamps `harvested_at` after extraction
+- `is_registered_subagent(session_id)` — scans all registries; used by the daemon to suppress standalone timeout extraction for registered subagents
+- `cleanup_old_registries(max_age_hours=48)` — removes stale registry files
+
+**Compatibility + circuit breaker (`core/compatibility.py`):** Watches the host platform version and disables Quaid operations when an incompatible host is detected. Three circuit breaker states: `normal`, `degraded` (extraction/storage disabled, recall works), `safe_mode` (all operations disabled).
+- `VersionWatcher` — daemon-integrated class; `tick()` does a cheap mtime check on the host binary, triggers full version check when mtime changes or per adaptive interval. On state change, writes `circuit-breaker.json` and notifies the user. Adaptive check intervals: 24h (normal/compatible), 1h (untested or safe_mode), 6h (degraded).
+- `JanitorScheduler` — daemon-owned janitor scheduling; replaces external cron. Runs janitor at a configured hour (default 4am) within a configurable window. Catch-up logic: if checkpoint is >24h old, runs regardless of window. Config keys: `janitor.scheduled_hour`, `janitor.window_hours`. Skips if circuit breaker disallows writes.
+- `read_circuit_breaker(data_dir)` / `write_circuit_breaker(data_dir, state)` / `clear_circuit_breaker(data_dir)` — file-based state persistence at `data/circuit-breaker.json`
+- `check_write_allowed(data_dir)` / `check_read_allowed(data_dir)` — entry-point guards for critical operations
+- `evaluate_compatibility(host_info, quaid_version, matrix)` — evaluates against the compatibility matrix (fetched from GitHub, cached at `data/compatibility-matrix.json`). Global kill switch in matrix triggers `safe_mode` immediately.
+- `preflight_compatibility_check(host_platform, host_version, quaid_version)` — pre-install check for install scripts; returns `{ok, status, message, fix}` dict
+- `notify_on_use_if_degraded(data_dir)` — session-init guard; emits once-per-30-min warning when state is degraded/safe_mode
+
+**Post-extraction docs hook (`core/docs_updater_hook.py`):** Runs after extraction to update project docs (`TOOLS.md`, `AGENTS.md`) based on shadow git diffs. Uses a classify → gate → update pipeline to avoid unnecessary LLM calls.
+- `update_project_docs(snapshots, extraction_result, dry_run)` — entry point; iterates over project snapshots from `project_registry.snapshot_all_projects()`. Trivial diffs (confidence ≥ 0.7) are skipped without LLM. Borderline cases gated by `call_fast_reasoning`. Significant changes updated by `call_deep_reasoning`.
+- Edit format: `<<<EDIT\nSECTION: ...\nOLD: ...\nNEW: ...\n>>>` blocks; parsed and applied via `datastore.docsdb.updater.apply_edit_blocks`.
+- Metrics returned: `projects_checked`, `docs_updated`, `docs_skipped`, `trivial_skipped`, `errors`.
+
+**Soul snippets + journal (`datastore/notedb/soul_snippets.py`):** Dual extraction system producing both fast-path snippets and slow-path journal entries at compaction/reset.
+- **Snippets (fast path):** Bullet-point observations written to `*.snippets.md` staging files in the identity dir. Nightly janitor reviews each snippet with `FOLD` (integrate into core file), `REWRITE` (synthesize), or `DISCARD` decisions. Keeps `SOUL.md`, `USER.md`, `MEMORY.md` current day-to-day. Target files configurable; `AGENTS.md` is optional via config.
+- **Journal (slow path):** Diary-style paragraphs written to `journal/*.journal.md`. Opus distillation runs weekly, synthesizing themes into core markdown. Old journal entries archived monthly.
+- Entry points: `run_soul_snippets_review()` — nightly snippet FOLD/REWRITE/DISCARD (janitor Task 1d-snippets); `run_journal_distillation()` — weekly Opus distillation (janitor Task 1d-journal).
+- Protected regions in core markdown files are skipped during writes (via `lib/markdown.strip_protected_regions`).
+
+**Plugin contract architecture (`core/contracts/`, `core/plugins/`):** Defines the protocol surfaces that all datastores implement.
+- `core/contracts/plugin_contract.py` — `PluginContractBase` ABC with seven executable surfaces: `on_init`, `on_config`, `on_status`, `on_dashboard`, `on_maintenance`, `on_tool_runtime`, `on_health`.
+- `core/contracts/memory.py` — `MemoryServicePort` Protocol (structural typing) defining the store/recall/search/create_edge/forget/stats/domain API that all memory service implementations must satisfy.
+- `core/plugins/memorydb_contract.py` — MemoryDB contract. Notable: domain lifecycle (schema/table sync and TOOLS domain block sync) is datastore-owned and implemented here, invoked by core plugin contract execution. Uses `lib/domain_runtime.publish_domains_to_runtime_config` and `lib/tools_domain_sync.sync_tools_domain_block`.
+- `core/plugins/docsdb_contract.py` — DocsDB contract; handles docs workspace init (`projects/`, `temp/`, `scratch/` directory initialization).
+- `core/plugins/notedb_contract.py` — NoteDB contract; minimal stub (all hooks return `ready: True`; dashboard disabled).
+- `core/services/memory_service.py` — `DatastoreMemoryService` class implementing `MemoryServicePort`; core-side composition point wrapping `datastore.facade` behind identity enforcement (`identity_runtime` assertion, privacy policy, write contract).
 
 ### 8. Configuration System
 
