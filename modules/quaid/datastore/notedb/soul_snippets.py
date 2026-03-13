@@ -1254,7 +1254,9 @@ def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
         config = data.get("config", {})
         purpose = config.get("purpose", "")
         max_lines = config.get("maxLines", 200)
+        max_tokens = config.get("maxTokens", 0)
         current_lines = len(parent_content.split('\n'))
+        current_tokens = estimate_tokens(parent_content)
 
         snippet_list = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(snippets))
 
@@ -1262,10 +1264,16 @@ def build_review_prompt(all_snippets: Dict[str, Dict[str, Any]]) -> str:
         visible_content, _ = strip_protected_regions(parent_content)
         visible_project_content, _ = strip_protected_regions(project_content)
 
+        size_budget = (
+            f"Token cap: {max_tokens} (do not exceed)"
+            if max_tokens
+            else f"Size budget: approximately {max_lines} lines"
+        )
+
         file_sections.append(f"""### {filename}
 Purpose: {purpose}
-Current size: {current_lines} lines (max: {max_lines})
-Headroom: {max_lines - current_lines} lines
+Current size: {current_tokens} tokens
+{size_budget}
 
 Current content:
 ```
@@ -1311,7 +1319,8 @@ Guidelines per file:
 
 IMPORTANT:
 - You MUST return exactly one decision for EVERY snippet listed above. Do not omit any.
-- Treat maxLines as a strong target for compactness, not a hard cutoff. If a file is near its target, only FOLD if the snippet is truly essential — and suggest what existing content could be trimmed.
+- If a file has a token cap, treat that cap as absolute. Do not choose FOLD or REWRITE text that would push the file past the token cap. If needed, suggest trimming existing content first.
+- If a file is near its size budget, only FOLD if the snippet is truly essential — and suggest what existing content could be trimmed.
 - If a snippet duplicates existing content, DISCARD it.
 - Prefer REWRITE over FOLD when the snippet's wording doesn't match the file's existing style.
 - Snippet text must be a single line (no newlines). If rewriting, keep it as one concise line.

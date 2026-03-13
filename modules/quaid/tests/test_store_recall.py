@@ -908,7 +908,7 @@ class TestRecallTelemetry:
         assert meta["token_count"] >= 1
         assert meta["planner_profile"] == "full"
 
-    def test_plan_fanout_queries_fast_profiles_reduce_budget(self):
+    def test_plan_fanout_queries_fast_profiles_preserve_full_budget_metadata(self):
         from datastore.memorydb.memory_graph import _plan_fanout_queries
 
         _queries_fast, fast_meta = _plan_fanout_queries(
@@ -924,8 +924,44 @@ class TestRecallTelemetry:
 
         assert fast_meta["planner_profile"] == "fast"
         assert aggressive_meta["planner_profile"] == "aggressive"
-        assert fast_meta["fanout_budget"] <= 2
-        assert aggressive_meta["fanout_budget"] <= fast_meta["fanout_budget"]
+        assert fast_meta["fanout_budget"] == 5
+        assert aggressive_meta["fanout_budget"] == 5
+
+    def test_plan_fanout_queries_fast_profile_prompt_is_conservative(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_call_fast_reasoning(*, prompt, **kwargs):
+            captured["prompt"] = prompt
+            return ('{"queries":["Maya career timeline"]}', {})
+
+        with patch.object(mg, "parse_json_response", return_value={"queries": ["Maya career timeline"]}), \
+             patch("lib.llm_clients.call_fast_reasoning", side_effect=_fake_call_fast_reasoning):
+            queries, meta = mg._plan_fanout_queries(
+                "Trace Maya's career arc from TechFlow to Stripe",
+                return_meta=True,
+                planner_profile="aggressive",
+            )
+
+        assert queries[0] == "Trace Maya's career arc from TechFlow to Stripe"
+        assert "Default to exactly 1 query" in captured["prompt"]
+        assert meta["planner_profile"] == "aggressive"
+
+    def test_recall_fast_always_uses_planner(self):
+        import datastore.memorydb.memory_graph as mg
+
+        captured = {}
+
+        def _fake_recall(query, **kwargs):
+            captured["kwargs"] = kwargs
+            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            mg.recall_fast("Where does Maya work?", planner_profile="aggressive", return_meta=True)
+
+        assert captured["kwargs"]["use_routing"] is True
+        assert captured["kwargs"]["planner_profile"] == "aggressive"
 
     def test_apply_mmr_skips_diversity_loop_when_results_fit_limit(self, tmp_path):
         from datastore.memorydb.memory_graph import _apply_mmr
