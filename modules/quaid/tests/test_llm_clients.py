@@ -174,6 +174,32 @@ class TestTokenUsage:
         assert usage["output_tokens"] == 50
         assert usage["api_calls"] == 2
 
+    def test_get_token_usage_includes_model_and_tier_breakdown(self):
+        import core.llm.clients as llm_clients
+        reset_token_usage()
+        llm_clients._models_loaded = True
+        llm_clients._fast_reasoning_model = "claude-haiku-4-5"
+        llm_clients._deep_reasoning_model = "claude-opus-4-6"
+        llm_clients._usage_by_model = {
+            "claude-haiku-4-5": {"input": 30, "output": 12},
+            "claude-opus-4-6": {"input": 70, "output": 28},
+        }
+
+        usage = get_token_usage()
+
+        assert usage["model_usage"]["claude-haiku-4-5"]["total_tokens"] == 42
+        assert usage["model_usage"]["claude-opus-4-6"]["total_tokens"] == 98
+        assert usage["tier_usage"]["fast"] == {
+            "input_tokens": 30,
+            "output_tokens": 12,
+            "total_tokens": 42,
+        }
+        assert usage["tier_usage"]["deep"] == {
+            "input_tokens": 70,
+            "output_tokens": 28,
+            "total_tokens": 98,
+        }
+
     def test_estimate_cost_zero_usage(self):
         reset_token_usage()
         cost = estimate_cost()
@@ -332,6 +358,31 @@ class TestCallLlmProvider:
         assert usage["input_tokens"] == 100
         assert usage["output_tokens"] == 50
         assert usage["api_calls"] == 1
+
+    def test_emits_usage_event_when_log_path_is_configured(self, test_adapter, tmp_path, monkeypatch):
+        """call_llm should append benchmark-scoped usage events when requested."""
+        import core.llm.clients as llm_clients
+        usage_log = tmp_path / "logs" / "llm-usage.jsonl"
+        monkeypatch.setenv("QUAID_LLM_USAGE_LOG_PATH", str(usage_log))
+        monkeypatch.setenv("QUAID_LLM_USAGE_PHASE", "ingest")
+        monkeypatch.setenv("QUAID_LLM_USAGE_SOURCE", "benchmark")
+
+        reset_token_usage()
+        llm_clients.call_llm("system", "user", max_tokens=100)
+
+        rows = usage_log.read_text(encoding="utf-8").strip().splitlines()
+        assert len(rows) == 1
+        payload = json.loads(rows[0])
+        assert payload["phase"] == "ingest"
+        assert payload["source"] == "benchmark"
+        assert payload["provider"]
+        assert payload["tier"] in {"fast", "deep"}
+        assert payload["input_tokens"] == 100
+        assert payload["output_tokens"] == 50
+        assert payload["total_tokens"] == 150
+        assert payload["api_calls"] == 1
+        assert payload["duration_ms"] >= 0
+        assert isinstance(payload["model_usage"], dict)
 
     def test_cost_cap_abort(self, test_adapter, monkeypatch):
         """call_llm should abort when cost cap is exceeded."""

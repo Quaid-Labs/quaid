@@ -44,6 +44,7 @@ _fast_reasoning_model: str = ""
 _deep_reasoning_model: str = ""
 _model_config_lock = threading.Lock()
 _trace_lock = threading.Lock()
+_usage_log_lock = threading.Lock()
 
 
 def _load_model_config():
@@ -134,12 +135,31 @@ def reset_token_usage():
 def get_token_usage() -> dict:
     """Return accumulated token usage and estimated cost for this run."""
     with _usage_lock:
+        model_usage = {
+            model_name: {
+                "input_tokens": int(counts.get("input", 0)),
+                "output_tokens": int(counts.get("output", 0)),
+                "total_tokens": int(counts.get("input", 0)) + int(counts.get("output", 0)),
+            }
+            for model_name, counts in _usage_by_model.items()
+        }
+        tier_usage = {
+            "fast": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            "deep": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        }
+        for model_name, counts in model_usage.items():
+            tier = _resolve_tier(model_name)
+            tier_usage[tier]["input_tokens"] += int(counts["input_tokens"])
+            tier_usage[tier]["output_tokens"] += int(counts["output_tokens"])
+            tier_usage[tier]["total_tokens"] += int(counts["total_tokens"])
         return {
             "input_tokens": _usage_input_tokens,
             "output_tokens": _usage_output_tokens,
             "api_calls": _usage_calls,
             "cache_read_tokens": _usage_cache_read_tokens,
             "cache_creation_tokens": _usage_cache_creation_tokens,
+            "model_usage": model_usage,
+            "tier_usage": tier_usage,
         }
 
 
@@ -345,6 +365,64 @@ def _append_trace(payload: Dict[str, object]) -> None:
         return
 
 
+def _usage_log_path() -> Optional[Path]:
+    raw = str(os.environ.get("QUAID_LLM_USAGE_LOG_PATH", "")).strip()
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _append_usage_event(
+    result: LLMResult,
+    *,
+    tier: Optional[str],
+    provider_name: str,
+    requested_model: Optional[str],
+) -> None:
+    """Best-effort append of per-call token usage to a shared JSONL log."""
+    path = _usage_log_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        model_usage = {}
+        if result.model_usage:
+            for model_name, counts in result.model_usage.items():
+                model_usage[str(model_name)] = {
+                    "input_tokens": int(counts.get("input", 0)),
+                    "output_tokens": int(counts.get("output", 0)),
+                    "total_tokens": int(counts.get("input", 0)) + int(counts.get("output", 0)),
+                }
+        elif result.model:
+            model_usage[str(result.model)] = {
+                "input_tokens": int(result.input_tokens),
+                "output_tokens": int(result.output_tokens),
+                "total_tokens": int(result.input_tokens) + int(result.output_tokens),
+            }
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "phase": str(os.environ.get("QUAID_LLM_USAGE_PHASE", "")).strip() or "unknown",
+            "source": str(os.environ.get("QUAID_LLM_USAGE_SOURCE", "")).strip() or "runtime",
+            "provider": provider_name,
+            "tier": tier or "",
+            "requested_model": requested_model or "",
+            "resolved_model": result.model or requested_model or "",
+            "input_tokens": int(result.input_tokens),
+            "output_tokens": int(result.output_tokens),
+            "total_tokens": int(result.input_tokens) + int(result.output_tokens),
+            "cache_read_tokens": int(result.cache_read_tokens),
+            "cache_creation_tokens": int(result.cache_creation_tokens),
+            "api_calls": 1,
+            "duration_ms": round(float(result.duration) * 1000),
+            "model_usage": model_usage,
+        }
+        with _usage_log_lock:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=True) + "\n")
+    except Exception:
+        return
+
+
 def _track_usage(result: LLMResult) -> None:
     """Accumulate token usage from an LLMResult into module-level counters."""
     global _usage_input_tokens, _usage_output_tokens, _usage_calls
@@ -482,6 +560,12 @@ def call_llm(system_prompt: str, user_message: str,
                         raise TimeoutError("LLM deadline exhausted while waiting for worker slot")
                 result = llm.llm_call(messages, resolved_tier, max_tokens, call_timeout)
             _track_usage(result)
+            _append_usage_event(
+                result,
+                tier=resolved_tier,
+                provider_name=provider_name,
+                requested_model=model,
+            )
             if result.truncated:
                 logger.warning(
                     "[llm_clients] Response truncated (max_tokens) for model=%s",
