@@ -21,16 +21,18 @@ This file is the canonical entry point for all docs in `projects/quaid`.
 | File | Summary |
 |---|---|
 | `projects/quaid/reference/adapter-provider-architecture.md` | Provider abstraction contract: only adapter/provider + config are provider-aware; core calls deep/fast tiers only. |
-| `projects/quaid/reference/memory-local-implementation.md` | Implementation-level reference for hooks, extraction flow, recall flow, config shape (incl. 3-layer merge chain), instance management, and module boundaries. |
-| `projects/quaid/reference/memory-system-design.md` | High-level system design, layer boundaries, lifecycle, and design principles. |
-| `projects/quaid/reference/memory-schema.md` | SQLite schema reference: nodes/edges/FTS/indexes, doc_registry, doc_chunks, project_definitions. |
+| `projects/quaid/reference/memory-reference.md` | **Consolidated reference.** System design, full implementation details (hooks, modules, shared lib, instance management), SQLite schema DDL, and configuration reference. Replaces the three stubs below. |
+| `projects/quaid/reference/memory-system-design.md` | **Stub — moved to memory-reference.md.** |
+| `projects/quaid/reference/memory-local-implementation.md` | **Stub — moved to memory-reference.md.** |
+| `projects/quaid/reference/memory-schema.md` | **Stub — moved to memory-reference.md.** |
 | `projects/quaid/reference/memory-deduplication-system.md` | Store-time and janitor dedup pipeline, thresholds, and merge safety behavior. |
 | `projects/quaid/reference/janitor-reference.md` | Nightly janitor pipeline reference: schedule, tasks, 3-pass RAG reindex, locking, and operational behavior. |
 | `projects/quaid/reference/memory-operations-guide.md` | Operational handbook for memory/docs lifecycle and day-to-day usage. |
-| `projects/quaid/reference/projects-cli-reference.md` | CLI quick-reference: project registry, doc registry, cross-instance workflow, shared QUAID_HOME model. |
+| `projects/quaid/reference/projects-cli-reference.md` | Stub — see projects-reference.md. |
 | `projects/quaid/reference/extraction-pipeline.md` | **New.** Full extraction pipeline reference: triggers, signal protocol, 14-step pipeline, all 7 hooks, daemon lifecycle, public API. |
 | `projects/quaid/reference/config-instances.md` | **New.** Config system and instance model: 4-layer merge chain, per-instance layout, shared state, CLI reference, multi-instance patterns. |
-| `projects/quaid/reference/projects-system.md` | **New.** Projects system internals: two-registry model, full lifecycle (create/link/unlink/delete), shadow git, project updater, sync engine. |
+| `projects/quaid/reference/projects-system.md` | Stub — see projects-reference.md. |
+| `projects/quaid/reference/projects-reference.md` | **Consolidated.** Projects system: overview, two-registry model, full lifecycle, shadow git, sync engine, project updater, CLI reference, cross-instance workflow, invariants. |
 | `projects/quaid/reference/rag-docs-system.md` | **New.** RAG and docs system: indexing pipeline, chunking, search, staleness detection, doc auto-update, event processing, CLI reference. |
 | `projects/quaid/reference/hooks-session-lifecycle.md` | **New.** Hook entry points and session lifecycle: all 7 hooks with stdin/stdout schemas, CC/OC hook wiring, signal system, subagent registry, notification model. |
 
