@@ -1556,39 +1556,32 @@ Consider running: docs staleness updater (update-stale --apply)`;
     return Math.max(5, Math.min(k, 40));
   }
   async function recallMemoryFromBridge(query, limit, opts) {
-    const stores = opts.stores || ["vector_basic"];
-    const expandGraph = stores.includes("graph");
+    const rawStores = opts.stores || ["vector"];
+    const expandGraph = rawStores.includes("graph");
+    const normalizedStores = [...new Set(rawStores.map(
+      (s) => s === "vector_basic" || s === "vector_technical" ? "vector" : s
+    ))];
+    let domain = opts.domain;
+    if (!domain) {
+      if (rawStores.includes("vector_technical") && !rawStores.includes("vector_basic")) {
+        domain = { technical: true };
+      } else if (rawStores.includes("vector_basic") && !rawStores.includes("vector_technical")) {
+        domain = { personal: true };
+      }
+    }
+    const cfg = { stores: normalizedStores, limit };
+    if (domain) cfg["domain_filter"] = domain;
+    if (opts.domainBoost) cfg["domain_boost"] = opts.domainBoost;
+    if (opts.project) cfg["project"] = opts.project;
+    if (opts.dateFrom) cfg["date_from"] = opts.dateFrom;
+    if (opts.dateTo) cfg["date_to"] = opts.dateTo;
+    if (opts.fast) cfg["fast"] = true;
+    if (expandGraph && opts.depth) cfg["depth"] = opts.depth;
+    if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
+      cfg["candidate_pool"] = opts.candidatePool;
+    }
     try {
-      const args = [
-        query,
-        "--limit",
-        String(limit),
-        "--json",
-        "--stores",
-        stores.join(",")
-      ];
-      if (opts.fast) args.push("--fast");
-      if (opts.domain && typeof opts.domain === "object") {
-        args.push("--domain-filter", JSON.stringify(opts.domain));
-      }
-      if (opts.domainBoost) {
-        args.push("--domain-boost", JSON.stringify(opts.domainBoost));
-      }
-      if (opts.project) {
-        args.push("--project", opts.project);
-      }
-      if (opts.dateFrom) {
-        args.push("--date-from", opts.dateFrom);
-      }
-      if (opts.dateTo) {
-        args.push("--date-to", opts.dateTo);
-      }
-      if (expandGraph && opts.depth) {
-        args.push("--depth", String(opts.depth));
-      }
-      if (opts.candidatePool && Array.isArray(opts.candidatePool) && opts.candidatePool.length > 0) {
-        args.push("--candidate-pool", JSON.stringify(opts.candidatePool));
-      }
+      const args = [query, JSON.stringify(cfg), "--json"];
       const output = await datastoreBridge.recall(args);
       const results = parseMemoryResults(output, expandGraph);
       if (!expandGraph) return results.map((r) => ({ ...r, via: "vector" }));

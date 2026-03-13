@@ -23,17 +23,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# Circuit breaker primitives and HostInfo live in lib so datastore/lib
+# modules can import them without crossing subsystem boundaries.
+# Re-export everything here for backward compatibility.
+from lib.circuit_breaker import (  # noqa: F401
+    NORMAL,
+    DEGRADED,
+    SAFE_MODE,
+    CIRCUIT_BREAKER_FILE,
+    CircuitBreakerState,
+    read_circuit_breaker,
+    check_read_allowed,
+    check_write_allowed,
+)
+from lib.host import HostInfo  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Circuit breaker states
+# Circuit breaker states (kept for reference — canonical values are in lib)
 # ---------------------------------------------------------------------------
 
-NORMAL = "normal"
-DEGRADED = "degraded"       # Extraction/storage disabled, recall works
-SAFE_MODE = "safe_mode"     # All operations disabled
-
-CIRCUIT_BREAKER_FILE = "circuit-breaker.json"
 VERSION_CACHE_FILE = "host-version.json"
 MATRIX_CACHE_FILE = "compatibility-matrix.json"
 
@@ -48,44 +58,6 @@ CHECK_INTERVAL_UNTESTED = 3600      # 1h  — new host version, matrix may updat
 CHECK_INTERVAL_DEGRADED = 21600     # 6h  — incompatible, fix may be published
 CHECK_INTERVAL_SAFE_MODE = 3600     # 1h  — everything blocked, recover ASAP
 CHECK_INTERVAL_KILL_SWITCH = 3600   # 1h  — global emergency, check for lift
-
-
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-@dataclass
-class HostInfo:
-    """Information about the host platform."""
-    platform: str           # "openclaw", "claude-code", "standalone"
-    version: str            # "2026.3.7", "2.1.72", etc.
-    binary_path: Optional[str] = None  # Path to the host binary (for mtime)
-
-    def label(self) -> str:
-        return f"{self.platform} {self.version}"
-
-
-@dataclass
-class CircuitBreakerState:
-    """Current circuit breaker state."""
-    status: str = NORMAL
-    reason: Optional[str] = None
-    set_by: Optional[str] = None
-    set_at: Optional[str] = None
-    host_version: Optional[str] = None
-    message: Optional[str] = None
-    untested: bool = False  # True when no matrix entry matched (unknown combo)
-
-    def is_normal(self) -> bool:
-        return self.status == NORMAL
-
-    def allows_writes(self) -> bool:
-        """Can we store/extract/update?"""
-        return self.status == NORMAL
-
-    def allows_reads(self) -> bool:
-        """Can we recall/search?"""
-        return self.status in (NORMAL, DEGRADED)
 
 
 @dataclass
@@ -141,31 +113,12 @@ def _version_satisfies(version: str, range_spec: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Circuit breaker file operations
+# (read_circuit_breaker, check_read_allowed, check_write_allowed re-exported
+#  from lib.circuit_breaker above)
 # ---------------------------------------------------------------------------
 
 def _breaker_path(data_dir: Path) -> Path:
     return data_dir / CIRCUIT_BREAKER_FILE
-
-
-def read_circuit_breaker(data_dir: Path) -> CircuitBreakerState:
-    """Read the current circuit breaker state. Returns NORMAL if no file."""
-    p = _breaker_path(data_dir)
-    if not p.exists():
-        return CircuitBreakerState()
-    try:
-        raw = json.loads(p.read_text())
-        return CircuitBreakerState(
-            status=raw.get("status", NORMAL),
-            reason=raw.get("reason"),
-            set_by=raw.get("set_by"),
-            set_at=raw.get("set_at"),
-            host_version=raw.get("host_version"),
-            message=raw.get("message"),
-            untested=raw.get("untested", False),
-        )
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read circuit breaker: %s", e)
-        return CircuitBreakerState()
 
 
 def write_circuit_breaker(data_dir: Path, state: CircuitBreakerState) -> None:
@@ -193,27 +146,6 @@ def clear_circuit_breaker(data_dir: Path) -> None:
         set_by="version_watcher",
         set_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     ))
-
-
-# ---------------------------------------------------------------------------
-# Entry point guards — call these at the top of critical operations
-# ---------------------------------------------------------------------------
-
-def check_write_allowed(data_dir: Path) -> CircuitBreakerState:
-    """Check if write operations (extract, store, update) are allowed.
-
-    Returns the state. Caller should check state.allows_writes() and use
-    state.message for user-facing error text.
-    """
-    return read_circuit_breaker(data_dir)
-
-
-def check_read_allowed(data_dir: Path) -> CircuitBreakerState:
-    """Check if read operations (recall, search) are allowed.
-
-    Returns the state. Caller should check state.allows_reads().
-    """
-    return read_circuit_breaker(data_dir)
 
 
 # ---------------------------------------------------------------------------

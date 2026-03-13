@@ -535,7 +535,7 @@ describe("QuaidFacade", () => {
     expect(results.length).toBeGreaterThan(0);
   });
 
-  it("recall forwards domain filter with --domain-filter flag", async () => {
+  it("recall forwards domain filter in JSON config", async () => {
     const execPython = vi.fn(async (command: string) => {
       if (command === "recall") {
         return JSON.stringify([{ text: "domain fact", category: "fact", similarity: 0.8 }]);
@@ -553,8 +553,13 @@ describe("QuaidFacade", () => {
     });
     const recallCall = execPython.mock.calls.find((args) => args[0] === "recall");
     expect(recallCall).toBeTruthy();
-    expect(recallCall?.[1]).toContain("--domain-filter");
-    expect(recallCall?.[1]).not.toContain("--domain");
+    const recallArgs: string[] = recallCall?.[1] ?? [];
+    const cfgArg = recallArgs.find((a: string) => a.startsWith("{"));
+    expect(cfgArg).toBeTruthy();
+    const cfg = JSON.parse(cfgArg!);
+    expect(cfg.domain_filter).toMatchObject({ personal: true });
+    expect(recallArgs).not.toContain("--domain-filter");
+    expect(recallArgs).not.toContain("--domain");
   });
 
   it("recallWithToolRetry returns primary results when retry heuristics do not trigger", async () => {

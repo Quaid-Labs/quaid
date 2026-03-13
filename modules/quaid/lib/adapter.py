@@ -32,8 +32,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 
 from lib.fail_policy import is_fail_hard_enabled
 
-if TYPE_CHECKING:
-    from core.compatibility import HostInfo
+from lib.host import HostInfo
 
 if TYPE_CHECKING:
     from lib.providers import EmbeddingsProvider, LLMProvider
@@ -102,7 +101,6 @@ class QuaidAdapter(abc.ABC):
         Binary path is used for cheap mtime-based change detection.
         Override in subclasses with platform-specific detection.
         """
-        from core.compatibility import HostInfo
         return HostInfo(platform=self.adapter_id(), version="unknown")
 
     def identity_dir(self) -> Path:
