@@ -19,13 +19,38 @@ def _workspace_root() -> Path:
     return Path.cwd()
 
 
-def _config_path() -> Path:
-    root = _workspace_root()
-    return root / "config" / "memory.json"
+def _resolve_config_target(args: argparse.Namespace | None = None) -> tuple[Path, str]:
+    """Resolve which config file to target based on flags and environment.
+
+    Priority (first match wins):
+      --shared flag          → QUAID_HOME/shared/config/memory.json
+      --instance <id> flag   → QUAID_HOME/<id>/config/memory.json
+      QUAID_INSTANCE env     → QUAID_HOME/<QUAID_INSTANCE>/config/memory.json
+      (none)                 → QUAID_HOME/shared/config/memory.json  (default)
+
+    Returns (config_path, label).
+    """
+    home = _workspace_root()
+
+    shared_flag = getattr(args, "shared", False)
+    instance_arg = getattr(args, "instance", None)
+
+    if shared_flag or (not instance_arg and not os.getenv("QUAID_INSTANCE", "").strip()):
+        return home / "shared" / "config" / "memory.json", "shared (machine-wide)"
+
+    instance_id = instance_arg or os.getenv("QUAID_INSTANCE", "").strip()
+    return home / instance_id / "config" / "memory.json", f"instance '{instance_id}'"
 
 
-def _load_config(path: Path) -> dict[str, Any]:
+def _config_path(args: argparse.Namespace | None = None) -> Path:
+    path, _ = _resolve_config_target(args)
+    return path
+
+
+def _load_config(path: Path, allow_missing: bool = False) -> dict[str, Any]:
     if not path.exists():
+        if allow_missing:
+            return {}
         raise FileNotFoundError(f"Config not found: {path}")
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -225,8 +250,9 @@ def _set(data: dict[str, Any], dotted: str | list[str], value: Any) -> None:
     cur[parts[-1]] = value
 
 
-def _print_summary(path: Path, data: dict[str, Any]) -> None:
-    print("Quaid Configuration")
+def _print_summary(path: Path, data: dict[str, Any], label: str = "") -> None:
+    header = f"Quaid Configuration — {label}" if label else "Quaid Configuration"
+    print(header)
     print(str(path))
     print()
 
@@ -385,17 +411,39 @@ def parse_literal(raw: str) -> Any:
     return value
 
 
+def _add_target_args(p: argparse.ArgumentParser) -> None:
+    """Add --shared / --instance targeting flags to a subparser."""
+    grp = p.add_mutually_exclusive_group()
+    grp.add_argument("--shared", action="store_true",
+                     help="Target the machine-wide shared config (embeddings, ollama)")
+    grp.add_argument("--instance", metavar="ID",
+                     help="Target a specific instance config")
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Quaid config helper")
+    parser = argparse.ArgumentParser(
+        description="Quaid config helper",
+        epilog=(
+            "Target flags (mutually exclusive): --shared targets QUAID_HOME/shared/config/memory.json; "
+            "--instance <id> targets QUAID_HOME/<id>/config/memory.json. "
+            "When neither is given, QUAID_INSTANCE env is used, else shared is the default."
+        ),
+    )
     sub = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("show", help="Show summary")
-    sub.add_parser("path", help="Print config path")
-    sub.add_parser("edit", help="Interactive config editor")
+    show_p = sub.add_parser("show", help="Show summary")
+    _add_target_args(show_p)
+
+    path_p = sub.add_parser("path", help="Print config path")
+    _add_target_args(path_p)
+
+    edit_p = sub.add_parser("edit", help="Interactive config editor")
+    _add_target_args(edit_p)
 
     set_p = sub.add_parser("set", help="Set a dotted key path")
     set_p.add_argument("key", help="Dotted path (e.g. models.fastReasoning)")
     set_p.add_argument("value", help="Value (string/number/true/false/json)")
+    _add_target_args(set_p)
 
     auth_p = sub.add_parser("set-auth", help="Store a long-lived auth token for the active adapter")
     auth_p.add_argument("token", nargs="?", help="Token value (omit to read from stdin)")
@@ -403,34 +451,38 @@ def main() -> int:
     args = parser.parse_args()
     cmd = args.cmd or "show"
 
-    path = _config_path()
+    cfg_path, cfg_label = _resolve_config_target(args)
+
     if cmd == "path":
-        print(str(path))
+        print(str(cfg_path))
         return 0
 
+    allow_missing = getattr(args, "shared", False) or (
+        not getattr(args, "instance", None) and not os.getenv("QUAID_INSTANCE", "").strip()
+    )
     try:
-        data = _load_config(path)
+        data = _load_config(cfg_path, allow_missing=allow_missing)
     except Exception as err:
         print(str(err))
         return 1
 
     if cmd == "show":
-        _print_summary(path, data)
+        _print_summary(cfg_path, data, label=cfg_label)
         return 0
 
     if cmd == "edit":
-        interactive_edit(path, data)
+        interactive_edit(cfg_path, data)
         return 0
 
     if cmd == "set":
         try:
             _set(data, args.key, parse_literal(args.value))
-            _save_config(path, data)
+            _save_config(cfg_path, data)
             _run_config_callbacks_after_save()
         except Exception as err:
             print(f"Failed to set {args.key}: {err}")
             return 1
-        print(f"Set {args.key} in {path}")
+        print(f"Set {args.key} in {cfg_path}")
         return 0
 
     if cmd == "set-auth":

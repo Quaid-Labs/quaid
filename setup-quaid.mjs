@@ -359,6 +359,10 @@ const OLLAMA_PS_URL = `${OLLAMA_BASE_URL}/api/ps`;
 // Allows the prompt to override IS_OPENCLAW / IS_CLAUDE_CODE after they're set.
 let _platformOverride = "";
 
+// Mutable instance ID override — set by the instance ID prompt in step1().
+// Takes precedence over the adapter-derived default.
+let _instanceIdOverride = "";
+
 function resolvedInstallerPlatform() {
   if (_platformOverride) return _platformOverride;
   if (IS_CLAUDE_CODE) return "claude-code";
@@ -367,6 +371,7 @@ function resolvedInstallerPlatform() {
 }
 
 function resolvedInstallerInstanceId(adapterType = "") {
+  if (_instanceIdOverride) return _instanceIdOverride;
   const explicit = String(adapterType || "").trim();
   if (explicit) return explicit;
   return resolvedInstallerPlatform();
@@ -376,6 +381,113 @@ function syncInstallerInstanceEnv(adapterType = "") {
   const instance = resolvedInstallerInstanceId(adapterType);
   process.env.QUAID_INSTANCE = instance;
   return instance;
+}
+
+/**
+ * List existing Quaid instance names by scanning WORKSPACE for directories
+ * that contain config/memory.json.
+ */
+function listExistingInstances() {
+  const reserved = new Set([
+    "shared", "projects", "config", "data", "logs", "temp", "tmp",
+    "quaid", "plugins", "lib", "core", "docs", "assets", "release",
+    "scripts", "test", "tests", "benchmark", "node_modules",
+  ]);
+  try {
+    if (!fs.existsSync(WORKSPACE)) return [];
+    return fs.readdirSync(WORKSPACE)
+      .filter(name => {
+        if (name.startsWith(".")) return false;
+        if (reserved.has(name.toLowerCase())) return false;
+        const cfgPath = path.join(WORKSPACE, name, "config", "memory.json");
+        return fs.existsSync(cfgPath);
+      })
+      .sort();
+  } catch { return []; }
+}
+
+/**
+ * Prompt the user to confirm or customise their Quaid instance ID.
+ * Called once after the platform is known. Sets _instanceIdOverride.
+ *
+ * Default = adapter name (e.g. "claude-code"). User can override to any valid name.
+ * Showing existing instances lets them opt-in to shared memory knowingly.
+ */
+async function promptInstanceId(adapterType) {
+  if (AGENT_MODE || _testAnswers) {
+    // Non-interactive: keep the adapter-derived default, no prompt.
+    syncInstallerInstanceEnv(adapterType);
+    return;
+  }
+
+  // If QUAID_INSTANCE is already set in the environment (e.g. re-install over
+  // an existing setup, or set explicitly by the operator), honour it silently.
+  const envInstance = String(process.env.QUAID_INSTANCE || "").trim();
+  if (envInstance && !_instanceIdOverride) {
+    _instanceIdOverride = envInstance;
+    log.info(C.dim(`Instance ID: ${envInstance} (from QUAID_INSTANCE env — skipping prompt)`));
+    return;
+  }
+
+  const defaultId = adapterType || resolvedInstallerPlatform();
+  const existing = listExistingInstances();
+
+  const INSTANCE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
+  const RESERVED = new Set([
+    "shared", "projects", "config", "data", "logs", "temp", "tmp",
+    "quaid", "plugins", "lib", "core", "docs", "assets", "release",
+    "scripts", "test", "tests", "benchmark", "node_modules",
+  ]);
+
+  log.message("");
+  log.message(C.bold("Instance ID"));
+  log.message(
+    "Each Quaid install gets an instance ID — a short name for its memory silo.\n" +
+    "Two installs with the " + C.bold("same") + " ID share memory. Different IDs = separate memory.\n" +
+    "The ID becomes a folder under your Quaid home: " + C.dim(WORKSPACE + "/<id>/")
+  );
+
+  if (existing.length > 0) {
+    log.message("Existing instances: " + existing.map(n => C.cyan(n)).join("  "));
+  } else {
+    log.message(C.dim("No existing instances found under " + WORKSPACE));
+  }
+
+  if (adapterType === "claude-code") {
+    log.message(
+      C.dim("Claude Code: using the same ID across machines shares memory across all your CC sessions.")
+    );
+  } else if (adapterType === "openclaw") {
+    log.message(
+      C.dim("OpenClaw: each agent can get its own ID for an independent memory and personality.")
+    );
+  }
+
+  log.message("");
+
+  const answer = handleCancel(await text({
+    message: "Instance ID",
+    placeholder: defaultId,
+    initialValue: defaultId,
+    validate(value) {
+      const v = (value || "").trim() || defaultId;
+      if (!INSTANCE_RE.test(v))
+        return "Must start with a letter or digit, contain only [a-zA-Z0-9._-], max 64 chars.";
+      if (RESERVED.has(v.toLowerCase()))
+        return `'${v}' is reserved. Try something like '${adapterType}-personal'.`;
+    },
+  }));
+
+  const chosen = (String(answer || "").trim()) || defaultId;
+  _instanceIdOverride = chosen;
+  syncInstallerInstanceEnv();
+
+  if (!existing.includes(chosen)) {
+    log.success(`Instance: ${C.cyan(chosen)} ${C.dim("(new silo)")}`);
+  } else {
+    log.info(`Instance: ${C.cyan(chosen)} ${C.dim("(existing — memory will be shared)")}`);
+  }
+  log.message("");
 }
 
 /**
@@ -1465,6 +1577,7 @@ async function step1_preflight() {
       _platformOverride = "openclaw";
     }
     syncInstallerInstanceEnv();
+    await promptInstanceId(resolvedInstallerPlatform());
   }
 
   if (_isPlatform("claude-code")) {
@@ -1836,6 +1949,12 @@ async function step3_models() {
     log.info(`Provider override: ${C.bcyan(provider)} ${C.dim("(QUAID_INSTALL_PROVIDER)")}`);
   }
   syncInstallerInstanceEnv(adapterType);
+  // Prompt for instance ID if it wasn't already set in step1 (e.g. platform
+  // was pre-detected via IS_OPENCLAW / IS_CLAUDE_CODE flags rather than the
+  // interactive picker, so step1 skipped the prompt).
+  if (!_instanceIdOverride) {
+    await promptInstanceId(adapterType);
+  }
 
   if (provider !== "anthropic") {
     log.warn(C.bold("Non-Anthropic providers are experimental. Prompts are tuned for Claude."));
@@ -1951,8 +2070,53 @@ async function step3_models() {
 // =============================================================================
 // Step 4: Embeddings
 // =============================================================================
+/**
+ * Detect an already-configured embedding setup from a shared config object.
+ *
+ * Returns { provider, embedModel, embedDim } if any provider's embedding is
+ * configured, or null if no embedding setup is found.
+ *
+ * Add a new branch here when a new embeddings provider is added.
+ */
+function detectSharedEmbeddings(cfg) {
+  if (!cfg || typeof cfg !== "object") return null;
+
+  // ollama (current provider)
+  if (cfg.ollama?.embeddingModel && cfg.ollama.embeddingModel !== "none") {
+    return {
+      provider: "ollama",
+      embedModel: cfg.ollama.embeddingModel,
+      embedDim: cfg.ollama.embeddingDim || 0,
+    };
+  }
+
+  // future providers:
+  // if (cfg.openai?.embeddingModel) return { provider: "openai", embedModel: cfg.openai.embeddingModel, embedDim: cfg.openai.embeddingDim || 1536 };
+  // if (cfg.cohere?.embeddingModel) return { provider: "cohere", embedModel: cfg.cohere.embeddingModel, embedDim: cfg.cohere.embeddingDim || 1024 };
+
+  return null;
+}
+
 async function step4_embeddings() {
   stepHeader(4, TOTAL_INSTALL_STEPS, "EMBEDDINGS", STEP_QUOTES.embeddings);
+
+  // Embeddings config is machine-wide — only ask once per machine.
+  // Check shared config for any already-configured embedding provider.
+  const sharedConfigPath = path.join(WORKSPACE, "shared", "config", "memory.json");
+  if (fs.existsSync(sharedConfigPath)) {
+    try {
+      const sharedCfg = JSON.parse(fs.readFileSync(sharedConfigPath, "utf8"));
+      const found = detectSharedEmbeddings(sharedCfg);
+      if (found) {
+        log.info(C.dim("Embeddings already configured in shared config — inheriting."));
+        log.info(`  provider: ${C.cyan(found.provider)}  model: ${C.cyan(found.embedModel)}  dim: ${found.embedDim || "auto"}`);
+        log.info(C.dim(`  source: ${sharedConfigPath}`));
+        log.info(C.dim("  To change the model, run: quaid config edit --shared"));
+        log.message("");
+        return { embedModel: found.embedModel, embedDim: found.embedDim };
+      }
+    } catch { /* malformed shared config — fall through to normal setup */ }
+  }
 
   log.info(C.dim("Embeddings power semantic search — turning text into vectors"));
   log.info(C.dim("so Quaid can find relevant memories by meaning, not just keywords."));
@@ -3800,11 +3964,6 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
       archivePath: "data/memory_archive.db",
       walMode: true,
     },
-    ollama: {
-      url: (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/v1\/?$/, "").replace(/\/+$/, ""),
-      embeddingModel: embeddings.embedModel,
-      embeddingDim: embeddings.embedDim,
-    },
     rag: {
       docsDir: "docs",
       chunkMaxTokens: 800,
@@ -3815,17 +3974,46 @@ function writeConfig(owner, models, embeddings, systems, janitorPolicies = null)
     },
   };
 
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  const configJson = JSON.stringify(config, null, 2) + "\n";
-  fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), configJson);
+  // Write ollama/embeddings config to the machine-wide shared config so all
+  // instances on this machine use the same embedding model (required for
+  // cross-instance memory inspection).  Only write if the shared config does
+  // not already have an ollama block (first install wins; subsequent installs
+  // inherit the existing setup).
+  const sharedConfigDir = path.join(WORKSPACE, "shared", "config");
+  const sharedConfigPath = path.join(sharedConfigDir, "memory.json");
+  const ollamaBlock = {
+    url: (process.env.OLLAMA_URL || "http://localhost:11434").replace(/\/v1\/?$/, "").replace(/\/+$/, ""),
+    embeddingModel: embeddings.embedModel,
+    embeddingDim: embeddings.embedDim,
+  };
+  let sharedCfg = {};
+  if (fs.existsSync(sharedConfigPath)) {
+    try { sharedCfg = JSON.parse(fs.readFileSync(sharedConfigPath, "utf8")); } catch {}
+  }
+  if (!sharedCfg.ollama) {
+    sharedCfg.ollama = ollamaBlock;
+    fs.mkdirSync(sharedConfigDir, { recursive: true });
+    fs.writeFileSync(sharedConfigPath, JSON.stringify(sharedCfg, null, 2) + "\n");
+    log.info(`Wrote embeddings config to shared config: ${sharedConfigPath}`);
+  } else {
+    log.info(C.dim(`Shared embeddings config already exists — skipping (${sharedConfigPath})`));
+  }
 
-  // Also write config to instance root so QUAID_INSTANCE runtime finds it.
+  // Write config to the instance root (QUAID_HOME/<instance>/config/memory.json).
+  // This is the authoritative instance config path; the old flat QUAID_HOME/config/
+  // path is no longer written.
   const instanceId = (process.env.QUAID_INSTANCE || "").trim();
   if (instanceId) {
     const instanceConfigDir = path.join(WORKSPACE, instanceId, "config");
     fs.mkdirSync(instanceConfigDir, { recursive: true });
+    const configJson = JSON.stringify(config, null, 2) + "\n";
     fs.writeFileSync(path.join(instanceConfigDir, "memory.json"), configJson);
-    log.info(`Copied config to instance path: ${instanceConfigDir}/memory.json`);
+    log.info(`Wrote instance config: ${instanceConfigDir}/memory.json`);
+  } else {
+    // Fallback for non-instance installs (standalone without QUAID_INSTANCE set).
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    const configJson = JSON.stringify(config, null, 2) + "\n";
+    fs.writeFileSync(path.join(CONFIG_DIR, "memory.json"), configJson);
   }
 }
 

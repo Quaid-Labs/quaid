@@ -221,6 +221,46 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" health "$@"
     ;;
 
+  instances|instance)
+    SUBCMD="${1:-list}"
+    shift 2>/dev/null || true
+    case "$SUBCMD" in
+      list)
+        python3 - "$@" <<'PYEOF'
+import sys, os, json
+sys.path.insert(0, os.environ.get("QUAID_MODULE_ROOT", os.path.dirname(os.path.abspath(__file__))))
+from lib.instance import list_instances, quaid_home, instance_id as _iid
+
+home = quaid_home()
+instances = list_instances()
+try:
+    current = _iid()
+except Exception:
+    current = None
+
+if "--json" in sys.argv:
+    print(json.dumps({"home": str(home), "current": current, "instances": instances}))
+else:
+    print(f"Quaid home: {home}")
+    print()
+    if not instances:
+        print("  (no instances found)")
+    else:
+        for name in instances:
+            marker = " *" if name == current else ""
+            print(f"  {name}{marker}")
+    if current and current not in instances:
+        print(f"  {current}  (current — not yet initialised)")
+    print()
+PYEOF
+        ;;
+      *)
+        echo "Usage: quaid instances list"
+        exit 1
+        ;;
+    esac
+    ;;
+
   config)
     SUBCMD="${1:-show}"
     shift 2>/dev/null || true
@@ -240,7 +280,7 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
         exec python3 "$CONFIG_PY" set "$@"
         ;;
       *)
-        echo "Usage: quaid config [show|edit|path|set <dotted.key> <value>]"
+        echo "Usage: quaid config [show|edit|path|set <dotted.key> <value>] [--shared | --instance <id>]"
         exit 1
         ;;
     esac
@@ -307,10 +347,15 @@ search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edge
     echo "  compat matrix        Show cached compatibility matrix"
     echo ""
     echo "Config:"
-    echo "  config               Show configuration summary"
-    echo "  config edit          Interactive menu editor"
-    echo "  config path          Show active config path"
+    echo "  instances list       List all Quaid instances under QUAID_HOME"
+    echo ""
+    echo "Config:"
+    echo "  config [show]        Show config summary (default: shared or current instance)"
+    echo "  config edit          Interactive config editor"
+    echo "  config path          Show active config file path"
     echo "  config set k v       Set value by dotted key path"
+    echo "  --shared             Target machine-wide shared config (embeddings, ollama)"
+    echo "  --instance <id>      Target a specific instance's config"
     echo ""
     echo "Run from: $SCRIPT_DIR"
     ;;

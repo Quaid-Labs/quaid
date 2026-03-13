@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 from lib.runtime_context import get_workspace_dir
-from lib.instance import quaid_home as _quaid_home
+from lib.instance import quaid_home as _quaid_home, shared_config_path as _shared_config_path
 logger = logging.getLogger(__name__)
 
 
@@ -58,10 +58,18 @@ def _workspace_root() -> Path:
 
 
 def _config_paths() -> list:
-    """Config file search paths (in priority order)."""
+    """Config file search paths (highest priority first).
+
+    Merge order (lowest → highest at load time):
+      3. ./memory-config.json            — local cwd override (rarely used)
+      2. ~/.quaid/memory-config.json     — user-level fallback
+      1. QUAID_HOME/shared/config/memory.json  — machine-wide shared settings (embeddings, ollama)
+      0. QUAID_HOME/<instance>/config/memory.json — per-instance config (highest priority)
+    """
     root = _workspace_root()
     return [
         root / "config" / "memory.json",
+        _shared_config_path(),
         Path.home() / ".quaid" / "memory-config.json",
         Path("./memory-config.json"),
     ]

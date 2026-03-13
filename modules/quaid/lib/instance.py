@@ -95,6 +95,16 @@ def shared_registry_path() -> Path:
     return shared_dir() / "project-registry.json"
 
 
+def shared_config_path() -> Path:
+    """Shared config file: QUAID_HOME/shared/config/memory.json.
+
+    Contains machine-wide settings (embeddings model, Ollama URL) that all
+    instances on this machine inherit.  Instance configs can override individual
+    keys; shared config is the fallback layer below instance config.
+    """
+    return shared_dir() / "config" / "memory.json"
+
+
 def instance_exists(name: str) -> bool:
     """Check if an instance directory exists and has config."""
     try:

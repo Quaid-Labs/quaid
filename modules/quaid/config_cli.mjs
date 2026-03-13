@@ -75,13 +75,52 @@ function workspaceRoot() {
   return process.cwd();
 }
 
+/**
+ * Resolve which config file to target.
+ *
+ * Priority (CLI wins over env):
+ *   --shared              → QUAID_HOME/shared/config/memory.json
+ *   --instance <id>       → QUAID_HOME/<id>/config/memory.json
+ *   QUAID_INSTANCE env    → QUAID_HOME/<QUAID_INSTANCE>/config/memory.json
+ *   (none)                → QUAID_HOME/shared/config/memory.json  (default)
+ */
+function resolveConfigTarget() {
+  const args = process.argv.slice(3); // after "node config_cli.mjs <cmd>"
+  const sharedFlag = args.includes("--shared");
+  const instanceIdx = args.findIndex(a => a === "--instance" || a === "-i");
+  const instanceArg = instanceIdx !== -1 ? args[instanceIdx + 1] : null;
+
+  const home = workspaceRoot();
+
+  if (sharedFlag || (!instanceArg && !process.env.QUAID_INSTANCE)) {
+    return {
+      kind: "shared",
+      configPath: path.join(home, "shared", "config", "memory.json"),
+      label: "shared (machine-wide)",
+    };
+  }
+
+  const instanceId = instanceArg || String(process.env.QUAID_INSTANCE || "").trim();
+  return {
+    kind: "instance",
+    instanceId,
+    configPath: path.join(home, instanceId, "config", "memory.json"),
+    label: `instance '${instanceId}'`,
+  };
+}
+
 function configPath() {
-  return path.join(workspaceRoot(), "config", "memory.json");
+  return resolveConfigTarget().configPath;
 }
 
 function loadConfig() {
-  const p = configPath();
-  if (!fs.existsSync(p)) throw new Error(`Config not found: ${p}`);
+  const target = resolveConfigTarget();
+  const p = target.configPath;
+  if (!fs.existsSync(p)) {
+    // For shared config, return an empty object — it may not exist yet
+    if (target.kind === "shared") return { path: p, data: {} };
+    throw new Error(`Config not found: ${p}`);
+  }
   return { path: p, data: JSON.parse(fs.readFileSync(p, "utf8")) };
 }
 
@@ -787,7 +826,8 @@ function showConfig() {
   const deep = getPath(cfg, "models.deepReasoning", "default");
   const fast = getPath(cfg, "models.fastReasoning", "default");
 
-  console.log("Quaid Configuration");
+  const target = resolveConfigTarget();
+  console.log(`Quaid Configuration — ${target.label}`);
   console.log(cfgPath);
   console.log("");
   console.log(`agent system:     ${getPath(cfg, "adapter.type", "standalone")}`);
@@ -820,7 +860,15 @@ function setConfig(dotted, raw) {
 }
 
 function usage() {
-  console.log("Usage: quaid config [show|edit|path|set <dotted.key> <value>]");
+  console.log("Usage: quaid config [show|edit|path|set <dotted.key> <value>] [--shared | --instance <id>]");
+  console.log("");
+  console.log("Target flags (pick one):");
+  console.log("  --shared              Edit the machine-wide shared config (default when no QUAID_INSTANCE)");
+  console.log("  --instance <id>       Edit a specific instance's config");
+  console.log("  (no flag)             Uses QUAID_INSTANCE env var if set, else shared");
+  console.log("");
+  console.log("The shared config holds machine-wide settings (embeddings model, Ollama URL).");
+  console.log("Instance configs inherit shared values and can override individual keys.");
 }
 
 async function main() {

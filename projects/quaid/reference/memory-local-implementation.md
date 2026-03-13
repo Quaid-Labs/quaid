@@ -364,7 +364,10 @@ All shared library modules use `__all__` exports to define explicit public API b
 | `notifications` | Notification routing and channel config |
 | `systems` | Feature gates, system-level toggles, bootstrap file monitoring |
 
-**Embedding model config:**
+**Embedding model config (machine-wide / shared):**
+
+Embeddings config lives in `QUAID_HOME/shared/config/memory.json` — written once on first install and inherited by all instances on the machine. All instances must use the same model so embeddings are cross-instance comparable.
+
 ```json
 {
   "ollama": {
@@ -374,6 +377,8 @@ All shared library modules use `__all__` exports to define explicit public API b
   }
 }
 ```
+
+To change the embedding model: `quaid config edit --shared`
 
 The embedding model was upgraded from nomic-embed-text (768-dim) → qwen3-embedding:0.6b → **qwen3-embedding:8b** (4096-dim, 75.22 MTEB score). The higher-dimensional embeddings provide significantly better semantic matching quality.
 
