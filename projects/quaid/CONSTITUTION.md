@@ -79,6 +79,8 @@ Without seed preservation, every instance converges toward the same generic voic
 - Periodic resonance check: does the evolved content still feel like the same entity?
 - Amplify what makes this agent distinctive. Do not smooth edges toward bland.
 
+**Implementation note:** Immutable regions in SOUL.md (and other core files) are enforced at write-time using `<!-- protected --> ... <!-- /protected -->` HTML comment blocks. The snippet review system strips protected blocks before sending content to the model and skips any edits that would fall inside them. The "Ethical Foundation" section of SOUL.md is additionally protected by explicit LLM prompt instruction. This is the current mechanism for Layers 1 and 2 protection — a `<!-- protected -->` wrapper applied at file creation or onboarding.
+
 ### Three Files, Three Purposes
 
 **SOUL.md — The Agent's Inner Life**
@@ -137,9 +139,9 @@ The snippet generator produces four types:
 
 ### Seed Preservation Rules
 
-- Layers 1 and 2 are NEVER modified, softened, or removed
+- Layers 1 and 2 are NEVER modified, softened, or removed (enforced via `<!-- protected -->` blocks; see above)
 - Layer 3 entries must be consonant with the seed personality
-- Periodic resonance check: does the evolved content still feel like the same entity?
+- Periodic resonance check: does the evolved content still feel like the same entity? (TODO 3 — not yet automated)
 - Amplify what makes this agent distinctive. Do not smooth edges toward bland.
 
 ---
@@ -148,11 +150,13 @@ The snippet generator produces four types:
 
 ### TODO 1: Soul Onboarding
 
+**Status: NOT implemented.** The `<!-- protected -->` block mechanism exists and is used to guard already-marked immutable regions at write time, but the onboarding flow that identifies layers, marks them as protected, and seeds Layer 3 does not exist.
+
 When Quaid takes over an existing OpenClaw agent, it should:
 
 1. Read the existing SOUL.md
 2. Identify Layer 1 (OpenClaw base), Layer 2 (user seed/vibe), and any existing Layer 3 entries
-3. Preserve Layers 1 and 2 as immutable
+3. Wrap Layers 1 and 2 in `<!-- protected --> ... <!-- /protected -->` to make them immutable
 4. Extract the seed personality characteristics for consonance checking
 5. Begin evolving Layer 3 within the seed's character
 
@@ -160,17 +164,25 @@ If no seed exists (user skipped onboarding), Quaid should either use the default
 
 ### TODO 2: Context-Aware Extraction Mode
 
+**Status: NOT implemented.** The extraction pipeline does not distinguish between conversational content and code/project artifacts.
+
 When large blocks of code load into a conversation, the extraction pipeline should detect the transition from conversational context to project artifact and handle them differently. Conversational content gets extracted as snippets. Code blocks get associated with the projects system, not the personal memory graph.
 
 ### TODO 3: Seed Resonance Checking
+
+**Status: NOT implemented.** No automated resonance check exists in the janitor or snippet review pipeline.
 
 Every N janitor passes, the janitor should re-read the seed and verify evolved content still feels like the same entity. If the agent has drifted from its seed personality, course-correct. This prevents convergence toward generic LLM voice over time.
 
 ### TODO 4: Core File Token Budgeting
 
+**Status: NOT implemented.** The janitor has a global token budget for LLM calls, but no per-file size cap exists for SOUL.md, USER.md, or MEMORY.md.
+
 Core files cost tokens on every query. As they grow, implement a budget: SOUL.md max ~2K tokens, USER.md max ~3K tokens, MEMORY.md max ~2K tokens. The janitor consolidates and deepens rather than just appending. At scale, fewer entries with more wisdom beats more entries with less depth.
 
 ### TODO 5: Git-Versioned Core File Changes
+
+**Status: NOT implemented for core files.** Shadow git (`core/shadow_git.py`) exists and is used by the project registry to track user project files, but it is NOT wired into the snippet/journal/workspace write paths for SOUL.md, USER.md, MEMORY.md, or other core markdown.
 
 Every modification to core files (SOUL.md, USER.md, MEMORY.md, TOOLS.md, AGENTS.md) and project docs (PROJECT.md) should be committed via git, preserving a full history of changes. The janitor, snippet system, and journal distillation already overwrite these files — they should do so in a commit with a meaningful message (e.g., "janitor: distill 3 journal entries into USER.md"). This gives:
 
@@ -182,6 +194,8 @@ Every modification to core files (SOUL.md, USER.md, MEMORY.md, TOOLS.md, AGENTS.
 Implementation: wrap file writes in the snippet/journal/workspace systems with `git add <file> && git commit -m "<source>: <summary>"`. Keep commits atomic (one per file per janitor pass). The git log becomes the ground truth for the agent's evolution timeline.
 
 ### TODO 6: Contract-Owned Nightly Backup Service (Optional)
+
+**Status: NOT implemented.** The janitor tracks `backup_core` and `backup_keychain` fields in its applied-changes report (both initialized to `False`) but no backup logic runs. No contract surface for `backup_resources` exists.
 
 Add an optional nightly backup service driven by datastore contracts, not janitor path hardcoding.
 

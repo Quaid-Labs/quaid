@@ -5,13 +5,13 @@ Purpose: evaluate current `quaid` CLI commands for practical runtime value in al
 ## Command Surface
 
 ### Keep (high value, core operations)
-- `search`, `find`, `get`, `forget`
+- `search`, `recall`, `get`, `forget`
 - `store`, `edge`
 - `stats`, `doctor`
 - `janitor`
 - `docs` (search/check/update/changelog)
 - `registry` / `project` / `projects`
-- `config` (now includes interactive menu)
+- `config` (now includes interactive menu; supports `--shared` and `--instance <id>` flags)
 
 ### Keep but mark advanced
 - `export`
@@ -21,7 +21,7 @@ Purpose: evaluate current `quaid` CLI commands for practical runtime value in al
 - low-level `memory_graph.py` passthrough commands
 
 ### Potential deprecations (not removed yet)
-- `find` (overlaps with `search`; keep for now because no-rerank quick lookup is useful in debugging)
+- `find` — not currently wired in CLI dispatch (was considered for no-rerank quick lookup; `search` covers this use case)
 - direct low-level commands exposed via passthrough that bypass guardrails
 
 ## Implemented Improvements

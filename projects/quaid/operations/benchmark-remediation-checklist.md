@@ -2,6 +2,8 @@
 
 This checklist tracks the remaining work for benchmark reliability and retrieval quality.
 
+> **Note:** `~/quaid/benchmark/` was removed 2026-03-01 (archived to `~/quaid/benchmark.REMOVED-20260301-094624`). Active benchmark harness is now at `~/quaid/agents/codex-bench/`. All `agentlife/eval/` commands below run from that directory.
+
 ## Scope
 
 Priority items covered:
@@ -28,7 +30,7 @@ Ensure extraction + janitor consistently create usable graph edges in production
 - Re-running extraction in resume mode does not regress edge counts.
 
 ### Validation commands
-- Single-chunk extraction debug:
+- Single-chunk extraction debug (run from `~/quaid/agents/codex-bench`):
   - `python3 agentlife/eval/run_production_benchmark.py --mode ingest --results-dir <run> --only-chunk <idx> --skip-janitor --no-tier5`
 - DB checks:
   - `sqlite3 <run>/data/memory.db "select count(*) from edges;"`
@@ -49,7 +51,7 @@ Eliminate blank model outputs in eval flows.
 - Full AL-S run has `0` empty predictions.
 - Debug eval runs write only `*.debug.json` artifacts, leaving canonical `evaluation_results.json` intact.
 
-### Validation commands
+### Validation commands (run from `~/quaid/agents/codex-bench`)
 - `python3 agentlife/eval/run_production_benchmark.py --mode eval --results-dir <run> --only-query <idx> --no-judge --no-tier5`
 - `python3 - <<'PY'\nimport json; r=json.load(open('<run>/evaluation_results.debug.json'))[0]; print(bool((r.get('prediction') or '').strip()))\nPY`
 
@@ -88,10 +90,12 @@ Promote current facts and suppress stale/conflicting facts.
 - Retrieval for temporal-current queries prefers latest facts in validation spot-checks.
 
 ### Validation commands
-- `python3 modules/quaid/core/lifecycle/janitor.py --task review --apply`
+- `python3 modules/quaid/core/lifecycle/janitor.py --task review --apply` (add `--approve` if `janitor.applyMode=ask`)
 - `python3 modules/quaid/core/lifecycle/janitor.py --task duplicates --apply`
 - `python3 modules/quaid/core/lifecycle/janitor.py --task decay_review --apply`
 - Query DB for stale/superseded markers and verify recall behavior on contested prompts.
+
+Note: the default `janitor.apply_mode` is `auto` so `--apply` works without `--approve`. Add `--approve` only when `applyMode=ask` is configured.
 
 ## Exit Criteria For Next Benchmark Pass
 
