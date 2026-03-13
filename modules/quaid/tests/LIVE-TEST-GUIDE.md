@@ -187,6 +187,10 @@ Read replies with:
 tmux capture-pane -t main:99 -p | tail -30
 ```
 
+**Important:** To end a CC session and trigger `SessionEnd` extraction, use
+**ctrl+C** in pane 99 — do NOT type `/exit`. In CC v2.1.75, `/exit` exits
+cleanly but skips the `SessionEnd` hook entirely, so extraction never fires.
+
 ## Notification Level Checks
 
 Use these config toggles between milestones:
