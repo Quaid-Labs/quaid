@@ -58,6 +58,55 @@ Changes shipped in `9240ee2a feat(installer): shared embeddings config, instance
 
 ---
 
+## 2026-03-13 — Projects System Live Test Run
+
+Full OC CRUD + CC CRUD + Cross-Platform (XP) tests on example.local.
+Both OC and CC share `QUAID_HOME=/Users/owner/quaid`.
+
+### Bugs Found and Fixed
+
+| Bug | Fix |
+|-----|-----|
+| `create_project` set `instances: [adapter.adapter_id()]` — always returned `openclaw` regardless of `QUAID_INSTANCE` | Changed to `instance_id()` which reads `QUAID_INSTANCE` correctly |
+| `delete_project` left ghost rows in SQLite `project_definitions` and `doc_registry` | Added `DELETE FROM project_definitions/doc_registry WHERE name/project = ?` after JSON registry save |
+| `rag reindex --all` did not index files registered via `doc_registry` | Added third pass: enumerate `DocsRegistry().list_docs()` and index each file not yet chunked |
+| `quaid project link/unlink` commands did not exist | Implemented `link_project`, `unlink_project` in `project_registry.py` and wired into CLI |
+
+### Results
+
+| Test | Result | Notes |
+|------|--------|-------|
+| OC-P1 Create | ✅ | `oc-test-proj` at `openclaw/projects/oc-test-proj/` |
+| OC-P2 Register doc | ✅ | `/tmp/oc-test-doc.md` registered (id=6) |
+| OC-P3 Search | ✅ | `/tmp/oc-test-doc.md` top result (similarity 0.732) |
+| OC-P4 Show | ✅ | `instances: ["openclaw"]`, correct JSON |
+| OC-P5 Janitor dry-run | ✅ | No orphan warnings |
+| OC-P6 Markdown sanity | ✅ | `# Project: OC Test Project`, UTF-8, `docs/` present |
+| OC-P7 Delete | ✅ | Registry empty, dir gone |
+| CC-P1 Create | ✅ | `cc-test-proj` at `claude-code/projects/cc-test-proj/` |
+| CC-P2 Register doc | ✅ | `/tmp/cc-test-doc.md` registered |
+| CC-P3 Search | ✅ | `/tmp/cc-test-doc.md` top result (similarity 0.747); required `reindex --all` (janitor RAG task does not trigger registry pass — follow-up needed) |
+| CC-P4 Show | ✅ | `instances: ["claude-code"]` after adapter_id bug fix applied |
+| CC-P5 Janitor dry-run | ✅ | No orphan warnings |
+| CC-P6 Markdown sanity | ✅ | `# Project: CC Test Project`, UTF-8, `docs/` present |
+| CC-P7 Delete | ✅ | Registry empty, dir gone |
+| XP-1 Global registry | ✅ | OC and CC see identical list |
+| XP-2 OC creates project+doc | ✅ | `shared-xp-proj`, `/tmp/oc-xp-doc.md` registered |
+| XP-3 CC sees project | ✅ | `shared-xp-proj` visible via CC global-registry |
+| XP-4 CC links + adds doc | ✅ | `instances: ["openclaw","claude-code"]`; both docs listed |
+| XP-5 CC sees OC doc | ✅ | `/tmp/oc-xp-doc.md` top result in CC search (similarity 0.734) |
+| XP-6 OC sees CC doc | ✅ | `/tmp/cc-xp-doc.md` top result in OC search (similarity 0.717) |
+| XP-7 Janitor cross-instance | ✅ | No orphan warnings |
+| XP-8 Markdown sanity | ✅ | `# Project: Cross-Platform Test`, UTF-8, `docs/` present |
+| XP-9 Cleanup | ✅ | Registry empty, dir gone |
+
+### Follow-up items
+
+- `janitor --task rag --apply` does not trigger doc_registry pass — only `reindex --all` does. Consider wiring the doc_registry pass into the janitor RAG task.
+- OC-P3 and CC-P3 work after `reindex --all` but the test protocol lists `janitor --task rag --apply` as the indexing step. Update protocol or wire janitor to call reindex.
+
+---
+
 ## Previous Sessions
 
 ### 2026-03-08 — CC Hook Wiring Verification
