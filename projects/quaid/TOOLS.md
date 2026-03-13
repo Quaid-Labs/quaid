@@ -72,10 +72,12 @@ Rule of thumb: if the file only makes sense in the context of this project, put 
 
 ### Maintenance
 - `quaid janitor --task all --dry-run` — Preview janitor maintenance
-- `quaid janitor --task all --apply` — Run janitor maintenance
+- `quaid janitor --task all --apply` — Run janitor maintenance (`--apply --approve` required when `janitor.applyMode=ask`)
 - `quaid doctor` — Health check
 
 Note: `--task contradictions` is retained for CLI backward compatibility but is NOT active in the `--task all` pipeline. It prints a "DECOMMISSIONED" notice and exits. Stale/conflicting fact handling is now supersession/recency-based via the `dedup` and `decay` tasks.
+
+Note: If `janitor.applyMode=ask` is set in `config/memory.json`, running with `--apply` alone prints a dry-run result and prompts you to re-run with `--approve`. Pass both `--apply --approve` to actually execute changes. When `applyMode=auto` (the standard cron default), `--approve` is a no-op.
 
 ## Plugin Contract Surfaces
 
@@ -287,6 +289,7 @@ quaid registry list --project quaid
 # Janitor maintenance
 quaid janitor --task all --dry-run
 quaid janitor --task all --apply
+quaid janitor --task all --apply --approve  # required when applyMode=ask
 quaid janitor --task all --apply --time-budget 1800 --token-budget 12000
 
 # Project system
