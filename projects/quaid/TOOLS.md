@@ -2,7 +2,9 @@
 
 Quaid is an active knowledge layer. Use the `quaid` CLI via your Bash tool — no tool registration needed.
 
-For project docs and full architecture, see `PROJECT.md`.
+**Environment:** `QUAID_HOME` and `QUAID_INSTANCE` are baked into hooks at install time. If calling `quaid` from a shell outside of a hook, ensure both are set.
+
+**For full project docs, architecture, and reference index:** read the Quaid project's `PROJECT.md` — found at `$QUAID_HOME/shared/projects/quaid/PROJECT.md` or via `quaid docs search "topic" --project quaid`.
 
 ---
 
@@ -22,9 +24,11 @@ quaid stats
 - `--limit N` — result count (default 5)
 - `--project <name>` — scope to project
 - `--date-from / --date-to YYYY-MM-DD`
-- `--domain-boost '["technical","project"]'` — boost scoring by domain (preferred over filter)
-- `--domain-filter '{"technical": true}'` — strict domain filter (use only when exclusion is required)
+- `--domain-boost '["technical","project"]'` — multiplier on matching domains before ranking; use for broad recall when you want to prefer certain topics without excluding others. List form uses 1.3× each; map form sets explicit multipliers: `'{"technical": 1.5}'`
+- `--domain-filter '{"technical": true}'` — hard filter: only returns memories tagged with true domains. Use only when you are certain other domains should be excluded entirely.
 - `--json` / `--debug`
+
+**When to use boost vs filter:** Default to `--domain-boost`. Only use `--domain-filter` when the question is definitively scoped and cross-domain noise would be wrong (e.g. "show me only finance memories").
 
 **store categories:** `preference`, `fact`, `decision`, `entity`, `other`
 
