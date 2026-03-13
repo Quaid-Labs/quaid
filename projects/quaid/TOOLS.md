@@ -69,7 +69,11 @@ quaid docs check                              # check for stale docs
 quaid docs update --apply                     # update stale docs from source diffs
 quaid registry register <path> --project <name>  # link external file into project
 quaid registry list [--project <name>]
-quaid hook-search "query"                     # unified memory + docs search in one pass
+```
+
+**Unified search** (memory + docs in one pass):
+```bash
+quaid hook-search "query"   # recall memories AND search project docs together; use when you want a single sweep instead of running recall and docs search separately
 ```
 
 ---
@@ -123,6 +127,11 @@ quaid config show
 quaid config edit [--shared | --instance <id>]
 quaid config set <dotted.key> <value> [--shared]
 quaid instances list [--json]
+```
+
+**Cross-instance search:** Override `QUAID_INSTANCE` at call time to read another instance's memory (both instances must share `QUAID_HOME`):
+```bash
+QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from CC context
 ```
 
 ---
