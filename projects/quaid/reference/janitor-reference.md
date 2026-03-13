@@ -431,7 +431,7 @@ The janitor dispatches maintenance tasks through a `LifecycleRegistry` — a plu
 - `QUAID_LIFECYCLE_MODULES` env var — comma-separated list of extra module names to register (must start with `adaptors.`, `core.`, or `datastore.`)
 - `config.lifecycle.modules` — config-driven list of additional modules (same prefix allowlist)
 
-**Resource locking:** Routines declare `write_resources` at registration (or use defaults in `_DEFAULT_WRITE_RESOURCES`). The registry acquires these locks before running the routine (skipped in dry-run). Lock timeout is `core.parallel.lockWaitSeconds` (default 120s). See `core.parallel` config in `memory-local-implementation.md` for full lock config.
+**Resource locking:** Routines declare `write_resources` at registration (or use defaults in `_DEFAULT_WRITE_RESOURCES`). The registry acquires these locks before running the routine (skipped in dry-run). Lock timeout is `core.parallel.lockWaitSeconds` (default 120s). See `core.parallel` config in `memory-reference.md` for full lock config.
 
 **Parallel routine execution:** `run_many()` executes multiple routines concurrently up to `max_workers`. Overall timeout defaults to `core.parallel.lifecyclePrepassTimeoutSeconds` (300s). Timed-out routines are cancelled and recorded as errors.
 

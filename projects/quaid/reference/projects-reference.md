@@ -1229,7 +1229,5 @@ OpenClaw adapter monitors `SOUL.md` (80), `USER.md` (150), `MEMORY.md` (100),
   workflow doc, not a reference)
 - `projects/quaid/reference/rag-docs-system.md` — RAG indexing pipeline, chunking, search
 - `projects/quaid/reference/janitor-reference.md` — janitor task schedule and maintenance
-- `projects/quaid/reference/memory-local-implementation.md` — hooks and instance management
-- `docs/PROJECT-SYSTEM-SPEC.md` — stub, see this file
-- `projects/quaid/reference/projects-system.md` — stub, see this file
-- `projects/quaid/reference/projects-cli-reference.md` — stub, see this file
+- `projects/quaid/reference/memory-reference.md` — hooks and instance management
+- `docs/TOOLS.md` — combined CLI reference for all quaid commands

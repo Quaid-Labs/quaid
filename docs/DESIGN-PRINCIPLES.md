@@ -121,6 +121,6 @@ a command. They just talk, and it works.
 ## References
 
 - [Directory Standard](DIRECTORY-STANDARD.md) — canonical file layout
-- [Project System Spec](PROJECT-SYSTEM-SPEC.md) — tracking, sync, shadow git
+- [Project System Spec](../projects/quaid/reference/projects-reference.md) — tracking, sync, shadow git
 - [Architecture](ARCHITECTURE.md) — system architecture
 - [Plugin System](PLUGIN-SYSTEM.md) — adapter/plugin contracts

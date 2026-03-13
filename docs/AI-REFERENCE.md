@@ -910,13 +910,13 @@ python3 core/lifecycle/janitor.py --task all --apply
 
 | Topic | Primary Doc |
 |-------|-------------|
-| Memory architecture | `projects/quaid/reference/memory-system-design.md` |
-| Plugin implementation | `projects/quaid/reference/memory-local-implementation.md` |
+| Memory architecture | `projects/quaid/reference/memory-reference.md` |
+| Plugin implementation | `projects/quaid/reference/memory-reference.md` |
 | Janitor pipeline | `projects/quaid/reference/janitor-reference.md` |
-| Database schema | `projects/quaid/reference/memory-schema.md` |
+| Database schema | `projects/quaid/reference/memory-reference.md` |
 | Deduplication | `projects/quaid/reference/memory-deduplication-system.md` |
 | Operations guide | `projects/quaid/reference/memory-operations-guide.md` |
-| Projects CLI | `projects/quaid/reference/projects-cli-reference.md` |
+| Projects CLI | `projects/quaid/reference/projects-reference.md` |
 | Project onboarding | `projects/quaid/operations/project_onboarding.md` |
 
 > **Note:** These documentation paths reference internal workspace files and are not included in the public release repo. They are available in development environments where the full workspace is present.

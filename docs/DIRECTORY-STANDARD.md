@@ -152,7 +152,7 @@ Canonical:  QUAID_HOME/projects/myapp/TOOLS.md
      Sync:  ~/.openclaw/workspace/plugins/quaid/projects/myapp/TOOLS.md  (copy)
 ```
 
-See [Project System Spec](PROJECT-SYSTEM-SPEC.md) for sync engine details.
+See [Project System Spec](../projects/quaid/reference/projects-reference.md) for sync engine details.
 
 **Rules**:
 - Canonical location is always `QUAID_HOME/projects/<name>/`.
@@ -172,7 +172,7 @@ documents, creative work. This is the user's stuff, not Quaid's.
 Trip/`, a git repo, a shared drive — Quaid doesn't dictate this.
 
 **Quaid's role**: Track changes via shadow git (see
-[Project System Spec](PROJECT-SYSTEM-SPEC.md#shadow-git-tracking)). Index
+[Project System Spec](../projects/quaid/reference/projects-reference.md#shadow-git-tracking)). Index
 relevant files into docsdb. Never move, rename, or restructure the user's
 files.
 
@@ -315,6 +315,6 @@ Any new adapter must:
 ## References
 
 - [Design Principles](DESIGN-PRINCIPLES.md) — why this layout exists
-- [Project System Spec](PROJECT-SYSTEM-SPEC.md) — shadow git, sync engine
+- [Project System Spec](../projects/quaid/reference/projects-reference.md) — shadow git, sync engine
 - [Plugin System](PLUGIN-SYSTEM.md) — adapter contracts
 - [Multi-User Memory Spec](MULTI-USER-MEMORY-SPEC.md) — future identity splitting

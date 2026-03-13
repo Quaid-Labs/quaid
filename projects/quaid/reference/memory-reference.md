@@ -1436,7 +1436,7 @@ Resolution rules:
 - Effective provider comes from `models.llmProvider` unless it is `"default"`, in which case gateway default provider/auth state is used.
 - Unknown providers fail loudly (no silent Anthropic fallback), preserving abstraction and testability.
 
-See `projects/quaid/reference/adapter-provider-architecture.md` for the canonical provider/model flow.
+See `docs/INTERFACES.md#provider-abstraction-contract` for the canonical provider/model flow.
 
 ### 4.7 Search Config
 
@@ -1577,9 +1577,9 @@ quaid instances list --json        # JSON output: {home, current, instances:[...
 - `janitor-reference.md` — Nightly maintenance pipeline reference
 - `memory-deduplication-system.md` — Store-time and nightly dedup
 - `memory-operations-guide.md` — Day-to-day operational handbook
-- `adapter-provider-architecture.md` — Provider abstraction contract
+- `../../docs/INTERFACES.md#provider-abstraction-contract` — Provider abstraction contract
 - `extraction-pipeline.md` — Full extraction pipeline reference
 - `config-instances.md` — Config system and instance model details
-- `projects-system.md` — Projects system internals
+- `projects-reference.md` — Projects system internals
 - `rag-docs-system.md` — RAG and docs system
 - `hooks-session-lifecycle.md` — Hook entry points and session lifecycle

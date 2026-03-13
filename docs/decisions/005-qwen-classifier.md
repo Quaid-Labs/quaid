@@ -62,4 +62,4 @@ Prompt optimized for:
 ## See Also
 
 - `modules/quaid/ingest/extract.py`
-- `projects/quaid/reference/memory-local-implementation.md`
+- `projects/quaid/reference/memory-reference.md`

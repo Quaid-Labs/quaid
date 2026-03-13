@@ -86,4 +86,4 @@ python3 core/lifecycle/janitor.py --task all --apply
 
 - `projects/quaid/TOOLS.md` - current tool contracts and parameter maps.
 - `projects/quaid/AGENTS.md` - operating rules and project navigation.
-- `projects/quaid/reference/memory-local-implementation.md` - implementation internals.
+- `projects/quaid/reference/memory-reference.md` - implementation internals.

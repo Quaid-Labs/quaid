@@ -129,7 +129,7 @@ Coverage requirements:
    - Janitor-parallel E2E assertions now focus on deterministic benchmark invariants (pending/unreviewed depletion + threshold gates) instead of fragile status-delta assumptions.
    - Added explicit janitor subprocess failure diagnostics to E2E for faster root-cause loops.
 18. Canonical checkpoint cut tooling.
-   - Ownership lives in benchmark workspace (`~/quaid/benchmark/scripts/cut-benchmark-checkpoint.sh`), not in `dev`.
+   - Ownership lives in codex-bench workspace (`~/quaid/agents/codex-bench/scripts/cut-benchmark-checkpoint.sh`), not in `dev`.
    - Provides a single canonical command to sync `~/quaid/dev` -> `~/quaid/benchmark-checkpoint` with stable exclusions + metadata output.
 
 ## Backlog Order

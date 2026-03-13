@@ -26,7 +26,7 @@
   - `operations/projects-testing.md` — live test protocol for projects system (OC CRUD + CC CRUD + cross-platform)
   - `operations/live-validation-log.md` — record of M0–M7 live validation runs
 - `reference/`: deep technical docs and implementation details.
-  - `reference/projects-cli-reference.md` — CLI reference for project registry and docs commands
+  - `reference/projects-reference.md` — CLI reference for project registry and docs commands (Section 7)
 - Keep details here when they are too large/noisy for always-loaded files.
 
 ### 3) Runtime code map (`modules/quaid/`)

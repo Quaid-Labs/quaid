@@ -330,5 +330,5 @@ quaid doctor
 
 - `projects/quaid/AGENTS.md` — project behavior and operating rules
 - `projects/quaid/PROJECT.md` — full project overview and architecture map
-- `projects/quaid/reference/memory-local-implementation.md` — implementation details
+- `projects/quaid/reference/memory-reference.md` — implementation details
 - `projects/quaid/reference/janitor-reference.md` — janitor internals and tasks

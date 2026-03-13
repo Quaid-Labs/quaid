@@ -10,7 +10,7 @@ It focuses on deterministic checkpoint cuts and janitor/E2E gates that must pass
 3. E2E in `dev` is the admission gate before requesting a new checkpoint cut.
 
 Canonical checkpoint script location:
-- `~/quaid/benchmark/scripts/cut-benchmark-checkpoint.sh`
+- `~/quaid/agents/codex-bench/scripts/cut-benchmark-checkpoint.sh`
 
 ## Required Pre-Cut Gates (Run In `~/quaid/dev/modules/quaid`)
 
@@ -34,7 +34,7 @@ Expected `janitor-parallel-bench` artifacts:
   - `janitor_stats_errors == []`
   - threshold block present
 
-## Cutting A Checkpoint (Run In `~/quaid/benchmark`)
+## Cutting A Checkpoint (Run In `~/quaid/agents/codex-bench`)
 
 Dry run:
 ```bash

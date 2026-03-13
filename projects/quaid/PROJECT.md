@@ -20,7 +20,7 @@ This file is the canonical entry point for all docs in `projects/quaid`.
 
 | File | Summary |
 |---|---|
-| `projects/quaid/reference/adapter-provider-architecture.md` | Provider abstraction contract: only adapter/provider + config are provider-aware; core calls deep/fast tiers only. |
+| `projects/quaid/reference/adapter-provider-architecture.md` | **Stub — folded into `docs/INTERFACES.md#provider-abstraction-contract`.** Provider abstraction contract: only adapter/provider + config are provider-aware; core calls deep/fast tiers only. |
 | `projects/quaid/reference/memory-reference.md` | **Consolidated reference.** System design, full implementation details (hooks, modules, shared lib, instance management), SQLite schema DDL, and configuration reference. Replaces the three stubs below. |
 | `projects/quaid/reference/memory-system-design.md` | **Stub — moved to memory-reference.md.** |
 | `projects/quaid/reference/memory-local-implementation.md` | **Stub — moved to memory-reference.md.** |
