@@ -3437,6 +3437,8 @@ def _recall_once(
     domain: Optional[Dict[str, bool]] = None,
     domain_boost: Optional[Any] = None,
     project: Optional[str] = None,
+    include_graph_traversal: bool = True,
+    include_co_session: bool = True,
     low_signal_retry: bool = True,
     return_meta: bool = False,
 ) -> Any:
@@ -3828,7 +3830,7 @@ def _recall_once(
 
     # Temporal contiguity: facts from the same session were co-encoded
     # and likely share context — surface them as bonus candidates
-    if diverse_results:
+    if diverse_results and include_co_session:
         _phase_t0 = _time.monotonic()
         session_ids = {}
         for node, score in diverse_results[:5]:
@@ -3882,7 +3884,7 @@ def _recall_once(
 
     # Add related nodes via multi-hop graph traversal
     # Uses BEAM search (scored, pruned) or BFS (exhaustive) based on config
-    if diverse_results:
+    if diverse_results and include_graph_traversal:
         _phase_t0 = _time.monotonic()
         _use_beam = True  # Default matches TraversalConfig.use_beam
         _beam_width = 5
@@ -4184,6 +4186,8 @@ def _recall_once(
                         use_intent=use_intent,
                         use_multi_pass=use_multi_pass,
                         use_reranker=use_reranker,
+                        include_graph_traversal=include_graph_traversal,
+                        include_co_session=include_co_session,
                         current_session_id=current_session_id,
                         compaction_time=compaction_time,
                         date_from=date_from,
@@ -4403,7 +4407,7 @@ def _summarize_result_coverage(results: List[Dict[str, Any]]) -> Dict[str, int]:
     }
 
 
-def _estimate_fanout_profile(query: str, max_queries: int) -> Dict[str, Any]:
+def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str = "full") -> Dict[str, Any]:
     """Estimate fanout breadth before paying for multiple retrieval branches."""
     clean = " ".join((query or "").split())
     tokens = [tok for tok in clean.split() if tok]
@@ -4427,13 +4431,18 @@ def _estimate_fanout_profile(query: str, max_queries: int) -> Dict[str, Any]:
 
     if any(sig in signals for sig in ("broad_intent", "multi_entity")) or len(signals) >= 2:
         shape = "broad"
-        budget = min(max_queries, 5)
     elif len(tokens) <= 4 and len(named_tokens) <= 1 and not signals:
         shape = "narrow"
-        budget = min(max_queries, 2)
     else:
         shape = "focused"
-        budget = min(max_queries, 3)
+
+    if planner_profile == "aggressive":
+        budget_map = {"broad": 2, "focused": 1, "narrow": 1}
+    elif planner_profile == "fast":
+        budget_map = {"broad": 2, "focused": 2, "narrow": 1}
+    else:
+        budget_map = {"broad": max_queries, "focused": max_queries, "narrow": max_queries}
+    budget = min(max_queries, budget_map.get(shape, max_queries))
 
     return {
         "shape": shape,
@@ -4441,6 +4450,7 @@ def _estimate_fanout_profile(query: str, max_queries: int) -> Dict[str, Any]:
         "token_count": len(tokens),
         "named_entity_tokens": len(named_tokens),
         "signals": signals,
+        "planner_profile": planner_profile,
     }
 
 
@@ -4511,7 +4521,13 @@ def _build_branch_telemetry(
     }
 
 
-def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.5, return_meta: bool = False):
+def _plan_fanout_queries(
+    query: str,
+    max_queries: int = 5,
+    timeout_s: float = 1.5,
+    return_meta: bool = False,
+    planner_profile: str = "full",
+):
     """Generate multiple HyDE-style search queries in a single fast LLM call.
 
     Replaces both route_query() and _plan_recall_queries() for injection path.
@@ -4532,6 +4548,7 @@ def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.
         "token_count": 0,
         "named_entity_tokens": 0,
         "shape_signals": [],
+        "planner_profile": planner_profile,
     }
 
     def _finish(out: List[str], bailout_reason: Optional[str] = None):
@@ -4543,12 +4560,13 @@ def _plan_fanout_queries(query: str, max_queries: int = 5, timeout_s: float = 1.
         return out
 
     clean = " ".join((query or "").split())
-    profile = _estimate_fanout_profile(clean, max_queries=max_queries)
+    profile = _estimate_fanout_profile(clean, max_queries=max_queries, planner_profile=planner_profile)
     meta["query_shape"] = str(profile["shape"])
     meta["fanout_budget"] = int(profile["fanout_budget"])
     meta["token_count"] = int(profile["token_count"])
     meta["named_entity_tokens"] = int(profile["named_entity_tokens"])
     meta["shape_signals"] = list(profile["signals"])
+    meta["planner_profile"] = str(profile.get("planner_profile") or planner_profile)
     max_queries = max(1, int(profile["fanout_budget"]))
     if not clean:
         return _finish([], "empty_query")
@@ -4638,6 +4656,7 @@ def recall_fast(
     domain_boost: Optional[Any] = None,
     project: Optional[str] = None,
     timeout_ms: Optional[int] = None,
+    planner_profile: str = "fast",
     return_meta: bool = False,
 ) -> Any:
     """Pre-injection recall: thin wrapper over recall() with single-pass settings."""
@@ -4686,7 +4705,7 @@ def recall_fast(
         use_aliases=True,
         use_intent=True,
         use_multi_pass=False,
-        use_reranker=True,
+        use_reranker=False,
         current_session_id=current_session_id,
         compaction_time=compaction_time,
         date_from=date_from,
@@ -4703,9 +4722,12 @@ def recall_fast(
         domain=domain,
         domain_boost=domain_boost,
         project=project,
-        low_signal_retry=True,
+        low_signal_retry=False,
         max_turns=1,
         timeout_ms=timeout_ms,
+        planner_profile=planner_profile,
+        include_graph_traversal=should_expand_graph(query),
+        include_co_session=False,
         return_meta=True,
     )
     if isinstance(results, tuple):
@@ -4849,6 +4871,9 @@ def recall(
     low_signal_retry: bool = True,
     max_turns: int = 3,
     timeout_ms: Optional[int] = None,
+    planner_profile: str = "full",
+    include_graph_traversal: bool = True,
+    include_co_session: bool = True,
     return_meta: bool = False,
 ) -> Any:
     """Orchestrated recall with iterative drilling.
@@ -4975,6 +5000,7 @@ def recall(
                 else 15.0
             ),
             return_meta=True,
+            planner_profile=planner_profile,
         )
         if isinstance(planned, tuple) and len(planned) == 2:
             fanout_queries, fanout_meta = planned
@@ -5019,6 +5045,8 @@ def recall(
                 use_routing=False,  # Already HyDE'd
                 use_multi_pass=use_multi_pass,
                 use_reranker=use_reranker,
+                include_graph_traversal=include_graph_traversal,
+                include_co_session=include_co_session,
                 low_signal_retry=low_signal_retry,
                 return_meta=True,
                 **common_kwargs,
@@ -5029,6 +5057,8 @@ def recall(
                 use_routing=False,
                 use_multi_pass=False,
                 use_reranker=False,
+                include_graph_traversal=False,
+                include_co_session=False,
                 low_signal_retry=False,
                 return_meta=True,
                 **common_kwargs,
@@ -6865,6 +6895,8 @@ if __name__ == "__main__":
         recall_fast_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
         recall_fast_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_fast_p.add_argument("--timeout-ms", type=int, default=None, help="Override overall fast-recall timeout budget")
+        recall_fast_p.add_argument("--planner-profile", choices=["fast", "aggressive"], default="fast",
+                                   help="Planner fanout profile for fast recall (default: fast)")
         recall_fast_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
         recall_fast_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
 
@@ -7206,6 +7238,7 @@ if __name__ == "__main__":
             date_to         = cfg.get("date_to")
             archive         = cfg.get("archive", False)
             candidate_pool  = cfg.get("candidate_pool")
+            planner_profile = cfg.get("planner_profile", "full")
 
             if want_memory and archive:
                 from datastore.memorydb.archive_store import search_archive as _search_archive
@@ -7311,6 +7344,7 @@ if __name__ == "__main__":
                     recall_kwargs['use_multi_pass'] = False
                     recall_kwargs['use_reranker'] = False
                     recall_kwargs['max_turns'] = 1
+                recall_kwargs['planner_profile'] = planner_profile
                 if use_json:
                     results, meta = recall(query, return_meta=True, **recall_kwargs)
                     print(json.dumps({"results": results, "meta": meta}))
@@ -7395,6 +7429,7 @@ if __name__ == "__main__":
                 domain_boost=domain_boost,
                 project=getattr(args, "project", None),
                 timeout_ms=getattr(args, "timeout_ms", None),
+                planner_profile=getattr(args, "planner_profile", "fast"),
                 return_meta=True,
             )
             if args.json:

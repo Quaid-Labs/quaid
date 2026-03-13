@@ -906,6 +906,26 @@ class TestRecallTelemetry:
         assert meta["query_shape"] in {"broad", "focused", "narrow"}
         assert meta["fanout_budget"] >= 1
         assert meta["token_count"] >= 1
+        assert meta["planner_profile"] == "full"
+
+    def test_plan_fanout_queries_fast_profiles_reduce_budget(self):
+        from datastore.memorydb.memory_graph import _plan_fanout_queries
+
+        _queries_fast, fast_meta = _plan_fanout_queries(
+            "Trace Maya's career arc from TechFlow to Stripe",
+            return_meta=True,
+            planner_profile="fast",
+        )
+        _queries_aggressive, aggressive_meta = _plan_fanout_queries(
+            "Trace Maya's career arc from TechFlow to Stripe",
+            return_meta=True,
+            planner_profile="aggressive",
+        )
+
+        assert fast_meta["planner_profile"] == "fast"
+        assert aggressive_meta["planner_profile"] == "aggressive"
+        assert fast_meta["fanout_budget"] <= 2
+        assert aggressive_meta["fanout_budget"] <= fast_meta["fanout_budget"]
 
     def test_apply_mmr_skips_diversity_loop_when_results_fit_limit(self, tmp_path):
         from datastore.memorydb.memory_graph import _apply_mmr
