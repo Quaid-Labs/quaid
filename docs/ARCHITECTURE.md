@@ -63,6 +63,23 @@ Quaid exposes its knowledge layer through three interfaces: a **CLI** (standalon
 
 Project knowledge retrieval remains a first-class path: host adapters expose `projects_search` where appropriate, and the CLI exposes the same capability through `quaid docs search`.
 
+### TypeScript Layer: Facade and Knowledge Engine
+
+The TypeScript layer sits between adapters and Python backend. Two key modules orchestrate this:
+
+**`core/facade.ts` — Adapter entry point.** `createQuaidFacade(deps)` is the single constructor all adapters call. It wires together the datastore bridge, project catalog reader, knowledge engine, and all per-session state (extraction queue, injection dedup log, lifecycle signal history). Adapters call facade methods rather than reaching into Python bridge or knowledge-engine directly. The facade also owns model-tier resolution (`resolveTierModel`) and the LLM provider routing that lets configs specify `"default"` and have the active gateway provider filled in at runtime.
+
+**`core/knowledge-engine.ts` — Recall routing.** `createKnowledgeEngine(deps)` is the TypeScript recall router. It provides two modes:
+
+- **Explicit stores mode** (`opts.datastores` set, or `opts.fast=true`): executes the listed datastores directly, no LLM routing call.
+- **Routed mode** (default, no datastores given): calls `routeRecallPlan()` — a fast-reasoning LLM pass that cleans the query, picks datastores, optionally identifies a target project, and sets `domainBoost`. The LLM response is validated and repaired (one retry) before use. If the router fails and `failOpen=true` with `fail_hard=false`, falls back to deterministic defaults with a warning injected into results.
+
+Store execution is sequential (not parallel). Graph store receives accumulated vector results as a `candidatePool` to seed traversal. Results are deduped by `id` (preferred) or `via::text` key, source-type-boosted by intent, then sorted by similarity and sliced to `limit`.
+
+**Project catalog cap.** `routeRecallPlan` calls `getProjectCatalog()` but hard-caps the list at 40 entries (`.slice(0, 40)`) before embedding the names into the router prompt. Projects beyond the 40th position are invisible to the router's project-scoping logic. The router also validates any returned project name against the capped list — an LLM-suggested project that ranked 41st or higher will be silently dropped (no project scoping applied). This is a known limitation; if your instance has many projects, sort the most important ones first in `config/memory.json`.
+
+**`core/session-timeout.ts` — Idle-session extraction.** `SessionTimeoutManager` is instantiated by the OpenClaw adapter and provides a secondary extraction path for sessions that never fire a `/compact` or `/reset`. It buffers messages via `onAgentEnd` and sets a debounced timer (`timeoutMinutes`, default from `capture.inactivityTimeoutMinutes`). If the timer fires before `onAgentStart` clears it, `queueExtractionFromSession` is called. For OC, this writes a daemon signal (compaction type) rather than running extraction in-process. A stale-sweep mechanism (`recoverStaleBuffers`) runs at startup to catch sessions that timed out while the process was not running; it uses a windowed scan between the last sweep timestamp and now, capped at `maxStaleRecoverPerTick` (default 3) per invocation with exponential backoff on failures. Replay prevention uses per-session cursor files in `data/session-cursors/`.
+
 **Maintenance** -- A nightly janitor pipeline reviews pending facts, deduplicates near-identical memories, resolves contradictions, decays stale memories, updates documentation, and runs structural health checks.
 
 Almost every decision in the system is algorithm-assisted but ultimately arbitrated by an LLM appropriate for the task. This means Quaid naturally scales with AI models -- as reasoning capabilities improve, every decision in the pipeline gets better without code changes.

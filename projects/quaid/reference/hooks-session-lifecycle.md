@@ -450,6 +450,9 @@ hooks; the Python layer handles extraction signaling.
 | Reset trigger | `SessionEnd` | `session_end` + `before_reset` compat |
 | Compaction control | CC controls timing | OC `supports_compaction_control=True` |
 | Notifications | Deferred via `cc-pending-notifications.jsonl` | Live via `openclaw message send` CLI |
+| Tool registration | None — CC agents use `quaid` CLI via Bash tool | None — OC tool registration was removed; agents use `quaid` CLI |
+
+**No tool registration in either adapter.** Both adapters previously registered `memory_recall`, `memory_store`, and `projects_search` as first-class LLM tools. These registrations have been removed. Agents in both integrations now access Quaid through the `quaid` CLI (see `projects/quaid/TOOLS.md` for the command reference). The `registerToolChecked` helper is still present in the OC adapter source to satisfy lint but is not called.
 
 ---
 

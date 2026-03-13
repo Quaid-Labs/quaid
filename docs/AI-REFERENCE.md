@@ -110,10 +110,15 @@ Write request
 | File | Purpose | Notes |
 |------|---------|-------|
 | `adaptors/openclaw/index.ts` | Plugin entry shim | Minimal export indirection to runtime adapter module |
-| `adaptors/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, tool schemas (`memory_recall`, `memory_store`, `projects_search`), extraction triggers, notifications |
-| `orchestrator/default-orchestrator.ts` | Knowledge routing/orchestration | `total_recall`, datastore normalization/routing, recall aggregation/fusion |
+| `adaptors/openclaw/adapter.ts` | OpenClaw runtime integration (SOURCE OF TRUTH) | Hook registration, extraction trigger wiring, session-timeout manager, daemon signal dispatch, notifications. **No tool registration** — tools were removed; agents use the `quaid` CLI instead (see `projects/quaid/TOOLS.md`). |
+| `core/facade.ts` | Adapter-facing entry point | `createQuaidFacade(deps)` — single constructor adapters call. Wires datastore bridge, knowledge engine, project catalog, extraction queue, lifecycle signal history, and model-tier resolution. |
+| `core/knowledge-engine.ts` | TypeScript recall router | `createKnowledgeEngine(deps)` — routed recall via fast-reasoning LLM prepass (`routeRecallPlan`) or direct explicit-stores mode. Handles dedup, source-type boosting, fail-open fallback, and repair retry on malformed router JSON. Project catalog is capped at 40 entries in router prompt. |
+| `core/session-timeout.ts` | Idle-session extraction | `SessionTimeoutManager` — debounced timer per session; fires extraction (via daemon signal) when no `onAgentStart` clears it within `timeoutMinutes`. Stale-sweep recovers sessions missed during process downtime. |
+| `core/knowledge-stores.ts` | Datastore registry | `STORE_REGISTRY` — canonical list of datastores with defaults for flat vs. graph-expand recall. `getRoutableDatastoreKeys()` excludes `vector` (aggregate) from router choices. |
+| `core/project-catalog.ts` | Project catalog reader | `createProjectCatalogReader` — reads project names and descriptions from `config/memory.json -> projects.definitions`. Falls back to `TOOLS.md`/`PROJECT.md` first-useful-line extraction. |
 | `core/data-writers.ts` | Canonical write routing/dispatch | `createDataWriteEngine()`, `writeData()`, DataWriter registry/specs |
-| `adaptors/openclaw/index.js` / `adapter.js` / `orchestrator/default-orchestrator.js` | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js` |
+| `core/spawn-with-timeout.ts` | Subprocess spawning | `spawnWithTimeout` — spawns a child process with SIGTERM + SIGKILL escalation on timeout. Used by all Python bridge calls from the TypeScript layer. |
+| `adaptors/openclaw/index.js` / `adapter.js` / `core/facade.js` etc. | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js`. Check with `npm run check:runtime-pairs`. |
 
 ### CI / Release Guard Scripts
 
@@ -275,6 +280,9 @@ Each Quaid instance (adapter silo) lives in its own subdirectory under `QUAID_HO
 ```
 $QUAID_HOME/
 ├── shared/                          # Cross-instance shared resources
+│   ├── config/
+│   │   └── memory.json              # Machine-wide embeddings config (Ollama URL, model, dim)
+│   │                                # First-install-wins: written once, inherited by all instances
 │   ├── projects/                    # Shared project docs (TOOLS.md, AGENTS.md, etc.)
 │   │   └── <project-name>/
 │   └── project-registry.json        # Global registry (projects -> instances)

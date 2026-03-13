@@ -79,6 +79,27 @@ node setup-quaid.mjs --agent \
   --artifact "/path/to/quaid-plugin-<sha>.tar.gz"
 ```
 
+## Instance ID (Silo Name)
+
+The installer prompts for an **instance ID** — a short name for the memory silo (e.g. `claude-code`, `openclaw`).
+Two installs with the same ID share memory; different IDs get independent databases.
+The ID becomes a subdirectory under `QUAID_HOME`: `<QUAID_HOME>/<instance-id>/`.
+
+In agent/non-interactive mode the adapter-derived default is used without prompting.
+To pre-set the instance ID and skip the prompt, set `QUAID_INSTANCE`.
+
+## Shared Embeddings Config
+
+On first install the installer writes a machine-wide embeddings config to:
+
+```
+<QUAID_HOME>/shared/config/memory.json
+```
+
+This file records the Ollama URL, embedding model, and embedding dimension so all instances on the same machine use the same model (required for cross-instance memory inspection). The rule is **first-install-wins**: if `shared/config/memory.json` already has an `ollama` block, subsequent installs skip writing it and inherit the existing setup.
+
+To change the shared embedding model after install, edit `<QUAID_HOME>/shared/config/memory.json` directly and re-run `quaid doctor` to verify.
+
 ## Environment Variables (optional)
 
 - `QUAID_WORKSPACE` or `QUAID_HOME`: explicit workspace/home path override (highest priority, same as `--workspace`)
@@ -99,12 +120,27 @@ node setup-quaid.mjs --agent \
 - `QUAID_INSTALL_NOTIFY_TARGET`: force installer progress target (for example `telegram:<chat_id>`)
 - `QUAID_INSTALL_NOTIFY_ACCOUNT`: optional channel account override when using explicit channel/target
 
+## Claude Code-specific Notes
+
+- Pass `--claude-code` (or set `QUAID_INSTALL_CLAUDE_CODE=1`) to force the installer into Claude Code adapter mode.
+  Without this flag, the installer auto-detects the platform. Provide it when running in a non-interactive or
+  headless environment where auto-detection may be unreliable.
+- The installer writes six hook entries to `~/.claude/settings.json`:
+  `SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`, `SubagentStart`, `SubagentStop`.
+- On macOS, the janitor is scheduled via a launchd plist (`~/Library/LaunchAgents/com.quaid.janitor.plist`).
+  It runs `quaid janitor --task all --apply --time-budget 3600` at the configured hour (default 4:30 AM).
+  Logs go to `<QUAID_HOME>/logs/janitor/launchd.log` and `launchd-err.log`.
+  The plist embeds `QUAID_HOME` and uses the Claude Code OAuth token — no API key env var is needed.
+  Check status: `launchctl list | grep quaid`
+  Unload: `launchctl unload ~/Library/LaunchAgents/com.quaid.janitor.plist`
+- The installer creates a per-instance identity directory at `<QUAID_HOME>/claude-code/identity/`
+  for `USER.md`, `SOUL.md`, and `MEMORY.md`.
+
 ## OpenClaw-specific Notes
 
 - Installer now attempts to auto-heal missing `agents.list` in `~/.openclaw/openclaw.json`.
 - Required hooks are enabled explicitly during install:
-  - `bootstrap-extra-files` (alias fallback: `bot-strap-extra-files`)
-  - `session-memory` (alias fallback: `session-memoey`)
+  - `bootstrap-extra-files`
 
 ## Minimal Non-interactive Command
 
@@ -226,7 +262,6 @@ After install — OpenClaw adapter:
 ```bash
 openclaw hooks list
 openclaw hooks enable bootstrap-extra-files
-openclaw hooks enable session-memory
 ```
 
 After install — Claude Code adapter:
@@ -239,6 +274,6 @@ cat ~/.claude/settings.json | python3 -c "import sys,json; h=json.load(sys.stdin
 quaid doctor
 ```
 
-Expected output from hooks check: `['UserPromptSubmit', 'SessionEnd', 'SubagentStart', 'SubagentStop']` (or similar).
+Expected output from hooks check: `['SessionStart', 'UserPromptSubmit', 'PreCompact', 'SessionEnd', 'SubagentStart', 'SubagentStop']` (or similar — any subset present means hooks are wired).
 
 If OpenClaw is unavailable, run standalone mode and set workspace via `--workspace`.
