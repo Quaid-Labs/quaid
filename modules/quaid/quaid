@@ -325,6 +325,7 @@ PYEOF
     echo "  project list         List registered projects"
     echo "  project create       Create a new project"
     echo "  project show <name>  Show project details"
+    echo "  project link <name>  Add current instance to an existing project"
     echo "  project delete       Delete a project"
     echo "  project snapshot     Take shadow git snapshot(s)"
     echo "  project sync         Sync files to adapter workspaces"

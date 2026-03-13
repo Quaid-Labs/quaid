@@ -44,6 +44,7 @@ This file is the canonical entry point for all docs in `projects/quaid`.
 | `projects/quaid/operations/benchmark-remediation-checklist.md` | Benchmark remediation execution checklist and janitor/doc verification steps. |
 | `projects/quaid/operations/plugin-framework-checklist.md` | Plugin framework readiness checklist and rollout guardrails. |
 | `projects/quaid/operations/cli-audit.md` | CLI command/audit notes for operational correctness and UX consistency. |
+| `projects/quaid/operations/live-validation-log.md` | Manual live test records: M0–M7 results per adapter version, installer feature status. |
 
 ## Source Code
 - `modules/quaid/`

@@ -180,6 +180,36 @@ def update_project(name: str, **updates: Any) -> Dict[str, Any]:
     return registry["projects"][name]
 
 
+def link_project(name: str) -> Dict[str, Any]:
+    """Add the current QUAID_INSTANCE to a project's instances list.
+
+    Used when a second adapter wants to participate in an existing project
+    without taking ownership. Idempotent — safe to call if already linked.
+
+    Args:
+        name: Project name.
+
+    Returns:
+        The updated project entry.
+
+    Raises:
+        KeyError: If project not found.
+    """
+    registry = _load_registry()
+    if name not in registry["projects"]:
+        raise KeyError(f"Project not found: {name}")
+
+    from lib.instance import instance_id as _instance_id
+    instance = _instance_id()
+    instances = registry["projects"][name].setdefault("instances", [])
+    if instance not in instances:
+        instances.append(instance)
+        registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+        _save_registry(registry)
+        logger.info("Linked instance %s to project %s", instance, name)
+    return registry["projects"][name]
+
+
 def delete_project(name: str) -> None:
     """Remove a project from the registry and clean up artifacts.
 
@@ -222,6 +252,16 @@ def delete_project(name: str) -> None:
     # Remove from registry
     del registry["projects"][name]
     _save_registry(registry)
+
+    # Clean up SQLite: project_definitions + doc_registry entries
+    try:
+        from lib.database import get_connection
+        from lib.config import get_db_path
+        with get_connection(get_db_path()) as conn:
+            conn.execute("DELETE FROM project_definitions WHERE name = ?", (name,))
+            conn.execute("DELETE FROM doc_registry WHERE project = ?", (name,))
+    except Exception as e:
+        logger.warning("Failed to clean up DB entries for project %s: %s", name, e)
 
     logger.info("Deleted project: %s", name)
 

@@ -170,6 +170,32 @@ Override with:
 QUAID_E2E_PATHS="openai-oauth,openai-api,anthropic-api" npm run test:all:full
 ```
 
+## Projects System Live Testing
+
+Full protocol in `operations/projects-testing.md`. Run order:
+
+1. **OC CRUD** (alfie.local) — create, register doc, search, show, delete
+2. **CC CRUD** (local testbench) — same sequence against CC instance
+3. **Cross-platform** — global registry check, CC registers doc to OC project, CC reads it back
+
+### Quick reference
+```bash
+# OC
+export QUAID_HOME=~/.quaid QUAID_INSTANCE=openclaw
+quaid registry create-project <name> && quaid registry list
+
+# CC
+export QUAID_HOME=~/quaid QUAID_INSTANCE=claudecode
+quaid registry create-project <name> && quaid registry list
+
+# Global (either machine)
+quaid global-registry list
+```
+
+Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instances, CC can register and search docs in OC-owned project.
+
+---
+
 ## Pass/Fail Rubric
 
 ### Blocking pass criteria

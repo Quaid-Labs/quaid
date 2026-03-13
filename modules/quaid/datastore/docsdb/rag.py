@@ -678,7 +678,7 @@ def main():
         workspace_files = [f for f in Path(base_dir).glob('*.md') if f.is_file()]
         workspace_chunks = 0
         workspace_indexed = 0
-        
+
         for md_file in workspace_files:
             file_path = str(md_file.absolute())
             if not args.all and not rag.needs_reindex(file_path):
@@ -687,9 +687,39 @@ def main():
             if chunks > 0:
                 workspace_indexed += 1
                 workspace_chunks += chunks
-        
+
         print(f"Workspace indexing: {workspace_indexed} files indexed, {workspace_chunks} chunks")
-        print(f"\nTotal: {docs_result['indexed_files'] + workspace_indexed} files, {docs_result['total_chunks'] + workspace_chunks} chunks")
+
+        print("\n=== Indexing doc_registry entries ===")
+        registry_chunks = 0
+        registry_indexed = 0
+        try:
+            from datastore.docsdb.registry import DocsRegistry
+            reg = DocsRegistry()
+            reg_docs = reg.list_docs()
+            for doc in reg_docs:
+                raw_path = doc.get("file_path", "")
+                if not raw_path:
+                    continue
+                p = Path(raw_path)
+                if not p.is_absolute():
+                    p = _workspace() / p
+                file_path = str(p.absolute())
+                if not Path(file_path).is_file():
+                    continue
+                if not args.all and not rag.needs_reindex(file_path):
+                    continue
+                chunks = rag.index_document(file_path)
+                if chunks > 0:
+                    registry_indexed += 1
+                    registry_chunks += chunks
+        except Exception as e:
+            print(f"Warning: could not index doc_registry entries: {e}")
+        print(f"Doc registry indexing: {registry_indexed} files indexed, {registry_chunks} chunks")
+
+        total_files = docs_result['indexed_files'] + workspace_indexed + registry_indexed
+        total_chunks = docs_result['total_chunks'] + workspace_chunks + registry_chunks
+        print(f"\nTotal: {total_files} files, {total_chunks} chunks")
     
     elif args.command == 'search':
         docs_filter = []

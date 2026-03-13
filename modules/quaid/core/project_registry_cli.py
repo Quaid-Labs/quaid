@@ -83,6 +83,19 @@ def cmd_update(args):
         sys.exit(1)
 
 
+def cmd_link(args):
+    from core.project_registry import link_project
+    try:
+        entry = link_project(args.name)
+        instances = ", ".join(entry.get("instances", []))
+        print(f"Linked to project '{args.name}' — instances: {instances}")
+        if args.json:
+            print(json.dumps(entry, indent=2))
+    except KeyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_delete(args):
     from core.project_registry import delete_project
     try:
@@ -176,6 +189,10 @@ def main():
     update_p.add_argument("--description", "-d", help="New description")
     update_p.add_argument("--source-root", "-s", help="New source root path")
 
+    # link
+    link_p = subparsers.add_parser("link", help="Add current instance to a project's instances list")
+    link_p.add_argument("name", help="Project name")
+
     # delete
     delete_p = subparsers.add_parser("delete", help="Delete a project")
     delete_p.add_argument("name", help="Project name")
@@ -194,6 +211,7 @@ def main():
         "create": cmd_create,
         "show": cmd_show,
         "update": cmd_update,
+        "link": cmd_link,
         "delete": cmd_delete,
         "snapshot": cmd_snapshot,
         "sync": cmd_sync,
