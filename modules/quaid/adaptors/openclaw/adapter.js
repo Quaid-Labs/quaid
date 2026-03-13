@@ -1505,8 +1505,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           }
           const fresh = rows.slice(priorCount);
           for (let i = 0; i < fresh.length; i += 1) {
-            const text = extractSessionMessageText(fresh[i]).trim().toLowerCase();
-            if (!text) continue;
+            const rawText = extractSessionMessageText(fresh[i]).trim();
+            if (!rawText) continue;
+            const rawLines = rawText.split("\n").filter((l) => l.trim());
+            const lastLine = (rawLines[rawLines.length - 1] || "").trim();
+            const stripped = lastLine.replace(/^\[.*?\]\s*/, "").trim();
+            const text = (stripped || rawText).toLowerCase();
             const commandKey = `${active.sessionId}:${priorCount + i}:${text}`;
             if (seenSessionIndexCommandKeys.has(commandKey)) {
               continue;
@@ -1600,10 +1604,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     };
     const handleSlashLifecycleFromMessage = async (event, ctx, sourceEvent) => {
       try {
-        const text = String(
+        const rawText = String(
           facade.getMessageText(event?.message || event) || event?.text || event?.content || ""
         ).trim();
-        if (!text) return;
+        if (!rawText) return;
+        const text = rawText.replace(/^\[.*?\]\s*/, "").trim() || rawText;
         const normalized = text.toLowerCase();
         let commandAction = null;
         let lifecycleSignal = null;
