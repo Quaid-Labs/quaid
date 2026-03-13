@@ -1478,15 +1478,15 @@ notify_user(${JSON.stringify(message)})
         });
       }
 
-      event.prependContext = facade.injectFullJournalContext(event.prependContext);
-      event.prependContext = facade.injectProjectContext(event.prependContext);
-
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
 
       if (!autoInjectEnabled) {
-        // Explicitly disabled: skip automatic injection for this instance.
+        // Explicitly disabled: skip all context injection for this instance.
         return { prependContext: event.prependContext };
       }
+
+      event.prependContext = facade.injectFullJournalContext(event.prependContext);
+      event.prependContext = facade.injectProjectContext(event.prependContext);
 
       return { prependContext: event.prependContext };
     };

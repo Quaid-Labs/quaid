@@ -1217,12 +1217,12 @@ notify_user(${JSON.stringify(message)})
           hook_session_id: String(ctx?.sessionId || "")
         });
       }
-      event.prependContext = facade.injectFullJournalContext(event.prependContext);
-      event.prependContext = facade.injectProjectContext(event.prependContext);
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) {
         return { prependContext: event.prependContext };
       }
+      event.prependContext = facade.injectFullJournalContext(event.prependContext);
+      event.prependContext = facade.injectProjectContext(event.prependContext);
       return { prependContext: event.prependContext };
     };
     const beforePromptBuildHandler = async (event, ctx) => {
