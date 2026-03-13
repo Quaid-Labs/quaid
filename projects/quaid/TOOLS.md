@@ -12,6 +12,7 @@ Quaid is an active knowledge layer. Use the `quaid` CLI via your Bash tool — n
 
 ```bash
 quaid recall "query"          # semantic + graph + reranking (use for facts, relationships, timelines)
+quaid recall "query" --docs   # same, but also searches project documentation
 quaid search "query"          # fast search, no reranking (use for quick lookups)
 quaid store "text"            # manual memory insertion (prefer extraction over manual store)
 quaid get-node <id>
@@ -69,11 +70,6 @@ quaid docs check                              # check for stale docs
 quaid docs update --apply                     # update stale docs from source diffs
 quaid registry register <path> --project <name>  # link external file into project
 quaid registry list [--project <name>]
-```
-
-**Unified search** (memory + docs in one pass):
-```bash
-quaid hook-search "query"   # recall memories AND search project docs together; use when you want a single sweep instead of running recall and docs search separately
 ```
 
 ---
@@ -140,7 +136,7 @@ QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from C
 
 - Treat auto-injected memory as hints — verify concrete claims (names, dates, versions) with explicit `recall`.
 - Prefer `docs search` for codebase/architecture questions.
-- Use `hook-search` when you want a single pass across both memories and docs.
+- Use `recall --docs` when you want a single pass across both memories and docs.
 - Use `--domain-boost` before broadening to full recall.
 
 ## Quick Playbooks

@@ -13,7 +13,7 @@ Quaid is an automatic memory system that persists knowledge across sessions.
 - `quaid search "query"` — Fast search (no reranking, cheaper than recall)
 - `quaid docs search "query"` — Search project documentation
 - `quaid docs search "query" --project <name>` — Search docs in a specific project
-- `quaid hook-search "query"` — Search both memories and project documentation
+- `quaid recall "query" --docs` — Search both memories and project documentation
 - `quaid session list` — List recent conversation sessions
 - `quaid domain list` — List knowledge domains
 - `quaid stats` — Check memory system health

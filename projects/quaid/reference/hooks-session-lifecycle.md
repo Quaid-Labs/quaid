@@ -207,35 +207,6 @@ which is lost when the context window is compacted).
 
 ---
 
-### `quaid hook-search "query"`
-
-**Usage:** `quaid hook-search "some query"` (argument, not stdin)
-
-**What it does:**
-
-Runs a combined search across memories and project documentation:
-
-1. `recall(query=query, owner_id=owner, limit=5)` — full memory recall with
-   graph traversal.
-2. `projects_search_docs(query=query, limit=3)` — RAG search across the
-   docs index.
-
-Prints results to stdout in two labeled sections:
-```
-=== Memory Results ===
-  1. [fact] ... (relevance: 0.91)
-  ...
-
-=== Documentation Results ===
-  1. [Title] First 200 chars of chunk...
-  ...
-```
-
-Unlike `hook-inject`, this hook is called on-demand (e.g., from the agent
-via Bash tool) rather than automatically by the platform.
-
----
-
 ### `quaid hook-subagent-start`
 
 **Triggered by:** `SubagentStart` (Claude Code) / `subagent_spawned` (OpenClaw)

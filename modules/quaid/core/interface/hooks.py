@@ -8,14 +8,12 @@ Hook commands:
     inject          Recall memories for a user message (stdin: JSON with "prompt")
     inject-compact  Re-inject critical memories after compaction
     extract         Extract knowledge from a conversation transcript
-    search          Interactive search across memories + docs
     session-init    Collect and output project docs for session start injection
 
 Usage:
     quaid hook-inject             (reads JSON from stdin)
     quaid hook-inject-compact     (reads JSON from stdin)
     quaid hook-extract [--precompact]  (reads JSON from stdin)
-    quaid hook-search "query"
     quaid hook-session-init       (outputs project context to stdout)
 """
 
@@ -445,50 +443,6 @@ def hook_session_init(args):
         print(f"[quaid][session-init] {rules_file} up to date", file=sys.stderr)
 
 
-def hook_search(args):
-    """Search memories and docs, print results to stdout.
-
-    Usage: quaid hook-search "query"
-    """
-    query = " ".join(args.query) if hasattr(args, "query") and args.query else ""
-    if not query:
-        print("Usage: quaid hook-search \"query\"", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        from core.interface.api import recall, projects_search_docs
-        owner = _get_owner_id()
-
-        # Search memories
-        memories = recall(query=query, owner_id=owner, limit=5)
-
-        # Search docs
-        doc_results = projects_search_docs(query=query, limit=3)
-
-        # Format output
-        if memories:
-            print("=== Memory Results ===")
-            for i, mem in enumerate(memories, 1):
-                text = mem.get("text", "")
-                sim = mem.get("similarity", 0)
-                cat = mem.get("category", "fact")
-                print(f"  {i}. [{cat}] {text} (relevance: {sim:.2f})")
-
-        chunks = doc_results.get("chunks", [])
-        if chunks:
-            print("\n=== Documentation Results ===")
-            for i, chunk in enumerate(chunks, 1):
-                title = chunk.get("title", "untitled")
-                text = chunk.get("text", "")[:200]
-                print(f"  {i}. [{title}] {text}")
-
-        if not memories and not chunks:
-            print("No results found.")
-
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
 
 def hook_subagent_start(args):
     """Register a subagent in the subagent registry.
@@ -580,9 +534,6 @@ def main():
         help="Flag indicating this is a pre-compaction extraction",
     )
 
-    search_parser = subparsers.add_parser("search", help="Search memories + docs")
-    search_parser.add_argument("query", nargs="*", help="Search query")
-
     subparsers.add_parser("subagent-start", help="Register subagent in registry")
     subparsers.add_parser("subagent-stop", help="Mark subagent complete in registry")
 
@@ -596,8 +547,6 @@ def main():
         hook_session_init(args)
     elif args.command == "extract":
         hook_extract(args)
-    elif args.command == "search":
-        hook_search(args)
     elif args.command == "subagent-start":
         hook_subagent_start(args)
     elif args.command == "subagent-stop":

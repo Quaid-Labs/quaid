@@ -619,7 +619,7 @@ The `quaid` CLI works standalone -- no gateway needed.
 quaid store <text>            # Store a single memory (--category, --owner, --domains, ...)
 
 # Search & Retrieve
-quaid search <query>          # Search memories (full recall pipeline)
+quaid search <query>          # Fast memory search (no reranking)
 quaid recall <query>          # Recall pipeline helper
 quaid get-node <id>           # Get a memory by ID
 quaid get-edges <id>          # Get edges for a memory node
@@ -648,7 +648,7 @@ All commands run from the `modules/quaid/` directory.
 # Memory operations
 python3 datastore/memorydb/memory_graph.py store "fact text" --owner default --category preference
 python3 datastore/memorydb/memory_graph.py search "query" --owner default --limit 10
-python3 datastore/memorydb/memory_graph.py search-all "query"     # Unified memory search (datastore only)
+python3 datastore/memorydb/memory_graph.py recall "query" --docs   # Recall + docs search
 python3 datastore/memorydb/memory_graph.py stats
 python3 datastore/memorydb/memory_graph.py get-edges <node_id>
 
