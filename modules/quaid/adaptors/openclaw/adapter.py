@@ -309,7 +309,7 @@ class OpenClawAdapter(QuaidAdapter):
             return True
         if "HEARTBEAT" in text and "HEARTBEAT_OK" in text:
             return True
-        if re.sub(r"[*_<>/b\\s]", "", text).startswith("HEARTBEAT_OK"):
+        if re.sub(r"[*_<>/b\s]", "", text).startswith("HEARTBEAT_OK"):
             return True
         return False
 

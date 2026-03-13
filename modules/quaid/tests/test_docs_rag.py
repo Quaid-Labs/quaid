@@ -4,7 +4,8 @@ import os
 import sys
 import sqlite3
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from types import SimpleNamespace
+from unittest.mock import patch, MagicMock, call
 
 # Ensure plugin root is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -284,3 +285,132 @@ class TestDocsSearchFiltering:
         rag = _make_rag(tmp_path)
         with pytest.raises(RuntimeError, match="failHard is enabled"):
             rag.search_docs("memory", limit=5)
+
+
+# ---------------------------------------------------------------------------
+# _run_rag_maintenance third pass — doc_registry enumeration
+# ---------------------------------------------------------------------------
+#
+# The third pass (rag.py lines 623-648) iterates DocsRegistry().list_docs()
+# and conditionally indexes files registered outside the workspace.
+#
+# Mock setup requirements:
+#   - cfg.projects.enabled = False  → skips the first two passes entirely
+#   - DocsRAG.reindex_all patched   → returns empty counters (pass 1 stub)
+#   - datastore.docsdb.registry.DocsRegistry patched → controls list_docs() output
+#   - DocsRAG.needs_reindex patched → controls up-to-date vs. stale decision
+#   - DocsRAG.index_document patched → controls indexing side-effects
+#
+# ---------------------------------------------------------------------------
+
+def _make_rag_ctx(tmp_path):
+    """Build a minimal _run_rag_maintenance ctx with projects disabled."""
+    cfg = SimpleNamespace(
+        rag=SimpleNamespace(docs_dir="docs"),
+        projects=SimpleNamespace(enabled=False, definitions={}),
+    )
+    return SimpleNamespace(cfg=cfg, dry_run=False, workspace=tmp_path)
+
+
+class _Result:
+    def __init__(self):
+        self.metrics = {}
+        self.logs = []
+        self.errors = []
+        self.data = {}
+
+
+def _empty_reindex_result():
+    return {"total_files": 0, "indexed_files": 0, "skipped_files": 0, "total_chunks": 0}
+
+
+class TestRagMaintenanceThirdPass:
+    """Third pass: doc_registry enumeration inside _run_rag_maintenance."""
+
+    def _register_and_get_handler(self):
+        from datastore.docsdb.rag import register_lifecycle_routines
+        class _Reg:
+            def __init__(self):
+                self.handlers = {}
+            def register(self, name, handler):
+                self.handlers[name] = handler
+        reg = _Reg()
+        register_lifecycle_routines(reg, _Result)
+        return reg.handlers["rag"]
+
+    def test_external_doc_outside_workspace_gets_indexed(self, tmp_path):
+        """A registered doc whose path is outside workspace (absolute) is indexed."""
+        handler = self._register_and_get_handler()
+        ctx = _make_rag_ctx(tmp_path)
+
+        # Create a real file outside the workspace
+        external_dir = tmp_path / "external"
+        external_dir.mkdir()
+        external_file = external_dir / "outside.md"
+        external_file.write_text("# External\nContent.")
+
+        fake_reg = MagicMock()
+        fake_reg.list_docs.return_value = [{"file_path": str(external_file)}]
+
+        with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
+             patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
+             patch("datastore.docsdb.rag.DocsRAG.needs_reindex", return_value=True), \
+             patch("datastore.docsdb.rag.DocsRAG.index_document", return_value=3) as mock_index:
+            result = handler(ctx)
+
+        mock_index.assert_called_once_with(str(external_file))
+        assert result.metrics["rag_files_indexed"] >= 1
+        assert result.metrics["rag_chunks_created"] >= 3
+
+    def test_up_to_date_doc_is_skipped(self, tmp_path):
+        """A registered doc that needs_reindex=False is counted as skipped, not indexed."""
+        handler = self._register_and_get_handler()
+        ctx = _make_rag_ctx(tmp_path)
+
+        existing_file = tmp_path / "current.md"
+        existing_file.write_text("# Up to date\nStill current.")
+
+        fake_reg = MagicMock()
+        fake_reg.list_docs.return_value = [{"file_path": str(existing_file)}]
+
+        with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
+             patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
+             patch("datastore.docsdb.rag.DocsRAG.needs_reindex", return_value=False), \
+             patch("datastore.docsdb.rag.DocsRAG.index_document") as mock_index:
+            result = handler(ctx)
+
+        mock_index.assert_not_called()
+        assert result.metrics["rag_files_skipped"] >= 1
+
+    def test_nonexistent_path_is_silently_skipped(self, tmp_path):
+        """A registered doc whose path does not exist on disk is silently skipped."""
+        handler = self._register_and_get_handler()
+        ctx = _make_rag_ctx(tmp_path)
+
+        fake_reg = MagicMock()
+        fake_reg.list_docs.return_value = [{"file_path": "/nonexistent/ghost.md"}]
+
+        with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
+             patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
+             patch("datastore.docsdb.rag.DocsRAG.index_document") as mock_index:
+            result = handler(ctx)
+
+        # No index attempt, no error raised, metrics counters stay at zero for this path
+        mock_index.assert_not_called()
+        assert result.errors == []
+
+    def test_list_docs_exception_is_swallowed(self, tmp_path):
+        """An exception from DocsRegistry().list_docs() is caught and logged as a warning."""
+        handler = self._register_and_get_handler()
+        ctx = _make_rag_ctx(tmp_path)
+
+        fake_reg = MagicMock()
+        fake_reg.list_docs.side_effect = Exception("db exploded")
+
+        with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
+             patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg):
+            # Must not raise — exception is swallowed and logged as a warning
+            result = handler(ctx)
+
+        # No unhandled errors in result (the warning goes to logger, not result.errors)
+        assert result.errors == []

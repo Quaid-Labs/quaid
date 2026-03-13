@@ -938,8 +938,8 @@ async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens
     model: resolved.model,
     input_tokens: data?.usage?.input_tokens || 0,
     output_tokens: data?.usage?.output_tokens || 0,
-    cache_read_tokens: 0,
-    cache_creation_tokens: 0,
+    cache_read_tokens: data?.usage?.cache_read_input_tokens || 0,
+    cache_creation_tokens: data?.usage?.cache_creation_input_tokens || 0,
     truncated: false
   };
 }
@@ -2000,7 +2000,7 @@ notify_user("\u{1F9E0} Processing memories from ${startNotify.triggerDesc}...")
         writeHookTrace("extract.pipeline_error", {
           label,
           session_id: sessionId || "",
-          error: msg.slice(0, 500)
+          error: msg
         });
         return;
       }

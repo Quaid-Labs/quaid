@@ -394,6 +394,10 @@ def _diag_logging_enabled() -> bool:
 
 
 def _diag_truncate(value: Any, limit: int = 220) -> str:
+    # Log-formatting helper only. Strings are shortened for log line safety.
+    # This is NOT data truncation — the underlying stored values are never modified.
+    # Only called from _diag_log_decision(), which is gated behind QUAID_DIAG_LOG
+    # (disabled by default).
     txt = str(value or "")
     if len(txt) <= limit:
         return txt

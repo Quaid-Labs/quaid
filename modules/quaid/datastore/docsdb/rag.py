@@ -118,13 +118,12 @@ class DocsRAG:
         lines = content.split('\n')
         chunks = []
         current_chunk_lines = []
-        current_header = None
         current_tokens = 0
-        
+
         for line in lines:
             line_tokens = self.estimate_tokens(line)
-            
-            # Check for header
+
+            # Check for header — start a new chunk at each heading boundary
             header_match = re.match(r'^(#{1,3})\s+(.+)', line)
             if header_match:
                 # Save current chunk if it has content
@@ -132,9 +131,7 @@ class DocsRAG:
                     chunks.append('\n'.join(current_chunk_lines))
                     current_chunk_lines = []
                     current_tokens = 0
-                
-                # Update current header
-                current_header = line
+
                 current_chunk_lines.append(line)
                 current_tokens = line_tokens
                 continue
@@ -392,7 +389,7 @@ class DocsRAG:
                 continue
             seen.add(item)
             uniq.append(item)
-        return uniq[:64]
+        return uniq
 
     def search_docs(self, query: str, limit: int = 5, min_similarity: float = 0.3,
                     project: Optional[str] = None, docs: Optional[List[str]] = None) -> List[Dict]:
@@ -609,6 +606,9 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             skipped = int(rag_result.get("skipped_files", 0))
             chunks = int(rag_result.get("total_chunks", 0))
 
+            # Track scanned directory prefixes so pass 3 can skip already-covered files.
+            scanned_dirs: list = [str(Path(docs_dir).resolve()) + "/"]
+
             if cfg.projects.enabled:
                 for proj_name, proj_defn in cfg.projects.definitions.items():
                     proj_dir = workspace / proj_defn.home_dir
@@ -619,21 +619,26 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         indexed += int(proj_result.get("indexed_files", 0))
                         skipped += int(proj_result.get("skipped_files", 0))
                         chunks += int(proj_result.get("total_chunks", 0))
+                        scanned_dirs.append(str(proj_dir.resolve()) + "/")
 
-            # Third pass: index files registered via doc_registry (external files not
-            # under any scanned directory — e.g. /tmp/*.md or files outside workspace).
+            # Third pass: index files registered via doc_registry that are NOT already
+            # covered by passes 1 or 2 (external files, e.g. outside workspace or in
+            # source-root paths not under any scanned project dir).
             try:
                 from datastore.docsdb.registry import DocsRegistry as _DR
-                from pathlib import Path as _Path
                 reg_docs = _DR().list_docs()
                 for doc in reg_docs:
                     raw_path = doc.get("file_path", "")
                     if not raw_path:
                         continue
-                    p = _Path(raw_path)
+                    p = Path(raw_path)
                     if not p.is_absolute():
                         p = workspace / p
                     if not p.is_file():
+                        continue
+                    # Skip files already covered by directory scans in passes 1 and 2
+                    p_resolved = str(p.resolve())
+                    if any(p_resolved.startswith(d) for d in scanned_dirs):
                         continue
                     if rag.needs_reindex(str(p)):
                         doc_chunks = rag.index_document(str(p))

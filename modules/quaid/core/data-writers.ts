@@ -101,7 +101,7 @@ export function createDataWriteEngine(opts: DataWriteEngineOptions = {}) {
       }
       const errObj = err as Error;
       const errType = errObj?.name || typeof err || "UnknownError";
-      const errStack = typeof errObj?.stack === "string" ? errObj.stack.slice(0, 4000) : undefined;
+      const errStack = typeof errObj?.stack === "string" ? errObj.stack : undefined;
       return {
         status: "failed",
         error: String(errObj?.message || err || "Unknown DataWriter error"),

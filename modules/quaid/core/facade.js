@@ -1049,7 +1049,7 @@ function createQuaidFacade(deps) {
         console.log(`[quaid][timeout] auto-compaction requested for key=${key} (compacted=${String(result?.compacted)})`);
       } else {
         const raw = String(result?.raw || "");
-        console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${raw.slice(0, 300)}`);
+        console.warn(`[quaid][timeout] auto-compaction returned non-ok for key=${key}: ${raw}`);
       }
     } catch (err) {
       if (deps.isFailHardEnabled()) {
@@ -1939,7 +1939,7 @@ ${allNotes.map((n) => `- ${n}`).join("\n")}
       extracted = JSON.parse(output || "{}");
     } catch (err) {
       const msg = String(err?.message || err);
-      throw new Error(`[quaid][facade] extract pipeline failed: ${msg.slice(0, 500)}`);
+      throw new Error(`[quaid][facade] extract pipeline failed: ${msg}`);
     } finally {
       try {
         fs.unlinkSync(tmpPath);

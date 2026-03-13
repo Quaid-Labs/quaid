@@ -39,25 +39,42 @@ def _load_registry() -> Dict[str, Any]:
 
 
 def _save_registry(data: Dict[str, Any]) -> None:
-    """Atomically write the registry file with file locking."""
+    """Atomically write the registry file with file locking.
+
+    Locking strategy: acquire an exclusive lock on the canonical file
+    (creating it if absent) so that concurrent writers are serialised
+    across the full read-modify-write cycle.  Write to a sibling .tmp
+    file, fsync, then rename over the canonical path.  The lock is held
+    until after the rename so no reader sees a half-written file and no
+    second writer can slip in between write and rename.
+    """
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp = path.with_suffix(".tmp")
+    # Open (or create) the canonical file to use as the lock target.
+    # O_CREAT | O_RDWR so the fd is valid even on first run.
+    lock_fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            json.dump(data, f, indent=2, sort_keys=True)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        tmp.rename(path)
-    except OSError as e:
-        logger.error("Failed to write project registry: %s", e)
-        if tmp.exists():
-            tmp.unlink()
-        raise
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, sort_keys=True)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.rename(path)
+        except OSError as e:
+            logger.error("Failed to write project registry: %s", e)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
 
 
 def list_projects() -> Dict[str, Dict[str, Any]]:

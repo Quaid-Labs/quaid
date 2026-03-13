@@ -578,7 +578,7 @@ A second paragraph continues the discussion about document processing. It emphas
     it('handles extremely long queries', async () => {
       const longQuery = 'system architecture microservices distributed components API gateway authentication data processing '.repeat(10)
       
-      const results = await rag.search(longQuery.substring(0, 500)) // Trim to reasonable length
+      const results = await rag.search(longQuery)
       
       expect(Array.isArray(results)).toBe(true)
     })

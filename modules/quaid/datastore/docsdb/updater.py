@@ -933,10 +933,13 @@ def update_doc_from_diffs(
         _, max_lines = core_info
         response_lines = len(response.splitlines())
         if response_lines > max_lines:
-            print(f"  WARNING: Response ({response_lines} lines) exceeds limit ({max_lines}) — trimming excess")
-            lines = response.splitlines()
-            response = "\n".join(lines[:max_lines])
-            chars_after = len(response)
+            # Do NOT truncate — log and skip write to avoid silently discarding content.
+            # The LLM ignored the line-limit instruction; log and return False so the
+            # caller can retry or alert rather than writing a half-document.
+            print(f"  WARNING: Response ({response_lines} lines) exceeds limit ({max_lines}) — skipping write to avoid truncation")
+            log_doc_update(doc_path, trigger, stale_sources, "Skipped: response exceeded core markdown line limit",
+                           dry_run, False, chars_before, len(response))
+            return False
 
     if dry_run:
         print(f"  [DRY RUN] Would update {doc_path} ({chars_before} -> {chars_after} chars)")

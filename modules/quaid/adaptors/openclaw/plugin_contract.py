@@ -17,13 +17,8 @@ class OpenClawAdapterPluginContract(PluginContractBase):
         # Keep init lightweight and side-effect free. Datastore access here can
         # create import cycles during config/plugin bootstrap.
         _ = ctx
-        try:
-            _INIT_READY = True
-            _INIT_ERROR = None
-        except Exception as exc:
-            _INIT_READY = False
-            _INIT_ERROR = str(exc)
-            raise
+        _INIT_READY = True
+        _INIT_ERROR = None
 
     def on_config(self, ctx: PluginHookContext) -> None:
         # Keep this strict and explicit: openclaw adapter slot should pair with adapter.type=openclaw.

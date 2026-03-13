@@ -212,7 +212,7 @@ class GatewayLLMProvider(LLMProvider):
                     raise RuntimeError(
                         f"No credential configured for selected model provider (HTTP {e.code}): {err_msg}"
                     ) from e
-                retryable = e.code in {429, 500, 502, 503, 504}
+                retryable = e.code in {429, 500, 502, 504}
                 last_error = e
                 if retryable and attempt < retries:
                     time.sleep(0.25 * (2 ** attempt))

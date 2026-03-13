@@ -259,7 +259,7 @@ class ClaudeCodeAdapter(QuaidAdapter):
                             text = block.get("text", "")
                             if text:
                                 text_parts.append(text)
-                    content = " ".join(text_parts)
+                    content = "\n".join(text_parts)
                 elif not isinstance(content, str):
                     continue
 

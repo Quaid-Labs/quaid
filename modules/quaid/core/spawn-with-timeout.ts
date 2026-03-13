@@ -60,8 +60,7 @@ export function spawnWithTimeout(opts: SpawnWithTimeoutOptions): Promise<string>
       const stdoutText = stdout.trim();
       const detail = [stderrText ? `stderr: ${stderrText}` : "", stdoutText ? `stdout: ${stdoutText}` : ""]
         .filter(Boolean)
-        .join(" | ")
-        .slice(0, 1000);
+        .join(" | ");
       reject(new Error(`${opts.label} error (exit=${String(code)}): ${detail}`));
     });
     proc.on("error", (err: Error) => {

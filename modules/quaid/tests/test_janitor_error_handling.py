@@ -187,18 +187,33 @@ def test_run_tests_uses_configurable_timeout(monkeypatch):
     assert out["success"] is True
 
 
-def test_append_decision_log_trims_to_configured_tail(tmp_path, monkeypatch):
+def test_append_decision_log_archives_via_rotation(tmp_path, monkeypatch):
+    """_append_decision_log archives old entries via rotate_log_file, not truncation.
+
+    The decision log is append-only; rotation is token-budget-based (archiving to
+    a sibling directory), not line-count-based.  QUAID_DECISION_LOG_MAX_LINES is no
+    longer the controlling parameter — it is ignored since the switch to archiving.
+
+    This test verifies:
+    - All written entries appear in the live file after normal-sized writes (rotation
+      does not fire for small entries that stay under the token budget).
+    - All written payloads are valid JSON and contain the expected fields.
+    - No lines are silently discarded.
+    """
     decision_path = tmp_path / "janitor" / "decision-log.jsonl"
-    monkeypatch.setenv("QUAID_DECISION_LOG_MAX_LINES", "3")
     monkeypatch.setattr(janitor, "_decision_log_path", lambda: decision_path)
 
     for idx in range(5):
         janitor._append_decision_log("test", {"idx": idx})
 
     lines = decision_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 3
+    # All 5 entries must be present — rotation does not discard entries
+    assert len(lines) == 5
     payloads = [janitor.json.loads(line) for line in lines]
-    assert [p["idx"] for p in payloads] == [2, 3, 4]
+    assert [p["idx"] for p in payloads] == [0, 1, 2, 3, 4]
+    for p in payloads:
+        assert "ts" in p
+        assert p["kind"] == "test"
 
 
 def test_check_for_updates_ignores_non_object_github_payload(tmp_path, monkeypatch):

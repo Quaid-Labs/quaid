@@ -15,13 +15,8 @@ class ClaudeCodeAdapterPluginContract(PluginContractBase):
     def on_init(self, ctx: PluginHookContext) -> None:
         global _INIT_READY, _INIT_ERROR
         _ = ctx
-        try:
-            _INIT_READY = True
-            _INIT_ERROR = None
-        except Exception as exc:
-            _INIT_READY = False
-            _INIT_ERROR = str(exc)
-            raise
+        _INIT_READY = True
+        _INIT_ERROR = None
 
     def on_config(self, ctx: PluginHookContext) -> None:
         adapter_type = str(getattr(getattr(ctx.config, "adapter", None), "type", "") or "").strip().lower()

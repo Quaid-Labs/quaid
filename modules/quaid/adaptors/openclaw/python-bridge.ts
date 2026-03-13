@@ -17,18 +17,13 @@ function _formatBridgeErrorDetail(stderrText: string, stdoutText: string): strin
     /timed out|timeout|Gateway LLM proxy transient error|URLError|TimeoutError/i.test(stderrText)
       ? "[hint] upstream llm timeout/connection issue detected"
       : "";
-  const compactStderr =
-    stderrText.length > 900
-      ? `${stderrText.slice(0, 420)} ... [truncated] ... ${stderrText.slice(-420)}`
-      : stderrText;
   return [
     timeoutHint,
-    compactStderr ? `stderr: ${compactStderr}` : "",
+    stderrText ? `stderr: ${stderrText}` : "",
     stdoutText ? `stdout: ${stdoutText}` : "",
   ]
     .filter(Boolean)
-    .join(" | ")
-    .slice(0, 2000);
+    .join(" | ");
 }
 
 type PythonBridgeConfig = {

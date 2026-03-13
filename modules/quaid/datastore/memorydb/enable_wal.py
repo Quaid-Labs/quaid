@@ -43,16 +43,16 @@ def enable_wal_mode():
             timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
             sync = conn.execute("PRAGMA synchronous").fetchone()[0]
 
-            print("✅ Upgraded successfully:")
-            print(f"   Journal mode: {current_mode} → {new_mode}")
+            print("Upgraded successfully:")
+            print(f"   Journal mode: {current_mode} -> {new_mode}")
             print(f"   Busy timeout (session): {timeout}ms")
             print(f"   Synchronous (session): {sync}")
             print("   Cache size (session): 64MB")
     except sqlite3.Error as exc:
         print(f"Failed enabling WAL mode: {exc}")
         raise
-    
-    print("\n🔄 Benefits:")
+
+    print("\nBenefits:")
     print("   - Multiple readers can read simultaneously")
     print("   - Writers don't block readers")
     print("   - Better resilience under concurrent reads/writes")

@@ -91,7 +91,7 @@ def process_event(event_path: str) -> Dict:
 
     print(f"Processing event: trigger={trigger}, project_hint={project_hint}")
     print(f"  Files touched: {len(files_touched)}")
-    print(f"  Summary: {summary[:100]}...")
+    print(f"  Summary: {summary}")
 
     registry = DocsRegistry()
     try:
@@ -355,7 +355,7 @@ def _apply_updates(
             # Just log it for now
             log_doc_update(
                 f"projects/{project_name}/PROJECT.md",
-                trigger, [], f"Session summary: {summary[:100]}",
+                trigger, [], f"Session summary: {summary}",
                 dry_run=True, success=True, chars_before=len(project_md_content),
                 chars_after=len(project_md_content), notify=False,
             )
@@ -418,12 +418,11 @@ def evaluate_doc_health(
         f"- {d['file_path']}: {d.get('description', '')}" for d in docs
     ) or "(no docs registered)"
 
-    # Gather recent project log entries
+    # Gather recent project log entries — read full file (rotation keeps it bounded).
     log_path = project_dir / PROJECT_HISTORY_FILENAME
     recent_log = ""
     if log_path.exists():
-        lines = log_path.read_text().strip().split("\n")
-        recent_log = "\n".join(lines[-30:])  # Last 30 entries
+        recent_log = log_path.read_text(encoding="utf-8").strip()
 
     # Gather source roots for gap analysis
     source_roots = defn.source_roots or []

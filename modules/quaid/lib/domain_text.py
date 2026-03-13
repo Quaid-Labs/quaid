@@ -32,7 +32,21 @@ def normalize_domain_id(value: object) -> Optional[str]:
     return norm
 
 
-def sanitize_domain_description(value: object, *, max_chars: int = MAX_DOMAIN_DESCRIPTION_CHARS) -> str:
+def sanitize_domain_description(
+    value: object,
+    *,
+    max_chars: int = MAX_DOMAIN_DESCRIPTION_CHARS,
+    allow_truncate: bool = False,
+) -> str:
+    """Sanitize a domain description string.
+
+    Args:
+        value: Raw description (any type — coerced to str).
+        max_chars: Maximum allowed length after normalization.
+        allow_truncate: If True, silently trim to max_chars (for reading
+            existing DB rows that may predate this limit). If False (default),
+            raise ValueError when the normalized text exceeds max_chars.
+    """
     text = unicodedata.normalize("NFKC", str(value or "")).strip()
     text = text.replace("`", "'")
     text = re.sub(r"[\r\n\t]+", " ", text)
@@ -42,5 +56,11 @@ def sanitize_domain_description(value: object, *, max_chars: int = MAX_DOMAIN_DE
         if pattern.search(text):
             raise ValueError("Domain description contains unsafe instruction-like content")
     if len(text) > max_chars:
-        text = text[:max_chars].rstrip()
+        if allow_truncate:
+            text = text[:max_chars].rstrip()
+        else:
+            raise ValueError(
+                f"Domain description too long ({len(text)} chars, max {max_chars}). "
+                "Shorten the description before registering."
+            )
     return text

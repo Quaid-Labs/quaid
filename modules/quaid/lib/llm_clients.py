@@ -18,6 +18,7 @@ import json
 import hashlib
 import logging
 import os
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -610,14 +611,13 @@ def call_llm(system_prompt: str, user_message: str,
                 "system_preview": _preview(system_prompt, 30),
                 "response_preview": "",
                 "error_code": _error_code(e),
-                "error": str(e)[:200],
+                "error": str(e),
                 "rate_limits": _rate_limit_headers(e),
                 "key_fp": _key_fp(),
             })
             # Only retry on transient errors (rate limit, server errors, timeouts)
-            import subprocess as _sp
             retryable = isinstance(e, (TimeoutError, ConnectionError, OSError,
-                                       _sp.TimeoutExpired))
+                                       subprocess.TimeoutExpired))
             if isinstance(e, urllib.error.HTTPError):
                 retryable = e.code in _RETRYABLE_HTTP_CODES
             if retryable and attempt < retries:

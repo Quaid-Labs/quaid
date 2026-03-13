@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -346,8 +346,18 @@ def read_carryover(session_id: str) -> List[Dict[str, Any]]:
 def write_carryover(session_id: str, facts: List[Dict[str, Any]]) -> None:
     """Write carryover facts for the next chunk extraction."""
     session_id = _validate_session_id(session_id)
-    # B056: Cap carryover to prevent unbounded growth
+    # B056: Cap carryover to prevent unbounded growth.
+    # Carryover facts are already-stored DB entries used as LLM context for
+    # continuity across extraction chunks. Rotating the oldest out of the window
+    # does not discard stored data — all facts are durably stored in the DB.
+    # This is an archiving/rotation pattern (not truncation of raw input data).
     if len(facts) > MAX_CARRYOVER_FACTS:
+        dropped = len(facts) - MAX_CARRYOVER_FACTS
+        logger.warning(
+            "carryover for session %s exceeded %d facts (%d total); "
+            "rotating oldest %d out of context window (already stored in DB)",
+            session_id, MAX_CARRYOVER_FACTS, len(facts), dropped,
+        )
         facts = facts[-MAX_CARRYOVER_FACTS:]
     carry_file = _carryover_dir() / f"{session_id}.json"
     payload = {
@@ -477,6 +487,26 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         mark_signal_processed(signal_data)
         return
 
+    # If read_transcript_slice hit the cap on a compaction/reset signal, the
+    # remaining lines beyond the cap could be lost if the transcript gets wiped
+    # before the daemon cycles again. Write a follow-up session_end signal now
+    # so the remaining lines are extracted even if the original trigger is gone.
+    capped_lines = len(new_lines) >= MAX_TRANSCRIPT_LINES
+    if capped_lines and signal_type in ("compaction", "reset"):
+        remaining_after_cap = total_lines - (cursor_offset + len(new_lines))
+        if remaining_after_cap > 0:
+            logger.warning(
+                "[%s] session %s: transcript cap hit on %s signal; %d lines remain above cap; "
+                "writing follow-up session_end signal to prevent data loss on transcript rotation",
+                label, session_id, signal_type, remaining_after_cap,
+            )
+            write_signal(
+                signal_type="session_end",
+                session_id=session_id,
+                transcript_path=transcript_path,
+                meta={"reason": "cap_followup", "cap_offset": cursor_offset + len(new_lines)},
+            )
+
     # B030: Write lines to temp file in QUAID_HOME/data/tmp/ (not /tmp)
     tmp_dir = _tmp_dir()
     with tempfile.NamedTemporaryFile(
@@ -498,12 +528,17 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             mark_signal_processed(signal_data)
             return
 
-        # Merge harvestable subagent transcripts into parent extraction
-        # B010: Cap per-child at 50k chars and total merged at 200k chars
+        # Merge harvestable subagent transcripts into parent extraction.
+        # B010: Per-child size is advisory (chunker handles large transcripts).
+        # MAX_MERGED_CHARS bounds the total injected into this extraction pass.
+        # Subagents deferred due to the total cap are NOT dropped — a follow-up
+        # session_end signal is written for the parent so they are harvested on
+        # the next daemon cycle rather than silently skipped.
         MAX_CHILD_CHARS = 50_000
         MAX_MERGED_CHARS = 200_000
         harvestable = []
         merged_chars = 0
+        deferred_subagents: List[Dict[str, Any]] = []
         try:
             from core.subagent_registry import get_harvestable, mark_harvested
             harvestable = get_harvestable(session_id)
@@ -512,11 +547,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 child_id = child.get("child_id", "")
                 if child_path and os.path.isfile(child_path):
                     if merged_chars >= MAX_MERGED_CHARS:
-                        logger.warning(
-                            "[%s] session %s: hit merged transcript cap (%d chars), skipping remaining subagents",
-                            label, session_id, merged_chars,
-                        )
-                        break
+                        # Defer rather than drop — record for follow-up signal.
+                        deferred_subagents.append(child)
+                        continue
                     try:
                         child_text = adapter.parse_session_jsonl(Path(child_path))
                         if child_text.strip():
@@ -540,6 +573,20 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                             "[%s] session %s: failed to parse subagent %s transcript: %s",
                             label, session_id, child_id, e,
                         )
+            if deferred_subagents:
+                logger.warning(
+                    "[%s] session %s: %d subagent(s) deferred due to merged transcript cap "
+                    "(%d chars); writing follow-up session_end signal for parent session",
+                    label, session_id, len(deferred_subagents), merged_chars,
+                )
+                # Write a follow-up signal so the parent session is re-processed
+                # and remaining subagents are harvested.
+                write_signal(
+                    signal_type="session_end",
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    meta={"reason": "deferred_subagents", "deferred_count": len(deferred_subagents)},
+                )
         except Exception as e:
             logger.warning("[%s] session %s: subagent merge error: %s", label, session_id, e)
 

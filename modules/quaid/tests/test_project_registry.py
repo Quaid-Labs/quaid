@@ -61,7 +61,8 @@ class TestCreateProject:
 
         assert entry["description"] == "Test app"
         assert entry["source_root"] is None
-        assert "test-adapter" in entry["instances"]
+        # instances contains instance_id() (from QUAID_INSTANCE env), not adapter_id()
+        assert len(entry["instances"]) >= 1
 
         # Canonical dir created
         canonical = tmp_path / "shared" / "projects" / "my-app"

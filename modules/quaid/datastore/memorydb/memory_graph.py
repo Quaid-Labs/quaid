@@ -1119,7 +1119,10 @@ class MemoryGraph:
                 else:
                     sql += " AND (session_id IS NULL OR session_id != ?)"
                     params.append(current_session_id)
-            sql += " ORDER BY accessed_at DESC LIMIT 200"
+            # No LIMIT: brute-force path must scan all embeddings to avoid silent misses.
+            # sqlite-vec (the normal path) handles large datasets efficiently; this fallback
+            # only runs when sqlite-vec is not installed, so full-scan is acceptable.
+            sql += " ORDER BY accessed_at DESC"
             return sql, params
 
         with self._get_conn() as conn:
@@ -2526,7 +2529,7 @@ def list_domains(active_only: bool = True) -> List[Dict[str, Any]]:
         if not did:
             continue
         try:
-            desc = _sanitize_domain_description(row[1])
+            desc = _sanitize_domain_description(row[1], allow_truncate=True)
         except Exception:
             desc = ""
         out.append({

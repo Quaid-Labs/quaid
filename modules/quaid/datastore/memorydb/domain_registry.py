@@ -9,7 +9,6 @@ from typing import Dict
 from datastore.memorydb.domain_defaults import default_domain_descriptions
 from lib.database import get_connection
 from lib.domain_text import (
-    MAX_DOMAIN_DESCRIPTION_CHARS,
     normalize_domain_id,
     sanitize_domain_description,
 )
@@ -62,7 +61,7 @@ def read_active_domains(conn) -> Dict[str, str]:
         domain_id = normalize_domain_id(row[0])
         if not domain_id:
             continue
-        out[domain_id] = sanitize_domain_description(row[1])
+        out[domain_id] = sanitize_domain_description(row[1], allow_truncate=True)
     return normalize_domain_map(out)
 
 

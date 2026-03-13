@@ -219,6 +219,11 @@ def _warn_api_key_fallback() -> None:
     )
 
 
+class _OAuthUnavailable(Exception):
+    """Internal signal: OAuth path failed, try next layer."""
+    pass
+
+
 class ClaudeCodeOAuthLLMProvider(LLMProvider):
     """3-layer auth fallback for Claude Code LLM calls.
 
@@ -423,8 +428,3 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             "deep": {"model": self._deep_model, "available": True},
             "fast": {"model": self._fast_model, "available": True},
         }
-
-
-class _OAuthUnavailable(Exception):
-    """Internal signal: OAuth path failed, try next layer."""
-    pass

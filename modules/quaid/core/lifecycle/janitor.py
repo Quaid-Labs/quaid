@@ -193,7 +193,8 @@ def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
     """Run npm test for quaid plugin and report pass/fail counts."""
     _ensure_runtime_state()
     metrics.start_task("tests")
-    plugin_dir = str(Path(__file__).parent)
+    # __file__ is core/lifecycle/janitor.py — go up two levels to modules/quaid/
+    plugin_dir = str(Path(__file__).resolve().parents[2])
 
     result = {"tests_passed": 0, "tests_failed": 0, "tests_total": 0, "success": False}
 
@@ -245,7 +246,7 @@ def run_tests(metrics: JanitorMetrics) -> Dict[str, Any]:
                 print(f"    {line}")
 
     except subprocess.TimeoutExpired:
-        print(f"  Tests timed out after 600s")
+        print(f"  Tests timed out after {_janitor_test_timeout_seconds()}s")
         metrics.add_error("Unit tests timed out")
         result["tests_failed"] = 1
         result["tests_total"] = 1
@@ -457,16 +458,16 @@ def _decision_log_max_lines(default_lines: int = 2000) -> int:
 
 
 def _trim_decision_log_tail(path: Path, max_lines: int) -> None:
+    """Rotate the decision log, archiving old entries rather than discarding them."""
     if max_lines <= 0:
         return
+    if not path.is_file():
+        return
     try:
-        content = path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return
-    if len(content) <= max_lines:
-        return
-    trimmed = "\n".join(content[-max_lines:]) + "\n"
-    _atomic_write_text(path, trimmed)
+        from core.log_rotation import rotate_log_file
+        rotate_log_file(path, archive_dir=path.parent / "decision-log-archive")
+    except Exception as exc:
+        janitor_logger.warn("decision_log_rotation_failed", path=str(path), error=str(exc))
 
 
 def _append_decision_log(kind: str, payload: Dict[str, Any]) -> None:

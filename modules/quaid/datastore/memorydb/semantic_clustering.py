@@ -46,7 +46,7 @@ SEMANTIC_CLUSTERS = {
     }
 }
 
-def call_ollama_clustering(prompt: str, max_tokens: int = 50) -> str:
+def call_clustering_llm(prompt: str, max_tokens: int = 50) -> str:
     """Call fast-reasoning provider for clustering classification."""
     try:
         result, _ = call_fast_reasoning(
@@ -102,7 +102,7 @@ Categories:
 
 Return only the category name:"""
 
-    response = call_ollama_clustering(prompt, max_tokens=20)
+    response = call_clustering_llm(prompt, max_tokens=20)
     
     # Parse response
     for cluster_name in SEMANTIC_CLUSTERS.keys():
@@ -165,7 +165,7 @@ def print_clustering_stats(clusters: Dict[str, List[Node]]):
     """Print statistics about semantic clustering."""
     total_nodes = sum(len(nodes) for nodes in clusters.values())
     
-    print("\n📊 Semantic Clustering Statistics:")
+    print("\nSemantic Clustering Statistics:")
     print(f"  Total Fact nodes: {total_nodes}")
     
     for cluster_name, nodes in clusters.items():
@@ -180,7 +180,7 @@ def print_clustering_stats(clusters: Dict[str, List[Node]]):
     
     if total_pairs_without_clustering > 0:
         reduction = (1 - total_pairs_with_clustering / total_pairs_without_clustering) * 100
-        print(f"\n⚡ Contradiction Check Reduction: {reduction:.1f}%")
+        print(f"\nContradiction Check Reduction: {reduction:.1f}%")
         print(f"  Without clustering: {total_pairs_without_clustering:,} pairs")
         print(f"  With clustering:    {total_pairs_with_clustering:,} pairs")
 
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     print_clustering_stats(clusters)
     
     # Test classification on a few examples
-    print("\n🧪 Sample Classifications:")
+    print("\nSample Classifications:")
     with graph._get_conn() as conn:
         sample_rows = conn.execute("SELECT * FROM nodes WHERE type = 'Fact' LIMIT 10").fetchall()
     
