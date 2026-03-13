@@ -61,8 +61,8 @@ These are two different concepts:
 
 `adapter_id` identifies the host platform. `instance_id` identifies which
 memory silo is active. They often have similar values but are independent:
-two different instances (`agent1`, `agent2`) can both use the same
-adapter type (`openclaw`).
+two different instances can both use the same adapter type — for example,
+two separate `openclaw` installs sharing a machine.
 
 The Claude Code adapter (`adaptors/claude_code/adapter.py`) returns
 `"claude-code"` from `adapter_id()`. The OpenClaw adapter returns
@@ -185,7 +185,7 @@ root). With the default relative path this produces `QUAID_HOME/data/memory.db`.
 
 Each instance should set an explicit absolute path, or a path relative to
 `QUAID_HOME` that is scoped to its instance directory. For example, two instances would use their respective instance roots:
-`QUAID_HOME/claude-code/data/memory.db` and `QUAID_HOME/agent1/data/memory.db`.
+`QUAID_HOME/claude-code/data/memory.db` and `QUAID_HOME/openclaw/data/memory.db`.
 Separate databases mean instances do not share memory — cross-instance recall
 requires the global project registry and shared projects directory.
 
@@ -276,9 +276,8 @@ Output example:
 ```
 Quaid home: /your/quaid/home
 
-  agent1
-  agent2  *
-  claude-code
+  openclaw
+  claude-code  *
 ```
 
 The `*` marker identifies the instance matching the current `QUAID_INSTANCE`
@@ -287,7 +286,7 @@ env var. If `QUAID_INSTANCE` is set but the directory does not yet have
 
 The JSON form (`--json`) returns:
 ```json
-{"home": "/path/to/QUAID_HOME", "current": "agent2", "instances": ["agent1", ...]}
+{"home": "/path/to/QUAID_HOME", "current": "claude-code", "instances": ["openclaw", "claude-code"]}
 ```
 
 ---
@@ -336,8 +335,8 @@ on `QuaidAdapter` all derive from `instance_root()`.
 
 ### Same QUAID_HOME, multiple instances
 
-This is the standard setup on a single machine where multiple agents share
-the same memory workspace (e.g. `agent1`, `agent2`, `claude-code`):
+This is the standard setup on a single machine where OpenClaw and Claude Code
+share the same memory workspace:
 
 ```
 QUAID_HOME=/your/quaid/home
@@ -347,16 +346,14 @@ QUAID_HOME=/your/quaid/home
     config/memory.json          ← shared embeddings/Ollama config
     project-registry.json       ← registry visible to all instances
     projects/                   ← shared project canonical dirs
-  agent1/
-    config/memory.json          ← agent1 instance config
-    data/memory.db              ← agent1's private memory DB
-    identity/                   ← agent1's SOUL.md, USER.md, etc.
-  agent2/
-    config/memory.json          ← agent2 instance config
-    data/memory.db              ← agent2's private memory DB
+  openclaw/
+    config/memory.json          ← openclaw instance config
+    data/memory.db              ← openclaw's private memory DB
+    identity/                   ← SOUL.md, USER.md, etc.
   claude-code/
-    config/memory.json
-    data/memory.db
+    config/memory.json          ← claude-code instance config
+    data/memory.db              ← claude-code's private memory DB
+    identity/
 ```
 
 Each instance has its own isolated database. The shared project registry
