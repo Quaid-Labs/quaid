@@ -119,10 +119,13 @@ Uninstall existing OC plugin if present:
 ssh example.local 'openclaw plugins uninstall quaid 2>/dev/null || rm -rf ~/.openclaw/extensions/quaid; echo done'
 ```
 
-Install with the installer script (run from spark, installs onto alfie):
+Install with the installer script (run from spark, installs onto alfie).
+Use `QUAID_TEST_MOCK_MIGRATION=1` to skip LLM-based migration of existing
+workspace files (SOUL.md, USER.md, etc.) — without it the installer runs 5
+sequential deep-reasoning calls that block M0 for several minutes:
 
 ```bash
-ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=openclaw node setup-quaid.mjs --agent --workspace "/Users/owner/quaid" --source local'
+ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=openclaw node setup-quaid.mjs --agent --workspace "/Users/owner/quaid" --source local'
 ```
 
 ### Claude Code on example.local
@@ -142,7 +145,7 @@ if p.exists():
     p.write_text(json.dumps(data, indent=2))
 print("Cleared existing Quaid Claude Code hooks if present")
 PY'
-ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/owner/quaid" --source local'
+ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/owner/quaid" --source local'
 ```
 
 ### Post-install verification
