@@ -1845,8 +1845,17 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           }
           const fresh = rows.slice(priorCount);
           for (let i = 0; i < fresh.length; i += 1) {
-            const text = extractSessionMessageText(fresh[i]).trim().toLowerCase();
-            if (!text) continue;
+            const rawText = extractSessionMessageText(fresh[i]).trim();
+            if (!rawText) continue;
+            // The before_prompt_build hook prepends injected context before the
+            // user's actual message, and OC gateway prepends a [Day Date Time TZ]
+            // timestamp to every user message. To detect slash commands robustly:
+            // 1. Take the LAST non-empty line (user input is always last after injections).
+            // 2. Strip the OC timestamp prefix from that line.
+            const rawLines = rawText.split("\n").filter((l: string) => l.trim());
+            const lastLine = (rawLines[rawLines.length - 1] || "").trim();
+            const stripped = lastLine.replace(/^\[.*?\]\s*/, "").trim();
+            const text = (stripped || rawText).toLowerCase();
             const commandKey = `${active.sessionId}:${priorCount + i}:${text}`;
             if (seenSessionIndexCommandKeys.has(commandKey)) {
               continue;
@@ -1944,13 +1953,18 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // before transcript files settle; bind extraction to the active user session.
     const handleSlashLifecycleFromMessage = async (event: any, ctx: any, sourceEvent: "message:received" | "message:preprocessed") => {
       try {
-        const text = String(
+        const rawText = String(
           facade.getMessageText(event?.message || event) ||
           event?.text ||
           event?.content ||
           ""
         ).trim();
-        if (!text) return;
+        if (!rawText) return;
+        // Strip OC gateway timestamp prefix [Day Date Time TZ] if present.
+        // OC prepends "[Sat 2026-03-14 01:20 GMT+8] " to every user message
+        // before calling hooks; without stripping, "/compact" → "[...] /compact"
+        // which doesn't match the bare slash-command patterns.
+        const text = rawText.replace(/^\[.*?\]\s*/, "").trim() || rawText;
         const normalized = text.toLowerCase();
         let commandAction: "new" | "reset" | "compact" | null = null;
         let lifecycleSignal: "ResetSignal" | "CompactionSignal" | null = null;
