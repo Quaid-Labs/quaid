@@ -678,7 +678,6 @@ delegates to the appropriate Python entry point.
 ```bash
 # Memory operations
 quaid recall "query"
-quaid search "query"
 quaid store "text"
 quaid stats
 

@@ -13,7 +13,6 @@ Quaid is an active knowledge layer. Use the `quaid` CLI via your Bash tool — n
 ```bash
 quaid recall "query"          # semantic + graph + reranking (use for facts, relationships, timelines)
 quaid recall "query" --docs   # same, but also searches project documentation
-quaid search "query"          # fast search, no reranking (use for quick lookups)
 quaid store "text"            # manual memory insertion (prefer extraction over manual store)
 quaid get-node <id>
 quaid get-edges <id>
@@ -21,12 +20,15 @@ quaid delete-node <id>
 quaid stats
 ```
 
-**Key flags** (`recall` and `search`):
+**Key flags** (`recall`):
 - `--limit N` — result count (default 5)
 - `--project <name>` — scope to project
 - `--date-from / --date-to YYYY-MM-DD`
+- `--docs` — also search project documentation (appended after memory results)
+- `--stores <list>` — target specific datastores: `vector_basic`, `vector_technical`, `graph`, `docs`; comma-separated; `--stores docs` alone skips memory
 - `--domain-boost '["technical","project"]'` — multiplier on matching domains before ranking; use for broad recall when you want to prefer certain topics without excluding others. List form uses 1.3× each; map form sets explicit multipliers: `'{"technical": 1.5}'`
 - `--domain-filter '{"technical": true}'` — hard filter: only returns memories tagged with true domains. Use only when you are certain other domains should be excluded entirely.
+- `--fast` — skip multi-pass, reranker, and graph traversal (cheaper, faster)
 - `--json` / `--debug`
 
 **When to use boost vs filter:** Default to `--domain-boost`. Only use `--domain-filter` when the question is definitively scoped and cross-domain noise would be wrong (e.g. "show me only finance memories").

@@ -6496,18 +6496,6 @@ if __name__ == "__main__":
         backfill_p = subparsers.add_parser("backfill-hashes", help="Backfill content_hash for nodes with NULL hash")
         backfill_p.add_argument("--dry-run", action="store_true", help="Preview what would be updated without making changes")
 
-        # --- search ---
-        search_p = subparsers.add_parser("search", help="Fast memory search (no reranking)")
-        search_p.add_argument("query", nargs="+", help="Search query")
-        search_p.add_argument("--owner", default=None, help="Owner ID")
-        search_p.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
-        search_p.add_argument("--json", action="store_true", help="JSON output")
-        search_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON')
-        search_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array')
-        search_p.add_argument("--project", default=None, help="Filter by project")
-        search_p.add_argument("--date-from", default=None, help="Only return memories from this date (YYYY-MM-DD)")
-        search_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
-
         # --- store ---
         store_p = subparsers.add_parser("store", help="Store a new memory")
         store_p.add_argument("text", help="Text of the memory to store")
@@ -6581,7 +6569,7 @@ if __name__ == "__main__":
         recall_p.add_argument("--project", default=None, help="Filter by project/domain label")
         recall_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
         recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
-        recall_p.add_argument("--stores", default=None, help="Comma-separated store list: vector_basic,vector_technical,graph")
+        recall_p.add_argument("--stores", default=None, help="Comma-separated store list: vector_basic,vector_technical,graph,docs (use 'docs' alone for docs-only)")
         recall_p.add_argument("--fast", action="store_true", help="Fast mode: skip multi-pass, reranker, max_turns=1")
         recall_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
         recall_p.add_argument("--session-id", default=None, help="Filter results to a specific session ID")
@@ -6591,7 +6579,7 @@ if __name__ == "__main__":
         recall_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
         recall_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
         recall_p.add_argument("--candidate-pool", default=None, help="JSON array of pre-fetched vector results to pass to graph search")
-        recall_p.add_argument("--docs", action="store_true", help="Also search project documentation (appended after memory results)")
+        recall_p.add_argument("--docs", action="store_true", help="Also search project documentation (shorthand for --stores docs combined with memory)")
 
         recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
         recall_fast_p.add_argument("query", nargs="+", help="Search query")
@@ -6779,24 +6767,6 @@ if __name__ == "__main__":
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)
 
-        elif args.command == "search":
-            query = " ".join(args.query)
-            owner = args.owner or _get_memory_config().users.default_owner
-            graph = get_graph()
-            raw = graph.search_hybrid(query, limit=args.limit, owner_id=owner)
-            if args.json:
-                out = [
-                    {"id": n.id, "text": n.name, "category": n.type, "similarity": round(s, 4)}
-                    for n, s in raw
-                ]
-                print(json.dumps(out))
-            else:
-                if not raw:
-                    print("No results found.")
-                else:
-                    for node, score in raw:
-                        print(f"[{score:.2f}] [{node.type}] {node.name}")
-
         elif args.command == "get-node":
             node_id = args.id
             result = get_memory(node_id)
@@ -6916,7 +6886,12 @@ if __name__ == "__main__":
             domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
             domain_boost = json.loads(getattr(args, "domain_boost", "[]") or "[]")
             stores_raw = getattr(args, 'stores', None)
-            stores = [s.strip() for s in stores_raw.split(",")] if stores_raw else []
+            all_stores = [s.strip() for s in stores_raw.split(",")] if stores_raw else []
+            # 'docs' is not a memory store — extract it and route separately
+            want_docs = "docs" in all_stores or getattr(args, "docs", False)
+            stores = [s for s in all_stores if s != "docs"]
+            # skip memory if the caller explicitly asked for only docs
+            want_memory = not all_stores or bool(stores)
             use_fast = getattr(args, 'fast', False)
             use_json = getattr(args, 'json', False)
             graph_depth = getattr(args, 'depth', 1)
@@ -6925,7 +6900,7 @@ if __name__ == "__main__":
             candidate_pool_raw = getattr(args, 'candidate_pool', None)
             candidate_pool = json.loads(candidate_pool_raw) if candidate_pool_raw else None
 
-            if archive:
+            if want_memory and archive:
                 from datastore.memorydb.archive_store import search_archive as _search_archive
                 archive_results = _search_archive(query, limit=args.limit)
                 if use_json:
@@ -6951,7 +6926,7 @@ if __name__ == "__main__":
                         print(f"[archive] [{r.get('type', '?')}] {r.get('name', '')} |ID:{r.get('id', '')}|archived:{r.get('archived_at', '')}|reason:{r.get('archive_reason', '')}")
                     if not archive_results:
                         print("No archived memories found")
-            elif session_id:
+            elif want_memory and session_id:
                 # Session-filtered search: return facts from a specific session
                 mg = MemoryGraph()
                 with mg._get_conn() as conn:
@@ -6985,7 +6960,7 @@ if __name__ == "__main__":
                         print(f"[1.00] [{r['type']}]{date_str}[C:{conf:.1f}] {r['content'] or r['name']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
                     if not rows:
                         print("No facts found for this session")
-            elif "graph" in stores:
+            elif want_memory and "graph" in stores:
                 # Graph-aware recall with optional candidate pool
                 results = graph_aware_recall(
                     query,
@@ -7010,7 +6985,7 @@ if __name__ == "__main__":
                         privacy = r.get('privacy', 'shared')
                         owner = r.get('owner_id', '')
                         print(f"[{r['similarity']:.2f}] [{r.get('category', 'fact')}]{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|P:{privacy}|O:{owner}")
-            else:
+            elif want_memory:
                 # Vector recall — determine domain from stores flag
                 if "vector_technical" in stores and "vector_basic" not in stores:
                     effective_domain = {"technical": True}
@@ -7059,8 +7034,8 @@ if __name__ == "__main__":
                             d = r['_debug']
                             print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
 
-            # --docs: also search project documentation
-            if getattr(args, "docs", False) and not args.json:
+            # --docs / --stores docs: also search project documentation
+            if want_docs and not args.json:
                 try:
                     from core.interface.api import projects_search_docs
                     doc_results = projects_search_docs(query=query, limit=3)

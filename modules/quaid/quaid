@@ -206,7 +206,7 @@ else:
     ;;
 
 # Everything else goes to memory_graph.py
-search|store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|backfill-hashes|health|event)
+store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fact|backfill-hashes|health|event)
     exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" "$CMD" "$@"
     ;;
 
@@ -287,7 +287,6 @@ PYEOF
     echo "quaid - Total Recall memory system"
     echo ""
     echo "Memory commands:"
-    echo "  search <query>       Search memories (fast, no reranking)"
     echo "  store <text>         Store a new memory"
     echo "  recall <query>       Full recall pipeline (semantic + graph + rerank)"
     echo "  recall --docs <q>    Recall memories + project docs"

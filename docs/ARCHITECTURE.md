@@ -30,7 +30,7 @@ Quaid exposes its knowledge layer through three interfaces: a **CLI** (standalon
 
 ```
      CLI                OpenClaw Gateway        Claude Code
- (quaid search,             |                   hooks / rules
+ (quaid recall,             |                   hooks / rules
   quaid store, ...)    Lifecycle hooks               |
           |            (compaction, reset,          |
           v             agent turn)                 v
@@ -59,7 +59,7 @@ Quaid exposes its knowledge layer through three interfaces: a **CLI** (standalon
 
 **Extraction** -- Triggered by context compaction, session reset, direct CLI module invocation (`python3 ingest/extract.py`), or adapter lifecycle signals. A deep-reasoning LLM call extracts structured facts and relationship edges from the conversation transcript. Facts enter the database as `pending` and are immediately available for recall. The janitor later reviews and graduates them to `active`, improving quality, but pending facts are never hidden from retrieval.
 
-**Retrieval** -- Fires before each agent turn (OpenClaw / Claude Code) or via `quaid search` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
+**Retrieval** -- Fires before each agent turn (OpenClaw / Claude Code) or via `quaid recall` CLI. The query is resolved across knowledge datastores (for example `vector_basic`, `vector_technical`, `graph`, `journal`, `projects`) with optional `total_recall` planning (fast-reasoning pass for query cleanup + datastore routing). Results are fused via RRF, reranked by a fast-reasoning LLM, and injected into the agent's context as `[MEMORY]`-prefixed messages.
 
 Project knowledge retrieval remains a first-class path: host adapters expose `projects_search` where appropriate, and the CLI exposes the same capability through `quaid docs search`.
 

@@ -619,7 +619,7 @@ The `quaid` CLI works standalone -- no gateway needed.
 quaid store <text>            # Store a single memory (--category, --owner, --domains, ...)
 
 # Search & Retrieve
-quaid search <query>          # Fast memory search (no reranking)
+quaid recall <query>          # Recall memories (semantic + graph + rerank)
 quaid recall <query>          # Recall pipeline helper
 quaid get-node <id>           # Get a memory by ID
 quaid get-edges <id>          # Get edges for a memory node
