@@ -19,10 +19,12 @@ quaid project list --json
 
 ### Create a project
 ```bash
-quaid registry create-project <name> --label "Display Name"
+quaid project create <name> [--description "Display Name"] [--source-root /path]
 ```
 Creates `QUAID_HOME/shared/projects/<name>/` with `PROJECT.md` and `docs/` subdir.
 Also registers the project in `QUAID_HOME/project-registry.json` and the SQLite `project_definitions` table.
+
+Note: The older `quaid registry create-project <name> --label "..."` command still works (routes through `datastore/docsdb/registry.py`) but `quaid project create` is the canonical interface.
 
 ### Show a project
 ```bash
@@ -111,7 +113,7 @@ file, so this shows the complete cross-adapter project list.
 
 ```bash
 # OC creates a project
-QUAID_INSTANCE=openclaw quaid registry create-project my-proj --label "My Project"
+QUAID_INSTANCE=openclaw quaid project create my-proj --description "My Project"
 
 # OC registers a doc
 QUAID_INSTANCE=openclaw quaid registry register /path/to/doc.md --project my-proj
