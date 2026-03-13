@@ -41,14 +41,13 @@ This file is the canonical entry point for all docs in `projects/quaid`.
 | File | Summary |
 |---|---|
 | `projects/quaid/operations/project_onboarding.md` | Agent workflow for project discovery, registration, cross-instance participation (link/unlink), and safe deletion. |
-| `projects/quaid/operations/projects-testing.md` | Live test protocol: OC CRUD + CC CRUD + cross-platform (XP) on example.local with shared QUAID_HOME. |
+| `projects/quaid/operations/projects-testing.md` | Live test protocol: OC CRUD + CC CRUD + cross-platform (XP) with shared QUAID_HOME. |
 | `projects/quaid/operations/live-validation-log.md` | Live validation log: M0–M7 results per adapter version, projects system test results, bugs found and fixed. |
 | `projects/quaid/operations/testing-infrastructure.md` | Unified test stack reference: deterministic/unit/integration/build layers, e2e scripts, and pass/fail rubric. |
 | `projects/quaid/operations/release-readiness.md` | Alpha release positioning, current go/hold criteria, known issues, and contributor-focused priorities. |
 | `projects/quaid/operations/release-checklist.md` | Canonical go/no-go release checklist used for final readiness verification. |
 | `projects/quaid/operations/release-tagging-checklist.md` | Step-by-step release/tag/publish checklist for alpha cuts. |
 | `projects/quaid/operations/repo-cleanup.md` | Repo hygiene log: removed OpenClaw carryover artifacts and pending scrub tasks. |
-| `projects/quaid/operations/benchmark-remediation-checklist.md` | Benchmark remediation execution checklist and janitor/doc verification steps. |
 | `projects/quaid/operations/plugin-framework-checklist.md` | Plugin framework readiness checklist and rollout guardrails. |
 | `projects/quaid/operations/cli-audit.md` | CLI command/audit notes for operational correctness and UX consistency. |
 

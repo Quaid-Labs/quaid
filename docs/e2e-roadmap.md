@@ -136,7 +136,7 @@ Coverage requirements:
 
 Implement next in this order:
 1. Tune/commit environment-specific stage-budget thresholds from accumulated nightly history.
-   - Current state: insufficient successful `nightly` samples in local history; provisional `janitor-parallel-bench` caps documented in `~/quaid/util/docs/benchmark-operations.md` (moved out of dev tree).
+   - Current state: insufficient successful `nightly` samples; provisional `janitor-parallel-bench` caps are machine-calibrated and not committed.
 
 ## Sweep Loop (Boundary + Bugs)
 

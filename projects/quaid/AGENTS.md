@@ -71,7 +71,7 @@
   - If a temp/scratch file becomes durable, move it into a tracked project.
 
 ### Cross-Instance Discipline
-- Both OC and CC adapters on example.local share `QUAID_HOME=/Users/owner/quaid` — all instances read from the same root.
+- When OC and CC share a machine, point both to the same `QUAID_HOME` — all instances read from the same root.
 - Cross-instance project participation uses `quaid project link/unlink`; prefer this over recreating projects from scratch.
 - `quaid project delete` is destructive — it removes all instances, the canonical project directory, and all SQLite rows. Use `quaid project unlink` if you only want to leave a project without deleting it for others.
 - Both adapters share `QUAID_HOME/shared/project-registry.json` and `QUAID_HOME/shared/projects/`; edits made by one instance are immediately visible to the other.

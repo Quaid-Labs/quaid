@@ -1141,9 +1141,8 @@ LLM-generated keywords map edge types to natural language triggers. Used by `sho
 
 Managed by `datastore/docsdb/registry.py` `ensure_table()` — NOT in schema.sql.
 
-> **Location:** `QUAID_HOME/<instance>/data/memory.db`. On example.local, both OC and CC share
-> `QUAID_HOME=/Users/owner/quaid`, so `doc_registry` and `doc_chunks` are in
-> `QUAID_HOME/data/memory.db` and are shared across instances unless `QUAID_HOME` differs.
+> **Location:** `QUAID_HOME/<instance>/data/memory.db`. When OC and CC share a `QUAID_HOME`,
+> `doc_registry` and `doc_chunks` are in the shared database and visible to both instances.
 
 ```sql
 CREATE TABLE IF NOT EXISTS doc_registry (

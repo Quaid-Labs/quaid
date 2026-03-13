@@ -129,7 +129,7 @@ Note: `quaid project create` manages the project registry (`project-registry.jso
 
 #### Cross-instance project participation
 
-On example.local, both OC and CC share the same `QUAID_HOME=/Users/owner/quaid`
+When OC and CC share a machine, both can use the same `QUAID_HOME`
 and `project-registry.json`, so a project created by one adapter is immediately
 visible to the other. Use `quaid project link` when a second adapter wants to
 formally join a project's `instances` list:

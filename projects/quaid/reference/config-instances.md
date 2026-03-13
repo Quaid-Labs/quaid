@@ -222,7 +222,7 @@ quaid config show --instance claude-code
 # Print the path to the active config file
 quaid config path
 quaid config path --shared
-quaid config path --instance agent1
+quaid config path --instance openclaw
 
 # Interactive editor (menu-driven)
 quaid config edit
