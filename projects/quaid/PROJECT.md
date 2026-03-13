@@ -15,7 +15,6 @@ Supports multiple adapters (OpenClaw, Claude Code) sharing a single `QUAID_HOME`
 | `SOUL.md` | Quaid's reflective journaling guidance |
 | `USER.md` | User-understanding journaling: patterns, tone, sensitivity |
 | `MEMORY.md` | Shared-moment and world-understanding journaling |
-| `CONSTITUTION.md` | Architectural principles and core file evolution model |
 
 ---
 
@@ -29,6 +28,7 @@ Supports multiple adapters (OpenClaw, Claude Code) sharing a single `QUAID_HOME`
 | `reference/janitor-reference.md` | Nightly janitor: schedule, tasks, 3-pass RAG reindex, locking, LifecycleRegistry. |
 | `reference/extraction-pipeline.md` | 14-step extraction pipeline, all hooks, daemon lifecycle, public API. |
 | `reference/config-instances.md` | 4-layer config merge chain, per-instance layout, shared state, multi-instance patterns. |
+| `reference/soul-architecture.md` | Core file philosophy: understanding-vs-rules design, seed preservation, SOUL/USER/MEMORY architecture, open TODOs. |
 
 ---
 

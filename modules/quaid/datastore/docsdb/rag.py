@@ -312,7 +312,9 @@ class DocsRAG:
 
     # Files that live in context (loaded via session-init into .claude/rules/) and
     # should never be RAG-indexed — returning them as doc chunks would be redundant noise.
-    _CONTEXT_FILES = frozenset({"SOUL.md", "USER.md", "MEMORY.md", "AGENTS.md", "TOOLS.md", "CONSTITUTION.md"})
+    # Files injected into context via session-init hook — indexing them as RAG
+    # chunks would return redundant noise since they're already in the window.
+    _CONTEXT_FILES = frozenset({"SOUL.md", "USER.md", "MEMORY.md", "AGENTS.md", "TOOLS.md"})
 
     def _is_context_file(self, path: Path) -> bool:
         return path.name in self._CONTEXT_FILES
