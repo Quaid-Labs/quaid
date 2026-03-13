@@ -273,6 +273,9 @@ def build_review_prompt(files_config: Dict[str, Dict[str, Any]]) -> str:
         max_tokens = info.get("maxTokens")
         if isinstance(max_tokens, (int, float)) and int(max_tokens) > 0:
             return f"- **{fname}**: {info.get('purpose', 'Unknown')} (token cap: {int(max_tokens)})"
+        max_lines = info.get("maxLines")
+        if isinstance(max_lines, (int, float)) and int(max_lines) > 0:
+            return f"- **{fname}**: {info.get('purpose', 'Unknown')} (max {int(max_lines)} lines)"
         return f"- **{fname}**: {info.get('purpose', 'Unknown')} (size budget configured)"
 
     file_purposes = "\n".join([
