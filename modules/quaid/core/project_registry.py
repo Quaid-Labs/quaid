@@ -97,13 +97,14 @@ def create_project(
         raise ValueError(f"Project already exists: {name}")
 
     from lib.adapter import get_adapter, quaid_projects_dir
+    from lib.instance import instance_id as _instance_id
     adapter = get_adapter()
     canonical = quaid_projects_dir(adapter.quaid_home()) / name
 
     entry = {
         "canonical_path": str(canonical),
         "source_root": source_root,
-        "instances": [adapter.adapter_id()],
+        "instances": [_instance_id()],
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
         "description": description,
     }
