@@ -3439,6 +3439,7 @@ def _recall_once(
     project: Optional[str] = None,
     include_graph_traversal: bool = True,
     include_co_session: bool = True,
+    include_mmr: bool = True,
     low_signal_retry: bool = True,
     return_meta: bool = False,
 ) -> Any:
@@ -3783,11 +3784,15 @@ def _recall_once(
             int(getattr(config_retrieval, 'mmr_candidate_cap', _mmr_candidate_cap) or _mmr_candidate_cap),
         )
     _mmr_input_candidates = len(scored_results)
-    if len(scored_results) > _mmr_candidate_cap:
-        scored_results = scored_results[:_mmr_candidate_cap]
-    _phase_t0 = _time.monotonic()
-    diverse_results = _apply_mmr(scored_results, graph, limit, mmr_lambda=_mmr_lambda)
-    _phase_ms["mmr_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+    if include_mmr:
+        if len(scored_results) > _mmr_candidate_cap:
+            scored_results = scored_results[:_mmr_candidate_cap]
+        _phase_t0 = _time.monotonic()
+        diverse_results = _apply_mmr(scored_results, graph, limit, mmr_lambda=_mmr_lambda)
+        _phase_ms["mmr_ms"] = round((_time.monotonic() - _phase_t0) * 1000)
+    else:
+        diverse_results = scored_results[:limit]
+        _phase_ms["mmr_ms"] = 0
 
     output = []
     seen_ids = set()
@@ -4162,6 +4167,7 @@ def _recall_once(
             "fts_fallback_used": _fts_fallback_used,
             "multi_pass_triggered": _multi_pass_triggered,
             "reranker_enabled": reranker_enabled,
+            "mmr_enabled": include_mmr,
             "used_hyde": bool(_ollama_up and use_routing and _HAS_LLM_CLIENTS),
         },
     }
@@ -4188,6 +4194,7 @@ def _recall_once(
                         use_reranker=use_reranker,
                         include_graph_traversal=include_graph_traversal,
                         include_co_session=include_co_session,
+                        include_mmr=include_mmr,
                         current_session_id=current_session_id,
                         compaction_time=compaction_time,
                         date_from=date_from,
@@ -4695,13 +4702,21 @@ def recall_fast(
         }
         return ([], meta) if return_meta else []
 
+    fast_shape = _estimate_fanout_profile(
+        query,
+        max_queries=1 if planner_profile == "aggressive" else 2,
+        planner_profile=planner_profile,
+    )
+    effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
+    use_planner = fast_shape.get("shape") == "broad"
+
     results = recall(
         query=query,
-        limit=limit,
+        limit=effective_limit,
         privacy=privacy,
         owner_id=owner_id,
         min_similarity=min_similarity,
-        use_routing=True,
+        use_routing=use_planner,
         use_aliases=True,
         use_intent=True,
         use_multi_pass=False,
@@ -4728,6 +4743,7 @@ def recall_fast(
         planner_profile=planner_profile,
         include_graph_traversal=should_expand_graph(query),
         include_co_session=False,
+        include_mmr=False,
         return_meta=True,
     )
     if isinstance(results, tuple):
@@ -4874,6 +4890,7 @@ def recall(
     planner_profile: str = "full",
     include_graph_traversal: bool = True,
     include_co_session: bool = True,
+    include_mmr: bool = True,
     return_meta: bool = False,
 ) -> Any:
     """Orchestrated recall with iterative drilling.
@@ -5006,14 +5023,15 @@ def recall(
             fanout_queries, fanout_meta = planned
         else:
             fanout_queries = planned if isinstance(planned, list) else []
-            fanout_meta = {
-                "query": query,
-                "timeout_ms": 0,
-                "used_llm": False,
-                "bailout_reason": None,
-                "queries_count": len(fanout_queries),
-                "elapsed_ms": 0,
-            }
+        fanout_meta = {
+            "query": query,
+            "timeout_ms": 0,
+            "used_llm": False,
+            "bailout_reason": None,
+            "queries_count": len(fanout_queries),
+            "elapsed_ms": 0,
+            "planner_profile": planner_profile,
+        }
     else:
         fanout_queries = [query]
         fanout_meta = {
@@ -5023,6 +5041,7 @@ def recall(
             "bailout_reason": None,
             "queries_count": len(fanout_queries),
             "elapsed_ms": 0,
+            "planner_profile": planner_profile,
         }
     if fanout_meta.get("bailout_reason") in bailout_counts:
         bailout_counts[fanout_meta["bailout_reason"]] += 1
@@ -5047,6 +5066,7 @@ def recall(
                 use_reranker=use_reranker,
                 include_graph_traversal=include_graph_traversal,
                 include_co_session=include_co_session,
+                include_mmr=include_mmr,
                 low_signal_retry=low_signal_retry,
                 return_meta=True,
                 **common_kwargs,
@@ -5059,6 +5079,7 @@ def recall(
                 use_reranker=False,
                 include_graph_traversal=False,
                 include_co_session=False,
+                include_mmr=include_mmr,
                 low_signal_retry=False,
                 return_meta=True,
                 **common_kwargs,
