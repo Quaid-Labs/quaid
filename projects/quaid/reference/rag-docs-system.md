@@ -128,7 +128,7 @@ Pre-pass: before the three indexing passes, janitor also:
 def needs_reindex(self, file_path: str) -> bool
 ```
 
-Reads `st_mtime` from disk (UTC), queries `MAX(updated_at)` from `doc_chunks` for that file. Returns `True` if file is newer than the stored index time, or if no chunks exist. On any exception, returns `True` (fail-safe reindex).
+Reads `st_mtime` from disk (UTC), queries `updated_at` from `doc_chunks` for that file (`LIMIT 1`). Returns `True` if file is newer than the stored index time, or if no chunks exist. On any exception, returns `True` (fail-safe reindex).
 
 **Step 5: `index_document(file_path)` — atomic index-and-replace**
 
@@ -171,7 +171,7 @@ Files scanned by `scan_docs_directory()`:
 - **Model:** `qwen3-embedding:8b`
 - **Dimensions:** 4096 (float32)
 - **Storage:** Packed as a float32 BLOB in `doc_chunks.embedding` via `lib/embeddings.py` helpers: `pack_embedding()` / `unpack_embedding()`
-- **Ollama host:** Configured in `QUAID_HOME/config/memory.json` under `ollama.host`. Both OC and CC adapters on the same machine share the same Ollama instance.
+- **Ollama URL:** Configured in `QUAID_HOME/shared/config/memory.json` under `ollama.url`. Both OC and CC adapters on the same machine share the same Ollama instance.
 - **Fail policy:** If `lib/fail_policy.is_fail_hard_enabled()` is `True` and embedding fails during search, `search_docs()` raises `RuntimeError` instead of returning an empty list.
 
 ---
@@ -270,8 +270,9 @@ Returns combined text or empty string. If git is unavailable or times out, the u
 2. Calls `get_git_diff()` for each stale source.
 3. Detects if the doc is a "core markdown" file (TOOLS.md, AGENTS.md, etc.) via `_get_core_markdown_info()` — if so, uses a line-limit-aware prompt.
 4. Calls `call_deep_reasoning()` (Opus/`lib/llm_clients.py`) with the current doc + diffs + purpose as context.
-5. On success: atomically writes the new content via `_atomic_write_text()` (temp file + `os.replace()`).
-6. Logs the update to `logs/docs-update-log.json` via `log_doc_update()`, which also tracks cleanup state.
+5. Two skip-write guards run before writing: (a) if the response is less than 50% of the original size (suspected LLM truncation), skips write and returns `False`; (b) for core markdown files, if the response line count exceeds the configured `maxLines` limit, skips write and returns `False` — does **not** truncate. Both cases log to the changelog with `success=False`.
+6. On success: atomically writes the new content via `_atomic_write_text()` (temp file + `os.replace()`).
+7. Logs the update to `logs/docs-update-log.json` via `log_doc_update()`, which also tracks cleanup state.
 
 `update_doc_from_transcript(doc_path, purpose, transcript, dry_run, trigger)`:
 Used when no git diffs are available (e.g., untracked files). Provides the session transcript as context instead of diffs.
@@ -399,7 +400,7 @@ quaid docs changelog                                 # Recent doc update history
 | `rag.chunk_overlap_tokens` | Overlap tokens at chunk splits (default: 100) |
 | `rag.search_limit` | Default `--limit` for `docs search` (default: 5) |
 | `rag.min_similarity` | Default minimum similarity threshold (default: 0.3) |
-| `ollama.host` | Ollama server URL |
+| `ollama.url` | Ollama server URL |
 | `ollama.embeddingDim` | Embedding dimension (expected: 4096 for qwen3-embedding:8b) |
 | `projects.enabled` | Whether project system is active |
 | `projects.staging_dir` | Path to event queue directory |

@@ -182,11 +182,11 @@ Full protocol in `operations/projects-testing.md`. Run order:
 ```bash
 # OC
 export QUAID_HOME=~/.quaid QUAID_INSTANCE=openclaw
-quaid registry create-project <name> && quaid registry list
+quaid project create <name> && quaid project list
 
 # CC
 export QUAID_HOME=~/quaid QUAID_INSTANCE=claudecode
-quaid registry create-project <name> && quaid registry list
+quaid project create <name> && quaid project list
 
 # Global (either machine)
 quaid global-registry list
