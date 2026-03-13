@@ -1,6 +1,8 @@
-# Quaid Core File Rearchitecture — Constitution
+# Soul Architecture — Core File Philosophy and Design
 
-**This is the single authoritative document for Quaid's core file philosophy, architecture, and implementation.**
+**Reference doc for Quaid's core file philosophy (SOUL.md / USER.md / MEMORY.md), seed preservation, and the understanding-vs-rules design principle.**
+
+*Note on TODOs in Part 4: shadow git (TODO 5) exists via `core/shadow_git.py` but is not wired to core file writes. Soul onboarding (TODO 1), resonance checking (TODO 3), and token budgeting (TODO 4) remain unimplemented.*
 
 ---
 

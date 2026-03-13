@@ -61,4 +61,3 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 | `SOUL.md` | Quaid's reflective identity |
 | `USER.md` | User understanding and patterns |
 | `MEMORY.md` | Shared-moment and world-understanding context |
-| `CONSTITUTION.md` | Architectural principles and evolution model |
