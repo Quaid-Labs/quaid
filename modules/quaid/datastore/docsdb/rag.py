@@ -620,6 +620,33 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         skipped += int(proj_result.get("skipped_files", 0))
                         chunks += int(proj_result.get("total_chunks", 0))
 
+            # Third pass: index files registered via doc_registry (external files not
+            # under any scanned directory — e.g. /tmp/*.md or files outside workspace).
+            try:
+                from datastore.docsdb.registry import DocsRegistry as _DR
+                from pathlib import Path as _Path
+                reg_docs = _DR().list_docs()
+                for doc in reg_docs:
+                    raw_path = doc.get("file_path", "")
+                    if not raw_path:
+                        continue
+                    p = _Path(raw_path)
+                    if not p.is_absolute():
+                        p = workspace / p
+                    if not p.is_file():
+                        continue
+                    if rag.needs_reindex(str(p)):
+                        doc_chunks = rag.index_document(str(p))
+                        if doc_chunks > 0:
+                            indexed += 1
+                            chunks += doc_chunks
+                        total_files += 1
+                    else:
+                        total_files += 1
+                        skipped += 1
+            except Exception as exc:
+                logger.warning("doc_registry pass failed during RAG maintenance: %s", exc)
+
             result.metrics["rag_total_files"] = total_files
             result.metrics["rag_files_indexed"] = indexed
             result.metrics["rag_files_skipped"] = skipped
