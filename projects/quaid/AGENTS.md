@@ -1,118 +1,64 @@
-# Knowledge Layer — Agent Operating Guide
+# Quaid — Operating Guide
 
-## Operator Interrupt Policy
+Quaid is an active knowledge layer. It captures facts and project context from conversations, recalls them on demand, and maintains knowledge health nightly.
 
-- If the operator sends a new request while you are in the middle of an active task, do not immediately switch tasks.
-- Queue the new request and complete the current task first.
-- Only switch immediately when the operator uses explicit interruption language (for example: `wait`).
+For full CLI reference see `TOOLS.md`. For doc index and architecture see `PROJECT.md`.
 
-## Fail-Hard Rule
+---
 
-- Fail-hard control is config-driven through `retrieval.failHard` / `retrieval.fail_hard` in `config/memory.json`.
-- Do not implement fail-hard switching via env var toggles in product flows.
-- When fail-hard is `true`, never degrade/fallback silently.
-- When fail-hard is `false`, any fallback must emit loud warnings/diagnostics.
-
-## Project Navigation (Start Here)
-
-### 1) Core Markdown (always loaded context)
-- `AGENTS.md`: this operational guide.
-- `TOOLS.md`: tool behavior and parameter reference.
-- `PROJECT.md`: architecture map and doc index.
-- `MEMORY.md`, `USER.md`, `SOUL.md`, `CONSTITUTION.md`: long-lived behavioral memory/context.
-
-### 2) Project docs (`projects/quaid/`)
-- `operations/`: runbooks, release/checkpoint/testing procedures.
-  - `operations/projects-testing.md` — live test protocol for projects system (OC CRUD + CC CRUD + cross-platform)
-  - `operations/live-validation-log.md` — record of M0–M7 live validation runs
-- `reference/`: deep technical docs and implementation details.
-  - `reference/projects-reference.md` — CLI reference for project registry and docs commands (Section 7)
-- Keep details here when they are too large/noisy for always-loaded files.
-
-### 3) Runtime code map (`modules/quaid/`)
-- `adaptors/openclaw/adapter.ts`: tool registration and runtime hook wiring.
-- `adaptors/openclaw/adapter.py`: Python adaptor bridge and lifecycle wiring.
-- `datastore/memorydb/`: memory graph, schema, janitor maintenance.
-- `datastore/docsdb/`: docs registry/search/update pipelines.
-- `core/lifecycle/`: janitor/workspace lifecycle orchestration.
-- `core/llm/scheduler.py`: global adaptive LLM scheduler (timeout backoff + slow release).
-
-## Best Practices
-
-### Documentation Discipline
-- Keep `AGENTS.md` focused on navigation and operations.
-- Keep `TOOLS.md` focused on tool contracts and parameter maps.
-- Keep `PROJECT.md` as the “where things live” architecture index.
-- Keep the `TOOLS.md` domain list aligned with `config/memory.json -> retrieval.domains`.
-- When behavior changes, update docs in the same commit.
-
-### Retrieval Discipline
-- Use memory/project tools before claiming missing context.
-- Treat auto-injected memory as hints; verify concrete claims via explicit recall.
-- Prefer scoped retrieval (project/domain/date) when available to reduce noise.
-- Use session transcript retrieval only when conversation continuity is required.
-
-### Fail-Hard Discipline
-- Fail-hard behavior is config-driven (`retrieval.failHard` / `retrieval.fail_hard`).
-- Do not hide errors in strict mode.
-- In non-strict mode, degraded behavior must log clearly.
-
-### Change Discipline
-- Make changes in `~/quaid/dev` only.
-- Treat `~/quaid/benchmark-checkpoint` as a cut artifact, not a dev workspace.
-- Keep benchmark/checkpoint operations in their own runbooks under `operations/`.
-- Keep `npm run check:boundaries` green; dynamic imports (`__import__`, `importlib.import_module`) are boundary-checked the same as static imports.
-- E2E failure policy: work one lane at a time. If a lane fails, fix and rerun that lane before moving to any other lane in the matrix.
-- Before creating any non-temporary file, first decide project ownership:
-  - Prefer placing the file under an existing tracked project.
-  - If no project fits, create/register a new project first, then place the file there.
-  - Temporary or scratch files are the exception: place them in workspace-visible `temp/` or `scratch/`.
-  - When using `temp/` or `scratch/`, explicitly tell the user those files are temporary/untracked project artifacts.
-  - If a temp/scratch file becomes durable, move it into a tracked project.
-
-### Cross-Instance Discipline
-- When OC and CC share a machine, point both to the same `QUAID_HOME` — all instances read from the same root.
-- Cross-instance project participation uses `quaid project link/unlink`; prefer this over recreating projects from scratch.
-- `quaid project delete` is destructive — it removes all instances, the canonical project directory, and all SQLite rows. Use `quaid project unlink` if you only want to leave a project without deleting it for others.
-- Both adapters share `QUAID_HOME/shared/project-registry.json` and `QUAID_HOME/shared/projects/`; edits made by one instance are immediately visible to the other.
-
-### Plugin Contract Discipline
-- Plugin runtime surfaces are contract-owned and manifest-declared.
-- Executable contract hooks: `init`, `config`, `status`, `dashboard`, `maintenance`, `tool_runtime`, `health`.
-- Declared contract surfaces: `tools`, `api`, `events`, `ingest_triggers`, `auth_requirements`, `migrations`, `notifications`.
-- In strict mode (`config/memory.json -> plugins.strict=true`), undeclared tool/event registrations must fail fast.
-- Datastore-specific behavior (for example domains/schema sync) belongs in datastore plugin contracts, not core one-offs.
-- Workspace ownership belongs with datastore init surfaces where relevant (for example `docsdb` owns `projects/`, `temp/`, and `scratch/` directory initialization).
-- Core prepass timeout tuning lives under `core.parallel.lifecyclePrepassTimeoutSeconds` /
-  `core.parallel.lifecyclePrepassTimeoutRetries` (snake_case aliases also supported).
-
-## Memory Lifecycle
+## How Memory Works
 
 ```
-Conversation -> /compact or /reset -> Opus extracts facts+edges -> Store in DB
-
-Nightly janitor (independent scheduler) -> Review -> Dedup -> Decay -> Graduate to 'active'
+Conversation → compaction/reset → Opus extracts facts + edges → stored in DB
+Nightly janitor (4 AM default) → review → dedup → decay → graduate to active
 ```
 
-- **Extraction:** Opus analyzes transcript at compaction, extracts personal facts with relationships
-- **Edges:** Created at extraction time, linked to source facts
-- **Janitor:** Runs at 4 AM local time (default; 2-hour eligibility window) — reviews pending facts, merges duplicates, decays stale memories (Ebbinghaus), monitors core files
+- **Extraction priority:** user facts first, agent-action memories second, technical/project state third. Agent extraction must never displace user-memory coverage.
+- **Edges** are created at extraction time and linked to source facts.
+- **Janitor** runs nightly: reviews pending, merges duplicates (Ebbinghaus decay), monitors core files.
+- **Soul snippets** (fast path) — bullet observations distilled into SOUL.md, USER.md, MEMORY.md by janitor.
+- **Journal** (slow path) — diary paragraphs distilled by Opus monthly.
 
-**Extraction priority invariant:**
-- User facts are first priority.
-- Agent-action memories are second priority.
-- Technical/project-state facts are third priority.
-- Agent/technical extraction must never reduce baseline user-memory coverage.
+---
 
-## Retrieval Notes
+## Operating Rules
 
-- For exact tool parameter maps and usage patterns, refer to `projects/quaid/TOOLS.md`.
-- `quaid hook-search "query"` — unified search across memories + docs together; use when you want a single recall pass instead of running `recall` and `docs search` separately.
-- Keep this file focused on operating rules and project navigation.
+**Retrieval discipline**
+- Always use memory/project tools before claiming missing context.
+- Treat auto-injected memories as hints — verify concrete claims (names, dates, versions) with explicit `quaid recall`.
+- Use `quaid docs search` for codebase/architecture questions.
+- Use `quaid hook-search` for a single pass across both memories and docs.
 
-## Dual Extraction: Snippets + Journal
+**Interrupt policy**
+- Complete the current task before starting a new one.
+- Switch immediately only on explicit interruption (`wait`, `stop`, `cancel`).
 
-Both systems extract entries at compaction/reset time:
+**Fail-hard**
+- Controlled by `retrieval.fail_hard` in `config/memory.json`.
+- When `true`: never degrade silently — surface the error.
+- When `false`: degrade with loud warnings/diagnostics.
 
-- **Soul Snippets (fast path)** — Bullet-point observations to `*.snippets.md`. Nightly janitor FOLDs/REWRITEs/DISCARDs into core files (default: SOUL.md, USER.md, MEMORY.md; AGENTS.md optional via config).
-- **Journal (slow path)** — Diary paragraphs to `journal/*.journal.md`. Opus distills themes into core markdown. Old entries archived monthly.
+**File placement**
+- Place new files in an existing tracked project when possible.
+- If no project fits, create one: `quaid project create <name>`.
+- Temp/scratch files go in `temp/` or `scratch/` — tell the user these are untracked.
+- Move durable temp files into a tracked project.
+
+**Cross-instance**
+- When OC and CC share a machine, both use the same `QUAID_HOME`.
+- Use `quaid project link/unlink` for cross-instance project participation.
+- `quaid project delete` is destructive — prefer `unlink` if you only want to leave the project.
+
+---
+
+## Core Files (always loaded)
+
+| File | Role |
+|------|------|
+| `AGENTS.md` | This guide |
+| `TOOLS.md` | CLI reference |
+| `PROJECT.md` | Doc index and architecture map |
+| `SOUL.md` | Quaid's reflective identity |
+| `USER.md` | User understanding and patterns |
+| `MEMORY.md` | Shared-moment and world-understanding context |
+| `CONSTITUTION.md` | Architectural principles and evolution model |
