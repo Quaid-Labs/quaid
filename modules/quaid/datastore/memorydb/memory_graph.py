@@ -6559,27 +6559,29 @@ if __name__ == "__main__":
         history_p.add_argument("id", help="Node ID")
 
         # --- recall ---
+        # Config JSON schema (all fields optional):
+        # {
+        #   "stores": ["vector","graph","docs"] | {"vector": {...}, "graph": {...}, "docs": {"project":"quaid","limit":5}},
+        #   "limit": 5,
+        #   "min_similarity": 0.60,
+        #   "domain_filter": {"all": true},
+        #   "domain_boost": ["technical","project"],
+        #   "project": "quaid",
+        #   "fast": false,
+        #   "depth": 1,
+        #   "date_from": "YYYY-MM-DD",
+        #   "date_to": "YYYY-MM-DD",
+        #   "session_id": null,
+        #   "current_session_id": null,
+        #   "compaction_time": null,
+        #   "archive": false,
+        #   "candidate_pool": null,
+        #   "owner": null
+        # }
         recall_p = subparsers.add_parser("recall", help="Recall memories (unified recall surface)")
-        recall_p.add_argument("query", nargs="+", help="Search query")
-        recall_p.add_argument("--owner", default=None, help="Owner ID")
-        recall_p.add_argument("--limit", type=int, default=5, help="Max results (default: 5)")
-        recall_p.add_argument("--min-similarity", type=float, default=0.60, help="Min similarity threshold (default: 0.60)")
-        recall_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON, e.g. {"all":true} or {"technical":true}')
-        recall_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array, e.g. ["technical","project"]')
-        recall_p.add_argument("--project", default=None, help="Filter by project/domain label")
-        recall_p.add_argument("--json", action="store_true", help="JSON output including recall metadata")
-        recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown for each result")
-        recall_p.add_argument("--stores", default=None, help="Comma-separated store list: vector_basic,vector_technical,graph,docs (use 'docs' alone for docs-only)")
-        recall_p.add_argument("--fast", action="store_true", help="Fast mode: skip multi-pass, reranker, max_turns=1")
-        recall_p.add_argument("--depth", type=int, default=1, help="Graph traversal depth (default: 1)")
-        recall_p.add_argument("--session-id", default=None, help="Filter results to a specific session ID")
-        recall_p.add_argument("--current-session-id", default=None, help="Current session ID for filtering")
-        recall_p.add_argument("--compaction-time", default=None, help="Compaction timestamp for filtering")
-        recall_p.add_argument("--date-from", default=None, help="Only return memories from this date onward (YYYY-MM-DD)")
-        recall_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
-        recall_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
-        recall_p.add_argument("--candidate-pool", default=None, help="JSON array of pre-fetched vector results to pass to graph search")
-        recall_p.add_argument("--docs", action="store_true", help="Also search project documentation (shorthand for --stores docs combined with memory)")
+        recall_p.add_argument("query", nargs="+", help="Search query (last token parsed as JSON config if it starts with '{')")
+        recall_p.add_argument("--json", action="store_true", help="JSON output")
+        recall_p.add_argument("--debug", action="store_true", help="Show scoring breakdown per result")
 
         recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
         recall_fast_p.add_argument("query", nargs="+", help="Search query")
@@ -6882,27 +6884,60 @@ if __name__ == "__main__":
                 print("No history found for node", file=sys.stderr)
 
         elif args.command == "recall":
-            query = " ".join(args.query)
-            domain_filter = json.loads(getattr(args, "domain_filter", '{"all": true}') or '{"all": true}')
-            domain_boost = json.loads(getattr(args, "domain_boost", "[]") or "[]")
-            stores_raw = getattr(args, 'stores', None)
-            all_stores = [s.strip() for s in stores_raw.split(",")] if stores_raw else []
-            # 'docs' is not a memory store — extract it and route separately
-            want_docs = "docs" in all_stores or getattr(args, "docs", False)
-            stores = [s for s in all_stores if s != "docs"]
-            # skip memory if the caller explicitly asked for only docs
-            want_memory = not all_stores or bool(stores)
-            use_fast = getattr(args, 'fast', False)
-            use_json = getattr(args, 'json', False)
-            graph_depth = getattr(args, 'depth', 1)
-            session_id = getattr(args, 'session_id', None)
-            archive = getattr(args, 'archive', False)
-            candidate_pool_raw = getattr(args, 'candidate_pool', None)
-            candidate_pool = json.loads(candidate_pool_raw) if candidate_pool_raw else None
+            # Parse query and optional JSON config from positional args.
+            # The last token is treated as config if it starts with '{'.
+            raw_tokens = args.query
+            cfg: dict = {}
+            if raw_tokens and raw_tokens[-1].strip().startswith("{"):
+                try:
+                    cfg = json.loads(raw_tokens[-1])
+                    raw_tokens = raw_tokens[:-1]
+                except json.JSONDecodeError as _e:
+                    print(f"recall: invalid config JSON: {_e}", file=sys.stderr)
+                    sys.exit(1)
+            query = " ".join(raw_tokens)
+            if not query:
+                print("recall: query required", file=sys.stderr)
+                sys.exit(1)
+
+            # Resolve stores config.
+            # stores can be a list ["vector","graph","docs"] or a dict {"vector":{...},"docs":{...}}
+            stores_cfg = cfg.get("stores", ["vector", "graph"])
+            if isinstance(stores_cfg, list):
+                store_names = stores_cfg
+                store_opts: dict = {}
+            else:
+                store_names = list(stores_cfg.keys())
+                store_opts = stores_cfg  # per-store option overrides
+
+            want_docs = "docs" in store_names
+            want_memory = bool([s for s in store_names if s != "docs"]) or not store_names
+
+            # Top-level config with per-store overrides
+            limit       = cfg.get("limit", 5)
+            owner       = cfg.get("owner") or _get_memory_config().users.default_owner
+            use_json    = args.json
+            use_debug   = args.debug
+
+            # Memory-store config (top-level, overridable per store)
+            mem_opts    = store_opts.get("vector", store_opts.get("graph", {}))
+            domain_filter   = mem_opts.get("domain_filter", cfg.get("domain_filter", {"all": True}))
+            domain_boost    = mem_opts.get("domain_boost", cfg.get("domain_boost", []))
+            project         = mem_opts.get("project", cfg.get("project"))
+            min_similarity  = mem_opts.get("min_similarity", cfg.get("min_similarity", 0.60))
+            use_fast        = cfg.get("fast", False)
+            graph_depth     = cfg.get("depth", store_opts.get("graph", {}).get("depth", 1))
+            session_id      = cfg.get("session_id")
+            current_session_id = cfg.get("current_session_id")
+            compaction_time = cfg.get("compaction_time")
+            date_from       = cfg.get("date_from")
+            date_to         = cfg.get("date_to")
+            archive         = cfg.get("archive", False)
+            candidate_pool  = cfg.get("candidate_pool")
 
             if want_memory and archive:
                 from datastore.memorydb.archive_store import search_archive as _search_archive
-                archive_results = _search_archive(query, limit=args.limit)
+                archive_results = _search_archive(query, limit=limit)
                 if use_json:
                     out = []
                     for r in archive_results:
@@ -6934,7 +6969,7 @@ if __name__ == "__main__":
                         "SELECT id, type, name, content, extraction_confidence, created_at, privacy, owner_id, session_id "
                         "FROM nodes WHERE session_id = ? AND owner_id = ? AND status IN ('active', 'approved', 'pending') "
                         "ORDER BY created_at DESC LIMIT ?",
-                        (session_id, args.owner or _get_memory_config().users.default_owner, int(args.limit))
+                        (session_id, owner, int(limit))
                     ).fetchall()
                 if use_json:
                     out = []
@@ -6960,16 +6995,16 @@ if __name__ == "__main__":
                         print(f"[1.00] [{r['type']}]{date_str}[C:{conf:.1f}] {r['content'] or r['name']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
                     if not rows:
                         print("No facts found for this session")
-            elif want_memory and "graph" in stores:
+            elif want_memory and "graph" in store_names:
                 # Graph-aware recall with optional candidate pool
                 results = graph_aware_recall(
                     query,
-                    owner_id=args.owner,
-                    limit=args.limit,
+                    owner_id=owner,
+                    limit=limit,
                     graph_depth=graph_depth,
                     domain=domain_filter,
                     domain_boost=domain_boost,
-                    project=getattr(args, 'project', None),
+                    project=project,
                     candidate_pool=candidate_pool,
                 )
                 if use_json:
@@ -6983,29 +7018,22 @@ if __name__ == "__main__":
                         conf = r.get('extraction_confidence', 0.5)
                         created = r.get('created_at', '')
                         privacy = r.get('privacy', 'shared')
-                        owner = r.get('owner_id', '')
-                        print(f"[{r['similarity']:.2f}] [{r.get('category', 'fact')}]{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|P:{privacy}|O:{owner}")
+                        owner_id = r.get('owner_id', '')
+                        print(f"[{r['similarity']:.2f}] [{r.get('category', 'fact')}]{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|P:{privacy}|O:{owner_id}")
             elif want_memory:
-                # Vector recall — determine domain from stores flag
-                if "vector_technical" in stores and "vector_basic" not in stores:
-                    effective_domain = {"technical": True}
-                elif "vector_basic" in stores and "vector_technical" not in stores:
-                    effective_domain = {"personal": True}
-                else:
-                    effective_domain = domain_filter
-
+                # Vector recall
                 recall_kwargs = dict(
-                    limit=args.limit,
-                    owner_id=args.owner,
-                    min_similarity=args.min_similarity,
-                    current_session_id=getattr(args, 'current_session_id', None),
-                    compaction_time=getattr(args, 'compaction_time', None),
-                    date_from=getattr(args, 'date_from', None),
-                    date_to=getattr(args, 'date_to', None),
-                    debug=getattr(args, 'debug', False),
-                    domain=effective_domain,
+                    limit=limit,
+                    owner_id=owner,
+                    min_similarity=min_similarity,
+                    current_session_id=current_session_id,
+                    compaction_time=compaction_time,
+                    date_from=date_from,
+                    date_to=date_to,
+                    debug=use_debug,
+                    domain=domain_filter,
                     domain_boost=domain_boost,
-                    project=getattr(args, 'project', None),
+                    project=project,
                 )
                 if use_fast:
                     recall_kwargs['use_multi_pass'] = False
@@ -7025,21 +7053,22 @@ if __name__ == "__main__":
                         created = r.get('created_at', '')
                         date_str = f"({created.split('T')[0]})" if created else ""
                         privacy = r.get('privacy', 'shared')
-                        owner = r.get('owner_id', '')
+                        owner_id = r.get('owner_id', '')
                         valid_from = r.get('valid_from', '')
                         valid_until = r.get('valid_until', '')
                         source_type = r.get('source_type', '') or ''
-                        print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner}|ST:{source_type}")
+                        print(f"[{r['similarity']:.2f}] [{r['category']}]{date_str}{flag_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:{valid_from}|VU:{valid_until}|P:{privacy}|O:{owner_id}|ST:{source_type}")
                         if r.get('_debug'):
                             d = r['_debug']
                             print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
 
-            # --docs / --stores docs: also search project documentation
-            if want_docs and not args.json:
+            # docs store
+            if want_docs and not use_json:
                 try:
                     from core.interface.api import projects_search_docs
-                    doc_project = getattr(args, 'project', None)
-                    doc_limit = max(3, args.limit) if not want_memory else 3
+                    docs_opts = store_opts.get("docs", {})
+                    doc_project = docs_opts.get("project", cfg.get("project"))
+                    doc_limit = docs_opts.get("limit", limit if not want_memory else 3)
                     doc_results = projects_search_docs(query=query, limit=doc_limit, project=doc_project)
                     chunks = doc_results.get("chunks", [])
                     project_md = doc_results.get("project_md")

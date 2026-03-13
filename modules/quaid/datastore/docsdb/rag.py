@@ -310,6 +310,13 @@ class DocsRAG:
                 return line.strip()
         return None
 
+    # Files that live in context (loaded via session-init into .claude/rules/) and
+    # should never be RAG-indexed — returning them as doc chunks would be redundant noise.
+    _CONTEXT_FILES = frozenset({"SOUL.md", "USER.md", "MEMORY.md", "AGENTS.md", "TOOLS.md", "CONSTITUTION.md"})
+
+    def _is_context_file(self, path: Path) -> bool:
+        return path.name in self._CONTEXT_FILES
+
     def scan_docs_directory(self, docs_dir: str) -> List[str]:
         """Recursively find indexable docs in directory.
 
@@ -317,6 +324,9 @@ class DocsRAG:
         - Markdown files (*.md)
         - Current project logs (PROJECT.log)
         - Archived project logs (log/*.log) — historical entries with temporal context
+
+        Excludes files that are always loaded into context (SOUL.md, USER.md, etc.)
+        since indexing them would return redundant chunks.
         """
         doc_files = []
         docs_path = Path(docs_dir)
@@ -327,7 +337,8 @@ class DocsRAG:
 
         for pattern in ('*.md', 'PROJECT.log'):
             for doc_file in docs_path.rglob(pattern):
-                doc_files.append(str(doc_file.absolute()))
+                if not self._is_context_file(doc_file):
+                    doc_files.append(str(doc_file.absolute()))
 
         # Include archived log files (monthly archives from log rotation)
         for doc_file in docs_path.rglob('log/*.log'):
@@ -707,7 +718,7 @@ def main():
         docs_result = rag.reindex_all(docs_dir, force=args.all)
         
         print("\n=== Indexing workspace .md files ===")
-        workspace_files = [f for f in Path(base_dir).glob('*.md') if f.is_file()]
+        workspace_files = [f for f in Path(base_dir).glob('*.md') if f.is_file() and not rag._is_context_file(f)]
         workspace_chunks = 0
         workspace_indexed = 0
 

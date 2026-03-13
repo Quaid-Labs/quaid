@@ -11,27 +11,38 @@ Quaid is an active knowledge layer. Use the `quaid` CLI via your Bash tool — n
 ## Memory
 
 ```bash
-quaid recall "query"          # semantic + graph + reranking (use for facts, relationships, timelines)
-quaid recall "query" --docs   # same, but also searches project documentation
-quaid store "text"            # manual memory insertion (prefer extraction over manual store)
+quaid recall "query"                    # default stores: vector + graph
+quaid recall "query" '{"stores": ["vector", "graph", "docs"]}'
+quaid recall "query" '{"stores": ["docs"], "project": "quaid"}'  # docs only
+quaid store "text"                      # manual memory insertion
 quaid get-node <id>
 quaid get-edges <id>
 quaid delete-node <id>
 quaid stats
 ```
 
-**Key flags** (`recall`):
-- `--limit N` — result count (default 5)
-- `--project <name>` — scope to project
-- `--date-from / --date-to YYYY-MM-DD`
-- `--docs` — also search project documentation (appended after memory results)
-- `--stores <list>` — target specific datastores: `vector_basic`, `vector_technical`, `graph`, `docs`; comma-separated; `--stores docs` alone skips memory
-- `--domain-boost '["technical","project"]'` — multiplier on matching domains before ranking; use for broad recall when you want to prefer certain topics without excluding others. List form uses 1.3× each; map form sets explicit multipliers: `'{"technical": 1.5}'`
-- `--domain-filter '{"technical": true}'` — hard filter: only returns memories tagged with true domains. Use only when you are certain other domains should be excluded entirely.
-- `--fast` — skip multi-pass, reranker, and graph traversal (cheaper, faster)
-- `--json` / `--debug`
+**recall config JSON** (all fields optional):
+```json
+{
+  "stores": ["vector", "graph", "docs"],
+  "limit": 5,
+  "domain_filter": {"technical": true},
+  "domain_boost": ["technical", "project"],
+  "project": "quaid",
+  "fast": false,
+  "date_from": "YYYY-MM-DD",
+  "date_to": "YYYY-MM-DD"
+}
+```
 
-**When to use boost vs filter:** Default to `--domain-boost`. Only use `--domain-filter` when the question is definitively scoped and cross-domain noise would be wrong (e.g. "show me only finance memories").
+**Stores:**
+- `vector` — semantic + FTS hybrid search across all memories (domain-filtered by `domain_filter`/`domain_boost`)
+- `graph` — graph-aware recall with edge traversal (expands via relationship edges)
+- `docs` — project docs RAG; returns chunks + PROJECT.md when `project` is set
+
+**`domain_filter` vs `domain_boost`:** Default to `domain_boost` (soft preference). Use `domain_filter` only when you must exclude other domains entirely.
+
+**Output flags:** `--json` (machine-readable), `--debug` (scoring breakdown)
 
 **store categories:** `preference`, `fact`, `decision`, `entity`, `other`
 
@@ -137,15 +148,16 @@ QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from C
 ## Retrieval Policy
 
 - Treat auto-injected memory as hints — verify concrete claims (names, dates, versions) with explicit `recall`.
-- Prefer `docs search` for codebase/architecture questions.
-- Use `recall --docs` when you want a single pass across both memories and docs.
-- Use `--domain-boost` before broadening to full recall.
+- For codebase/architecture questions, include `"docs"` in stores or use `quaid docs search`.
+- Use `domain_boost` in config before broadening to full recall.
 
 ## Quick Playbooks
 
-**Personal/relationship question:** `recall` → if low confidence, add `--domain-boost '["personal"]'`
+**Personal/relationship question:** `recall "query"` → if low confidence, add `'{"domain_boost": ["personal"]}'`
 
-**Technical/project question:** `recall --domain-boost '["technical","project"]'` → if still unclear, `docs search --project <name>`
+**Technical/project question:** `recall "query" '{"domain_boost": ["technical","project"]}'` → if still unclear, add `"docs"` to stores
+
+**Memory + docs in one pass:** `recall "query" '{"stores": ["vector","graph","docs"]}'`
 
 **Missing session context:** `session list --limit 1` → `session load --session-id <id>`
 
