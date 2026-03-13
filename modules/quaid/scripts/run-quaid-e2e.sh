@@ -3991,7 +3991,7 @@ I need you to remember project status and personal context. We are editing modul
 Facts:
 1) My dog is named Madu.
 2) My sister is Shannon.
-3) I work in /Users/owner/quaid/dev.
+3) I work in the quaid dev workspace.
 Project summary: quaid refactor includes janitor lifecycle registry and datastore-owned maintenance.
 Journal cue: I feel focused and cautious about boundaries.
 Snippet cue: boundary ownership belongs in datastore modules.

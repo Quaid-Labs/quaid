@@ -5,7 +5,7 @@
   "main": "adaptors/openclaw/index.js",
   "type": "module",
   "keywords": [
-    "clawdbot",
+    "openclaw",
     "plugin",
     "memory",
     "local",
@@ -38,18 +38,13 @@
     "test:coverage:all": "npm run test:coverage && npm run test:coverage:py",
     "test:watch": "vitest"
   },
-  "clawdbot": {
-    "extensions": [
-      "adaptors/openclaw/index.js"
-    ]
-  },
   "openclaw": {
     "extensions": [
       "adaptors/openclaw/index.js"
     ]
   },
   "peerDependencies": {
-    "clawdbot": "*"
+    "openclaw": "*"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.32.0"

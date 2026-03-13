@@ -24,10 +24,10 @@ The sandman cron MUST run with `sessionTarget: "isolated"` to prevent context wi
 To verify or fix:
 ```bash
 # Check current configuration
-clawdbot cron list
+openclaw cron list
 
 # Fix if needed (replace JOB_ID with actual ID)
-clawdbot cron edit <JOB_ID> --session isolated --message "Run janitor..."
+openclaw cron edit <JOB_ID> --session isolated --message "Run janitor..."
 ```
 
 ## Concurrency Lock

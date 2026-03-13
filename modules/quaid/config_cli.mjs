@@ -10,7 +10,7 @@ function tryImportClackPath() {
   const candidates = [];
 
   try {
-    const which = spawnSync("sh", ["-c", "command -v clawdbot || command -v openclaw"], {
+    const which = spawnSync("sh", ["-c", "command -v openclaw || command -v clawdbot"], {
       stdio: ["ignore", "pipe", "ignore"],
       encoding: "utf8",
     });

@@ -515,13 +515,13 @@ The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The snake_c
 `adaptors/openclaw/adapter.ts` is source of truth for runtime behavior; `adaptors/openclaw/adapter.js` must match manually. `adaptors/openclaw/index.ts` remains a minimal entry shim. Gateway loads `.js`, not `.ts`. Full restart required after plugin changes (SIGUSR1 does not reload TS).
 
 #### Gateway Stale Process
-`clawdbot gateway restart` does not reliably kill the old process. The reliable sequence is:
+`openclaw gateway restart` does not reliably kill the old process. The reliable sequence is:
 ```bash
-clawdbot gateway stop
+openclaw gateway stop
 pkill -f "openclaw-gateway"
 # Wait for port 18789 to be free
-clawdbot gateway start
-clawdbot gateway install
+openclaw gateway start
+openclaw gateway install
 ```
 
 ### Janitor Pipeline
@@ -709,7 +709,7 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, or `claude-code` | Required |
 | `CLAWDBOT_WORKSPACE` | OC adapter workspace root (Python adapter). Also accepted by the TS adapter as lowest-priority fallback after `QUAID_HOME` and `QUAID_WORKSPACE`. | Optional |
 | `QUAID_WORKSPACE` | OC TS adapter workspace root (second-priority, after `QUAID_HOME`). | Optional |
-| `QUAID_MESSAGE_CLI` | Override the `openclaw`/`clawdbot` binary path used for OC notifications. Skips auto-detection. | Not set |
+| `QUAID_MESSAGE_CLI` | Override the `openclaw` binary path used for OC notifications. Skips auto-detection. | Not set |
 | `OPENCLAW_GATEWAY_URL` | Override OC gateway base URL for LLM routing. | `http://127.0.0.1:<port from openclaw.json>` |
 | `OPENCLAW_GATEWAY_TOKEN` | Override OC gateway auth token. | Read from `~/.openclaw/openclaw.json` |
 | `MEMORY_DB_PATH` | Override database file path | `<quaid_home>/<instance_id>/data/memory.db` |
