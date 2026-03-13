@@ -118,6 +118,7 @@ Write request
 | `core/project-catalog.ts` | Project catalog reader | `createProjectCatalogReader` — reads project names and descriptions from `config/memory.json -> projects.definitions`. Falls back to `TOOLS.md`/`PROJECT.md` first-useful-line extraction. |
 | `core/data-writers.ts` | Canonical write routing/dispatch | `createDataWriteEngine()`, `writeData()`, DataWriter registry/specs |
 | `core/spawn-with-timeout.ts` | Subprocess spawning | `spawnWithTimeout` — spawns a child process with SIGTERM + SIGKILL escalation on timeout. Used by all Python bridge calls from the TypeScript layer. |
+| `orchestrator/default-orchestrator.ts` | Orchestrator entry shim | Re-exports `createKnowledgeEngine` and related types from `core/knowledge-engine.ts` — the stable public surface adapters use for routed recall. |
 | `adaptors/openclaw/index.js` / `adapter.js` / `core/facade.js` etc. | Runtime JS loaded by gateway | Keep TS/JS runtime pairs synchronized; gateway executes `.js`. Check with `npm run check:runtime-pairs`. |
 
 ### CI / Release Guard Scripts

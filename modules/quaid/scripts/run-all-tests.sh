@@ -99,6 +99,7 @@ with tempfile.TemporaryDirectory(prefix="quaid-plugin-health-") as tmp:
             "PYTHONPATH": ".",
             "QUAID_HOME": str(tmp_path),
             "CLAWDBOT_WORKSPACE": str(tmp_path),
+            "QUAID_INSTANCE": "smoke-test",
         },
     )
     payload = json.loads(out)

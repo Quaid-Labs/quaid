@@ -4667,7 +4667,7 @@ def recall(
 
     # Circuit breaker guard
     try:
-        from core.compatibility import check_read_allowed
+        from lib.circuit_breaker import check_read_allowed
         from lib.adapter import get_adapter
         breaker = check_read_allowed(get_adapter().data_dir())
         if not breaker.allows_reads():
@@ -5146,7 +5146,7 @@ def store(
     """
     # Circuit breaker guard — block writes if disabled
     try:
-        from core.compatibility import check_write_allowed
+        from lib.circuit_breaker import check_write_allowed
         from lib.adapter import get_adapter
         breaker = check_write_allowed(get_adapter().data_dir())
         if not breaker.allows_writes():
@@ -6897,8 +6897,9 @@ if __name__ == "__main__":
                     sys.exit(1)
             query = " ".join(raw_tokens)
             if not query:
-                print("recall: query required", file=sys.stderr)
-                sys.exit(1)
+                if args.json:
+                    print("[]")
+                sys.exit(0)
 
             # Resolve stores config.
             # stores can be a list ["vector","graph","docs"] or a dict {"vector":{...},"docs":{...}}
@@ -7065,13 +7066,30 @@ if __name__ == "__main__":
             # docs store
             if want_docs and not use_json:
                 try:
-                    from core.interface.api import projects_search_docs
+                    from datastore.docsdb.rag import DocsRAG as _DocsRAG
                     docs_opts = store_opts.get("docs", {})
                     doc_project = docs_opts.get("project", cfg.get("project"))
                     doc_limit = docs_opts.get("limit", limit if not want_memory else 3)
-                    doc_results = projects_search_docs(query=query, limit=doc_limit, project=doc_project)
-                    chunks = doc_results.get("chunks", [])
-                    project_md = doc_results.get("project_md")
+                    _rag = _DocsRAG()
+                    chunks = _rag.search_docs(
+                        query=query,
+                        limit=max(1, min(doc_limit, 20)),
+                        project=doc_project if doc_project else None,
+                    )
+                    project_md = None
+                    if doc_project:
+                        try:
+                            from config import get_config as _get_config
+                            from lib.runtime_context import get_workspace_dir as _get_workspace_dir
+                            _cfg = _get_config()
+                            _defn = _cfg.projects.definitions.get(doc_project)
+                            if _defn and _defn.home_dir:
+                                _md = _get_workspace_dir() / _defn.home_dir / "PROJECT.md"
+                                if _md.exists():
+                                    project_md = _md.read_text(encoding="utf-8")
+                        except Exception:
+                            pass
+                    doc_results = {"chunks": chunks, "project_md": project_md}
                     if chunks:
                         print("\n=== Documentation ===")
                         for i, chunk in enumerate(chunks, 1):
