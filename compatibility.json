@@ -2,23 +2,33 @@
   "kill_switch": false,
   "kill_message": null,
   "schema_version": 1,
-  "updated_at": "2026-03-11",
-  "latest_quaid": "0.2.15-alpha",
+  "updated_at": "2026-03-13",
+  "latest_quaid": "0.3.0",
   "update_message": null,
   "matrix": [
     {
       "host": "openclaw",
-      "host_range": ">=2026.3.0",
-      "quaid_range": ">=0.2.15-alpha",
+      "host_range": ">=2026.3.7 <2026.3.12",
+      "quaid_range": ">=0.3.0",
       "status": "compatible",
+      "notes": "Tested: 2026.3.7, 2026.3.8, 2026.3.11",
       "message": "",
       "fix": ""
     },
     {
+      "host": "openclaw",
+      "host_range": "<2026.3.7",
+      "quaid_range": ">=0.3.0",
+      "status": "incompatible",
+      "message": "OpenClaw 2026.3.7 or later is required. Please upgrade OpenClaw.",
+      "fix": "npm install -g openclaw@latest"
+    },
+    {
       "host": "claude-code",
-      "host_range": ">=2.0.0",
-      "quaid_range": ">=0.2.15-alpha",
+      "host_range": ">=1.0.0",
+      "quaid_range": ">=0.3.0",
       "status": "compatible",
+      "notes": "Tested against Claude Code CLI stable channel",
       "message": "",
       "fix": ""
     }
