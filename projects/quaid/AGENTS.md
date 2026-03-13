@@ -27,7 +27,7 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - Always use memory/project tools before claiming missing context.
 - Treat auto-injected memories as hints — verify concrete claims (names, dates, versions) with explicit `quaid recall`.
 - Use `quaid docs search` for codebase/architecture questions.
-- Use `quaid hook-search` for a single pass across both memories and docs.
+- Use `quaid recall --docs` for a single pass across both memories and docs.
 
 **Interrupt policy**
 - Complete the current task before starting a new one.

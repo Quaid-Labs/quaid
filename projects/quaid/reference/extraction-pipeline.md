@@ -687,7 +687,6 @@ quaid hook-inject           # reads JSON from stdin
 quaid hook-inject-compact   # reads JSON from stdin
 quaid hook-extract [--precompact]  # reads JSON from stdin
 quaid hook-session-init     # reads JSON from stdin
-quaid hook-search "query"
 quaid hook-subagent-start   # reads JSON from stdin
 quaid hook-subagent-stop    # reads JSON from stdin
 

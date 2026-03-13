@@ -6497,6 +6497,17 @@ if __name__ == "__main__":
         backfill_p.add_argument("--dry-run", action="store_true", help="Preview what would be updated without making changes")
 
         # --- search ---
+        search_p = subparsers.add_parser("search", help="Fast memory search (no reranking)")
+        search_p.add_argument("query", nargs="+", help="Search query")
+        search_p.add_argument("--owner", default=None, help="Owner ID")
+        search_p.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
+        search_p.add_argument("--json", action="store_true", help="JSON output")
+        search_p.add_argument("--domain-filter", default='{"all": true}', help='Domain filter JSON')
+        search_p.add_argument("--domain-boost", default="[]", help='Domain boost JSON array')
+        search_p.add_argument("--project", default=None, help="Filter by project")
+        search_p.add_argument("--date-from", default=None, help="Only return memories from this date (YYYY-MM-DD)")
+        search_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
+
         # --- store ---
         store_p = subparsers.add_parser("store", help="Store a new memory")
         store_p.add_argument("text", help="Text of the memory to store")
@@ -6580,6 +6591,7 @@ if __name__ == "__main__":
         recall_p.add_argument("--date-to", default=None, help="Only return memories up to this date (YYYY-MM-DD)")
         recall_p.add_argument("--archive", action="store_true", help="Search archived memories instead")
         recall_p.add_argument("--candidate-pool", default=None, help="JSON array of pre-fetched vector results to pass to graph search")
+        recall_p.add_argument("--docs", action="store_true", help="Also search project documentation (appended after memory results)")
 
         recall_fast_p = subparsers.add_parser("recall-fast", help="Fast pre-injection recall with HyDE fanout")
         recall_fast_p.add_argument("query", nargs="+", help="Search query")
@@ -6766,6 +6778,24 @@ if __name__ == "__main__":
             except (ValueError, RuntimeError) as e:
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)
+
+        elif args.command == "search":
+            query = " ".join(args.query)
+            owner = args.owner or _get_memory_config().users.default_owner
+            graph = get_graph()
+            raw = graph.search_hybrid(query, limit=args.limit, owner_id=owner)
+            if args.json:
+                out = [
+                    {"id": n.id, "text": n.name, "category": n.type, "similarity": round(s, 4)}
+                    for n, s in raw
+                ]
+                print(json.dumps(out))
+            else:
+                if not raw:
+                    print("No results found.")
+                else:
+                    for node, score in raw:
+                        print(f"[{score:.2f}] [{node.type}] {node.name}")
 
         elif args.command == "get-node":
             node_id = args.id
@@ -7028,6 +7058,21 @@ if __name__ == "__main__":
                         if r.get('_debug'):
                             d = r['_debug']
                             print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
+
+            # --docs: also search project documentation
+            if getattr(args, "docs", False) and not args.json:
+                try:
+                    from core.interface.api import projects_search_docs
+                    doc_results = projects_search_docs(query=query, limit=3)
+                    chunks = doc_results.get("chunks", [])
+                    if chunks:
+                        print("\n=== Documentation ===")
+                        for i, chunk in enumerate(chunks, 1):
+                            title = chunk.get("title", "untitled")
+                            text = chunk.get("text", "")[:300]
+                            print(f"  {i}. [{title}] {text}")
+                except Exception as _docs_err:
+                    print(f"[docs] warning: {_docs_err}", file=sys.stderr)
 
         elif args.command == "recall-fast":
             query = " ".join(args.query)

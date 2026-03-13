@@ -222,7 +222,7 @@ quaid docs search "query" --project quaid
 quaid docs search "query" --project quaid --docs "architecture.md,api-reference.md"
 ```
 
-The CLI search (`quaid hook-search`) combines memory recall and docs search in a single call.
+`quaid recall "query" --docs` combines memory recall and docs search in a single call.
 
 ---
 
@@ -364,7 +364,7 @@ python3 datastore/docsdb/rag.py stats                # Index statistics
 quaid docs search "query"
 quaid docs search "query" --project <name>
 quaid docs search "query" --project <name> --docs "file1.md,file2.md"
-quaid hook-search "query"                            # Memory + docs combined
+quaid recall "query" --docs                          # Memory + docs combined
 
 # --- Staleness ---
 quaid docs check                                     # Show stale doc/source pairs
