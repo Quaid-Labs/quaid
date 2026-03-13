@@ -6,7 +6,7 @@
 
 ### A Knowledge Layer for Agentic Systems
 
-> **Early alpha** — launched February 2026, active daily development.
+> **Early alpha** — launched 2026, active daily development.
 
 Most agents still treat long-term context as replay: re-inject old chat and hope retrieval lands. Quaid is not another memory plugin; it is an **active knowledge layer**. It continuously captures, structures, and maintains knowledge, then serves only what matters at query time. Result: 88.3% of full-context Haiku accuracy with targeted memory injection.
 
@@ -20,7 +20,7 @@ Every session starts ready to work. Project docs, architecture decisions, tool g
 **What it does with them:**
 - Extracts memories from conversations automatically
 - Retrieves the right ones at the right time (hybrid search + LLM reranking)
-- Runs a nightly janitor that reviews, deduplicates, resolves contradictions, and decays stale memories
+- Runs a nightly janitor that reviews, deduplicates, and decays stale memories
 - Keeps project docs and personality files current without manual maintenance
 
 Quaid is an agentic-system independent knowledge layer by design, with adapters handling host-specific runtime details. Today, the most mature integrations are [OpenClaw](https://github.com/openclaw/openclaw), Claude Code, and the standalone CLI.
@@ -75,7 +75,7 @@ node setup-quaid.mjs --source github --ref <commit-sha>
 
 - **Local-first by default:** memory graph, embeddings, and maintenance run on your machine.
 - **Three knowledge areas:** facts, core personality, and project knowledge are treated differently instead of flattened into one store.
-- **Lifecycle maintenance, not just storage:** nightly janitor pipeline continuously reviews, deduplicates, resolves contradictions, and decays stale knowledge.
+- **Lifecycle maintenance, not just storage:** nightly janitor pipeline continuously reviews, deduplicates, and decays stale knowledge.
 - **Dual learning system:** fast snippets + slower journal distillation for long-term synthesis.
 - **OpenClaw-first, system-agnostic design:** deepest integration today is OpenClaw, but the architecture is built around adapter contracts.
 
@@ -123,7 +123,7 @@ Quaid organizes knowledge into three areas, each with different retrieval behavi
 
 **Projects & Docs** — Auto-discovers project structure, tracks documentation, and keeps docs current from git changes. Comprehensive docs beat partial docs — partial or outdated docs mislead the LLM. This also keeps system-level knowledge out of the memory graph, where it would pollute fact retrieval.
 
-**Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where deep-reasoning LLMs can curate knowledge economically. Reviews, deduplicates, resolves contradictions, decays stale facts, and monitors documentation health in bulk.
+**Workspace Maintenance** — A nightly janitor pipeline that batches the day's work into a window where deep-reasoning LLMs can curate knowledge economically. Reviews, deduplicates, decays stale facts, and monitors documentation health in bulk.
 
 ---
 
@@ -166,13 +166,13 @@ We haven't yet fully evaluated the cost savings Quaid provides by reducing conte
 
 Quaid is in early alpha. LLM routing is adapter- and config-driven (`deep_reasoning` / `fast_reasoning`), with provider/model resolution handled through the gateway provider layer. Ollama remains the default embeddings path.
 
-Known limitations for **v0.2.15-alpha**:
+Known limitations for **v0.2.17-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
 - Windows support exists but has less operational coverage than macOS/Linux *(experimental)*.
 - OpenClaw is currently the most mature host integration path; broader host coverage is still in progress *(experimental outside OpenClaw)*.
 
-The system is backed by over 1,400 tests in the default gate (1,224 selected pytest + 222 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md). LongMemEval integration is implemented and smoke-tested; full benchmark runs are pending.
+The system is backed by over 1,800 tests in the default gate (1,547 selected pytest + 331 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md). LongMemEval integration is implemented and smoke-tested; full benchmark runs are pending.
 
 GitHub Actions CI runs automated checks on pushes/PRs including runtime pair sync, docs/release consistency, linting, runtime build, isolated Python unit suites, and the full gate (`run-all-tests --full`) with the bootstrap E2E auth matrix enabled.
 
@@ -193,7 +193,7 @@ We're actively testing and refining the system against benchmarks and welcome co
 - [Maintainer Lifecycle](docs/MAINTAINER-LIFECYCLE.md) — Safe branch/release model for post-user operation
 - [Contributing](CONTRIBUTING.md) — PR expectations, validation, and AI-assisted contribution policy
 - [Good First Issues](docs/GOOD-FIRST-ISSUES.md) — Small scoped tasks for new contributors
-- [v0.2.15-alpha Notes](docs/releases/v0.2.15-alpha.md) — Release highlights and known limitations
+- [v0.2.15-alpha Notes](docs/releases/v0.2.15-alpha.md) — Latest published release highlights and known limitations
 - [Roadmap](ROADMAP.md) — What's coming next
 
 ---

@@ -342,11 +342,27 @@ Centralized modules extracted from duplicated code across `datastore/memorydb/me
 | `lib/embeddings.py` | `get_embedding(text)`, `pack_embedding()`, `unpack_embedding()` — embedding calls routed through configured provider (Ollama by default) |
 | `lib/similarity.py` | `cosine_similarity(a, b)` — vector comparison |
 | `lib/tokens.py` | `extract_key_tokens(text)` — noun/name extraction for dedup recall |
+| `lib/batch_utils.py` | Batch processing utilities for LLM calls. Two patterns: **parallel batching** (`parallel_batch`) — splits items into token-sized chunks processed concurrently; **waterfall batching** (`waterfall_batch`) — serial cascading distillation where each batch's output is carryover context for the next. Also exports `chunk_by_tokens`, `chunk_text_by_tokens`, `ChunkResult`, `DEFAULT_CHUNK_TOKENS` (8000 tokens). Truncation is banned; these helpers enforce that invariant. |
+| `lib/instance.py` | Zero-dependency instance resolution. Reads `QUAID_HOME` and `QUAID_INSTANCE` env vars only. Public API: `quaid_home()`, `instance_id()`, `instance_root()`, `shared_dir()`, `shared_projects_dir()`, `shared_registry_path()`, `shared_config_path()`, `list_instances()`, `instance_exists()`, `require_instance_exists()`, `validate_instance_id()`. Instance names must match `[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}` and not be reserved words. |
 | `datastore/memorydb/archive_store.py` | `archive_node(node, reason)` / `search_archive(query)` — datastore-owned archive writes/reads for `data/memory_archive.db` (`lib/archive.py` remains a compatibility shim). |
 
 All shared library modules use `__all__` exports to define explicit public API boundaries, ensuring clean module interfaces and preventing accidental coupling to internal helpers.
 
 **Provider/adapter pattern:** LLM and embedding functionality is routed through adapters/providers. The core memory pipeline does not choose providers directly; it requests `deep_reasoning` or `fast_reasoning` and the adapter resolves provider + model from config and gateway state.
+
+**Ingest runtime bridge (`core/ingest_runtime.py`):** Runtime-safe ingest entrypoints that keep core decoupled from ingest module internals. Three public functions:
+- `run_docs_ingest(transcript_path, label, session_id)` — triggers docs ingest pipeline
+- `run_session_logs_ingest(*, session_id, owner_id, label, ...)` — records session log metadata
+- `run_extract_from_transcript(*, transcript, owner_id, label, dry_run)` — runs fact extraction on a transcript string
+
+Core orchestrators import ingest via this bridge rather than importing `ingest.*` modules directly.
+
+**Global LLM scheduler (`core/llm/scheduler.py`):** Singleton `GlobalLlmScheduler` that centralizes timeout-driven throttling and adaptive concurrency for all LLM-parallel call sites. Key behaviors:
+- `run_map(workload_key, items, fn, configured_workers, ...)` — parallel map with per-workload adaptive concurrency caps
+- **Timeout + backoff:** On timeout, halves the worker cap for that workload key and retries remaining items (up to `timeout_retries` attempts; raises `TimeoutError` after exhaustion)
+- **Slow release:** After successful completion, increments the cap back toward `configured_workers` by 1
+- `QUAID_GLOBAL_LLM_MAX_WORKERS` env var — overrides the global thread pool ceiling (default 32)
+- Singleton access via `get_global_llm_scheduler()`; `reset_global_llm_scheduler()` shuts down and clears it (called at process exit via `atexit`)
 
 ### 8. Configuration System
 
@@ -389,9 +405,39 @@ quaid config set <dotted.key> <value> --shared   # Set a key in shared config
 | `docs` | `autoUpdateOnCompact`, `maxDocsPerUpdate`, `stalenessCheckEnabled`, `sourceMapping`, `updateTimeoutSeconds` |
 | `rag` | `docsDir`, `chunkMaxTokens`, `chunkOverlapTokens`, `searchLimit`, `minSimilarity` |
 | `search` | `semanticFallbackLimit`, `ftsBoostProperNouns`, BEAM search params, reranker config |
+| `core.parallel` | Lifecycle prepass concurrency and locking — see below |
 | `capture`, `decay`, `dedup`, `janitor`, `retrieval`, `logging`, `users` | Existing sections |
 | `notifications` | Notification routing and channel config |
 | `systems` | Feature gates, system-level toggles, bootstrap file monitoring |
+
+**`core.parallel` config** (controls lifecycle routine concurrency and resource locking):
+
+```json
+{
+  "core": {
+    "parallel": {
+      "enabled": true,
+      "lifecyclePrepassWorkers": 3,
+      "lifecyclePrepassTimeoutSeconds": 300,
+      "lifecyclePrepassTimeoutRetries": 1,
+      "lockEnforcementEnabled": true,
+      "lockWaitSeconds": 120,
+      "lockRequireRegistration": true
+    }
+  }
+}
+```
+
+All keys accept snake_case aliases (e.g. `lifecycle_prepass_timeout_seconds`). Env var overrides:
+- `QUAID_CORE_PARALLEL_MAP_TIMEOUT_SECONDS` — per-map timeout (overrides `lifecyclePrepassTimeoutSeconds`)
+- `QUAID_CORE_PARALLEL_MAP_TIMEOUT_RETRIES` — per-map retry count (overrides `lifecyclePrepassTimeoutRetries`)
+- `QUAID_GLOBAL_LLM_MAX_WORKERS` — global LLM thread pool ceiling (default 32; set on `GlobalLlmScheduler` at process start)
+
+**Lock resources** — lifecycle routines declare `write_resources` at registration time. Recognized tokens:
+- `db:memory` — resolves to the memory DB path; serializes DB writers
+- `files:global` / `files` / `core_markdown` — global files lock (markdown and doc writes)
+- `file:<path>` — per-file lock
+Dry-run disables locking entirely.
 
 **Embedding model config (machine-wide / shared):**
 

@@ -6,8 +6,8 @@ tmux message passing. ALL verification happens via shell commands and DB
 queries from a separate pane. This is black-box testing — no direct function
 calls, no imports, no mocks.
 
-**Who runs this:** An LLM agent (e.g. claude-dev in window 5) driving tests
-against a target agent window (e.g. OC in window 1, CC in window 5 on another
+**Who runs this:** An LLM agent (e.g. claude-dev in window 4) driving tests
+against a target agent window (e.g. OC in window 1, CC in window 4 on another
 machine).
 
 **Communication pattern:**
@@ -492,7 +492,7 @@ Copy this to track results for each run:
 Date: YYYY-MM-DD
 Target: OC/CC @ hostname
 Branch: canary @ <commit>
-Tester: claude-dev @ window 5
+Tester: claude-dev @ window 4
 
 M0 Install:     [ ] PASS / FAIL — notes:
 M1 Extract/new: [ ] PASS / FAIL — notes:

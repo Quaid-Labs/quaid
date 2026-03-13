@@ -81,14 +81,17 @@ node setup-quaid.mjs --agent \
 
 ## Environment Variables (optional)
 
-- `QUAID_WORKSPACE` or `QUAID_HOME`: explicit workspace override
-- `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint
+- `QUAID_WORKSPACE` or `QUAID_HOME`: explicit workspace/home path override (highest priority, same as `--workspace`)
+- `QUAID_INSTANCE`: pre-set instance identifier; installer skips the instance prompt and uses this value directly (e.g. `openclaw`, `claude-code`)
+- `CLAWDBOT_WORKSPACE`: OpenClaw workspace hint (auto-detected when OpenClaw is installed)
 - `QUAID_INSTALL_AGENT=1`: enable non-interactive installer defaults
+- `QUAID_INSTALL_CLAUDE_CODE=1`: force installer into Claude Code adapter mode (equivalent to `--claude-code` flag)
 - `QUAID_OWNER_NAME`: explicit human owner name for memory tagging
 - `QUAID_INSTALL_SOURCE`: `local|github|artifact`
 - `QUAID_INSTALL_REF`: git branch/tag/commit (for github source)
 - `QUAID_INSTALL_GITHUB_REPO`: repo override (default `quaid-labs/quaid`)
 - `QUAID_INSTALL_ARTIFACT`: local path or URL to `.tar.gz` (for artifact source)
+- `QUAID_INSTALL_PROVIDER`: force LLM provider selection (e.g. `anthropic`, `claude-code`, `openai-compatible`)
 - `QUAID_INSTALL_NOTIFY=0|1`: disable/enable installer progress notifications in agent mode
 - `QUAID_INSTALL_NOTIFY_PROGRESS=0|1`: disable/enable step checkpoint notifications
 - `QUAID_INSTALL_NOTIFY_COMPLETE=0|1`: disable/enable completion notification
@@ -211,19 +214,31 @@ Minimum required summary fields:
 The summary should also tell the user where to edit settings:
 
 - Interactive editor: `quaid config edit`
-- Config file: `<workspace>/config/memory.json`
+- Config file: `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json` (use `quaid config path` to confirm the active path)
 
 Do not present `memory`, `journal`, `projects`, or `workspace` as a survey field or configurable install choice.
 Those systems are always on by policy and should only be described if the user explicitly asks.
 
 ## Verification
 
-After install:
+After install — OpenClaw adapter:
 
 ```bash
 openclaw hooks list
 openclaw hooks enable bootstrap-extra-files
 openclaw hooks enable session-memory
 ```
+
+After install — Claude Code adapter:
+
+```bash
+# Verify hooks are registered in ~/.claude/settings.json
+cat ~/.claude/settings.json | python3 -c "import sys,json; h=json.load(sys.stdin).get('hooks',{}); print([k for k in h if 'quaid' in str(h[k]).lower()])"
+
+# Run doctor
+quaid doctor
+```
+
+Expected output from hooks check: `['UserPromptSubmit', 'SessionEnd', 'SubagentStart', 'SubagentStop']` (or similar).
 
 If OpenClaw is unavailable, run standalone mode and set workspace via `--workspace`.

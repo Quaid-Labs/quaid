@@ -30,7 +30,7 @@ maintains projects through Quaid's tools. The human just talks.
     "japan-trip": {
       "canonical_path": "/home/solomon/quaid/projects/japan-trip",
       "source_root": "/home/solomon/Documents/Japan Trip",
-      "instances": ["claudecode", "openclaw"],
+      "instances": ["claudecode-abc123", "openclaw-def456"],
       "created_at": "2026-03-11T10:00:00.000000",
       "description": "Japan trip planning — flights, hotels, itinerary"
     }
@@ -42,7 +42,7 @@ maintains projects through Quaid's tools. The human just talks.
 |-------|---------|
 | `canonical_path` | Where Quaid's project metadata lives (TOOLS.md, docs/) |
 | `source_root` | Where the user's actual project files live (optional) |
-| `instances` | Which adapter instances use this project |
+| `instances` | Which adapter instances use this project (values are `instance_id()` strings, e.g. `"claudecode-abc123"`) |
 | `created_at` | When the project was created |
 | `description` | Human-readable description (LLM-generated) |
 
@@ -65,9 +65,9 @@ The LLM calls `create_project(name, description, source_root=None)`:
 1. Create `QUAID_HOME/projects/<name>/`
 2. Create `PROJECT.md` with metadata
 3. Create empty `docs/` subdirectory
-4. Register in `project-registry.json`
-5. If `source_root` provided, initialize shadow git tracking
-6. If OC adapter is active, trigger sync to copy bootstrap files
+4. Register in `project-registry.json` with `instances: [instance_id()]` (the current adapter's instance ID from `lib/instance.instance_id()`)
+5. If `source_root` provided, initialize shadow git tracking and take initial snapshot
+6. Trigger sync to copy bootstrap files to adapter workspaces that require it (e.g. OC)
 
 ### Tracking a source directory
 
@@ -83,12 +83,25 @@ When the LLM registers a `source_root`:
 
 The LLM calls `delete_project(name)`:
 
-1. Remove from `project-registry.json`
-2. Remove `QUAID_HOME/projects/<name>/`
-3. Remove shadow git at `QUAID_HOME/.git-tracking/<name>/`
-4. Remove synced copies from all adapter workspaces
-5. Remove docsdb entries for this project
-6. **Never touch `source_root`** — that's the user's files
+1. Destroy shadow git tracking at `QUAID_HOME/.git-tracking/<name>/` (if any)
+2. Remove `QUAID_HOME/projects/<name>/` (canonical project directory)
+3. Remove from `project-registry.json`
+4. Purge SQLite rows: `DELETE FROM project_definitions WHERE name=?` and `DELETE FROM doc_registry WHERE project=?`
+5. **Never touch `source_root`** — that's the user's files
+
+Note: synced workspace copies (OC) are cleaned up lazily by the sync engine's stale-target cleanup on the next daemon tick.
+
+### Linking and Unlinking
+
+`link_project(name)` — adds the current adapter's `instance_id()` to the project's `instances` list. Idempotent. Used when a second adapter joins an existing project.
+
+`unlink_project(name)` — removes the current adapter's `instance_id()` from `instances`. Idempotent. Does not delete the project or its files.
+
+CLI:
+```bash
+quaid project link <name>    # Add current instance to an existing project
+quaid project unlink <name>  # Remove current instance from a project
+```
 
 ---
 
@@ -167,37 +180,45 @@ do because the daemon already handled everything.
 class ShadowGit:
     """Shadow git tracker for a project's source files."""
 
-    def __init__(self, project_name: str, source_root: Path):
-        self.git_dir = QUAID_HOME / ".git-tracking" / project_name
-        self.work_tree = source_root
+    def __init__(self, project_name: str, source_root: Path,
+                 tracking_base: Optional[Path] = None):
+        # tracking_base defaults to QUAID_HOME/.git-tracking/
+        if tracking_base is None:
+            tracking_base = get_workspace_dir() / ".git-tracking"
+        self.git_dir = tracking_base / project_name
+        self.work_tree = Path(source_root).resolve()
 
-    def _git(self, *args) -> subprocess.CompletedProcess:
+    def _git(self, *args, check=True, timeout=60) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["git", f"--git-dir={self.git_dir}",
              f"--work-tree={self.work_tree}", *args],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=check, timeout=timeout,
         )
+
+    @property
+    def initialized(self) -> bool:
+        return (self.git_dir / "HEAD").is_file()
 
     def init(self):
         """Initialize shadow git for this project."""
+        if self.initialized:
+            return
         self.git_dir.mkdir(parents=True, exist_ok=True)
-        self._git("init", "--bare")
-        self._apply_default_ignores()
+        subprocess.run(["git", "init", "--bare", str(self.git_dir)], check=True)
+        self._apply_default_excludes()  # writes to info/exclude
 
-    def snapshot(self) -> Optional[DiffResult]:
-        """Snapshot current state, return diff if anything changed."""
-        status = self._git("status", "--porcelain")
-        if not status.stdout.strip():
-            return None  # Nothing changed
-        self._git("add", "-A")
-        self._git("commit", "-m", f"snapshot {datetime.utcnow().isoformat()}")
-        diff = self._git("diff", "--find-renames", "--name-status", "HEAD~1..HEAD")
-        return parse_diff(diff.stdout)
+    def snapshot(self) -> Optional[SnapshotResult]:
+        """Snapshot current state, return SnapshotResult if anything changed."""
+        # Returns None if no changes; SnapshotResult.is_initial=True for first commit
+
+    def add_ignore_patterns(self, patterns: List[str]) -> None:
+        """Append LLM-managed patterns to info/exclude (after defaults)."""
 
     def get_tracked_files(self) -> List[str]:
         """List all tracked files."""
-        result = self._git("ls-files")
-        return result.stdout.strip().splitlines()
+
+    def destroy(self) -> None:
+        """Remove the shadow git tracking directory."""
 ```
 
 ---
@@ -426,51 +447,29 @@ Claude Code has no such boundary and reads directly from QUAID_HOME.
 
 ### Sync Contract
 
+The sync engine exposes module-level functions in `core/sync_engine.py`:
+
 ```python
-class SyncEngine:
-    """Sync bootstrap files from canonical to adapter workspaces."""
+SYNCABLE_NAMES = frozenset({
+    "TOOLS.md", "AGENTS.md", "SOUL.md", "USER.md",
+    "MEMORY.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md",
+})
 
-    # Files eligible for sync (OC's VALID_BOOTSTRAP_NAMES equivalent)
-    SYNCABLE_NAMES = {"TOOLS.md", "AGENTS.md", "SOUL.md", "USER.md",
-                      "MEMORY.md", "IDENTITY.md", "HEARTBEAT.md", "TODO.md"}
+def sync_project(canonical_dir: Path, target_dir: Path, project_name: str) -> SyncResult:
+    """Sync one project's bootstrap files from canonical to target."""
+    # For each name in SYNCABLE_NAMES:
+    #   - If canonical file missing and target exists: remove target
+    #   - If target mtime >= canonical mtime: skip
+    #   - Otherwise: copy with shutil.copy2 (preserves mtime)
+    # Writes a README.md in the target project dir pointing to canonical location.
 
-    def sync_project(self, project_name: str, target_dir: Path) -> SyncResult:
-        """Sync one project's bootstrap files to a target directory."""
-        canonical = QUAID_HOME / "projects" / project_name
-        result = SyncResult(project=project_name, copied=[], skipped=[], removed=[])
+def sync_all_projects() -> List[SyncResult]:
+    """Sync all registered projects to all adapters that need it.
 
-        for fname in self.SYNCABLE_NAMES:
-            src = canonical / fname
-            dst = target_dir / project_name / fname
-
-            if not src.is_file():
-                # Canonical file removed — clean up target
-                if dst.is_file():
-                    dst.unlink()
-                    result.removed.append(fname)
-                continue
-
-            if dst.is_file() and dst.stat().st_mtime >= src.stat().st_mtime:
-                result.skipped.append(fname)
-                continue
-
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)  # preserves mtime
-            result.copied.append(fname)
-
-        self._write_readme(target_dir / project_name, canonical)
-        return result
-
-    def sync_all(self) -> List[SyncResult]:
-        """Sync all projects to all adapters that need it."""
-        results = []
-        for project_name, project_info in registry.items():
-            for adapter in project_info["instances"]:
-                sync_target = get_adapter(adapter).get_context_sync_target()
-                if sync_target is None:
-                    continue  # Adapter reads directly, no sync needed
-                results.append(self.sync_project(project_name, sync_target))
-        return results
+    Calls adapter.get_context_sync_target(); if None, adapter reads directly
+    (no sync needed). Iterates canonical projects dir and syncs each project.
+    Also cleans up stale target dirs for projects that no longer exist.
+    """
 ```
 
 ### Adapter Contract Addition
