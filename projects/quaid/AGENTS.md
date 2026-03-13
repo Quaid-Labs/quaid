@@ -23,7 +23,10 @@
 
 ### 2) Project docs (`projects/quaid/`)
 - `operations/`: runbooks, release/checkpoint/testing procedures.
+  - `operations/projects-testing.md` — live test protocol for projects system (OC CRUD + CC CRUD + cross-platform)
+  - `operations/live-validation-log.md` — record of M0–M7 live validation runs
 - `reference/`: deep technical docs and implementation details.
+  - `reference/projects-cli-reference.md` — CLI reference for project registry and docs commands
 - Keep details here when they are too large/noisy for always-loaded files.
 
 ### 3) Runtime code map (`modules/quaid/`)
@@ -67,6 +70,12 @@
   - When using `temp/` or `scratch/`, explicitly tell the user those files are temporary/untracked project artifacts.
   - If a temp/scratch file becomes durable, move it into a tracked project.
 
+### Cross-Instance Discipline
+- Both OC and CC adapters on example.local share `QUAID_HOME=/Users/owner/quaid` — all instances read from the same root.
+- Cross-instance project participation uses `quaid project link/unlink`; prefer this over recreating projects from scratch.
+- `quaid project delete` is destructive — it removes all instances, the canonical project directory, and all SQLite rows. Use `quaid project unlink` if you only want to leave a project without deleting it for others.
+- Both adapters share `QUAID_HOME/shared/project-registry.json` and `QUAID_HOME/shared/projects/`; edits made by one instance are immediately visible to the other.
+
 ### Plugin Contract Discipline
 - Plugin runtime surfaces are contract-owned and manifest-declared.
 - Executable contract hooks: `init`, `config`, `status`, `dashboard`, `maintenance`, `tool_runtime`, `health`.
@@ -87,7 +96,7 @@ Nightly janitor (independent scheduler) -> Review -> Dedup -> Decay -> Graduate 
 
 - **Extraction:** Opus analyzes transcript at compaction, extracts personal facts with relationships
 - **Edges:** Created at extraction time, linked to source facts
-- **Janitor:** Runs 4:30 AM — reviews pending facts, merges duplicates, decays stale memories (Ebbinghaus), monitors core files
+- **Janitor:** Runs at 4 AM local time (default; 2-hour eligibility window) — reviews pending facts, merges duplicates, decays stale memories (Ebbinghaus), monitors core files
 
 **Extraction priority invariant:**
 - User facts are first priority.
@@ -98,6 +107,7 @@ Nightly janitor (independent scheduler) -> Review -> Dedup -> Decay -> Graduate 
 ## Retrieval Notes
 
 - For exact tool parameter maps and usage patterns, refer to `projects/quaid/TOOLS.md`.
+- `quaid hook-search "query"` — unified search across memories + docs together; use when you want a single recall pass instead of running `recall` and `docs search` separately.
 - Keep this file focused on operating rules and project navigation.
 
 ## Dual Extraction: Snippets + Journal

@@ -197,7 +197,12 @@ Enhanced from simple reindex to include project management:
 
 **7c: Sync PROJECT.md External Files** — parses PROJECT.md "External Files" sections and creates registry entries for declared external files.
 
-**7d: RAG reindex** — original behavior: `datastore/docsdb/rag.py reindex` + indexes project directories for projects with `autoIndex: true`.
+**7d: RAG reindex (three passes):**
+1. **docs/ directory pass** — reindexes `cfg.rag.docs_dir` (the workspace `docs/` directory).
+2. **Project directory pass** — reindexes each project's `homeDir` for projects with `autoIndex: true`.
+3. **doc_registry pass** (added in commit `dedf2c47`) — enumerates all files registered via `DocsRegistry().list_docs()` and indexes any that need reindex. This covers external registered files (e.g. `/tmp/*.md`, files outside the workspace) that neither of the directory scans would reach.
+
+**Why the doc_registry pass matters:** Before this fix, `quaid registry register <path> --project <name>` registered a file in the database but the janitor never indexed it. The RAG search could not find content in those files. Now, `quaid janitor --task rag --apply --approve` is sufficient to index newly registered docs — no need for a separate manual `reindex --all`.
 
 ### Task 8: Tests
 Runs the vitest test suite. Output parser handles both vitest format (`Tests X failed | Y passed (Z)`) and test-runner.js summary format (`Total: X / Passed: Y / Failed: Z`).
@@ -334,7 +339,12 @@ python3 core/lifecycle/janitor.py --task all --apply --time-budget 1800 --token-
 
 # Explicitly approve policy-gated apply mode
 python3 core/lifecycle/janitor.py --task review --apply --approve
+
+# Index newly registered docs (doc_registry pass)
+python3 core/lifecycle/janitor.py --task rag --apply --approve
 ```
+
+> **`--approve` flag:** If `janitor.applyMode=ask` is set in `config/memory.json` (the default for some setups), running with `--apply` alone will print a dry-run result and prompt you to re-run with `--approve`. Pass both `--apply --approve` to actually execute changes. When `applyMode=auto` (the standard cron default), `--approve` is a no-op and `--apply` suffices.
 
 ## Dashboard Integration
 

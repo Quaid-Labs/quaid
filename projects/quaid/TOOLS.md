@@ -34,27 +34,30 @@ hooks/runtime set it per-invocation to avoid cross-instance collisions.
 
 ### Project Commands
 - `quaid project list` — List all registered projects
-- `quaid project create <name> [-d "description"] [-s /path/to/source]` — Create a new project
+- `quaid project create <name> [--description "..."] [--source-root /path]` — Create a new project
 - `quaid project show <name>` — Show project details
-- `quaid project update <name> [-d "new desc"] [-s /new/path]` — Update project fields
-- `quaid project delete <name>` — Delete a project (never touches source files)
+- `quaid project link <name>` — Add current instance to an existing project's instances list (idempotent)
+- `quaid project unlink <name>` — Remove current instance from project's instances list (idempotent, does not delete)
+- `quaid project delete <name>` — Delete a project: unlinks all instances, removes canonical project dir, and purges all SQLite rows (`project_definitions` + `doc_registry`). Does NOT touch the source directory.
 - `quaid project snapshot [<name>]` — Take shadow git snapshot(s) for change tracking
 - `quaid project sync` — Sync project context files to adapter workspaces
 
 ### Doc Registry Commands
 - `quaid registry list` — List all registered docs
-- `quaid registry create-project <name>` — Create a doc project in the registry
+- `quaid registry register <file_path> --project <name>` — Register a doc in the doc registry
 - `quaid global-registry list` — Cross-instance project registry
 - `quaid updater doc-health <project> [--dry-run]` — Evaluate doc lifecycle
 
 ### Project File Placement
 When working with a project, decide whether files belong **in the project directory** or should be **linked externally**:
 
-- **In the project dir**: files that are owned by the project and don't need to live elsewhere. Examples: essays, notes, standalone docs, project-specific configs.
-- **In `docs/` subdirectory**: project documentation goes here (architecture docs, reference guides, operational runbooks). Created automatically with each project.
-- **Linked externally**: code files that must live in specific repo paths. Register them with `quaid docs register <path> --project <name>` so the project tracks them without moving them.
+- **In the project dir**: files that are owned by the project and don't need to live elsewhere. Examples: essays, notes, standalone docs, project-specific configs. The canonical path is `QUAID_HOME/<instance>/projects/<name>/`.
+- **In `docs/` subdirectory**: project documentation goes here (architecture docs, reference guides, operational runbooks). Created automatically with each project at `QUAID_HOME/<instance>/projects/<name>/docs/`.
+- **Linked externally**: code files that must live in specific repo paths. Register them with `quaid registry register <path> --project <name>` (doc registry) so the project tracks them without moving them. Use the doc registry, not the project registry, for externally-linked files.
 
-Rule of thumb: if the file only makes sense in the context of this project, put it in the project directory. If it has to live in a specific location for code/build reasons, link it via the registry.
+Note: Files shared across multiple instances should be placed in a shared project directory or registered via the doc registry so all instances can discover them.
+
+Rule of thumb: if the file only makes sense in the context of this project, put it in the project directory. If it has to live in a specific location for code/build reasons, link it via `quaid registry register`.
 
 ### Combined Search
 - `quaid hook-search "query"` — Search memories + docs together
@@ -71,6 +74,8 @@ Rule of thumb: if the file only makes sense in the context of this project, put 
 - `quaid janitor --task all --dry-run` — Preview janitor maintenance
 - `quaid janitor --task all --apply` — Run janitor maintenance
 - `quaid doctor` — Health check
+
+Note: `--task contradictions` is retained for CLI backward compatibility but is NOT active in the `--task all` pipeline. It prints a "DECOMMISSIONED" notice and exits. Stale/conflicting fact handling is now supersession/recency-based via the `dedup` and `decay` tasks.
 
 ## Plugin Contract Surfaces
 
@@ -123,7 +128,7 @@ Flags (shared by `recall` and `search`):
 - `--json` — JSON output.
 - `--debug` — show scoring breakdown.
 
-<!-- AUTO-GENERATED:DOMAIN-LIST:START -->
+<!-- Manually maintained — update when quaid domain register adds new domains -->
 Available domains (from datastore `domain_registry` active rows):
 - `finance`: budgeting, purchases, salary, bills
 - `health`: training, injuries, routines, wellness
@@ -136,11 +141,11 @@ Available domains (from datastore `domain_registry` active rows):
 - `technical`: code, infra, APIs, architecture
 - `travel`: trips, moves, places, logistics
 - `work`: job/team/process decisions not deeply technical
-<!-- AUTO-GENERATED:DOMAIN-LIST:END -->
+<!-- end domain list -->
 
 Domain list maintenance:
 - Source of truth is datastore `domain_registry` (`active=1`).
-- `quaid domain register` updates the registry and triggers TOOLS domain block sync automatically.
+- `quaid domain register` updates the registry. Update the domain list above manually when new domains are added.
 
 Use cases:
 - relationship questions (`family`, `who is X`, `how are X and Y connected`)
@@ -208,14 +213,16 @@ Use this for explicit deletion requests.
 - `quaid docs search "query"` — search project documentation
 - `quaid docs check` — check for stale docs
 - `quaid docs update --apply` — update stale docs from source diffs
-- `quaid registry create-project <name> [--label ...] [--source-roots ...]` — create a project
-- `quaid registry list` — list all projects
-- `quaid registry register <file_path> --project <name>` — register a doc
+- `quaid project create <name> [--label "Display Name"]` — create a new project
+- `quaid project link <name>` — add current instance to an existing project
+- `quaid project unlink <name>` — remove current instance from a project
+- `quaid registry list` — list all registered docs in the doc registry
+- `quaid registry register <file_path> --project <name>` — register a doc (links external files into a project)
 - `quaid updater doc-health <project> [--dry-run]` — evaluate doc lifecycle
 
 Project placement policy:
 - Before creating any non-temporary file, place it inside an existing tracked project whenever possible.
-- If no existing project fits, create one with `quaid registry create-project` and place the file there.
+- If no existing project fits, create one with `quaid project create <name>` and place the file there.
 - Temporary or scratch files go in `temp/` or `scratch/` — explicitly tell the user these are untracked.
 - If a temp/scratch file becomes durable, move it into a tracked project.
 
@@ -284,10 +291,23 @@ quaid janitor --task all --apply --time-budget 1800 --token-budget 12000
 
 # Project system
 quaid project list
-quaid project create <name> -d "description" -s /path/to/source
+quaid project create <name> --label "Display Name"
 quaid project show <name>
-quaid project snapshot
+quaid project link <name>
+quaid project unlink <name>
+quaid project delete <name>
+quaid project snapshot [<name>]
 quaid project sync
+
+# Instances
+quaid instances list
+quaid instances list --json
+
+# Config
+quaid config show
+quaid config edit --shared
+quaid config edit --instance <id>
+quaid config set <dotted.key> <value> --shared
 
 # Doc lifecycle
 quaid updater doc-health <project> --dry-run

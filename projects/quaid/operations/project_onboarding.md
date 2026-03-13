@@ -51,8 +51,8 @@ For each detected item, walk the user through:
    <!-- /protected -->
    ```
 
-Only move content after the user confirms. Use `datastore/docsdb/registry.py` to create projects
-and register files.
+Only move content after the user confirms. Use `quaid project create` to create projects
+and `quaid registry register` to register files.
 
 ## Discovery Steps
 
@@ -116,17 +116,42 @@ For each project the user wants to register:
 For each confirmed project:
 
 ```bash
-cd modules/quaid
+# Create the project (scaffolds canonical dir, PROJECT.md, and docs/ subdir)
+quaid project create <name> --label "<Label>" --description "<description>"
 
-# Register the project
-python3 datastore/docsdb/registry.py create-project <name> \
-  --label "<Label>" \
-  --home-dir "<relative/path>" \
-  --description "<description>"
-
-# If the project has docs to index
-python3 datastore/docsdb/registry.py register <relative/path/to/doc.md> --project <name>
+# If the project has external docs to index (doc registry, not project registry)
+quaid registry register <absolute/path/to/doc.md> --project <name>
 ```
+
+Note: `quaid project create` manages the project registry (`project-registry.json` and
+`project_definitions` table). `quaid registry register` manages the doc registry
+(`doc_registry` table) — these are separate registries.
+
+#### Cross-instance project participation
+
+On example.local, both OC and CC share the same `QUAID_HOME=/Users/owner/quaid`
+and `project-registry.json`, so a project created by one adapter is immediately
+visible to the other. Use `quaid project link` when a second adapter wants to
+formally join a project's `instances` list:
+
+```bash
+# Second adapter joins an existing project (idempotent)
+QUAID_INSTANCE=claude-code quaid project link <name>
+
+# Second adapter leaves without deleting the project (idempotent)
+QUAID_INSTANCE=claude-code quaid project unlink <name>
+```
+
+#### Deleting a project
+
+`quaid project delete <name>` is **destructive**. It:
+- Removes all instance linkages
+- Removes the canonical project directory (`shared/projects/<name>/`)
+- Purges `project_definitions` and all `doc_registry` rows for the project from SQLite
+- Destroys shadow git tracking if configured
+- Does NOT touch the user's `source_root` directory
+
+Always verify with `quaid project show <name>` before deleting.
 
 ### 6. Create PROJECT.md (Optional)
 
@@ -152,7 +177,8 @@ The janitor's doc auto-update system will keep this file current as the project 
 After registering, verify:
 
 ```bash
-python3 datastore/docsdb/registry.py list --project <name>
+quaid project show <name>
+quaid docs list --project <name>
 ```
 
 Tell the user what was registered and that the system will now:
@@ -177,4 +203,5 @@ projects/
 ```
 
 Projects in `projects/` are auto-discovered by the janitor's RAG indexing task.
-Projects elsewhere in the workspace need manual registration via `datastore/docsdb/registry.py`.
+Projects elsewhere in the workspace need manual registration via `quaid project create` and
+`quaid registry register <path> --project <name>` for any external files to index.

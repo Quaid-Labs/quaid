@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     updated_at TEXT DEFAULT (datetime('now')),
     accessed_at TEXT DEFAULT (datetime('now')),
     access_count INTEGER DEFAULT 0,
-    storage_strength REAL DEFAULT 0.0,       -- Bjork: cumulative encoding strength (can increase/decrease, clamped to [0.0, 10.0])
+    storage_strength REAL DEFAULT 0.0,       -- Bjork: cumulative encoding strength (never decreases)
     confirmation_count INTEGER DEFAULT 0,    -- How many times re-confirmed by extraction
     last_confirmed_at TEXT                   -- When last confirmed
 );
@@ -486,6 +486,10 @@ LLM-generated keywords map edge types to natural language triggers. Used by `sho
 
 Managed by `datastore/docsdb/registry.py` `ensure_table()` — NOT in schema.sql.
 
+> **Location:** `QUAID_HOME/<instance>/data/memory.db`. On example.local, both OC and CC share
+> `QUAID_HOME=/Users/owner/quaid`, so `doc_registry` and `doc_chunks` are in
+> `QUAID_HOME/data/memory.db` and are shared across instances unless `QUAID_HOME` differs.
+
 ```sql
 CREATE TABLE IF NOT EXISTS doc_registry (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -501,11 +505,50 @@ CREATE TABLE IF NOT EXISTS doc_registry (
     last_indexed_at TEXT,
     last_modified_at TEXT,
     registered_at TEXT NOT NULL DEFAULT (datetime('now')),
-    registered_by TEXT DEFAULT 'system'
+    registered_by TEXT DEFAULT 'system',
+
+    -- Identity/source scope context (added via ALTER TABLE on existing DBs)
+    source_channel TEXT,
+    source_conversation_id TEXT,
+    source_author_id TEXT,
+    speaker_entity_id TEXT,
+    subject_entity_id TEXT,
+    conversation_id TEXT,
+    visibility_scope TEXT DEFAULT 'source_shared',
+    sensitivity TEXT DEFAULT 'normal',
+    participant_entity_ids TEXT DEFAULT '[]',
+    provenance_confidence REAL
 );
 ```
 
 In-directory files auto-belong to their project via `homeDir` matching. Registry entries are for: external files (fast path→project lookup), docs with `source_files` tracking (mtime staleness), and files needing explicit metadata.
+
+## Doc Chunks — RAG Embedding Storage
+
+Managed by `datastore/docsdb/rag.py` `_ensure_schema()` — NOT in schema.sql.
+
+> **Location:** Same `memory.db` as `doc_registry`. Shared across instances when `QUAID_HOME` is shared.
+
+```sql
+CREATE TABLE IF NOT EXISTS doc_chunks (
+    id TEXT PRIMARY KEY,                    -- source_file:chunk_index
+    source_file TEXT NOT NULL,              -- Full path to source file
+    chunk_index INTEGER NOT NULL,           -- 0-based chunk number within file
+    content TEXT NOT NULL,                  -- Chunk text content
+    section_header TEXT,                    -- Extracted markdown header (optional)
+    embedding BLOB NOT NULL,                -- float32 array, dim from config (ollama.embeddingDim)
+
+    -- Metadata
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+
+    UNIQUE(source_file, chunk_index)
+);
+```
+
+Used by the RAG search pipeline (`quaid docs search`). Indexing by one adapter makes chunks
+searchable by both adapters on the same machine (shared DB). Reindex with:
+`python3 datastore/docsdb/rag.py reindex --all`
 
 ## Project Definitions — Project Configuration (DB)
 

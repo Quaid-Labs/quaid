@@ -350,7 +350,36 @@ All shared library modules use `__all__` exports to define explicit public API b
 
 ### 8. Configuration System
 
-**Config file:** `config/memory.json` — central config with sections:
+**Config layer architecture — three-layer merge chain:**
+
+Config is loaded by merging three sources (highest priority wins, then falls through):
+
+| Priority | Path | Purpose |
+|----------|------|---------|
+| **1 (highest)** | `QUAID_HOME/<instance>/config/memory.json` | Per-instance overrides (identity, capture timeouts, domain preferences) |
+| **2** | `QUAID_HOME/shared/config/memory.json` | Machine-wide shared settings (embeddings model, Ollama URL) |
+| **3 (lowest)** | Built-in defaults | Baseline defaults compiled into `config.py` |
+
+Rules:
+- The shared config is written by the first installer; subsequent instances on the same machine inherit it automatically.
+- Embeddings config (`ollama.*`, `embeddings.*`) must live in shared config so all instances use the same model and produce comparable embeddings.
+- Instance config holds per-adapter settings that should differ between instances (identity, session timeouts, retrieval preferences).
+- A local `./memory-config.json` in the cwd can override everything (rarely used; intended for local dev/testing only).
+
+**Config CLI commands:**
+```bash
+quaid config show                          # Show effective merged config (instance + shared)
+quaid config show --shared                 # Show shared config only
+quaid config show --instance <id>          # Show specific instance's config
+quaid config edit                          # Edit current instance config ($EDITOR)
+quaid config edit --shared                 # Edit shared config (embeddings, Ollama URL)
+quaid config edit --instance <id>          # Edit a specific instance's config
+quaid config path                          # Show active config file path
+quaid config set <dotted.key> <value>      # Set a key in current instance config
+quaid config set <dotted.key> <value> --shared   # Set a key in shared config
+```
+
+**Config file:** `config/memory.json` — effective config with sections:
 
 | Section | Controls |
 |---------|----------|
@@ -503,3 +532,42 @@ Dynamic K scaling is runtime logic in the adapter (not a config block): retrieva
 - Missing provider mappings fail loudly (no implicit hardcoded provider fallback).
 
 See `projects/quaid/reference/adapter-provider-architecture.md` for the canonical provider/model flow.
+
+---
+
+### 9. Instance Management
+
+Quaid supports multiple isolated memory instances on the same machine (e.g. one for OpenClaw, one for Claude Code). Each instance has its own database, config, and logs while sharing embeddings config and the project registry.
+
+**Environment variables:**
+- `QUAID_HOME` — root directory containing all instances (default: `~/quaid`). Set once per machine.
+- `QUAID_INSTANCE` — identifier for the active instance (required; e.g. `openclaw`, `claude-code`). Set by each adapter's runtime hooks — do NOT set globally in shell profile.
+
+**Instance directory layout:**
+```
+QUAID_HOME/
+├── <instance>/           # One directory per instance
+│   ├── config/
+│   │   └── memory.json   # Instance-specific config overrides
+│   ├── data/
+│   │   └── memory.db     # Instance SQLite database
+│   └── logs/             # Instance logs
+├── shared/
+│   ├── config/
+│   │   └── memory.json   # Machine-wide shared config (embeddings, Ollama)
+│   └── projects/         # Shared project files
+└── project-registry.json # Cross-instance project registry
+```
+
+**Key rules:**
+- Multiple instances share `QUAID_HOME/shared/` and `QUAID_HOME/project-registry.json`.
+- The shared config is written by the first installer; subsequent instances inherit it without overwriting.
+- Instance names must be alphanumeric (may include `.`, `_`, `-`), max 64 chars, and cannot use reserved names (`shared`, `projects`, `config`, `data`, etc.).
+
+**CLI commands:**
+```bash
+quaid instances list               # List all instances under QUAID_HOME (current marked with *)
+quaid instances list --json        # JSON output: {home, current, instances:[...]}
+```
+
+**Module:** `lib/instance.py` — zero-dependency instance resolution. Functions: `quaid_home()`, `instance_id()`, `instance_root()`, `shared_dir()`, `list_instances()`, `shared_config_path()`.
