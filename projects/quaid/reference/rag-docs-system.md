@@ -115,7 +115,7 @@ The janitor performs three distinct passes:
 
 2. **Pass 2 — project home directories:** For each project in `cfg.projects.definitions`, if `proj_dir.exists()`, calls `rag.reindex_all(str(proj_dir))` using the same scan logic. Covers project-owned markdown and logs.
 
-3. **Pass 3 — `doc_registry` external files:** Enumerates all entries via `DocsRegistry().list_docs()`. For each entry whose `file_path` resolves to a real file, calls `rag.needs_reindex()` and indexes if stale. This covers files registered outside the scanned directories (e.g., source code files linked via `quaid registry register`).
+3. **Pass 3 — `doc_registry` external files:** Enumerates all entries via `DocsRegistry().list_docs()`. For each entry whose `file_path` resolves to a real file, calls `rag.needs_reindex()` and indexes if stale. This covers files registered outside the scanned directories (e.g., source code files linked via `quaid registry register`). **Double-counting guard:** Passes 1 and 2 each append their scanned directory to a `scanned_dirs` list. Pass 3 resolves each registry path to an absolute path and skips it if it starts with any entry in `scanned_dirs`. This prevents files that live inside an already-scanned project directory from being re-counted in pass 3.
 
 Pre-pass: before the three indexing passes, janitor also:
 - Calls `process_all_events()` (project_updater) to drain the event queue.
@@ -276,7 +276,7 @@ Returns combined text or empty string. If git is unavailable or times out, the u
 `update_doc_from_transcript(doc_path, purpose, transcript, dry_run, trigger)`:
 Used when no git diffs are available (e.g., untracked files). Provides the session transcript as context instead of diffs.
 
-**Changelog:** `logs/docs-update-log.json` — rolling file, last 100 entries kept. Each entry: `timestamp`, `doc_path`, `trigger`, `sources`, `summary`, `dry_run`, `success`, `chars_before`, `chars_after`.
+**Changelog:** `logs/docs-update-log.json` — rolling file, last 100 entries kept via `_save_changelog()` (uses a simple `entries[-100:]` slice). Each entry: `timestamp`, `doc_path`, `trigger`, `sources`, `summary`, `dry_run`, `success`, `chars_before`, `chars_after`. Design note: this uses a manual tail-slice rather than `core/log_rotation.py`. The two mechanisms are independent — `log_rotation.py` is intended for token-budget-driven archiving of append-only timestamped logs (PROJECT.log, journal); the changelog rolling trim is a fixed count cap on a JSON file. Migrating changelog to `log_rotation.py` is a known improvement but not yet done.
 
 **Update triggers (values in `trigger` field):** `"compact"`, `"janitor"`, `"manual"`, `"on-demand"`, `"cleanup"`.
 

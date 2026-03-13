@@ -223,7 +223,11 @@ QUAID_HOME/<instance>/data/tmp/<random>.jsonl
 ```
 
 Maximum 50,000 lines are read per extraction (`MAX_TRANSCRIPT_LINES`). If capped, a
-warning is logged.
+warning is logged. On `compaction` or `reset` signals, if lines remain above the cap
+and the transcript may be wiped before the daemon cycles again, a follow-up
+`session_end` signal is written immediately so the remaining content is extracted on
+the next daemon cycle rather than lost. The follow-up signal carries
+`meta.reason = "cap_followup"` and `meta.cap_offset` recording where extraction stopped.
 
 ### Step 4: JSONL parsing
 
@@ -255,9 +259,16 @@ If the session has registered subagents with harvestable transcripts
 <child transcript text>
 ```
 
-Per-child cap: 50,000 chars. Total merged cap: 200,000 chars. Subagent transcripts that
-would exceed these limits are logged and skipped (not silently dropped — the parent's
-own content is always preserved in full).
+Per-child advisory size: 50,000 chars. If a child transcript exceeds this, a warning
+is logged but the text is still included — the extraction chunker handles splitting
+large inputs.
+
+Total merged cap: 200,000 chars. If the total merged size would exceed
+`MAX_MERGED_CHARS`, remaining subagents are **deferred rather than dropped**: a
+follow-up `session_end` signal is written for the parent session so the deferred
+subagents are harvested on the next daemon cycle. The follow-up signal carries
+`meta.reason = "deferred_subagents"` and `meta.deferred_count`. The parent session's
+own content is always included in full; only overflow subagents are deferred.
 
 ### Step 6: Chunking (waterfall batching)
 
@@ -747,10 +758,11 @@ circular imports.
 
 ### Subagent transcript merge caps
 
-| Cap | Value |
-|-----|-------|
-| Per-child transcript | 50,000 chars |
-| Total merged | 200,000 chars |
+| Cap | Value | Behavior on breach |
+|-----|-------|--------------------|
+| `MAX_CHILD_CHARS` (per-child advisory) | 50,000 chars | Warning logged; child still included — chunker handles the size |
+| `MAX_MERGED_CHARS` (total merged) | 200,000 chars | Overflow subagents deferred via follow-up `session_end` signal, not dropped |
 
-When the total cap is reached, remaining subagent transcripts are skipped with a
-warning log. The parent session's own content is always included in full.
+When the total cap is reached, a follow-up `session_end` signal is written for the
+parent session so deferred subagents are harvested on the next daemon cycle. The
+parent session's own content is always included in full.

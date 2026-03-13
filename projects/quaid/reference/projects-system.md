@@ -49,9 +49,14 @@ data in different places. Confusing them is a common source of bugs.
 ```
 
 **Write safety:** `_save_registry()` in `core/project_registry.py` uses `fcntl.LOCK_EX`
-+ atomic rename (`project-registry.tmp` → `project-registry.json`). The `lib/project_registry.py`
-`_save()` uses atomic rename but **without** file locking — acceptable for low-contention
-global registry queries; high-frequency writes should go through `core/project_registry.py`.
++ atomic rename (`project-registry.tmp` → `project-registry.json`). The lock is acquired on
+the **canonical file** (`project-registry.json`) via `O_CREAT | O_RDWR`, not on the `.tmp`
+file. This is critical: locking the `.tmp` file (a previous bug) did not serialize concurrent
+writers because each writer created its own uniquely-named temp file. Locking the canonical
+file forces all writers to queue through the same lock fd across the full read-modify-write
+cycle. The `lib/project_registry.py` `_save()` uses atomic rename but **without** file
+locking — acceptable for low-contention global registry queries; high-frequency writes should
+go through `core/project_registry.py`.
 
 ### 1.2 Doc Registry
 
@@ -663,8 +668,14 @@ next sync cycle. The README.md written into each target dir warns about this.
 
 **`PROJECT.log` is append-only.** `append_project_logs()` never truncates or rewrites
 `PROJECT.log`. The marker-based section in `PROJECT.md` (`<!-- BEGIN:PROJECT_LOG -->`)
-is a separate rolling view — it accumulates entries over multiple sessions. Neither
-is automatically pruned (janitor can do this manually).
+is a separate rolling view — it accumulates entries over multiple sessions. Log rotation
+via `core.log_rotation.rotate_project_logs()` (called at the end of janitor Task 1d-journal)
+archives old entries; `PROJECT.log` itself is never in-place trimmed.
+
+**`_save_registry()` locking target:** The file lock must be acquired on the canonical
+`project-registry.json`, not the `.tmp` staging file. Locking `.tmp` is ineffective because
+each writer creates its own `.tmp` and they never contend on the same fd. This was a fixed
+bug — always lock the canonical path.
 
 **`evaluate_doc_health` placement constraint:** New docs suggested by the LLM must
 be placed under the `docs/` subdirectory. The prompt enforces this as a rule

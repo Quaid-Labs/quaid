@@ -150,6 +150,7 @@ Quaid integrates with Claude Code via hooks registered in `~/.claude/settings.js
 
 | Hook Event | `quaid` Command | Purpose |
 |-----------|----------------|---------|
+| `SessionStart` | `quaid hook-session-init` | Write project docs to `.claude/rules/`, sweep orphaned sessions, seed extraction cursor |
 | `UserPromptSubmit` | `quaid hook-inject` | Recall memories and inject as `additionalContext` for each user message |
 | `PreCompact` | `quaid hook-extract --precompact` | Signal extraction daemon before context compaction |
 | `SessionEnd` | `quaid hook-extract` | Signal extraction daemon at session end |
@@ -162,11 +163,18 @@ Each hook command reads JSON from stdin and must be invoked with `QUAID_HOME` an
 QUAID_HOME=/path/to/quaid QUAID_INSTANCE=claude-code quaid hook-inject
 ```
 
-The `UserPromptSubmit` hook injects at session start via `quaid hook-session-init` as well — this writes project docs to `.claude/rules/quaid-projects.md` so Claude Code caches them through compaction.
+There is no `PostCompact` hook wired. `hook-inject-compact` exists as a callable command but is not auto-registered in `settings.json`.
 
 ### Session-Init (Project Context)
 
-`quaid hook-session-init` runs at session start (wired to a `SessionInit` or startup hook), scans `$QUAID_HOME/shared/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files from `$QUAID_HOME/<INSTANCE_ID>/identity/`, and writes the combined content to `.claude/rules/quaid-projects.md`. Claude Code auto-loads `rules/*.md` and preserves them through compaction.
+`quaid hook-session-init` runs at `SessionStart` (wired to the `SessionStart` hook in `~/.claude/settings.json`). It:
+
+1. Calls `ensure_alive()` to start the extraction daemon if needed.
+2. Sweeps orphaned sessions from previous runs (queues extraction for any transcript with un-extracted content past the cursor).
+3. Seeds an extraction cursor for the current session so the daemon can discover it for timeout-based extraction.
+4. Scans `$QUAID_HOME/shared/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files (`USER.md`, `SOUL.md`, `MEMORY.md`) from `$QUAID_HOME/<INSTANCE_ID>/identity/`, checks janitor health and compatibility state, then writes the combined content to `{cwd}/.claude/rules/quaid-projects.md` (or `$QUAID_RULES_DIR/quaid-projects.md` if set).
+
+The write is idempotent — if content is unchanged the file is not touched, preventing unnecessary prompt cache invalidation. Claude Code auto-loads `rules/*.md` and preserves them through compaction (unlike `additionalContext` which is lost on compaction).
 
 ### Auth Token
 
@@ -691,7 +699,11 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `QUAID_HOME` | Root directory containing all Quaid instances | `~/quaid/` |
 | `QUAID_INSTANCE` | Instance identifier — selects which silo under `QUAID_HOME` is active (e.g. `openclaw`, `claude-code`) | Required — no implicit default |
 | `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, or `claude-code` | Required |
-| `CLAWDBOT_WORKSPACE` | Workspace root hint (for OpenClaw paths) | Optional |
+| `CLAWDBOT_WORKSPACE` | OC adapter workspace root (Python adapter). Also accepted by the TS adapter as lowest-priority fallback after `QUAID_HOME` and `QUAID_WORKSPACE`. | Optional |
+| `QUAID_WORKSPACE` | OC TS adapter workspace root (second-priority, after `QUAID_HOME`). | Optional |
+| `QUAID_MESSAGE_CLI` | Override the `openclaw`/`clawdbot` binary path used for OC notifications. Skips auto-detection. | Not set |
+| `OPENCLAW_GATEWAY_URL` | Override OC gateway base URL for LLM routing. | `http://127.0.0.1:<port from openclaw.json>` |
+| `OPENCLAW_GATEWAY_TOKEN` | Override OC gateway auth token. | Read from `~/.openclaw/openclaw.json` |
 | `MEMORY_DB_PATH` | Override database file path | `<quaid_home>/<instance_id>/data/memory.db` |
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
 | `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from env or `.env` file in adapter workspace |
@@ -702,7 +714,9 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | `QUAID_RULES_DIR` | Override `.claude/rules/` directory for CC `hook-session-init` output | Not set |
 | `MOCK_EMBEDDINGS` | Use deterministic fake embeddings (for testing) | Not set |
 
-API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in adapter workspace root. There is no macOS Keychain fallback in any adapter.
+API key fallback chain for Python adapters: `ANTHROPIC_API_KEY` env var -> `.env` file in adapter workspace root. In OC, the Python adapter also resolves credentials from `~/.openclaw/agents/main/agent/auth-profiles.json` (gateway credential store) for internal LLM calls. There is no macOS Keychain fallback in any adapter.
+
+OC LLM calls route through the gateway's `/v1/responses` endpoint (not the Anthropic API directly). CC uses OAuth direct API via `ClaudeCodeOAuthLLMProvider`. The active LLM provider for each adapter is determined by `adapter.type` in `config/memory.json` and resolved through the facade tier system (`deep`/`fast`).
 
 ---
 

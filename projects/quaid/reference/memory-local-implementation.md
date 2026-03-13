@@ -87,9 +87,17 @@ The search system uses a multi-stage pipeline with RRF fusion:
 8. **Access tracking** — `_update_access()` increments access_count and accessed_at for returned results
 9. **Domain filtering** — Recall applies domain-map filters (for example `{all:true}` or `{technical:true}`), preventing unrelated domains from displacing relevant memories in rankings
 
+**HyDE — Hypothetical Document Embedding (query expansion):**
+- `route_query(query)` transforms a question into a declarative statement before embedding (e.g. "where does Alice live?" → "Alice lives in..."). The embedding of an answer is closer to stored facts in vector space than the raw question.
+- Skips expansion for queries shorter than 15 characters (proper nouns, single words).
+- Falls back to original query if the LLM call fails or times out.
+- Controlled by `retrieval.use_hyde` config flag (default true). Disabled automatically when no embeddings provider is available.
+- Configurable timeout via `retrieval.hyde_timeout_ms` (default 15000ms) and retries via `retrieval.hyde_max_retries` (default 1).
+
 **BEAM Search (graph traversal enhancement):**
 - BEAM search replaces naive BFS for graph traversal, using scored frontier expansion
 - **Adaptive LLM reranking** — during BEAM traversal, an LLM reranker scores candidate nodes for relevance to the original query, pruning low-value paths early
+- `scoring_mode` parameter exists on `beam_search_graph()` but is effectively **unused** in production: scoring is always adaptive (heuristic first, conditional LLM reranker when candidates exceed beam_width). The `"llm"` branch is dead code — never passed by any caller.
 - BFS fallback: if BEAM search fails or encounters errors, falls back to standard BFS traversal for robustness
 - **Fact quality metric** — nodes include a quality score used during BEAM expansion to prioritize high-quality facts
 
@@ -141,6 +149,9 @@ Each result dict from `recall()` includes:
 - Core Quaid code is provider-agnostic. Only the adapter/provider layer and config are provider-aware.
 - LLM calls route through the OpenClaw gateway adapter (`/plugins/quaid/llm`) and are resolved by model tier (`deep_reasoning`/`fast_reasoning`), not by hardcoded provider branches in core logic.
 - Provider/model selection is fully config-driven via `models.llmProvider`, tier settings, and `models.fastReasoningModelClasses` / `models.deepReasoningModelClasses` in `config/memory.json`.
+
+**Unused / dead code:**
+- `datastore/memorydb/semantic_clustering.py` — groups Fact nodes into semantic buckets (people, places, preferences, technology, events) to reduce O(n²) contradiction checking. Has no production callers: no production module imports it. It is tested by `tests/test_semantic_clustering.py` but never invoked from `maintenance_ops.py` or any other runtime path. If contradiction checking at scale is needed in the future, this module provides a ready scaffold.
 
 **Data sanitization:**
 - All personal names are scrubbed from code comments, prompts, and docstrings to support safe public release
@@ -344,6 +355,7 @@ Centralized modules extracted from duplicated code across `datastore/memorydb/me
 | `lib/tokens.py` | `extract_key_tokens(text)` — noun/name extraction for dedup recall |
 | `lib/batch_utils.py` | Batch processing utilities for LLM calls. Two patterns: **parallel batching** (`parallel_batch`) — splits items into token-sized chunks processed concurrently; **waterfall batching** (`waterfall_batch`) — serial cascading distillation where each batch's output is carryover context for the next. Also exports `chunk_by_tokens`, `chunk_text_by_tokens`, `ChunkResult`, `DEFAULT_CHUNK_TOKENS` (8000 tokens). Truncation is banned; these helpers enforce that invariant. |
 | `lib/instance.py` | Zero-dependency instance resolution. Reads `QUAID_HOME` and `QUAID_INSTANCE` env vars only. Public API: `quaid_home()`, `instance_id()`, `instance_root()`, `shared_dir()`, `shared_projects_dir()`, `shared_registry_path()`, `shared_config_path()`, `list_instances()`, `instance_exists()`, `require_instance_exists()`, `validate_instance_id()`. Instance names must match `[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}` and not be reserved words. |
+| `lib/domain_text.py` | Domain ID and description normalization. `normalize_domain_id(value)` lowercases, strips non-alphanumeric chars, applies aliases (`"projects"` → `"project"`, `"family"` → `"personal"`), and returns `None` on invalid input. `sanitize_domain_description(value, *, max_chars=200, allow_truncate=False)` normalizes unicode, strips control characters, and raises `ValueError` when the text exceeds `max_chars` (default behavior). **The default is `allow_truncate=False` — callers must not rely on silent trimming.** Pass `allow_truncate=True` only when reading pre-existing DB rows that may predate the 200-char limit. Also raises `ValueError` on descriptions containing injection-like patterns (e.g., "ignore all previous instructions", "system prompt"). |
 | `datastore/memorydb/archive_store.py` | `archive_node(node, reason)` / `search_archive(query)` — datastore-owned archive writes/reads for `data/memory_archive.db` (`lib/archive.py` remains a compatibility shim). |
 
 All shared library modules use `__all__` exports to define explicit public API boundaries, ensuring clean module interfaces and preventing accidental coupling to internal helpers.
@@ -366,21 +378,24 @@ Core orchestrators import ingest via this bridge rather than importing `ingest.*
 
 ### 8. Configuration System
 
-**Config layer architecture — three-layer merge chain:**
+**Config layer architecture — four-layer merge chain:**
 
-Config is loaded by merging three sources (highest priority wins, then falls through):
+Config is loaded by `_load_config_inner()` in `config.py`. `_config_paths()` returns four paths in highest-priority-first order; the loader iterates them in reverse (lowest first) and deep-merges each file that exists:
 
 | Priority | Path | Purpose |
 |----------|------|---------|
-| **1 (highest)** | `QUAID_HOME/<instance>/config/memory.json` | Per-instance overrides (identity, capture timeouts, domain preferences) |
-| **2** | `QUAID_HOME/shared/config/memory.json` | Machine-wide shared settings (embeddings model, Ollama URL) |
-| **3 (lowest)** | Built-in defaults | Baseline defaults compiled into `config.py` |
+| **0 (highest)** | `QUAID_HOME/<instance>/config/memory.json` | Per-instance overrides (identity, capture timeouts, domain preferences) |
+| **1** | `QUAID_HOME/shared/config/memory.json` | Machine-wide shared settings (embeddings model, Ollama URL) |
+| **2** | `~/.quaid/memory-config.json` | User-level fallback (rarely used) |
+| **3 (lowest)** | `./memory-config.json` | Local cwd override (dev/testing only) |
 
 Rules:
 - The shared config is written by the first installer; subsequent instances on the same machine inherit it automatically.
 - Embeddings config (`ollama.*`, `embeddings.*`) must live in shared config so all instances use the same model and produce comparable embeddings.
 - Instance config holds per-adapter settings that should differ between instances (identity, session timeouts, retrieval preferences).
 - A local `./memory-config.json` in the cwd can override everything (rarely used; intended for local dev/testing only).
+- Missing layers are silently skipped; only files that exist are merged.
+- Deep merge semantics: nested dicts are merged recursively; scalar and list values in higher-priority layers overwrite lower-priority values entirely.
 
 **Config CLI commands:**
 ```bash

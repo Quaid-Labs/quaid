@@ -89,11 +89,24 @@ Nightly janitor reviews recent dedup rejections via `recall_pass`:
     "dedup": {
       "auto_reject_threshold": 0.98,
       "gray_zone_low": 0.88,
-      "llm_verify_enabled": true
+      "llm_verify_enabled": true,
+      "similarity_threshold": 0.85,
+      "high_similarity_threshold": 0.95
     }
   }
 }
 ```
+
+**Threshold semantics:**
+
+| Threshold | Default | Used by | Meaning |
+|-----------|---------|---------|---------|
+| `similarity_threshold` | 0.85 | Nightly janitor (Task 3) | `DUPLICATE_MIN_SIM` — lower bound for "might be a duplicate" in batch dedup |
+| `high_similarity_threshold` | 0.95 | Nightly janitor (Task 3) | `DUPLICATE_MAX_SIM` — upper bound; pairs above this are auto-merged without LLM review |
+| `auto_reject_threshold` | 0.98 | Store-time dedup | Pairs above this AND near-identical text are immediately rejected at write time |
+| `gray_zone_low` | 0.88 | Store-time dedup | Lower bound of the gray zone (0.88–0.98) where the LLM verifier is consulted at write time |
+
+Store-time thresholds (0.88/0.98) govern individual `store()` calls. Janitor batch thresholds (0.85/0.95) govern the nightly bulk pass across all existing memories.
 
 ---
 

@@ -53,11 +53,6 @@ The janitor requires LLM access for review/dedup/docs tasks. Provider/model rout
 | # | Task | LLM | Category | Description |
 |---|------|-----|----------|-------------|
 | 0b | **embeddings** | None | Infra | Backfill missing embeddings |
-| 1 | **workspace** | Opus | Infra | Single-pass audit of changed workspace files |
-| 1b | **docs_staleness** | Opus | Infra | Update stale docs from git diffs |
-| 1c | **docs_cleanup** | Opus | Infra | Clean bloated docs (churn-based trigger) |
-| 1d-snippets | **snippets** | Opus | Infra | Review & fold pending snippets into core markdown |
-| 1d-journal | **journal** | Opus | Infra | Distill journal entries into core markdown themes, archive old entries |
 | 2 | **review** | Opus | Memory | Batch-review pending memories (KEEP/DELETE/FIX/MERGE/MOVE_TO_PROJECT) |
 | 2a | **temporal** | None | Memory | Resolve relative dates (tomorrow, yesterday) to absolute |
 | 2b | **dedup_review** | Opus | Memory | Auto-confirm hash_exact entries, review embedding-based rejections (catch false positives) |
@@ -65,13 +60,24 @@ The janitor requires LLM access for review/dedup/docs tasks. Provider/model rout
 | 4 | **contradictions** | None | Memory | **Decommissioned** in active janitor path (task name retained as no-op compatibility surface) |
 | 5 | **decay** | None | Memory | Confidence decay on old unused memories |
 | 5b | **decay_review** | Opus | Memory | Review decayed facts (DELETE/EXTEND/PIN) |
+| 1 | **workspace** | Opus | Infra | Single-pass audit of changed workspace files (runs after memory pipeline) |
+| 1b | **docs_staleness** | Opus | Infra | Update stale docs from git diffs (runs after memory pipeline) |
+| 1c | **docs_cleanup** | Opus | Infra | Clean bloated docs (churn-based trigger; runs after memory pipeline) |
+| 1d-snippets | **snippets** | Opus | Infra | Review & fold pending snippets into core markdown (runs after memory pipeline) |
+| 1d-journal | **journal** | Opus | Infra | Distill journal entries into core markdown themes, archive old entries (runs after memory pipeline) |
 | 7 | **rag** | None | Infra | RAG reindex + project discovery + event processing |
 | 8 | **tests** | None | Infra | Run vitest suite (npm test; only when `--task tests`, `QUAID_DEV=1`, or `janitor.run_tests=true`) |
 | 9 | **cleanup** | None | Infra | Prune old recall_log (90d), dedup_log (90d), health_snapshots (180d), orphaned embeddings |
 | 10 | **update_check** | None | Infra | Check for Quaid updates (version comparison + cache) |
 | 11 | **graduate** | None | Memory | Promote approved memories to active after a healthy memory pipeline |
 
+> **Execution order note:** The task numbers (0b, 1, 1b, etc.) reflect historical labeling, not execution order. In `--task all`, the memory pipeline (0b, 2, 2a, 2b, 3, 5, 5b) runs **first**, then workspace/docs/snippets/journal (1, 1b, 1c, 1d). Memory tasks have higher priority under time budget pressure because late-arriving workspace/docs work is less critical than memory quality. Infrastructure tasks (rag, tests, cleanup, update_check) run last.
+
 > **Category** determines fail-fast behavior — see "Fail-Fast Pipeline Guard" below.
+
+### Parallel Dry-Run Prepass
+
+When `--task all --dry-run`, the janitor runs workspace, docs_staleness, docs_cleanup, snippets, and journal as a **parallel prepass** before executing them sequentially. This is an optimization: the dry-run results are cached in `parallel_lifecycle_results` and reused, avoiding a second serial pass when the apply phase runs immediately after. Concurrency is controlled by `core.parallel.lifecyclePrepassWorkers` (default 3). If the prepass fails for any reason, execution falls back to serial.
 
 ### Task 0b: Embeddings
 Backfills missing vector embeddings before memory pipeline tasks.
@@ -209,6 +215,8 @@ Runs the vitest test suite. Output parser handles both vitest format (`Tests X f
 
 **Config dependency:** Task 8 requires the `cfg` (config) object to be available. A previous bug (`9c28d5a6`) caused `cfg` to be undefined when Task 8 ran, resulting in a runtime error. The config object is now correctly passed through to the test task execution context.
 
+**Working directory:** `npm test` runs with `cwd` set to `modules/quaid/` (resolved as `Path(__file__).resolve().parents[2]`). A previous bug ran tests from `core/lifecycle/`, which caused `npm` to fail because `package.json` is at the `modules/quaid/` level.
+
 ## Fail-Fast Pipeline Guard
 
 The janitor uses a `memory_pipeline_ok` boolean to protect memory quality:
@@ -307,6 +315,14 @@ The hash covers the full system prompt text (including any dynamically injected 
 
 ---
 
+## Decision Log
+
+The janitor appends structured audit entries to `logs/janitor/decision-log.jsonl` via `_append_decision_log()`. Each row is a JSON object with `ts`, `kind`, and task-specific payload fields.
+
+**Rotation:** After each append, `_trim_decision_log_tail()` is called. If the log exceeds `_decision_log_max_lines()` (default 2000, overridable via `QUAID_DECISION_LOG_MAX_LINES`), old entries are **archived** using `core.log_rotation.rotate_log_file()` into `logs/janitor/decision-log-archive/`. This replaced an earlier in-place truncation approach that silently discarded old entries.
+
+**Pending approvals:** When `applyMode=ask` blocks an operation, the janitor writes a pending approval request to `logs/janitor/pending-approval-requests.json` and a human-readable summary to `logs/janitor/pending-approval-requests.md`. Re-running with `--apply --approve` clears these.
+
 ## Log Format
 
 ```json
@@ -345,6 +361,20 @@ python3 core/lifecycle/janitor.py --task rag --apply --approve
 ```
 
 > **`--approve` flag:** If `janitor.applyMode=ask` is set in `config/memory.json` (the default for some setups), running with `--apply` alone will print a dry-run result and prompt you to re-run with `--approve`. Pass both `--apply --approve` to actually execute changes. When `applyMode=auto` (the standard cron default), `--approve` is a no-op and `--apply` suffices.
+
+## `applyMode` Config (`janitor.apply_mode` / `janitor.applyMode`)
+
+Controls whether `--apply` is allowed to write changes. Resolved by `_resolve_apply_mode()` at runtime.
+
+| Mode | Behavior |
+|------|----------|
+| `auto` | `--apply` writes changes immediately. No approval step. Default for cron. |
+| `ask` | `--apply` alone runs dry-run and prints a prompt to re-run with `--apply --approve`. `--apply --approve` writes changes. |
+| `dry_run` | `--apply` is silently downgraded to dry-run regardless of flags. No way to write changes from CLI — must be changed in config first. |
+
+Unknown mode values fall through to dry-run for safety (with a warning message).
+
+Approval gating is per-scope (e.g. `destructive_memory_ops`, `core_markdown_writes`, `project_docs_writes`). Each scope checks `janitor.approval_policies.<scope>` config key independently. This means you can set `apply_mode=auto` globally but require explicit approval for destructive operations only.
 
 ## Dashboard Integration
 

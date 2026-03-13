@@ -467,9 +467,17 @@ This directory is shared across adapter instances and the extraction daemon.
 
 ### Signal file format
 
-Filename: `{timestamp_ms}_{pid}_{uuid8}_{signal_type}.json`
+Filename format differs by origin:
 
-Example: `1710000000000_12345_abc123de_compaction.json`
+- **Python (`write_signal` in `extraction_daemon.py`, used by CC hooks):**
+  `{timestamp_ms}_{pid}_{uuid8}_{signal_type}.json`
+  Example: `1710000000000_12345_abc123de_compaction.json`
+
+- **TypeScript (`writeDaemonSignal` in `adapter.ts`, used by OC):**
+  `{timestamp_ms}_{pid}_{signal_type}.json`
+  Example: `1710000000000_12345_compaction.json`
+
+Both formats are valid; the daemon processes all `.json` files in the signal directory regardless of naming.
 
 Content:
 ```json
@@ -609,11 +617,30 @@ openclaw message send --channel <channel> --target <target> --message "..."
 ```
 
 The channel and target are resolved from
-`~/.openclaw/agents/main/sessions/sessions.json` by looking up the most
-recently active user-routable session row.
+`~/.openclaw/agents/main/sessions/sessions.json`. The primary lookup key is
+`agent:main:main`. If that row has no routable channel, the adapter falls back
+to the most recently updated routable session row across all entries. If a
+`channel_override` is provided and the primary channel send fails, the adapter
+retries on the originally resolved channel. The `QUAID_MESSAGE_CLI` env var
+overrides the binary resolution order (`openclaw` → `/opt/homebrew/bin/openclaw`
+→ `clawdbot` → `/opt/homebrew/bin/clawdbot`).
 
 If `QUAID_DISABLE_NOTIFICATIONS` is set (and `force=False`), both adapters
 skip delivery silently.
+
+### Message filtering (transcript extraction)
+
+Each adapter filters certain messages from transcripts before extraction:
+
+**CC (`ClaudeCodeAdapter.filter_system_messages`):**
+- Lines containing `<system-reminder>` — injected by Claude Code itself
+- Lines starting with `[quaid]` or `[notify]` — Quaid's own diagnostic output
+
+**OC (`OpenClawAdapter.filter_system_messages`):**
+- Lines starting with `GatewayRestart:` or `System:`
+- Lines containing `"kind": "restart"` — JSON restart payloads
+- Lines where `HEARTBEAT` and `HEARTBEAT_OK` both appear
+- Lines where the stripped text starts with `HEARTBEAT_OK` (handles markdown-wrapped variants)
 
 ---
 

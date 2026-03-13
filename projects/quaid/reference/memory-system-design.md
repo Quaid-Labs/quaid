@@ -54,6 +54,10 @@ Agent calls memory_recall with crafted query
 Intent classification (WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY/PROJECT)
      │
      ▼
+HyDE query expansion (route_query) — rephrases question as declarative statement
+     │  for better vector-space alignment; skipped for short queries (<15 chars);
+     │  falls back to original query on LLM failure
+     ▼
 Parallel search (ThreadPoolExecutor)
   ├── Semantic: cosine similarity on qwen3-embedding:8b (4096-dim)
   └── BM25: FTS5 full-text search with proper noun weighting
@@ -110,17 +114,18 @@ Privacy is classified per-fact during extraction (Opus at compaction/reset). Def
 ## Search System (Batches 1-4, Feb 2026)
 
 ### Search Pipeline
-Multi-stage pipeline with RRF fusion, intent awareness, and diversity:
+Multi-stage pipeline with RRF fusion, HyDE query expansion, intent awareness, and diversity:
 
 1. **Intent classification** — categorizes query as WHO/WHEN/WHERE/WHAT/PREFERENCE/RELATION/WHY/PROJECT
-2. **Parallel search** — BM25 (FTS5) + semantic (cosine) run concurrently
-3. **RRF fusion** — Reciprocal Rank Fusion combines results (k=60, weights dynamic per intent via `_get_fusion_weights()`)
-4. **Content hash pre-filter** — SHA256 exact-dedup removes identical results
-5. **Composite scoring** — 60% relevance + 20% recency + 15% access frequency + 5% extraction confidence
-6. **Temporal validity** — expired facts penalized, future facts deprioritized
-7. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
-8. **Multi-hop traversal** — bidirectional graph traversal, depth=2, hop score decay 0.7^depth
-9. **Access tracking** — increments access_count and accessed_at on returned results
+2. **HyDE query expansion** — `route_query()` rephrases the question as a declarative statement before embedding (Hypothetical Document Embedding). Embedding an answer-like statement is closer in vector space to stored facts than the raw question. Skipped for queries < 15 chars; falls back to original query on LLM failure. Controlled by `retrieval.use_hyde` (default true).
+3. **Parallel search** — BM25 (FTS5) + semantic (cosine) run concurrently
+4. **RRF fusion** — Reciprocal Rank Fusion combines results (k=60, weights dynamic per intent via `_get_fusion_weights()`)
+5. **Content hash pre-filter** — SHA256 exact-dedup removes identical results
+6. **Composite scoring** — 60% relevance + 20% recency + 15% access frequency + 5% extraction confidence
+7. **Temporal validity** — expired facts penalized, future facts deprioritized
+8. **MMR diversity** — Maximal Marginal Relevance (lambda=0.7) prevents redundant results
+9. **Multi-hop traversal** — bidirectional graph traversal, depth=2, hop score decay 0.7^depth
+10. **Access tracking** — increments access_count and accessed_at on returned results
 
 ### Decay System (Ebbinghaus)
 - **Formula:** `R = 2^(-t / half_life)` with access-scaled half-life
