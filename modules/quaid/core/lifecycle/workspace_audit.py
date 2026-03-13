@@ -269,8 +269,14 @@ def get_monitored_files() -> Dict[str, Dict[str, Any]]:
 def build_review_prompt(files_config: Dict[str, Dict[str, Any]]) -> str:
     """Build the Opus review prompt with file purposes."""
 
+    def _format_file_purpose(fname: str, info: Dict[str, Any]) -> str:
+        max_tokens = info.get("maxTokens")
+        if isinstance(max_tokens, (int, float)) and int(max_tokens) > 0:
+            return f"- **{fname}**: {info.get('purpose', 'Unknown')} (token cap: {int(max_tokens)})"
+        return f"- **{fname}**: {info.get('purpose', 'Unknown')} (size budget configured)"
+
     file_purposes = "\n".join([
-        f"- **{fname}**: {info.get('purpose', 'Unknown')} (max {info.get('maxLines', 'N/A')} lines)"
+        _format_file_purpose(fname, info)
         for fname, info in files_config.items()
     ])
 
@@ -283,9 +289,10 @@ These files load on EVERY API call, EVERY turn. Tokens are precious. Keep them f
 
 ## Review Each Changed File For:
 
-1. **BLOAT** - Content exceeding file's purpose or maxLines
+1. **BLOAT** - Content exceeding file's purpose or configured size budget
    - Project-specific specs, API docs, tool definitions → should be in projects/ (MOVE_TO_PROJECT)
    - Queryable facts (phone numbers, dates, preferences) → should be in Memory DB
+   - If a file has a token cap, treat it as a hard cap during review. Content past that cap is bloat.
 
 2. **OUTDATED INFO** - Facts that are no longer true
    - Old system states, retired features, wrong information
@@ -301,7 +308,7 @@ These files load on EVERY API call, EVERY turn. Tokens are precious. Keep them f
 - **MOVE_TO_PROJECT** - Project specs, tool definitions, API docs for a specific project → flag for migration to a project directory. Set "project_hint" to a short description of what project this belongs to (e.g. "React frontend app", "memory plugin", "API server"). Note: content inside `<!-- protected -->` tags has already been excluded from your review — the user has opted out of migration for those sections.
 - **MOVE_TO_MEMORY** - Personal facts → store in memory DB, remove from file
 - **TRIM** - Outdated or redundant → suggest removal
-- **FLAG_BLOAT** - File exceeds maxLines → warn but don't auto-fix
+- **FLAG_BLOAT** - File exceeds its configured size budget → identify what should be trimmed
 
 ## Response Format
 

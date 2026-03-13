@@ -4443,13 +4443,7 @@ def _estimate_fanout_profile(query: str, max_queries: int, planner_profile: str 
     else:
         shape = "focused"
 
-    if planner_profile == "aggressive":
-        budget_map = {"broad": 2, "focused": 1, "narrow": 1}
-    elif planner_profile == "fast":
-        budget_map = {"broad": 2, "focused": 2, "narrow": 1}
-    else:
-        budget_map = {"broad": max_queries, "focused": max_queries, "narrow": max_queries}
-    budget = min(max_queries, budget_map.get(shape, max_queries))
+    budget = max_queries
 
     return {
         "shape": shape,
@@ -4584,6 +4578,18 @@ def _plan_fanout_queries(
     if not _HAS_LLM_CLIENTS:
         return _finish([clean], "no_llm_clients")
 
+    conservative_guidance = ""
+    if planner_profile == "aggressive":
+        conservative_guidance = (
+            "- Be extremely conservative for pre-injection. Default to exactly 1 query.\n"
+            "- Only emit 2 to 5 queries if the message clearly requires multiple distinct retrieval angles.\n"
+        )
+    elif planner_profile == "fast":
+        conservative_guidance = (
+            "- Be conservative for pre-injection. Prefer 1 query.\n"
+            "- Only emit extra queries when the message clearly spans multiple entities, times, or facets.\n"
+        )
+
     prompt = (
         f"Generate 1 to {max_queries} search queries to find personal memories relevant to this message.\n"
         "Rules:\n"
@@ -4594,7 +4600,8 @@ def _plan_fanout_queries(
         "- Additional queries: alternative angles, related entities, or broader context.\n"
         "- Keep all original names, dates, projects, and entities.\n"
         "- Only add queries if they would genuinely find different memories.\n"
-        "- Fewer good queries beats more weak ones.\n\n"
+        "- Fewer good queries beats more weak ones.\n"
+        f"{conservative_guidance}\n"
         f"Message: {clean}"
     )
 
@@ -4702,13 +4709,7 @@ def recall_fast(
         }
         return ([], meta) if return_meta else []
 
-    fast_shape = _estimate_fanout_profile(
-        query,
-        max_queries=1 if planner_profile == "aggressive" else 2,
-        planner_profile=planner_profile,
-    )
     effective_limit = min(limit, 6 if planner_profile == "aggressive" else 8)
-    use_planner = fast_shape.get("shape") == "broad"
 
     results = recall(
         query=query,
@@ -4716,7 +4717,7 @@ def recall_fast(
         privacy=privacy,
         owner_id=owner_id,
         min_similarity=min_similarity,
-        use_routing=use_planner,
+        use_routing=True,
         use_aliases=True,
         use_intent=True,
         use_multi_pass=False,
