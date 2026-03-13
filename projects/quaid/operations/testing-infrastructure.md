@@ -61,10 +61,10 @@ This document defines the current test stack, execution commands, and pass/fail 
   - `modules/quaid/scripts/run-quaid-e2e.sh`
   - `modules/quaid/scripts/run-quaid-e2e-matrix.sh`
 - Scope:
-  - Gateway stop/start, e2e workspace bootstrap, integration tests, janitor run, restore to `~/quaid/test`.
+  - Gateway stop/start, e2e workspace bootstrap, integration tests, janitor run, restore to the test workspace.
   - Bootstrap path executes canonical installer (`setup-quaid.mjs`), including datastore-init hooks and workspace dir initialization.
 - Bootstrap coupling:
-  - E2E runners live in `modules/quaid/scripts` and call bootstrap scripts via `QUAID_BOOTSTRAP_ROOT` (default `~/quaid/bootstrap`).
+  - E2E runners live in `modules/quaid/scripts` and call bootstrap scripts via `QUAID_BOOTSTRAP_ROOT` (set to your local bootstrap repo path).
   - Optional local env file: `modules/quaid/.env.e2e` (template: `modules/quaid/scripts/e2e.env.example`).
 - Notification safety:
   - E2E should run with Quaid notifications set to `quiet` to prevent Telegram/DM spam during automation.
@@ -77,79 +77,79 @@ This document defines the current test stack, execution commands, and pass/fail 
 
 ### Quick combined suite (recommended local default)
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 npm run test:all
 ```
 
 ### Python unit-only (default pytest mode)
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 python3 -m pytest -q
 ```
 
 ### Python integration-only
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 python3 -m pytest -q -o addopts= -m integration
 ```
 
 ### Python regression-only
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 python3 -m pytest -q -o addopts= -m regression
 ```
 
 ### Parallel isolated Python runner (recommended for CI/local)
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 python3 scripts/run_pytests.py --mode unit --workers 4 --timeout 120
 ```
 
 ### OpenClaw adapter-only partition
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 npm run test:adapter:openclaw
 ```
 
 ### Coverage (TypeScript + Python)
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 npm run test:coverage:all
 ```
 
 Python-only coverage (fast profile):
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 npm run test:coverage:py
 ```
 
 Python-only coverage (full profile):
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 npm run test:coverage:py:full
 ```
 
 ### Full combined suite
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 npm run test:all:full
 ```
 
 ### E2E single provider
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 ./scripts/run-quaid-e2e.sh --auth-path openai-oauth
 ```
 
 ### E2E with explicit notification level
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 ./scripts/run-quaid-e2e.sh --auth-path openai-oauth --notify-level quiet
 ```
 
 ### E2E provider matrix
 ```bash
-cd ~/quaid/test/modules/quaid
+cd <test-workspace>/modules/quaid
 ./scripts/run-quaid-e2e-matrix.sh --paths openai-oauth,openai-api,anthropic-api -- --skip-janitor
 ```
 Per-path timeout defaults to `1200` seconds. Override with `QUAID_E2E_PATH_TIMEOUT_SEC=<seconds>` when needed.
@@ -174,7 +174,7 @@ QUAID_E2E_PATHS="openai-oauth,openai-api,anthropic-api" npm run test:all:full
 
 Full protocol in `operations/projects-testing.md`. Run order:
 
-1. **OC CRUD** (example.local) — create, register doc, search, show, delete
+1. **OC CRUD** — create, register doc, search, show, delete
 2. **CC CRUD** (local testbench) — same sequence against CC instance
 3. **Cross-platform** — global registry check, CC registers doc to OC project, CC reads it back
 
@@ -218,7 +218,7 @@ Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instance
   - Apply mode shows observable work (`memories_processed` or `actions_taken` or status-bucket deltas).
 - Cleanup/restore succeeds:
   - `~/quaid/e2e-test` removed on success (unless `--keep-on-success`).
-  - Workspace restored to `~/quaid/test`.
+  - Workspace restored to the test workspace.
   - Gateway health recovered.
 - Summary integrity guard:
   - E2E summary must not report `status=success` while any stage remains `running`.
@@ -239,6 +239,6 @@ Pass criteria: OC CRUD clean, CC CRUD clean, global registry shows both instance
 - Python coverage runs in an isolated venv (`scripts/run-python-coverage.sh`) and reports source-only coverage (`--omit='tests/*'`).
 
 ## Bootstrap Ownership
-- Runtime/bootstrap orchestration remains in `~/quaid/bootstrap` (machine-local operational repo).
+- Runtime/bootstrap orchestration remains in the machine-local bootstrap repo (path set via `QUAID_BOOTSTRAP_ROOT`).
 - Quaid now keeps E2E entrypoints in `modules/quaid/scripts` so full test runs can execute from dev/test directly.
 - `~/quaid/dev` must not store local secrets or host-specific credential material.

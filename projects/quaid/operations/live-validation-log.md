@@ -8,14 +8,14 @@ Records of manual live validation runs against real adapter instances.
 
 ### Summary
 
-Full M0–M7 live test run against OC 3.11 (example.local) and CC (spark/local testbench).
+Full M0–M7 live test run against OC 3.11 (<oc-host>) and CC (local testbench).
 
 ### Environment
 
 | Adapter | Host | Version |
 |---------|------|---------|
-| OpenClaw | example.local | 2026.3.11 |
-| Claude Code | spark (local) | current stable |
+| OpenClaw | <oc-host> | 2026.3.11 |
+| Claude Code | local | current stable |
 | Quaid | both | 0.3.0-canary (commit `14d99b20`) |
 
 ### Results
@@ -60,8 +60,8 @@ Changes shipped in `9240ee2a feat(installer): shared embeddings config, instance
 
 ## 2026-03-13 — Projects System Live Test Run
 
-Full OC CRUD + CC CRUD + Cross-Platform (XP) tests on example.local.
-Both OC and CC share `QUAID_HOME=/Users/owner/quaid`.
+Full OC CRUD + CC CRUD + Cross-Platform (XP) tests on <oc-host>.
+Both OC and CC share `QUAID_HOME=<your-quaid-home>`.
 
 ### Bugs Found and Fixed
 

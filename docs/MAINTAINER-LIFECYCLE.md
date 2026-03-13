@@ -76,4 +76,4 @@ If a bad release lands:
 - Keep auth/provider credentials out of git-tracked files
 - Prefer GitHub noreply email for public attribution
 - Keep release notes accurate and explicit about known limitations
-- For benchmark handoff/cut procedure, use `docs/BENCHMARK-OPERATIONS.md` (checkpoint ownership is in `~/quaid/agents/codex-bench`).
+- For benchmark handoff/cut procedure, use `~/quaid/util/docs/benchmark-operations.md` (moved out of dev tree; checkpoint ownership is in the benchmark workspace).

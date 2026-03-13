@@ -61,7 +61,7 @@ These are two different concepts:
 
 `adapter_id` identifies the host platform. `instance_id` identifies which
 memory silo is active. They often have similar values but are independent:
-two different instances (`codex-dev`, `codex-bench`) can both use the same
+two different instances (`agent1`, `agent2`) can both use the same
 adapter type (`openclaw`).
 
 The Claude Code adapter (`adaptors/claude_code/adapter.py`) returns
@@ -184,9 +184,8 @@ return p if p.is_absolute() else _workspace_root() / p
 root). With the default relative path this produces `QUAID_HOME/data/memory.db`.
 
 Each instance should set an explicit absolute path, or a path relative to
-`QUAID_HOME` that is scoped to its instance directory. The Claude Code and
-OpenClaw instances on `example.local` use their respective instance roots:
-`QUAID_HOME/claude-code/data/memory.db` and `QUAID_HOME/codex-dev/data/memory.db`.
+`QUAID_HOME` that is scoped to its instance directory. For example, two instances would use their respective instance roots:
+`QUAID_HOME/claude-code/data/memory.db` and `QUAID_HOME/agent1/data/memory.db`.
 Separate databases mean instances do not share memory — cross-instance recall
 requires the global project registry and shared projects directory.
 
@@ -223,7 +222,7 @@ quaid config show --instance claude-code
 # Print the path to the active config file
 quaid config path
 quaid config path --shared
-quaid config path --instance codex-dev
+quaid config path --instance agent1
 
 # Interactive editor (menu-driven)
 quaid config edit
@@ -275,13 +274,11 @@ quaid instances list --json
 Output example:
 
 ```
-Quaid home: /Users/owner/quaid/agents
+Quaid home: /your/quaid/home
 
-  claude-bugs
-  claude-dev  *
-  codex-bench
-  codex-dev
-  codex-pr
+  agent1
+  agent2  *
+  claude-code
 ```
 
 The `*` marker identifies the instance matching the current `QUAID_INSTANCE`
@@ -290,7 +287,7 @@ env var. If `QUAID_INSTANCE` is set but the directory does not yet have
 
 The JSON form (`--json`) returns:
 ```json
-{"home": "/path/to/QUAID_HOME", "current": "claude-dev", "instances": ["claude-bugs", ...]}
+{"home": "/path/to/QUAID_HOME", "current": "agent2", "instances": ["agent1", ...]}
 ```
 
 ---
@@ -337,27 +334,27 @@ on `QuaidAdapter` all derive from `instance_root()`.
 
 ## 8. Multi-Instance Setup Patterns
 
-### Same QUAID_HOME, multiple instances (example.local)
+### Same QUAID_HOME, multiple instances
 
 This is the standard setup on a single machine where multiple agents share
-the same memory workspace (e.g. `claude-dev`, `codex-dev`, `claude-bugs`):
+the same memory workspace (e.g. `agent1`, `agent2`, `claude-code`):
 
 ```
-QUAID_HOME=/Users/owner/quaid/agents
+QUAID_HOME=/your/quaid/home
 
-/Users/owner/quaid/agents/
+/your/quaid/home/
   shared/
     config/memory.json          ← shared embeddings/Ollama config
     project-registry.json       ← registry visible to all instances
     projects/                   ← shared project canonical dirs
-  claude-dev/
-    config/memory.json          ← claude-dev instance config
-    data/memory.db              ← claude-dev's private memory DB
-    identity/                   ← claude-dev's SOUL.md, USER.md, etc.
-  codex-dev/
-    config/memory.json          ← codex-dev instance config
-    data/memory.db              ← codex-dev's private memory DB
-  claude-bugs/
+  agent1/
+    config/memory.json          ← agent1 instance config
+    data/memory.db              ← agent1's private memory DB
+    identity/                   ← agent1's SOUL.md, USER.md, etc.
+  agent2/
+    config/memory.json          ← agent2 instance config
+    data/memory.db              ← agent2's private memory DB
+  claude-code/
     config/memory.json
     data/memory.db
 ```
@@ -368,13 +365,13 @@ projects from any instance. Embeddings must use the same model (enforced by
 `shared/config/memory.json`) so that cross-instance doc search produces
 comparable vectors.
 
-### Separate QUAID_HOME per adapter (example.local + remote)
+### Separate QUAID_HOME per adapter
 
 Some adapters maintain a separate `QUAID_HOME` silo:
 
 ```
-QUAID_HOME=/Users/owner/quaid/claudecode   (Claude Code adapter)
-QUAID_HOME=/Users/owner/quaid/agents       (OpenClaw agent instances)
+QUAID_HOME=/your/quaid/claudecode   (Claude Code adapter)
+QUAID_HOME=/your/quaid/agents       (OpenClaw agent instances)
 ```
 
 These silos do not share a project registry or databases. Projects are not

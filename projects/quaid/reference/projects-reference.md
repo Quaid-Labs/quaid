@@ -900,7 +900,7 @@ timeout is 900s (configurable via `QUAID_PROJECT_UPDATER_WATCHDOG_SECONDS`). Use
 ### Environment Setup
 
 ```bash
-export QUAID_HOME=/Users/owner/quaid
+export QUAID_HOME=/path/to/your/quaid-home
 export QUAID_INSTANCE=openclaw   # or claude-code
 ```
 
@@ -1003,7 +1003,7 @@ Accepts absolute paths or paths relative to the workspace root.
 quaid docs search "query" --project <name>
 quaid docs search "query"                   # search all projects
 ```
-Requires embeddings (Ollama on example.local). Returns ranked chunks with similarity scores.
+Requires embeddings (Ollama running locally or on a configured embedding server). Returns ranked chunks with similarity scores.
 
 #### Check for stale docs
 ```bash
@@ -1040,8 +1040,8 @@ quaid global-registry remove <name> # --force overrides multi-instance guard
 quaid global-registry rename <name> <new>
 ```
 
-Reads `QUAID_HOME/project-registry.json`. On example.local both OC and CC share the
-same file, so this shows the complete cross-adapter project list.
+Reads `QUAID_HOME/project-registry.json`. When OC and CC run on the same machine and
+share a `QUAID_HOME`, this shows the complete cross-adapter project list.
 
 **`quaid global-registry list`** calls `lib/project_registry.list_all()`:
 ```python

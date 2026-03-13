@@ -318,9 +318,9 @@ registration is:
 
 Each command is prefixed with environment variables:
 ```
-QUAID_HOME='/Users/owner/quaid/claudecode'
+QUAID_HOME='<your-instance-dir>'
 QUAID_INSTANCE='claude-code'
-/Users/owner/quaid/claudecode/modules/quaid/quaid hook-<name>
+<your-instance-dir>/modules/quaid/quaid hook-<name>
 ```
 
 The `QUAID_HOME` and `QUAID_INSTANCE` values isolate this Claude Code
@@ -625,8 +625,8 @@ The channel and target are resolved from
 to the most recently updated routable session row across all entries. If a
 `channel_override` is provided and the primary channel send fails, the adapter
 retries on the originally resolved channel. The `QUAID_MESSAGE_CLI` env var
-overrides the binary resolution order (`openclaw` → `/opt/homebrew/bin/openclaw`
-→ `clawdbot` → `/opt/homebrew/bin/clawdbot`).
+overrides the binary resolution order (e.g. `openclaw` → system-installed `openclaw`
+→ your adapter CLI binary).
 
 If `QUAID_DISABLE_NOTIFICATIONS` is set (and `force=False`), both adapters
 skip delivery silently.
@@ -655,7 +655,7 @@ Each adapter filters certain messages from transcripts before extraction:
 | `QUAID_INSTANCE` | All hooks | Instance identifier (e.g., `claude-code`) |
 | `QUAID_RULES_DIR` | `hook-session-init` | Override destination for `quaid-projects.md` |
 | `QUAID_DISABLE_NOTIFICATIONS` | Notifications | Silence all notifications |
-| `QUAID_MESSAGE_CLI` | OC notifications | Override `openclaw`/`clawdbot` binary path |
+| `QUAID_MESSAGE_CLI` | OC notifications | Override adapter CLI binary path (e.g. `openclaw` or your adapter binary) |
 | `CLAWDBOT_WORKSPACE` | OC adapter | OpenClaw workspace root (OC-specific) |
 
 `QUAID_HOME` must be set per-hook-invocation. Do not set it globally.
@@ -663,13 +663,13 @@ Each adapter instance on a machine has its own `QUAID_HOME` silo.
 
 ---
 
-## 9. Key File Paths (this machine)
+## 9. Key File Paths
 
 | File | Path |
 |---|---|
 | CC settings (hook registration) | `~/.claude/settings.json` |
 | CC rules file (session context) | `<project-cwd>/.claude/rules/quaid-projects.md` |
-| CC instance silo | `/Users/owner/quaid/claudecode/` |
+| CC instance silo | `$QUAID_HOME/` |
 | Extraction signals dir | `$QUAID_HOME/data/extraction-signals/` |
 | Session cursors dir | `$QUAID_HOME/<instance>/data/session-cursors/` |
 | Subagent registry dir | `$QUAID_HOME/data/subagent-registry/` |

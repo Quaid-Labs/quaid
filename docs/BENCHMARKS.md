@@ -171,17 +171,17 @@ Mem0 uses GPT-4o-mini for answer generation. We report both Haiku answers (simil
 
 ## Next Benchmarks
 
-- **LongMemEval** (ICLR 2025): Code written and smoke-tested at `agents/codex-bench/memory-stress-test/runner/longmemeval/`. 500 QA pairs across 7 question types and 19,195 sessions. Pending full evaluation run. Top reported scores: Emergence AI 86%, Supermemory 81.6%, Zep+GPT-4o 71.2%.
+- **LongMemEval** (ICLR 2025): Code written and smoke-tested at `<benchmark-workspace>/memory-stress-test/runner/longmemeval/`. 500 QA pairs across 7 question types and 19,195 sessions. Pending full evaluation run. Top reported scores: Emergence AI 86%, Supermemory 81.6%, Zep+GPT-4o 71.2%.
 - **Purpose-built lifecycle benchmark**: A longer-term project to build a dataset that tests the full memory lifecycle -- multi-session accumulation, fact evolution, maintenance decisions, and project-level awareness. No existing benchmark covers this. See [ROADMAP.md](../ROADMAP.md).
 
 ---
 
 ## Reproducing Results
 
-The benchmark suite lives under `~/quaid/agents/codex-bench/memory-stress-test/runner/`. To run the LoCoMo evaluation:
+The benchmark suite lives under `<benchmark-workspace>/memory-stress-test/runner/`. To run the LoCoMo evaluation:
 
 ```bash
-cd ~/quaid/agents/codex-bench/memory-stress-test/runner/locomo
+cd <benchmark-workspace>/memory-stress-test/runner/locomo
 python3 run_locomo.py --config standard --answer-model haiku --trials 3
 python3 run_locomo.py --rejudge --results-dir data/results/  # Re-score cached predictions
 python3 run_locomo.py --full-context  # Full-context baseline (no knowledge layer)
@@ -189,7 +189,7 @@ python3 run_locomo.py --full-context  # Full-context baseline (no knowledge laye
 
 Requirements: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` (for GPT-4o-mini judge) environment variables. Ollama running locally for embeddings. A full evaluation run costs approximately $85 across all configurations.
 
-For operational benchmark handoff (E2E admission gates + checkpoint cut workflow), see `docs/BENCHMARK-OPERATIONS.md`.
+For operational benchmark handoff (E2E admission gates + checkpoint cut workflow), see `~/quaid/util/docs/benchmark-operations.md` (moved out of dev tree).
 
 ---
 
