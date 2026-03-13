@@ -11,6 +11,7 @@ This document defines Quaid's external interface model for host adapters and run
 ## Surfaces
 
 - `OpenClaw adapter` (`modules/quaid/adaptors/openclaw/adapter.ts`): richest integration path, lifecycle hooks + tools.
+- `Claude Code adapter` (`modules/quaid/adaptors/claude_code/adapter.py`): Python adapter for Claude Code sessions; hooks-based lifecycle, deferred notifications via pending file.
 - `CLI wrapper` (`modules/quaid/quaid`): operational entrypoint to Python modules.
 
 ## Plugin Foundation (Phase 1)

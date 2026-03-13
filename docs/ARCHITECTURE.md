@@ -467,7 +467,7 @@ The task numbering is historical -- tasks were added over time and the numbers r
 | temporal | Resolve relative dates ("last Tuesday") to absolute dates | No |
 | dedup_review | Review recent dedup rejections (were they correct?) | High |
 | duplicates + contradictions | Shared recall pass, then dedup (auto-reject >=0.98, LLM verify 0.88-0.98) + contradiction detection | Low |
-| contradictions (resolve) | High-reasoning LLM resolves detected contradictions (keep_a/keep_b/merge) | High |
+| contradictions (resolve) | High-reasoning LLM resolves detected contradictions (keep_a/keep_b/merge); disabled by default (`janitor.contradiction.enabled=false`) | High |
 | decay | Ebbinghaus exponential confidence decay on old unused facts | No |
 | decay_review | Review memories that decayed below threshold (delete/extend/pin) | High |
 
@@ -745,8 +745,8 @@ These gates are checked by both the TypeScript plugin (`isSystemEnabled()`) and 
 
 | Variable | Purpose |
 |----------|---------|
-| `QUAID_HOME` | Root directory for standalone mode (default `~/quaid/`) |
-| `adapter.type` (in `config/memory.json`) | Select adapter: `standalone` or `openclaw` (required) |
+| `QUAID_HOME` | Root directory containing all instances (default `~/quaid/`) |
+| `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, or `claude_code` |
 | `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations (default `"default"`) |
 | `CLAWDBOT_WORKSPACE` | Root workspace hint for OpenClaw integrations |
 | `MEMORY_DB_PATH` | Override database path |
@@ -782,10 +782,11 @@ def load_config() -> MemoryConfig:
         return _config
 ```
 
-Config file search order:
-1. `$QUAID_HOME/config/memory.json` (or `$CLAWDBOT_WORKSPACE/config/memory.json` when set)
-2. `~/.quaid/memory-config.json`
-3. `./memory-config.json`
+Config file merge order (lowest → highest priority):
+1. `./memory-config.json` — local cwd override (rarely used)
+2. `~/.quaid/memory-config.json` — user-level fallback
+3. `$QUAID_HOME/shared/config/memory.json` — machine-wide shared settings (embeddings, Ollama)
+4. `$QUAID_HOME/<instance>/config/memory.json` — per-instance config (highest priority)
 
 ### Known Gotcha
 
@@ -798,7 +799,7 @@ The `coreMarkdown.files` section has filename keys like `"SOUL.md"`. The `camelC
 `llm_clients.py` provides two functions that abstract over the underlying model:
 
 ```python
-def call_deep_reasoning(prompt, system_prompt=None, max_tokens=2000, timeout=600, model=None):
+def call_deep_reasoning(prompt, system_prompt=None, max_tokens=2000, timeout=600):
     """High-reasoning model. Used for fact review, contradiction resolution,
     workspace audits, journal distillation."""
 
@@ -828,8 +829,8 @@ class ModelConfig:
     fast_reasoning_provider: str = "default"
     deep_reasoning_provider: str = "default"
     embeddings_provider: str = "ollama"
-    fast_reasoning: str = "claude-haiku-4-5"
-    deep_reasoning: str = "claude-opus-4-6"
+    fast_reasoning: str = "default"
+    deep_reasoning: str = "default"
     fast_reasoning_model_classes: Dict[str, str] = field(default_factory=...)
     deep_reasoning_model_classes: Dict[str, str] = field(default_factory=...)
     fast_reasoning_context: int = 200000
@@ -860,6 +861,6 @@ Quaid includes a notification system (`modules/quaid/core/runtime/notify.py`) th
 
 ## Appendix: File Reference
 
-The source lives in `modules/quaid/`, organized by boundary: `core/` (interfaces/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). In OpenClaw integration, `adaptors/openclaw/adapter.ts` owns runtime integration, `adaptors/openclaw/index.ts` remains a minimal entry shim, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
+The source lives in `modules/quaid/`, organized by boundary: `core/` (interface/runtime/lifecycle/docs/contracts/services), `ingest/`, `datastore/`, `adaptors/`, and `orchestrator/`. Memory maintenance intelligence is datastore-owned (`datastore/memorydb/maintenance_ops.py`) and executed through janitor lifecycle registry orchestration (`core/lifecycle/janitor_lifecycle.py`). In OpenClaw integration, `adaptors/openclaw/adapter.ts` owns runtime integration, `adaptors/openclaw/index.ts` remains a minimal entry shim, and `adaptors/openclaw/maintenance.py` owns registration of OpenClaw-specific workspace maintenance. Shared utilities live in `lib/`. Prompt templates live in `prompts/`. Cross-subsystem imports are checked by `modules/quaid/scripts/check-boundaries.py`.
 
 For the complete file index with function signatures, database schema, CLI reference, and environment variables, see [AI-REFERENCE.md](AI-REFERENCE.md).

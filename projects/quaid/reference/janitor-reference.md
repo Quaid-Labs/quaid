@@ -378,6 +378,37 @@ The provider/adapter refactor separates LLM and embedding concerns into distinct
 
 The janitor follows strict module boundary conventions enforced by `__all__` exports across the Quaid plugin. Each module declares its public API via `__all__`, and internal helpers are not importable by convention. Shared utilities live in the `lib/` package. This structure was formalized in the module boundaries refactor (`301cfb68`) to ensure clean separation between the janitor pipeline, LLM clients, config loading, and shared library code.
 
+## Lifecycle Registry (`core/lifecycle/janitor_lifecycle.py`)
+
+The janitor dispatches maintenance tasks through a `LifecycleRegistry` — a plugin-style registry where datastore and adapter modules own their maintenance routines and register them at startup.
+
+**Key types:**
+- `RoutineContext` — passed to every routine: `cfg`, `dry_run`, `workspace`, `graph`, `options`, `parallel_map` (injected by registry at call time)
+- `RoutineResult` — returned by every routine: `metrics`, `logs`, `errors`, `data`
+- `LifecycleRoutine` — protocol: `(ctx: RoutineContext) -> RoutineResult`
+
+**Registration contract:** Modules expose a `register_lifecycle_routines(registry, result_factory)` function. The registry calls this at startup. Duplicate registration of the same routine name from a different owner raises `ValueError`. Idempotent re-registration from the same owner is allowed.
+
+**Default registry** (`build_default_registry()`): Loads routines from these modules in order:
+1. Adapter maintenance module (discovered from active adapter manifest or `adaptors/` tree)
+2. `datastore.docsdb.updater` — `docs_staleness`, `docs_cleanup`
+3. `datastore.notedb.soul_snippets` — `snippets`, `journal`
+4. `datastore.docsdb.rag` — `rag`
+5. `datastore.memorydb.maintenance` — `memory_graph_maintenance`
+6. `datastore.memorydb.memory_graph` — `datastore_cleanup`
+
+**Extension hooks:**
+- `QUAID_LIFECYCLE_MODULES` env var — comma-separated list of extra module names to register (must start with `adaptors.`, `core.`, or `datastore.`)
+- `config.lifecycle.modules` — config-driven list of additional modules (same prefix allowlist)
+
+**Resource locking:** Routines declare `write_resources` at registration (or use defaults in `_DEFAULT_WRITE_RESOURCES`). The registry acquires these locks before running the routine (skipped in dry-run). Lock timeout is `core.parallel.lockWaitSeconds` (default 120s). See `core.parallel` config in `memory-local-implementation.md` for full lock config.
+
+**Parallel routine execution:** `run_many()` executes multiple routines concurrently up to `max_workers`. Overall timeout defaults to `core.parallel.lifecyclePrepassTimeoutSeconds` (300s). Timed-out routines are cancelled and recorded as errors.
+
+**Parallel telemetry:** Set `QUAID_LIFECYCLE_PARALLEL_TELEMETRY=1` to append per-event JSONL rows to `logs/janitor/lifecycle-parallel-telemetry.jsonl` (events: `run_start`, `task_submit`, `task_done`, `task_timeout`, `task_error`, `run_end`). Off by default.
+
+**LLM concurrency inside routines:** The registry injects a `ctx.parallel_map(items, fn)` helper into each `RoutineContext`. This routes through `GlobalLlmScheduler.run_map()` with workload key `lifecycle_prepass:<routine_name>`, using `core.parallel.lifecyclePrepassWorkers` (default 3) as the configured concurrency. Timeout and retry count come from `lifecyclePrepassTimeoutSeconds` / `lifecyclePrepassTimeoutRetries` (or their env var overrides).
+
 ## Memory Lifecycle
 
 Facts flow through the pipeline before becoming permanent:
@@ -421,6 +452,7 @@ Settings are driven by `config/memory.json`. Key sections used by the janitor:
 | `decay` | decay task | Decay rates, thresholds |
 | `dedup` | duplicates | Similarity threshold, batch size |
 | `models.deep_reasoning_model_classes` / `models.fast_reasoning_model_classes` | all LLM tasks | Provider→tier model-class maps used when tier is `default` |
+| `core.parallel` | lifecycle registry | Concurrency, timeouts, and locking for lifecycle routines — `lifecyclePrepassWorkers` (default 3), `lifecyclePrepassTimeoutSeconds` (default 300), `lifecyclePrepassTimeoutRetries` (default 1), `lockWaitSeconds` (default 120), `lockRequireRegistration` (default true). All keys accept snake_case aliases. |
 
 Model names are resolved from `config/memory.json` by model tier, then routed through adapter/provider dispatch using active gateway provider/auth state.
 

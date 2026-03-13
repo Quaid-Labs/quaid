@@ -53,8 +53,9 @@ are.
 journal distillations, memory summaries. This is what Quaid "learns" about
 the user and itself over time.
 
-**Location**: Derived by core utility `quaid_identity_dir(quaid_home, adapter_id)`.
-The adapter provides its `adapter_id` string; core computes the path.
+**Location**: Derived via `adapter.identity_dir()`. The adapter provides its
+`adapter_id` string; core computes the path. (`quaid_identity_dir()` is a
+deprecated utility alias — prefer `adapter.identity_dir()` in new code.)
 
 | Adapter | adapter_id | Identity dir |
 |---------|-----------|-------------|
@@ -175,10 +176,11 @@ Trip/`, a git repo, a shared drive — Quaid doesn't dictate this.
 relevant files into docsdb. Never move, rename, or restructure the user's
 files.
 
-**Registration**: The LLM registers a source root with a project:
+**Registration**: The LLM registers a source root with a project via CLI or API:
 
-```python
-project_registry.register("myapp", source_root="/Users/solomon/code/myapp")
+```bash
+quaid project create myapp --source-root /Users/solomon/code/myapp
+quaid project update myapp --source-root /Users/solomon/code/myapp  # add later
 ```
 
 **Rules**:

@@ -22,12 +22,40 @@ Each plugin provides a `plugin.json` manifest:
 - `plugin_api_version` (required, integer)
 - `plugin_id` (required, unique, stable)
 - `plugin_type` (required: `adapter` | `ingest` | `datastore`)
-- `module` (required, import path)
-- `entrypoint` (optional, default `register`)
-- `capabilities` (optional object)
-- `dependencies` (optional array)
+- `module` (required, dotted import path)
+- `capabilities` (required object)
+  - `display_name` (required string)
+  - `contract` (required object — one entry per contract surface, each with `mode` and `handler` or `exports`)
+- `dependencies` (optional array of plugin_id strings)
 - `priority` (optional integer, default `100`)
 - `enabled` (optional bool, default `true`)
+
+### Contract surfaces
+
+Every manifest must declare all contract surfaces under `capabilities.contract`.
+
+**Executable surfaces** (mode must be `"hook"`, provide a `handler` reference):
+
+- `init`
+- `config`
+- `status`
+- `dashboard` (mode may be `"tbd"` until implemented)
+- `maintenance`
+- `tool_runtime`
+- `health`
+
+**Declared surfaces** (mode must be `"declared"`, provide an `exports` array):
+
+- `tools`
+- `api`
+- `events`
+- `ingest_triggers`
+- `auth_requirements`
+- `migrations`
+- `notifications`
+
+**Datastore plugins** additionally require top-level capability flags:
+`supports_multi_user`, `supports_policy_metadata`, `supports_redaction` (all boolean).
 
 ## Core runtime module
 
@@ -57,7 +85,7 @@ Runtime preflight is invoked from config boot when `plugins.enabled=true`. It va
     "slots": {
       "adapter": "",
       "ingest": [],
-      "dataStores": []
+      "datastores": []
     }
   }
 }

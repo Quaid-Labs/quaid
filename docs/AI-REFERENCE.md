@@ -27,7 +27,7 @@ Quaid is a graph-based persistent knowledge layer for AI agents. It ships with d
 - **Storage:** SQLite database with WAL mode, sqlite-vec ANN index, FTS5 full-text index
 - **Embeddings:** Ollama local server (qwen3-embedding:8b, 4096 dimensions)
 - **LLM calls:** Anthropic API (Opus for deep-reasoning, Haiku for fast-reasoning / reranking)
-- **Config:** JSON config file at `config/memory.json`
+- **Config:** JSON config file at `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json`
 
 **Retrieval pipeline (current):**
 ```
@@ -62,7 +62,6 @@ Write request
 | `datastore/memorydb/maintenance.py` | Datastore lifecycle registration facade | `register_lifecycle_routines()` for `memory_graph_maintenance` |
 | `core/lifecycle/janitor.py` | Janitor orchestration, scheduling, reporting, lifecycle dispatch | `run_task_optimized()`, `run_tests()`, task orchestration and policy gating |
 | `core/lifecycle/janitor_lifecycle.py` | Lifecycle routine registry and dispatch | `LifecycleRegistry`, `RoutineContext`, `RoutineResult`, `build_default_registry()` |
-| `adaptors/openclaw/maintenance.py` | OpenClaw-specific lifecycle registrations | `register_lifecycle_routines()` (workspace audit registration) |
 | `core/lifecycle/workspace_audit.py` | Workspace markdown audit implementation | `run_workspace_check()`, `check_bloat()` |
 | `datastore/notedb/soul_snippets.py` | Dual snippet + journal learning system | `run_soul_snippets_review()`, `run_journal_distillation()` |
 | `datastore/docsdb/rag.py` | RAG indexing/search and lifecycle registration | `search_docs()`, `index_document()`, `register_lifecycle_routines()` |
@@ -81,11 +80,22 @@ Write request
 | `datastore/memorydb/schema.sql` | Database DDL (nodes, edges, FTS5, indexes, operational tables) | Full schema definition |
 | `datastore/memorydb/enable_wal.py` | WAL mode enablement helper | `enable_wal_mode()` |
 
+### Adapter Layer (`adaptors/`)
+
+| File | Purpose | Key Exports / Notes |
+|------|---------|---------------------|
+| `adaptors/openclaw/adapter.py` | OpenClaw-specific adapter | `OpenClawAdapter`, sessions from `~/.openclaw/sessions/`, notifications via `openclaw message send` CLI |
+| `adaptors/openclaw/maintenance.py` | OpenClaw lifecycle registrations | `register_lifecycle_routines()` (workspace audit) |
+| `adaptors/claude_code/adapter.py` | Claude Code adapter | `ClaudeCodeAdapter`, sessions from `~/.claude/projects/`, deferred notifications via pending file, OAuth token auth |
+| `adaptors/claude_code/hooks.py` | Backwards-compatible shim for CC hooks | Delegates to `core.interface.hooks.main` |
+| `core/interface/hooks.py` | Adapter-agnostic hook entry points (SOURCE OF TRUTH for hooks) | `hook_inject`, `hook_inject_compact`, `hook_extract`, `hook_session_init`, `hook_subagent_start`, `hook_subagent_stop` |
+
 ### Shared Library (`lib/`)
 
 | File | Purpose | Key Exports |
 |------|---------|-------------|
 | `adapter.py` | Platform adapter layer base/standalone adapters | `QuaidAdapter`, `StandaloneAdapter`, `get_adapter()`, `set_adapter()`, `reset_adapter()`, `ChannelInfo` |
+| `instance.py` | Instance identity resolution | `instance_id()`, `quaid_home()`, `instance_root()`, `shared_dir()`, `list_instances()`, `validate_instance_id()` |
 | `config.py` | Path resolution, env overrides for tests | `get_db_path()`, `get_ollama_url()`, `get_embedding_model()`, `get_archive_db_path()` |
 | `database.py` | SQLite connection factory | `get_connection()` -- @contextmanager, enables WAL mode, FK ON, busy_timeout=30000 |
 | `embeddings.py` | Ollama embedding calls | `get_embedding()`, `pack_embedding()`, `unpack_embedding()` |
@@ -129,6 +139,43 @@ Project onboarding instructions live at `projects/quaid/operations/project_onboa
 
 Quaid currently performs schema evolution in-place from `datastore/memorydb/memory_graph.py` during startup/DB init.
 There is no standalone `migrations/` directory in the current repository layout.
+
+---
+
+## Claude Code Integration
+
+Quaid integrates with Claude Code via hooks registered in `~/.claude/settings.json`. Hooks call the `quaid` CLI which routes to `core/interface/hooks.py`.
+
+### Hook Wiring
+
+| Hook Event | `quaid` Command | Purpose |
+|-----------|----------------|---------|
+| `UserPromptSubmit` | `quaid hook-inject` | Recall memories and inject as `additionalContext` for each user message |
+| `PreCompact` | `quaid hook-extract --precompact` | Signal extraction daemon before context compaction |
+| `SessionEnd` | `quaid hook-extract` | Signal extraction daemon at session end |
+| `SubagentStart` | `quaid hook-subagent-start` | Register subagent in registry (skips standalone extraction for child) |
+| `SubagentStop` | `quaid hook-subagent-stop` | Mark subagent complete, transcript harvested by parent extraction |
+
+Each hook command reads JSON from stdin and must be invoked with `QUAID_HOME` and `QUAID_INSTANCE` set:
+
+```bash
+QUAID_HOME=/path/to/quaid QUAID_INSTANCE=claude-code quaid hook-inject
+```
+
+The `UserPromptSubmit` hook injects at session start via `quaid hook-session-init` as well — this writes project docs to `.claude/rules/quaid-projects.md` so Claude Code caches them through compaction.
+
+### Session-Init (Project Context)
+
+`quaid hook-session-init` runs at session start (wired to a `SessionInit` or startup hook), scans `$QUAID_HOME/shared/projects/*/` for `TOOLS.md` and `AGENTS.md`, collects identity files from `$QUAID_HOME/<INSTANCE_ID>/identity/`, and writes the combined content to `.claude/rules/quaid-projects.md`. Claude Code auto-loads `rules/*.md` and preserves them through compaction.
+
+### Auth Token
+
+The Claude Code adapter requires a long-lived OAuth token for daemon-mode API calls. Setup:
+
+```bash
+claude setup-token    # Generate token
+quaid config set-auth <token>  # Store it for the active adapter instance
+```
 
 ---
 
@@ -210,9 +257,43 @@ Triggers `nodes_ai`, `nodes_ad`, `nodes_au` keep `nodes_fts` in sync with `nodes
 
 ---
 
+## QUAID_HOME Directory Layout
+
+Each Quaid instance (adapter silo) lives in its own subdirectory under `QUAID_HOME`. Two environment variables control which silo is active:
+
+- `QUAID_HOME` — root directory (default `~/quaid/`)
+- `QUAID_INSTANCE` — instance identifier, e.g. `openclaw` or `claude-code` (no default; required)
+
+```
+$QUAID_HOME/
+├── shared/                          # Cross-instance shared resources
+│   ├── projects/                    # Shared project docs (TOOLS.md, AGENTS.md, etc.)
+│   │   └── <project-name>/
+│   └── project-registry.json        # Global registry (projects -> instances)
+└── <INSTANCE_ID>/                   # Per-instance silo (e.g. "openclaw", "claude-code")
+    ├── config/
+    │   └── memory.json              # Instance config (adapter.type, models, janitor, etc.)
+    ├── data/
+    │   ├── memory.db                # SQLite database
+    │   ├── extraction-signals/      # Signals from hooks -> daemon
+    │   ├── session-cursors/         # Extraction progress per session
+    │   └── extraction-daemon.pid    # Daemon PID file
+    ├── identity/                    # Quaid-managed identity files
+    │   ├── USER.md
+    │   ├── SOUL.md
+    │   └── MEMORY.md
+    ├── journal/                     # Journal files (journal/*.journal.md, archive/)
+    ├── logs/                        # Structured JSONL logs, janitor checkpoints
+    └── *.snippets.md                # Soul snippet staging files
+```
+
+Reserved instance names (cannot be used as instance identifiers): `shared`, `projects`, `config`, `data`, `logs`, `temp`, `tmp`, `quaid`, `plugins`, `lib`, `core`, `docs`, `assets`, `release`, `scripts`, `test`, `tests`, `benchmark`, `node_modules`.
+
+---
+
 ## Configuration
 
-Config is loaded from `config/memory.json`. Parsed by `config.py` into typed dataclasses.
+Config is loaded from `<QUAID_HOME>/<INSTANCE_ID>/config/memory.json` (the per-instance config). Parsed by `config.py` into typed dataclasses. A shared config at `<QUAID_HOME>/shared/config/memory.json` provides machine-wide defaults (embeddings model, Ollama URL) that instance configs can override.
 
 ### Config Tree
 
@@ -607,18 +688,21 @@ python3 -m pytest tests/test_invariants.py::test_name -v
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `QUAID_OWNER` | Owner identity for CLI and adapter-driven runtime operations | `"default"` |
-| `QUAID_HOME` | Root directory for standalone mode | `~/quaid/` |
-| `adapter.type` (in `config/memory.json`) | Select adapter: `standalone` or `openclaw` | Required |
+| `QUAID_HOME` | Root directory containing all Quaid instances | `~/quaid/` |
+| `QUAID_INSTANCE` | Instance identifier — selects which silo under `QUAID_HOME` is active (e.g. `openclaw`, `claude-code`) | Required — no implicit default |
+| `adapter.type` (in `config/memory.json`) | Select adapter: `standalone`, `openclaw`, or `claude-code` | Required |
 | `CLAWDBOT_WORKSPACE` | Workspace root hint (for OpenClaw paths) | Optional |
-| `MEMORY_DB_PATH` | Override database file path | `<quaid_home>/data/memory.db` |
+| `MEMORY_DB_PATH` | Override database file path | `<quaid_home>/<instance_id>/data/memory.db` |
 | `OLLAMA_URL` | Ollama server URL | `http://localhost:11434` |
-| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from `.env` file or macOS Keychain |
+| `ANTHROPIC_API_KEY` | Anthropic API key for LLM calls | Loaded from env or `.env` file in adapter workspace |
 | `OPENAI_API_KEY` | OpenAI API key (for benchmark judging) | Must be set explicitly |
 | `QUAID_DEV` | Enable dev mode (unit tests in janitor, verbose output) | Not set |
 | `QUAID_QUIET` | Suppress informational config messages | Not set |
+| `QUAID_DISABLE_NOTIFICATIONS` | Suppress all runtime notifications (bypassed when `force=True`) | Not set |
+| `QUAID_RULES_DIR` | Override `.claude/rules/` directory for CC `hook-session-init` output | Not set |
 | `MOCK_EMBEDDINGS` | Use deterministic fake embeddings (for testing) | Not set |
 
-API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in `QUAID_HOME` -> macOS Keychain (OpenClaw adapter only).
+API key fallback chain: `ANTHROPIC_API_KEY` env var -> `.env` file in adapter workspace root. There is no macOS Keychain fallback in any adapter.
 
 ---
 

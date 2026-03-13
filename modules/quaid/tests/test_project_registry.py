@@ -9,7 +9,9 @@ from core.project_registry import (
     create_project,
     delete_project,
     get_project,
+    link_project,
     list_projects,
+    unlink_project,
     update_project,
     projects_with_source_root,
     snapshot_all_projects,
@@ -203,3 +205,188 @@ class TestSnapshotAllProjects:
 
         results = snapshot_all_projects()
         assert results == []
+
+
+class TestCreateProjectUsesInstanceId:
+    def test_instances_list_records_instance_id(self, mock_adapter):
+        """create_project() uses lib.instance.instance_id(), not adapter.adapter_id().
+
+        The instances list should contain the value returned by instance_id(),
+        not whatever adapter_id() returns.
+        """
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="my-instance-abc"):
+            entry = create_project("my-app", description="Test")
+
+        assert "my-instance-abc" in entry["instances"]
+        # adapter_id should NOT appear — it is not the source of the instance token
+        assert "test-adapter" not in entry["instances"]
+
+    def test_instances_list_not_empty(self, mock_adapter):
+        """instances list must have at least one entry after project creation."""
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="env-instance-xyz"):
+            entry = create_project("my-app")
+
+        assert len(entry["instances"]) >= 1
+
+
+class TestLinkProject:
+    def test_link_adds_current_instance(self, mock_adapter):
+        """link_project() adds the current instance ID to the instances list."""
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="creator-instance"):
+            create_project("my-app")
+
+        with patch("lib.instance.instance_id", return_value="second-instance"):
+            entry = link_project("my-app")
+
+        assert "second-instance" in entry["instances"]
+
+    def test_link_is_idempotent(self, mock_adapter):
+        """Calling link_project() twice for the same instance does not duplicate it."""
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="creator-instance"):
+            create_project("my-app")
+
+        with patch("lib.instance.instance_id", return_value="second-instance"):
+            link_project("my-app")
+            entry = link_project("my-app")
+
+        assert entry["instances"].count("second-instance") == 1
+
+    def test_link_rejects_unknown_project(self, mock_adapter):
+        with patch("lib.instance.instance_id", return_value="some-instance"):
+            with pytest.raises(KeyError):
+                link_project("nonexistent")
+
+    def test_link_persists_to_registry(self, mock_adapter):
+        """Linked instance survives a registry reload."""
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="creator-instance"):
+            create_project("my-app")
+
+        with patch("lib.instance.instance_id", return_value="linker-instance"):
+            link_project("my-app")
+
+        loaded = get_project("my-app")
+        assert "linker-instance" in loaded["instances"]
+
+
+class TestUnlinkProject:
+    def test_unlink_removes_current_instance(self, mock_adapter):
+        """unlink_project() removes the current instance from the instances list."""
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="creator-instance"):
+            create_project("my-app")
+
+        with patch("lib.instance.instance_id", return_value="second-instance"):
+            link_project("my-app")
+
+        with patch("lib.instance.instance_id", return_value="second-instance"):
+            entry = unlink_project("my-app")
+
+        assert "second-instance" not in entry["instances"]
+        # creator should still be present
+        assert "creator-instance" in entry["instances"]
+
+    def test_unlink_is_idempotent(self, mock_adapter):
+        """Calling unlink_project() when already unlinked does not raise."""
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="creator-instance"):
+            create_project("my-app")
+
+        # "other-instance" was never linked — second call should not raise
+        with patch("lib.instance.instance_id", return_value="other-instance"):
+            entry = unlink_project("my-app")
+            entry2 = unlink_project("my-app")
+
+        assert "other-instance" not in entry["instances"]
+        assert "other-instance" not in entry2["instances"]
+
+    def test_unlink_rejects_unknown_project(self, mock_adapter):
+        with patch("lib.instance.instance_id", return_value="some-instance"):
+            with pytest.raises(KeyError):
+                unlink_project("nonexistent")
+
+    def test_unlink_persists_to_registry(self, mock_adapter):
+        """Unlinked state survives a registry reload."""
+        _, tmp_path = mock_adapter
+        with patch("lib.instance.instance_id", return_value="creator-instance"):
+            create_project("my-app")
+
+        with patch("lib.instance.instance_id", return_value="drop-instance"):
+            link_project("my-app")
+            unlink_project("my-app")
+
+        loaded = get_project("my-app")
+        assert "drop-instance" not in loaded["instances"]
+
+
+class TestDeleteProjectPurgesDb:
+    def test_delete_purges_project_definitions_and_doc_registry(self, mock_adapter):
+        """delete_project() removes project_definitions and doc_registry rows from SQLite."""
+        import sqlite3
+        from contextlib import contextmanager
+
+        _, tmp_path = mock_adapter
+
+        # Build an in-memory SQLite DB that already has the rows we expect to be purged
+        mem_conn = sqlite3.connect(":memory:")
+        mem_conn.execute(
+            "CREATE TABLE project_definitions (name TEXT PRIMARY KEY, data TEXT)"
+        )
+        mem_conn.execute(
+            "CREATE TABLE doc_registry (id INTEGER PRIMARY KEY, project TEXT, file_path TEXT)"
+        )
+        mem_conn.execute(
+            "INSERT INTO project_definitions VALUES ('my-app', '{}')"
+        )
+        mem_conn.execute(
+            "INSERT INTO doc_registry (project, file_path) VALUES ('my-app', '/some/file.md')"
+        )
+        mem_conn.execute(
+            "INSERT INTO doc_registry (project, file_path) VALUES ('other-project', '/other/file.md')"
+        )
+        mem_conn.commit()
+
+        @contextmanager
+        def _fake_get_connection(_db_path):
+            yield mem_conn
+            mem_conn.commit()
+
+        create_project("my-app")
+
+        with patch("lib.database.get_connection", _fake_get_connection), \
+             patch("lib.config.get_db_path", return_value=tmp_path / "memory.db"):
+            delete_project("my-app")
+
+        # project_definitions row must be gone
+        row = mem_conn.execute(
+            "SELECT name FROM project_definitions WHERE name = 'my-app'"
+        ).fetchone()
+        assert row is None
+
+        # doc_registry rows for this project must be gone
+        rows = mem_conn.execute(
+            "SELECT id FROM doc_registry WHERE project = 'my-app'"
+        ).fetchall()
+        assert rows == []
+
+        # unrelated project rows must be untouched
+        other = mem_conn.execute(
+            "SELECT id FROM doc_registry WHERE project = 'other-project'"
+        ).fetchall()
+        assert len(other) == 1
+
+    def test_delete_handles_missing_db_gracefully(self, mock_adapter):
+        """delete_project() does not raise when the DB connection fails."""
+        _, tmp_path = mock_adapter
+        create_project("my-app")
+
+        with patch("lib.database.get_connection", side_effect=Exception("db unavailable")):
+            # Should complete without raising (error is logged as a warning)
+            delete_project("my-app")
+
+        # Project is removed from registry regardless
+        assert get_project("my-app") is None
