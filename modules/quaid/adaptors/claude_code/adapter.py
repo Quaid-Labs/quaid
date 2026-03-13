@@ -273,7 +273,15 @@ class ClaudeCodeAdapter(QuaidAdapter):
 
     def get_llm_provider(self, model_tier: Optional[str] = None):
         from adaptors.claude_code.providers import ClaudeCodeOAuthLLMProvider
-        return ClaudeCodeOAuthLLMProvider()
+        try:
+            from config import get_config
+            cfg = get_config()
+            deep = cfg.models.deep_reasoning or "claude-opus-4-6"
+            fast = cfg.models.fast_reasoning or "claude-haiku-4-5"
+        except Exception:
+            deep = "claude-opus-4-6"
+            fast = "claude-haiku-4-5"
+        return ClaudeCodeOAuthLLMProvider(deep_model=deep, fast_model=fast)
 
 
 def _now_iso() -> str:

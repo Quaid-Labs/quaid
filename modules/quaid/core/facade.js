@@ -2406,6 +2406,47 @@ ${header}${journalContent}` : `${header}${journalContent}`;
   function notImplemented(name) {
     throw new Error(`[quaid][facade] ${name} is not yet implemented \u2014 scheduled for a future PR`);
   }
+  function injectProjectContext(existingContext) {
+    let prepend = existingContext;
+    try {
+      const projectsDir = path.join(deps.workspace, "projects");
+      let subdirs = [];
+      try {
+        subdirs = fs.readdirSync(projectsDir).filter((name) => {
+          try {
+            return fs.statSync(path.join(projectsDir, name)).isDirectory() && !name.startsWith(".");
+          } catch {
+            return false;
+          }
+        }).sort((a, b) => a === "quaid" ? -1 : b === "quaid" ? 1 : a.localeCompare(b));
+      } catch {
+        return prepend;
+      }
+      const sections = [];
+      for (const projectName of subdirs) {
+        for (const docFile of ["TOOLS.md", "AGENTS.md"]) {
+          const filePath = path.join(projectsDir, projectName, docFile);
+          if (fs.existsSync(filePath)) {
+            try {
+              const content = fs.readFileSync(filePath, "utf8").trim();
+              if (content) sections.push(`--- ${projectName}/${docFile} ---
+${content}`);
+            } catch {
+            }
+          }
+        }
+      }
+      if (sections.length === 0) return prepend;
+      const combined = "# Quaid Project Context\n\n" + sections.join("\n\n") + "\n";
+      prepend = prepend ? `${prepend}
+
+${combined}` : combined;
+    } catch (err) {
+      if (deps.isFailHardEnabled()) throw err;
+      console.warn(`[quaid] Project context injection failed: ${err?.message || String(err)}`);
+    }
+    return prepend;
+  }
   return {
     // Pass-through
     getConfig: deps.getMemoryConfig,
@@ -2475,6 +2516,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
     buildExtractionCompletionNotificationPayload,
     shouldNotifyExtractionStart,
     injectFullJournalContext,
+    injectProjectContext,
     isLowQualityQuery,
     filterMemoriesByPrivacy,
     loadInjectedMemoryKeys,

@@ -4,6 +4,7 @@ Records of manual live validation runs against real adapter instances.
 
 ---
 
+
 ## 2026-03-13 — v0.3.0 Prerelease Validation
 
 ### Summary
@@ -104,6 +105,25 @@ Both OC and CC share `QUAID_HOME=<your-quaid-home>`.
 
 - `janitor --task rag --apply` does not trigger doc_registry pass — only `reindex --all` does. Consider wiring the doc_registry pass into the janitor RAG task.
 - OC-P3 and CC-P3 work after `reindex --all` but the test protocol lists `janitor --task rag --apply` as the indexing step. Update protocol or wire janitor to call reindex.
+
+---
+
+## 2026-03-14 — M1–M10 OC Live Test (canary, example.local)
+
+### Bugs Found
+
+| Bug | Severity | Notes |
+|-----|----------|-------|
+| M4: `SessionTimeoutManager` reads `timeoutMinutes` once at plugin init — config change alone doesn't take effect | Medium | Must restart OpenClaw after changing `capture.inactivityTimeoutMinutes`. LIVE-TEST-GUIDE.md updated. |
+| M8: Neither OC nor CC `before_agent_start` injects Quaid TOOLS.md (project CLI guide) into agent context | High | Agent created plain folders/files instead of using `quaid project create`/`link`/`registry register`. CC session-init writes `.claude/rules/quaid-projects.md` but that only covers CC identity files; project CLI guide is missing from both. OC needs equivalent TOOLS.md injection in `before_agent_start`. |
+| CC extraction daemon always used `claude-opus-4-6` regardless of config | High | `adaptors/claude_code/adapter.py` `get_llm_provider()` called `ClaudeCodeOAuthLLMProvider()` with no args, defaulting to Opus. Fixed to read `deepReasoning`/`fastReasoning` from config. |
+| Installer: `setup-quaid.mjs` and `lib/` are at `~/quaid/dev/` root, not `modules/quaid/` | Low | LIVE-TEST-GUIDE.md rsync command and installer path corrected. |
+| M7: stale graph edges from prior test run (Oliver) persisted between runs | Low | No wipe between runs. Janitor would clean on next nightly run. Not a current-run extraction failure. |
+
+### Follow-up items
+
+- Wire TOOLS.md injection into OC `before_agent_start` (prependContext), matching CC's session-init hook path.
+- Add DB wipe step to LIVE-TEST-GUIDE.md pre-run checklist to avoid stale edge contamination across runs.
 
 ---
 

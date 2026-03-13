@@ -3155,6 +3155,49 @@ ${lines.join("\n")}
   }
 
   // -------------------------------------------------------------------------
+  // Project context injection for OC before_agent_start
+  // -------------------------------------------------------------------------
+
+  function injectProjectContext(existingContext?: string): string | undefined {
+    let prepend = existingContext;
+    try {
+      const projectsDir = path.join(deps.workspace, "projects");
+      let subdirs: string[] = [];
+      try {
+        subdirs = fs.readdirSync(projectsDir)
+          .filter((name: string) => {
+            try { return fs.statSync(path.join(projectsDir, name)).isDirectory() && !name.startsWith("."); }
+            catch { return false; }
+          })
+          .sort((a: string, b: string) => a === "quaid" ? -1 : b === "quaid" ? 1 : a.localeCompare(b));
+      } catch {
+        return prepend;
+      }
+
+      const sections: string[] = [];
+      for (const projectName of subdirs) {
+        for (const docFile of ["TOOLS.md", "AGENTS.md"]) {
+          const filePath = path.join(projectsDir, projectName, docFile);
+          if (fs.existsSync(filePath)) {
+            try {
+              const content = fs.readFileSync(filePath, "utf8").trim();
+              if (content) sections.push(`--- ${projectName}/${docFile} ---\n${content}`);
+            } catch { /* skip unreadable files */ }
+          }
+        }
+      }
+
+      if (sections.length === 0) return prepend;
+      const combined = "# Quaid Project Context\n\n" + sections.join("\n\n") + "\n";
+      prepend = prepend ? `${prepend}\n\n${combined}` : combined;
+    } catch (err: unknown) {
+      if (deps.isFailHardEnabled()) throw err;
+      console.warn(`[quaid] Project context injection failed: ${(err as Error)?.message || String(err)}`);
+    }
+    return prepend;
+  }
+
+  // -------------------------------------------------------------------------
   // Build and return the facade object
   // -------------------------------------------------------------------------
 
@@ -3230,6 +3273,7 @@ ${lines.join("\n")}
     buildExtractionCompletionNotificationPayload,
     shouldNotifyExtractionStart,
     injectFullJournalContext,
+    injectProjectContext,
     isLowQualityQuery,
     filterMemoriesByPrivacy,
     loadInjectedMemoryKeys,

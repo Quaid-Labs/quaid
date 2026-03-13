@@ -1479,6 +1479,7 @@ notify_user(${JSON.stringify(message)})
       }
 
       event.prependContext = facade.injectFullJournalContext(event.prependContext);
+      event.prependContext = facade.injectProjectContext(event.prependContext);
 
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
 
