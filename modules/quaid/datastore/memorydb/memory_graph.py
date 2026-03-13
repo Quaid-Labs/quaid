@@ -7038,14 +7038,24 @@ if __name__ == "__main__":
             if want_docs and not args.json:
                 try:
                     from core.interface.api import projects_search_docs
-                    doc_results = projects_search_docs(query=query, limit=3)
+                    doc_project = getattr(args, 'project', None)
+                    doc_limit = max(3, args.limit) if not want_memory else 3
+                    doc_results = projects_search_docs(query=query, limit=doc_limit, project=doc_project)
                     chunks = doc_results.get("chunks", [])
+                    project_md = doc_results.get("project_md")
                     if chunks:
                         print("\n=== Documentation ===")
                         for i, chunk in enumerate(chunks, 1):
                             title = chunk.get("title", "untitled")
                             text = chunk.get("text", "")[:300]
-                            print(f"  {i}. [{title}] {text}")
+                            score = chunk.get("score") or chunk.get("similarity")
+                            score_str = f" ({score:.2f})" if score else ""
+                            print(f"  {i}. [{title}]{score_str} {text}")
+                    if project_md:
+                        print("\n=== PROJECT.md ===")
+                        print(project_md[:1000])
+                        if len(project_md) > 1000:
+                            print("  ... (truncated)")
                 except Exception as _docs_err:
                     print(f"[docs] warning: {_docs_err}", file=sys.stderr)
 
