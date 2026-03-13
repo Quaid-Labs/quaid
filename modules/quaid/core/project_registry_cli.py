@@ -96,6 +96,19 @@ def cmd_link(args):
         sys.exit(1)
 
 
+def cmd_unlink(args):
+    from core.project_registry import unlink_project
+    try:
+        entry = unlink_project(args.name)
+        instances = ", ".join(entry.get("instances", [])) or "(none)"
+        print(f"Unlinked from project '{args.name}' — remaining instances: {instances}")
+        if args.json:
+            print(json.dumps(entry, indent=2))
+    except KeyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_delete(args):
     from core.project_registry import delete_project
     try:
@@ -193,6 +206,10 @@ def main():
     link_p = subparsers.add_parser("link", help="Add current instance to a project's instances list")
     link_p.add_argument("name", help="Project name")
 
+    # unlink
+    unlink_p = subparsers.add_parser("unlink", help="Remove current instance from a project's instances list")
+    unlink_p.add_argument("name", help="Project name")
+
     # delete
     delete_p = subparsers.add_parser("delete", help="Delete a project")
     delete_p.add_argument("name", help="Project name")
@@ -212,6 +229,7 @@ def main():
         "show": cmd_show,
         "update": cmd_update,
         "link": cmd_link,
+        "unlink": cmd_unlink,
         "delete": cmd_delete,
         "snapshot": cmd_snapshot,
         "sync": cmd_sync,

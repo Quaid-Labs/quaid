@@ -210,10 +210,43 @@ def link_project(name: str) -> Dict[str, Any]:
     return registry["projects"][name]
 
 
+def unlink_project(name: str) -> Dict[str, Any]:
+    """Remove the current QUAID_INSTANCE from a project's instances list.
+
+    Inverse of link_project. Idempotent — safe to call if already unlinked.
+    Does not delete the project or its files.
+
+    Args:
+        name: Project name.
+
+    Returns:
+        The updated project entry.
+
+    Raises:
+        KeyError: If project not found.
+    """
+    registry = _load_registry()
+    if name not in registry["projects"]:
+        raise KeyError(f"Project not found: {name}")
+
+    from lib.instance import instance_id as _instance_id
+    instance = _instance_id()
+    instances = registry["projects"][name].get("instances", [])
+    if instance in instances:
+        instances.remove(instance)
+        registry["projects"][name]["instances"] = instances
+        registry["projects"][name]["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+        _save_registry(registry)
+        logger.info("Unlinked instance %s from project %s", instance, name)
+    return registry["projects"][name]
+
+
 def delete_project(name: str) -> None:
     """Remove a project from the registry and clean up artifacts.
 
-    Does NOT touch the user's source_root directory.
+    Unlinks all instances, removes the canonical project directory, cleans up
+    shadow git tracking, and purges project_definitions + doc_registry rows
+    from the SQLite database. Does NOT touch the user's source_root directory.
 
     Args:
         name: Project name to delete.
