@@ -115,15 +115,38 @@ Both OC and CC share `QUAID_HOME=<your-quaid-home>`.
 | Bug | Severity | Notes |
 |-----|----------|-------|
 | M4: `SessionTimeoutManager` reads `timeoutMinutes` once at plugin init — config change alone doesn't take effect | Medium | Must restart OpenClaw after changing `capture.inactivityTimeoutMinutes`. LIVE-TEST-GUIDE.md updated. |
+| M3: OC gateway prepends `[Day Date Time TZ] ` to every user message — slash-command detection patterns checked bare `/compact` and never matched | High | Fixed in `handleSlashLifecycleFromMessage` and `tickSessionIndex`: strip OC timestamp prefix, use last non-empty line. `adapter.js` rebuild required after `.ts` change. |
+| M3/rate-limit: `injectProjectContext` + `injectFullJournalContext` fired unconditionally on every session start, burning token budget before agent could respond | Medium | Gated both calls behind `isAutoInjectEnabled()`. Use `retrieval.autoInject=false` to suppress all injection during rate-constrained testing; re-enable before M5. |
+| M3/rate-limit: Repeated 429 retries exhaust the OAuth account hourly budget | Low | Test infra issue — each failed retry adds to rate-limit pressure. Use longer backoffs (15-30 min) when hitting hard account limits, and skip to non-LLM milestones (M9, M10) while waiting. |
 | M8: Neither OC nor CC `before_agent_start` injects Quaid TOOLS.md (project CLI guide) into agent context | High | Agent created plain folders/files instead of using `quaid project create`/`link`/`registry register`. CC session-init writes `.claude/rules/quaid-projects.md` but that only covers CC identity files; project CLI guide is missing from both. OC needs equivalent TOOLS.md injection in `before_agent_start`. |
 | CC extraction daemon always used `claude-opus-4-6` regardless of config | High | `adaptors/claude_code/adapter.py` `get_llm_provider()` called `ClaudeCodeOAuthLLMProvider()` with no args, defaulting to Opus. Fixed to read `deepReasoning`/`fastReasoning` from config. |
 | Installer: `setup-quaid.mjs` and `lib/` are at `~/quaid/dev/` root, not `modules/quaid/` | Low | LIVE-TEST-GUIDE.md rsync command and installer path corrected. |
 | M7: stale graph edges from prior test run (Oliver) persisted between runs | Low | No wipe between runs. Janitor would clean on next nightly run. Not a current-run extraction failure. |
 
+### Results
+
+| Milestone | Result | Notes |
+|-----------|--------|-------|
+| M0 | ✅ PASS | Clean install, health/doctor passed |
+| M1 | ✅ PASS | `/new` extraction, PROOFNEW fact stored |
+| M2 | ✅ PASS | `/reset` extraction, PROOFRESET fact stored |
+| M3 | ⚠️ PARTIAL | Signal path verified (daemon-compaction logged); Opus extraction rate-limited. Daemon cursor preserved for auto-retry. |
+| M4 | ✅ PASS | Timeout extraction fired after 1-min config + restart |
+| M5–M9 | ❌ BLOCKED | Anthropic OAuth account persistently rate-limited (daily cap exhausted by M3 retry storm). All LLM-dependent milestones blocked. |
+| M10 | ✅ PASS (infra) | health/stats/docs CLI all run; config loaded; DB accessible |
+
+### Environment Blocker
+
+The example.local OC instance uses Solomon's Claude.ai OAuth token (`sk-ant-oat01`). The M3 retry storm (multiple failed attempts before the adapter.js rebuild fix) exhausted the account's daily rate-limit budget. After the budget was consumed, even bare single-turn Haiku calls returned 429 immediately. This persisted for 1.5+ hours with no recovery.
+
+**Test infra recommendation:** Add a dedicated Anthropic API key for live test runs. The `QUAID_TEST_API_KEY` env var (or a dedicated test-only key in `~/.openclaw/agents/main/agent/auth-profiles.json`) should be used for live test sessions to avoid consuming Solomon's personal account quota.
+
 ### Follow-up items
 
 - Wire TOOLS.md injection into OC `before_agent_start` (prependContext), matching CC's session-init hook path.
 - Add DB wipe step to LIVE-TEST-GUIDE.md pre-run checklist to avoid stale edge contamination across runs.
+- Add dedicated test API key configuration to the test environment on alfie.
+- LIVE-TEST-GUIDE.md: note that `retrieval.autoInject` must be `false` for M3 (no LLM calls during signal test) and re-enabled before M5.
 
 ---
 
