@@ -11,6 +11,8 @@ This is black-box testing:
 - no imports into runtime codepaths
 - no mocks
 - no code edits during the live test
+- all live agent interaction must happen through a visible tmux pane to
+  simulate a real user
 
 ## Core Rules
 
@@ -19,12 +21,17 @@ This is black-box testing:
 - Run the live test from the `canary` branch. Verify the checkout before
   installing or testing.
 - Use the installer script, not ad hoc install steps.
+- Do not use hidden helper wrappers for agent interaction during the live run.
+  Use a visible tmux pane for OpenClaw and Claude Code.
 - Lower model cost before testing: try Haiku first, step up to Sonnet only if
   quality is too degraded to run the test reliably.
 - Send ISSUE messages when something breaks or the environment is unclear.
 - Do not send routine milestone status messages.
 - After a fix, re-run the failed milestone. Do not mark it done without
   re-verification.
+- For live testing, janitor apply is pre-approved. If a milestone or docs/RAG
+  verification needs `quaid janitor --apply --approve`, run it directly
+  instead of stopping for approval.
 - For capability tests, speak to the agent like a real user would. Do not
   spoon-feed function names or CLI subcommands unless the milestone is
   explicitly testing a slash command such as `/new`, `/reset`, or `/compact`.
@@ -60,7 +67,7 @@ Main test environment:
 Target machine:
 - Host: `example.local`
 - OpenClaw workspace: `~/quaid`
-- OpenClaw agent wrapper: `/tmp/oc-send.sh`
+- Live interaction pane: local tmux pane `main:99`
 
 ## Start Condition
 
@@ -85,9 +92,16 @@ validation.
 
 ## Installer-Based Clean Install
 
-The dev tree lives on spark (`~/quaid/dev`), not on alfie. Sync the full dev
-tree to alfie before running the installer — `setup-quaid.mjs` and `lib/` are
-at the root of `~/quaid/dev`, not inside `modules/quaid/`:
+Use a source tree from the local test machine only. Do not involve `spark`.
+Valid install sources for a live run are:
+
+- local `~/quaid/dev` on this machine
+- GitHub `openclaw` when that is the target under test
+- Quaid `canary`
+
+When using the local dev tree, sync the full tree from this machine to alfie
+before running the installer. `setup-quaid.mjs` and `lib/` are at the root of
+`~/quaid/dev`, not inside `modules/quaid/`:
 
 ```bash
 rsync -av --checksum \
@@ -96,7 +110,7 @@ rsync -av --checksum \
   ~/quaid/dev/ example.local:~/quaid/dev/
 ```
 
-Verify branch on spark (the source of truth):
+Verify branch on the local source checkout:
 
 ```bash
 cd ~/quaid/dev && git branch --show-current && git rev-parse --short HEAD
@@ -119,7 +133,7 @@ Uninstall existing OC plugin if present:
 ssh example.local 'openclaw plugins uninstall quaid 2>/dev/null || rm -rf ~/.openclaw/extensions/quaid; echo done'
 ```
 
-Install with the installer script (run from spark, installs onto alfie).
+Install with the installer script on `alfie`, using the synced local tree.
 Use `QUAID_TEST_MOCK_MIGRATION=1` to skip LLM-based migration of existing
 workspace files (SOUL.md, USER.md, etc.) — without it the installer runs 5
 sequential deep-reasoning calls that block M0 for several minutes:
@@ -154,22 +168,83 @@ ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRA
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid health 2>&1'
 ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.get(\"hooks\", {}).keys()))"'
+ssh example.local 'ls -l ~/quaid/openclaw/identity/SOUL.md ~/quaid/claude-code/identity/SOUL.md 2>/dev/null || true'
+```
+
+If either instance-local `identity/SOUL.md` is missing, seed it from the shared
+root file before running janitor `--apply`:
+
+```bash
+ssh example.local 'python3 - <<\"PY\"
+from pathlib import Path
+src = Path("/Users/owner/quaid/SOUL.md")
+for dst in [
+    Path("/Users/owner/quaid/openclaw/identity/SOUL.md"),
+    Path("/Users/owner/quaid/claude-code/identity/SOUL.md"),
+]:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if not dst.exists():
+        dst.write_text(src.read_text())
+        print(f"created {dst}")
+PY'
 ```
 
 ## Execution Model
 
-### OpenClaw
+### Phase Start Reset
 
-Run OC interactions through SSH plus `/tmp/oc-send.sh` on `example.local`:
+At the start of each live interaction phase, reset local tmux pane `main:99`
+so the interface is fresh and visible.
+
+- OpenClaw phase start: kill and restart pane `main:99`, `ssh example.local`,
+  then launch `openclaw tui`
+- Claude Code phase start: kill and restart pane `main:99`, `ssh example.local`,
+  then launch `claude`
+
+Recommended pattern:
 
 ```bash
-ssh example.local '/tmp/oc-send.sh "message here"'
-ssh example.local '/tmp/oc-send.sh "/new"'
-ssh example.local '/tmp/oc-send.sh "/reset"'
-ssh example.local '/tmp/oc-send.sh "/compact"'
+tmux respawn-pane -k -t main:99 'zsh -il'
+tmux send-keys -t main:99 "ssh example.local" Enter
 ```
 
-Avoid apostrophes in shell-quoted messages.
+Then launch the subject under test:
+
+```bash
+tmux send-keys -t main:99 "openclaw tui" Enter
+# or
+tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code claude --dangerously-skip-permissions" Enter
+```
+
+Do this again whenever switching from the OpenClaw phase to the Claude Code
+phase, or if the pane becomes contaminated and you need a clean visible session.
+
+### OpenClaw
+
+OC live interaction must be visible in local tmux pane `main:99`, just like
+Claude Code. Do not use `/tmp/oc-send.sh` or any hidden SSH wrapper for live
+milestones. The goal is to simulate a real user session.
+
+Pattern:
+
+```bash
+tmux respawn-pane -k -t main:99 'zsh -il'
+tmux send-keys -t main:99 "ssh example.local" Enter
+tmux send-keys -t main:99 "openclaw tui" Enter
+```
+
+Then send normal user messages or slash commands directly in that pane:
+
+```bash
+tmux send-keys -t main:99 "message here" Enter
+tmux send-keys -t main:99 "/new" Enter
+tmux send-keys -t main:99 "/reset" Enter
+tmux send-keys -t main:99 "/compact" Enter
+tmux capture-pane -t main:99 -p | tail -30
+```
+
+Use SSH/CLI commands only for verification, DB queries, logs, config changes,
+install, and uninstall. Do not use them to simulate the agent conversation.
 
 ### Claude Code
 
@@ -177,6 +252,7 @@ CC hooks require interactive mode. Run CC visibly in local tmux pane `main:99`,
 SSH to `example.local`, and launch `claude` from there.
 
 ```bash
+tmux respawn-pane -k -t main:99 'zsh -il'
 tmux send-keys -t main:99 "ssh example.local" Enter
 tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code claude --dangerously-skip-permissions" Enter
 ```
@@ -187,9 +263,64 @@ Read replies with:
 tmux capture-pane -t main:99 -p | tail -30
 ```
 
-**Important:** To end a CC session and trigger `SessionEnd` extraction, use
-**ctrl+C** in pane 99 — do NOT type `/exit`. In CC v2.1.75, `/exit` exits
-cleanly but skips the `SessionEnd` hook entirely, so extraction never fires.
+**Important:** For this live test flow, end the visible CC session with
+`/exit` in pane `99` to return cleanly to the remote shell. After each CC
+session end, explicitly verify that extraction happened by checking
+`~/quaid/claude-code/data/extraction-signals/`, the CC daemon log, or the
+shared DB at `~/quaid/data/memory.db`. If a session ends cleanly but no
+`session_end` signal appears, do not assume extraction fired.
+
+Current live-test fallback on `claude` `2.1.76`:
+
+1. Find the real CC transcript under `~/.claude/projects/-Users-clawdbot-quaid/`.
+2. Write a manual `session_end` signal against that real transcript.
+3. Verify the shared DB at `~/quaid/data/memory.db`.
+
+Example:
+
+```bash
+ssh example.local 'python3 - <<\"PY\"
+import sys
+sys.path.insert(0, \"/Users/owner/quaid/plugins/quaid\")
+from core.extraction_daemon import write_signal
+p = write_signal(
+    signal_type=\"session_end\",
+    session_id=\"<real-cc-session-id>\",
+    transcript_path=\"/Users/owner/.claude/projects/-Users-clawdbot-quaid/<real-cc-session-id>.jsonl\",
+)
+print(p)
+PY'
+```
+
+Before running CC project/recall milestones, verify that SessionStart generated
+real project guidance, not just identity projections. The current hook-session-
+init path scans `~/quaid/shared/projects`, not `~/quaid/projects`, so the
+shared project registry/sync state must already be correct.
+
+Quick checks:
+
+```bash
+ssh example.local 'wc -l ~/.claude/rules/quaid-projects.md && sed -n "1,220p" ~/.claude/rules/quaid-projects.md'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code ~/.openclaw/extensions/quaid/quaid project list 2>&1'
+ssh example.local 'find ~/quaid/shared/projects -maxdepth 3 -type f | sort'
+ssh example.local 'python3 - <<\"PY\"
+import json
+from pathlib import Path
+p = Path(\"/Users/owner/quaid/project-registry.json\")
+if p.exists():
+    print(json.dumps(json.loads(p.read_text()), indent=2))
+PY'
+```
+
+Pass only if `~/.claude/rules/quaid-projects.md` includes project sections like
+`--- quaid/TOOLS.md ---` and `--- quaid/AGENTS.md ---`. If it only contains
+`USER.md` / `MEMORY.md` projections, CC project CRUD is not being tested
+against a valid shared-project bootstrap state yet. Also verify the global
+registry entry for `quaid` points at `$QUAID_HOME/shared/projects/quaid`, not
+an instance-local path such as `$QUAID_HOME/openclaw/projects/quaid`.
+
+For CC `/compact`, the proof token should store from the visible live run
+without this manual fallback once the per-instance signal-dir fix is deployed.
 
 ## Notification Level Checks
 
@@ -210,6 +341,23 @@ Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
 ### M1: Extraction via `/new`
 
 Seed a distinctive `PROOFNEW-<timestamp>` fact, then trigger `/new`.
+
+**OC TUI session requirement**: M1 requires that the proof token session is a
+proper TUI session registered as `agent:main:tui-*` in sessions.json. When
+`/new` fires in such a session, OC creates a new session ID and the
+`before_agent_start` hook detects the transition and writes a ResetSignal for
+the proof token session.
+
+If `/new` is run from an `agent:main:main` session (non-TUI path), it is a
+UI-level reset that keeps the same session ID — no signal is written and the
+session extracts only via the 60-minute idle timeout.
+
+Before M1: verify the active TUI session is registered in sessions.json:
+```bash
+ssh example.local 'python3 -c "import json; d=json.load(open(\"/Users/owner/.openclaw/agents/main/sessions/sessions.json\")); [print(k,\"=\",v.get(\"sessionId\",\"?\")) for k,v in d.items() if \"tui\" in k.lower()]"'
+```
+If no `agent:main:tui-*` entry appears within ~10 seconds of opening the TUI,
+close and reopen `openclaw tui` to force a fresh registration.
 
 Pass:
 - the fact is stored after the lifecycle boundary
@@ -255,6 +403,11 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.o
 
 Pass:
 - the timeout fact is extracted with no explicit lifecycle command
+- for Claude Code, verify `quaid daemon status` points at the correct
+  instance root before idling:
+  - `instance_root: /Users/owner/quaid/claude-code`
+  - `log_file: /Users/owner/quaid/claude-code/logs/daemon/extraction-daemon.log`
+  - `pid_file: /Users/owner/quaid/claude-code/data/extraction-daemon.pid`
 
 ### M5: Memory Injection
 
@@ -338,12 +491,13 @@ Run:
 
 ```bash
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task all 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
 ```
 
 Pass:
 - janitor completes
-- checkpoint file exists afterward
+- `checkpoint-all.json` exists afterward with `status: completed`
+- `janitor-stats.json` reports `success: true`
 
 ### M10: Docs and Health
 
@@ -458,6 +612,23 @@ ssh example.local 'cat ~/quaid/config/memory.json | python3 -m json.tool | head 
 ssh example.local 'cat ~/quaid/data/circuit-breaker.json 2>/dev/null'
 ssh example.local 'cat ~/quaid/logs/janitor/checkpoint-all.json 2>/dev/null'
 ```
+
+Also audit the markdown artifacts directly, not just their existence:
+
+```bash
+ssh example.local 'for f in /Users/owner/quaid/{SOUL,USER,IDENTITY,TOOLS,AGENTS,PROJECT,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'find /Users/owner/quaid/shared/projects/live-test -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw/SOUL.snippets.md /Users/owner/quaid/claude-code/SOUL.snippets.md /Users/owner/quaid/openclaw/journal/SOUL.journal.md /Users/owner/quaid/openclaw/journal/USER.journal.md /Users/owner/quaid/openclaw/journal/MEMORY.journal.md /Users/owner/quaid/claude-code/journal/SOUL.journal.md /Users/owner/quaid/claude-code/journal/USER.journal.md /Users/owner/quaid/claude-code/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'find /Users/owner/quaid/shared/projects -name "PROJECT.log" -o -name "*.log" | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
+```
+
+Pass criteria:
+- root markdown files are present and not obviously malformed or empty placeholders
+- the live-test project docs are coherent and point at the correct shared paths
+- if the project is expected to have `TOOLS.md`, `AGENTS.md`, or a richer
+  `PROJECT.md`, verify that explicitly and record any missing file as a finding
+- snippets and journals look structurally sane and consistent with the run
+- project logs, if present, are readable and correspond to real actions taken
 
 ## Final Closeout
 
