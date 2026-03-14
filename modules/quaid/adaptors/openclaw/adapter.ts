@@ -380,10 +380,26 @@ function writeDaemonSignal(
       }
     }
   }
-  const resolvedPath = sessionTranscriptPaths.get(sessionId) || "";
+  let resolvedPath = sessionTranscriptPaths.get(sessionId) || "";
   if (!resolvedPath) {
     console.warn(`[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping signal`);
     return null;
+  }
+
+  // For reset signals, OC may have already moved the transcript content to a
+  // .reset.* snapshot before this signal fires. If the resolved path is empty
+  // (0 bytes) and a .reset.* backup exists, use the backup so the daemon has
+  // content to extract from.
+  if (signalType === "reset") {
+    try {
+      const stat = fs.statSync(resolvedPath);
+      if (stat.size === 0) {
+        const backup = latestResetBackup(sessionId);
+        if (backup) {
+          resolvedPath = backup;
+        }
+      }
+    } catch {}
   }
 
   try {
