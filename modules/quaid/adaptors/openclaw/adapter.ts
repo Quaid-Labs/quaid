@@ -2412,15 +2412,22 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
       if (!isAlreadyTracked && isSystemEnabled("memory")) {
-        // Find the session the watcher most recently observed new messages in.
+        // Find the prior session using JSONL file mtime — the session the user was
+        // just in is always the one OC most recently wrote to. sessionLastActivityMs
+        // is unreliable on fresh gateway boots because all existing sessions get
+        // bulk-initialized with the same timestamp on the first watcher tick.
         let bestPriorSessionId: string | null = null;
-        let bestActivityMs = 0;
-        for (const [sid, activityMs] of sessionLastActivityMs.entries()) {
+        let bestMtimeMs = 0;
+        for (const [key, sid] of sessionKeyLastSeen.entries()) {
+          if (key.startsWith("agent:main:hook:")) continue;
           if (sid === newSessionId) continue;
-          if (activityMs > bestActivityMs) {
-            bestActivityMs = activityMs;
-            bestPriorSessionId = sid;
-          }
+          try {
+            const mtimeMs = fs.statSync(getOpenClawSessionFile(sid)).mtimeMs;
+            if (mtimeMs > bestMtimeMs) {
+              bestMtimeMs = mtimeMs;
+              bestPriorSessionId = sid;
+            }
+          } catch {}
         }
         if (bestPriorSessionId) {
           const priorKey = Array.from(sessionKeyLastSeen.entries())
