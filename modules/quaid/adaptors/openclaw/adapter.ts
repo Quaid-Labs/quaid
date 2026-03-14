@@ -381,6 +381,15 @@ function writeDaemonSignal(
     }
   }
   let resolvedPath = sessionTranscriptPaths.get(sessionId) || "";
+  if (!resolvedPath && signalType === "reset") {
+    // Original JSONL not found — OC may have moved it entirely (not just emptied it).
+    // Try the .reset.* backup directly so the daemon still gets content to extract.
+    const backup = latestResetBackup(sessionId);
+    if (backup) {
+      resolvedPath = backup;
+      sessionTranscriptPaths.set(sessionId, backup);
+    }
+  }
   if (!resolvedPath) {
     console.warn(`[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping signal`);
     return null;
