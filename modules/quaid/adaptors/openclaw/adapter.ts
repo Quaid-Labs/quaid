@@ -2461,14 +2461,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             const dotIdx = fname.indexOf(".jsonl.reset.");
             if (dotIdx < 0) continue;
             const sid = fname.slice(0, dotIdx);
-            if (!sid || sid === newSessionId) continue;
+            if (!sid) continue;
+            // Do NOT skip sid === newSessionId. OC TUI /reset keeps the same session
+            // UUID — it empties the JSONL in place and creates a .reset.* backup, then
+            // restarts the gateway. The new gateway fires before_agent_start for the
+            // same UUID as if it were a fresh session. We need to detect that the
+            // "new" session is actually itself a just-reset session and extract from
+            // its own backup.
             try {
               const backupStat = fs.statSync(path.join(baseDir, fname));
               const age = nowMs - backupStat.mtimeMs;
               if (age >= 0 && age < RECENT_RESET_WINDOW_MS && backupStat.mtimeMs > bestResetMtimeMs) {
                 bestResetMtimeMs = backupStat.mtimeMs;
                 bestPriorSessionId = sid;
-                detectionMethod = "reset_signature";
+                detectionMethod = sid === newSessionId ? "self_reset" : "reset_signature";
               }
             } catch {}
           }
