@@ -1375,6 +1375,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     const transcriptLifecycleCursor = /* @__PURE__ */ new Map();
     let lastTranscriptSessionHint = null;
     let currentInteractiveSession = null;
+    let hookSetAt = 0;
     const runtimeEvents = api?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update) => {
@@ -1523,6 +1524,17 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             return;
           }
           if (currentInteractiveSession && currentInteractiveSession.sessionId !== active.sessionId) {
+            const HOOK_GRACE_MS = 9e4;
+            const withinGrace = hookSetAt > 0 && Date.now() - hookSetAt < HOOK_GRACE_MS;
+            if (withinGrace && active.updatedAt < hookSetAt) {
+              writeHookTrace("session_index.hook_grace_suppressed_switch", {
+                from_session_id: currentInteractiveSession.sessionId,
+                to_session_id: active.sessionId,
+                hook_set_at: hookSetAt,
+                candidate_updated_at: active.updatedAt
+              });
+              return;
+            }
             writeHookTrace("session_index.active_session_changed", {
               from_session_id: currentInteractiveSession.sessionId,
               from_session_key: currentInteractiveSession.key,
@@ -1962,12 +1974,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           to_session_id: newSessionId
         });
       }
+      hookSetAt = Date.now();
       currentInteractiveSession = {
         key: "agent:main:main",
         sessionId: newSessionId,
         sessionFile: getOpenClawSessionFile(newSessionId),
-        mtimeMs: Date.now(),
-        updatedAt: Date.now(),
+        mtimeMs: hookSetAt,
+        updatedAt: hookSetAt,
         lastChannel: "",
         lastTo: ""
       };
