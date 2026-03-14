@@ -2328,6 +2328,65 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
     startSessionIndexWatcher();
 
+    // Session-transition fallback: when OC TUI sessions no longer write
+    // agent:main:tui-* entries to sessions.json, the session index watcher
+    // cannot detect /new transitions (sessions.json never changes).
+    // Detect transitions here via before_agent_start: when a new non-internal
+    // session ID appears that differs from currentInteractiveSession, emit a
+    // ResetSignal for the prior session so extraction is triggered.
+    onChecked("before_agent_start", async (event: any, ctx: any) => {
+      if (isInternalSessionContext(event, ctx)) return;
+      const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
+      if (!newSessionId || !currentInteractiveSession) return;
+      if (currentInteractiveSession.sessionId === newSessionId) return;
+      const prior = currentInteractiveSession;
+      writeHookTrace("hook.before_agent_start.session_transition_detected", {
+        from_session_id: prior.sessionId,
+        from_session_key: prior.key,
+        to_session_id: newSessionId,
+      });
+      if (
+        !isInternalSessionContext(
+          { sessionKey: prior.key },
+          { sessionId: prior.sessionId },
+        )
+        && isSystemEnabled("memory")
+        && facade.shouldProcessLifecycleSignal(prior.sessionId, {
+          label: "ResetSignal",
+          source: "hook",
+          signature: `before_agent_start:session_change:${prior.sessionId}`,
+        })
+      ) {
+        facade.markLifecycleSignalFromHook(prior.sessionId, "ResetSignal");
+        writeDaemonSignal(prior.sessionId, "reset", {
+          source: "before_agent_start_session_change",
+          prior_session_id: prior.sessionId,
+          prior_session_key: prior.key,
+          new_session_id: newSessionId,
+        });
+        console.log(
+          `[quaid][signal] daemon signal reset session=${prior.sessionId} source=before_agent_start_session_change`,
+        );
+        writeHookTrace("hook.before_agent_start.session_change_signal_queued", {
+          from_session_id: prior.sessionId,
+          to_session_id: newSessionId,
+        });
+      }
+      // Adopt new session so subsequent transitions are detected correctly.
+      currentInteractiveSession = {
+        key: "agent:main:main",
+        sessionId: newSessionId,
+        sessionFile: getOpenClawSessionFile(newSessionId),
+        mtimeMs: Date.now(),
+        updatedAt: Date.now(),
+        lastChannel: "",
+        lastTo: "",
+      };
+    }, {
+      name: "before-agent-start-session-transition",
+      priority: 5,
+    });
+
     // Shared recall abstraction — used by both memory_recall tool and auto-inject
     async function recallMemories(opts: RecallOptions): Promise<MemoryResult[]> {
       const {
