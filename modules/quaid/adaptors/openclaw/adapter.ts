@@ -2192,7 +2192,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       // previous session entry when present so extraction targets real content.
       if (action === "new" || action === "reset") {
         const previousSessionId = String(
-          event?.previousSessionEntry?.sessionId
+          // OC stores session data under event.context (nested), not top-level.
+          // Read both paths: context.previousSessionEntry (preferred), context.sessionEntry
+          // (fallback), context.sessionId (explicit field added by our OC patch), and
+          // legacy top-level fields for older OC versions.
+          event?.context?.previousSessionEntry?.sessionId
+          || event?.context?.sessionEntry?.sessionId
+          || event?.context?.sessionId
+          || event?.previousSessionEntry?.sessionId
           || event?.previousSessionId
           || "",
         ).trim();
