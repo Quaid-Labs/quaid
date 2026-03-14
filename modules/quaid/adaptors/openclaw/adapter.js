@@ -1375,7 +1375,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     const transcriptLifecycleCursor = /* @__PURE__ */ new Map();
     let lastTranscriptSessionHint = null;
     let currentInteractiveSession = null;
-    let hookSetAt = 0;
     const runtimeEvents = api?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update) => {
@@ -1512,6 +1511,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     }
     const sessionIndexMessageCounts = /* @__PURE__ */ new Map();
     const seenSessionIndexCommandKeys = /* @__PURE__ */ new Set();
+    const sessionKeyLastSeen = /* @__PURE__ */ new Map();
     const startSessionIndexWatcher = () => {
       if (sessionIndexWatcherStarted) {
         return;
@@ -1519,123 +1519,132 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       sessionIndexWatcherStarted = true;
       const tickSessionIndex = () => {
         try {
-          const active = pickActiveInteractiveSession(readSessionsIndex());
-          if (!active) {
-            return;
-          }
-          if (currentInteractiveSession && currentInteractiveSession.sessionId !== active.sessionId) {
-            const HOOK_GRACE_MS = 9e4;
-            const withinGrace = hookSetAt > 0 && Date.now() - hookSetAt < HOOK_GRACE_MS;
-            if (withinGrace && active.updatedAt < hookSetAt) {
-              writeHookTrace("session_index.hook_grace_suppressed_switch", {
-                from_session_id: currentInteractiveSession.sessionId,
-                to_session_id: active.sessionId,
-                hook_set_at: hookSetAt,
-                candidate_updated_at: active.updatedAt
-              });
-              return;
+          const data = readSessionsIndex();
+          const recognizedEntries = [];
+          for (const [key, row] of Object.entries(data || {})) {
+            if (!row || typeof row !== "object" || typeof row?.sessionId !== "string" || !(key === "agent:main:main" || key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:direct:") || key.startsWith("agent:main:telegram:slash:"))) {
+              continue;
             }
-            writeHookTrace("session_index.active_session_changed", {
-              from_session_id: currentInteractiveSession.sessionId,
-              from_session_key: currentInteractiveSession.key,
-              to_session_id: active.sessionId,
-              to_session_key: active.key
+            const sessionId = String(row.sessionId || "").trim();
+            if (!sessionId) continue;
+            recognizedEntries.push({
+              key,
+              sessionId,
+              sessionFile: getOpenClawSessionFile(sessionId),
+              updatedAt: Number(row.updatedAt || 0)
             });
-            preserveSessionTranscript(currentInteractiveSession.sessionId, currentInteractiveSession.sessionFile, "session-switch");
-            if (!isInternalSessionContext({ sessionKey: currentInteractiveSession.key }, { sessionId: currentInteractiveSession.sessionId }) && isSystemEnabled2("memory") && facade.shouldProcessLifecycleSignal(currentInteractiveSession.sessionId, {
-              label: "ResetSignal",
-              source: "session_index",
-              signature: `session_index:switch:${currentInteractiveSession.key}`
-            })) {
-              facade.markLifecycleSignalFromHook(currentInteractiveSession.sessionId, "ResetSignal");
-              writeDaemonSignal(currentInteractiveSession.sessionId, "reset", {
-                source: "session_index_switch",
-                prior_session_key: currentInteractiveSession.key,
-                next_session_key: active.key
+          }
+          for (const entry of recognizedEntries) {
+            const { key, sessionId, sessionFile, updatedAt } = entry;
+            const prevSessionId = sessionKeyLastSeen.get(key);
+            if (prevSessionId && prevSessionId !== sessionId) {
+              writeHookTrace("session_index.key_transition", {
+                key,
+                from_session_id: prevSessionId,
+                to_session_id: sessionId
+              });
+              const prevFile = getOpenClawSessionFile(prevSessionId);
+              preserveSessionTranscript(prevSessionId, prevFile, "session-key-transition");
+              if (!isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId }) && isSystemEnabled2("memory") && facade.shouldProcessLifecycleSignal(prevSessionId, {
+                label: "ResetSignal",
+                source: "session_index",
+                signature: `session_index:key_transition:${key}`
+              })) {
+                facade.markLifecycleSignalFromHook(prevSessionId, "ResetSignal");
+                writeDaemonSignal(prevSessionId, "reset", {
+                  source: "session_index_key_transition",
+                  session_key: key,
+                  next_session_id: sessionId
+                });
+                writeHookTrace("session_index.signal_queued", {
+                  signal: "reset",
+                  source: "key-transition",
+                  session_id: prevSessionId,
+                  session_key: key
+                });
+              }
+              sessionIndexMessageCounts.delete(prevSessionId);
+            }
+            sessionKeyLastSeen.set(key, sessionId);
+            sessionTranscriptPaths.set(sessionId, sessionFile);
+            const rows = parseSessionMessagesJsonl(sessionFile);
+            const priorCount = sessionIndexMessageCounts.get(sessionId) || 0;
+            sessionIndexMessageCounts.set(sessionId, rows.length);
+            if (rows.length <= priorCount) {
+              continue;
+            }
+            const fresh = rows.slice(priorCount);
+            for (let i = 0; i < fresh.length; i += 1) {
+              const rawText = extractSessionMessageText(fresh[i]).trim();
+              if (!rawText) continue;
+              const rawLines = rawText.split("\n").filter((l) => l.trim());
+              const lastLine = (rawLines[rawLines.length - 1] || "").trim();
+              const stripped = lastLine.replace(/^\[.*?\]\s*/, "").trim();
+              const text = (stripped || rawText).toLowerCase();
+              const commandKey = `${sessionId}:${priorCount + i}:${text}`;
+              if (seenSessionIndexCommandKeys.has(commandKey)) {
+                continue;
+              }
+              let daemonType = null;
+              let lifecycleSignal = null;
+              let commandName = null;
+              if (text === "/new" || text.startsWith("/new ")) {
+                daemonType = "reset";
+                lifecycleSignal = "ResetSignal";
+                commandName = "new";
+              } else if (text === "/reset" || text.startsWith("/reset ")) {
+                daemonType = "reset";
+                lifecycleSignal = "ResetSignal";
+                commandName = "reset";
+              } else if (text === "/compact" || text.startsWith("/compact ")) {
+                daemonType = "compaction";
+                lifecycleSignal = "CompactionSignal";
+                commandName = "compact";
+              }
+              if (!daemonType || !lifecycleSignal || !commandName) {
+                continue;
+              }
+              seenSessionIndexCommandKeys.add(commandKey);
+              writeHookTrace("session_index.command_detected", {
+                session_id: sessionId,
+                session_key: key,
+                command: commandName,
+                text: text.slice(0, 120)
+              });
+              if (isInternalSessionContext({ sessionKey: key }, { sessionId }) || !isSystemEnabled2("memory")) {
+                continue;
+              }
+              preserveSessionTranscript(sessionId, sessionFile, `command-${commandName}`);
+              if (!facade.shouldProcessLifecycleSignal(sessionId, {
+                label: lifecycleSignal,
+                source: "session_index",
+                signature: `session_index:command_${commandName}`
+              })) {
+                writeHookTrace("session_index.signal_suppressed", {
+                  session_id: sessionId,
+                  session_key: key,
+                  command: commandName,
+                  reason: "duplicate"
+                });
+                continue;
+              }
+              facade.markLifecycleSignalFromHook(sessionId, lifecycleSignal);
+              writeDaemonSignal(sessionId, daemonType, {
+                source: `session_index_command_${commandName}`,
+                command: commandName,
+                session_key: key
               });
               writeHookTrace("session_index.signal_queued", {
-                signal: "reset",
-                source: "session-switch",
-                session_id: currentInteractiveSession.sessionId,
-                session_key: currentInteractiveSession.key
+                signal: daemonType,
+                source: `command-${commandName}`,
+                session_id: sessionId,
+                session_key: key
               });
             }
           }
-          currentInteractiveSession = active;
-          sessionTranscriptPaths.set(active.sessionId, active.sessionFile);
-          const rows = parseSessionMessagesJsonl(active.sessionFile);
-          const priorCount = sessionIndexMessageCounts.get(active.sessionId) || 0;
-          sessionIndexMessageCounts.set(active.sessionId, rows.length);
-          if (rows.length <= priorCount) {
-            return;
-          }
-          const fresh = rows.slice(priorCount);
-          for (let i = 0; i < fresh.length; i += 1) {
-            const rawText = extractSessionMessageText(fresh[i]).trim();
-            if (!rawText) continue;
-            const rawLines = rawText.split("\n").filter((l) => l.trim());
-            const lastLine = (rawLines[rawLines.length - 1] || "").trim();
-            const stripped = lastLine.replace(/^\[.*?\]\s*/, "").trim();
-            const text = (stripped || rawText).toLowerCase();
-            const commandKey = `${active.sessionId}:${priorCount + i}:${text}`;
-            if (seenSessionIndexCommandKeys.has(commandKey)) {
-              continue;
-            }
-            let daemonType = null;
-            let lifecycleSignal = null;
-            let commandName = null;
-            if (text === "/new" || text.startsWith("/new ")) {
-              daemonType = "reset";
-              lifecycleSignal = "ResetSignal";
-              commandName = "new";
-            } else if (text === "/reset" || text.startsWith("/reset ")) {
-              daemonType = "reset";
-              lifecycleSignal = "ResetSignal";
-              commandName = "reset";
-            } else if (text === "/compact" || text.startsWith("/compact ")) {
-              daemonType = "compaction";
-              lifecycleSignal = "CompactionSignal";
-              commandName = "compact";
-            }
-            if (!daemonType || !lifecycleSignal || !commandName) {
-              continue;
-            }
-            seenSessionIndexCommandKeys.add(commandKey);
-            writeHookTrace("session_index.command_detected", {
-              session_id: active.sessionId,
-              session_key: active.key,
-              command: commandName,
-              text: text.slice(0, 120)
-            });
-            if (isInternalSessionContext({ sessionKey: active.key }, { sessionId: active.sessionId }) || !isSystemEnabled2("memory")) {
-              continue;
-            }
-            preserveSessionTranscript(active.sessionId, active.sessionFile, `command-${commandName}`);
-            if (!facade.shouldProcessLifecycleSignal(active.sessionId, {
-              label: lifecycleSignal,
-              source: "session_index",
-              signature: `session_index:command_${commandName}`
-            })) {
-              writeHookTrace("session_index.signal_suppressed", {
-                session_id: active.sessionId,
-                session_key: active.key,
-                command: commandName,
-                reason: "duplicate"
-              });
-              continue;
-            }
-            facade.markLifecycleSignalFromHook(active.sessionId, lifecycleSignal);
-            writeDaemonSignal(active.sessionId, daemonType, {
-              source: `session_index_command_${commandName}`,
-              command: commandName,
-              session_key: active.key
-            });
-            writeHookTrace("session_index.signal_queued", {
-              signal: daemonType,
-              source: `command-${commandName}`,
-              session_id: active.sessionId,
-              session_key: active.key
-            });
+          const active = pickActiveInteractiveSession(data);
+          if (active) {
+            currentInteractiveSession = active;
           }
         } catch (err) {
           writeHookTrace("session_index.error", {
@@ -1943,47 +1952,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     onChecked("before_agent_start", async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
-      if (!newSessionId || !currentInteractiveSession) return;
-      if (currentInteractiveSession.sessionId === newSessionId) return;
-      const prior = currentInteractiveSession;
-      writeHookTrace("hook.before_agent_start.session_transition_detected", {
-        from_session_id: prior.sessionId,
-        from_session_key: prior.key,
-        to_session_id: newSessionId
-      });
-      if (!isInternalSessionContext(
-        { sessionKey: prior.key },
-        { sessionId: prior.sessionId }
-      ) && isSystemEnabled2("memory") && facade.shouldProcessLifecycleSignal(prior.sessionId, {
-        label: "ResetSignal",
-        source: "hook",
-        signature: `before_agent_start:session_change:${prior.sessionId}`
-      })) {
-        facade.markLifecycleSignalFromHook(prior.sessionId, "ResetSignal");
-        writeDaemonSignal(prior.sessionId, "reset", {
-          source: "before_agent_start_session_change",
-          prior_session_id: prior.sessionId,
-          prior_session_key: prior.key,
-          new_session_id: newSessionId
-        });
-        console.log(
-          `[quaid][signal] daemon signal reset session=${prior.sessionId} source=before_agent_start_session_change`
-        );
-        writeHookTrace("hook.before_agent_start.session_change_signal_queued", {
-          from_session_id: prior.sessionId,
-          to_session_id: newSessionId
-        });
+      if (!newSessionId) return;
+      writeHookTrace("hook.before_agent_start.session_seen", { session_id: newSessionId });
+      if (!Array.from(sessionKeyLastSeen.values()).includes(newSessionId)) {
+        const syntheticKey = `agent:main:hook:${newSessionId}`;
+        sessionKeyLastSeen.set(syntheticKey, newSessionId);
       }
-      hookSetAt = Date.now();
-      currentInteractiveSession = {
-        key: "agent:main:main",
-        sessionId: newSessionId,
-        sessionFile: getOpenClawSessionFile(newSessionId),
-        mtimeMs: hookSetAt,
-        updatedAt: hookSetAt,
-        lastChannel: "",
-        lastTo: ""
-      };
     }, {
       name: "before-agent-start-session-transition",
       priority: 5
