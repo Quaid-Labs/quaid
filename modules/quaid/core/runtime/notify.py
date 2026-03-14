@@ -343,47 +343,6 @@ def notify_memory_recall(
     return notify_user(message, dry_run=dry_run, channel_override=_resolve_channel("retrieval"))
 
 
-def notify_docs_search(
-    query: str,
-    results: list,
-    dry_run: bool = False
-) -> bool:
-    """
-    Notify user about docs being searched.
-
-    Args:
-        query: The search query used
-        results: List of result dicts with 'doc', 'section', 'score' fields
-        dry_run: If True, don't actually send
-
-    Returns:
-        True if notification sent
-    """
-    if not results:
-        return False
-
-    msg_parts = [f"**[{SYSTEM_LABEL} — Docs Search]**", ""]
-    msg_parts.append(f"_Query: \"{query}\"_")
-    msg_parts.append("")
-
-    for r in results[:5]:  # Limit to top 5
-        doc = r.get("doc", "unknown")
-        section = r.get("section", "")
-        score = r.get("score", 0)
-
-        # Clean up section title
-        if section:
-            section = section[:60] + "..." if len(section) > 60 else section
-            msg_parts.append(f"• `{doc}` — {section} ({int(score*100)}%)")
-        else:
-            msg_parts.append(f"• `{doc}` ({int(score*100)}%)")
-
-    if len(results) > 5:
-        msg_parts.append(f"_...and {len(results) - 5} more_")
-
-    message = "\n".join(msg_parts)
-    return notify_user(message, dry_run=dry_run)
-
 
 def notify_memory_extraction(
     facts_stored: int,

@@ -377,14 +377,6 @@ describe("QuaidFacade", () => {
   // Docs
   // -----------------------------------------------------------------------
 
-  it("docsSearch delegates to execDocsRag", async () => {
-    const execDocsRag = vi.fn(async () => "1. result");
-    const facade = createQuaidFacade(makeMockDeps({ execDocsRag }));
-    const result = await facade.docsSearch("architecture", ["--limit", "5"]);
-    expect(result).toBe("1. result");
-    expect(execDocsRag).toHaveBeenCalledWith("search", ["architecture", "--limit", "5"]);
-  });
-
   it("docsRead delegates to execDocsRegistry", async () => {
     const execDocsRegistry = vi.fn(async () => "# Doc content");
     const facade = createQuaidFacade(makeMockDeps({ execDocsRegistry }));

@@ -4,7 +4,7 @@ Quaid is an active knowledge layer. Use the `quaid` CLI via your Bash tool — n
 
 **Environment:** `QUAID_HOME` and `QUAID_INSTANCE` are baked into hooks at install time. If calling `quaid` from a shell outside of a hook, ensure both are set.
 
-**For full project docs, architecture, and reference index:** read the Quaid project's `PROJECT.md` — found at `$QUAID_HOME/shared/projects/quaid/PROJECT.md` or via `quaid docs search "topic" --project quaid`.
+**For full project docs, architecture, and reference index:** read the Quaid project's `PROJECT.md` — found at `$QUAID_HOME/shared/projects/quaid/PROJECT.md` or via `quaid recall "topic" '{"stores":["docs"],"project":"quaid"}'`.
 
 ---
 
@@ -75,8 +75,8 @@ quaid domain register <name> "description"
 ## Project Docs
 
 ```bash
-quaid docs search "query"                     # semantic RAG search across project docs
-quaid docs search "query" --project <name>    # scoped to one project
+quaid recall "query" '{"stores": ["docs"]}'                     # semantic RAG search across project docs
+quaid recall "query" '{"stores": ["docs"], "project": "<name>"}' # scoped to one project
 quaid docs list [--project <name>]
 quaid docs check                              # check for stale docs
 quaid docs update --apply                     # update stale docs from source diffs
@@ -147,7 +147,7 @@ QUAID_INSTANCE=openclaw quaid recall "query"   # search openclaw's memory from C
 ## Retrieval Policy
 
 - Treat auto-injected memory as hints — verify concrete claims (names, dates, versions) with explicit `recall`.
-- For codebase/architecture questions, include `"docs"` in stores or use `quaid docs search`.
+- For codebase/architecture questions, include `"docs"` in stores: `recall "query" '{"stores":["docs"]}'`.
 - Use `domain_boost` in config before broadening to full recall.
 
 ## Quick Playbooks

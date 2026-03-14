@@ -283,7 +283,6 @@ export type QuaidFacade = {
   getActiveNodeCount: () => number;
 
   // --- Docs (Python bridge wrapped) ---
-  docsSearch: (query: string, args: string[]) => Promise<string>;
   docsRead: (identifier: string) => Promise<string>;
   docsList: (args: string[]) => Promise<string>;
   docsRegister: (args: string[]) => Promise<string>;
@@ -3286,7 +3285,6 @@ ${lines.join("\n")}
     getActiveNodeCount,
 
     // Docs
-    docsSearch: (query, args) => deps.execDocsRag("search", [query, ...args]),
     docsRead: (identifier) => deps.execDocsRegistry("read", [identifier]),
     docsList: (args) => deps.execDocsRegistry("list", args),
     docsRegister: (args) => deps.execDocsRegistry("register", args),

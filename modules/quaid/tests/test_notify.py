@@ -15,7 +15,6 @@ import pytest
 from core.runtime.notify import (
     notify_memory_recall,
     notify_memory_extraction,
-    notify_docs_search,
     notify_user,
     get_last_channel,
     ChannelInfo,
@@ -283,39 +282,6 @@ class TestNotifyMemoryExtraction:
         with _patch_notify_user() as mock_send:
             result = notify_memory_extraction(0, 1, 0, details=details)
             assert result is True
-
-
-# ---------------------------------------------------------------------------
-# notify_docs_search
-# ---------------------------------------------------------------------------
-
-class TestNotifyDocsSearch:
-    """Tests for notify_docs_search() message formatting."""
-
-    def test_empty_results_returns_false(self):
-        assert notify_docs_search("test query", []) is False
-
-    def test_results_formatted(self):
-        results = [
-            {"doc": "memory-system-design.md", "section": "Architecture", "score": 0.92},
-            {"doc": "janitor-reference.md", "section": "Pipeline", "score": 0.85},
-        ]
-        with _patch_notify_user() as mock_send:
-            result = notify_docs_search("memory architecture", results)
-            assert result is True
-            msg = mock_send.call_args[0][0]
-            assert "memory architecture" in msg
-            assert "memory-system-design.md" in msg
-            assert "92%" in msg
-
-    def test_max_five_results(self):
-        """Only top 5 results shown, with overflow count."""
-        results = [{"doc": f"doc{i}.md", "section": f"Sec{i}", "score": 0.9 - i * 0.1}
-                    for i in range(8)]
-        with _patch_notify_user() as mock_send:
-            notify_docs_search("query", results)
-            msg = mock_send.call_args[0][0]
-            assert "3 more" in msg
 
 
 # ---------------------------------------------------------------------------
