@@ -217,13 +217,29 @@ function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteract
     })
     .filter((row) => row.sessionId);
   // Sort priority:
-  // 1. TUI sessions (agent:main:tui-*) outrank the generic agent:main:main entry.
-  //    When a user is active in the TUI, OC may still refresh agent:main:main's
-  //    updatedAt for background/relay purposes, causing it to win on timestamp alone
-  //    and making the watcher track the wrong (often empty) session.
+  // 1. TUI/telegram sessions (agent:main:tui-*, agent:main:telegram:*) outrank
+  //    agent:main:main.  When a user is active in the TUI, OC may still refresh
+  //    agent:main:main's updatedAt for background/relay purposes, causing it to
+  //    win on timestamp alone and making the watcher track the wrong session.
+  //    EXCEPTION: if all TUI/telegram entries are stale (>5 min older than main),
+  //    fall back to recency comparison — the TUI is no longer actively registered
+  //    and main holds the genuine current session.
   // 2. Within the same tier, prefer newest updatedAt; break ties with transcript mtimeMs.
+  const TIER_STALENESS_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+  const mainEntry = entries.find((e) => e.key === "agent:main:main");
+  const isHighTierKey = (key: string): boolean =>
+    key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:");
+  const highTierEntries = entries.filter((e) => isHighTierKey(e.key));
+  const bestHighTierUpdatedAt = highTierEntries.reduce(
+    (max, e) => Math.max(max, e.updatedAt),
+    0,
+  );
+  // If main is significantly newer than every TUI/telegram entry, suppress tier boost.
+  const suppressTierBoost =
+    mainEntry != null
+    && mainEntry.updatedAt - bestHighTierUpdatedAt > TIER_STALENESS_THRESHOLD_MS;
   const sessionTier = (key: string): number =>
-    key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:") ? 1 : 0;
+    (!suppressTierBoost && isHighTierKey(key)) ? 1 : 0;
   entries.sort((a, b) => {
     const tierDiff = sessionTier(a.key) - sessionTier(b.key);
     if (tierDiff !== 0) return tierDiff;

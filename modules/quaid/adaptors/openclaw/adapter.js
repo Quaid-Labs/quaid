@@ -156,7 +156,16 @@ function pickActiveInteractiveSession(data) {
       lastTo: String(row?.lastTo || "").trim()
     };
   }).filter((row) => row.sessionId);
-  const sessionTier = (key) => key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:") ? 1 : 0;
+  const TIER_STALENESS_THRESHOLD_MS = 5 * 60 * 1e3;
+  const mainEntry = entries.find((e) => e.key === "agent:main:main");
+  const isHighTierKey = (key) => key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:");
+  const highTierEntries = entries.filter((e) => isHighTierKey(e.key));
+  const bestHighTierUpdatedAt = highTierEntries.reduce(
+    (max, e) => Math.max(max, e.updatedAt),
+    0
+  );
+  const suppressTierBoost = mainEntry != null && mainEntry.updatedAt - bestHighTierUpdatedAt > TIER_STALENESS_THRESHOLD_MS;
+  const sessionTier = (key) => !suppressTierBoost && isHighTierKey(key) ? 1 : 0;
   entries.sort((a, b) => {
     const tierDiff = sessionTier(a.key) - sessionTier(b.key);
     if (tierDiff !== 0) return tierDiff;
