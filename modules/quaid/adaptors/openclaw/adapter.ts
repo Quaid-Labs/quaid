@@ -2062,6 +2062,50 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (active) {
             currentInteractiveSession = active;
           }
+
+          // Orphaned-reset scan: OC TUI /reset restarts the gateway process,
+          // so before_agent_start fires BEFORE OC creates the .reset.* backup.
+          // All hook-based detection loses the race. Poll here instead — runs
+          // every second, fires a reset signal within 1s of OC creating the backup.
+          if (isSystemEnabled("memory")) {
+            try {
+              const baseDir = getOpenClawSessionsBaseDir();
+              const scanFiles = fs.readdirSync(baseDir);
+              const nowTickMs = Date.now();
+              const ORPHAN_RESET_WINDOW_MS = 300_000; // 5 minutes
+              for (const fname of scanFiles) {
+                const dotIdx = fname.indexOf(".jsonl.reset.");
+                if (dotIdx < 0) continue;
+                const sid = fname.slice(0, dotIdx);
+                if (!sid) continue;
+                try {
+                  const backupStat = fs.statSync(path.join(baseDir, fname));
+                  const age = nowTickMs - backupStat.mtimeMs;
+                  if (age < 0 || age >= ORPHAN_RESET_WINDOW_MS) continue;
+                  // Confirm the original JSONL is 0 bytes (content was moved to backup)
+                  let origSize = -1;
+                  try { origSize = fs.statSync(getOpenClawSessionFile(sid)).size; } catch {}
+                  if (origSize !== 0) continue;
+                  if (!facade.shouldProcessLifecycleSignal(sid, {
+                    label: "ResetSignal",
+                    source: "watcher_scan",
+                    signature: `watcher_scan:orphan_reset:${sid}`,
+                  })) continue;
+                  facade.markLifecycleSignalFromHook(sid, "ResetSignal");
+                  writeDaemonSignal(sid, "reset", {
+                    source: "orphan_reset_scan",
+                    backup_file: fname,
+                  });
+                  writeHookTrace("session_index.orphan_reset_detected", {
+                    session_id: sid,
+                    backup_file: fname,
+                    age_ms: age,
+                  });
+                  console.log(`[quaid][signal] orphan reset detected session=${sid} backup=${fname}`);
+                } catch {}
+              }
+            } catch {}
+          }
         } catch (err: unknown) {
           writeHookTrace("session_index.error", {
             error: String((err as Error)?.message || err),
