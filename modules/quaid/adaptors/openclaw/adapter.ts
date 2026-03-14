@@ -2082,10 +2082,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   const backupStat = fs.statSync(path.join(baseDir, fname));
                   const age = nowTickMs - backupStat.mtimeMs;
                   if (age < 0 || age >= ORPHAN_RESET_WINDOW_MS) continue;
-                  // Confirm the original JSONL is 0 bytes (content was moved to backup)
+                  // Confirm the original JSONL has no content (was moved/emptied to backup).
+                  // origSize = -1 means file doesn't exist (OC renamed/moved it).
+                  // origSize = 0 means OC emptied it in place.
+                  // origSize > 0 means the session still has unprocessed content — skip.
                   let origSize = -1;
                   try { origSize = fs.statSync(getOpenClawSessionFile(sid)).size; } catch {}
-                  if (origSize !== 0) continue;
+                  if (origSize > 0) continue;
                   if (!facade.shouldProcessLifecycleSignal(sid, {
                     label: "ResetSignal",
                     source: "watcher_scan",
