@@ -224,7 +224,41 @@ function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteract
     if (uDiff !== 0) return uDiff;
     return a.mtimeMs - b.mtimeMs;
   });
-  return entries[entries.length - 1] || null;
+  if (entries.length > 0) {
+    return entries[entries.length - 1];
+  }
+
+  // Fallback: sessions.json absent or has no recognized entries (e.g. fresh TUI install).
+  // Scan the sessions directory for the most recently modified .jsonl transcript file.
+  try {
+    const dir = getOpenClawSessionsBaseDir();
+    const names = fs.readdirSync(dir).filter((n) =>
+      n.endsWith(".jsonl") && !n.includes(".jsonl.") && n.length > 6
+    );
+    if (!names.length) return null;
+    let best: { sessionId: string; sessionFile: string; mtimeMs: number } | null = null;
+    for (const name of names) {
+      const sessionId = name.slice(0, -6); // strip .jsonl
+      const sessionFile = path.join(dir, name);
+      let mtimeMs = 0;
+      try { mtimeMs = fs.statSync(sessionFile).mtimeMs; } catch {}
+      if (!best || mtimeMs > best.mtimeMs) {
+        best = { sessionId, sessionFile, mtimeMs };
+      }
+    }
+    if (!best) return null;
+    return {
+      key: "agent:main:filesystem-fallback",
+      sessionId: best.sessionId,
+      sessionFile: best.sessionFile,
+      mtimeMs: best.mtimeMs,
+      updatedAt: best.mtimeMs,
+      lastChannel: "",
+      lastTo: "",
+    };
+  } catch {
+    return null;
+  }
 }
 
 function latestResetBackup(sessionId: string): string | null {

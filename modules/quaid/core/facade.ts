@@ -1302,6 +1302,22 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
   function resolveLifecycleHookSessionId(event: unknown, ctx: unknown, messages: unknown[]): string {
     const eventObj = (event && typeof event === "object") ? event as Record<string, unknown> : {};
     const context = (ctx && typeof ctx === "object") ? ctx as Record<string, unknown> : {};
+
+    // Prefer sessions.json key lookup — it maps OC session keys to transcript file UUIDs,
+    // which are authoritative. Some OC versions emit a different sessionId in hook events
+    // than the UUID used for the transcript filename; sessions.json is always correct.
+    const eventSessionKey = String(eventObj.sessionKey || eventObj.targetSessionKey || "").trim();
+    const fromEventKey = deps.resolveSessionIdFromSessionKey?.(eventSessionKey) || "";
+    if (fromEventKey) {
+      return fromEventKey;
+    }
+    const ctxSessionKey = String(context.sessionKey || "").trim();
+    const fromCtxKey = deps.resolveSessionIdFromSessionKey?.(ctxSessionKey) || "";
+    if (fromCtxKey) {
+      return fromCtxKey;
+    }
+
+    // Fall back to direct sessionId from event (may differ from transcript UUID in some OC builds)
     const direct = String(eventObj.sessionId || context.sessionId || "").trim();
     if (direct) {
       return direct;
@@ -1313,16 +1329,6 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
     ).trim();
     if (fromEventEntry) {
       return fromEventEntry;
-    }
-    const eventSessionKey = String(eventObj.sessionKey || eventObj.targetSessionKey || "").trim();
-    const fromEventKey = deps.resolveSessionIdFromSessionKey?.(eventSessionKey) || "";
-    if (fromEventKey) {
-      return fromEventKey;
-    }
-    const ctxSessionKey = String(context.sessionKey || "").trim();
-    const fromCtxKey = deps.resolveSessionIdFromSessionKey?.(ctxSessionKey) || "";
-    if (fromCtxKey) {
-      return fromCtxKey;
     }
     return extractSessionId(messages, ctx);
   }
