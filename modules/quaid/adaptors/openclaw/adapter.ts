@@ -2428,23 +2428,57 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
       if (!isAlreadyTracked && isSystemEnabled("memory")) {
-        // Find the prior session using JSONL file mtime — the session the user was
-        // just in is always the one OC most recently wrote to. sessionLastActivityMs
-        // is unreliable on fresh gateway boots because all existing sessions get
-        // bulk-initialized with the same timestamp on the first watcher tick.
+        // Find the prior session. Strategy:
+        // 1. "Just reset" detection: look for a session whose JSONL is 0 bytes AND
+        //    has a very recent .reset.* backup (< 120s old). This is the unambiguous
+        //    signature of an OC /reset — only the session that was just reset shows
+        //    this pattern. This is more reliable than mtime because the reset operation
+        //    itself empties the JSONL (setting its mtime to "now"), which can make the
+        //    reset session appear artificially recent OR other sessions can have
+        //    higher mtimes for unrelated reasons (background OC activity).
+        // 2. Fallback to JSONL mtime if no reset-signature session found.
+        const RECENT_RESET_WINDOW_MS = 120_000;
+        const nowMs = Date.now();
         let bestPriorSessionId: string | null = null;
-        let bestMtimeMs = 0;
+        let detectionMethod = "mtime";
+
+        // Pass 1: look for the definitive just-reset signature.
         for (const [key, sid] of sessionKeyLastSeen.entries()) {
           if (key.startsWith("agent:main:hook:")) continue;
           if (sid === newSessionId) continue;
           try {
-            const mtimeMs = fs.statSync(getOpenClawSessionFile(sid)).mtimeMs;
-            if (mtimeMs > bestMtimeMs) {
-              bestMtimeMs = mtimeMs;
-              bestPriorSessionId = sid;
+            const jsonlPath = getOpenClawSessionFile(sid);
+            const stat = fs.statSync(jsonlPath);
+            if (stat.size === 0) {
+              const backup = latestResetBackup(sid);
+              if (backup) {
+                const backupStat = fs.statSync(backup);
+                if (nowMs - backupStat.mtimeMs < RECENT_RESET_WINDOW_MS) {
+                  bestPriorSessionId = sid;
+                  detectionMethod = "reset_signature";
+                  break;
+                }
+              }
             }
           } catch {}
         }
+
+        // Pass 2: fall back to JSONL mtime if no reset-signature session found.
+        if (!bestPriorSessionId) {
+          let bestMtimeMs = 0;
+          for (const [key, sid] of sessionKeyLastSeen.entries()) {
+            if (key.startsWith("agent:main:hook:")) continue;
+            if (sid === newSessionId) continue;
+            try {
+              const mtimeMs = fs.statSync(getOpenClawSessionFile(sid)).mtimeMs;
+              if (mtimeMs > bestMtimeMs) {
+                bestMtimeMs = mtimeMs;
+                bestPriorSessionId = sid;
+              }
+            } catch {}
+          }
+        }
+
         if (bestPriorSessionId) {
           const priorKey = Array.from(sessionKeyLastSeen.entries())
             .find(([k, v]) => v === bestPriorSessionId && !k.startsWith("agent:main:hook:"))?.[0]
@@ -2453,6 +2487,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             new_session_id: newSessionId,
             prior_session_id: bestPriorSessionId,
             prior_key: priorKey,
+            detection_method: detectionMethod,
           });
           if (
             !isInternalSessionContext({ sessionKey: priorKey }, { sessionId: bestPriorSessionId })
