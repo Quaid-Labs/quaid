@@ -150,6 +150,41 @@ The example.local OC instance uses Solomon's Claude.ai OAuth token (`sk-ant-oat0
 
 ---
 
+## 2026-03-14 — M1 OC Second Run (canary, example.local, fresh reinstall)
+
+### Bugs Found
+
+| Bug | Severity | Notes |
+|-----|----------|-------|
+| M1: `resolveLifecycleHookSessionId` uses `eventObj.sessionId` before sessions.json key lookup | High | OC hook events carry an internal session UUID that differs from the transcript filename. sessions.json is authoritative. Fix: try `resolveSessionIdFromSessionKey(eventSessionKey)` first, fall back to direct event sessionId. |
+| M1: TUI sessions (`agent:main:tui-*`) lose to `agent:main:main` on `updatedAt` in `pickActiveInteractiveSession` | High | OC may refresh `agent:main:main.updatedAt` for background/relay activity while the user is active in a TUI session, causing the session watcher to track the wrong (often empty) session. Fix: give TUI and telegram session keys a higher priority tier than `agent:main:main`. |
+| M1: `memoryConfigCandidates()` reads `QUAID_HOME/config/memory.json` which doesn't exist on fresh installs | Critical | Installer writes per-instance config to `QUAID_HOME/QUAID_INSTANCE/config/memory.json`; adapter was never looking there. `getMemoryConfig()` returned `buildFallbackMemoryConfig()` with no `autoInject` key → always defaulted to `true`. All config changes (autoInject, model tier) were written to the right file but silently ignored. Fix: prepend `QUAID_HOME/QUAID_INSTANCE/config/memory.json` to candidates list. |
+| M1/rate-limit: Repeated retry storms exhaust OAuth daily cap | Low | Same infra issue as previous run. Skip to non-LLM milestones (M9, M10) while waiting for reset. |
+
+### Fixes Shipped (commits on canary)
+
+| Commit | Description |
+|--------|-------------|
+| `0139dd41` | `resolveLifecycleHookSessionId`: sessions.json key lookup before event sessionId |
+| `0139dd41` | `pickActiveInteractiveSession`: filesystem fallback when sessions.json absent |
+| `533aa056` | `pickActiveInteractiveSession`: TUI sessions outrank `agent:main:main` (tier sort) |
+| `d19645f4` | `memoryConfigCandidates`: read per-instance config first (`QUAID_HOME/INSTANCE/config/memory.json`) |
+
+### Results
+
+| Milestone | Result | Notes |
+|-----------|--------|-------|
+| M0 | ✅ PASS | Fresh reinstall, health/doctor passed, autoInject=false set |
+| M1 | ⏸ BLOCKED (env) | Config-path fix confirmed working (first bare turn clean, no injection). Provider rate-limited on first agent turn — daily cap. Retry after reset. |
+| M9–M10 | 🔄 IN PROGRESS | Running non-LLM milestones while waiting for rate limit reset. |
+
+### Notes
+
+- Hot-swapping adapter.js requires an OC **gateway restart**, not just a new TUI session. The old adapter.js stays in memory until the gateway process is restarted.
+- `retrieval.autoInject=false` must be set via Python direct write (not `quaid config set`) on fresh installs because `@clack/prompts` is missing from the installed plugin's `node_modules`.
+
+---
+
 ## Previous Sessions
 
 ### 2026-03-08 — CC Hook Wiring Verification
