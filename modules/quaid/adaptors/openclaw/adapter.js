@@ -289,10 +289,22 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       }
     }
   }
-  const resolvedPath = sessionTranscriptPaths.get(sessionId) || "";
+  let resolvedPath = sessionTranscriptPaths.get(sessionId) || "";
   if (!resolvedPath) {
     console.warn(`[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping signal`);
     return null;
+  }
+  if (signalType === "reset") {
+    try {
+      const stat = fs.statSync(resolvedPath);
+      if (stat.size === 0) {
+        const backup = latestResetBackup(sessionId);
+        if (backup) {
+          resolvedPath = backup;
+        }
+      }
+    } catch {
+    }
   }
   try {
     fs.mkdirSync(DAEMON_SIGNAL_DIR, { recursive: true });
