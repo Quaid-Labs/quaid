@@ -525,11 +525,20 @@ function createAdapterMemoryConfigResolver(): AdapterMemoryConfigResolver {
   let memoryConfig: any = null;
 
   function memoryConfigCandidates(): string[] {
-    return [
+    const candidates: string[] = [];
+    // Instance-specific config wins: QUAID_HOME/QUAID_INSTANCE/config/memory.json
+    const instance = String(process.env.QUAID_INSTANCE || "").trim();
+    if (instance) {
+      candidates.push(path.join(WORKSPACE, instance, "config", "memory.json"));
+    }
+    // Shared config as fallback (embeddings + cross-instance settings)
+    candidates.push(
+      path.join(WORKSPACE, "shared", "config", "memory.json"),
       path.join(WORKSPACE, "config", "memory.json"),
       path.join(os.homedir(), ".quaid", "memory-config.json"),
       path.join(process.cwd(), "memory-config.json"),
-    ];
+    );
+    return candidates;
   }
 
   function resolveMemoryConfigPath(): string {
