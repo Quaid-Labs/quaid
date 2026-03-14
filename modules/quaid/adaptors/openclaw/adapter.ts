@@ -105,8 +105,13 @@ const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 90_000;
 
-// Daemon signal infrastructure — writes extraction signals for the shared Python daemon
-const DAEMON_SIGNAL_DIR = path.join(WORKSPACE, "data", "extraction-signals");
+// Daemon signal infrastructure — writes extraction signals for the shared Python daemon.
+// Use the instance-specific path when QUAID_INSTANCE is set, mirroring the Python
+// daemon's _signal_dir() = _instance_root() / "data" / "extraction-signals".
+const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
+const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE
+  ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "extraction-signals")
+  : path.join(WORKSPACE, "data", "extraction-signals");
 const sessionTranscriptPaths = new Map<string, string>();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
 const SESSION_INDEX_POLL_MS = 1000;
