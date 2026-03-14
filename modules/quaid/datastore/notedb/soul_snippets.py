@@ -1430,7 +1430,7 @@ def apply_decisions(
                     processed_snippets.setdefault(filename, []).append(original_text)
                 else:
                     file_path = _resolve_writable_file_path(filename)
-                    if not file_path.exists():
+                    if file_path is None or not file_path.exists():
                         stats["errors"].append(f"Skipped {filename}[{snippet_idx+1}]: file missing")
                     else:
                         try:

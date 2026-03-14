@@ -77,10 +77,24 @@ def hook_inject(args):
             if not existing.get("transcript_path"):
                 from lib.adapter import get_adapter
                 sessions_dir = get_adapter().get_sessions_dir()
+                transcript_path = ""
                 if sessions_dir:
                     for candidate in Path(sessions_dir).rglob(f"{session_id}.jsonl"):
-                        write_cursor(session_id, 0, str(candidate))
+                        transcript_path = str(candidate)
                         break
+                # Fallback: rglob misses when the transcript hasn't been created yet
+                # (race: CC creates the .jsonl file after UserPromptSubmit fires).
+                # Derive the expected path from cwd using CC's encoding scheme
+                # (abs path with '/' replaced by '-') so the daemon can discover
+                # the session once the transcript exists and has content.
+                if not transcript_path:
+                    hook_cwd = hook_input.get("cwd", "").strip() if hook_input else ""
+                    if hook_cwd and sessions_dir:
+                        cwd_encoded = hook_cwd.replace("/", "-")
+                        predicted = Path(sessions_dir) / cwd_encoded / f"{session_id}.jsonl"
+                        transcript_path = str(predicted)
+                if transcript_path:
+                    write_cursor(session_id, 0, transcript_path)
         except Exception:
             pass
 
@@ -375,7 +389,10 @@ def hook_session_init(args):
             if content:
                 sections.append(f"--- {special_file} ---\n{content}")
 
-    # 2. Collect TOOLS.md and AGENTS.md from all project subdirs
+    # 2. Collect TOOLS.md and AGENTS.md from all project subdirs.
+    #    Also include canonical_paths from the project registry so that
+    #    projects whose docs live outside projects_dir (e.g. in an OC silo
+    #    but registered as shared) are included without requiring symlinks.
     try:
         subdirs = sorted(
             [d for d in projects_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
@@ -384,8 +401,35 @@ def hook_session_init(args):
     except OSError:
         subdirs = []
 
+    # Collect registry canonical_paths for projects not already under projects_dir.
+    # Keyed by project name so registry entries win for the same name.
+    registry_extra: Dict[str, Path] = {}
+    try:
+        from core.project_registry import list_projects as _list_projects
+        for proj_name, proj_entry in _list_projects().items():
+            canonical = Path(proj_entry.get("canonical_path", "")).resolve()
+            if canonical.is_dir() and not canonical.is_relative_to(projects_dir.resolve()):
+                registry_extra[proj_name] = canonical
+    except Exception:
+        pass
+
+    # Merge: projects_dir subdirs first, then registry extras not yet covered.
+    seen_names = {d.name for d in subdirs}
+    extra_subdirs = sorted(
+        [(name, path) for name, path in registry_extra.items() if name not in seen_names],
+        key=lambda t: (0 if t[0] == "quaid" else 1, t[0]),
+    )
+
     for project_dir in subdirs:
         project_name = project_dir.name
+        for doc_file in ("TOOLS.md", "AGENTS.md"):
+            fpath = project_dir / doc_file
+            if fpath.is_file():
+                content = fpath.read_text(encoding="utf-8").strip()
+                if content:
+                    sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
+
+    for project_name, project_dir in extra_subdirs:
         for doc_file in ("TOOLS.md", "AGENTS.md"):
             fpath = project_dir / doc_file
             if fpath.is_file():

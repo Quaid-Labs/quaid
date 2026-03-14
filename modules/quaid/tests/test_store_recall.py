@@ -963,6 +963,40 @@ class TestRecallTelemetry:
         assert captured["kwargs"]["use_routing"] is True
         assert captured["kwargs"]["planner_profile"] == "aggressive"
 
+    def test_recall_fast_returns_list_by_default(self):
+        """Regression: return_meta=False (default) must return List[Dict], not tuple.
+
+        hook_inject calls recall_fast() and iterates the result as a list of dicts.
+        If recall_fast returns a tuple (rows, meta), _format_memories crashes with
+        'list object has no attribute get'.
+        """
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_recall(query, **kwargs):
+            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            result = mg.recall_fast("Where does Maya work?")
+
+        assert isinstance(result, list), (
+            f"recall_fast() with return_meta=False must return list, got {type(result)}"
+        )
+
+    def test_recall_fast_returns_tuple_when_return_meta_true(self):
+        """return_meta=True returns (rows, meta) tuple."""
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_recall(query, **kwargs):
+            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            result = mg.recall_fast("Where does Maya work?", return_meta=True)
+
+        assert isinstance(result, tuple)
+        rows, meta = result
+        assert isinstance(rows, list)
+        assert isinstance(meta, dict)
+
     def test_apply_mmr_skips_diversity_loop_when_results_fit_limit(self, tmp_path):
         from datastore.memorydb.memory_graph import _apply_mmr
 

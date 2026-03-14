@@ -4754,7 +4754,7 @@ def recall_fast(
     meta = dict(meta or {})
     meta["mode"] = "fast"
     _attach_recall_meta(rows, meta)
-    return rows, meta
+    return (rows, meta) if return_meta else rows
 
 
 def _drill_plan_queries(
