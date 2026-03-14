@@ -1959,12 +1959,17 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
       if (!isAlreadyTracked && isSystemEnabled2("memory")) {
         let bestPriorSessionId = null;
-        let bestActivityMs = 0;
-        for (const [sid, activityMs] of sessionLastActivityMs.entries()) {
+        let bestMtimeMs = 0;
+        for (const [key, sid] of sessionKeyLastSeen.entries()) {
+          if (key.startsWith("agent:main:hook:")) continue;
           if (sid === newSessionId) continue;
-          if (activityMs > bestActivityMs) {
-            bestActivityMs = activityMs;
-            bestPriorSessionId = sid;
+          try {
+            const mtimeMs = fs.statSync(getOpenClawSessionFile(sid)).mtimeMs;
+            if (mtimeMs > bestMtimeMs) {
+              bestMtimeMs = mtimeMs;
+              bestPriorSessionId = sid;
+            }
+          } catch {
           }
         }
         if (bestPriorSessionId) {
