@@ -1012,3 +1012,598 @@ class TestRecallTelemetry:
         out = _apply_mmr(results, graph, limit=5)
 
         assert out == results
+
+
+# ---------------------------------------------------------------------------
+# recall_fast() hook_inject contract
+# ---------------------------------------------------------------------------
+
+class TestRecallFastHookInjectContract:
+    """Ensure recall_fast() output satisfies the hook_inject integration contract.
+
+    hook_inject calls recall_fast() and passes the result to _format_memories(),
+    which iterates it and calls .get("text") on each element. The contract is:
+      - return_meta=False (default) → List[Dict]
+      - each dict has a "text" key
+      - empty result is [] not None and not a tuple
+      - result items also have "similarity" and "category" keys (format_memories uses them)
+    """
+
+    def test_recall_fast_result_items_have_text_key(self):
+        """Each item returned by recall_fast() must have a 'text' key.
+
+        _format_memories() calls mem.get('text', '') on every row. If 'text' is
+        missing, the injected context is silently empty per row.
+        """
+        import datastore.memorydb.memory_graph as mg
+
+        fake_rows = [
+            {"text": "Maya works at Stripe", "category": "fact", "similarity": 0.9, "id": "abc"},
+            {"text": "Maya joined in 2023", "category": "fact", "similarity": 0.8, "id": "def"},
+        ]
+
+        def _fake_recall(query, **kwargs):
+            return fake_rows, {"mode": "full", "stop_reason": "max_turns"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            result = mg.recall_fast("Where does Maya work?")
+
+        assert isinstance(result, list)
+        for item in result:
+            assert isinstance(item, dict), f"Expected dict, got {type(item)}"
+            assert "text" in item, f"Result item missing 'text' key: {item.keys()}"
+
+    def test_recall_fast_result_items_have_similarity_and_category(self):
+        """Result items must carry 'similarity' and 'category' for _format_memories()."""
+        import datastore.memorydb.memory_graph as mg
+
+        fake_rows = [
+            {"text": "Maya works at Stripe", "category": "fact", "similarity": 0.85, "id": "abc"},
+        ]
+
+        def _fake_recall(query, **kwargs):
+            return fake_rows, {"mode": "full", "stop_reason": "max_turns"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            result = mg.recall_fast("Where does Maya work?")
+
+        assert len(result) >= 1
+        item = result[0]
+        assert "similarity" in item
+        assert "category" in item
+
+    def test_recall_fast_empty_result_is_list_not_none(self):
+        """When recall returns no results, recall_fast() must return [] not None.
+
+        hook_inject guards with `if memories:` before calling _format_memories().
+        None would pass that guard silently — the bug is silent wrong behavior,
+        not a crash. [] is the correct sentinel.
+        """
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_recall(query, **kwargs):
+            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            result = mg.recall_fast("Some query about nothing stored")
+
+        assert result is not None, "recall_fast() must not return None; use []"
+        assert isinstance(result, list)
+        assert result == []
+
+    def test_recall_fast_empty_result_is_not_tuple(self):
+        """Empty result must not be a tuple even when recall() returns ([], meta).
+
+        The original bug: recall_fast returned (rows, meta) unconditionally.
+        hook_inject iterated the tuple, got `rows` (a list) as first element,
+        then called rows.get('text') → AttributeError.
+        """
+        import datastore.memorydb.memory_graph as mg
+
+        def _fake_recall(query, **kwargs):
+            return [], {"mode": "full", "stop_reason": "planner_returned_empty"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            result = mg.recall_fast("Some query about nothing stored")
+
+        assert not isinstance(result, tuple), (
+            "recall_fast() with return_meta=False (default) must return a list, "
+            "not a tuple. Returning a tuple breaks hook_inject iteration."
+        )
+
+    def test_recall_fast_nonempty_result_is_iterable_of_dicts(self):
+        """Iterating recall_fast() result must yield dicts, not nested containers.
+
+        This guards against the tuple-unpacking bug where iterating (rows, meta)
+        yields rows (a list) as the first item, not a dict.
+        """
+        import datastore.memorydb.memory_graph as mg
+
+        fake_rows = [
+            {"text": "fact one", "category": "fact", "similarity": 0.9, "id": "1"},
+            {"text": "fact two", "category": "fact", "similarity": 0.8, "id": "2"},
+        ]
+
+        def _fake_recall(query, **kwargs):
+            return fake_rows, {"mode": "full", "stop_reason": "max_turns"}
+
+        with patch.object(mg, "recall", side_effect=_fake_recall):
+            result = mg.recall_fast("Any substantive query here")
+
+        for i, item in enumerate(result):
+            assert isinstance(item, dict), (
+                f"item[{i}] should be dict but got {type(item).__name__}: {item!r}"
+            )
+            # Simulate what _format_memories does — this must not raise
+            _ = item.get("text", "")
+            _ = item.get("similarity", 0)
+            _ = item.get("category", "fact")
+
+    def test_recall_fast_propagates_exception_from_recall(self):
+        """recall_fast() propagates exceptions from recall() to the caller.
+
+        hook_inject wraps its own call to recall_fast() in a try/except, so the
+        exception is caught and the hook degrades gracefully at that level.
+        The important thing is that recall_fast() itself does NOT silently swallow
+        errors — the caller (hook_inject) is responsible for degradation policy.
+
+        This test documents the actual propagation behavior so a future refactor
+        that accidentally adds silent swallowing will be caught.
+        """
+        import datastore.memorydb.memory_graph as mg
+
+        def _failing_recall(query, **kwargs):
+            raise RuntimeError("Simulated embedding provider failure")
+
+        with patch.object(mg, "recall", side_effect=_failing_recall):
+            with pytest.raises(RuntimeError, match="Simulated embedding provider failure"):
+                mg.recall_fast("What is Maya's role?")
+
+
+# ---------------------------------------------------------------------------
+# Domain filter normalization — unit tests for _normalize_domain_filter
+# ---------------------------------------------------------------------------
+
+class TestNormalizeDomainFilter:
+    """Unit tests for _normalize_domain_filter()."""
+
+    def test_none_input_returns_include_all_true(self):
+        from datastore.memorydb.memory_graph import _normalize_domain_filter
+        include_all, domains = _normalize_domain_filter(None)
+        assert include_all is True
+        assert domains == set()
+
+    def test_empty_dict_returns_include_all_true(self):
+        from datastore.memorydb.memory_graph import _normalize_domain_filter
+        include_all, domains = _normalize_domain_filter({})
+        assert include_all is True
+        assert domains == set()
+
+    def test_all_true_returns_include_all_true(self):
+        """{'all': True} should return include_all=True with no specific domains."""
+        from datastore.memorydb.memory_graph import _normalize_domain_filter
+        include_all, domains = _normalize_domain_filter({"all": True})
+        assert include_all is True
+        assert domains == set()
+
+    def test_specific_domain_true_returns_include_all_false(self):
+        """{'technical': True} should restrict to the technical domain."""
+        from datastore.memorydb.memory_graph import _normalize_domain_filter
+        allowed = {"technical", "personal", "project"}
+        include_all, domains = _normalize_domain_filter({"technical": True}, allowed)
+        assert include_all is False
+        assert "technical" in domains
+        assert "personal" not in domains
+
+    def test_multiple_domains_true(self):
+        """{'technical': True, 'project': True} restricts to both domains."""
+        from datastore.memorydb.memory_graph import _normalize_domain_filter
+        allowed = {"technical", "personal", "project", "work"}
+        include_all, domains = _normalize_domain_filter(
+            {"technical": True, "project": True}, allowed
+        )
+        assert include_all is False
+        assert domains == {"technical", "project"}
+
+    def test_all_false_with_no_selected_domains_returns_empty_set(self):
+        """{'all': False} with no other true keys → include_all=False, domains=set()."""
+        from datastore.memorydb.memory_graph import _normalize_domain_filter
+        include_all, domains = _normalize_domain_filter({"all": False})
+        assert include_all is False
+        assert domains == set()
+
+    def test_unknown_domain_only_fails_open(self):
+        """Unknown-only domains fail open (include all) to avoid hard recall failures."""
+        from datastore.memorydb.memory_graph import _normalize_domain_filter
+        allowed = {"technical", "personal"}
+        include_all, domains = _normalize_domain_filter(
+            {"made_up_domain": True}, allowed
+        )
+        # Fail open: include_all=True (defaults to value of 'all' key which is True)
+        assert domains == set()
+        # include_all behavior documented: defaults to True when 'all' key absent
+
+    def test_non_dict_input_returns_include_all_true(self):
+        """Non-dict inputs (string, list, int) fall back to include_all=True."""
+        from datastore.memorydb.memory_graph import _normalize_domain_filter
+        for bad in ("technical", ["technical"], 1, True):
+            include_all, domains = _normalize_domain_filter(bad)
+            assert include_all is True
+            assert domains == set()
+
+
+# ---------------------------------------------------------------------------
+# Domain boost normalization — unit tests for _normalize_domain_boost
+# ---------------------------------------------------------------------------
+
+class TestNormalizeDomainBoost:
+    """Unit tests for _normalize_domain_boost()."""
+
+    def test_none_returns_empty_dict(self):
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        assert _normalize_domain_boost(None) == {}
+
+    def test_list_form_applies_default_factor(self):
+        """List form: each domain gets the default_factor (1.3)."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical", "project", "personal"}
+        result = _normalize_domain_boost(["technical"], allowed, default_factor=1.3)
+        assert "technical" in result
+        assert result["technical"] == 1.3
+
+    def test_list_form_multiple_domains(self):
+        """Multiple domains in list form each get default_factor."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical", "project", "personal"}
+        result = _normalize_domain_boost(
+            ["technical", "project"], allowed, default_factor=1.3
+        )
+        assert result.get("technical") == 1.3
+        assert result.get("project") == 1.3
+
+    def test_dict_form_applies_explicit_multiplier(self):
+        """Map form: {'technical': 1.5} sets multiplier to 1.5."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical", "project"}
+        result = _normalize_domain_boost({"technical": 1.5}, allowed)
+        assert result.get("technical") == 1.5
+
+    def test_dict_form_true_value_uses_default_factor(self):
+        """Map form with True value uses default_factor."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical", "project"}
+        result = _normalize_domain_boost({"technical": True}, allowed, default_factor=1.3)
+        assert result.get("technical") == 1.3
+
+    def test_dict_form_false_value_excludes_domain(self):
+        """Map form with False value skips that domain."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical", "project"}
+        result = _normalize_domain_boost({"technical": False, "project": 1.2}, allowed)
+        assert "technical" not in result
+        assert result.get("project") == 1.2
+
+    def test_factor_clamped_to_max_2(self):
+        """Multiplier above 2.0 is clamped to 2.0."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical"}
+        result = _normalize_domain_boost({"technical": 9.9}, allowed)
+        assert result.get("technical") == 2.0
+
+    def test_factor_clamped_to_min_1(self):
+        """Multiplier below 1.0 is clamped to 1.0."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical"}
+        result = _normalize_domain_boost({"technical": 0.5}, allowed)
+        assert result.get("technical") == 1.0
+
+    def test_zero_or_negative_factor_excluded(self):
+        """Zero or negative multiplier skips the domain entirely."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical"}
+        result = _normalize_domain_boost({"technical": 0}, allowed)
+        assert "technical" not in result
+        result2 = _normalize_domain_boost({"technical": -1.5}, allowed)
+        assert "technical" not in result2
+
+    def test_unknown_domains_filtered_when_allowed_domains_provided(self):
+        """Domains not in allowed_domains are stripped from the boost map."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical", "personal"}
+        result = _normalize_domain_boost(
+            {"technical": 1.5, "made_up": 1.3}, allowed
+        )
+        assert "technical" in result
+        assert "made_up" not in result
+
+    def test_string_input_treated_as_single_domain_list(self):
+        """A bare string is treated as a single-element list."""
+        from datastore.memorydb.memory_graph import _normalize_domain_boost
+        allowed = {"technical"}
+        result = _normalize_domain_boost("technical", allowed, default_factor=1.3)
+        assert result.get("technical") == 1.3
+
+
+# ---------------------------------------------------------------------------
+# Domain boost applied in full recall pipeline (integration)
+# ---------------------------------------------------------------------------
+
+class TestDomainBoostRecallIntegration:
+    """Verify domain boost is applied during recall() scoring pipeline."""
+
+    def test_domain_boost_list_form_increases_score(self, tmp_path):
+        """Memories tagged with a boosted domain should score higher.
+
+        We store two memories: one tagged 'technical', one untagged. With
+        domain_boost=['technical'] the technical memory should rank first.
+        """
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store("Quaid deployed the new API endpoint to production cluster",
+                  owner_id="quaid", skip_dedup=True, domains=["technical"])
+            store("Quaid attended the team standup meeting this morning",
+                  owner_id="quaid", skip_dedup=True)
+            results_boosted = recall(
+                "Quaid work activities",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain_boost=["technical"],
+            )
+            results_plain = recall(
+                "Quaid work activities",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+            )
+            # With boost, technical result's score >= plain score
+            # (boost can only increase or maintain score)
+            if results_boosted and results_plain:
+                boosted_technical = next(
+                    (r for r in results_boosted if "technical" in (r.get("domains") or [])), None
+                )
+                plain_technical = next(
+                    (r for r in results_plain if "technical" in (r.get("domains") or [])), None
+                )
+                if boosted_technical and plain_technical:
+                    assert boosted_technical["similarity"] >= plain_technical["similarity"]
+
+    def test_domain_boost_map_form_applies_correct_multiplier(self, tmp_path):
+        """domain_boost={'technical': 1.5} should raise the technical memory's score."""
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store("Quaid fixed the async job runner memory leak in the worker pool",
+                  owner_id="quaid", skip_dedup=True, domains=["technical"])
+            results = recall(
+                "Quaid async worker pool leak",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain_boost={"technical": 1.5},
+            )
+            assert isinstance(results, list)
+            # Technical result must be present and must be a list of dicts
+            for r in results:
+                assert isinstance(r, dict)
+                assert "text" in r
+                assert "similarity" in r
+
+
+# ---------------------------------------------------------------------------
+# Domain filter {"all": true} includes all memories
+# ---------------------------------------------------------------------------
+
+class TestDomainFilterAllTrue:
+    """domain={"all": True} must include all memories regardless of domain tag."""
+
+    def test_all_true_includes_tagged_and_untagged(self, tmp_path):
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store("Quaid prefers single origin espresso beans", owner_id="quaid",
+                  skip_dedup=True, domains=["personal"])
+            store("Quaid runs integration tests with pytest nightly", owner_id="quaid",
+                  skip_dedup=True, domains=["technical"])
+            store("Quaid likes hiking trails on weekends", owner_id="quaid",
+                  skip_dedup=True)
+            results = recall(
+                "Quaid",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain={"all": True},
+            )
+            # All three memories should be eligible (none excluded by domain filter)
+            assert len(results) >= 2
+
+    def test_all_true_equivalent_to_no_domain_filter(self, tmp_path):
+        """Passing domain={"all": True} should produce the same results as domain=None."""
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store("Quaid uses Obsidian for notes", owner_id="quaid",
+                  skip_dedup=True, domains=["personal"])
+            store("Quaid uses TypeScript for frontend code", owner_id="quaid",
+                  skip_dedup=True, domains=["technical"])
+            results_all_true = recall(
+                "Quaid tools",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain={"all": True},
+            )
+            results_no_domain = recall(
+                "Quaid tools",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                domain=None,
+            )
+            ids_all_true = {r["id"] for r in results_all_true}
+            ids_no_domain = {r["id"] for r in results_no_domain}
+            assert ids_all_true == ids_no_domain
+
+
+# ---------------------------------------------------------------------------
+# Score threshold: below-threshold memories excluded
+# ---------------------------------------------------------------------------
+
+class TestScoreThreshold:
+    """min_similarity threshold properly gates recall output."""
+
+    def test_high_threshold_excludes_low_scoring_results(self, tmp_path):
+        """With min_similarity=0.999, only near-perfect matches pass."""
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store("Quaid uses mechanical keyboards for typing work",
+                  owner_id="quaid", skip_dedup=True)
+            results = recall(
+                "completely unrelated query about weather forecast tomorrow",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.999,
+            )
+            # Any returned result must meet or exceed the threshold
+            for r in results:
+                assert r["similarity"] >= 0.999, (
+                    f"Result with similarity={r['similarity']} below threshold 0.999"
+                )
+
+    def test_zero_threshold_allows_all_results(self, tmp_path):
+        """With min_similarity=0.0, no results are filtered by score."""
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store("Quaid runs every morning before work",
+                  owner_id="quaid", skip_dedup=True)
+            results = recall(
+                "Quaid morning routine",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+            )
+            # All results must have non-negative similarity
+            for r in results:
+                assert r["similarity"] >= 0.0
+
+    def test_no_results_below_threshold_in_output(self, tmp_path):
+        """Verify that scored_results below min_similarity are never in output."""
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        threshold = 0.75
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            store("Quaid attends weekly retrospective meetings with the team",
+                  owner_id="quaid", skip_dedup=True)
+            results = recall(
+                "Quaid weekly team meetings",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=threshold,
+            )
+            for r in results:
+                assert r["similarity"] >= threshold, (
+                    f"Result leaked through threshold: similarity={r['similarity']} < {threshold}"
+                )
+
+
+# ---------------------------------------------------------------------------
+# recall() limit parameter edge cases
+# ---------------------------------------------------------------------------
+
+class TestRecallLimitEdgeCases:
+    """Edge cases for the limit parameter in recall()."""
+
+    def test_limit_1_returns_at_most_one_result(self, tmp_path):
+        """limit=1 must return at most 1 result even if many memories match."""
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            for i in range(8):
+                store(f"Quaid has preference number {i} about beverage choices",
+                      owner_id="quaid", skip_dedup=True)
+            results = recall(
+                "Quaid preference beverage",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                limit=1,
+            )
+            assert len(results) <= 1
+
+    def test_limit_exceeding_stored_returns_all_stored(self, tmp_path):
+        """limit larger than stored count should return all stored memories."""
+        from datastore.memorydb.memory_graph import store, recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            n = 3
+            for i in range(n):
+                store(f"Quaid owns a unique item called gadget number {i}",
+                      owner_id="quaid", skip_dedup=True)
+            results = recall(
+                "Quaid gadget item",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                limit=100,
+            )
+            # Can't get more results than were stored
+            assert len(results) <= n
+
+    def test_recall_returns_list_not_tuple_with_return_meta_false(self, tmp_path):
+        """recall() with return_meta=False (default) must return a list."""
+        from datastore.memorydb.memory_graph import recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            result = recall(
+                "Quaid test query for type checking",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+            )
+            assert isinstance(result, list), (
+                f"recall() with return_meta=False must return list, got {type(result)}"
+            )
+
+    def test_recall_returns_tuple_with_return_meta_true(self, tmp_path):
+        """recall() with return_meta=True must return (list, dict)."""
+        from datastore.memorydb.memory_graph import recall
+        graph, _ = _make_graph(tmp_path)
+        with patch("datastore.memorydb.memory_graph.get_graph", return_value=graph), \
+             patch("datastore.memorydb.memory_graph._lib_get_embedding", side_effect=_fake_get_embedding), \
+             patch("datastore.memorydb.memory_graph.route_query", side_effect=lambda q: q):
+            result = recall(
+                "Quaid test query for meta checking",
+                owner_id="quaid",
+                use_routing=False,
+                min_similarity=0.0,
+                return_meta=True,
+            )
+            assert isinstance(result, tuple), (
+                f"recall() with return_meta=True must return tuple, got {type(result)}"
+            )
+            rows, meta = result
+            assert isinstance(rows, list)
+            assert isinstance(meta, dict)

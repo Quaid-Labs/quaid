@@ -1523,3 +1523,637 @@ class TestDualSystem:
         from config import JournalConfig
         cfg = JournalConfig(snippets_enabled=False)
         assert cfg.snippets_enabled is False
+
+
+# =============================================================================
+# Bug-regression + gap-filling tests: _resolve_writable_file_path,
+# _insert_into_file, and the apply_decisions FOLD/REWRITE/DISCARD loop.
+# =============================================================================
+
+
+class TestResolveWritableFilePath:
+    """Unit tests for _resolve_writable_file_path()."""
+
+    def test_returns_none_when_neither_path_exists(self, workspace_dir):
+        """Bug regression: must return None (not raise) when file is absent."""
+        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        result = _resolve_writable_file_path("NONEXISTENT.md")
+        assert result is None
+
+    def test_returns_root_path_when_only_root_exists(self, workspace_dir):
+        """Falls back to the root (identity) file if no project copy exists."""
+        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        root = workspace_dir / "identity" / "SOUL.md"
+        root.write_text("# SOUL\n\nRoot only.\n")
+        result = _resolve_writable_file_path("SOUL.md")
+        assert result is not None
+        assert result.exists()
+        assert result == root
+
+    def test_prefers_project_path_over_root(self, workspace_dir):
+        """Project copy takes priority over root copy."""
+        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        root = workspace_dir / "identity" / "SOUL.md"
+        root.write_text("# SOUL\n\nRoot.\n")
+        project = workspace_dir / "projects" / "quaid" / "SOUL.md"
+        project.parent.mkdir(parents=True, exist_ok=True)
+        project.write_text("# SOUL\n\nProject.\n")
+        result = _resolve_writable_file_path("SOUL.md")
+        assert result == project
+
+    def test_returns_none_for_arbitrary_missing_file(self, workspace_dir):
+        """Non-identity filename with no matching file returns None."""
+        from datastore.notedb.soul_snippets import _resolve_writable_file_path
+        result = _resolve_writable_file_path("TOTALLY_ABSENT.md")
+        assert result is None
+
+
+class TestInsertIntoFileBugRegression:
+    """Unit tests for _insert_into_file() — especially the missing-file path."""
+
+    def test_missing_file_returns_false_not_raises(self, workspace_dir):
+        """_insert_into_file must return False, not raise, when file is absent."""
+        from datastore.notedb.soul_snippets import _insert_into_file
+        # Confirm no file exists
+        result = _insert_into_file("GHOST.md", "Some text.", "END")
+        assert result is False
+
+    def test_existing_file_returns_true(self, workspace_dir):
+        """_insert_into_file returns True when target exists and insert succeeds."""
+        from datastore.notedb.soul_snippets import _insert_into_file
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nBase content.\n")
+        result = _insert_into_file("SOUL.md", "New thought.", "END")
+        assert result is True
+        assert "New thought." in parent.read_text()
+
+    def test_insert_into_file_does_not_overwrite_protected_region(self, workspace_dir):
+        """Text inserted at END is appended after protected regions, not inside them."""
+        from datastore.notedb.soul_snippets import _insert_into_file
+        parent = workspace_dir / "identity" / "SOUL.md"
+        protected_block = (
+            "# SOUL\n\n"
+            "<!-- protected -->\n"
+            "## Secret Section\n\n"
+            "This must not be touched.\n"
+            "<!-- /protected -->\n\n"
+            "## Public Section\n\n"
+            "Public text.\n"
+        )
+        parent.write_text(protected_block)
+        result = _insert_into_file("SOUL.md", "Appended fact.", "END")
+        assert result is True
+        content = parent.read_text()
+        assert "Appended fact." in content
+        # Protected block must remain intact
+        assert "This must not be touched." in content
+        assert "<!-- protected -->" in content
+
+    def test_insert_skips_protected_section_heading_and_finds_next(self, workspace_dir):
+        """_insert_into_file skips section headings inside protected regions."""
+        from datastore.notedb.soul_snippets import _insert_into_file
+        parent = workspace_dir / "identity" / "SOUL.md"
+        content = (
+            "# SOUL\n\n"
+            "<!-- protected -->\n"
+            "## Hidden\n\nDo not insert here.\n"
+            "<!-- /protected -->\n\n"
+            "## Open\n\nInsert here.\n"
+        )
+        parent.write_text(content)
+        # Ask to insert after "Hidden" — should be blocked by protection
+        # and fall through to END rather than inserting into protected block.
+        result = _insert_into_file("SOUL.md", "Safe insert.", "Hidden")
+        assert result is True
+        final = parent.read_text()
+        assert "Safe insert." in final
+        # The protected block must not be modified
+        protected_start = final.index("<!-- protected -->")
+        protected_end = final.index("<!-- /protected -->") + len("<!-- /protected -->")
+        assert "Safe insert." not in final[protected_start:protected_end]
+
+
+class TestApplyDecisionsFileMissingBug:
+    """Regression tests for the AttributeError bug: _resolve_writable_file_path
+    returning None and the caller calling .exists() on None."""
+
+    def test_fold_file_missing_records_error_not_attributeerror(self, workspace_dir):
+        """When _insert_into_file returns False AND file is missing, error is
+        recorded as 'file missing' string — no AttributeError is raised."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        # DO NOT create the parent file — it must be absent
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": "# SOUL\n\nBase.\n",
+                "snippets": ["A profound observation."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD",
+             "insert_after": "END", "reason": "test"}
+        ]
+        # Must not raise AttributeError
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert isinstance(stats, dict)
+        assert len(stats["errors"]) == 1
+        error_msg = stats["errors"][0].lower()
+        assert "missing" in error_msg or "file" in error_msg
+
+    def test_fold_file_missing_does_not_count_as_folded(self, workspace_dir):
+        """A FOLD that fails because the file is missing must NOT increment folded."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": "# SOUL\n\nBase.\n",
+                "snippets": ["Should not fold."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD",
+             "insert_after": "END", "reason": "test"}
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert stats["folded"] == 0
+
+    def test_rewrite_file_missing_records_error_not_attributeerror(self, workspace_dir):
+        """REWRITE with a missing target file records an error string, no exception."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        all_snippets = {
+            "USER.md": {
+                "parent_content": "# USER\n\nBase.\n",
+                "snippets": ["User trait."],
+                "config": {"purpose": "User model", "maxLines": 150},
+            }
+        }
+        decisions = [
+            {"file": "USER.md", "snippet_index": 1, "action": "REWRITE",
+             "rewritten_text": "Rewritten user trait.", "insert_after": "END",
+             "reason": "test"}
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert isinstance(stats, dict)
+        # Must not raise; error recorded
+        assert len(stats["errors"]) >= 1
+        assert stats["rewritten"] == 0
+
+
+class TestApplyDecisionsSkippedAtLimit:
+    """Tests for skipped_at_limit branch in apply_decisions.
+
+    This branch triggers only when _insert_into_file returns False AND the file
+    exists AND current_lines >= max_lines. Since _insert_into_file only returns
+    False when file is absent, we trigger this via mock.
+    """
+
+    def test_skipped_at_limit_stat_incremented(self, workspace_dir):
+        """When insert returns False but file is at maxLines, skipped_at_limit is set."""
+        from datastore.notedb import soul_snippets
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        # Write a file with exactly max_lines lines (81 including header)
+        max_lines = 81
+        parent.write_text("# SOUL\n" + "line\n" * (max_lines - 1))
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- At-limit snippet.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["At-limit snippet."],
+                "config": {"purpose": "Personality", "maxLines": max_lines},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD",
+             "insert_after": "END", "reason": "test"}
+        ]
+
+        # Mock _insert_into_file to return False to simulate the "at limit" branch.
+        with patch("datastore.notedb.soul_snippets._insert_into_file", return_value=False):
+            stats = apply_decisions(decisions, all_snippets, dry_run=False)
+
+        assert stats["errors"] == []
+        assert stats["skipped_at_limit"] == 1
+        assert stats["discarded"] == 1  # also incremented
+
+    def test_skipped_at_limit_clears_snippet_from_file(self, workspace_dir):
+        """Snippet is cleared from .snippets.md on skipped_at_limit to prevent retry loops."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        max_lines = 81
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n" + "line\n" * (max_lines - 1))
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- At-limit snippet to be cleared.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["At-limit snippet to be cleared."],
+                "config": {"purpose": "Personality", "maxLines": max_lines},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD",
+             "insert_after": "END", "reason": "test"}
+        ]
+
+        with patch("datastore.notedb.soul_snippets._insert_into_file", return_value=False):
+            apply_decisions(decisions, all_snippets, dry_run=False)
+
+        # Snippet file should have been cleaned (snippet removed or file deleted)
+        if snippets_path.exists():
+            assert "At-limit snippet to be cleared." not in snippets_path.read_text()
+
+
+class TestApplyDecisionsFoldRewriteDiscard:
+    """Focused tests on the FOLD / REWRITE / DISCARD decision processing."""
+
+    def test_discard_removes_snippet_from_snippets_file(self, workspace_dir):
+        """DISCARD counts and removes the snippet from .snippets.md."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Redundant observation.\n"
+            "- Keeper observation.\n"
+        )
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": "# SOUL\n\nBase.\n",
+                "snippets": ["Redundant observation.", "Keeper observation."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "DISCARD",
+             "reason": "Already in file"},
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert stats["discarded"] == 1
+        assert stats["errors"] == []
+        # Discarded snippet must be removed; keeper must remain
+        if snippets_path.exists():
+            remaining = snippets_path.read_text()
+            assert "Redundant observation." not in remaining
+            assert "Keeper observation." in remaining
+
+    def test_discard_does_not_write_to_parent_file(self, workspace_dir):
+        """DISCARD must not insert anything into the parent markdown file."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nExisting.\n")
+        original = parent.read_text()
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": original,
+                "snippets": ["Should be discarded."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "DISCARD",
+             "reason": "Not needed"}
+        ]
+        apply_decisions(decisions, all_snippets, dry_run=False)
+        assert parent.read_text() == original
+
+    def test_rewrite_uses_rewritten_text_when_provided(self, workspace_dir):
+        """REWRITE inserts rewritten_text, not original snippet text."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nBase content.\n")
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Raw snippet text.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["Raw snippet text."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "REWRITE",
+             "rewritten_text": "Polished rewritten text.", "insert_after": "END",
+             "reason": "Voice adjustment"}
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert stats["rewritten"] == 1
+        assert stats["errors"] == []
+        content = parent.read_text()
+        assert "Polished rewritten text." in content
+        # Original raw text must NOT have been inserted
+        assert "Raw snippet text." not in content
+
+    def test_rewrite_falls_back_to_original_when_rewritten_text_missing(self, workspace_dir, caplog):
+        """REWRITE with no rewritten_text falls back to original and logs a warning."""
+        from datastore.notedb.soul_snippets import apply_decisions
+        import logging
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nBase content.\n")
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Original text used as fallback.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["Original text used as fallback."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "REWRITE",
+             # No rewritten_text key at all
+             "insert_after": "END", "reason": "Missing text"}
+        ]
+        with caplog.at_level(logging.WARNING, logger="datastore.notedb.soul_snippets"):
+            stats = apply_decisions(decisions, all_snippets, dry_run=False)
+
+        assert stats["rewritten"] == 1
+        assert stats["errors"] == []
+        content = parent.read_text()
+        assert "Original text used as fallback." in content
+        assert "missing rewritten_text" in caplog.text.lower() or "rewritten_text" in caplog.text.lower()
+
+    def test_rewrite_falls_back_to_original_when_rewritten_text_empty(self, workspace_dir):
+        """REWRITE with empty rewritten_text string falls back to original."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nBase content.\n")
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Fallback for empty rewrite.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["Fallback for empty rewrite."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "REWRITE",
+             "rewritten_text": "   ",  # whitespace-only
+             "insert_after": "END", "reason": "Empty rewrite test"}
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert stats["rewritten"] == 1
+        content = parent.read_text()
+        assert "Fallback for empty rewrite." in content
+
+    def test_dry_run_does_not_write_to_parent(self, workspace_dir):
+        """dry_run=True: FOLD increments stats but does NOT write to the parent file."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nOriginal only.\n")
+        original_content = parent.read_text()
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": original_content,
+                "snippets": ["Should not appear in file."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD",
+             "insert_after": "END", "reason": "test"}
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=True)
+        assert stats["folded"] == 1
+        assert stats["errors"] == []
+        # File must be unchanged in dry_run mode
+        assert parent.read_text() == original_content
+
+    def test_dry_run_rewrite_increments_rewritten_stat(self, workspace_dir):
+        """dry_run=True: REWRITE increments rewritten stat without writing."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nOriginal.\n")
+        original_content = parent.read_text()
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": original_content,
+                "snippets": ["Draft snippet."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "REWRITE",
+             "rewritten_text": "Polished version.", "insert_after": "END",
+             "reason": "test"}
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=True)
+        assert stats["rewritten"] == 1
+        assert parent.read_text() == original_content
+
+    def test_dry_run_does_not_clear_snippets_file(self, workspace_dir):
+        """dry_run=True: .snippets.md is NOT modified even when DISCARD is chosen."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Snippet to be discarded.\n"
+        )
+        original_snippets = snippets_path.read_text()
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": "# SOUL\n\nBase.\n",
+                "snippets": ["Snippet to be discarded."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "DISCARD",
+             "reason": "Redundant"}
+        ]
+        apply_decisions(decisions, all_snippets, dry_run=True)
+        # Snippets file must not be changed
+        assert snippets_path.read_text() == original_snippets
+
+    def test_invalid_snippet_index_logged_as_error_not_raised(self, workspace_dir):
+        """Out-of-range snippet_index is recorded as an error, not an exception."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nBase.\n")
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["Only one snippet."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            # snippet_index 99 is out of range (only index 1 is valid)
+            {"file": "SOUL.md", "snippet_index": 99, "action": "FOLD",
+             "insert_after": "END", "reason": "bad index"}
+        ]
+        # Must not raise any exception
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert len(stats["errors"]) == 1
+        assert "99" in stats["errors"][0] or "invalid" in stats["errors"][0].lower()
+        assert stats["folded"] == 0
+
+    def test_invalid_snippet_index_dry_run_also_records_error(self, workspace_dir):
+        """Out-of-range index in dry_run=True mode also records error, not exception."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": "# SOUL\n",
+                "snippets": ["One."],
+                "config": {},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 0, "action": "FOLD",
+             "insert_after": "END"}  # index 0 → snippet_idx -1 → invalid
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=True)
+        assert len(stats["errors"]) == 1
+
+    def test_processed_snippets_removed_from_file_after_fold(self, workspace_dir):
+        """After a successful FOLD, the snippet is removed from .snippets.md."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nBase content.\n")
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Folded snippet.\n"
+            "- Remaining snippet.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["Folded snippet.", "Remaining snippet."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD",
+             "insert_after": "END", "reason": "Good insight"}
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert stats["folded"] == 1
+        assert stats["errors"] == []
+        # Folded snippet must be gone from .snippets.md
+        if snippets_path.exists():
+            remaining = snippets_path.read_text()
+            assert "Folded snippet." not in remaining
+            assert "Remaining snippet." in remaining
+
+    def test_all_snippets_processed_removes_snippets_file(self, workspace_dir):
+        """When every snippet in the file is processed, .snippets.md is deleted."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nBase content.\n")
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Only snippet.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["Only snippet."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD",
+             "insert_after": "END", "reason": "test"}
+        ]
+        apply_decisions(decisions, all_snippets, dry_run=False)
+        # Snippets file should be deleted when no snippets remain
+        assert not snippets_path.exists()
+
+    def test_fold_and_discard_mixed_decisions(self, workspace_dir):
+        """Mixed FOLD + DISCARD decisions in one batch are each handled correctly."""
+        from datastore.notedb.soul_snippets import apply_decisions
+
+        parent = workspace_dir / "identity" / "SOUL.md"
+        parent.write_text("# SOUL\n\nBase.\n")
+
+        snippets_path = workspace_dir / "SOUL.snippets.md"
+        snippets_path.write_text(
+            "# SOUL — Pending Snippets\n\n"
+            "## Compaction — 2026-02-10 14:30:22\n"
+            "- Keep this one.\n"
+            "- Throw this away.\n"
+        )
+
+        all_snippets = {
+            "SOUL.md": {
+                "parent_content": parent.read_text(),
+                "snippets": ["Keep this one.", "Throw this away."],
+                "config": {"purpose": "Personality", "maxLines": 80},
+            }
+        }
+        decisions = [
+            {"file": "SOUL.md", "snippet_index": 1, "action": "FOLD",
+             "insert_after": "END", "reason": "Good"},
+            {"file": "SOUL.md", "snippet_index": 2, "action": "DISCARD",
+             "reason": "Redundant"},
+        ]
+        stats = apply_decisions(decisions, all_snippets, dry_run=False)
+        assert stats["folded"] == 1
+        assert stats["discarded"] == 1
+        assert stats["errors"] == []
+        content = parent.read_text()
+        assert "Keep this one." in content
+        assert "Throw this away." not in content

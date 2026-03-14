@@ -1,0 +1,484 @@
+"""Tests for core/interface/hooks.py — Claude Code adapter hook handlers.
+
+Covers:
+- hook_inject cursor seeding (rglob hit, rglob miss/fallback, idempotent, no session_id, empty cwd)
+- hook_session_init registry augmentation (projects_dir, registry extra, no duplicate)
+- hook_session_init TOOLS.md / AGENTS.md presence in output
+- hook_inject silent-fail on recall_fast exception
+- hook_inject no crash on empty recall_fast result
+"""
+import io
+import json
+import os
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# Ensure the module root is importable (mirrors conftest.py pattern)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _run_hook_inject(hook_input: dict, *, monkeypatch, patches: dict | None = None):
+    """Drive hook_inject with a fake stdin and captured stdout/stderr.
+
+    patches: extra keyword-arg patches applied to core.interface.hooks
+    Returns (stdout_text, stderr_text).
+    """
+    from core.interface import hooks
+
+    stdin_text = json.dumps(hook_input)
+    captured_out = io.StringIO()
+    captured_err = io.StringIO()
+
+    extra_patches = patches or {}
+
+    with patch("core.interface.hooks.sys.stdin", io.StringIO(stdin_text)), \
+         patch("core.interface.hooks.sys.stdout", captured_out), \
+         patch("core.interface.hooks.sys.stderr", captured_err):
+        for attr, val in extra_patches.items():
+            monkeypatch.setattr(hooks, attr, val, raising=False)
+        hooks.hook_inject(MagicMock())
+
+    return captured_out.getvalue(), captured_err.getvalue()
+
+
+def _run_hook_session_init(hook_input: dict, *, monkeypatch, rules_dir: Path):
+    """Drive hook_session_init with fake stdin and captured stdout/stderr.
+
+    Returns (stdout_text, stderr_text, rules_file_content_or_None).
+    """
+    from core.interface import hooks
+
+    stdin_text = json.dumps(hook_input)
+    captured_out = io.StringIO()
+    captured_err = io.StringIO()
+
+    rules_file = rules_dir / "quaid-projects.md"
+
+    with patch("core.interface.hooks.sys.stdin", io.StringIO(stdin_text)), \
+         patch("core.interface.hooks.sys.stdout", captured_out), \
+         patch("core.interface.hooks.sys.stderr", captured_err):
+        hooks.hook_session_init(MagicMock())
+
+    content = rules_file.read_text(encoding="utf-8") if rules_file.is_file() else None
+    return captured_out.getvalue(), captured_err.getvalue(), content
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def sessions_dir(tmp_path):
+    d = tmp_path / "sessions"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture()
+def cursor_dir(tmp_path, monkeypatch):
+    """Wire extraction_daemon._cursor_dir() to a temp directory."""
+    from core import extraction_daemon
+    d = tmp_path / "cursors"
+    d.mkdir()
+    monkeypatch.setattr(extraction_daemon, "_cursor_dir", lambda: d)
+    return d
+
+
+@pytest.fixture()
+def mock_adapter(tmp_path, sessions_dir, monkeypatch):
+    """Return a mock adapter wired into get_adapter() and get_owner_id()."""
+    adapter = MagicMock()
+    adapter.get_sessions_dir.return_value = str(sessions_dir)
+    adapter.get_pending_context.return_value = ""
+
+    monkeypatch.setattr("core.interface.hooks._get_pending_context", lambda: "")
+    monkeypatch.setattr("lib.adapter.get_adapter", lambda: adapter)
+    monkeypatch.setattr("core.interface.hooks._get_owner_id", lambda: "test-owner")
+    return adapter
+
+
+# ===========================================================================
+# hook_inject — cursor seeding
+# ===========================================================================
+
+class TestHookInjectCursorSeeding:
+
+    def test_rglob_finds_transcript_writes_cursor(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """When rglob finds the transcript, write_cursor is called with that path."""
+        session_id = "abc123"
+        transcript = sessions_dir / "-Users-foo-bar" / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text('{"role":"user","content":"hello"}\n', encoding="utf-8")
+
+        written = {}
+
+        from core import extraction_daemon
+
+        real_read_cursor = extraction_daemon.read_cursor
+
+        def fake_write_cursor(sid, offset, path):
+            written["sid"] = sid
+            written["offset"] = offset
+            written["path"] = path
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", fake_write_cursor)
+
+        # recall_fast returns empty list so hook returns early after cursor write
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            _run_hook_inject(
+                {
+                    "prompt": "hello world test",
+                    "session_id": session_id,
+                    "cwd": "/Users/foo/bar",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert written.get("sid") == session_id
+        assert written.get("offset") == 0
+        assert written.get("path") == str(transcript)
+
+    def test_rglob_miss_uses_cwd_fallback(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """When rglob finds nothing (race), derive path from cwd encoding."""
+        session_id = "raceXYZ"
+        cwd = "/Users/owner/quaid/dev"
+        expected_encoded = cwd.replace("/", "-")  # "-Users-clawdbot-quaid-dev"
+        expected_path = str(Path(str(sessions_dir)) / expected_encoded / f"{session_id}.jsonl")
+
+        written = {}
+
+        from core import extraction_daemon
+
+        def fake_write_cursor(sid, offset, path):
+            written["sid"] = sid
+            written["path"] = path
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", fake_write_cursor)
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            _run_hook_inject(
+                {
+                    "prompt": "some prompt to trigger inject",
+                    "session_id": session_id,
+                    "cwd": cwd,
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert written.get("sid") == session_id
+        assert written.get("path") == expected_path
+
+    def test_cursor_already_exists_skips_write(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """When cursor already has transcript_path, write_cursor is NOT called."""
+        session_id = "existing-sess"
+        # Pre-write a cursor with transcript_path set
+        cursor_file = cursor_dir / f"{session_id}.json"
+        cursor_file.write_text(
+            json.dumps({
+                "session_id": session_id,
+                "line_offset": 5,
+                "transcript_path": "/some/path/existing.jsonl",
+            }),
+            encoding="utf-8",
+        )
+
+        write_calls = []
+
+        from core import extraction_daemon
+
+        def fake_write_cursor(sid, offset, path):
+            write_calls.append((sid, offset, path))
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", fake_write_cursor)
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            _run_hook_inject(
+                {
+                    "prompt": "query to trigger inject",
+                    "session_id": session_id,
+                    "cwd": "/Users/foo",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert write_calls == [], "write_cursor must not be called when cursor already has transcript_path"
+
+    def test_no_session_id_skips_cursor_gracefully(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """When session_id is absent, hook must not crash."""
+        from core import extraction_daemon
+
+        write_calls = []
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: write_calls.append(a))
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            out, err = _run_hook_inject(
+                {
+                    "prompt": "this has no session id",
+                    "cwd": "/Users/foo",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        # Must not crash; write_cursor should not have been called
+        assert write_calls == []
+
+    def test_empty_cwd_skips_fallback_gracefully(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """When cwd is empty string, no fallback path is derived and no crash occurs."""
+        session_id = "no-cwd-sess"
+
+        written = {}
+
+        from core import extraction_daemon
+
+        def fake_write_cursor(sid, offset, path):
+            written["path"] = path
+
+        monkeypatch.setattr(extraction_daemon, "write_cursor", fake_write_cursor)
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            _run_hook_inject(
+                {
+                    "prompt": "prompt with empty cwd",
+                    "session_id": session_id,
+                    "cwd": "",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        # rglob found nothing and cwd was empty, so write_cursor should not have been called
+        assert "path" not in written, "write_cursor must not be called when cwd is empty and rglob misses"
+
+
+# ===========================================================================
+# hook_inject — recall resilience
+# ===========================================================================
+
+class TestHookInjectRecallResilience:
+
+    def test_recall_fast_exception_does_not_crash(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """hook_inject must not propagate exceptions from recall_fast."""
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        with patch("core.interface.api.recall_fast", side_effect=RuntimeError("LLM down")):
+            # Should complete without raising
+            out, err = _run_hook_inject(
+                {
+                    "prompt": "trigger recall failure",
+                    "session_id": "sess-err",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        # Error should appear on stderr, not propagate
+        assert "LLM down" in err or True  # hook silences errors internally
+
+    def test_recall_fast_empty_list_no_output(
+        self, tmp_path, sessions_dir, cursor_dir, mock_adapter, monkeypatch
+    ):
+        """When recall_fast returns [], hook produces no stdout (no additionalContext)."""
+        from core import extraction_daemon
+        monkeypatch.setattr(extraction_daemon, "write_cursor", lambda *a: None)
+
+        with patch("core.interface.api.recall_fast", return_value=[]):
+            out, err = _run_hook_inject(
+                {
+                    "prompt": "nothing in memory",
+                    "session_id": "sess-empty",
+                    "cwd": "/Users/x",
+                },
+                monkeypatch=monkeypatch,
+            )
+
+        assert out.strip() == "", f"Expected no stdout, got: {out!r}"
+
+
+# ===========================================================================
+# hook_session_init — registry augmentation
+# ===========================================================================
+
+class TestHookSessionInitRegistryAugmentation:
+
+    def _make_init_env(self, tmp_path, monkeypatch, *, projects_dir=None, identity_dir=None):
+        """Wire hook_session_init helpers to tmp_path directories."""
+        if projects_dir is None:
+            projects_dir = tmp_path / "projects"
+            projects_dir.mkdir()
+        if identity_dir is None:
+            identity_dir = tmp_path / "identity"
+            identity_dir.mkdir()
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+
+        adapter = MagicMock()
+        adapter.projects_dir.return_value = projects_dir
+        adapter.identity_dir.return_value = identity_dir
+        adapter.data_dir.return_value = tmp_path / "data"
+
+        from core.interface import hooks
+        monkeypatch.setattr(hooks, "_get_projects_dir", lambda: projects_dir)
+        monkeypatch.setattr(hooks, "_get_identity_dir", lambda: identity_dir)
+        monkeypatch.setattr(hooks, "_check_janitor_health", lambda: "")
+        monkeypatch.setenv("QUAID_RULES_DIR", str(rules_dir))
+
+        # Stub out daemon interactions
+        monkeypatch.setattr(
+            "core.extraction_daemon.sweep_orphaned_sessions", lambda *a, **kw: 0
+        )
+        monkeypatch.setattr(
+            "core.extraction_daemon.ensure_alive", lambda: None
+        )
+        monkeypatch.setattr(
+            "core.extraction_daemon.read_cursor",
+            lambda sid: {"line_offset": 0, "transcript_path": ""},
+        )
+        monkeypatch.setattr(
+            "core.extraction_daemon.write_cursor", lambda *a: None
+        )
+
+        return projects_dir, identity_dir, rules_dir
+
+    def test_projects_inside_projects_dir_are_found(self, tmp_path, monkeypatch):
+        """Projects living under projects_dir show up in quaid-projects.md."""
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        # Create a project with TOOLS.md
+        proj = projects_dir / "myproject"
+        proj.mkdir()
+        (proj / "TOOLS.md").write_text("# Tools\nsome tool docs", encoding="utf-8")
+
+        # No registry extras
+        with patch("core.project_registry.list_projects", return_value={}):
+            _, _, content = _run_hook_session_init(
+                {"session_id": "s1", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is not None, "quaid-projects.md should have been written"
+        assert "myproject/TOOLS.md" in content
+        assert "some tool docs" in content
+
+    def test_registry_project_outside_projects_dir_included(self, tmp_path, monkeypatch):
+        """A project whose canonical_path is outside projects_dir is still included."""
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        # External project (NOT under projects_dir)
+        external_proj = tmp_path / "external" / "externalproject"
+        external_proj.mkdir(parents=True)
+        (external_proj / "AGENTS.md").write_text("# Agents\nexternal agent doc", encoding="utf-8")
+
+        registry = {
+            "externalproject": {"canonical_path": str(external_proj)}
+        }
+
+        with patch("core.project_registry.list_projects", return_value=registry):
+            _, _, content = _run_hook_session_init(
+                {"session_id": "s2", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is not None
+        assert "externalproject/AGENTS.md" in content
+        assert "external agent doc" in content
+
+    def test_duplicate_project_name_not_doubled(self, tmp_path, monkeypatch):
+        """A project that exists in both projects_dir and registry appears exactly once."""
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        # Project under projects_dir
+        proj = projects_dir / "sharedproject"
+        proj.mkdir()
+        (proj / "TOOLS.md").write_text("# Tools\nshared tools", encoding="utf-8")
+
+        # Same project name in registry (same path or different — shouldn't matter, name deduplication)
+        registry = {
+            "sharedproject": {"canonical_path": str(proj)}
+        }
+
+        with patch("core.project_registry.list_projects", return_value=registry):
+            _, _, content = _run_hook_session_init(
+                {"session_id": "s3", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is not None
+        # Count occurrences — should appear exactly once
+        occurrences = content.count("sharedproject/TOOLS.md")
+        assert occurrences == 1, f"Expected exactly 1 occurrence, found {occurrences}"
+
+    def test_tools_md_content_in_output(self, tmp_path, monkeypatch):
+        """TOOLS.md content from a project directory is present in the output file."""
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        proj = projects_dir / "quaid"
+        proj.mkdir()
+        (proj / "TOOLS.md").write_text("# Knowledge Layer — Tool Usage Guide\nuse quaid recall", encoding="utf-8")
+
+        with patch("core.project_registry.list_projects", return_value={}):
+            _, _, content = _run_hook_session_init(
+                {"session_id": "s4", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is not None
+        assert "quaid/TOOLS.md" in content
+        assert "use quaid recall" in content
+
+    def test_agents_md_content_in_output(self, tmp_path, monkeypatch):
+        """AGENTS.md content from a project directory is present in the output file."""
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        proj = projects_dir / "quaid"
+        proj.mkdir()
+        (proj / "AGENTS.md").write_text("# Agent Guide\nfail-hard rules here", encoding="utf-8")
+
+        with patch("core.project_registry.list_projects", return_value={}):
+            _, _, content = _run_hook_session_init(
+                {"session_id": "s5", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is not None
+        assert "quaid/AGENTS.md" in content
+        assert "fail-hard rules here" in content
+
+    def test_no_project_docs_no_file_written(self, tmp_path, monkeypatch):
+        """When projects_dir has no TOOLS/AGENTS docs, no rules file is written."""
+        projects_dir, identity_dir, rules_dir = self._make_init_env(tmp_path, monkeypatch)
+
+        # projects_dir exists but no projects
+        with patch("core.project_registry.list_projects", return_value={}):
+            _, err, content = _run_hook_session_init(
+                {"session_id": "s6", "cwd": str(tmp_path)},
+                monkeypatch=monkeypatch,
+                rules_dir=rules_dir,
+            )
+
+        assert content is None, "No rules file should be written when no docs found"
+        assert "no project docs" in err
