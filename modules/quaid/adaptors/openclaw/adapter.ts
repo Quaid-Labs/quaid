@@ -2442,26 +2442,30 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         let bestPriorSessionId: string | null = null;
         let detectionMethod = "mtime";
 
-        // Pass 1: look for the definitive just-reset signature.
-        for (const [key, sid] of sessionKeyLastSeen.entries()) {
-          if (key.startsWith("agent:main:hook:")) continue;
-          if (sid === newSessionId) continue;
-          try {
-            const jsonlPath = getOpenClawSessionFile(sid);
-            const stat = fs.statSync(jsonlPath);
-            if (stat.size === 0) {
-              const backup = latestResetBackup(sid);
-              if (backup) {
-                const backupStat = fs.statSync(backup);
-                if (nowMs - backupStat.mtimeMs < RECENT_RESET_WINDOW_MS) {
-                  bestPriorSessionId = sid;
-                  detectionMethod = "reset_signature";
-                  break;
-                }
+        // Pass 1: look for the definitive just-reset signature by scanning the
+        // sessions base dir directly for .reset.* backup files modified within
+        // the window. This is filesystem-only and survives gateway restarts
+        // (e.g., OC restarts the gateway process on /reset, wiping sessionKeyLastSeen).
+        try {
+          const baseDir = getOpenClawSessionsBaseDir();
+          const allFiles = fs.readdirSync(baseDir);
+          let bestResetMtimeMs = 0;
+          for (const fname of allFiles) {
+            const dotIdx = fname.indexOf(".jsonl.reset.");
+            if (dotIdx < 0) continue;
+            const sid = fname.slice(0, dotIdx);
+            if (!sid || sid === newSessionId) continue;
+            try {
+              const backupStat = fs.statSync(path.join(baseDir, fname));
+              const age = nowMs - backupStat.mtimeMs;
+              if (age >= 0 && age < RECENT_RESET_WINDOW_MS && backupStat.mtimeMs > bestResetMtimeMs) {
+                bestResetMtimeMs = backupStat.mtimeMs;
+                bestPriorSessionId = sid;
+                detectionMethod = "reset_signature";
               }
-            }
-          } catch {}
-        }
+            } catch {}
+          }
+        } catch {}
 
         // Pass 2: fall back to JSONL mtime if no reset-signature session found.
         if (!bestPriorSessionId) {
