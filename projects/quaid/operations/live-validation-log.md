@@ -176,12 +176,36 @@ The example.local OC instance uses Solomon's Claude.ai OAuth token (`sk-ant-oat0
 |-----------|--------|-------|
 | M0 | ✅ PASS | Fresh reinstall, health/doctor passed, autoInject=false set |
 | M1 | ⏸ BLOCKED (env) | Config-path fix confirmed working (first bare turn clean, no injection). Provider rate-limited on first agent turn — daily cap. Retry after reset. |
-| M9–M10 | 🔄 IN PROGRESS | Running non-LLM milestones while waiting for rate limit reset. |
+| M9 | ❌ BLOCKED (env) | `--dry-run` still makes LLM classifier calls. Janitor hung holding `.janitor.lock`, returned 50-byte non-JSON rate-limit error body. Not a Quaid bug. |
+| M10 | 🔄 IN PROGRESS | health/stats/docs — fully read-only, no LLM calls. |
 
 ### Notes
 
 - Hot-swapping adapter.js requires an OC **gateway restart**, not just a new TUI session. The old adapter.js stays in memory until the gateway process is restarted.
 - `retrieval.autoInject=false` must be set via Python direct write (not `quaid config set`) on fresh installs because `@clack/prompts` is missing from the installed plugin's `node_modules`.
+
+---
+
+## 2026-03-14 — M5–M6 OC Resume (canary, example.local)
+
+### Bugs Found
+
+| Bug | Severity | Notes |
+|-----|----------|-------|
+| M6: `before_prompt_build` auto-inject uses OC gateway exec-error strings as recall query | Medium | When an OC gateway subprocess dies (e.g. reranker killed by SIGTERM), OC sends `Exec failed (cmd, signal SIGTERM) :: ...` as `event.prompt`. This string passed all existing prompt filters and became the recall query, producing garbled `[quaid][recall] source=auto_inject query="Exec failed..."` log entries and a meaningless DB lookup. Fix: added `Exec failed` to the skip-pattern regex in `beforePromptBuildHandler`. |
+| M6: OC retrieval sub-agent scores fact as perfect match (5) but main OC agent says "no concrete details" | Medium | OC-side bug — `quaid recall "niece"` CLI returns Anne correctly; the issue is OC's retrieval pipeline not surfacing sub-agent results to the main agent response. Not a Quaid bug. |
+
+### Fixes Shipped (commits on canary)
+
+| Commit | Description |
+|--------|-------------|
+| `a3d97071` | `before_prompt_build`: skip `Exec failed` OC gateway error strings as recall queries |
+
+### Diagnostics
+
+- `quaid recall "niece"` on alfie returns correct facts (`User has a niece`, `Users niece Anne is 7 years old and loves drawing`) even while gateway logs show reranker timeouts.
+- Reranker SIGTERM is a transient OC infra issue; Quaid recall degrades gracefully (skips reranking, returns vector results).
+- M5 still blocked by OAuth rate limit (429 before first LLM turn).
 
 ---
 
