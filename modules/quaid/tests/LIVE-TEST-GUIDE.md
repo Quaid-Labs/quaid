@@ -340,24 +340,16 @@ Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
 
 ### M1: Extraction via `/new`
 
-Seed a distinctive `PROOFNEW-<timestamp>` fact, then trigger `/new`.
+> **STATUS: KNOWN BROKEN for OC. Skip for OC, run for CC only.**
+>
+> OC TUI `/new` is a visual-only session switch: no sessions.json update, no
+> new JSONL file created on disk. The Quaid adapter has no reliable signal to
+> detect the boundary. Multiple approaches attempted (before_agent_start hook,
+> per-key session watcher, activity-based fallback) — all blocked by OC
+> internals that are not exposed as hookable events. CC `/new` works correctly
+> via the `command:new` hook and should be tested normally.
 
-**OC TUI session requirement**: M1 requires that the proof token session is a
-proper TUI session registered as `agent:main:tui-*` in sessions.json. When
-`/new` fires in such a session, OC creates a new session ID and the
-`before_agent_start` hook detects the transition and writes a ResetSignal for
-the proof token session.
-
-If `/new` is run from an `agent:main:main` session (non-TUI path), it is a
-UI-level reset that keeps the same session ID — no signal is written and the
-session extracts only via the 60-minute idle timeout.
-
-Before M1: verify the active TUI session is registered in sessions.json:
-```bash
-ssh alfie.local 'python3 -c "import json; d=json.load(open(\"/Users/clawdbot/.openclaw/agents/main/sessions/sessions.json\")); [print(k,\"=\",v.get(\"sessionId\",\"?\")) for k,v in d.items() if \"tui\" in k.lower()]"'
-```
-If no `agent:main:tui-*` entry appears within ~10 seconds of opening the TUI,
-close and reopen `openclaw tui` to force a fresh registration.
+**CC only** — Seed a distinctive `PROOFNEW-<timestamp>` fact, then trigger `/new`.
 
 Pass:
 - the fact is stored after the lifecycle boundary
