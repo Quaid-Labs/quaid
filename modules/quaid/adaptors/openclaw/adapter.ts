@@ -216,10 +216,17 @@ function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteract
       };
     })
     .filter((row) => row.sessionId);
-  // Prefer updatedAt from sessions.json (authoritative); fall back to transcript mtimeMs
-  // only as tiebreaker. This prevents stale transcripts (touched by preservation/reset)
-  // from outranking the genuinely active session.
+  // Sort priority:
+  // 1. TUI sessions (agent:main:tui-*) outrank the generic agent:main:main entry.
+  //    When a user is active in the TUI, OC may still refresh agent:main:main's
+  //    updatedAt for background/relay purposes, causing it to win on timestamp alone
+  //    and making the watcher track the wrong (often empty) session.
+  // 2. Within the same tier, prefer newest updatedAt; break ties with transcript mtimeMs.
+  const sessionTier = (key: string): number =>
+    key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:") ? 1 : 0;
   entries.sort((a, b) => {
+    const tierDiff = sessionTier(a.key) - sessionTier(b.key);
+    if (tierDiff !== 0) return tierDiff;
     const uDiff = a.updatedAt - b.updatedAt;
     if (uDiff !== 0) return uDiff;
     return a.mtimeMs - b.mtimeMs;
