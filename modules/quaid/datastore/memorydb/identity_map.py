@@ -73,21 +73,30 @@ def upsert_identity_handle(
             """,
             (owner, channel, conv, raw_handle),
         ).fetchone()
-        row_id = str(row["id"]) if row else str(uuid.uuid4())
-        conn.execute(
-            """
-            INSERT INTO identity_handles (
-                id, owner_id, source_channel, conversation_id, handle,
-                canonical_entity_id, confidence, notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(owner_id, source_channel, conversation_id, handle) DO UPDATE SET
-                canonical_entity_id = excluded.canonical_entity_id,
-                confidence = excluded.confidence,
-                notes = excluded.notes,
-                updated_at = excluded.updated_at
-            """,
-            (row_id, owner, channel, conv, raw_handle, canonical, float(confidence), notes, now, now),
-        )
+        if row:
+            # Update existing row — reuse its primary key to avoid PK conflict
+            # (INSERT ... ON CONFLICT fires PK constraint before the UNIQUE clause
+            # when the same id is present in the VALUES list).
+            row_id = str(row["id"])
+            conn.execute(
+                """
+                UPDATE identity_handles
+                SET canonical_entity_id = ?, confidence = ?, notes = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (canonical, float(confidence), notes, now, row_id),
+            )
+        else:
+            row_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO identity_handles (
+                    id, owner_id, source_channel, conversation_id, handle,
+                    canonical_entity_id, confidence, notes, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (row_id, owner, channel, conv, raw_handle, canonical, float(confidence), notes, now, now),
+            )
     return {
         "id": row_id,
         "owner_id": owner,
