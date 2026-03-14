@@ -33,3 +33,73 @@ def test_classify_node_semantic_cluster_logs_fallback_for_unknown_response(caplo
         cluster = semantic_clustering.classify_node_semantic_cluster(node)
     assert cluster == "uncategorized"
     assert "semantic clustering fallback used" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# classify_node_semantic_cluster — heuristic paths (no LLM call needed)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_person_type_returns_people():
+    node = Node.create(type="Person", name="Alice Smith")
+    # Person type matches "people" cluster types — LLM should NOT be called
+    with patch.object(semantic_clustering, "call_clustering_llm") as mock_llm:
+        cluster = semantic_clustering.classify_node_semantic_cluster(node)
+    mock_llm.assert_not_called()
+    assert cluster == "people"
+
+
+def test_classify_place_type_returns_places():
+    node = Node.create(type="Place", name="Quaid HQ")
+    with patch.object(semantic_clustering, "call_clustering_llm") as mock_llm:
+        cluster = semantic_clustering.classify_node_semantic_cluster(node)
+    mock_llm.assert_not_called()
+    assert cluster == "places"
+
+
+def test_classify_preference_type_returns_preferences():
+    node = Node.create(type="Preference", name="likes coffee")
+    with patch.object(semantic_clustering, "call_clustering_llm") as mock_llm:
+        cluster = semantic_clustering.classify_node_semantic_cluster(node)
+    mock_llm.assert_not_called()
+    assert cluster == "preferences"
+
+
+def test_classify_event_type_returns_events():
+    node = Node.create(type="Event", name="team meeting on Monday")
+    with patch.object(semantic_clustering, "call_clustering_llm") as mock_llm:
+        cluster = semantic_clustering.classify_node_semantic_cluster(node)
+    mock_llm.assert_not_called()
+    assert cluster == "events"
+
+
+def test_classify_concept_with_tech_keyword_returns_technology():
+    node = Node.create(type="Concept", name="uses Python database for storage")
+    with patch.object(semantic_clustering, "call_clustering_llm") as mock_llm:
+        cluster = semantic_clustering.classify_node_semantic_cluster(node)
+    mock_llm.assert_not_called()
+    assert cluster == "technology"
+
+
+def test_classify_fact_with_keyword_match_skips_llm():
+    """Keyword match on Fact type without LLM (heuristic wins)."""
+    node = Node.create(type="Fact", name="lives in Portland")
+    with patch.object(semantic_clustering, "call_clustering_llm") as mock_llm:
+        cluster = semantic_clustering.classify_node_semantic_cluster(node)
+    mock_llm.assert_not_called()
+    assert cluster == "places"
+
+
+def test_classify_llm_response_parsed_to_cluster():
+    """LLM response of 'people' is correctly mapped to 'people' cluster."""
+    node = Node.create(type="Fact", name="zxqvplrtn_unique_gibberish")
+    with patch.object(semantic_clustering, "call_clustering_llm", return_value="people"):
+        cluster = semantic_clustering.classify_node_semantic_cluster(node)
+    assert cluster == "people"
+
+
+def test_call_clustering_llm_returns_stripped_result():
+    """Successful LLM response is stripped of whitespace."""
+    with patch.object(semantic_clustering, "call_fast_reasoning", return_value=("  technology  ", {})):
+        out = semantic_clustering.call_clustering_llm("test prompt")
+    assert out == "technology"
