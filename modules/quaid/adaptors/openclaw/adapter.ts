@@ -1700,6 +1700,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     const transcriptLifecycleCursor = new Map<string, number>();
     let lastTranscriptSessionHint: { sessionId: string; seenAtMs: number } | null = null;
     let currentInteractiveSession: ActiveInteractiveSession | null = null;
+    // Tracks when before_agent_start hook last authoritatively set currentInteractiveSession.
+    // The session watcher must not switch away to a session with an older updatedAt within
+    // this grace window, preventing stale-but-high-updatedAt prior sessions from displacing
+    // a freshly hook-set session.
+    let hookSetAt = 0;
     const runtimeEvents = (api as any)?.runtime?.events;
     if (runtimeEvents && typeof runtimeEvents.onSessionTranscriptUpdate === "function") {
       runtimeEvents.onSessionTranscriptUpdate((update: any) => {
@@ -1875,6 +1880,22 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             return;
           }
           if (currentInteractiveSession && currentInteractiveSession.sessionId !== active.sessionId) {
+            // Guard: if the before_agent_start hook recently set currentInteractiveSession
+            // authoritatively, don't let the watcher revert to a session whose updatedAt
+            // predates the hook-set time. This prevents stale sessions with high updatedAt
+            // (e.g. a prior TUI session that was active moments before this run) from
+            // displacing the freshly hook-adopted session before OC writes its final updatedAt.
+            const HOOK_GRACE_MS = 90_000; // 90s window
+            const withinGrace = hookSetAt > 0 && (Date.now() - hookSetAt) < HOOK_GRACE_MS;
+            if (withinGrace && active.updatedAt < hookSetAt) {
+              writeHookTrace("session_index.hook_grace_suppressed_switch", {
+                from_session_id: currentInteractiveSession.sessionId,
+                to_session_id: active.sessionId,
+                hook_set_at: hookSetAt,
+                candidate_updated_at: active.updatedAt,
+              });
+              return;
+            }
             writeHookTrace("session_index.active_session_changed", {
               from_session_id: currentInteractiveSession.sessionId,
               from_session_key: currentInteractiveSession.key,
@@ -2378,12 +2399,15 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         });
       }
       // Adopt new session so subsequent transitions are detected correctly.
+      // Record hookSetAt so the session watcher won't revert to a stale session
+      // whose updatedAt predates this hook-authoritative adoption.
+      hookSetAt = Date.now();
       currentInteractiveSession = {
         key: "agent:main:main",
         sessionId: newSessionId,
         sessionFile: getOpenClawSessionFile(newSessionId),
-        mtimeMs: Date.now(),
-        updatedAt: Date.now(),
+        mtimeMs: hookSetAt,
+        updatedAt: hookSetAt,
         lastChannel: "",
         lastTo: "",
       };
