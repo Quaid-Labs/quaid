@@ -156,12 +156,49 @@ function pickActiveInteractiveSession(data) {
       lastTo: String(row?.lastTo || "").trim()
     };
   }).filter((row) => row.sessionId);
+  const sessionTier = (key) => key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:") ? 1 : 0;
   entries.sort((a, b) => {
+    const tierDiff = sessionTier(a.key) - sessionTier(b.key);
+    if (tierDiff !== 0) return tierDiff;
     const uDiff = a.updatedAt - b.updatedAt;
     if (uDiff !== 0) return uDiff;
     return a.mtimeMs - b.mtimeMs;
   });
-  return entries[entries.length - 1] || null;
+  if (entries.length > 0) {
+    return entries[entries.length - 1];
+  }
+  try {
+    const dir = getOpenClawSessionsBaseDir();
+    const names = fs.readdirSync(dir).filter(
+      (n) => n.endsWith(".jsonl") && !n.includes(".jsonl.") && n.length > 6
+    );
+    if (!names.length) return null;
+    let best = null;
+    for (const name of names) {
+      const sessionId = name.slice(0, -6);
+      const sessionFile = path.join(dir, name);
+      let mtimeMs = 0;
+      try {
+        mtimeMs = fs.statSync(sessionFile).mtimeMs;
+      } catch {
+      }
+      if (!best || mtimeMs > best.mtimeMs) {
+        best = { sessionId, sessionFile, mtimeMs };
+      }
+    }
+    if (!best) return null;
+    return {
+      key: "agent:main:filesystem-fallback",
+      sessionId: best.sessionId,
+      sessionFile: best.sessionFile,
+      mtimeMs: best.mtimeMs,
+      updatedAt: best.mtimeMs,
+      lastChannel: "",
+      lastTo: ""
+    };
+  } catch {
+    return null;
+  }
 }
 function latestResetBackup(sessionId) {
   const prefix = `${sessionId}.jsonl.reset.`;
@@ -387,11 +424,18 @@ function createAdapterMemoryConfigResolver() {
   let memoryConfigPath = "";
   let memoryConfig = null;
   function memoryConfigCandidates() {
-    return [
+    const candidates = [];
+    const instance = String(process.env.QUAID_INSTANCE || "").trim();
+    if (instance) {
+      candidates.push(path.join(WORKSPACE, instance, "config", "memory.json"));
+    }
+    candidates.push(
+      path.join(WORKSPACE, "shared", "config", "memory.json"),
       path.join(WORKSPACE, "config", "memory.json"),
       path.join(os.homedir(), ".quaid", "memory-config.json"),
       path.join(process.cwd(), "memory-config.json")
-    ];
+    );
+    return candidates;
   }
   function resolveMemoryConfigPath() {
     for (const candidate of memoryConfigCandidates()) {
@@ -1239,7 +1283,7 @@ notify_user(${JSON.stringify(message)})
         if (query.length < 3) {
           query = rawPrompt;
         }
-        if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w)/.test(query)) {
+        if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/.test(query)) {
           return { prependContext: event.prependContext };
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {

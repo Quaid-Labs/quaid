@@ -1568,8 +1568,8 @@ notify_user(${JSON.stringify(message)})
           .trim();
         if (query.length < 3) { query = rawPrompt; }
 
-        // Skip system/internal prompts and slash commands
-        if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w)/.test(query)) {
+        // Skip system/internal prompts, slash commands, and OC gateway error messages
+        if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/.test(query)) {
           return { prependContext: event.prependContext };
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
