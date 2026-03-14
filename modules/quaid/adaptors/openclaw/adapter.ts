@@ -1869,6 +1869,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     // /new in any session writes a reset for that specific session (not a tracked
     // "current" that may point to the wrong one).
     const sessionKeyLastSeen = new Map<string, string>();
+    // Tracks the last time the watcher observed new messages in a session.
+    // Used by the before_agent_start fallback to identify which session was
+    // just active when OC does a visual-only /new (no sessions.json update).
+    const sessionLastActivityMs = new Map<string, number>();
     const startSessionIndexWatcher = () => {
       if (sessionIndexWatcherStarted) {
         return;
@@ -1961,6 +1965,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               continue;
             }
             const fresh = rows.slice(priorCount);
+            sessionLastActivityMs.set(sessionId, Date.now());
             for (let i = 0; i < fresh.length; i += 1) {
               const rawText = extractSessionMessageText(fresh[i]).trim();
               if (!rawText) continue;
@@ -2387,22 +2392,66 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
     startSessionIndexWatcher();
 
-    // Session-transition fallback: when OC TUI sessions do not write agent:main:tui-*
-    // entries to sessions.json (older OC builds), the session index watcher's per-key
-    // tracking cannot detect /new transitions. As a best-effort fallback, seed
-    // sessionKeyLastSeen from hook events so the watcher has a baseline to diff against
-    // if sessions.json later catches up, and update currentInteractiveSession for
-    // timeout tracking.
+    // Session-transition fallback for OC TUI /new visual-only transitions:
+    // When /new is typed in OC TUI, OC creates a new session internally but does NOT
+    // update sessions.json or create the new session's JSONL on disk. The per-key
+    // watcher therefore cannot detect the transition. However, before_agent_start
+    // still fires for the new (post-/new) session ID.
+    //
+    // When we see a session ID we have never tracked (not in sessionKeyLastSeen),
+    // find the session the watcher most recently observed activity in and write a
+    // reset for it. "Most recently observed activity" means the watcher saw new
+    // messages in that session in the current gateway lifetime — recorded in
+    // sessionLastActivityMs. This avoids mtime-based guessing and false positives
+    // from prior-run sessions that the watcher never actively watched this boot.
     onChecked("before_agent_start", async (event: any, ctx: any) => {
       if (isInternalSessionContext(event, ctx)) return;
       const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
       if (!newSessionId) return;
       writeHookTrace("hook.before_agent_start.session_seen", { session_id: newSessionId });
-      // Seed the per-key map with a synthetic key if this session isn't already tracked,
-      // so the watcher has a prior to compare against.
-      if (!Array.from(sessionKeyLastSeen.values()).includes(newSessionId)) {
-        const syntheticKey = `agent:main:hook:${newSessionId}`;
-        sessionKeyLastSeen.set(syntheticKey, newSessionId);
+
+      const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
+      if (!isAlreadyTracked && isSystemEnabled("memory")) {
+        // Find the session the watcher most recently observed new messages in.
+        let bestPriorSessionId: string | null = null;
+        let bestActivityMs = 0;
+        for (const [sid, activityMs] of sessionLastActivityMs.entries()) {
+          if (sid === newSessionId) continue;
+          if (activityMs > bestActivityMs) {
+            bestActivityMs = activityMs;
+            bestPriorSessionId = sid;
+          }
+        }
+        if (bestPriorSessionId) {
+          const priorKey = Array.from(sessionKeyLastSeen.entries())
+            .find(([k, v]) => v === bestPriorSessionId && !k.startsWith("agent:main:hook:"))?.[0]
+            || "agent:main:tui-unknown";
+          writeHookTrace("hook.before_agent_start.fallback_transition", {
+            new_session_id: newSessionId,
+            prior_session_id: bestPriorSessionId,
+            prior_key: priorKey,
+          });
+          if (
+            !isInternalSessionContext({ sessionKey: priorKey }, { sessionId: bestPriorSessionId })
+            && facade.shouldProcessLifecycleSignal(bestPriorSessionId, {
+              label: "ResetSignal",
+              source: "hook",
+              signature: `before_agent_start:fallback:${bestPriorSessionId}`,
+            })
+          ) {
+            facade.markLifecycleSignalFromHook(bestPriorSessionId, "ResetSignal");
+            writeDaemonSignal(bestPriorSessionId, "reset", {
+              source: "before_agent_start_fallback",
+              prior_session_id: bestPriorSessionId,
+              new_session_id: newSessionId,
+            });
+            console.log(
+              `[quaid][signal] daemon signal reset session=${bestPriorSessionId} source=before_agent_start_fallback`,
+            );
+          }
+        }
+        // Seed so repeated before_agent_start fires for the same new session don't re-trigger.
+        sessionKeyLastSeen.set(`agent:main:hook:${newSessionId}`, newSessionId);
       }
     }, {
       name: "before-agent-start-session-transition",

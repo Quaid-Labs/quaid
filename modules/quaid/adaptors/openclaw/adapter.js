@@ -1512,6 +1512,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     const sessionIndexMessageCounts = /* @__PURE__ */ new Map();
     const seenSessionIndexCommandKeys = /* @__PURE__ */ new Set();
     const sessionKeyLastSeen = /* @__PURE__ */ new Map();
+    const sessionLastActivityMs = /* @__PURE__ */ new Map();
     const startSessionIndexWatcher = () => {
       if (sessionIndexWatcherStarted) {
         return;
@@ -1574,6 +1575,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               continue;
             }
             const fresh = rows.slice(priorCount);
+            sessionLastActivityMs.set(sessionId, Date.now());
             for (let i = 0; i < fresh.length; i += 1) {
               const rawText = extractSessionMessageText(fresh[i]).trim();
               if (!rawText) continue;
@@ -1954,9 +1956,41 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
       if (!newSessionId) return;
       writeHookTrace("hook.before_agent_start.session_seen", { session_id: newSessionId });
-      if (!Array.from(sessionKeyLastSeen.values()).includes(newSessionId)) {
-        const syntheticKey = `agent:main:hook:${newSessionId}`;
-        sessionKeyLastSeen.set(syntheticKey, newSessionId);
+      const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
+      if (!isAlreadyTracked && isSystemEnabled2("memory")) {
+        let bestPriorSessionId = null;
+        let bestActivityMs = 0;
+        for (const [sid, activityMs] of sessionLastActivityMs.entries()) {
+          if (sid === newSessionId) continue;
+          if (activityMs > bestActivityMs) {
+            bestActivityMs = activityMs;
+            bestPriorSessionId = sid;
+          }
+        }
+        if (bestPriorSessionId) {
+          const priorKey = Array.from(sessionKeyLastSeen.entries()).find(([k, v]) => v === bestPriorSessionId && !k.startsWith("agent:main:hook:"))?.[0] || "agent:main:tui-unknown";
+          writeHookTrace("hook.before_agent_start.fallback_transition", {
+            new_session_id: newSessionId,
+            prior_session_id: bestPriorSessionId,
+            prior_key: priorKey
+          });
+          if (!isInternalSessionContext({ sessionKey: priorKey }, { sessionId: bestPriorSessionId }) && facade.shouldProcessLifecycleSignal(bestPriorSessionId, {
+            label: "ResetSignal",
+            source: "hook",
+            signature: `before_agent_start:fallback:${bestPriorSessionId}`
+          })) {
+            facade.markLifecycleSignalFromHook(bestPriorSessionId, "ResetSignal");
+            writeDaemonSignal(bestPriorSessionId, "reset", {
+              source: "before_agent_start_fallback",
+              prior_session_id: bestPriorSessionId,
+              new_session_id: newSessionId
+            });
+            console.log(
+              `[quaid][signal] daemon signal reset session=${bestPriorSessionId} source=before_agent_start_fallback`
+            );
+          }
+        }
+        sessionKeyLastSeen.set(`agent:main:hook:${newSessionId}`, newSessionId);
       }
     }, {
       name: "before-agent-start-session-transition",
