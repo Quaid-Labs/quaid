@@ -1927,6 +1927,53 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     ensureDaemonAlive();
     console.log("[quaid][daemon] extraction daemon ensure_alive called at boot");
     startSessionIndexWatcher();
+    onChecked("before_agent_start", async (event, ctx) => {
+      if (isInternalSessionContext(event, ctx)) return;
+      const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
+      if (!newSessionId || !currentInteractiveSession) return;
+      if (currentInteractiveSession.sessionId === newSessionId) return;
+      const prior = currentInteractiveSession;
+      writeHookTrace("hook.before_agent_start.session_transition_detected", {
+        from_session_id: prior.sessionId,
+        from_session_key: prior.key,
+        to_session_id: newSessionId
+      });
+      if (!isInternalSessionContext(
+        { sessionKey: prior.key },
+        { sessionId: prior.sessionId }
+      ) && isSystemEnabled2("memory") && facade.shouldProcessLifecycleSignal(prior.sessionId, {
+        label: "ResetSignal",
+        source: "hook",
+        signature: `before_agent_start:session_change:${prior.sessionId}`
+      })) {
+        facade.markLifecycleSignalFromHook(prior.sessionId, "ResetSignal");
+        writeDaemonSignal(prior.sessionId, "reset", {
+          source: "before_agent_start_session_change",
+          prior_session_id: prior.sessionId,
+          prior_session_key: prior.key,
+          new_session_id: newSessionId
+        });
+        console.log(
+          `[quaid][signal] daemon signal reset session=${prior.sessionId} source=before_agent_start_session_change`
+        );
+        writeHookTrace("hook.before_agent_start.session_change_signal_queued", {
+          from_session_id: prior.sessionId,
+          to_session_id: newSessionId
+        });
+      }
+      currentInteractiveSession = {
+        key: "agent:main:main",
+        sessionId: newSessionId,
+        sessionFile: getOpenClawSessionFile(newSessionId),
+        mtimeMs: Date.now(),
+        updatedAt: Date.now(),
+        lastChannel: "",
+        lastTo: ""
+      };
+    }, {
+      name: "before-agent-start-session-transition",
+      priority: 5
+    });
     async function recallMemories(opts) {
       const {
         query,
