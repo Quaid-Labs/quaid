@@ -290,6 +290,13 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     }
   }
   let resolvedPath = sessionTranscriptPaths.get(sessionId) || "";
+  if (!resolvedPath && signalType === "reset") {
+    const backup = latestResetBackup(sessionId);
+    if (backup) {
+      resolvedPath = backup;
+      sessionTranscriptPaths.set(sessionId, backup);
+    }
+  }
   if (!resolvedPath) {
     console.warn(`[quaid][daemon-signal] no transcript path for session ${sessionId}, skipping signal`);
     return null;
@@ -732,7 +739,12 @@ async function requestSessionCompaction(sessionKey) {
   return { ok: Boolean(parsed?.ok), compacted: parsed?.compacted, raw: String(out || "") };
 }
 function parseSessionMessagesJsonl(sessionFile) {
-  const content = fs.readFileSync(sessionFile, "utf8");
+  let content;
+  try {
+    content = fs.readFileSync(sessionFile, "utf8");
+  } catch {
+    return [];
+  }
   const lines = content.trim().split("\n");
   const messages = [];
   for (const line of lines) {
@@ -1660,6 +1672,49 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (active) {
             currentInteractiveSession = active;
           }
+          if (isSystemEnabled2("memory")) {
+            try {
+              const baseDir = getOpenClawSessionsBaseDir();
+              const scanFiles = fs.readdirSync(baseDir);
+              const nowTickMs = Date.now();
+              const ORPHAN_RESET_WINDOW_MS = 3e5;
+              for (const fname of scanFiles) {
+                const dotIdx = fname.indexOf(".jsonl.reset.");
+                if (dotIdx < 0) continue;
+                const sid = fname.slice(0, dotIdx);
+                if (!sid) continue;
+                try {
+                  const backupStat = fs.statSync(path.join(baseDir, fname));
+                  const age = nowTickMs - backupStat.mtimeMs;
+                  if (age < 0 || age >= ORPHAN_RESET_WINDOW_MS) continue;
+                  let origSize = -1;
+                  try {
+                    origSize = fs.statSync(getOpenClawSessionFile(sid)).size;
+                  } catch {
+                  }
+                  if (origSize > 0) continue;
+                  if (!facade.shouldProcessLifecycleSignal(sid, {
+                    label: "ResetSignal",
+                    source: "watcher_scan",
+                    signature: `watcher_scan:orphan_reset:${sid}`
+                  })) continue;
+                  facade.markLifecycleSignalFromHook(sid, "ResetSignal");
+                  writeDaemonSignal(sid, "reset", {
+                    source: "orphan_reset_scan",
+                    backup_file: fname
+                  });
+                  writeHookTrace("session_index.orphan_reset_detected", {
+                    session_id: sid,
+                    backup_file: fname,
+                    age_ms: age
+                  });
+                  console.log(`[quaid][signal] orphan reset detected session=${sid} backup=${fname}`);
+                } catch {
+                }
+              }
+            } catch {
+            }
+          }
         } catch (err) {
           writeHookTrace("session_index.error", {
             error: String(err?.message || err)
@@ -1769,7 +1824,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
     const resolveLifecycleCommandTargetSessionId = (action, event, ctx) => {
       if (action === "new" || action === "reset") {
         const previousSessionId = String(
-          event?.previousSessionEntry?.sessionId || event?.previousSessionId || ""
+          // OC stores session data under event.context (nested), not top-level.
+          // Read both paths: context.previousSessionEntry (preferred), context.sessionEntry
+          // (fallback), context.sessionId (explicit field added by our OC patch), and
+          // legacy top-level fields for older OC versions.
+          event?.context?.previousSessionEntry?.sessionId || event?.context?.sessionEntry?.sessionId || event?.context?.sessionId || event?.previousSessionEntry?.sessionId || event?.previousSessionId || ""
         ).trim();
         if (previousSessionId) {
           return previousSessionId;
@@ -1970,18 +2029,45 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       writeHookTrace("hook.before_agent_start.session_seen", { session_id: newSessionId });
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
       if (!isAlreadyTracked && isSystemEnabled2("memory")) {
+        const RECENT_RESET_WINDOW_MS = 12e4;
+        const nowMs = Date.now();
         let bestPriorSessionId = null;
-        let bestMtimeMs = 0;
-        for (const [key, sid] of sessionKeyLastSeen.entries()) {
-          if (key.startsWith("agent:main:hook:")) continue;
-          if (sid === newSessionId) continue;
-          try {
-            const mtimeMs = fs.statSync(getOpenClawSessionFile(sid)).mtimeMs;
-            if (mtimeMs > bestMtimeMs) {
-              bestMtimeMs = mtimeMs;
-              bestPriorSessionId = sid;
+        let detectionMethod = "mtime";
+        try {
+          const baseDir = getOpenClawSessionsBaseDir();
+          const allFiles = fs.readdirSync(baseDir);
+          let bestResetMtimeMs = 0;
+          for (const fname of allFiles) {
+            const dotIdx = fname.indexOf(".jsonl.reset.");
+            if (dotIdx < 0) continue;
+            const sid = fname.slice(0, dotIdx);
+            if (!sid) continue;
+            try {
+              const backupStat = fs.statSync(path.join(baseDir, fname));
+              const age = nowMs - backupStat.mtimeMs;
+              if (age >= 0 && age < RECENT_RESET_WINDOW_MS && backupStat.mtimeMs > bestResetMtimeMs) {
+                bestResetMtimeMs = backupStat.mtimeMs;
+                bestPriorSessionId = sid;
+                detectionMethod = sid === newSessionId ? "self_reset" : "reset_signature";
+              }
+            } catch {
             }
-          } catch {
+          }
+        } catch {
+        }
+        if (!bestPriorSessionId) {
+          let bestMtimeMs = 0;
+          for (const [key, sid] of sessionKeyLastSeen.entries()) {
+            if (key.startsWith("agent:main:hook:")) continue;
+            if (sid === newSessionId) continue;
+            try {
+              const mtimeMs = fs.statSync(getOpenClawSessionFile(sid)).mtimeMs;
+              if (mtimeMs > bestMtimeMs) {
+                bestMtimeMs = mtimeMs;
+                bestPriorSessionId = sid;
+              }
+            } catch {
+            }
           }
         }
         if (bestPriorSessionId) {
@@ -1989,7 +2075,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           writeHookTrace("hook.before_agent_start.fallback_transition", {
             new_session_id: newSessionId,
             prior_session_id: bestPriorSessionId,
-            prior_key: priorKey
+            prior_key: priorKey,
+            detection_method: detectionMethod
           });
           if (!isInternalSessionContext({ sessionKey: priorKey }, { sessionId: bestPriorSessionId }) && facade.shouldProcessLifecycleSignal(bestPriorSessionId, {
             label: "ResetSignal",

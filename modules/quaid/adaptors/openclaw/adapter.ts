@@ -903,7 +903,12 @@ async function requestSessionCompaction(sessionKey: string): Promise<{ ok: boole
 }
 
 function parseSessionMessagesJsonl(sessionFile: string): any[] {
-  const content = fs.readFileSync(sessionFile, "utf8");
+  let content: string;
+  try {
+    content = fs.readFileSync(sessionFile, "utf8");
+  } catch {
+    return [];
+  }
   const lines = content.trim().split("\n");
   const messages: any[] = [];
   for (const line of lines) {
