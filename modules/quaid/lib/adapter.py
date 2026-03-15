@@ -335,6 +335,45 @@ class QuaidAdapter(abc.ABC):
         """
         return []
 
+    # ---- Multi-agent support ----
+
+    def is_multi_agent(self) -> bool:
+        """True if this platform supports multiple first-class agents with own silos.
+
+        When True, each agent has its own Quaid silo derived via agent_instance_id().
+        Subagents running inside a parent session are NOT first-class agents — they
+        inherit the parent's instance automatically.
+        """
+        return False
+
+    def default_agent_id(self) -> str:
+        """Primary/default agent identifier for this platform."""
+        return "main"
+
+    def list_agent_ids(self) -> List[str]:
+        """Return all known first-class agent IDs for this platform.
+
+        Called at install time to enumerate agents for silo initialization.
+        Single-agent adapters return [default_agent_id()].
+        Multi-agent adapters override to discover agents from platform config.
+        """
+        return [self.default_agent_id()]
+
+    def agent_instance_id(self, agent_id: str) -> str:
+        """Derive the Quaid instance ID for a given agent.
+
+        Single-agent platforms return instance_id() regardless of agent_id.
+        Multi-agent adapters override to route each agent to its own silo.
+
+        Convention: "<base-instance>-<agent_id>" (e.g. "openclaw-coding").
+        For the default/main agent, returns the primary instance_id().
+        """
+        return self.instance_id()
+
+    def agent_instance_root(self, agent_id: str) -> Path:
+        """Resolve the instance root directory for a given agent."""
+        return self.quaid_home() / self.agent_instance_id(agent_id)
+
     # ---- Identity ----
 
     def get_repo_slug(self) -> str:

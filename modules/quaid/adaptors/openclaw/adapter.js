@@ -80,8 +80,20 @@ const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 9e4;
 const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
-const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
+function getInstanceId(agentId = "main") {
+  const normalized = String(agentId || "main").trim().toLowerCase();
+  if (!normalized || normalized === "main") {
+    return _QUAID_INSTANCE;
+  }
+  return _QUAID_INSTANCE ? `${_QUAID_INSTANCE}-${normalized}` : normalized;
+}
+function getDaemonSignalDir(agentId = "main") {
+  const instanceId = getInstanceId(agentId);
+  return instanceId ? path.join(WORKSPACE, instanceId, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
+}
+const DAEMON_SIGNAL_DIR = getDaemonSignalDir("main");
 const sessionTranscriptPaths = /* @__PURE__ */ new Map();
+const sessionIdToAgentId = /* @__PURE__ */ new Map();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
 const SESSION_INDEX_POLL_MS = 1e3;
 let sessionIndexWatcherStarted = false;
@@ -317,8 +329,10 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       }
     }
   }
+  const agentId = sessionIdToAgentId.get(sessionId) || "main";
+  const signalDir = getDaemonSignalDir(agentId);
   try {
-    fs.mkdirSync(DAEMON_SIGNAL_DIR, { recursive: true });
+    fs.mkdirSync(signalDir, { recursive: true });
   } catch {
   }
   const payload = {
@@ -331,7 +345,7 @@ function writeDaemonSignal(sessionId, signalType, meta) {
     meta: meta || {}
   };
   const fname = `${Date.now()}_${process.pid}_${signalType}.json`;
-  const sigPath = path.join(DAEMON_SIGNAL_DIR, fname);
+  const sigPath = path.join(signalDir, fname);
   try {
     fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 384 });
     console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
@@ -1571,11 +1585,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const data = readSessionsIndex();
           const recognizedEntries = [];
           for (const [key, row] of Object.entries(data || {})) {
-            if (!row || typeof row !== "object" || typeof row?.sessionId !== "string" || !key.startsWith("agent:main:")) {
+            if (!row || typeof row !== "object" || typeof row?.sessionId !== "string" || !key.startsWith("agent:")) {
               continue;
             }
             const sessionId = String(row.sessionId || "").trim();
             if (!sessionId) continue;
+            const keyParts = key.split(":");
+            const agentId = keyParts.length >= 3 ? keyParts[1].trim() || "main" : "main";
+            sessionIdToAgentId.set(sessionId, agentId);
             recognizedEntries.push({
               key,
               sessionId,
@@ -1619,7 +1636,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             } else if (!prevSessionId && initialSnapshotDone && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
               writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId, watcher_start_ms: watcherStartMs });
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
-                if (priorKey.startsWith("agent:main:hook:")) continue;
+                if (/^agent:[^:]+:hook:/.test(priorKey)) continue;
                 if (priorSid === sessionId) continue;
                 if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
                 let priorSize = -1;
@@ -2121,7 +2138,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         if (!bestPriorSessionId) {
           let bestMtimeMs = 0;
           for (const [key, sid] of sessionKeyLastSeen.entries()) {
-            if (key.startsWith("agent:main:hook:")) continue;
+            if (/^agent:[^:]+:hook:/.test(key)) continue;
             if (sid === newSessionId) continue;
             try {
               const mtimeMs = fs.statSync(getOpenClawSessionFile(sid)).mtimeMs;
@@ -2134,7 +2151,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           }
         }
         if (bestPriorSessionId) {
-          const priorKey = Array.from(sessionKeyLastSeen.entries()).find(([k, v]) => v === bestPriorSessionId && !k.startsWith("agent:main:hook:"))?.[0] || "agent:main:tui-unknown";
+          const priorKey = Array.from(sessionKeyLastSeen.entries()).find(([k, v]) => v === bestPriorSessionId && !/^agent:[^:]+:hook:/.test(k))?.[0] || "agent:main:tui-unknown";
           writeHookTrace("hook.before_agent_start.fallback_transition", {
             new_session_id: newSessionId,
             prior_session_id: bestPriorSessionId,

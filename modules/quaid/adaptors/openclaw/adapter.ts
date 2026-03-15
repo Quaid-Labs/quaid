@@ -109,10 +109,39 @@ const BACKLOG_NOTIFY_STALE_MS = 90_000;
 // Use the instance-specific path when QUAID_INSTANCE is set, mirroring the Python
 // daemon's _signal_dir() = _instance_root() / "data" / "extraction-signals".
 const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
-const DAEMON_SIGNAL_DIR = _QUAID_INSTANCE
-  ? path.join(WORKSPACE, _QUAID_INSTANCE, "data", "extraction-signals")
-  : path.join(WORKSPACE, "data", "extraction-signals");
+
+/**
+ * Derive the Quaid instance ID for a given OC agent ID.
+ *
+ * - main agent  → _QUAID_INSTANCE (the configured primary instance, e.g. "openclaw")
+ * - other agent → "<_QUAID_INSTANCE>-<agentId>" (e.g. "openclaw-coding")
+ *
+ * Called by the system to compute all instance-specific paths. When QUAID_INSTANCE
+ * is not set (legacy flat layout), main returns "" and others return the agentId.
+ */
+function getInstanceId(agentId: string = "main"): string {
+  const normalized = String(agentId || "main").trim().toLowerCase();
+  if (!normalized || normalized === "main") {
+    return _QUAID_INSTANCE;
+  }
+  return _QUAID_INSTANCE ? `${_QUAID_INSTANCE}-${normalized}` : normalized;
+}
+
+/** Daemon signal directory for a given agent's Quaid silo. */
+function getDaemonSignalDir(agentId: string = "main"): string {
+  const instanceId = getInstanceId(agentId);
+  return instanceId
+    ? path.join(WORKSPACE, instanceId, "data", "extraction-signals")
+    : path.join(WORKSPACE, "data", "extraction-signals");
+}
+
+// Primary instance signal dir (backward-compat constant for non-session-routed callers).
+const DAEMON_SIGNAL_DIR = getDaemonSignalDir("main");
+
 const sessionTranscriptPaths = new Map<string, string>();
+// Maps sessionId → agentId for multi-agent daemon signal routing.
+// Populated by the session index watcher as sessions are discovered.
+const sessionIdToAgentId = new Map<string, string>();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
 const SESSION_INDEX_POLL_MS = 1000;
 let sessionIndexWatcherStarted = false;
@@ -412,8 +441,11 @@ function writeDaemonSignal(
     }
   }
 
+  // Route to the agent's own Quaid silo if known, otherwise primary instance.
+  const agentId = sessionIdToAgentId.get(sessionId) || "main";
+  const signalDir = getDaemonSignalDir(agentId);
   try {
-    fs.mkdirSync(DAEMON_SIGNAL_DIR, { recursive: true });
+    fs.mkdirSync(signalDir, { recursive: true });
   } catch {}
 
   const payload = {
@@ -426,7 +458,7 @@ function writeDaemonSignal(
     meta: meta || {},
   };
   const fname = `${Date.now()}_${process.pid}_${signalType}.json`;
-  const sigPath = path.join(DAEMON_SIGNAL_DIR, fname);
+  const sigPath = path.join(signalDir, fname);
   try {
     fs.writeFileSync(sigPath, JSON.stringify(payload), { mode: 0o600 });
     console.log(`[quaid][daemon-signal] wrote ${signalType} signal for session=${sessionId} path=${sigPath}`);
@@ -1964,12 +1996,16 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               !row
               || typeof row !== "object"
               || typeof (row as any)?.sessionId !== "string"
-              || !key.startsWith("agent:main:")
+              || !key.startsWith("agent:")
             ) {
               continue;
             }
             const sessionId = String((row as any).sessionId || "").trim();
             if (!sessionId) continue;
+            // Extract agentId from "agent:<agentId>:<channel>" and register for signal routing.
+            const keyParts = key.split(":");
+            const agentId = keyParts.length >= 3 ? (keyParts[1].trim() || "main") : "main";
+            sessionIdToAgentId.set(sessionId, agentId);
             recognizedEntries.push({
               key,
               sessionId,
@@ -2032,7 +2068,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               // empty, every key has prevSessionId=undefined).
               writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId, watcher_start_ms: watcherStartMs });
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
-                if (priorKey.startsWith("agent:main:hook:")) continue;
+                if (/^agent:[^:]+:hook:/.test(priorKey)) continue;
                 if (priorSid === sessionId) continue;
                 if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
                 // Only signal sessions whose transcript was modified after this watcher
@@ -2630,7 +2666,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         if (!bestPriorSessionId) {
           let bestMtimeMs = 0;
           for (const [key, sid] of sessionKeyLastSeen.entries()) {
-            if (key.startsWith("agent:main:hook:")) continue;
+            if (/^agent:[^:]+:hook:/.test(key)) continue;
             if (sid === newSessionId) continue;
             try {
               const mtimeMs = fs.statSync(getOpenClawSessionFile(sid)).mtimeMs;
@@ -2644,7 +2680,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
         if (bestPriorSessionId) {
           const priorKey = Array.from(sessionKeyLastSeen.entries())
-            .find(([k, v]) => v === bestPriorSessionId && !k.startsWith("agent:main:hook:"))?.[0]
+            .find(([k, v]) => v === bestPriorSessionId && !/^agent:[^:]+:hook:/.test(k))?.[0]
             || "agent:main:tui-unknown";
           writeHookTrace("hook.before_agent_start.fallback_transition", {
             new_session_id: newSessionId,
