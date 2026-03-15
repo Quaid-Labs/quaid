@@ -1596,7 +1596,13 @@ notify_user(${JSON.stringify(message)})
     // OC's before_agent_start fires for subagent sessions without the user's
     // prompt. before_prompt_build fires per-message with the actual prompt and
     // messages array, so recall injection works reliably.
-    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string } | undefined> => {
+    //
+    // Project docs (TOOLS.md + AGENTS.md for every registered project) are
+    // injected as appendSystemContext on the FIRST message of each session so
+    // the model receives them as system-prompt instructions (cached, not user
+    // context). A session-scoped Set prevents re-injection on subsequent turns.
+    const projectDocsInjectedSessions = new Set<string>();
+    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return { prependContext: event.prependContext };
@@ -1698,7 +1704,28 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error: unknown) {
         console.error("[quaid] Auto-injection error:", error);
       }
-      return { prependContext: event.prependContext };
+
+      // Inject all registered project TOOLS.md + AGENTS.md as appendSystemContext
+      // once per session so the model treats them as system instructions.
+      let appendSystemContext: string | undefined;
+      const sessionKey = String(ctx?.sessionId || ctx?.session?.id || "");
+      if (sessionKey && !projectDocsInjectedSessions.has(sessionKey) && isSystemEnabled("projects")) {
+        try {
+          const projectDocs = facade.injectProjectContext(undefined);
+          if (projectDocs) {
+            appendSystemContext = projectDocs;
+            projectDocsInjectedSessions.add(sessionKey);
+            writeHookTrace("hook.project_docs_injected", { session_id: sessionKey, len: projectDocs.length });
+          }
+        } catch (err: unknown) {
+          console.warn(`[quaid] Project docs appendSystemContext injection failed: ${(err as Error)?.message || String(err)}`);
+        }
+      }
+
+      return {
+        prependContext: event.prependContext,
+        ...(appendSystemContext ? { appendSystemContext } : {}),
+      };
     };
 
     // Register lifecycle hooks via registerHook (api.on is for event bus signals).

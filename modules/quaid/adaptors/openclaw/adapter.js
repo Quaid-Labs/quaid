@@ -1305,6 +1305,7 @@ notify_user(${JSON.stringify(message)})
       }
       return { prependContext: event.prependContext };
     };
+    const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
@@ -1386,7 +1387,24 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
       }
-      return { prependContext: event.prependContext };
+      let appendSystemContext;
+      const sessionKey = String(ctx?.sessionId || ctx?.session?.id || "");
+      if (sessionKey && !projectDocsInjectedSessions.has(sessionKey) && isSystemEnabled2("projects")) {
+        try {
+          const projectDocs = facade.injectProjectContext(void 0);
+          if (projectDocs) {
+            appendSystemContext = projectDocs;
+            projectDocsInjectedSessions.add(sessionKey);
+            writeHookTrace("hook.project_docs_injected", { session_id: sessionKey, len: projectDocs.length });
+          }
+        } catch (err) {
+          console.warn(`[quaid] Project docs appendSystemContext injection failed: ${err?.message || String(err)}`);
+        }
+      }
+      return {
+        prependContext: event.prependContext,
+        ...appendSystemContext ? { appendSystemContext } : {}
+      };
     };
     console.log("[quaid] Registering before_agent_start hook for memory injection");
     onChecked("before_agent_start", beforeAgentStartHandler, {
