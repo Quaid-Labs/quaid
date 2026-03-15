@@ -1656,10 +1656,15 @@ notify_user(${JSON.stringify(message)})
           ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey
             || resolveSessionKeyForSessionId(_bpbSid)
         ).trim().toLowerCase();
+        // Match both full-path keys (agent:main:tui-*) and bare keys (tui-*)
+        // because OC may pass either form in event.sessionKey depending on context.
         const _bpbInteractive =
           _bpbKey === "agent:main:main"
+          || _bpbKey === "main"
           || _bpbKey.startsWith("agent:main:tui-")
-          || _bpbKey.startsWith("agent:main:telegram:");
+          || _bpbKey.startsWith("tui-")
+          || _bpbKey.startsWith("agent:main:telegram:")
+          || _bpbKey.startsWith("telegram:");
         if (!_bpbInteractive) {
           writeHookTrace("hook.before_prompt_build.non_interactive_skip", {
             session_id: _bpbSid,
