@@ -161,22 +161,6 @@ def cmd_snapshot(args):
                 print(f"  {c['status']}\t{c['path']}")
 
 
-def cmd_sync(args):
-    from core.sync_engine import sync_all_projects
-    results = sync_all_projects()
-    if not results:
-        print("No projects to sync (adapter has no sync target).")
-        return
-    for sr in results:
-        parts = []
-        if sr.copied:
-            parts.append(f"copied: {', '.join(sr.copied)}")
-        if sr.removed:
-            parts.append(f"removed: {', '.join(sr.removed)}")
-        if sr.skipped:
-            parts.append(f"skipped: {', '.join(sr.skipped)}")
-        print(f"  {sr.project}: {'; '.join(parts) or 'up to date'}")
-
 
 def main():
     parser = argparse.ArgumentParser(description="Quaid project system CLI")
@@ -218,8 +202,6 @@ def main():
     snap_p = subparsers.add_parser("snapshot", help="Take shadow git snapshot(s)")
     snap_p.add_argument("name", nargs="?", help="Project name (all if omitted)")
 
-    # sync
-    subparsers.add_parser("sync", help="Sync project files to adapter workspaces")
 
     args = parser.parse_args()
 
@@ -232,7 +214,6 @@ def main():
         "unlink": cmd_unlink,
         "delete": cmd_delete,
         "snapshot": cmd_snapshot,
-        "sync": cmd_sync,
     }
 
     if args.command in commands:

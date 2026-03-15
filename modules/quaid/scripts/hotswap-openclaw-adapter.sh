@@ -56,8 +56,8 @@ for f in "$LOCAL_ADAPTER_TS" "$LOCAL_ADAPTER_JS" "$LOCAL_TIMEOUT_TS" "$LOCAL_TIM
   fi
 done
 
-REMOTE_ADAPTER_DIR="$PLUGIN_DIR/modules/quaid/adaptors/openclaw"
-REMOTE_CORE_DIR="$PLUGIN_DIR/modules/quaid/core"
+REMOTE_ADAPTER_DIR="$PLUGIN_DIR/adaptors/openclaw"
+REMOTE_CORE_DIR="$PLUGIN_DIR/core"
 
 echo "Target host: $HOST"
 echo "Target plugin dir: $PLUGIN_DIR"

@@ -662,17 +662,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         # B002: Mark processed only on success
         mark_signal_processed(signal_data)
 
-        # Post-extraction hooks: sync project context files to adapter workspaces
-        # and snapshot shadow git for tracked projects.
-        try:
-            from core.sync_engine import sync_all_projects
-            sync_results = sync_all_projects()
-            for sr in sync_results:
-                if sr.copied:
-                    logger.info("[%s] synced %s: %s", label, sr.project, sr.copied)
-        except Exception as e:
-            logger.warning("[%s] post-extraction sync error: %s", label, e)
-
+        # Post-extraction hooks: snapshot shadow git for tracked projects.
         snapshots = []
         try:
             from core.project_registry import snapshot_all_projects

@@ -136,15 +136,6 @@ class OpenClawAdapter(QuaidAdapter):
                 files[str(fpath)] = {"purpose": purpose, "maxLines": max_lines}
         return files
 
-    def get_context_sync_target(self):
-        """OC needs bootstrap files copied inside its workspace boundary.
-
-        bootstrap-extra-files resolves paths relative to ~/.openclaw/workspace/
-        (the defaults workspace, not the agent workspace). The glob pattern
-        'projects/*/AGENTS.md' finds files at ~/.openclaw/workspace/projects/<name>/AGENTS.md.
-        """
-        return Path.home() / ".openclaw" / "workspace" / "projects"
-
     def quaid_home(self) -> Path:
         """Root directory containing all Quaid instances (QUAID_HOME)."""
         env = os.environ.get("QUAID_HOME", "").strip()

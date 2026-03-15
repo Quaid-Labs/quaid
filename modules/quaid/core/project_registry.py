@@ -158,16 +158,6 @@ def create_project(
     registry["projects"][name] = entry
     _save_registry(registry)
 
-    # Trigger sync to adapter workspaces (e.g. OC)
-    try:
-        from core.sync_engine import sync_all_projects
-        sync_results = sync_all_projects()
-        for sr in sync_results:
-            if sr.copied:
-                logger.info("Synced %s on create: %s", sr.project, sr.copied)
-    except Exception as e:
-        logger.warning("Post-create sync failed for %s: %s", name, e)
-
     logger.info("Created project: %s", name)
     return entry
 
