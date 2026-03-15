@@ -706,8 +706,14 @@ def extract_from_transcript(
                 fact_entry["status"] = "failed"
                 result["facts_skipped"] += 1
 
-            # Create edges for any successful fact write where we have a fact id.
-            fact_id = store_result.get("id")
+            # Create edges only for newly stored or updated facts — NOT for duplicates.
+            # When a fact is deduped, store_result still returns the existing fact's id.
+            # Running edge creation on a duplicate attaches the current LLM's (possibly
+            # wrong or carry-contaminated) edge output to the old fact, producing spurious
+            # edges like "Diana --sibling_of--> User's mom" even after DB cleanup.
+            # The edge backfill (janitor --task edges) handles any missed edges on
+            # existing facts that genuinely need them.
+            fact_id = store_result.get("id") if store_result.get("status") in ("created", "updated") else None
             if fact_id and isinstance(fact.get("edges"), list):
                 for edge in fact.get("edges", []):
                     if not isinstance(edge, dict):

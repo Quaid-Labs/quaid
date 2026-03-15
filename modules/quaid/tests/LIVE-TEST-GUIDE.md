@@ -554,21 +554,49 @@ user's niece. The owner name (e.g., "Solomon") must appear as the sibling entity
 not "User" or "User's mom" — the extraction prompt now injects the owner name
 so first-person pronouns resolve correctly.
 
-**Pre-flight: clear any stale niece/Anne facts from prior test runs.**
-If any niece fact exists from a previous run, it will win over Alice in recall.
+**Pre-flight: clean DB and start a genuine fresh session.**
+
+This phase MUST start in a clean session with no prior Diana/Alice/Anne/niece
+history in either the DB or the session transcript. Retrying within the same
+session accumulates previous mentions in carry_facts and causes dedup/entity
+contamination even after DB deletion.
+
+Step 1 — Clear stale nodes from the DB:
 
 ```bash
-ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db); sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" ORDER BY created_at DESC LIMIT 10;"'
+ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db); sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" OR LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
 ```
 
-Delete any stale niece/Anne nodes found:
+Delete each found node (replace `<id>` with actual IDs):
 
 ```bash
-# Replace <id1> <id2> with actual IDs found above
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid delete-node <id>'
 ```
 
-In a fresh session, tell the agent two facts naturally — do NOT say "niece":
+Verify clean:
+
+```bash
+ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db); sqlite3 "$DB" "SELECT COUNT(*) FROM nodes WHERE LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\";"'
+# Must return 0
+```
+
+Step 2 — Restart the extraction daemon so any patched files are loaded:
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 1; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid daemon start'
+```
+
+Step 3 — Start a completely fresh OC session for seeding.
+Kill and restart pane `main:99` with a new named session so the transcript
+is empty before seeding. **Do not retry within the same session** — each
+retry appends to the transcript, which contaminate carry_facts.
+
+```bash
+# Kill current pane 99 content and start fresh session
+ssh example.local 'openclaw tui --session oc-m7p3-$(date +%s)'
+```
+
+In the new session, tell the agent two facts naturally — do NOT say "niece":
 
 - `My sister's name is Diana.`
 - `Diana has a daughter named Alice.`
