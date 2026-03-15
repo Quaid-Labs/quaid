@@ -16,6 +16,14 @@ This is black-box testing:
 
 ## Core Rules
 
+**MACHINE SAFETY — READ FIRST:**
+- ALL install, uninstall, and `setup-quaid.mjs` commands MUST be run via
+  `ssh example.local '...'`. NEVER run them directly on the local machine.
+- Before any install or uninstall command, verify you are targeting alfie:
+  `ssh example.local hostname` must return `alfie`.
+- If you ever find yourself running `node setup-quaid.mjs` without an
+  `ssh example.local` prefix, STOP immediately — you are on the wrong machine.
+
 - Use this document as the source of truth for the live test procedure.
 - Start from a clean install unless the user explicitly says to skip it.
 - Run the live test from the `canary` branch. Verify the checkout before
@@ -340,14 +348,22 @@ Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
 
 ### M1: Extraction via `/new`
 
-> **STATUS: Should now work for OC.** Previous "KNOWN BROKEN" label was based
-> on incorrect analysis. OC's `performGatewaySessionReset` updates `sessions.json`
-> with a new UUID AND calls `archiveSessionTranscriptsForSession` (creating a
-> `.reset.*` backup) for both `/new` and `/reset`. The key-transition watcher in
-> `tickSessionIndex` detects the sessionId change and arms a targeted orphan
-> check. Run for both OC and CC.
+> **OC TUI behavior:** OC TUI `/new` does NOT update `sessions.json` or create
+> a `.reset.*` backup. It is a visual-only session switch. The extraction path
+> is `before_agent_start` on the new session — it mtime-scans `sessionKeyLastSeen`
+> to find the prior session and writes the daemon signal. This requires sending
+> at least one follow-up message to the new session after `/new`.
 
-Seed a distinctive `PROOFNEW-<timestamp>` fact, then trigger `/new`.
+Procedure:
+1. Seed a distinctive `PROOFNEW-<timestamp>` fact in the current session.
+2. Wait for full idle.
+3. Send `/new`.
+4. **Send one follow-up message to the new session** (e.g. `Hello`). This is
+   required — `before_agent_start` only fires when the new session processes
+   its first message, which triggers mtime-based prior-session detection and
+   writes the extraction signal for the pre-/new session.
+5. Wait 30–60 seconds for extraction.
+6. Check DB for the proof token.
 
 Pass:
 - the fact is stored after the lifecycle boundary
