@@ -254,7 +254,32 @@ class QuaidAdapter(abc.ABC):
                 text,
                 flags=re.IGNORECASE,
             )
-            text = re.sub(r"\n?\[message_id:\s*\d+\]", "", text, flags=re.IGNORECASE).strip()
+            text = re.sub(r"\n?\[message_id:\s*\d+\]", "", text, flags=re.IGNORECASE)
+            # Strip system-injected context blocks that are prepended to user messages
+            # by the memory hook (injected_memories) or OC timestamp prefix. These appear
+            # in user-role messages but are NOT user-stated content — extracting from them
+            # causes false facts (e.g. recalled memories re-stored as new user statements).
+            text = re.sub(
+                r"<injected_memories>.*?</injected_memories>\s*",
+                "",
+                text,
+                flags=re.DOTALL,
+            )
+            text = re.sub(
+                r"AUTOMATED MEMORY SYSTEM:.*?(?=\n\n|\Z)",
+                "",
+                text,
+                flags=re.DOTALL,
+            )
+            # Strip OC gateway timestamp prefix [Day Date Time TZ]
+            text = re.sub(r"^\[[A-Za-z]{3}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}[^\]]*\]\s*", "", text)
+            # Strip Sender metadata blocks injected by OC gateway
+            text = re.sub(
+                r"Sender \(untrusted metadata\):.*?(?=\n\n|\Z)",
+                "",
+                text,
+                flags=re.DOTALL,
+            ).strip()
             if not text or self.should_filter_transcript_message(text):
                 continue
 
