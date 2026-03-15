@@ -61,6 +61,7 @@ def _load_soul_snippets_module():
 def _load_extraction_prompt(
     domain_defs: Optional[Dict[str, str]] = None,
     owner_id: Optional[str] = None,
+    known_projects: Optional[Dict[str, str]] = None,
 ) -> str:
     """Load the extraction system prompt from file."""
     prompt = get_prompt("ingest.extraction.system")
@@ -86,6 +87,22 @@ def _load_extraction_prompt(
             "",
             "DOMAIN OUTPUT CONTRACT (MANDATORY):",
             '- Every fact MUST include "domains": ["..."] with at least one allowed domain id.',
+        ])
+        prompt += "\n".join(lines) + "\n"
+    if known_projects:
+        lines = [
+            "",
+            "REGISTERED PROJECTS (use exact names as keys in project_logs — no other names are valid):",
+        ]
+        for proj_name, proj_desc in sorted(known_projects.items()):
+            desc_str = str(proj_desc or "").strip()
+            lines.append(f"- {proj_name}" + (f": {desc_str}" if desc_str else ""))
+        lines.extend([
+            "",
+            "PROJECT LOG CONTRACT (MANDATORY):",
+            "- Only emit project_logs entries for projects listed above.",
+            "- Use the exact project name as the key (case-sensitive).",
+            "- If nothing noteworthy happened for a project, omit it from project_logs.",
         ])
         prompt += "\n".join(lines) + "\n"
     return prompt
@@ -455,8 +472,14 @@ def extract_from_transcript(
     if not allowed_domains:
         raise RuntimeError("No active domains are registered in retrieval config")
 
-    # Load extraction prompt — inject owner_id so the LLM anchors first-person pronouns correctly
-    system_prompt = _load_extraction_prompt(domain_defs, owner_id=owner_id)
+    # Load extraction prompt — inject owner_id and known projects so the LLM uses correct names
+    known_projects: Dict[str, str] = {}
+    try:
+        for proj_name, proj_def in get_config().projects.definitions.items():
+            known_projects[proj_name] = getattr(proj_def, "description", "") or ""
+    except Exception:
+        pass
+    system_prompt = _load_extraction_prompt(domain_defs, owner_id=owner_id, known_projects=known_projects or None)
 
     # Chunk transcript for extraction (split at turn boundaries)
     try:
