@@ -1658,14 +1658,15 @@ notify_user(${JSON.stringify(message)})
       if (isInternalSessionContext(event, ctx)) return;
 
       // Guard: only inject memories for positively-identified interactive sessions.
-      // When sessions.patch times out, the quaid-llm session key is never written to
-      // sessions.json. OC still fires before_prompt_build for that session with an
-      // unresolvable key — isInternalSessionContext misses it and recall fires again,
-      // creating a recursive loop (each recall spawns another LLM call → another
-      // openresponses session → another before_prompt_build → repeat).
-      // Fix: require the session to be a known interactive key, OR (if no key is
-      // resolvable) to match the tracked interactive session. Unknown-key sessions
-      // that don't match the current interactive session are skipped.
+      // OC fires before_prompt_build for every session — including anonymous
+      // openresponses sessions created by callConfiguredLLM for internal LLM calls.
+      // Those sessions have empty or non-interactive keys (sessions.patch may have
+      // failed or been skipped). Without this guard, recall fires for each one,
+      // spawning another LLM call → another anonymous session → recursive loop
+      // with growing user_len as injected context accumulates each cycle.
+      // Fix: require a RESOLVED, POSITIVE interactive key. Empty keys and
+      // non-interactive keys are both skipped. The user's TUI/main session will
+      // always have a resolved key (agent:main:tui-*, agent:main:main, or telegram:*).
       {
         const _bpbSid = String(ctx?.sessionId || event?.sessionId || "").trim();
         const _bpbKey = String(
@@ -1675,13 +1676,7 @@ notify_user(${JSON.stringify(message)})
         const _bpbInteractive =
           _bpbKey === "agent:main:main"
           || _bpbKey.startsWith("agent:main:tui-")
-          || _bpbKey.startsWith("agent:main:telegram:")
-          || (!_bpbKey && (
-            // Empty key: allow if this is the current known interactive session,
-            // or if no interactive session is tracked yet (initial state).
-            !currentInteractiveSession?.sessionId
-            || _bpbSid === currentInteractiveSession.sessionId
-          ));
+          || _bpbKey.startsWith("agent:main:telegram:");
         if (!_bpbInteractive) {
           writeHookTrace("hook.before_prompt_build.non_interactive_skip", {
             session_id: _bpbSid,

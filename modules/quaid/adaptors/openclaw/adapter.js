@@ -1335,9 +1335,7 @@ notify_user(${JSON.stringify(message)})
         const _bpbKey = String(
           ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(_bpbSid)
         ).trim().toLowerCase();
-        const _bpbInteractive = _bpbKey === "agent:main:main" || _bpbKey.startsWith("agent:main:tui-") || _bpbKey.startsWith("agent:main:telegram:") || !_bpbKey && // Empty key: allow if this is the current known interactive session,
-        // or if no interactive session is tracked yet (initial state).
-        (!currentInteractiveSession?.sessionId || _bpbSid === currentInteractiveSession.sessionId);
+        const _bpbInteractive = _bpbKey === "agent:main:main" || _bpbKey.startsWith("agent:main:tui-") || _bpbKey.startsWith("agent:main:telegram:");
         if (!_bpbInteractive) {
           writeHookTrace("hook.before_prompt_build.non_interactive_skip", {
             session_id: _bpbSid,
