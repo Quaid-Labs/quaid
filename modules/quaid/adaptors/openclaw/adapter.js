@@ -311,6 +311,10 @@ function writeDaemonSignal(sessionId, signalType, meta) {
         }
       }
     } catch {
+      const backup = latestResetBackup(sessionId);
+      if (backup) {
+        resolvedPath = backup;
+      }
     }
   }
   try {
@@ -1542,6 +1546,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       sessionIndexWatcherStarted = true;
+      const pendingOrphanChecks = /* @__PURE__ */ new Map();
+      const ORPHAN_CHECK_DEADLINE_MS = 6e4;
       const tickSessionIndex = () => {
         try {
           const data = readSessionsIndex();
@@ -1587,6 +1593,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   session_id: prevSessionId,
                   session_key: key
                 });
+              }
+              if (isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId })) {
+                pendingOrphanChecks.set(prevSessionId, Date.now());
               }
               sessionIndexMessageCounts.delete(prevSessionId);
             }
@@ -1672,47 +1681,41 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           if (active) {
             currentInteractiveSession = active;
           }
-          if (isSystemEnabled2("memory")) {
-            try {
-              const baseDir = getOpenClawSessionsBaseDir();
-              const scanFiles = fs.readdirSync(baseDir);
-              const nowTickMs = Date.now();
-              const ORPHAN_RESET_WINDOW_MS = 3e5;
-              for (const fname of scanFiles) {
-                const dotIdx = fname.indexOf(".jsonl.reset.");
-                if (dotIdx < 0) continue;
-                const sid = fname.slice(0, dotIdx);
-                if (!sid) continue;
+          if (pendingOrphanChecks.size > 0) {
+            const nowMs = Date.now();
+            for (const [sid, armedAt] of pendingOrphanChecks) {
+              if (nowMs - armedAt > ORPHAN_CHECK_DEADLINE_MS) {
+                pendingOrphanChecks.delete(sid);
+                writeHookTrace("session_index.orphan_check_expired", { session_id: sid });
+                continue;
+              }
+              try {
+                const backup = latestResetBackup(sid);
+                if (!backup) continue;
+                let origSize = -1;
                 try {
-                  const backupStat = fs.statSync(path.join(baseDir, fname));
-                  const age = nowTickMs - backupStat.mtimeMs;
-                  if (age < 0 || age >= ORPHAN_RESET_WINDOW_MS) continue;
-                  let origSize = -1;
-                  try {
-                    origSize = fs.statSync(getOpenClawSessionFile(sid)).size;
-                  } catch {
-                  }
-                  if (origSize > 0) continue;
-                  if (!facade.shouldProcessLifecycleSignal(sid, {
-                    label: "ResetSignal",
-                    source: "watcher_scan",
-                    signature: `watcher_scan:orphan_reset:${sid}`
-                  })) continue;
-                  facade.markLifecycleSignalFromHook(sid, "ResetSignal");
-                  writeDaemonSignal(sid, "reset", {
-                    source: "orphan_reset_scan",
-                    backup_file: fname
-                  });
-                  writeHookTrace("session_index.orphan_reset_detected", {
-                    session_id: sid,
-                    backup_file: fname,
-                    age_ms: age
-                  });
-                  console.log(`[quaid][signal] orphan reset detected session=${sid} backup=${fname}`);
+                  origSize = fs.statSync(getOpenClawSessionFile(sid)).size;
                 } catch {
                 }
+                if (origSize > 0) {
+                  pendingOrphanChecks.delete(sid);
+                  continue;
+                }
+                if (!facade.shouldProcessLifecycleSignal(sid, {
+                  label: "ResetSignal",
+                  source: "watcher_scan",
+                  signature: "hook:ResetSignal"
+                })) {
+                  pendingOrphanChecks.delete(sid);
+                  continue;
+                }
+                pendingOrphanChecks.delete(sid);
+                facade.markLifecycleSignalFromHook(sid, "ResetSignal");
+                writeDaemonSignal(sid, "reset", { source: "orphan_reset_check" });
+                writeHookTrace("session_index.orphan_reset_detected", { session_id: sid });
+                console.log(`[quaid][signal] orphan reset detected session=${sid}`);
+              } catch {
               }
-            } catch {
             }
           }
         } catch (err) {

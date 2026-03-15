@@ -824,16 +824,6 @@ function createQuaidFacade(deps) {
   function resolveLifecycleHookSessionId(event, ctx, messages) {
     const eventObj = event && typeof event === "object" ? event : {};
     const context = ctx && typeof ctx === "object" ? ctx : {};
-    const direct = String(eventObj.sessionId || context.sessionId || "").trim();
-    if (direct) {
-      return direct;
-    }
-    const fromEventEntry = String(
-      eventObj.sessionEntry?.sessionId || eventObj.previousSessionEntry?.sessionId || ""
-    ).trim();
-    if (fromEventEntry) {
-      return fromEventEntry;
-    }
     const eventSessionKey = String(eventObj.sessionKey || eventObj.targetSessionKey || "").trim();
     const fromEventKey = deps.resolveSessionIdFromSessionKey?.(eventSessionKey) || "";
     if (fromEventKey) {
@@ -843,6 +833,16 @@ function createQuaidFacade(deps) {
     const fromCtxKey = deps.resolveSessionIdFromSessionKey?.(ctxSessionKey) || "";
     if (fromCtxKey) {
       return fromCtxKey;
+    }
+    const direct = String(eventObj.sessionId || context.sessionId || "").trim();
+    if (direct) {
+      return direct;
+    }
+    const fromEventEntry = String(
+      eventObj.sessionEntry?.sessionId || eventObj.previousSessionEntry?.sessionId || ""
+    ).trim();
+    if (fromEventEntry) {
+      return fromEventEntry;
     }
     return extractSessionId(messages, ctx);
   }
@@ -2527,7 +2527,6 @@ ${combined}` : combined;
     computeDynamicK,
     getActiveNodeCount,
     // Docs
-    docsSearch: (query, args) => deps.execDocsRag("search", [query, ...args]),
     docsRead: (identifier) => deps.execDocsRegistry("read", [identifier]),
     docsList: (args) => deps.execDocsRegistry("list", args),
     docsRegister: (args) => deps.execDocsRegistry("register", args),
