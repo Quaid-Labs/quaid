@@ -157,6 +157,53 @@ class ClaudeCodeAdapter(QuaidAdapter):
         """
         return [self.instance_id()]
 
+    def get_instance_manager(self):
+        from adaptors.claude_code.instance_manager import ClaudeCodeInstanceManager
+        return ClaudeCodeInstanceManager(self)
+
+    def get_cli_namespace(self) -> str:
+        return "claudecode"
+
+    def get_cli_commands(self) -> dict:
+        return {
+            "make_instance": self._cli_make_instance,
+        }
+
+    def _cli_make_instance(self, args: list) -> None:
+        """quaid claudecode make_instance <path> <name>"""
+        if len(args) < 2:
+            print("Usage: quaid claudecode make_instance <project-path> <name>")
+            print("  project-path  Path to the Claude Code project root")
+            print("  name          Short label for the instance (e.g. 'myapp')")
+            return
+        project_path, name = args[0], args[1]
+        dry_run = "--dry-run" in args
+
+        mgr = self.get_instance_manager()
+        instance_id = mgr.resolve_instance_id(name)
+
+        if dry_run:
+            print(f"[dry-run] Would create silo: {mgr.adapter.quaid_home() / instance_id}")
+            print(f"[dry-run] Would write QUAID_INSTANCE={instance_id} to {project_path}/.claude/settings.json")
+            return
+
+        silo_root = mgr.make_instance(project_path, name)
+        print(f"Created silo: {silo_root}")
+        print(f"Instance ID:  {instance_id}")
+        print(f"Wrote QUAID_INSTANCE={instance_id} to {project_path}/.claude/settings.json")
+
+    def get_cli_tools_snippet(self) -> str:
+        prefix = self.agent_id_prefix()
+        return (
+            "### Claude Code Instance Commands (`quaid claudecode`)\n\n"
+            "- `quaid claudecode make_instance <path> <name>` — Create a Quaid instance "
+            "for a Claude Code project. Initializes a silo at "
+            f"`~/quaid/{prefix}-<name>/` and writes `QUAID_INSTANCE={prefix}-<name>` "
+            "into `<path>/.claude/settings.json`. Use this to give a CC project its own "
+            "isolated memory store.\n"
+            "  - `--dry-run` — Preview without making changes\n"
+        )
+
     def get_host_info(self):
         """Detect Claude Code platform version and binary path."""
         import shutil

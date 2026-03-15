@@ -16,6 +16,14 @@
 #
 # This is a convenience wrapper around the Python modules.
 
+# Platform check — Quaid requires macOS or Linux (uses fcntl, os.fork, AF_UNIX)
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|CYGWIN*|MSYS*|Windows_NT)
+    echo "error: Quaid requires macOS or Linux. Windows is not supported." >&2
+    exit 1
+    ;;
+esac
+
 set -euo pipefail
 
 # Resolve symlinks to find the real plugin directory
@@ -216,6 +224,34 @@ store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fa
 
   doctor)
     exec python3 "$SCRIPT_DIR/datastore/memorydb/memory_graph.py" health "$@"
+    ;;
+
+  claudecode|openclaw)
+    # Adapter-registered CLI namespace dispatch
+    ADAPTER_CMD="$CMD"
+    python3 - "$ADAPTER_CMD" "$@" <<'PYEOF'
+import sys, os
+sys.path.insert(0, os.environ.get("QUAID_MODULE_ROOT", os.path.dirname(os.path.abspath(__file__))))
+from lib.adapter import get_adapter
+
+adapter_ns = sys.argv[1]
+subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
+rest = sys.argv[3:]
+
+adapter = get_adapter()
+ns = adapter.get_cli_namespace()
+if ns != adapter_ns:
+    print(f"error: adapter namespace '{ns}' does not match '{adapter_ns}'", file=sys.stderr)
+    sys.exit(1)
+
+commands = adapter.get_cli_commands()
+if not subcmd or subcmd not in commands:
+    print(f"Usage: quaid {adapter_ns} <command>")
+    print(f"Available commands: {', '.join(commands.keys()) if commands else '(none)'}")
+    sys.exit(1 if subcmd else 0)
+
+commands[subcmd](rest)
+PYEOF
     ;;
 
   instances|instance)

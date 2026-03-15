@@ -30,12 +30,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
+from lib.platform_guard import assert_supported_platform  # noqa: F401
 from lib.fail_policy import is_fail_hard_enabled
 
 from lib.host import HostInfo
 
 if TYPE_CHECKING:
     from lib.providers import EmbeddingsProvider, LLMProvider
+    from lib.instance_manager import InstanceManager
 
 
 @dataclass
@@ -376,6 +378,43 @@ class QuaidAdapter(abc.ABC):
     def agent_instance_root(self, agent_instance_id: str) -> Path:
         """Resolve the instance root directory for a given agent instance ID."""
         return self.quaid_home() / agent_instance_id
+
+    # ---- Adapter CLI registration ----
+
+    def get_cli_namespace(self) -> Optional[str]:
+        """Short CLI namespace for this adapter's commands (e.g. 'claudecode').
+
+        When non-None, the quaid CLI exposes 'quaid <namespace> <cmd>' by
+        dispatching to get_cli_commands(). Returns None if this adapter has
+        no CLI commands.
+        """
+        return None
+
+    def get_cli_commands(self) -> dict:
+        """Map of command name → callable for this adapter's CLI namespace.
+
+        Each callable receives (args: list[str]) and should print output
+        to stdout. Only called when get_cli_namespace() is non-None.
+        """
+        return {}
+
+    def get_cli_tools_snippet(self) -> str:
+        """Markdown snippet describing this adapter's CLI commands.
+
+        Injected into .claude/rules/quaid-projects.md at session start so
+        agents know what adapter-specific commands are available.
+        Returns empty string if no adapter CLI commands exist.
+        """
+        return ""
+
+    def get_instance_manager(self) -> Optional["InstanceManager"]:
+        """Return the InstanceManager for this adapter, or None.
+
+        Adapters that support user-driven instance creation (e.g. CC)
+        return a subclass. Adapters that manage instances automatically
+        (e.g. OC at install time) return None.
+        """
+        return None
 
     # ---- Identity ----
 

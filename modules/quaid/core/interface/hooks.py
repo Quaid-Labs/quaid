@@ -437,6 +437,15 @@ def hook_session_init(args):
                 if content:
                     sections.append(f"--- {project_name}/{doc_file} ---\n{content}")
 
+    # 2b. Append adapter CLI tools snippet (registered by the active adapter)
+    try:
+        from lib.adapter import get_adapter
+        cli_snippet = get_adapter().get_cli_tools_snippet()
+        if cli_snippet:
+            sections.append(f"--- adapter-cli ---\n{cli_snippet.strip()}")
+    except Exception as e:
+        print(f"[quaid][session-init] adapter CLI snippet error: {e}", file=sys.stderr)
+
     if not sections:
         print("[quaid][session-init] no project docs found", file=sys.stderr)
         return
