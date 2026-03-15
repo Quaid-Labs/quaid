@@ -994,6 +994,13 @@ const _sessionModelOverrideCache = new Map<string, string>();
 const _sessionModelOverrideFailedUntil = new Map<string, number>();
 const _SESSION_OVERRIDE_FAIL_TTL_MS = 30_000;
 const _SESSION_OVERRIDE_TIMEOUT_MS = 5_000;
+// Re-entrancy guard for beforePromptBuildHandler.
+// OC reuses the TUI session key for internal openresponses LLM calls spawned by
+// callConfiguredLLM. This means session-key filtering cannot distinguish user messages
+// from internal calls. Instead we track whether a recall is already in flight: if
+// before_prompt_build fires while we are inside recallMemories, it must be an internal
+// call and we skip to prevent a recursive recall→LLM→recall→... loop.
+let _beforePromptBuildInFlight = false;
 
 function _getGatewayCredential(providers: string[]): string | undefined {
   for (const provider of providers) {
@@ -1640,40 +1647,6 @@ notify_user(${JSON.stringify(message)})
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
 
-      // Guard: only inject memories for positively-identified interactive sessions.
-      // OC fires before_prompt_build for every session — including anonymous
-      // openresponses sessions created by callConfiguredLLM for internal LLM calls.
-      // Those sessions have empty or non-interactive keys (sessions.patch may have
-      // failed or been skipped). Without this guard, recall fires for each one,
-      // spawning another LLM call → another anonymous session → recursive loop
-      // with growing user_len as injected context accumulates each cycle.
-      // Fix: require a RESOLVED, POSITIVE interactive key. Empty keys and
-      // non-interactive keys are both skipped. The user's TUI/main session will
-      // always have a resolved key (agent:main:tui-*, agent:main:main, or telegram:*).
-      {
-        const _bpbSid = String(ctx?.sessionId || event?.sessionId || "").trim();
-        const _bpbKey = String(
-          ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey
-            || resolveSessionKeyForSessionId(_bpbSid)
-        ).trim().toLowerCase();
-        // Match both full-path keys (agent:main:tui-*) and bare keys (tui-*)
-        // because OC may pass either form in event.sessionKey depending on context.
-        const _bpbInteractive =
-          _bpbKey === "agent:main:main"
-          || _bpbKey === "main"
-          || _bpbKey.startsWith("agent:main:tui-")
-          || _bpbKey.startsWith("tui-")
-          || _bpbKey.startsWith("agent:main:telegram:")
-          || _bpbKey.startsWith("telegram:");
-        if (!_bpbInteractive) {
-          writeHookTrace("hook.before_prompt_build.non_interactive_skip", {
-            session_id: _bpbSid,
-            session_key: _bpbKey || "(empty)",
-          });
-          return;
-        }
-      }
-
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return { prependContext: event.prependContext };
 
@@ -1725,18 +1698,33 @@ notify_user(${JSON.stringify(message)})
         // filter excludes untagged or differently-tagged facts. Retrieve all facts
         // and let semantic similarity + reranking surface the relevant ones.
         const injectDomain: DomainFilter = { all: true };
-        const allMemories = await recallMemories({
-          query,
-          limit: injectLimit,
-          expandGraph: true,
-          datastores: ["vector_basic", "graph"],
-          routeStores: false,
-          intent: injectIntent,
-          domain: injectDomain,
-          failOpen: true,
-          waitForExtraction: false,
-          sourceTag: "auto_inject"
-        });
+
+        // Re-entrancy guard: if before_prompt_build fires while we are already inside
+        // recallMemories, this is an OC-internal LLM call (OC reuses the TUI session key
+        // for callConfiguredLLM openresponses sessions). Skip to prevent the
+        // recall→LLM→recall→... recursive loop.
+        if (_beforePromptBuildInFlight) {
+          writeHookTrace("hook.before_prompt_build.reentrant_skip", { query: query.slice(0, 80) });
+          return { prependContext: event.prependContext };
+        }
+        _beforePromptBuildInFlight = true;
+        let allMemories: any[];
+        try {
+          allMemories = await recallMemories({
+            query,
+            limit: injectLimit,
+            expandGraph: true,
+            datastores: ["vector_basic", "graph"],
+            routeStores: false,
+            intent: injectIntent,
+            domain: injectDomain,
+            failOpen: true,
+            waitForExtraction: false,
+            sourceTag: "auto_inject"
+          });
+        } finally {
+          _beforePromptBuildInFlight = false;
+        }
 
         const injection = facade.prepareAutoInjectionContext({
           allMemories,

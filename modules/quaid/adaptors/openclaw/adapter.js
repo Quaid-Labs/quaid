@@ -796,6 +796,7 @@ const _sessionModelOverrideCache = /* @__PURE__ */ new Map();
 const _sessionModelOverrideFailedUntil = /* @__PURE__ */ new Map();
 const _SESSION_OVERRIDE_FAIL_TTL_MS = 3e4;
 const _SESSION_OVERRIDE_TIMEOUT_MS = 5e3;
+let _beforePromptBuildInFlight = false;
 function _getGatewayCredential(providers) {
   for (const provider of providers) {
     const normalized = String(provider || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -1306,20 +1307,6 @@ notify_user(${JSON.stringify(message)})
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
-      {
-        const _bpbSid = String(ctx?.sessionId || event?.sessionId || "").trim();
-        const _bpbKey = String(
-          ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(_bpbSid)
-        ).trim().toLowerCase();
-        const _bpbInteractive = _bpbKey === "agent:main:main" || _bpbKey === "main" || _bpbKey.startsWith("agent:main:tui-") || _bpbKey.startsWith("tui-") || _bpbKey.startsWith("agent:main:telegram:") || _bpbKey.startsWith("telegram:");
-        if (!_bpbInteractive) {
-          writeHookTrace("hook.before_prompt_build.non_interactive_skip", {
-            session_id: _bpbSid,
-            session_key: _bpbKey || "(empty)"
-          });
-          return;
-        }
-      }
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) return { prependContext: event.prependContext };
       const rawPrompt = String(event.prompt || "").trim();
@@ -1348,18 +1335,28 @@ notify_user(${JSON.stringify(message)})
         const injectLimit = autoInjectK;
         const injectIntent = "general";
         const injectDomain = { all: true };
-        const allMemories = await recallMemories({
-          query,
-          limit: injectLimit,
-          expandGraph: true,
-          datastores: ["vector_basic", "graph"],
-          routeStores: false,
-          intent: injectIntent,
-          domain: injectDomain,
-          failOpen: true,
-          waitForExtraction: false,
-          sourceTag: "auto_inject"
-        });
+        if (_beforePromptBuildInFlight) {
+          writeHookTrace("hook.before_prompt_build.reentrant_skip", { query: query.slice(0, 80) });
+          return { prependContext: event.prependContext };
+        }
+        _beforePromptBuildInFlight = true;
+        let allMemories;
+        try {
+          allMemories = await recallMemories({
+            query,
+            limit: injectLimit,
+            expandGraph: true,
+            datastores: ["vector_basic", "graph"],
+            routeStores: false,
+            intent: injectIntent,
+            domain: injectDomain,
+            failOpen: true,
+            waitForExtraction: false,
+            sourceTag: "auto_inject"
+          });
+        } finally {
+          _beforePromptBuildInFlight = false;
+        }
         const injection = facade.prepareAutoInjectionContext({
           allMemories,
           eventMessages: event.messages || [],
