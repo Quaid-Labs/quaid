@@ -423,13 +423,12 @@ class OpenClawAdapter(QuaidAdapter):
         return True
 
     def agent_id_prefix(self) -> str:
-        """The OC instance prefix used to build per-agent instance IDs.
+        """OC adapter prefix for building per-agent instance IDs (e.g. "openclaw").
 
-        Returns the primary QUAID_INSTANCE value (e.g. "openclaw").
-        All agent instance IDs are "<prefix>-<label>":
-          "openclaw-main", "openclaw-coding", "openclaw-work", etc.
+        QUAID_INSTANCE is the primary agent's full ID ("openclaw-main"); stripping
+        "-main" gives the shared prefix used for all agents.
         """
-        return self.instance_id()
+        return self.adapter_id()  # "openclaw"
 
     def list_agent_instance_ids(self) -> list:
         """Return fully-prefixed Quaid instance IDs for all OC agents.

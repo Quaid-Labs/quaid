@@ -372,9 +372,13 @@ function resolvedInstallerPlatform() {
 
 function resolvedInstallerInstanceId(adapterType = "") {
   if (_instanceIdOverride) return _instanceIdOverride;
-  const explicit = String(adapterType || "").trim();
-  if (explicit) return explicit;
-  return resolvedInstallerPlatform();
+  const platform = String(adapterType || resolvedInstallerPlatform()).trim();
+  // Convention: instance IDs follow "<prefix>-<label>". Default label is "main".
+  // Standalone has no multi-agent concept and uses the platform name as-is.
+  if (platform && platform !== "standalone") {
+    return `${platform}-main`;
+  }
+  return platform || "standalone";
 }
 
 function syncInstallerInstanceEnv(adapterType = "") {
@@ -455,7 +459,8 @@ async function promptInstanceId(adapterType) {
 
   if (adapterType === "claude-code") {
     log.message(
-      C.dim("Claude Code: using the same ID across machines shares memory across all your CC sessions.")
+      C.dim("Claude Code: default is \"claude-code-main\". Use \"claude-code-<project>\" per project\n" +
+            "  for isolated memory silos (set QUAID_INSTANCE in .claude/settings.json).")
     );
   } else if (adapterType === "openclaw") {
     log.message(
@@ -1671,8 +1676,8 @@ async function step1_preflight() {
     if (_removeOpenClawPluginsAllowQuaid()) {
       log.info("Removed stale plugins.allow entry for quaid before plugin registration");
     }
-    if (_ensureOpenClawRuntimeInstanceEnv("openclaw")) {
-      log.info("Seeded OpenClaw config env.vars with QUAID_INSTANCE=openclaw");
+    if (_ensureOpenClawRuntimeInstanceEnv("openclaw-main")) {
+      log.info("Seeded OpenClaw config env.vars with QUAID_INSTANCE=openclaw-main");
     }
     const responsesEndpointChanged = _ensureOpenClawResponsesEndpoint();
     if (responsesEndpointChanged) {
@@ -2880,8 +2885,11 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
   if (_isPlatform("claude-code")) {
-    // Create per-instance identity directory for SOUL.md, USER.md, MEMORY.md
-    const identityDir = path.join(WORKSPACE, "claude-code", "identity");
+    // Create per-instance identity directory for SOUL.md, USER.md, MEMORY.md.
+    // Use the resolved QUAID_INSTANCE (e.g. "claude-code-main") so the directory
+    // matches the actual silo path rather than the bare adapter name.
+    const ccInstanceId = (process.env.QUAID_INSTANCE || "claude-code-main").trim();
+    const identityDir = path.join(WORKSPACE, ccInstanceId, "identity");
     if (!fs.existsSync(identityDir)) {
       fs.mkdirSync(identityDir, { recursive: true });
       log.info(`Created identity directory: ${identityDir}`);
@@ -3709,7 +3717,7 @@ function setupClaudeCodeHooks() {
   // Python runtime to resolve the per-instance config and identity dirs.
   const quaidBin = path.join(PLUGIN_DIR, "quaid");
   const quaidCmd = fs.existsSync(quaidBin) ? quaidBin : "quaid";
-  const instanceId = (process.env.QUAID_INSTANCE || "claude-code").trim();
+  const instanceId = (process.env.QUAID_INSTANCE || "claude-code-main").trim();
   const envPrefix = `QUAID_HOME='${WORKSPACE}' QUAID_INSTANCE='${instanceId}'`;
 
   const desiredHooks = {

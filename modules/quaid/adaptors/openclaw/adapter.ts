@@ -108,20 +108,26 @@ const BACKLOG_NOTIFY_STALE_MS = 90_000;
 // Daemon signal infrastructure — writes extraction signals for the shared Python daemon.
 // Use the instance-specific path when QUAID_INSTANCE is set, mirroring the Python
 // daemon's _signal_dir() = _instance_root() / "data" / "extraction-signals".
+// QUAID_INSTANCE is the current (primary) agent's full instance ID, e.g. "openclaw-main".
 const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
+// Prefix: strip the "-main" suffix so getInstanceId can build any agent's ID.
+// "openclaw-main" → "openclaw", "claude-code-main" → "claude-code", "openclaw" → "openclaw" (legacy).
+const _QUAID_PREFIX = _QUAID_INSTANCE.endsWith("-main")
+  ? _QUAID_INSTANCE.slice(0, -5)
+  : _QUAID_INSTANCE;
 
 /**
  * Derive the Quaid instance ID for a given OC agent label.
  *
  * Always produces "<prefix>-<label>" (e.g. "openclaw-main", "openclaw-coding").
- * _QUAID_INSTANCE is the prefix (the gateway's configured instance name).
+ * _QUAID_PREFIX is derived from QUAID_INSTANCE by stripping the "-main" suffix.
  *
  * Called frequently by the system to compute all instance-specific paths.
  * When QUAID_INSTANCE is not set (legacy flat layout), returns the label as-is.
  */
 function getInstanceId(agentLabel: string = "main"): string {
   const label = String(agentLabel || "main").trim().toLowerCase() || "main";
-  return _QUAID_INSTANCE ? `${_QUAID_INSTANCE}-${label}` : label;
+  return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
 
 /** Daemon signal directory for a given agent's Quaid silo. */

@@ -80,9 +80,10 @@ const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 9e4;
 const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
+const _QUAID_PREFIX = _QUAID_INSTANCE.endsWith("-main") ? _QUAID_INSTANCE.slice(0, -5) : _QUAID_INSTANCE;
 function getInstanceId(agentLabel = "main") {
   const label = String(agentLabel || "main").trim().toLowerCase() || "main";
-  return _QUAID_INSTANCE ? `${_QUAID_INSTANCE}-${label}` : label;
+  return _QUAID_PREFIX ? `${_QUAID_PREFIX}-${label}` : label;
 }
 function getDaemonSignalDir(agentId = "main") {
   const instanceId = getInstanceId(agentId);

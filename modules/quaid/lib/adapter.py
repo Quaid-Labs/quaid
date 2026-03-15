@@ -349,14 +349,18 @@ class QuaidAdapter(abc.ABC):
     def agent_id_prefix(self) -> str:
         """Prefix used to build per-agent instance IDs.
 
-        For single-agent platforms this is just instance_id() — the prefix IS the
-        full instance ID and no per-agent suffix is needed.
+        Convention: instance IDs follow "<prefix>-<label>" (e.g. "openclaw-main",
+        "openclaw-coding"). The prefix is derived by stripping the "-main" suffix
+        from the primary instance ID — e.g. "openclaw-main" → "openclaw".
 
-        For multi-agent platforms (e.g. OC) this is the base name (e.g. "openclaw")
-        and agents get IDs like "<prefix>-<label>" (e.g. "openclaw-main",
-        "openclaw-coding"). Override in subclasses that have a shared gateway prefix.
+        For single-agent platforms with a bare instance ID (no "-main" suffix),
+        returns instance_id() unchanged.
+
+        Subclasses may override to return adapter_id() directly (e.g. "claude-code"),
+        which is equivalent when QUAID_INSTANCE follows the "<adapter>-main" convention.
         """
-        return self.instance_id()
+        iid = self.instance_id()
+        return iid[:-5] if iid.endswith("-main") else iid
 
     def list_agent_instance_ids(self) -> List[str]:
         """Return all Quaid instance IDs for this platform's agents.

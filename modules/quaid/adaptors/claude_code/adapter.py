@@ -139,6 +139,24 @@ class ClaudeCodeAdapter(QuaidAdapter):
     def adapter_id(self) -> str:
         return "claude-code"
 
+    def agent_id_prefix(self) -> str:
+        """CC adapter prefix for building instance IDs (e.g. "claude-code").
+
+        QUAID_INSTANCE is the current instance's full ID ("claude-code-main" by
+        default, or "claude-code-<project>" for per-project isolation).
+        Stripping "-main" gives the shared prefix.
+        """
+        return self.adapter_id()  # "claude-code"
+
+    def list_agent_instance_ids(self) -> list:
+        """CC is single-agent by default; returns the current instance ID.
+
+        Per-project isolation uses a different QUAID_INSTANCE value set via
+        .claude/settings.json — e.g. "claude-code-myapp" for project isolation.
+        In that case, this returns ["claude-code-myapp"] for that project.
+        """
+        return [self.instance_id()]
+
     def get_host_info(self):
         """Detect Claude Code platform version and binary path."""
         import shutil

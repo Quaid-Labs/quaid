@@ -2035,15 +2035,15 @@ print(f'[+] Quaid project registered ({len(found)} docs)')
     # Agent instance IDs are fully-prefixed: "openclaw-main", "openclaw-coding", etc.
     # QUAID_HOME = parent of WORKSPACE_ROOT; primary silo basename = $(basename WORKSPACE_ROOT).
     if $IS_OPENCLAW; then
-        local quaid_home_dir primary_basename agent_instance_ids
+        local quaid_home_dir primary_basename oc_prefix agent_instance_ids
         quaid_home_dir="$(dirname "$WORKSPACE_ROOT")"
         primary_basename="$(basename "$WORKSPACE_ROOT")"
-        agent_instance_ids="$(
-            cd "$PLUGIN_DIR" && \
-            QUAID_HOME="${WORKSPACE_ROOT}" CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}" \
-            python3 - "$primary_basename" <<'PY'
+        # Derive prefix: strip "-main" suffix if present.
+        # "openclaw-main" → "openclaw"; legacy "openclaw" → "openclaw"
+        oc_prefix="${primary_basename%-main}"
+        agent_instance_ids="$(python3 - "$oc_prefix" <<'PY'
 import json, os, sys
-primary = sys.argv[1].strip()
+prefix = sys.argv[1].strip()
 cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
 try:
     data = json.load(open(cfg_path, "r", encoding="utf-8"))
@@ -2056,9 +2056,9 @@ if not labels:
 if "main" in labels:
     labels = ["main"] + [l for l in labels if l != "main"]
 # Fully-prefixed instance IDs: "openclaw-main", "openclaw-coding", ...
-instance_ids = [f"{primary}-{label}" for label in labels]
-# Skip the one that already exists as WORKSPACE_ROOT (primary silo already created)
-secondary = [i for i in instance_ids if i != primary]
+all_ids = [f"{prefix}-{label}" for label in labels]
+# Skip "main" — primary silo already created at WORKSPACE_ROOT
+secondary = [i for i in all_ids if not i.endswith("-main")]
 print("\n".join(secondary))
 PY
         )" || true
@@ -2066,8 +2066,8 @@ PY
             info "Multi-agent detected — creating Quaid silos for additional agents..."
             while IFS= read -r instance_id; do
                 [[ -z "$instance_id" ]] && continue
-                # Extract agent label from full instance ID for display (e.g. "coding" from "openclaw-coding")
-                local agent_label="${instance_id#${primary_basename}-}"
+                # Extract agent label from full instance ID (e.g. "coding" from "openclaw-coding")
+                local agent_label="${instance_id#${oc_prefix}-}"
                 local silo_dir="${quaid_home_dir}/${instance_id}"
                 _init_agent_silo "$agent_label" "$silo_dir"
             done <<< "$agent_instance_ids"
