@@ -103,6 +103,7 @@ MAX_EXECUTION_TIME = int(getattr(_cfg.janitor, "task_timeout_minutes", 120) or 1
 RECALL_CANDIDATES_PER_NODE = 30  # Max candidates to recall per new memory
 JANITOR_TASK_CHOICES = [
     "embeddings",
+    "edges",
     "workspace",
     "docs_staleness",
     "docs_cleanup",

@@ -2248,13 +2248,13 @@ def backfill_edges(
         "lives in", "lives at", "friend", "colleague", "neighbour", "neighbor",
         "has a dog", "has a cat", "has a pet",
     )
-    kw_clauses = " OR ".join(f"LOWER(n.text) LIKE ?" for _ in relationship_keywords)
+    kw_clauses = " OR ".join(f"LOWER(n.name) LIKE ?" for _ in relationship_keywords)
     kw_params = [f"%{kw}%" for kw in relationship_keywords]
 
     with graph._get_conn() as conn:
         rows = conn.execute(
             f"""
-            SELECT n.id, n.text, n.owner_id
+            SELECT n.id, n.name, n.owner_id
             FROM nodes n
             WHERE n.type = 'Fact'
               AND n.status IN ('active', 'approved', 'pending')
@@ -2268,7 +2268,7 @@ def backfill_edges(
             kw_params + [max_facts],
         ).fetchall()
 
-    facts = [{"id": row["id"], "text": row["text"], "owner_id": row["owner_id"]} for row in rows]
+    facts = [{"id": row["id"], "text": row["name"], "owner_id": row["owner_id"]} for row in rows]
     result["found"] = len(facts)
 
     if not facts:
