@@ -726,7 +726,7 @@ and that extraction signals route to the right agent's silo.
 ```bash
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
   python3 -c "
-import sys; sys.path.insert(0, \"/Users/owner/quaid/plugins/quaid\")
+import sys, os; sys.path.insert(0, os.path.expanduser(\"~/.openclaw/extensions/quaid\"))
 from adaptors.factory import create_adapter
 a = create_adapter(\"openclaw\")
 ids = a.list_agent_instance_ids()
@@ -773,9 +773,9 @@ done
 the correct agent's signal dir:**
 
 ```bash
-# Send a test message to the OC agent window
-TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test \
-  ~/quaid/util/scripts/tmux-msg.sh main:1.0 "Verification ping for M12 multi-agent signal routing check"
+# Send a test message to the OC agent window on alfie
+ssh example.local 'TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test \
+  ~/quaid/util/scripts/tmux-msg.sh main:1.0 "Verification ping for M12 multi-agent signal routing check"'
 
 # Wait briefly for the hook to process, then verify the signal appears under openclaw-main
 sleep 5
