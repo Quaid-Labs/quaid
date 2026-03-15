@@ -1914,6 +1914,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       sessionIndexWatcherStarted = true;
+      let lastOrphanScanMs = 0;
+      const ORPHAN_SCAN_INTERVAL_MS = 30_000; // scan for orphaned resets every 30s, not every tick
       const tickSessionIndex = () => {
         try {
           const data = readSessionsIndex();
@@ -2085,13 +2087,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
           // Orphaned-reset scan: OC TUI /reset restarts the gateway process,
           // so before_agent_start fires BEFORE OC creates the .reset.* backup.
-          // All hook-based detection loses the race. Poll here instead — runs
-          // every second, fires a reset signal within 1s of OC creating the backup.
-          if (isSystemEnabled("memory")) {
+          // All hook-based detection loses the race. Poll here instead.
+          // Rate-limited to every 30s — no need to scan disk on every 1s tick.
+          const nowOrphanMs = Date.now();
+          if (isSystemEnabled("memory") && (nowOrphanMs - lastOrphanScanMs) >= ORPHAN_SCAN_INTERVAL_MS) {
+            lastOrphanScanMs = nowOrphanMs;
             try {
               const baseDir = getOpenClawSessionsBaseDir();
               const scanFiles = fs.readdirSync(baseDir);
-              const nowTickMs = Date.now();
               const ORPHAN_RESET_WINDOW_MS = 300_000; // 5 minutes
               for (const fname of scanFiles) {
                 const dotIdx = fname.indexOf(".jsonl.reset.");
@@ -2100,7 +2103,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 if (!sid) continue;
                 try {
                   const backupStat = fs.statSync(path.join(baseDir, fname));
-                  const age = nowTickMs - backupStat.mtimeMs;
+                  const age = nowOrphanMs - backupStat.mtimeMs;
                   if (age < 0 || age >= ORPHAN_RESET_WINDOW_MS) continue;
                   // Confirm the original JSONL has no content (was moved/emptied to backup).
                   // origSize = -1 means file doesn't exist (OC renamed/moved it).
