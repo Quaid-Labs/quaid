@@ -1914,8 +1914,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       sessionIndexWatcherStarted = true;
-      let lastOrphanScanMs = 0;
-      const ORPHAN_SCAN_INTERVAL_MS = 30_000; // scan for orphaned resets every 30s, not every tick
+      // Tracks sessions where a key transition was detected but the .reset.* backup
+      // may not have been created yet. Value is the time the watch was armed (ms).
+      // Checked each tick; times out after 60s. Empty most of the time.
+      const pendingOrphanChecks = new Map<string, number>();
+      const ORPHAN_CHECK_DEADLINE_MS = 60_000;
       const tickSessionIndex = () => {
         try {
           const data = readSessionsIndex();
@@ -1987,6 +1990,12 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   session_id: prevSessionId,
                   session_key: key,
                 });
+              }
+              // Arm a targeted orphan check: OC may not have created the .reset.*
+              // backup yet. The pending check runs each tick and emits the signal
+              // once the backup appears, or gives up after 60s.
+              if (isSystemEnabled("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId })) {
+                pendingOrphanChecks.set(prevSessionId, Date.now());
               }
               // Clean up message count for the ended session.
               sessionIndexMessageCounts.delete(prevSessionId);
@@ -2085,52 +2094,43 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             currentInteractiveSession = active;
           }
 
-          // Orphaned-reset scan: OC TUI /reset restarts the gateway process,
-          // so before_agent_start fires BEFORE OC creates the .reset.* backup.
-          // All hook-based detection loses the race. Poll here instead.
-          // Rate-limited to every 30s — no need to scan disk on every 1s tick.
-          const nowOrphanMs = Date.now();
-          if (isSystemEnabled("memory") && (nowOrphanMs - lastOrphanScanMs) >= ORPHAN_SCAN_INTERVAL_MS) {
-            lastOrphanScanMs = nowOrphanMs;
-            try {
-              const baseDir = getOpenClawSessionsBaseDir();
-              const scanFiles = fs.readdirSync(baseDir);
-              const ORPHAN_RESET_WINDOW_MS = 300_000; // 5 minutes
-              for (const fname of scanFiles) {
-                const dotIdx = fname.indexOf(".jsonl.reset.");
-                if (dotIdx < 0) continue;
-                const sid = fname.slice(0, dotIdx);
-                if (!sid) continue;
-                try {
-                  const backupStat = fs.statSync(path.join(baseDir, fname));
-                  const age = nowOrphanMs - backupStat.mtimeMs;
-                  if (age < 0 || age >= ORPHAN_RESET_WINDOW_MS) continue;
-                  // Confirm the original JSONL has no content (was moved/emptied to backup).
-                  // origSize = -1 means file doesn't exist (OC renamed/moved it).
-                  // origSize = 0 means OC emptied it in place.
-                  // origSize > 0 means the session still has unprocessed content — skip.
-                  let origSize = -1;
-                  try { origSize = fs.statSync(getOpenClawSessionFile(sid)).size; } catch {}
-                  if (origSize > 0) continue;
-                  if (!facade.shouldProcessLifecycleSignal(sid, {
-                    label: "ResetSignal",
-                    source: "watcher_scan",
-                    signature: "hook:ResetSignal",
-                  })) continue;
-                  facade.markLifecycleSignalFromHook(sid, "ResetSignal");
-                  writeDaemonSignal(sid, "reset", {
-                    source: "orphan_reset_scan",
-                    backup_file: fname,
-                  });
-                  writeHookTrace("session_index.orphan_reset_detected", {
-                    session_id: sid,
-                    backup_file: fname,
-                    age_ms: age,
-                  });
-                  console.log(`[quaid][signal] orphan reset detected session=${sid} backup=${fname}`);
-                } catch {}
+          // Pending orphan checks: for each session where a key transition was
+          // detected, look for the .reset.* backup. OC creates it shortly after
+          // the gateway restarts, so this usually resolves on the first or second
+          // tick. Gives up after 60s. O(pending sessions) not O(all files).
+          if (pendingOrphanChecks.size > 0) {
+            const nowMs = Date.now();
+            for (const [sid, armedAt] of pendingOrphanChecks) {
+              if (nowMs - armedAt > ORPHAN_CHECK_DEADLINE_MS) {
+                pendingOrphanChecks.delete(sid);
+                writeHookTrace("session_index.orphan_check_expired", { session_id: sid });
+                continue;
               }
-            } catch {}
+              try {
+                const backup = latestResetBackup(sid);
+                if (!backup) continue; // not created yet — retry next tick
+                let origSize = -1;
+                try { origSize = fs.statSync(getOpenClawSessionFile(sid)).size; } catch {}
+                if (origSize > 0) {
+                  // Original still has content — key transition signal already handled it
+                  pendingOrphanChecks.delete(sid);
+                  continue;
+                }
+                if (!facade.shouldProcessLifecycleSignal(sid, {
+                  label: "ResetSignal",
+                  source: "watcher_scan",
+                  signature: "hook:ResetSignal",
+                })) {
+                  pendingOrphanChecks.delete(sid); // already handled by key-transition signal
+                  continue;
+                }
+                pendingOrphanChecks.delete(sid);
+                facade.markLifecycleSignalFromHook(sid, "ResetSignal");
+                writeDaemonSignal(sid, "reset", { source: "orphan_reset_check" });
+                writeHookTrace("session_index.orphan_reset_detected", { session_id: sid });
+                console.log(`[quaid][signal] orphan reset detected session=${sid}`);
+              } catch {}
+            }
           }
         } catch (err: unknown) {
           writeHookTrace("session_index.error", {
