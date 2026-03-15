@@ -355,6 +355,20 @@ const LOGS_DIR = path.join(WORKSPACE, "logs");
 const PROJECTS_DIR = path.join(WORKSPACE, "projects");
 const TEMP_DIR = path.join(WORKSPACE, "temp");
 const SCRATCH_DIR = path.join(WORKSPACE, "scratch");
+
+/**
+ * Returns the instance-level projects directory.
+ * Must be called after syncInstallerInstanceEnv() has run.
+ * For non-standalone adapters: WORKSPACE/<instanceId>/projects
+ * For standalone: WORKSPACE/projects (same as PROJECTS_DIR)
+ */
+function instanceProjectsDir() {
+  const instanceId = resolvedInstallerInstanceId();
+  if (instanceId && instanceId !== "standalone") {
+    return path.join(WORKSPACE, instanceId, "projects");
+  }
+  return PROJECTS_DIR;
+}
 const OLLAMA_BASE_URL = (process.env.OLLAMA_URL || "http://localhost:11434")
   .replace(/\/v1\/?$/, "")
   .replace(/\/+$/, "");
@@ -2975,7 +2989,7 @@ print('[+] Datastore init hooks complete')
   // Contract-owned project workspace dirs should exist after datastore init hooks.
   // Some runtime profiles trim plugin slots during bootstrap; guard here so
   // install always yields expected workspace shape.
-  const contractOwnedDirs = [PROJECTS_DIR, TEMP_DIR, SCRATCH_DIR];
+  const contractOwnedDirs = [instanceProjectsDir(), TEMP_DIR, SCRATCH_DIR];
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
   if (missingContractOwnedDirs.length > 0) {
     for (const dir of missingContractOwnedDirs) {
@@ -3224,7 +3238,7 @@ print(total)
     const existingDirs = [];
     // Scan projects/ for existing project directories
     try {
-      for (const entry of fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
+      for (const entry of fs.readdirSync(instanceProjectsDir(), { withFileTypes: true })) {
         if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "staging") {
           existingDirs.push(entry.name);
         }
@@ -3246,7 +3260,7 @@ reg = DocsRegistry()
 names = ${projNames}
 total_docs = 0
 for name in names:
-    proj_dir = os.path.join(${JSON.stringify(PROJECTS_DIR)}, name)
+    proj_dir = os.path.join(${JSON.stringify(instanceProjectsDir())}, name)
     project_md = os.path.join(proj_dir, 'PROJECT.md')
     try:
         if not os.path.exists(project_md):
@@ -3278,7 +3292,7 @@ print(total_docs)
     log.info(C.dim("Your agent can discover more projects — ask it to \"set up projects\""));
 
     // Install Quaid project reference docs and constitutional guidance
-    const quaidProjDir = path.join(PROJECTS_DIR, "quaid");
+    const quaidProjDir = path.join(instanceProjectsDir(), "quaid");
     fs.mkdirSync(quaidProjDir, { recursive: true });
     const quaidProjSrc = path.join(__dirname, "projects", "quaid");
     for (const f of ["TOOLS.md", "AGENTS.md", "USER.md", "SOUL.md", "MEMORY.md", "ARCHITECTURE.md", "project_onboarding.md"]) {

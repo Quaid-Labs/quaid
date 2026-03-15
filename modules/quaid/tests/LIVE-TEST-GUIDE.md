@@ -488,6 +488,23 @@ Pass:
   - `log_file: /Users/clawdbot/quaid/claude-code-main/logs/daemon/extraction-daemon.log`
   - `pid_file: /Users/clawdbot/quaid/claude-code-main/data/extraction-daemon.pid`
 
+Verify extraction happened (use `name` column, not `text`):
+```bash
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "canal towpath"'
+# OR direct DB check:
+ssh alfie.local python3 << 'EOF'
+import sqlite3
+con = sqlite3.connect("/Users/clawdbot/quaid/data/memory.db")
+rows = con.execute("SELECT name, status, created_at FROM nodes WHERE name LIKE '%canal%' OR name LIKE '%morning run%' ORDER BY created_at DESC LIMIT 5").fetchall()
+for r in rows: print(r)
+EOF
+```
+
+**Signal naming**: timeout extraction via the adapter's SessionTimeoutManager appears
+in the daemon log as `[daemon-compaction]` with `source: timeout_extract` (NOT as
+`daemon-timeout`). The daemon's own `check_idle_sessions` path (backup) would log
+`daemon-timeout` — but the primary timeout path writes a compaction signal.
+
 ### M5: Auto-Inject
 
 This milestone tests that the hook automatically injects relevant memory into
