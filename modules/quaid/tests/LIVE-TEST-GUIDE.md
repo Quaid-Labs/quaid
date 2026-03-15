@@ -345,6 +345,8 @@ change.
 ## OpenClaw and Claude Code Milestones
 
 Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
+Then run M11 (artifact generation) once for each platform to verify snippets,
+journals, and project logs are building from extractions.
 
 ### M1: Extraction via `/new`
 
@@ -588,14 +590,37 @@ ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.ope
 ssh alfie.local 'test -f /tmp/quaid-live-src/main.py && echo source_still_exists'
 ```
 
+After project CRUD, trigger extraction to generate project logs. Tell the agent
+naturally something about the session, then do `/reset`:
+
+> "We've just tested project creation, update, sync, and delete for the
+> live-test project. Triggering a reset to capture this."
+
+Then `/reset`. This gives the extraction LLM enough project context to include
+a `project_logs` entry for the quaid project in the extraction JSON.
+
+Check after extraction:
+
+```bash
+ssh alfie.local 'tail -20 ~/quaid/openclaw/projects/quaid/PROJECT.log 2>/dev/null || echo "(PROJECT.log absent — check if quaid project exists in instance)"'
+```
+
 Pass:
 - create works
 - show works
 - update works
 - snapshot/sync work
 - delete removes the project but not the source directory
+- `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
 
 ### M9: Janitor
+
+Before running, capture the pre-janitor artifact state:
+
+```bash
+# Record line counts so you can verify condensation happened
+ssh alfie.local 'echo "OC SOUL.snippets:"; wc -l ~/quaid/openclaw/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/openclaw/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/openclaw/identity/SOUL.md 2>/dev/null || echo "(absent)"'
+```
 
 Run:
 
@@ -604,10 +629,27 @@ ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.ope
 ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
 ```
 
+After the run, verify condensation:
+
+```bash
+# Stats: snippets_folded + snippets_rewritten + snippets_discarded should be > 0
+ssh alfie.local 'cat ~/quaid/openclaw/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
+# Post-janitor snippet and identity state
+ssh alfie.local 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/openclaw/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/openclaw/identity/SOUL.md 2>/dev/null'
+ssh alfie.local 'cat ~/quaid/openclaw/identity/SOUL.md 2>/dev/null | head -40'
+```
+
 Pass:
 - janitor completes
 - `checkpoint-all.json` exists afterward with `status: completed`
 - `janitor-stats.json` reports `success: true`
+- `applied_changes` shows `snippets_folded + snippets_rewritten + snippets_discarded > 0` (snippets were reviewed)
+- `SOUL.snippets.md` line count decreased or file was cleared (entries processed)
+- if `snippets_folded > 0`, `identity/SOUL.md` grew (folded content arrived)
+
+Fail:
+- snippets review task skipped entirely (all three snippet counters remain 0 and snippets file unchanged)
+- janitor exits with non-zero status
 
 ### M10: Docs and Health
 
@@ -624,6 +666,55 @@ Pass:
 - health is good enough to continue
 - stats are sensible
 - docs commands run successfully
+
+### M11: Snippet, Journal, and Project Log Generation
+
+This milestone verifies that the extraction pipeline writes soul snippets,
+user snippets, journal entries, and project logs to disk — not just facts to
+the DB. Run it after M1-M10 so multiple extractions have accumulated artifacts.
+
+**Snippets** (written per-extraction when the LLM includes `soul_snippets`):
+
+```bash
+# OC
+ssh alfie.local 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/openclaw/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
+ssh alfie.local 'echo "=== OC USER.snippets ==="; cat ~/quaid/openclaw/USER.snippets.md 2>/dev/null || echo "(absent)"'
+# CC
+ssh alfie.local 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
+ssh alfie.local 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code/USER.snippets.md 2>/dev/null || echo "(absent)"'
+```
+
+Pass: OC `SOUL.snippets.md` has at least one entry. The section headers (e.g.
+`## Compaction — YYYY-MM-DD`) should correspond to extraction events from this
+run. CC snippets may be absent on first install — they build via CC sessions.
+
+**Journal entries** (written when LLM includes `journal_entries`; discretionary):
+
+```bash
+ssh alfie.local 'echo "=== OC journals ==="; ls ~/quaid/openclaw/journal/ 2>/dev/null; for f in ~/quaid/openclaw/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+ssh alfie.local 'echo "=== CC journals ==="; ls ~/quaid/claude-code/journal/ 2>/dev/null || echo "(absent)"; for f in ~/quaid/claude-code/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+```
+
+Pass: Journal directory exists. Presence of entries is correct but not required
+— the LLM only writes journal entries when it finds genuinely new observations.
+Empty journals on early test runs are expected. Structurally malformed files are
+a failure.
+
+**Project logs** (written when extraction includes `project_logs` entries):
+
+```bash
+ssh alfie.local 'echo "=== OC quaid PROJECT.log ==="; tail -30 ~/quaid/openclaw/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
+ssh alfie.local 'echo "=== CC quaid PROJECT.log ==="; tail -30 ~/quaid/claude-code/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
+```
+
+Pass: `projects/quaid/PROJECT.log` exists and has at least one timestamped
+entry from this test run — M8 includes a deliberate `/reset` to capture project
+context. Entries are formatted `- [YYYY-MM-DDTHH:MM:SS] <text>`.
+
+Fail:
+- OC `SOUL.snippets.md` is absent or empty after 3+ extractions
+- `projects/quaid/PROJECT.log` absent after M8's trigger step
+- Any file is structurally malformed (broken JSON, truncated entries)
 
 ## Cross-Platform Project Linking Test
 
