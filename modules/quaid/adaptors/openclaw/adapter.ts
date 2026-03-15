@@ -1656,6 +1656,41 @@ notify_user(${JSON.stringify(message)})
     const projectDocsInjectedSessions = new Set<string>();
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
+
+      // Guard: only inject memories for positively-identified interactive sessions.
+      // When sessions.patch times out, the quaid-llm session key is never written to
+      // sessions.json. OC still fires before_prompt_build for that session with an
+      // unresolvable key — isInternalSessionContext misses it and recall fires again,
+      // creating a recursive loop (each recall spawns another LLM call → another
+      // openresponses session → another before_prompt_build → repeat).
+      // Fix: require the session to be a known interactive key, OR (if no key is
+      // resolvable) to match the tracked interactive session. Unknown-key sessions
+      // that don't match the current interactive session are skipped.
+      {
+        const _bpbSid = String(ctx?.sessionId || event?.sessionId || "").trim();
+        const _bpbKey = String(
+          ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey
+            || resolveSessionKeyForSessionId(_bpbSid)
+        ).trim().toLowerCase();
+        const _bpbInteractive =
+          _bpbKey === "agent:main:main"
+          || _bpbKey.startsWith("agent:main:tui-")
+          || _bpbKey.startsWith("agent:main:telegram:")
+          || (!_bpbKey && (
+            // Empty key: allow if this is the current known interactive session,
+            // or if no interactive session is tracked yet (initial state).
+            !currentInteractiveSession?.sessionId
+            || _bpbSid === currentInteractiveSession.sessionId
+          ));
+        if (!_bpbInteractive) {
+          writeHookTrace("hook.before_prompt_build.non_interactive_skip", {
+            session_id: _bpbSid,
+            session_key: _bpbKey || "(empty)",
+          });
+          return;
+        }
+      }
+
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return { prependContext: event.prependContext };
 
