@@ -548,7 +548,7 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main
 Check immediately whether both edges were extracted from the compound fact:
 
 ```bash
-ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db) && sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
+ssh example.local 'DB=~/quaid/data/memory.db && sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
 ```
 
 **Phase 2 — Janitor edge backfill (tests retroactive recovery):**
@@ -567,7 +567,7 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main
 Re-check edges — all should now be present:
 
 ```bash
-ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db) && sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
+ssh example.local 'DB=~/quaid/data/memory.db && sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
 ```
 
 Expected edges after Phase 1 or Phase 2:
@@ -604,7 +604,7 @@ contamination even after DB deletion.
 Step 1 — Clear stale nodes from the DB:
 
 ```bash
-ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db); sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" OR LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
+ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" OR LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
 ```
 
 Delete each found node (replace `<id>` with actual IDs):
@@ -616,7 +616,7 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main
 Verify clean:
 
 ```bash
-ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db); sqlite3 "$DB" "SELECT COUNT(*) FROM nodes WHERE LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\";"'
+ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT COUNT(*) FROM nodes WHERE LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\";"'
 # Must return 0
 ```
 
@@ -647,7 +647,7 @@ Then trigger `/reset` to extract those facts and start a new session.
 before wasting a session query:
 
 ```bash
-ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db); sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"Diana\",\"Alice\") OR t.name IN (\"Diana\",\"Alice\") ORDER BY s.name, e.relation;"'
+ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"Diana\",\"Alice\") OR t.name IN (\"Diana\",\"Alice\") ORDER BY s.name, e.relation;"'
 ```
 
 Expected edges (owner = "Solomon" for this install):
@@ -1176,8 +1176,8 @@ Instances on alfie use per-instance subdirectories under `~/quaid/`:
 
 ```bash
 # OC instance health
-ssh example.local 'sqlite3 ~/quaid/openclaw-main/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
-ssh example.local 'sqlite3 ~/quaid/openclaw-main/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
+ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
+ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
 ssh example.local 'ls ~/quaid/openclaw-main/journal/'
 ssh example.local 'cat ~/quaid/openclaw-main/USER.snippets.md 2>/dev/null'
 ssh example.local 'ls -lt ~/quaid/openclaw-main/logs/ | head -20'

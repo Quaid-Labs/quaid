@@ -3355,6 +3355,17 @@ print(len(found))
     );
   }
   log.success("Installation complete!");
+  // Write install timestamp so the session-index watcher knows to ignore
+  // sessions that predate this install (prevents orphan extraction fan-out
+  // after a clean reinstall/wipe).
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(DATA_DIR, "installed-at.json"),
+      JSON.stringify({ installedAt: new Date().toISOString() }),
+      { mode: 0o600 },
+    );
+  } catch {}
   log.message("");
   try {
     const markerDir = path.join(LOGS_DIR, "janitor");
