@@ -143,7 +143,7 @@ Preview first:
 
 ```bash
 ssh example.local 'openclaw plugins list 2>/dev/null | grep quaid || true'
-ssh example.local 'ls -ld ~/quaid ~/quaid/openclaw ~/quaid/shared 2>/dev/null || true'
+ssh example.local 'ls -ld ~/quaid ~/quaid/openclaw-main ~/quaid/shared 2>/dev/null || true'
 ```
 
 Uninstall existing OC plugin if present:
@@ -158,7 +158,7 @@ workspace files (SOUL.md, USER.md, etc.) — without it the installer runs 5
 sequential deep-reasoning calls that block M0 for several minutes:
 
 ```bash
-ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=openclaw node setup-quaid.mjs --agent --workspace "/Users/owner/quaid" --source local'
+ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=openclaw-main node setup-quaid.mjs --agent --workspace "/Users/owner/quaid" --source local'
 ```
 
 ### Claude Code on example.local
@@ -184,10 +184,10 @@ ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRA
 ### Post-install verification
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid health 2>&1'
 ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.get(\"hooks\", {}).keys()))"'
-ssh example.local 'ls -l ~/quaid/openclaw/identity/SOUL.md ~/quaid/claude-code/identity/SOUL.md 2>/dev/null || true'
+ssh example.local 'ls -l ~/quaid/openclaw-main/identity/SOUL.md ~/quaid/claude-code/identity/SOUL.md 2>/dev/null || true'
 ```
 
 If either instance-local `identity/SOUL.md` is missing, seed it from the shared
@@ -198,7 +198,7 @@ ssh example.local 'python3 - <<\"PY\"
 from pathlib import Path
 src = Path("/Users/owner/quaid/SOUL.md")
 for dst in [
-    Path("/Users/owner/quaid/openclaw/identity/SOUL.md"),
+    Path("/Users/owner/quaid/openclaw-main/identity/SOUL.md"),
     Path("/Users/owner/quaid/claude-code/identity/SOUL.md"),
 ]:
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -206,6 +206,13 @@ for dst in [
         dst.write_text(src.read_text())
         print(f"created {dst}")
 PY'
+```
+
+Seed the quaid project directory in `openclaw-main` so `PROJECT.log` can be
+written by extraction (the daemon looks for `projects/quaid/PROJECT.md`):
+
+```bash
+ssh example.local 'src=~/quaid/openclaw-main/projects/quaid/PROJECT.md; mkdir -p "$(dirname $src)"; [ -f "$src" ] || cp ~/quaid/projects/quaid/PROJECT.md "$src" && echo "seeded" || echo "already exists"'
 ```
 
 ## Execution Model
@@ -336,7 +343,7 @@ Pass only if `~/.claude/rules/quaid-projects.md` includes project sections like
 `USER.md` / `MEMORY.md` projections, CC project CRUD is not being tested
 against a valid shared-project bootstrap state yet. Also verify the global
 registry entry for `quaid` points at `$QUAID_HOME/shared/projects/quaid`, not
-an instance-local path such as `$QUAID_HOME/openclaw/projects/quaid`.
+an instance-local path such as `$QUAID_HOME/openclaw-main/projects/quaid`.
 
 For CC `/compact`, the extracted fact should store from the visible live run
 without this manual fallback once the per-instance signal-dir fix is deployed.
@@ -417,7 +424,7 @@ timeout only at plugin init — a config-only change without restart has no
 effect):
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
 # Then restart OpenClaw on alfie.
 ```
 
@@ -428,7 +435,7 @@ then let the session idle for >1 minute without sending any further messages.
 After the test, restore the timeout and restart again:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
 # Then restart OpenClaw on alfie.
 ```
 
@@ -449,7 +456,7 @@ needed.
 Seed a known fact directly so you can test injection in isolation:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
 ```
 
 Start a fresh session and ask, framed so the agent knows what is being tested:
@@ -500,9 +507,9 @@ Seed a compound fact that contains two relationships in one sentence.
 The extraction prompt now explicitly asks the LLM to extract ALL edges:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa and they have a son named Oliver" 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David is the user'"'"'s brother" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa and they have a son named Oliver" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid store "David is the user'"'"'s brother" 2>&1'
 ```
 
 Check immediately whether both edges were extracted from the compound fact:
@@ -521,7 +528,7 @@ If `spouse_of` is missing from Phase 1 (LLM picked only `parent_of`), that
 is expected to be recoverable via backfill. Run the edge backfill task:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
 ```
 
 Re-check edges — all should now be present:
@@ -570,7 +577,7 @@ ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/qu
 Delete each found node (replace `<id>` with actual IDs):
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid delete-node <id>'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid delete-node <id>'
 ```
 
 Verify clean:
@@ -583,7 +590,7 @@ ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/qu
 Step 2 — Restart the extraction daemon so any patched files are loaded:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 1; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid daemon start'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>/dev/null; sleep 1; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon start'
 ```
 
 Step 3 — Start a completely fresh OC session for seeding.
@@ -647,28 +654,26 @@ Ask the agent naturally:
 - `Can you show me what you know about the live-test project?`
 - `Can you update that project's description so it is clearly marked as a live test project?`
 
-Modify the source, then ask naturally:
+Ask the agent to list all projects:
 
-```bash
-ssh example.local 'printf "print(\"modified\")\n" > /tmp/quaid-live-src/main.py'
-```
+- `Can you list all the projects you know about?`
 
-- `Can you check what changed in the live-test project since the last snapshot?`
-- `Can you take a new snapshot of the live-test project?`
+Then delete the test project:
+
 - `Can you delete the live-test project?`
 
 Verify from shell:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid project list 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid project show live-test 2>&1 || true'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project list 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project show live-test 2>&1 || true'
 ssh example.local 'test -f /tmp/quaid-live-src/main.py && echo source_still_exists'
 ```
 
 After project CRUD, trigger extraction to generate project logs. Tell the agent
 naturally something about the session, then do `/reset`:
 
-> "We've just tested project creation, update, sync, and delete for the
+> "We've just tested project creation, show, list, update, and delete for the
 > live-test project. Triggering a reset to capture this."
 
 Then `/reset`. This gives the extraction LLM enough project context to include
@@ -677,14 +682,14 @@ a `project_logs` entry for the quaid project in the extraction JSON.
 Check after extraction:
 
 ```bash
-ssh example.local 'tail -20 ~/quaid/openclaw/projects/quaid/PROJECT.log 2>/dev/null || echo "(PROJECT.log absent — check if quaid project exists in instance)"'
+ssh example.local 'tail -20 ~/quaid/openclaw-main/projects/quaid/PROJECT.log 2>/dev/null || echo "(PROJECT.log absent — check if quaid project exists in instance)"'
 ```
 
 Pass:
 - create works
-- show works
-- update works
-- snapshot (diff + retake) works
+- show works (returns project details)
+- list works (live-test appears in output)
+- update works (description reflects the change)
 - delete removes the project but not the source directory
 - `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
 
@@ -694,24 +699,24 @@ Before running, capture the pre-janitor artifact state:
 
 ```bash
 # Record line counts so you can verify condensation happened
-ssh example.local 'echo "OC SOUL.snippets:"; wc -l ~/quaid/openclaw/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/openclaw/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/openclaw/identity/SOUL.md 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "OC SOUL.snippets:"; wc -l ~/quaid/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(absent)"; echo "OC USER.snippets:"; wc -l ~/quaid/openclaw-main/USER.snippets.md 2>/dev/null || echo "(absent)"; echo "OC SOUL.md:"; wc -l ~/quaid/openclaw-main/identity/SOUL.md 2>/dev/null || echo "(absent)"'
 ```
 
 Run:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
 ```
 
 After the run, verify condensation:
 
 ```bash
 # Stats: snippets_folded + snippets_rewritten + snippets_discarded should be > 0
-ssh example.local 'cat ~/quaid/openclaw/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
+ssh example.local 'cat ~/quaid/openclaw-main/logs/janitor-stats.json | python3 -c "import json,sys; d=json.load(sys.stdin); ac=d.get(\"applied_changes\",{}); print(\"success:\", d[\"success\"]); [print(f\"  {k}: {v}\") for k,v in ac.items() if \"snippet\" in k or \"journal\" in k or \"log_entries\" in k]"'
 # Post-janitor snippet and identity state
-ssh example.local 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/openclaw/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/openclaw/identity/SOUL.md 2>/dev/null'
-ssh example.local 'cat ~/quaid/openclaw/identity/SOUL.md 2>/dev/null | head -40'
+ssh example.local 'echo "OC SOUL.snippets after:"; wc -l ~/quaid/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(empty/absent)"; echo "OC SOUL.md after:"; wc -l ~/quaid/openclaw-main/identity/SOUL.md 2>/dev/null'
+ssh example.local 'cat ~/quaid/openclaw-main/identity/SOUL.md 2>/dev/null | head -40'
 ```
 
 Pass:
@@ -731,10 +736,10 @@ Fail:
 Run:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid health 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid stats 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid docs list 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid docs check 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid stats 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs list 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs check 2>&1'
 ```
 
 Pass:
@@ -748,12 +753,27 @@ This milestone verifies that the extraction pipeline writes soul snippets,
 user snippets, journal entries, and project logs to disk — not just facts to
 the DB. Run it after M1-M10 so multiple extractions have accumulated artifacts.
 
+**Pre-check: ensure the daemon has fresh config** (its project_definitions are
+loaded at startup; if the daemon started while M9 janitor was running the DB
+may be cached stale). Restart before triggering the trigger extraction:
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+```
+
+Then do a fresh OC session + `/reset` to trigger a full extraction cycle:
+
+> "Verifying extraction pipeline artifacts for M11. Triggering reset."
+
+Then `/reset` and wait for the daemon to complete (check `tail -5` of daemon log
+for `project logs seen=N written=M` — `written` should be ≥ 1).
+
 **Snippets** (written per-extraction when the LLM includes `soul_snippets`):
 
 ```bash
 # OC
-ssh example.local 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/openclaw/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
-ssh example.local 'echo "=== OC USER.snippets ==="; cat ~/quaid/openclaw/USER.snippets.md 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== OC USER.snippets ==="; cat ~/quaid/openclaw-main/USER.snippets.md 2>/dev/null || echo "(absent)"'
 # CC
 ssh example.local 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
 ssh example.local 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code/USER.snippets.md 2>/dev/null || echo "(absent)"'
@@ -766,7 +786,7 @@ run. CC snippets may be absent on first install — they build via CC sessions.
 **Journal entries** (written when LLM includes `journal_entries`; discretionary):
 
 ```bash
-ssh example.local 'echo "=== OC journals ==="; ls ~/quaid/openclaw/journal/ 2>/dev/null; for f in ~/quaid/openclaw/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+ssh example.local 'echo "=== OC journals ==="; ls ~/quaid/openclaw-main/journal/ 2>/dev/null; for f in ~/quaid/openclaw-main/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
 ssh example.local 'echo "=== CC journals ==="; ls ~/quaid/claude-code/journal/ 2>/dev/null || echo "(absent)"; for f in ~/quaid/claude-code/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
 ```
 
@@ -778,7 +798,7 @@ a failure.
 **Project logs** (written when extraction includes `project_logs` entries):
 
 ```bash
-ssh example.local 'echo "=== OC quaid PROJECT.log ==="; tail -30 ~/quaid/openclaw/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== OC quaid PROJECT.log ==="; tail -30 ~/quaid/openclaw-main/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
 ssh example.local 'echo "=== CC quaid PROJECT.log ==="; tail -30 ~/quaid/claude-code/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
 ```
 
@@ -890,7 +910,7 @@ if [ -f "$pid_file" ]; then
   fi
 else
   # Fallback: legacy flat instance path
-  pid_file="$HOME/quaid/openclaw/data/extraction-daemon.pid"
+  pid_file="$HOME/quaid/openclaw-main/data/extraction-daemon.pid"
   if [ -f "$pid_file" ]; then
     pid=$(cat "$pid_file")
     if kill -0 "$pid" 2>/dev/null; then
@@ -1052,9 +1072,9 @@ Ask OC naturally:
 Verify from shell:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid project show cross-live-test 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project show cross-live-test 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
 Then ask OC:
@@ -1113,19 +1133,19 @@ Fail:
 After all milestones and the cross-platform project linking test.
 
 Instances on alfie use per-instance subdirectories under `~/quaid/`:
-- OC: `~/quaid/openclaw/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw`)
+- OC: `~/quaid/openclaw-main/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw`)
 - CC: `~/quaid/claude-code/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code`)
 
 ```bash
 # OC instance health
-ssh example.local 'sqlite3 ~/quaid/openclaw/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
-ssh example.local 'sqlite3 ~/quaid/openclaw/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
-ssh example.local 'ls ~/quaid/openclaw/journal/'
-ssh example.local 'cat ~/quaid/openclaw/USER.snippets.md 2>/dev/null'
-ssh example.local 'ls -lt ~/quaid/openclaw/logs/ | head -20'
-ssh example.local 'cat ~/quaid/openclaw/config/memory.json | python3 -m json.tool | head -20'
-ssh example.local 'cat ~/quaid/openclaw/data/circuit-breaker.json 2>/dev/null'
-ssh example.local 'cat ~/quaid/openclaw/logs/janitor/checkpoint-all.json 2>/dev/null'
+ssh example.local 'sqlite3 ~/quaid/openclaw-main/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
+ssh example.local 'sqlite3 ~/quaid/openclaw-main/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
+ssh example.local 'ls ~/quaid/openclaw-main/journal/'
+ssh example.local 'cat ~/quaid/openclaw-main/USER.snippets.md 2>/dev/null'
+ssh example.local 'ls -lt ~/quaid/openclaw-main/logs/ | head -20'
+ssh example.local 'cat ~/quaid/openclaw-main/config/memory.json | python3 -m json.tool | head -20'
+ssh example.local 'cat ~/quaid/openclaw-main/data/circuit-breaker.json 2>/dev/null'
+ssh example.local 'cat ~/quaid/openclaw-main/logs/janitor/checkpoint-all.json 2>/dev/null'
 
 # CC instance health
 ssh example.local 'sqlite3 ~/quaid/claude-code/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
@@ -1136,7 +1156,7 @@ Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirector
 
 ```bash
 # OC identity
-ssh example.local 'for f in /Users/owner/quaid/openclaw/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw-main/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 # CC identity
 ssh example.local 'for f in /Users/owner/quaid/claude-code/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 ```
@@ -1145,16 +1165,16 @@ Audit project docs and snippets/journals:
 
 ```bash
 # OC project docs
-ssh example.local 'find /Users/owner/quaid/openclaw/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
+ssh example.local 'find /Users/owner/quaid/openclaw-main/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
 # CC project docs
 ssh example.local 'find /Users/owner/quaid/claude-code/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
 # Live-test project (shared or per-instance depending on test run)
-ssh example.local 'find /Users/owner/quaid/shared/projects/live-test /Users/owner/quaid/openclaw/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
+ssh example.local 'find /Users/owner/quaid/shared/projects/live-test /Users/owner/quaid/openclaw-main/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
 # Snippets and journals
-ssh example.local 'for f in /Users/owner/quaid/openclaw/SOUL.snippets.md /Users/owner/quaid/openclaw/USER.snippets.md /Users/owner/quaid/claude-code/SOUL.snippets.md /Users/owner/quaid/claude-code/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
-ssh example.local 'for f in /Users/owner/quaid/openclaw/journal/SOUL.journal.md /Users/owner/quaid/openclaw/journal/USER.journal.md /Users/owner/quaid/openclaw/journal/MEMORY.journal.md /Users/owner/quaid/claude-code/journal/SOUL.journal.md /Users/owner/quaid/claude-code/journal/USER.journal.md /Users/owner/quaid/claude-code/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw-main/SOUL.snippets.md /Users/owner/quaid/openclaw-main/USER.snippets.md /Users/owner/quaid/claude-code/SOUL.snippets.md /Users/owner/quaid/claude-code/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw-main/journal/SOUL.journal.md /Users/owner/quaid/openclaw-main/journal/USER.journal.md /Users/owner/quaid/openclaw-main/journal/MEMORY.journal.md /Users/owner/quaid/claude-code/journal/SOUL.journal.md /Users/owner/quaid/claude-code/journal/USER.journal.md /Users/owner/quaid/claude-code/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
 # Project logs
-ssh example.local 'find /Users/owner/quaid/openclaw/projects /Users/owner/quaid/claude-code/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
+ssh example.local 'find /Users/owner/quaid/openclaw-main/projects /Users/owner/quaid/claude-code/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
 ```
 
 Pass criteria:
