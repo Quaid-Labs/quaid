@@ -786,7 +786,6 @@ function parseSessionMessagesJsonl(sessionFile) {
       console.warn(`[quaid] session file line parse failed: ${String(err?.message || err)}`);
     }
   }
-  console.log(`[quaid][timeout][parse] file=${sessionFile} lines=${lines.length} messages=${messages.length}`);
   return messages;
 }
 const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py");

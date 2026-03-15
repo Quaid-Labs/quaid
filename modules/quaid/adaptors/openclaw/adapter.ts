@@ -977,7 +977,6 @@ function parseSessionMessagesJsonl(sessionFile: string): any[] {
       console.warn(`[quaid] session file line parse failed: ${String((err as Error)?.message || err)}`);
     }
   }
-  console.log(`[quaid][timeout][parse] file=${sessionFile} lines=${lines.length} messages=${messages.length}`);
   return messages;
 }
 
