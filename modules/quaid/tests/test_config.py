@@ -1134,6 +1134,23 @@ class TestConfigLoading:
             config._warned_unknown_config_keys.clear()
             config._warned_unknown_config_keys.update(old_warned)
 
+    def test_retrieval_reranker_timeout_respects_config(self, tmp_path):
+        import config
+        old_config = config._config
+        config._config = None
+        try:
+            config_file = tmp_path / "memory.json"
+            config_file.write_text(json.dumps({
+                "retrieval": {
+                    "rerankerTimeoutMs": 12000
+                }
+            }))
+            with patch.object(config, "_config_paths", lambda: [config_file]):
+                cfg = load_config()
+                assert cfg.retrieval.reranker_timeout_ms == 12000
+        finally:
+            config._config = old_config
+
     def test_config_callback_failure_warns_when_plugins_non_strict(self, capsys):
         import config
 

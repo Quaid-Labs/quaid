@@ -505,6 +505,7 @@ class TestRerankerConfig:
         cfg = RetrievalConfig()
         assert cfg.reranker_enabled is True
         assert cfg.reranker_top_k == 20
+        assert cfg.reranker_timeout_ms == 15000
         assert "personal memory" in cfg.reranker_instruction.lower()
 
     def test_config_parses_reranker_from_json(self, tmp_path):
@@ -535,6 +536,7 @@ class TestRerankerConfig:
                 assert cfg.retrieval.reranker_enabled is True
                 assert cfg.retrieval.reranker_top_k == 10
                 assert cfg.retrieval.reranker_instruction == "Test instruction"
+                assert cfg.retrieval.reranker_timeout_ms == 15000
         finally:
             cfg_mod._config = old_config
 

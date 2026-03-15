@@ -217,6 +217,7 @@ class RetrievalConfig:
     reranker_enabled: bool = True
     reranker_top_k: int = 20
     reranker_instruction: str = "Given a personal memory query, determine if this memory is relevant to the query"
+    reranker_timeout_ms: int = 15_000  # Full-recall reranker wall timeout; preinject disables reranker entirely
     # Tuning parameters (externalized from hardcoded values)
     rrf_k: int = 60  # RRF fusion constant
     reranker_blend: float = 0.5  # Blend weight: reranker vs original score
@@ -570,6 +571,7 @@ _KNOWN_RETRIEVAL_KEYS = {
     "reranker_enabled",
     "reranker_top_k",
     "reranker_instruction",
+    "reranker_timeout_ms",
     "rrf_k",
     "reranker_blend",
     "composite_relevance_weight",
@@ -1130,6 +1132,7 @@ def _load_config_inner() -> MemoryConfig:
         reranker_enabled=reranker_data.get('enabled', True),
         reranker_top_k=reranker_data.get('top_k', 20),
         reranker_instruction=reranker_data.get('instruction', 'Given a personal memory query, determine if this memory is relevant to the query'),
+        reranker_timeout_ms=int(retrieval_data.get('reranker_timeout_ms', retrieval_data.get('rerankerTimeoutMs', 15000))),
         rrf_k=retrieval_data.get('rrf_k', 60),
         reranker_blend=retrieval_data.get('reranker_blend', 0.5),
         composite_relevance_weight=retrieval_data.get('composite_relevance_weight', 0.60),

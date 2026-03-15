@@ -3147,12 +3147,12 @@ def _rerank_via_llm(query: str, candidates: List[tuple], instruction: str, confi
 
     # Hard wall timeout: reranker must not block the user path.
     # If timeout is hit, return best-so-far (original candidate ranking).
-    reranker_timeout_ms = 3000
+    reranker_timeout_ms = 15000
     if config_retrieval:
         try:
             reranker_timeout_ms = int(getattr(config_retrieval, "reranker_timeout_ms", reranker_timeout_ms) or reranker_timeout_ms)
         except Exception:
-            reranker_timeout_ms = 3000
+            reranker_timeout_ms = 15000
     reranker_timeout_ms = max(250, reranker_timeout_ms)
     timeout_seconds = max(1, int((reranker_timeout_ms + 999) // 1000))
 
