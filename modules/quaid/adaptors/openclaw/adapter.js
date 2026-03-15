@@ -1547,6 +1547,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
       sessionIndexWatcherStarted = true;
       const watcherStartMs = Date.now();
+      let initialSnapshotDone = false;
       const pendingOrphanChecks = /* @__PURE__ */ new Map();
       const ORPHAN_CHECK_DEADLINE_MS = 6e4;
       const tickSessionIndex = () => {
@@ -1599,7 +1600,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 pendingOrphanChecks.set(prevSessionId, Date.now());
               }
               sessionIndexMessageCounts.delete(prevSessionId);
-            } else if (!prevSessionId && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
+            } else if (!prevSessionId && initialSnapshotDone && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
               writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId });
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
                 if (priorKey.startsWith("agent:main:hook:")) continue;
@@ -1759,6 +1760,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             error: String(err?.message || err)
           });
         }
+        initialSnapshotDone = true;
       };
       void tickSessionIndex();
       sessionIndexWatcherTimer = setInterval(tickSessionIndex, SESSION_INDEX_POLL_MS);

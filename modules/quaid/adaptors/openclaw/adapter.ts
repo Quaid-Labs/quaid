@@ -1914,10 +1914,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       sessionIndexWatcherStarted = true;
-      // Timestamp when this watcher instance started. Used to filter out sessions
-      // whose transcripts haven't changed since before we started (stale from
-      // previous gateway lifetimes).
+      // Timestamp when this watcher instance started. Used as secondary filter
+      // on transcript mtime in the new-key path.
       const watcherStartMs = Date.now();
+      // True once the first tick has completed and sessionKeyLastSeen is populated
+      // with the initial snapshot from sessions.json. The new-key signal path is
+      // suppressed on tick 1 to avoid treating ALL existing keys as new arrivals
+      // (sessionKeyLastSeen starts empty so every key has prevSessionId=undefined).
+      let initialSnapshotDone = false;
       // Tracks sessions where a key transition was detected but the .reset.* backup
       // may not have been created yet. Value is the time the watch was armed (ms).
       // Checked each tick; times out after 60s. Empty most of the time.
@@ -2003,11 +2007,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               }
               // Clean up message count for the ended session.
               sessionIndexMessageCounts.delete(prevSessionId);
-            } else if (!prevSessionId && isSystemEnabled("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
+            } else if (!prevSessionId && initialSnapshotDone && isSystemEnabled("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
               // Brand new key in sessions.json — OC TUI /new adds a NEW key rather
               // than updating an existing key's session ID. Signal any sessions that
-              // were recently active (seen this gateway lifetime) so their content
-              // is extracted before the user moves on.
+              // were recently active so their content is extracted before the user
+              // moves on. Gated on initialSnapshotDone to avoid treating all
+              // existing keys as new on the first tick (when sessionKeyLastSeen is
+              // empty, every key has prevSessionId=undefined).
               writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId });
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
                 if (priorKey.startsWith("agent:main:hook:")) continue;
@@ -2182,6 +2188,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             error: String((err as Error)?.message || err),
           });
         }
+        // Mark initial snapshot complete after the first tick so subsequent ticks
+        // can distinguish genuinely new keys from the initial population.
+        initialSnapshotDone = true;
       };
       void tickSessionIndex();
       sessionIndexWatcherTimer = setInterval(tickSessionIndex, SESSION_INDEX_POLL_MS);
