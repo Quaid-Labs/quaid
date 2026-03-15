@@ -397,8 +397,8 @@ function writeDaemonSignal(
 
   // For reset signals, OC may have already moved the transcript content to a
   // .reset.* snapshot before this signal fires. If the resolved path is empty
-  // (0 bytes) and a .reset.* backup exists, use the backup so the daemon has
-  // content to extract from.
+  // (0 bytes) or missing (ENOENT) and a .reset.* backup exists, use the backup
+  // so the daemon has content to extract from.
   if (signalType === "reset") {
     try {
       const stat = fs.statSync(resolvedPath);
@@ -408,7 +408,13 @@ function writeDaemonSignal(
           resolvedPath = backup;
         }
       }
-    } catch {}
+    } catch {
+      // File missing (ENOENT) — OC moved it entirely to a .reset.* backup.
+      const backup = latestResetBackup(sessionId);
+      if (backup) {
+        resolvedPath = backup;
+      }
+    }
   }
 
   try {
@@ -2106,7 +2112,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   if (!facade.shouldProcessLifecycleSignal(sid, {
                     label: "ResetSignal",
                     source: "watcher_scan",
-                    signature: `watcher_scan:orphan_reset:${sid}`,
+                    signature: "hook:ResetSignal",
                   })) continue;
                   facade.markLifecycleSignalFromHook(sid, "ResetSignal");
                   writeDaemonSignal(sid, "reset", {
