@@ -403,6 +403,60 @@ class OpenClawAdapter(QuaidAdapter):
                 print(f"[adapter] gateway auth config read failed, using defaults: {e}", file=sys.stderr)
         return 18789, ""
 
+    # ---- Multi-agent support ----
+
+    @staticmethod
+    def extract_agent_id_from_session_key(session_key: str) -> Optional[str]:
+        """Parse agentId from OC session key format 'agent:<agentId>:<channel>'.
+
+        Returns None if the key doesn't match the expected format.
+        """
+        parts = str(session_key or "").strip().split(":")
+        if len(parts) >= 3 and parts[0] == "agent":
+            agent_id = parts[1].strip()
+            return agent_id if agent_id else None
+        return None
+
+    def is_multi_agent(self) -> bool:
+        return True
+
+    def default_agent_id(self) -> str:
+        return "main"
+
+    def list_agent_ids(self) -> list:
+        """Discover all first-class OC agents from openclaw.json agents.list."""
+        cfg_path = self.get_gateway_config_path()
+        if not cfg_path:
+            return [self.default_agent_id()]
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            agents_list = cfg.get("agents", {}).get("list", []) or []
+            ids = [
+                str(a.get("id", "")).strip()
+                for a in agents_list
+                if isinstance(a, dict) and a.get("id")
+            ]
+            if not ids:
+                return [self.default_agent_id()]
+            # Ensure "main" is always first
+            if "main" in ids:
+                ids = ["main"] + [i for i in ids if i != "main"]
+            return ids
+        except (json.JSONDecodeError, IOError, KeyError):
+            return [self.default_agent_id()]
+
+    def agent_instance_id(self, agent_id: str) -> str:
+        """Derive Quaid instance ID for an OC agent.
+
+        main → primary instance_id() (e.g. "openclaw")
+        other → "<instance_id()>-<agent_id>" (e.g. "openclaw-coding")
+        """
+        normalized = str(agent_id or "").strip().lower()
+        if not normalized or normalized == self.default_agent_id():
+            return self.instance_id()
+        return f"{self.instance_id()}-{normalized}"
+
     # ---- Internal helpers ----
 
     def _find_sessions_json(self) -> Optional[Path]:

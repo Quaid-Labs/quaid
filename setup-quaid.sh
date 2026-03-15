@@ -664,6 +664,71 @@ raise SystemExit(2)
 PY
 }
 
+# Create a minimal Quaid silo for a secondary OC agent.
+# Args: $1 = agent_id, $2 = silo_root (full path to the new instance directory)
+_init_agent_silo() {
+    local agent_id="$1"
+    local silo_root="$2"
+
+    if [[ -d "${silo_root}/config" && -f "${silo_root}/config/memory.json" ]]; then
+        info "Agent silo already exists for '${agent_id}': ${silo_root}"
+        return 0
+    fi
+
+    info "Creating Quaid silo for agent '${agent_id}' at ${silo_root}..."
+    mkdir -p "${silo_root}/config" "${silo_root}/data" "${silo_root}/identity" \
+             "${silo_root}/journal" "${silo_root}/logs"
+
+    # Minimal config — openclaw adapter, defaults inherited from gateway
+    cat > "${silo_root}/config/memory.json" << AGENTCFG
+{
+  "adapter": { "type": "openclaw" },
+  "retrieval": { "failHard": false, "autoInject": true }
+}
+AGENTCFG
+
+    # Stub identity files
+    for f in SOUL.md USER.md MEMORY.md; do
+        if [[ ! -f "${silo_root}/identity/${f}" ]]; then
+            echo "# ${f%.md}" > "${silo_root}/identity/${f}"
+        fi
+    done
+
+    # Stub PROJECT.md
+    if [[ ! -f "${silo_root}/PROJECT.md" ]]; then
+        cat > "${silo_root}/PROJECT.md" << PROJAGENT
+# Quaid Workspace — ${agent_id}
+
+Quaid knowledge layer silo for OC agent: ${agent_id}.
+
+## Identity
+- \`identity/SOUL.md\` — Agent personality and interaction style
+- \`identity/USER.md\` — About the user (biography, goals, preferences)
+- \`identity/MEMORY.md\` — Core facts loaded every session
+
+## Structure
+- \`data/\` — Memory database (SQLite)
+- \`journal/\` — Journal entries (slow-path learning)
+- \`logs/\` — Janitor and system logs
+PROJAGENT
+    fi
+
+    # Initialize database for this agent silo
+    export QUAID_DB_PATH="${silo_root}/data/memory.db"
+    export QUAID_SCHEMA_PATH="${PLUGIN_DIR}/datastore/memorydb/schema.sql"
+    python3 -c "
+import os, sqlite3
+conn = sqlite3.connect(os.environ['QUAID_DB_PATH'])
+with open(os.environ['QUAID_SCHEMA_PATH']) as f:
+    conn.executescript(f.read())
+conn.close()
+print('[+] Database initialized')
+" 2>&1 || warn "Database init failed for agent '${agent_id}'"
+    [[ -f "${silo_root}/data/memory.db" ]] && chmod 600 "${silo_root}/data/memory.db"
+
+    info "Silo ready for agent '${agent_id}'"
+}
+
 _sanitize_openclaw_quaid_plugin_entry() {
     python3 - <<'PY'
 import json, os, sys
@@ -1964,6 +2029,38 @@ print(f'[+] Quaid project registered ({len(found)} docs)')
             export CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}"
             python3 scripts/sync-tools-domain-block.py --workspace "${WORKSPACE_ROOT}" 2>/dev/null || true
         ) || true
+    fi
+
+    # Multi-agent silo init: for each non-main OC agent, create a sibling Quaid silo.
+    # Convention: QUAID_HOME = parent of WORKSPACE_ROOT (e.g. ~/quaid)
+    #             Primary silo = WORKSPACE_ROOT (e.g. ~/quaid/openclaw)
+    #             Agent silos  = QUAID_HOME/<primary-instance>-<agentId>
+    if $IS_OPENCLAW; then
+        local quaid_home_dir primary_instance agent_ids
+        quaid_home_dir="$(dirname "$WORKSPACE_ROOT")"
+        primary_instance="$(basename "$WORKSPACE_ROOT")"
+        agent_ids="$(python3 - <<'PY'
+import json, os, sys
+cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    data = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+lst = ((data.get("agents") or {}).get("list")) or []
+ids = [str(a.get("id", "")).strip() for a in lst if isinstance(a, dict) and a.get("id")]
+# Exclude "main" — that is the primary silo already created above
+non_main = [i for i in ids if i and i != "main"]
+print("\n".join(non_main))
+PY
+        )" || true
+        if [[ -n "$agent_ids" ]]; then
+            info "Multi-agent detected — creating Quaid silos for additional agents..."
+            while IFS= read -r agent_id; do
+                [[ -z "$agent_id" ]] && continue
+                local silo_dir="${quaid_home_dir}/${primary_instance}-${agent_id}"
+                _init_agent_silo "$agent_id" "$silo_dir"
+            done <<< "$agent_ids"
+        fi
     fi
 
     info "Installation complete!"
