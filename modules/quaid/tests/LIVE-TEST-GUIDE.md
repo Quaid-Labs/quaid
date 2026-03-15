@@ -478,38 +478,51 @@ Pass:
 
 ### M7: Graph Traversal Verification
 
-Seed a small family graph using **atomic facts** — one relationship per
-statement. Compound sentences ("X married Y and they had Z") cause the LLM
-to extract only the most salient edge. Use separate CLI stores or separate
-natural-language turns:
+This milestone tests both extraction-time edge creation AND the janitor's
+retroactive edge backfill (`--task edges`).
+
+**Phase 1 — Compound fact (tests extraction prompt):**
+
+Seed a compound fact that contains two relationships in one sentence.
+The extraction prompt now explicitly asks the LLM to extract ALL edges:
 
 ```bash
-ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa" 2>&1'
-ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David and Lisa have a son named Oliver" 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa and they have a son named Oliver" 2>&1'
 ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
-ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David is the user's brother" 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David is the user'"'"'s brother" 2>&1'
 ```
 
-Run janitor so edges get extracted:
-
-```bash
-ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
-```
-
-Verify from shell:
+Check immediately whether both edges were extracted from the compound fact:
 
 ```bash
 ssh alfie.local 'sqlite3 ~/quaid/data/memory.db "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
 ```
 
-Expected edges (alphabetical ordering for symmetric relations):
+**Phase 2 — Janitor edge backfill (tests retroactive recovery):**
+
+If `spouse_of` is missing from Phase 1 (LLM picked only `parent_of`), that
+is expected to be recoverable. Run the edge backfill task:
+
+```bash
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
+```
+
+Re-check edges — all should now be present:
+
+```bash
+ssh alfie.local 'sqlite3 ~/quaid/data/memory.db "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
+```
+
+Expected edges after Phase 1 or Phase 2 (alphabetical ordering for symmetric relations):
 - `David --parent_of--> Oliver`
 - `David --sibling_of--> User` (or the user's name)
 - `David --spouse_of--> Lisa`  (alphabetical: D < L)
 - `David --works_at--> Google`
 
 Pass:
-- all expected edges are present in the DB
+- all expected edges present after Phase 1 alone = extraction prompt working fully
+- all expected edges present after Phase 2 = janitor backfill working as fallback
+- fail only if edges are missing even after both phases
 
 ### M8: Full Project System CRUD
 
