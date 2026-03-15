@@ -782,18 +782,12 @@ def parse_json_response(text: str) -> Optional[object]:
                     parse_errors.append(f"fenced parse failed at line {e.lineno}, col {e.colno}: {e.msg}")
                     continue
 
-    # Last resort: find first { or [ and try to parse from there
-    for start_char, end_char in [("{", "}"), ("[", "]")]:
-        start_idx = cleaned.find(start_char)
-        end_idx = cleaned.rfind(end_char)
-        if start_idx != -1 and end_idx > start_idx:
-            try:
-                return _loads_with_relaxed_fallback(cleaned[start_idx:end_idx + 1])
-            except json.JSONDecodeError as e:
-                parse_errors.append(
-                    f"substring parse ({start_char}...{end_char}) failed at line {e.lineno}, col {e.colno}: {e.msg}"
-                )
-                continue
+    # Last resort: find the first JSON token ({ or [) and extract the balanced
+    # structure starting from it. _extract_balanced_json uses min(starts) so it
+    # picks whichever of { or [ appears first — correct for both objects and
+    # arrays, and avoids the previous bug where trying { before [ caused the
+    # first dict inside an array (e.g. [{"fact":1}]) to be returned as a dict
+    # instead of the full array.
     balanced = _extract_balanced_json(cleaned)
     if balanced:
         try:

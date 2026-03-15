@@ -2162,6 +2162,21 @@ JSON array only:"""
 
     parsed = parse_json_response(response)
     if not isinstance(parsed, list):
+        # LLM may have wrapped the array in an object (e.g. {"edges": [...]}) or
+        # returned a single dict — unwrap common container keys before giving up.
+        if isinstance(parsed, dict):
+            for key in ("edges", "results", "facts", "items", "data", "output"):
+                candidate = parsed.get(key)
+                if isinstance(candidate, list):
+                    parsed = candidate
+                    logger.debug("batch_extract_edges: unwrapped list from dict key %r", key)
+                    break
+    if not isinstance(parsed, list):
+        logger.warning(
+            "batch_extract_edges: response was not a list (type=%s, preview=%.200s)",
+            type(parsed).__name__,
+            str(response)[:200],
+        )
         metrics.add_error("Batch edge response was not a list")
         return [[] for _ in facts]
 
