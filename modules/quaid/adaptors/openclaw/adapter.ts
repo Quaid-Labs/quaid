@@ -196,12 +196,7 @@ function pickActiveInteractiveSession(data: Record<string, any>): ActiveInteract
       row
       && typeof row === "object"
       && typeof row?.sessionId === "string"
-      && (
-        key === "agent:main:main"
-        || key.startsWith("agent:main:tui-")
-        || key.startsWith("agent:main:telegram:direct:")
-        || key.startsWith("agent:main:telegram:slash:")
-      )
+      && key.startsWith("agent:main:")
     ))
     .map(([key, row]) => {
       const sessionId = String(row?.sessionId || "").trim();
@@ -1943,12 +1938,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               !row
               || typeof row !== "object"
               || typeof (row as any)?.sessionId !== "string"
-              || !(
-                key === "agent:main:main"
-                || key.startsWith("agent:main:tui-")
-                || key.startsWith("agent:main:telegram:direct:")
-                || key.startsWith("agent:main:telegram:slash:")
-              )
+              || !key.startsWith("agent:main:")
             ) {
               continue;
             }
