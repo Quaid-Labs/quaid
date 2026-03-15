@@ -38,21 +38,15 @@ def project_env(tmp_path):
     (user_code / "main.py").write_text("def hello():\n    print('hello')\n")
     (user_code / "utils.py").write_text("def add(a, b):\n    return a + b\n")
 
-    # OC workspace for sync target
-    oc_workspace = tmp_path / "oc-workspace" / "projects"
-    oc_workspace.mkdir(parents=True)
-
     adapter = MagicMock()
     adapter.quaid_home.return_value = quaid_home
     adapter.adapter_id.return_value = "test-adapter"
-    adapter.get_context_sync_target.return_value = oc_workspace
     adapter.projects_dir.return_value = quaid_home / "shared" / "projects"
 
     with patch("lib.adapter.get_adapter", return_value=adapter):
         yield {
             "quaid_home": quaid_home,
             "user_code": user_code,
-            "oc_workspace": oc_workspace,
             "adapter": adapter,
             "tmp_path": tmp_path,
         }
@@ -132,32 +126,6 @@ class TestProjectSystemE2E:
         assert changes["new_module.py"] == "A"
         assert "utils.py" in changes
         assert changes["utils.py"] == "D"
-
-    def test_sync_copies_to_adapter_workspace(self, project_env):
-        """Sync engine copies project context files to adapter workspace."""
-        from core.project_registry import create_project
-        from core.sync_engine import sync_all_projects
-
-        create_project("my-app", description="Test")
-
-        # Add a TOOLS.md to the canonical project dir
-        canonical = project_env["quaid_home"] / "shared" / "projects" / "my-app"
-        (canonical / "TOOLS.md").write_text("# My App Tools\n\nTool docs here.\n")
-
-        # Sync to OC workspace
-        results = sync_all_projects()
-        assert len(results) == 1
-        assert "TOOLS.md" in results[0].copied
-
-        # File should exist in OC workspace
-        synced = project_env["oc_workspace"] / "my-app" / "TOOLS.md"
-        assert synced.is_file()
-        assert "My App Tools" in synced.read_text()
-
-        # README should be generated
-        readme = project_env["oc_workspace"] / "my-app" / "README.md"
-        assert readme.is_file()
-        assert "DO NOT EDIT" in readme.read_text()
 
     def test_classify_trivial_changes(self, project_env):
         """Trivial code changes should be classified as trivial."""

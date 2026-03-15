@@ -226,16 +226,6 @@ class QuaidAdapter(abc.ABC):
         """
         return {}
 
-    def get_context_sync_target(self) -> Optional[Path]:
-        """Return directory where project context files should be synced.
-
-        Returns None if this adapter reads directly from QUAID_HOME
-        (no sync needed). Returns a path if files must be copied into
-        the adapter's workspace due to boundary constraints (e.g. OC's
-        workspace boundary guard).
-        """
-        return None
-
     def should_filter_transcript_message(self, text: str) -> bool:
         """Adapter-specific transcript noise filtering."""
         return self.filter_system_messages(text)
