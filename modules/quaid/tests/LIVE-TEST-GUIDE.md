@@ -419,25 +419,35 @@ Pass:
 
 ### M4: Timeout Extraction
 
-Temporarily set `capture.inactivityTimeoutMinutes` to `1`, then **restart
-OpenClaw** so the new value takes effect (the SessionTimeoutManager reads the
-timeout only at plugin init — a config-only change without restart has no
-effect):
+Temporarily set `capture.inactivityTimeoutMinutes` to `1`. The change must be
+followed by a restart — both OC and CC cache config at startup:
 
+**OC** — set config then restart OpenClaw:
 ```bash
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
 # Then restart OpenClaw on alfie.
 ```
 
-After restart, mention something memorable in conversation
-(e.g. `"My morning run route goes along the canal towpath — about 8km."`)
+**CC** — set config then restart the CC daemon:
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
+```
+
+After restart, start a fresh visible CC session in main:99, mention something
+memorable (e.g. `"My morning run route goes along the canal towpath — about 8km."`)
 then let the session idle for >1 minute without sending any further messages.
 
 After the test, restore the timeout and restart again:
 
 ```bash
+# OC
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
 # Then restart OpenClaw on alfie.
+
+# CC
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid config set capture.inactivityTimeoutMinutes 60'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 ```
 
 Pass:
