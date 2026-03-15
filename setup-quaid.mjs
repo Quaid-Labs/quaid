@@ -3700,30 +3700,24 @@ function enableRequiredOpenClawHooks() {
     }
 
     // Ensure Quaid plugin tools are exposed under restrictive profiles like
-    // tools.profile='coding'. Two entries are required:
+    // tools.profile='coding'. OC rejects having both 'allow' and 'alsoAllow'
+    // in the same scope, so the two gates are split across scopes:
     //
-    // tools.allow — feeds collectExplicitAllowlist() which decides which optional
-    //   plugin tools to instantiate. Without this, memory_recall is never created
-    //   regardless of any later policy. Plugin-only allow lists are stripped by
-    //   stripPluginOnlyAllowlist so this entry doesn't accidentally exclude core tools.
+    // tools.alsoAllow (global scope) — merged INTO the profile allowlist before
+    //   the policy pipeline filter runs. Without this, the coding profile's
+    //   explicit allowlist (group:fs, etc.) filters memory_recall out.
     //
-    // tools.alsoAllow — merged INTO the profile allowlist before the policy pipeline
-    //   runs. Without this, the coding profile's explicit allowlist (group:fs, etc.)
-    //   filters memory_recall out even after the tool has been instantiated.
+    // agents.main.tools.allow (agent scope) — feeds collectExplicitAllowlist()
+    //   which decides which optional plugin tools to instantiate. Without this,
+    //   memory_recall is never created regardless of any later policy. A
+    //   plugin-only allow list is stripped by stripPluginOnlyAllowlist so it
+    //   doesn't accidentally exclude core tools from the agent toolset.
     //
-    // Both are required: allow creates the tool; alsoAllow lets it survive the filter.
+    // Both are required: agent allow creates the tool; global alsoAllow lets it
+    // survive the profile filter. No same-scope conflict since they're in
+    // different scopes (global tools vs agents.main.tools).
     const quaidToolsToAllow = ["memory_recall", "memory_store"];
     const toolsCfg = parsed.tools || (parsed.tools = {});
-
-    const existingAllow = Array.isArray(toolsCfg.allow) ? toolsCfg.allow : [];
-    const missingAllow = quaidToolsToAllow.filter(t => !existingAllow.includes(t));
-    if (missingAllow.length > 0) {
-      toolsCfg.allow = [...existingAllow, ...missingAllow];
-      changed = true;
-      log.info(`Added Quaid tools to tools.allow: ${missingAllow.join(", ")}`);
-    } else {
-      log.info("Quaid tools already in tools.allow");
-    }
 
     const existingAlsoAllow = Array.isArray(toolsCfg.alsoAllow) ? toolsCfg.alsoAllow : [];
     const missingAlsoAllow = quaidToolsToAllow.filter(t => !existingAlsoAllow.includes(t));
@@ -3733,6 +3727,20 @@ function enableRequiredOpenClawHooks() {
       log.info(`Added Quaid tools to tools.alsoAllow: ${missingAlsoAllow.join(", ")}`);
     } else {
       log.info("Quaid tools already in tools.alsoAllow");
+    }
+
+    // Agent-level allow for collectExplicitAllowlist (gate 1 — tool instantiation).
+    const agentsCfg = parsed.agents || (parsed.agents = {});
+    const mainAgentCfg = agentsCfg.main || (agentsCfg.main = {});
+    const mainAgentToolsCfg = mainAgentCfg.tools || (mainAgentCfg.tools = {});
+    const existingAgentAllow = Array.isArray(mainAgentToolsCfg.allow) ? mainAgentToolsCfg.allow : [];
+    const missingAgentAllow = quaidToolsToAllow.filter(t => !existingAgentAllow.includes(t));
+    if (missingAgentAllow.length > 0) {
+      mainAgentToolsCfg.allow = [...existingAgentAllow, ...missingAgentAllow];
+      changed = true;
+      log.info(`Added Quaid tools to agents.main.tools.allow: ${missingAgentAllow.join(", ")}`);
+    } else {
+      log.info("Quaid tools already in agents.main.tools.allow");
     }
 
     if (changed) {
