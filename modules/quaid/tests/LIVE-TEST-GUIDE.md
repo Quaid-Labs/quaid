@@ -103,6 +103,14 @@ ssh example.local 'rm -rf ~/quaid && rm -rf ~/.openclaw/extensions/quaid && echo
 > **WARNING**: This runs on example.local only — never on the local dev machine
 > where the source repo lives.
 
+**Clear OC session transcripts** (critical — stale sessions from prior runs trigger
+extraction fan-out after reinstall, saturating the gateway and breaking `/reset` and
+other hook-dependent milestones):
+
+```bash
+ssh example.local 'rm -rf ~/.openclaw/agents/main/sessions/ && echo "OC sessions cleared"'
+```
+
 **Clear CC adapter artifacts:**
 
 ```bash
