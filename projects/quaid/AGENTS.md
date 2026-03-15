@@ -63,9 +63,13 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - When `true`: never degrade silently — surface the error.
 - When `false`: degrade with loud warnings/diagnostics.
 
-**File placement**
+**Project and file placement**
+- When asked to "create a project", ALWAYS use the quaid CLI — never create files directly. Projects are registry entries, not directories:
+  ```bash
+  ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
+  ```
 - Place new files in an existing tracked project when possible.
-- If no project fits, create one: `quaid project create <name>`.
+- If no project fits, register one first with the command above, then place files there.
 - Temp/scratch files go in `temp/` or `scratch/` — tell the user these are untracked.
 - Move durable temp files into a tracked project.
 
