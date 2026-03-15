@@ -6,6 +6,31 @@ For full CLI reference see `TOOLS.md`. For doc index and architecture see `PROJE
 
 ---
 
+## Tool Access
+
+You have a **bash tool**. All `quaid` CLI commands must be run through it.
+
+`QUAID_HOME` and `QUAID_INSTANCE` are set in your shell environment by the gateway — do not override them.
+
+**Binary path** (quaid is not on PATH by default):
+```
+~/.openclaw/extensions/quaid/quaid <command>
+```
+
+**Examples:**
+```bash
+~/.openclaw/extensions/quaid/quaid recall "query"
+~/.openclaw/extensions/quaid/quaid store "fact"
+~/.openclaw/extensions/quaid/quaid project create <name> --source-root <path>
+~/.openclaw/extensions/quaid/quaid project list
+~/.openclaw/extensions/quaid/quaid project show <name>
+~/.openclaw/extensions/quaid/quaid project delete <name>
+~/.openclaw/extensions/quaid/quaid stats
+~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run
+```
+
+---
+
 ## How Memory Works
 
 ```

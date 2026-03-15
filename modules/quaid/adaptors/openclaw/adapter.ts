@@ -1587,9 +1587,8 @@ notify_user(${JSON.stringify(message)})
         return { prependContext: event.prependContext };
       }
 
-      event.prependContext = facade.injectFullJournalContext(event.prependContext);
-      event.prependContext = facade.injectProjectContext(event.prependContext);
-
+      // Project/journal context is injected via before_prompt_build as appendSystemContext
+      // so it lands in the system prompt (not user context) for proper instruction following.
       return { prependContext: event.prependContext };
     };
 
@@ -1597,7 +1596,10 @@ notify_user(${JSON.stringify(message)})
     // OC's before_agent_start fires for subagent sessions without the user's
     // prompt. before_prompt_build fires per-message with the actual prompt and
     // messages array, so recall injection works reliably.
-    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string } | undefined> => {
+    // Project/journal context is also injected here as appendSystemContext (once per session)
+    // so it lands in the system prompt where the model treats it as instructions.
+    const projectContextInjectedSessions = new Set<string>();
+    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return { prependContext: event.prependContext };
@@ -1699,7 +1701,25 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error: unknown) {
         console.error("[quaid] Auto-injection error:", error);
       }
-      return { prependContext: event.prependContext };
+
+      // Inject project/journal context as appendSystemContext once per session.
+      let appendSystemContext: string | undefined;
+      const sessionKey = String(ctx?.sessionId || ctx?.session?.id || "");
+      if (sessionKey && !projectContextInjectedSessions.has(sessionKey) && isSystemEnabled("projects")) {
+        try {
+          let sysCtx: string | undefined;
+          sysCtx = facade.injectFullJournalContext(sysCtx);
+          sysCtx = facade.injectProjectContext(sysCtx);
+          if (sysCtx) {
+            appendSystemContext = sysCtx;
+            projectContextInjectedSessions.add(sessionKey);
+          }
+        } catch (err: unknown) {
+          console.warn(`[quaid] Project context appendSystemContext injection failed: ${(err as Error)?.message || String(err)}`);
+        }
+      }
+
+      return { prependContext: event.prependContext, ...(appendSystemContext ? { appendSystemContext } : {}) };
     };
 
     // Register lifecycle hooks via registerHook (api.on is for event bus signals).
