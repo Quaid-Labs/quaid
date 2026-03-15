@@ -90,6 +90,17 @@ function getDaemonSignalDir(agentId = "main") {
   return instanceId ? path.join(WORKSPACE, instanceId, "data", "extraction-signals") : path.join(WORKSPACE, "data", "extraction-signals");
 }
 const DAEMON_SIGNAL_DIR = getDaemonSignalDir("main");
+function readInstalledAtMs() {
+  try {
+    const instanceId = getInstanceId("main");
+    const p = instanceId ? path.join(WORKSPACE, instanceId, "data", "installed-at.json") : path.join(WORKSPACE, "data", "installed-at.json");
+    const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+    const ts = String(raw.installedAt || "").trim();
+    if (ts) return new Date(ts).getTime();
+  } catch {
+  }
+  return 0;
+}
 const sessionTranscriptPaths = /* @__PURE__ */ new Map();
 const sessionIdToAgentId = /* @__PURE__ */ new Map();
 const QUAID_SESSION_PRESERVE_DIR = path.join(QUAID_LOGS_DIR, "quaid", "sessions");
@@ -1574,6 +1585,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       sessionIndexWatcherStarted = true;
+      const installedAtMs = readInstalledAtMs();
       const watcherStartMs = Date.now();
       let initialSnapshotDone = false;
       const pendingOrphanChecks = /* @__PURE__ */ new Map();
@@ -1633,10 +1645,16 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               sessionIndexMessageCounts.delete(prevSessionId);
             } else if (!prevSessionId && initialSnapshotDone && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
               writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId, watcher_start_ms: watcherStartMs });
+              const currentSids = new Set(recognizedEntries.map((e) => e.sessionId));
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
+                if (!currentSids.has(priorSid)) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "not_in_current_sessions", prior_sid: priorSid, prior_key: priorKey });
+                  continue;
+                }
                 if (/^agent:[^:]+:hook:/.test(priorKey)) continue;
                 if (priorSid === sessionId) continue;
                 if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
+                const mtimeFloorMs = installedAtMs > 0 ? installedAtMs : watcherStartMs;
                 let priorSize = -1;
                 let priorMtime = 0;
                 try {
@@ -1649,8 +1667,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   writeHookTrace("session_index.new_key_skip", { reason: "empty", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize });
                   continue;
                 }
-                if (priorMtime <= watcherStartMs) {
-                  writeHookTrace("session_index.new_key_skip", { reason: "mtime", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, watcher_start_ms: watcherStartMs });
+                if (priorMtime <= mtimeFloorMs) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "mtime", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, installed_at_ms: installedAtMs, watcher_start_ms: watcherStartMs });
                   continue;
                 }
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
@@ -2466,7 +2484,7 @@ notify_memory_extraction(
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const fallbackInteractiveSessionId = currentInteractiveSession?.sessionId || "";
-        const extractionSessionId = conversationMessages.length === 0 && fallbackInteractiveSessionId ? fallbackInteractiveSessionId : sessionId || facade.extractSessionId(messages, ctx);
+        const extractionSessionId = sessionId || (conversationMessages.length === 0 ? fallbackInteractiveSessionId : "") || facade.extractSessionId(messages, ctx) || "";
         writeHookTrace("hook.before_compaction.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",
