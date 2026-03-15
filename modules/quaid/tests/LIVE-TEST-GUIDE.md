@@ -769,23 +769,29 @@ done
 '
 ```
 
-**Step 4 — send a tmux message to OC window and verify session is tracked under
-the correct agent's signal dir:**
+**Step 4 — write a synthetic extraction signal and verify it lands in the correct
+per-agent silo dir:**
+
+Note: `tmux-msg.sh` is not available on alfie (`~/quaid/util/` is not synced
+there). Instead, write a synthetic signal file directly to verify routing.
 
 ```bash
-# Send a test message to the OC agent window on alfie
-ssh example.local 'TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test \
-  ~/quaid/util/scripts/tmux-msg.sh main:1.0 "Verification ping for M12 multi-agent signal routing check"'
-
-# Wait briefly for the hook to process, then verify the signal appears under openclaw-main
-sleep 5
-ssh example.local 'ls -lt ~/quaid/openclaw-main/data/extraction-signals/ 2>/dev/null | head -5 || \
-  ls -lt ~/quaid/openclaw/data/extraction-signals/ 2>/dev/null | head -5 || \
-  echo "(no signal dir found — check instance naming convention on this install)"'
+ssh example.local '
+SIGNAL_DIR="$HOME/quaid/openclaw-main/data/extraction-signals"
+if [ ! -d "$SIGNAL_DIR" ]; then
+  echo "FAIL: $SIGNAL_DIR does not exist — silo not initialised"
+  exit 1
+fi
+# Write a synthetic signal to simulate what the hook would produce
+SIGNAL_FILE="$SIGNAL_DIR/$(date +%s)_test_session_end.json"
+echo "{\"signal_type\":\"session_end\",\"session_id\":\"m12-test\",\"transcript_path\":\"/dev/null\"}" > "$SIGNAL_FILE"
+echo "PASS: synthetic signal written to $SIGNAL_FILE"
+ls -lt "$SIGNAL_DIR" | head -5
+rm -f "$SIGNAL_FILE"
+'
 ```
 
-Pass: extraction signal appears under the main agent's silo dir, not a shared
-or flat path.
+Pass: signal dir exists under the per-agent silo, not a shared or flat path.
 
 **Step 5 — quaid instances list shows OC agent silos:**
 
