@@ -2600,10 +2600,207 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       priority: 10,
     });
 
-    // Tool registration removed — agents use CLI (`quaid recall`, `quaid store`, etc.).
-    // See projects/quaid/TOOLS.md for the CLI command reference.
-    void registerToolChecked; // suppress unused lint
-    // [700 lines of tool registration removed — see git history]
+    // Re-enabled memory_recall tool. The CLI-via-exec approach deadlocks:
+    // quaid recall makes HTTP calls back to the OC gateway, but the gateway is blocked
+    // handling the model's exec turn — causing a hang that never resolves.
+    // The registered tool calls recallMemories() directly in the adapter process with no
+    // HTTP round-trip, avoiding the deadlock entirely.
+    if (isSystemEnabled("memory")) {
+      const recallStoreGuidance = facade.renderDatastoreGuidance();
+      registerToolChecked(
+        () => ({
+          name: "memory_recall",
+          description: `Search your memory for personal facts, preferences, relationships, project details, and past conversations. Always use this tool when you're unsure about something or need to verify a detail — if you might know it, search for it.
+
+USE THIS TOOL LIBERALLY. If you're about to say "I don't have information about..." or "I'm not sure...", SEARCH FIRST. It's better to search and find nothing than to miss a memory you have.
+
+COST AWARE RETRIEVAL ORDER:
+1) memory_recall (cheap; default first move)
+2) projects_search / project docs (more expensive; use for file-backed implementation detail)
+3) session_recall (most expensive/noisy; use only when memory+project docs are insufficient)
+
+USE WHEN: Any question about the user, their life, people they know, projects they work on, preferences, history, past decisions, technical details about their projects, or anything that might have come up in a previous conversation.
+SKIP WHEN: General knowledge questions, greetings, short acknowledgments.
+
+QUERY TIPS: Use specific names and topics. Try multiple searches with different phrasings if the first doesn't return what you need.
+options.graph.depth: Set to 2 for relationship queries (e.g., nephew = sibling's child). Default 1 is usually sufficient.
+options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by date range.
+RESPONSE BOUNDARY: Retrieved memories are supporting context, not permission to proactively dump sensitive details. On greetings, acknowledgments, or vague prompts, follow the user's lead before surfacing private health, finances, conflicts, or emotionally loaded history.
+
+${recallStoreGuidance}`,
+          parameters: Type.Object({
+            query: Type.String({ description: "Search query - use entity names and specific topics" }),
+            options: Type.Optional(Type.Object({
+              limit: Type.Optional(
+                Type.Number({ description: "Max results to return. Default reads from config." })
+              ),
+              datastores: Type.Optional(
+                Type.Array(
+                  Type.Union([
+                    Type.Literal("vector"),
+                    Type.Literal("vector_basic"),
+                    Type.Literal("vector_technical"),
+                    Type.Literal("graph"),
+                    Type.Literal("journal"),
+                    Type.Literal("project"),
+                  ]),
+                  { description: "Knowledge datastores to query." }
+                )
+              ),
+              graph: Type.Optional(Type.Object({
+                expand: Type.Optional(
+                  Type.Boolean({ description: "Traverse relationship graph — use for people/family queries (default: true)." })
+                ),
+                depth: Type.Optional(
+                  Type.Number({ description: "Graph traversal depth (default: 1). Use 2 for extended relationships." })
+                ),
+              })),
+              routing: Type.Optional(Type.Object({
+                enabled: Type.Optional(
+                  Type.Boolean({ description: "Enable total_recall planning pass (query cleanup + store routing)." })
+                ),
+                reasoning: Type.Optional(
+                  Type.Union([
+                    Type.Literal("fast"),
+                    Type.Literal("deep"),
+                  ], { description: "Reasoning model for routing pass." })
+                ),
+                intent: Type.Optional(
+                  Type.Union([
+                    Type.Literal("general"),
+                    Type.Literal("agent_actions"),
+                    Type.Literal("relationship"),
+                    Type.Literal("technical"),
+                  ], { description: "Intent facet for routing and ranking boosts." })
+                ),
+                failOpen: Type.Optional(
+                  Type.Boolean({ description: "If true, router/prepass failures return no recall instead of throwing." })
+                ),
+              })),
+              filters: Type.Optional(Type.Object({
+                domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean(), description: "Domain filter map. Example: {\"all\":true} or {\"technical\":true}." })),
+                domainBoost: Type.Optional(Type.Union([
+                  Type.Array(Type.String({ description: "Domain IDs to boost at default x1.3." })),
+                  Type.Object({}, { additionalProperties: Type.Number() }),
+                ])),
+                dateFrom: Type.Optional(Type.String({ description: "Only return memories from this date onward (YYYY-MM-DD)." })),
+                dateTo: Type.Optional(Type.String({ description: "Only return memories up to this date (YYYY-MM-DD)." })),
+                project: Type.Optional(Type.String({ description: "Optional project filter for technical memory results." })),
+                docs: Type.Optional(Type.Array(Type.String({ description: "Optional doc path/name filters when project-store recall is used." }))),
+              })),
+            })),
+          }),
+          async execute(_toolCallId: string, params: any) {
+            try {
+              let maxLimit = 50;
+              try {
+                const configData = facade.getConfig();
+                const rawMaxLimit = configData?.retrieval?.maxLimit ?? configData?.retrieval?.max_limit ?? 50;
+                const parsedMaxLimit = Number(rawMaxLimit);
+                maxLimit = Number.isFinite(parsedMaxLimit) && parsedMaxLimit > 0 ? parsedMaxLimit : 50;
+              } catch (err: unknown) {
+                console.warn(`[quaid] memory_recall maxLimit config resolve failed: ${String((err as Error)?.message || err)}`);
+              }
+
+              const dynamicK = facade.computeDynamicK();
+              const { query, options = {} } = params || {};
+              const requestedLimit = options?.limit;
+              const expandGraph = options?.graph?.expand ?? true;
+              const graphDepth = options?.graph?.depth ?? 1;
+              const datastores = options?.datastores;
+              const routeStores = options?.routing?.enabled;
+              const reasoning = options?.routing?.reasoning ?? "fast";
+              const intent = options?.routing?.intent ?? "general";
+              const domain = (options?.filters?.domain && typeof options.filters.domain === "object")
+                ? options.filters.domain
+                : { all: true };
+              const domainBoost = (Array.isArray(options?.filters?.domainBoost) || (options?.filters?.domainBoost && typeof options.filters.domainBoost === "object"))
+                ? options?.filters?.domainBoost as Record<string, number> | string[]
+                : undefined;
+              const dateFrom = options?.filters?.dateFrom;
+              const dateTo = options?.filters?.dateTo;
+              const project = options?.filters?.project;
+              const docs = options?.filters?.docs;
+              const routerFailOpen = Boolean(
+                options?.routing?.failOpen ??
+                getMemoryConfig().retrieval?.routerFailOpen ??
+                getMemoryConfig().retrieval?.router_fail_open ??
+                true
+              );
+              if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
+                return {
+                  content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
+                  details: { count: 0, skippedInternalQuery: true },
+                };
+              }
+              const limit = Math.min(requestedLimit ?? dynamicK, maxLimit);
+              const depth = Math.min(Math.max(graphDepth, 1), 3);
+              const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
+              const selectedStores = Array.isArray(datastores) ? datastores : undefined;
+
+              console.log(`[quaid] memory_recall: query="${String(query || "").slice(0, 50)}...", limit=${limit}, dynamicK=${dynamicK}, expandGraph=${expandGraph}, depth=${depth}, routed=${shouldRouteStores}, intent=${intent}`);
+              const results = await recallMemories({
+                query, limit, expandGraph, graphDepth: depth,
+                datastores: selectedStores, routeStores: shouldRouteStores,
+                reasoning, intent, domain, domainBoost,
+                project, failOpen: routerFailOpen,
+                dateFrom, dateTo, docs,
+                waitForExtraction: true, sourceTag: "tool",
+              });
+
+              if (results.length === 0) {
+                return {
+                  content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
+                  details: { count: 0 },
+                };
+              }
+
+              const recallFormatted = facade.formatRecallToolResponse(results);
+              const text = recallFormatted.text;
+
+              try {
+                if (facade.shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
+                  const payload = facade.buildRecallNotificationPayload(results, query, "tool", recallFormatted.breakdown);
+                  const dataFile2 = path.join(QUAID_TMP_DIR, `recall-data-${Date.now()}.json`);
+                  fs.writeFileSync(dataFile2, JSON.stringify(payload), { mode: 0o600 });
+                  const launched = spawnNotifyScript(`
+import json
+from core.runtime.notify import notify_memory_recall
+with open(${JSON.stringify(dataFile2)}, 'r') as f:
+    data = json.load(f)
+os.unlink(${JSON.stringify(dataFile2)})
+notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown'])
+`);
+                  if (!launched) { try { fs.unlinkSync(dataFile2); } catch {} }
+                }
+              } catch (notifyErr: unknown) {
+                console.warn(`[quaid] Memory recall notification skipped: ${(notifyErr as Error).message}`);
+              }
+
+              return {
+                content: [{ type: "text", text: text.trim() }],
+                details: {
+                  count: results.length,
+                  memories: results,
+                  vectorCount: recallFormatted.breakdown.vector_count,
+                  graphCount: recallFormatted.breakdown.graph_count,
+                  journalCount: recallFormatted.breakdown.journal_count,
+                  projectCount: recallFormatted.breakdown.project_count,
+                },
+              };
+            } catch (err: unknown) {
+              console.error("[quaid] memory_recall error:", err);
+              if (isFailHardEnabled()) throw err;
+              const errObj = err instanceof Error ? err : new Error(String(err));
+              return {
+                content: [{ type: "text", text: `Error recalling memories: ${errObj.message}` }],
+                details: { error: errObj.message, error_name: errObj.name },
+              };
+            }
+          },
+        }),
+      );
+    }
 
     // Extraction promise gate is facade-owned so adapters remain swappable.
     timeoutManager = new SessionTimeoutManager({
