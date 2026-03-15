@@ -3699,18 +3699,38 @@ function enableRequiredOpenClawHooks() {
       }
     }
 
-    // Ensure Quaid plugin tools are in tools.alsoAllow so they're not filtered
-    // out by restrictive profiles like tools.profile='coding'. The coding profile
-    // allows only core tool groups; plugin tools must be explicitly listed in
-    // alsoAllow to pass through the tool-policy pipeline.
+    // Ensure Quaid plugin tools are exposed under restrictive profiles like
+    // tools.profile='coding'. Two entries are required:
+    //
+    // tools.allow — feeds collectExplicitAllowlist() which decides which optional
+    //   plugin tools to instantiate. Without this, memory_recall is never created
+    //   regardless of any later policy. Plugin-only allow lists are stripped by
+    //   stripPluginOnlyAllowlist so this entry doesn't accidentally exclude core tools.
+    //
+    // tools.alsoAllow — merged INTO the profile allowlist before the policy pipeline
+    //   runs. Without this, the coding profile's explicit allowlist (group:fs, etc.)
+    //   filters memory_recall out even after the tool has been instantiated.
+    //
+    // Both are required: allow creates the tool; alsoAllow lets it survive the filter.
     const quaidToolsToAllow = ["memory_recall", "memory_store"];
     const toolsCfg = parsed.tools || (parsed.tools = {});
-    const existingAlsoAllow = Array.isArray(toolsCfg.alsoAllow) ? toolsCfg.alsoAllow : [];
-    const missingTools = quaidToolsToAllow.filter(t => !existingAlsoAllow.includes(t));
-    if (missingTools.length > 0) {
-      toolsCfg.alsoAllow = [...existingAlsoAllow, ...missingTools];
+
+    const existingAllow = Array.isArray(toolsCfg.allow) ? toolsCfg.allow : [];
+    const missingAllow = quaidToolsToAllow.filter(t => !existingAllow.includes(t));
+    if (missingAllow.length > 0) {
+      toolsCfg.allow = [...existingAllow, ...missingAllow];
       changed = true;
-      log.info(`Added Quaid tools to tools.alsoAllow: ${missingTools.join(", ")}`);
+      log.info(`Added Quaid tools to tools.allow: ${missingAllow.join(", ")}`);
+    } else {
+      log.info("Quaid tools already in tools.allow");
+    }
+
+    const existingAlsoAllow = Array.isArray(toolsCfg.alsoAllow) ? toolsCfg.alsoAllow : [];
+    const missingAlsoAllow = quaidToolsToAllow.filter(t => !existingAlsoAllow.includes(t));
+    if (missingAlsoAllow.length > 0) {
+      toolsCfg.alsoAllow = [...existingAlsoAllow, ...missingAlsoAllow];
+      changed = true;
+      log.info(`Added Quaid tools to tools.alsoAllow: ${missingAlsoAllow.join(", ")}`);
     } else {
       log.info("Quaid tools already in tools.alsoAllow");
     }
