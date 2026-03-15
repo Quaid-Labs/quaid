@@ -118,6 +118,17 @@ rsync -av --checksum \
   ~/quaid/dev/ example.local:~/quaid/dev/
 ```
 
+Also sync the legacy plugin path — the installer (`--workspace ~/quaid`) falls
+back to `~/quaid/plugins/quaid/` when `~/quaid/modules/quaid/` is absent, so
+both locations must be up to date:
+
+```bash
+rsync -av --checksum \
+  --exclude='node_modules/' --exclude='__pycache__/' --exclude='*.pyc' \
+  --exclude='.git/' --exclude='logs/' \
+  ~/quaid/dev/modules/quaid/ example.local:~/quaid/plugins/quaid/
+```
+
 Verify branch on the local source checkout:
 
 ```bash
