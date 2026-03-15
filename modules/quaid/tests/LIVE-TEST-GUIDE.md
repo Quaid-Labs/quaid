@@ -524,6 +524,36 @@ Pass:
 - all expected edges present after Phase 2 = janitor backfill working as fallback
 - fail only if edges are missing even after both phases
 
+**Phase 3 — Multi-hop traversal (tests graph reasoning):**
+
+This phase tests that the agent can answer a question that requires chaining
+two edges: `User --sibling_of--> Diana --parent_of--> Alice` → Alice is the
+user's niece.
+
+In a fresh session, tell the agent two facts naturally — do NOT say "niece":
+
+- `My sister's name is Diana.`
+- `Diana has a daughter named Alice.`
+
+Then trigger `/reset` to extract those facts and start a new session.
+In the new session, ask:
+
+- `Who is my niece?`
+
+The agent must traverse: sibling → that sibling's child → answer is the niece.
+
+Verify the edge chain exists:
+
+```bash
+ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"Diana\",\"Alice\") OR t.name IN (\"Diana\",\"Alice\") ORDER BY s.name, e.relation;"'
+```
+
+Pass:
+- agent correctly answers "Alice" (or "Alice, Diana's daughter")
+- answer is grounded in graph traversal, not a lucky guess or hallucination
+- edge chain `Diana --parent_of--> Alice` and `Diana --sibling_of--> User`
+  (or symmetric equivalent) exist in the DB
+
 ### M8: Full Project System CRUD
 
 This is a capability test. Do not tell the agent the exact command names.
