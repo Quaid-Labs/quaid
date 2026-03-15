@@ -139,7 +139,7 @@ function isInternalSessionContext(event, ctx) {
   return Boolean(sessionKey) && (sessionKey.includes("quaid-llm") || sessionKey.includes("openresponses:"));
 }
 function pickActiveInteractiveSession(data) {
-  const entries = Object.entries(data || {}).filter(([key, row]) => row && typeof row === "object" && typeof row?.sessionId === "string" && (key === "agent:main:main" || key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:direct:") || key.startsWith("agent:main:telegram:slash:"))).map(([key, row]) => {
+  const entries = Object.entries(data || {}).filter(([key, row]) => row && typeof row === "object" && typeof row?.sessionId === "string" && key.startsWith("agent:main:")).map(([key, row]) => {
     const sessionId = String(row?.sessionId || "").trim();
     const sessionFile = getOpenClawSessionFile(sessionId);
     let mtimeMs = 0;
@@ -1555,7 +1555,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
           const data = readSessionsIndex();
           const recognizedEntries = [];
           for (const [key, row] of Object.entries(data || {})) {
-            if (!row || typeof row !== "object" || typeof row?.sessionId !== "string" || !(key === "agent:main:main" || key.startsWith("agent:main:tui-") || key.startsWith("agent:main:telegram:direct:") || key.startsWith("agent:main:telegram:slash:"))) {
+            if (!row || typeof row !== "object" || typeof row?.sessionId !== "string" || !key.startsWith("agent:main:")) {
               continue;
             }
             const sessionId = String(row.sessionId || "").trim();
