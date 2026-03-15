@@ -497,7 +497,7 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.o
 Check immediately whether both edges were extracted from the compound fact:
 
 ```bash
-ssh example.local 'sqlite3 ~/quaid/openclaw-main/data/memory.db "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
+ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db) && sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
 ```
 
 **Phase 2 — Janitor edge backfill (tests retroactive recovery):**
@@ -516,7 +516,7 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.o
 Re-check edges — all should now be present:
 
 ```bash
-ssh example.local 'sqlite3 ~/quaid/openclaw-main/data/memory.db "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
+ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db) && sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
 ```
 
 Expected edges after Phase 1 or Phase 2:

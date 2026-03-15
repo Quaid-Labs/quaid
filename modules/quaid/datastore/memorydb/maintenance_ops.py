@@ -2303,7 +2303,7 @@ def backfill_edges(
             for edge in edges:
                 try:
                     _owner = owner_id or fact.get("owner_id") or _default_owner_id()
-                    edge_result = graph.create_edge(
+                    edge_result = create_edge(
                         subject_name=edge["subject"],
                         relation=edge["relation"],
                         object_name=edge["object"],
