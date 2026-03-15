@@ -340,16 +340,14 @@ Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
 
 ### M1: Extraction via `/new`
 
-> **STATUS: KNOWN BROKEN for OC. Skip for OC, run for CC only.**
->
-> OC TUI `/new` is a visual-only session switch: no sessions.json update, no
-> new JSONL file created on disk. The Quaid adapter has no reliable signal to
-> detect the boundary. Multiple approaches attempted (before_agent_start hook,
-> per-key session watcher, activity-based fallback) — all blocked by OC
-> internals that are not exposed as hookable events. CC `/new` works correctly
-> via the `command:new` hook and should be tested normally.
+> **STATUS: Should now work for OC.** Previous "KNOWN BROKEN" label was based
+> on incorrect analysis. OC's `performGatewaySessionReset` updates `sessions.json`
+> with a new UUID AND calls `archiveSessionTranscriptsForSession` (creating a
+> `.reset.*` backup) for both `/new` and `/reset`. The key-transition watcher in
+> `tickSessionIndex` detects the sessionId change and arms a targeted orphan
+> check. Run for both OC and CC.
 
-**CC only** — Seed a distinctive `PROOFNEW-<timestamp>` fact, then trigger `/new`.
+Seed a distinctive `PROOFNEW-<timestamp>` fact, then trigger `/new`.
 
 Pass:
 - the fact is stored after the lifecycle boundary
