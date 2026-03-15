@@ -2108,8 +2108,15 @@ def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
     for i, f in enumerate(facts):
         numbered.append(f'{i+1}. "{f["text"]}"')
 
+    owner_full = _owner_full_name()
+    owner_clause = (
+        f'The knowledge base belongs to {owner_full}. '
+        f'When facts reference "the user", "me", "my", "I", or "the owner", treat this as the named person "{owner_full}".'
+        if owner_full and owner_full != "the user"
+        else ""
+    )
     prompt = f"""You are building a knowledge graph from personal facts about a user's life.
-For each fact below, extract ALL relationships between named entities. A single fact may
+{owner_clause + chr(10) if owner_clause else ""}For each fact below, extract ALL relationships between named entities. A single fact may
 describe multiple relationships — extract every one.
 Only extract edges between named entities (people, places, organizations, pets). Do not create edges for system concepts, tools, or infrastructure.
 
