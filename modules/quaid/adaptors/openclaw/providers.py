@@ -222,8 +222,14 @@ class GatewayLLMProvider(LLMProvider):
                 logger.warning("Gateway LLM proxy transient error: %s", e)
                 last_error = e
                 if attempt < retries:
-                    time.sleep(0.25 * (2 ** attempt))
-                    continue
+                    # Only retry if there is budget remaining. A timeout means
+                    # we already spent `timeout` seconds — retrying with the
+                    # same timeout would double the wall-clock block time.
+                    elapsed = time.time() - start_time
+                    remaining = (timeout or 0) - elapsed
+                    if remaining > 0.5:
+                        time.sleep(min(0.25 * (2 ** attempt), remaining * 0.5))
+                        continue
                 raise
             except Exception as e:
                 logger.error("Gateway LLM proxy error: %s", e)
