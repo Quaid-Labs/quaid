@@ -2,17 +2,16 @@
 """Quaid Extraction Daemon — per-instance extraction coordinator.
 
 A long-lived process (one per QUAID_INSTANCE) that processes extraction signals
-from adapters. Handles chunked extraction with carryover context, cursor
-management, and compaction-aware timeout extraction.
+from adapters. Handles chunked extraction with cursor management and
+compaction-aware timeout extraction.
 
 Adapters write signal files to $QUAID_INSTANCE_ROOT/data/extraction-signals/.
 The daemon polls for signals, processes them serially, and advances
 cursors to prevent re-extraction.
 
 Signal types:
-    compaction   — Context is about to be compacted. Extract new content,
-                   clear carryover (compaction = logical boundary).
-    reset        — Session reset (/new, /reset). Extract + clear carryover.
+    compaction   — Context is about to be compacted. Extract new content.
+    reset        — Session reset (/new, /reset). Extract content.
     session_end  — Session ended cleanly. Extract remaining content.
 
 Lifecycle:
@@ -53,9 +52,6 @@ _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
 # Max lines to read from a transcript per extraction (B033)
 MAX_TRANSCRIPT_LINES = 50_000
-
-# Max carryover facts to keep (B056)
-MAX_CARRYOVER_FACTS = 50
 
 # Max signals to process per poll cycle (B031)
 MAX_SIGNALS_PER_POLL = 100
@@ -106,12 +102,6 @@ def _signal_dir() -> Path:
 
 def _cursor_dir() -> Path:
     d = _instance_root() / "data" / "session-cursors"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _carryover_dir() -> Path:
-    d = _instance_root() / "data" / "extraction-carryover"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -327,61 +317,6 @@ def write_cursor(session_id: str, line_offset: int, transcript_path: str) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Carryover context (per-session extraction state)
-# ---------------------------------------------------------------------------
-
-def read_carryover(session_id: str) -> List[Dict[str, Any]]:
-    """Read carryover facts from previous chunk extractions."""
-    session_id = _validate_session_id(session_id)
-    carry_file = _carryover_dir() / f"{session_id}.json"
-    if not carry_file.is_file():
-        return []
-    try:
-        data = json.loads(carry_file.read_text(encoding="utf-8"))
-        return data.get("facts", [])
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def write_carryover(session_id: str, facts: List[Dict[str, Any]]) -> None:
-    """Write carryover facts for the next chunk extraction."""
-    session_id = _validate_session_id(session_id)
-    # B056: Cap carryover to prevent unbounded growth.
-    # Carryover facts are already-stored DB entries used as LLM context for
-    # continuity across extraction chunks. Rotating the oldest out of the window
-    # does not discard stored data — all facts are durably stored in the DB.
-    # This is an archiving/rotation pattern (not truncation of raw input data).
-    if len(facts) > MAX_CARRYOVER_FACTS:
-        dropped = len(facts) - MAX_CARRYOVER_FACTS
-        logger.warning(
-            "carryover for session %s exceeded %d facts (%d total); "
-            "rotating oldest %d out of context window (already stored in DB)",
-            session_id, MAX_CARRYOVER_FACTS, len(facts), dropped,
-        )
-        facts = facts[-MAX_CARRYOVER_FACTS:]
-    carry_file = _carryover_dir() / f"{session_id}.json"
-    payload = {
-        "session_id": session_id,
-        "facts": facts,
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    try:
-        _atomic_write(carry_file, json.dumps(payload))
-    except OSError as e:
-        logger.error("carryover write failed for %s: %s", session_id, e)
-
-
-def clear_carryover(session_id: str) -> None:
-    """Clear carryover on compaction/reset (logical boundary)."""
-    session_id = _validate_session_id(session_id)
-    carry_file = _carryover_dir() / f"{session_id}.json"
-    try:
-        carry_file.unlink()
-    except OSError:
-        pass
-
-
-# ---------------------------------------------------------------------------
 # Transcript reading
 # ---------------------------------------------------------------------------
 
@@ -424,8 +359,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
     """Process a single extraction signal.
 
     Reads transcript from cursor, passes to extract_from_transcript()
-    which handles chunking, carryover, and storage internally.
-    On compaction/reset signals, clears carryover after extraction.
+    which handles chunking and storage internally.
     """
     signal_type = signal_data.get("type", "unknown")
     session_id = signal_data.get("session_id", "unknown")
@@ -590,11 +524,10 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning("[%s] session %s: subagent merge error: %s", label, session_id, e)
 
-        # Load carryover from previous extractions in this session
-        carry_facts = read_carryover(session_id)
-
         # Delegate to extract_from_transcript() — it handles chunking,
         # LLM calls, fact storage, snippets, journal, and project logs.
+        # carry_facts starts empty each tick; extract_from_transcript builds
+        # it in-memory across chunks within this single extraction run.
         from ingest.extract import extract_from_transcript
 
         owner = _get_owner_id()
@@ -603,7 +536,7 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
             owner_id=owner,
             label=label,
             session_id=session_id,
-            carry_facts=carry_facts,
+            carry_facts=[],
         )
 
         facts_stored = result.get("facts_stored", 0)
@@ -638,19 +571,9 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
                 "NOT advancing cursor to allow retry",
                 label, session_id, chunks_processed, chunks_total,
             )
-            # Still write carryover so next attempt has context
-            write_carryover(session_id, carry_facts)
         else:
             # Advance cursor
             write_cursor(session_id, cursor_offset + len(new_lines), transcript_path)
-
-            # Carryover management: clear on compaction/reset, persist otherwise
-            if signal_type in ("compaction", "reset"):
-                clear_carryover(session_id)
-            else:
-                # Persist the carry_facts accumulated during extraction
-                # extract_from_transcript modifies carry_facts in place
-                write_carryover(session_id, carry_facts)
 
         # Mark harvested subagent transcripts after successful extraction
         try:

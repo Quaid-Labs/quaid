@@ -81,10 +81,38 @@ Target machine:
 
 Do not begin milestone testing against an existing live Quaid install.
 
+### Step 0 — Full wipe on alfie (mandatory)
+
+Before any run, completely remove Quaid and all its data from alfie. Do not do
+targeted cleanup — stale carryover files, queue events, DB nodes, and identity
+files all contaminate test results in ways that are hard to trace. A full wipe
+is faster and safer than surgical cleanup.
+
+**Uninstall the plugin first to remove registry entries:**
+
+```bash
+ssh example.local 'openclaw plugins uninstall quaid 2>/dev/null; echo "OC uninstall done"'
+```
+
+**Then wipe the entire Quaid workspace and extension dir:**
+
+```bash
+ssh example.local 'rm -rf ~/quaid && rm -rf ~/.openclaw/extensions/quaid && echo "wipe done"'
+```
+
+> **WARNING**: This runs on example.local only — never on the local dev machine
+> where the source repo lives.
+
+**Clear CC adapter artifacts:**
+
+```bash
+ssh example.local 'rm -f ~/.claude/rules/quaid-projects.md && echo "CC rules cleared"'
+```
+
+### Remaining start checks
+
 Before any run:
 - verify the repo checkout is on `canary`
-- preview the current install and runtime paths
-- uninstall any existing Quaid install
 - reinstall Quaid cleanly with the installer script
 - verify the install is stable before M1
 
@@ -144,12 +172,6 @@ Preview first:
 ```bash
 ssh example.local 'openclaw plugins list 2>/dev/null | grep quaid || true'
 ssh example.local 'ls -ld ~/quaid ~/quaid/openclaw-main ~/quaid/shared 2>/dev/null || true'
-```
-
-Uninstall existing OC plugin if present:
-
-```bash
-ssh example.local 'openclaw plugins uninstall quaid 2>/dev/null || rm -rf ~/.openclaw/extensions/quaid; echo done'
 ```
 
 Install with the installer script on `alfie`, using the synced local tree.

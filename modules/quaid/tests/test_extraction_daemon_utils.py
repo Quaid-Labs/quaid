@@ -230,33 +230,3 @@ class TestTranscriptUtils:
 # ---------------------------------------------------------------------------
 
 
-class TestCarryover:
-    def test_read_carryover_nonexistent_returns_empty(self):
-        assert daemon.read_carryover("sess-1") == []
-
-    def test_write_then_read_carryover(self):
-        facts = [{"text": "user has a cat"}, {"text": "user likes python"}]
-        daemon.write_carryover("sess-1", facts)
-        result = daemon.read_carryover("sess-1")
-        assert result == facts
-
-    def test_write_carryover_overwrites(self):
-        daemon.write_carryover("sess-1", [{"text": "old"}])
-        daemon.write_carryover("sess-1", [{"text": "new"}])
-        result = daemon.read_carryover("sess-1")
-        assert result == [{"text": "new"}]
-
-    def test_clear_carryover_removes_facts(self):
-        daemon.write_carryover("sess-1", [{"text": "fact"}])
-        daemon.clear_carryover("sess-1")
-        assert daemon.read_carryover("sess-1") == []
-
-    def test_clear_carryover_nonexistent_is_noop(self):
-        daemon.clear_carryover("nonexistent-session")  # Should not raise
-
-    def test_read_carryover_malformed_json_returns_empty(self, tmp_path, monkeypatch):
-        carry_dir = tmp_path / "test-instance" / "data" / "carryover"
-        carry_dir.mkdir(parents=True)
-        (carry_dir / "bad-sess.json").write_text("}{not json")
-        result = daemon.read_carryover("bad-sess")
-        assert result == []
