@@ -2072,7 +2072,17 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               // existing keys as new on the first tick (when sessionKeyLastSeen is
               // empty, every key has prevSessionId=undefined).
               writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId, watcher_start_ms: watcherStartMs });
+              // Only consider sessions currently present in sessions.json. Sessions
+              // in sessionKeyLastSeen but absent from sessions.json are stale — they
+              // belong to earlier test runs or gateway restarts within this process
+              // lifetime. Without this guard the mtime check alone can't exclude them
+              // (their transcripts were modified during this gateway lifetime).
+              const currentSids = new Set(recognizedEntries.map((e) => e.sessionId));
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
+                if (!currentSids.has(priorSid)) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "not_in_current_sessions", prior_sid: priorSid, prior_key: priorKey });
+                  continue;
+                }
                 if (/^agent:[^:]+:hook:/.test(priorKey)) continue;
                 if (priorSid === sessionId) continue;
                 if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
