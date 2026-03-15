@@ -3698,6 +3698,23 @@ function enableRequiredOpenClawHooks() {
         }
       }
     }
+
+    // Ensure Quaid plugin tools are in tools.alsoAllow so they're not filtered
+    // out by restrictive profiles like tools.profile='coding'. The coding profile
+    // allows only core tool groups; plugin tools must be explicitly listed in
+    // alsoAllow to pass through the tool-policy pipeline.
+    const quaidToolsToAllow = ["memory_recall", "memory_store"];
+    const toolsCfg = parsed.tools || (parsed.tools = {});
+    const existingAlsoAllow = Array.isArray(toolsCfg.alsoAllow) ? toolsCfg.alsoAllow : [];
+    const missingTools = quaidToolsToAllow.filter(t => !existingAlsoAllow.includes(t));
+    if (missingTools.length > 0) {
+      toolsCfg.alsoAllow = [...existingAlsoAllow, ...missingTools];
+      changed = true;
+      log.info(`Added Quaid tools to tools.alsoAllow: ${missingTools.join(", ")}`);
+    } else {
+      log.info("Quaid tools already in tools.alsoAllow");
+    }
+
     if (changed) {
       const tmpPath = `${cfgPath}.tmp-hooks-${process.pid}-${Date.now()}`;
       fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
