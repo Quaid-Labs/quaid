@@ -990,6 +990,10 @@ const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.p
 // PROJECT_UPDATER removed — project events now emitted from Python extraction.
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
 const _sessionModelOverrideCache = new Map<string, string>();
+// Tracks when sessions.patch last failed per key so we can skip retries within a TTL.
+const _sessionModelOverrideFailedUntil = new Map<string, number>();
+const _SESSION_OVERRIDE_FAIL_TTL_MS = 30_000;
+const _SESSION_OVERRIDE_TIMEOUT_MS = 5_000;
 
 function _getGatewayCredential(providers: string[]): string | undefined {
   for (const provider of providers) {
@@ -1045,74 +1049,53 @@ async function _ensureGatewaySessionOverride(
 ): Promise<string> {
   const sessionKey = `agent:main:quaid-llm-${tier}`;
   const modelRef = `${resolved.provider}/${resolved.model}`;
-  const cached = _sessionModelOverrideCache.get(sessionKey);
-  if (cached === modelRef) {
+
+  // Already confirmed for this key+model — return immediately.
+  if (_sessionModelOverrideCache.get(sessionKey) === modelRef) {
     return sessionKey;
   }
 
-  // Patch first: avoid per-call resets that can churn gateway sessions.
-  const patchOut = await spawnWithTimeout({
-    cwd: WORKSPACE,
-    env: process.env,
-    timeoutMs: 20_000,
-    label: "[quaid][gateway] sessions.patch",
-    argv: [
-      "openclaw",
-      "gateway",
-      "call",
-      "sessions.patch",
-      "--json",
-      "--params",
-      JSON.stringify({ key: sessionKey, model: modelRef }),
-    ],
-  });
-  const patchParsed = JSON.parse(String(patchOut || "{}"));
-  if (patchParsed?.ok) {
-    _sessionModelOverrideCache.set(sessionKey, modelRef);
-    return sessionKey;
+  // Skip if sessions.patch failed recently: avoid blocking every LLM call
+  // for the full timeout when the gateway is slow to respond to sessions.patch.
+  // The model is specified in every /v1/responses request body anyway, so
+  // the session override is a best-effort optimisation, not a hard requirement.
+  const failedUntil = _sessionModelOverrideFailedUntil.get(sessionKey);
+  if (failedUntil && Date.now() < failedUntil) {
+    throw new Error(`[quaid][llm] sessions.patch skipped (failure TTL active for ${sessionKey})`);
   }
 
-  // If the utility lane is missing/corrupt, reset once and re-apply the model.
-  const resetOut = await spawnWithTimeout({
-    cwd: WORKSPACE,
-    env: process.env,
-    timeoutMs: 20_000,
-    label: "[quaid][gateway] sessions.reset",
-    argv: [
-      "openclaw",
-      "gateway",
-      "call",
-      "sessions.reset",
-      "--json",
-      "--params",
-      JSON.stringify({ key: sessionKey, reason: "new" }),
-    ],
-  });
-  const resetParsed = JSON.parse(String(resetOut || "{}"));
-  if (!resetParsed?.ok) {
-    throw new Error(`[quaid][llm] sessions.reset failed for ${sessionKey}`);
+  try {
+    const patchOut = await spawnWithTimeout({
+      cwd: WORKSPACE,
+      env: process.env,
+      timeoutMs: _SESSION_OVERRIDE_TIMEOUT_MS,
+      label: "[quaid][gateway] sessions.patch",
+      argv: [
+        "openclaw",
+        "gateway",
+        "call",
+        "sessions.patch",
+        "--json",
+        "--params",
+        JSON.stringify({ key: sessionKey, model: modelRef }),
+      ],
+    });
+    const patchParsed = JSON.parse(String(patchOut || "{}"));
+    if (patchParsed?.ok) {
+      _sessionModelOverrideCache.set(sessionKey, modelRef);
+      _sessionModelOverrideFailedUntil.delete(sessionKey);
+      return sessionKey;
+    }
+    // sessions.patch returned !ok — set failure TTL and throw.
+    _sessionModelOverrideFailedUntil.set(sessionKey, Date.now() + _SESSION_OVERRIDE_FAIL_TTL_MS);
+    throw new Error(`[quaid][llm] sessions.patch returned !ok for ${sessionKey}`);
+  } catch (err: unknown) {
+    // On timeout or any error, cache the failure so we don't retry immediately.
+    if (!_sessionModelOverrideFailedUntil.has(sessionKey) || (_sessionModelOverrideFailedUntil.get(sessionKey) ?? 0) < Date.now()) {
+      _sessionModelOverrideFailedUntil.set(sessionKey, Date.now() + _SESSION_OVERRIDE_FAIL_TTL_MS);
+    }
+    throw err;
   }
-  const patchAfterResetOut = await spawnWithTimeout({
-    cwd: WORKSPACE,
-    env: process.env,
-    timeoutMs: 20_000,
-    label: "[quaid][gateway] sessions.patch",
-    argv: [
-      "openclaw",
-      "gateway",
-      "call",
-      "sessions.patch",
-      "--json",
-      "--params",
-      JSON.stringify({ key: sessionKey, model: modelRef }),
-    ],
-  });
-  const patchAfterResetParsed = JSON.parse(String(patchAfterResetOut || "{}"));
-  if (!patchAfterResetParsed?.ok) {
-    throw new Error(`[quaid][llm] sessions.patch failed for ${sessionKey} model=${modelRef}`);
-  }
-  _sessionModelOverrideCache.set(sessionKey, modelRef);
-  return sessionKey;
 }
 
 type LLMProxyResponse = {
