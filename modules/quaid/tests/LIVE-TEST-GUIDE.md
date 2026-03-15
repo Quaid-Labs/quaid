@@ -327,7 +327,7 @@ against a valid shared-project bootstrap state yet. Also verify the global
 registry entry for `quaid` points at `$QUAID_HOME/shared/projects/quaid`, not
 an instance-local path such as `$QUAID_HOME/openclaw/projects/quaid`.
 
-For CC `/compact`, the proof token should store from the visible live run
+For CC `/compact`, the extracted fact should store from the visible live run
 without this manual fallback once the per-instance signal-dir fix is deployed.
 
 ## Notification Level Checks
@@ -355,33 +355,42 @@ Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
 > No follow-up message or `.reset.*` backup needed.
 
 Procedure:
-1. Seed a distinctive `PROOFNEW-<timestamp>` fact in the current session.
+1. Tell the agent something memorable in natural conversation — pick a vivid,
+   distinctive detail that would not already be in memory. For example:
+   `"My neighbour just told me she won a regional chili cook-off last weekend
+   using a smoked brisket recipe she's kept secret for twenty years."`
+   Note the distinctive keyword(s) you'll search for (e.g. `chili cook-off`).
 2. Wait for full idle.
 3. Send `/new`. (sessions.json is NOT updated yet at this point — visual-only switch)
 4. **Send one message to the new session** (e.g. `Hello`). This is required — OC
    only writes the new session key to `sessions.json` when the first message is
    processed. That update is what triggers the `new_key_detected` path.
 5. Wait 30–60 seconds for extraction.
-6. Check DB for the proof token.
+6. Check DB for the distinctive keyword.
 
 Hook trace markers to confirm: `session_index.new_key_detected` followed by
 `session_index.signal_queued` with `source=new-key` and the proof session ID.
 
 Pass:
 - the fact is stored after the lifecycle boundary
-- DB or recall output shows the new token
+- DB or recall output surfaces the distinctive detail
 
 ### M2: Extraction via `/reset`
 
-Seed a distinctive `PROOFRESET-<timestamp>` fact, then trigger `/reset`.
+Tell the agent something memorable in natural conversation, then trigger `/reset`.
+Use a different distinctive detail than M1 — for example:
+`"I just booked flights to Reykjavik for the aurora season in February."`
 
 Pass:
 - the fact is stored from the pre-reset session
 
 ### M3: Extraction via `/compact`
 
-Seed a distinctive `PROOFCOMPACT-<timestamp>` fact, build some conversation
-context, then trigger `/compact`.
+Tell the agent something memorable in natural conversation, build some
+conversation context (a few exchanges), then trigger `/compact`.
+Use a different distinctive detail — for example:
+`"My sister started her ceramics studio this spring, she fires everything in a
+wood-burning kiln she built herself."`
 
 Pass:
 - the fact is stored
@@ -399,8 +408,9 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.o
 # Then restart OpenClaw on alfie.
 ```
 
-After restart, create unextracted session content, let the session idle for
->1 minute, then verify timeout extraction fires.
+After restart, mention something memorable in conversation
+(e.g. `"My morning run route goes along the canal towpath — about 8km."`)
+then let the session idle for >1 minute without sending any further messages.
 
 After the test, restore the timeout and restart again:
 
@@ -417,40 +427,89 @@ Pass:
   - `log_file: /Users/owner/quaid/claude-code/logs/daemon/extraction-daemon.log`
   - `pid_file: /Users/owner/quaid/claude-code/data/extraction-daemon.pid`
 
-### M5: Memory Injection
+### M5: Auto-Inject
 
-Create or reuse a distinctive fact such as:
+This milestone tests that the hook automatically injects relevant memory into
+the agent's context before it even starts reasoning — no explicit recall call
+needed.
+
+Seed a known fact directly so you can test injection in isolation:
 
 ```bash
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "Baxter is a golden retriever who loves tennis balls" 2>&1'
 ```
 
-Then ask the agent naturally:
+Start a fresh session and ask, framed so the agent knows what is being tested:
 
-- `What do you know about Baxter?`
+- `This is a test of auto memory injection. Without using any recall tool,
+  what do you know about Baxter?`
 
 Pass:
 - the answer includes the stored fact
-- the answer appears to come from injected recall rather than a fresh explicit
-  browse/search step
+- the agent answers without making an explicit tool call to retrieve it —
+  the fact appeared in its context automatically via the inject hook
+
+Also test with a conversationally-extracted fact from M1–M4 (different topic
+from Baxter so there is no overlap):
+
+- `This is a test of auto memory injection. Without using any recall tool,
+  what do you remember about my neighbour?`
+
+Pass: the agent answers from injected context, no explicit recall tool call.
 
 ### M6: Deliberate Recall
 
-Ask natural questions that require actual retrieval:
+This milestone tests that the agent can actively retrieve facts on demand,
+independent of what was auto-injected.
 
-- `Tell me everything you remember about my niece.`
-- `What does my family do for holidays?`
+Ask natural questions framed so the agent uses explicit recall rather than
+relying on whatever arrived via auto-inject:
+
+- `This is a test of memory recall. Please ignore any context that may have
+  been auto-injected this session and use the quaid memory recall tool
+  directly. What have I told you about my family?`
+- `Same — use explicit quaid recall, not auto-inject. What do you know about
+  my exercise habits or recent plans?`
 
 Pass:
-- the agent surfaces the correct stored facts
-- the answers are materially grounded in memory, not generic filler
+- the agent makes an explicit recall tool call in response
+- the answers are materially grounded in stored memory
+- the agent does not just repeat what was already in injected context
 
 ### M7: Graph Traversal Verification
 
-Run shell or DB verification to confirm the expected relationship edges exist.
+Seed a small family graph using **atomic facts** — one relationship per
+statement. Compound sentences ("X married Y and they had Z") cause the LLM
+to extract only the most salient edge. Use separate CLI stores or separate
+natural-language turns:
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David is married to Lisa" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David and Lisa have a son named Oliver" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David works at Google" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid store "David is the user's brother" 2>&1'
+```
+
+Run janitor so edges get extracted:
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid janitor --task edges --apply 2>&1'
+```
+
+Verify from shell:
+
+```bash
+ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"David\",\"Lisa\",\"Oliver\") OR t.name IN (\"David\",\"Lisa\",\"Oliver\") ORDER BY s.name, e.relation;"'
+```
+
+Expected edges (alphabetical ordering for symmetric relations):
+- `David --parent_of--> Oliver`
+- `David --sibling_of--> User` (or the user's name)
+- `David --spouse_of--> Lisa`  (alphabetical: D < L)
+- `David --works_at--> Google`
 
 Pass:
-- the expected edges are present
+- all expected edges are present in the DB
 
 ### M8: Full Project System CRUD
 

@@ -45,6 +45,7 @@ from core.lifecycle.janitor_lifecycle import build_default_registry, RoutineCont
 from core.lifecycle.datastore_runtime import (
     get_graph,
     JanitorMetrics,
+    backfill_edges,
     backfill_embeddings,
     checkpoint_wal,
     count_nodes_by_status,
@@ -957,6 +958,17 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
             backfill_result = backfill_embeddings(graph, metrics, dry_run=dry_run)
             print(f"  Found: {backfill_result['found']}, Embedded: {backfill_result['embedded']}")
             print(f"Task completed in {metrics.task_duration('embedding_backfill'):.2f}s\n")
+
+        # --- Task 0c: Edge Backfill ---
+        # Retroactively extract edges for relationship facts that have no linked
+        # edges. Catches edges missed during initial extraction (e.g. compound
+        # sentences where the LLM only extracted one of multiple relationships).
+        if task in ("edges", "all") and _system_enabled_or_skip("memory", "Task 0c: Edge Backfill") and not _skip_if_over_budget("Task 0c: Edge Backfill", 20):
+            print("[Task 0c: Edge Backfill]")
+            edge_result = backfill_edges(graph, metrics, dry_run=dry_run)
+            applied_changes["edges_created"] += edge_result.get("edges_created", 0)
+            print(f"  Found: {edge_result['found']}, Edges created: {edge_result['edges_created']}, Errors: {edge_result['errors']}")
+            print(f"Task completed in {metrics.task_duration('edge_backfill'):.2f}s\n")
 
         # --- Task 2: Review Pending Memories (Opus API) ---
         # Memory pipeline starts here. If any task (2-6) fails,

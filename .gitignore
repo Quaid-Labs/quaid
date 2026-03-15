@@ -30,6 +30,8 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+# MagicMock artifact files (accidentally created by pytest tmp_path)
+*MagicMock*
 # Temporary files
 *.tmp
 *.bak

@@ -2094,10 +2094,12 @@ EDGE_BATCH_SIZE = 25  # Safety cap for edge extraction batch size
 
 def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
                         metrics: JanitorMetrics,
-                        relations_list: str = "") -> List[Optional[Dict[str, Any]]]:
+                        relations_list: str = "") -> List[List[Dict[str, Any]]]:
     """Extract edges from a batch of facts in a single Opus call.
 
-    Returns a list parallel to `facts` — each entry is an extraction dict or None.
+    Returns a list parallel to `facts` — each entry is a list of edge dicts
+    (may be empty if the fact has no relationships). Supports multiple edges
+    per fact to handle compound relationship sentences.
     """
     if not facts:
         return []
@@ -2107,7 +2109,8 @@ def batch_extract_edges(facts: List[Dict[str, Any]], graph: MemoryGraph,
         numbered.append(f'{i+1}. "{f["text"]}"')
 
     prompt = f"""You are building a knowledge graph from personal facts about a user's life.
-For each fact below, extract ONE relationship between two DISTINCT named entities if one exists.
+For each fact below, extract ALL relationships between named entities. A single fact may
+describe multiple relationships — extract every one.
 Only extract edges between named entities (people, places, organizations, pets). Do not create edges for system concepts, tools, or infrastructure.
 
 EXISTING relation types (use one of these whenever possible):
@@ -2130,80 +2133,194 @@ Only create a NEW relation type if absolutely none of the above fit. New types m
 Facts:
 {chr(10).join(numbered)}
 
-Use "has_edge": false if the fact has no clear relationship between two distinct named entities.
+Use an empty "edges" array if the fact has no clear relationship between two distinct named entities.
 
 Respond with a JSON array of {len(facts)} objects, one per fact in order:
 [
-  {{"fact": 1, "has_edge": true, "subject": "Alice", "subject_type": "Person", "relation": "lives_in", "object": "Paris", "object_type": "Place"}},
-  {{"fact": 2, "has_edge": false}},
-  {{"fact": 3, "has_edge": true, "subject": "Carol", "subject_type": "Person", "relation": "parent_of", "object": "Alice", "object_type": "Person"}},
-  {{"fact": 4, "has_edge": true, "subject": "Alice", "subject_type": "Person", "relation": "mentors", "object": "Bob", "object_type": "Person", "keywords": ["mentor", "mentee", "mentoring", "coached", "guidance"]}}
+  {{"fact": 1, "edges": [{{"subject": "Alice", "subject_type": "Person", "relation": "lives_in", "object": "Paris", "object_type": "Place"}}]}},
+  {{"fact": 2, "edges": []}},
+  {{"fact": 3, "edges": [{{"subject": "Carol", "subject_type": "Person", "relation": "parent_of", "object": "Alice", "object_type": "Person"}}, {{"subject": "Carol", "subject_type": "Person", "relation": "spouse_of", "object": "Dave", "object_type": "Person"}}]}},
+  {{"fact": 4, "edges": [{{"subject": "Alice", "subject_type": "Person", "relation": "mentors", "object": "Bob", "object_type": "Person", "keywords": ["mentor", "mentee", "mentoring", "coached", "guidance"]}}]}}
 ]
 
 JSON array only:"""
 
-    response, duration = call_deep_reasoning(prompt, max_tokens=200 * len(facts),
+    response, duration = call_deep_reasoning(prompt, max_tokens=300 * len(facts),
                                    timeout=DEEP_REASONING_TIMEOUT)
     metrics.add_llm_call(duration)
 
     if not response:
         metrics.add_error(f"Batch edge extraction failed ({len(facts)} facts)")
-        return [None] * len(facts)
+        return [[] for _ in facts]
 
     parsed = parse_json_response(response)
     if not isinstance(parsed, list):
         metrics.add_error("Batch edge response was not a list")
-        return [None] * len(facts)
+        return [[] for _ in facts]
 
     # Map results back to facts by index
-    results: List[Optional[Dict[str, Any]]] = [None] * len(facts)
+    results: List[List[Dict[str, Any]]] = [[] for _ in facts]
     for item in parsed:
         if not isinstance(item, dict):
             continue
         idx = item.get("fact")
         if not isinstance(idx, int) or idx < 1 or idx > len(facts):
             continue
-        if not item.get("has_edge"):
+
+        raw_edges = item.get("edges")
+        if not isinstance(raw_edges, list):
             continue
 
-        subject = (item.get("subject") or "").strip()
-        obj = (item.get("object") or "").strip()
-        relation = (item.get("relation") or "").strip().lower().replace(" ", "_")
+        fact_edges = []
+        for edge in raw_edges:
+            if not isinstance(edge, dict):
+                continue
+            subject = (edge.get("subject") or "").strip()
+            obj = (edge.get("object") or "").strip()
+            relation = (edge.get("relation") or "").strip().lower().replace(" ", "_")
 
-        if not subject or not obj or not relation:
-            continue
-        # Skip self-referential edges
-        if subject.lower() == obj.lower():
-            continue
+            if not subject or not obj or not relation:
+                continue
+            if subject.lower() == obj.lower():
+                continue
 
-        # Normalize: flip inverses, resolve synonyms, order symmetric
-        subject_type = item.get("subject_type", "Person")
-        obj_type = item.get("object_type", "Concept")
-        subject, subject_type, relation, obj, obj_type = _normalize_edge(
-            subject, subject_type, relation, obj, obj_type
-        )
+            # Normalize: flip inverses, resolve synonyms, order symmetric
+            subject_type = edge.get("subject_type", "Person")
+            obj_type = edge.get("object_type", "Concept")
+            subject, subject_type, relation, obj, obj_type = _normalize_edge(
+                subject, subject_type, relation, obj, obj_type
+            )
 
-        results[idx - 1] = {
-            "fact_id": facts[idx - 1]["id"],
-            "fact_text": facts[idx - 1]["text"],
-            "subject": subject,
-            "subject_type": subject_type,
-            "relation": relation,
-            "object": obj,
-            "object_type": obj_type,
-        }
+            fact_edge = {
+                "fact_id": facts[idx - 1]["id"],
+                "fact_text": facts[idx - 1]["text"],
+                "subject": subject,
+                "subject_type": subject_type,
+                "relation": relation,
+                "object": obj,
+                "object_type": obj_type,
+            }
 
-        # If LLM provided keywords for a new relation, store them
-        keywords = item.get("keywords")
-        if keywords and isinstance(keywords, list) and len(keywords) > 0:
-            # Filter to strings only
-            keywords = [k for k in keywords if isinstance(k, str) and k.strip()]
-            if keywords:
-                stored = store_edge_keywords(relation, keywords)
-                if stored:
-                    print(f"    Stored keywords for new relation '{relation}': {keywords[:5]}")
+            # If LLM provided keywords for a new relation, store them
+            keywords = edge.get("keywords")
+            if keywords and isinstance(keywords, list):
+                keywords = [k for k in keywords if isinstance(k, str) and k.strip()]
+                if keywords:
+                    stored = store_edge_keywords(relation, keywords)
+                    if stored:
+                        print(f"    Stored keywords for new relation '{relation}': {keywords[:5]}")
+
+            fact_edges.append(fact_edge)
+
+        results[idx - 1] = fact_edges
 
     return results
+
+
+def backfill_edges(
+    graph: "MemoryGraph",
+    metrics: "JanitorMetrics",
+    dry_run: bool = False,
+    max_facts: int = 100,
+    owner_id: Optional[str] = None,
+) -> Dict[str, int]:
+    """Retroactively extract edges for relationship facts that have no linked edges.
+
+    Finds fact/relationship nodes whose text was never linked to any edge row
+    (source_fact_id IS NULL or no edges reference this node) and runs
+    batch_extract_edges on them so the LLM gets a second chance to create
+    missed graph connections.
+
+    Returns counts: found, edges_created, errors.
+    """
+    metrics.start_task("edge_backfill")
+    result: Dict[str, int] = {"found": 0, "edges_created": 0, "errors": 0}
+
+    if not hasattr(graph, "_get_conn"):
+        return result
+
+    # Find fact nodes that have no edge linked via source_fact_id, filtering
+    # to nodes that plausibly describe relationships (contain key terms).
+    relationship_keywords = (
+        "married", "spouse", "husband", "wife", "partner",
+        "parent", "mother", "father", "son", "daughter", "child",
+        "sibling", "sister", "brother", "works at", "employed",
+        "lives in", "lives at", "friend", "colleague", "neighbour", "neighbor",
+        "has a dog", "has a cat", "has a pet",
+    )
+    kw_clauses = " OR ".join(f"LOWER(n.text) LIKE ?" for _ in relationship_keywords)
+    kw_params = [f"%{kw}%" for kw in relationship_keywords]
+
+    with graph._get_conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT n.id, n.text, n.owner_id
+            FROM nodes n
+            WHERE n.type = 'Fact'
+              AND n.status IN ('active', 'approved', 'pending')
+              AND NOT EXISTS (
+                  SELECT 1 FROM edges e WHERE e.source_fact_id = n.id
+              )
+              AND ({kw_clauses})
+            ORDER BY n.created_at DESC
+            LIMIT ?
+            """,
+            kw_params + [max_facts],
+        ).fetchall()
+
+    facts = [{"id": row["id"], "text": row["text"], "owner_id": row["owner_id"]} for row in rows]
+    result["found"] = len(facts)
+
+    if not facts:
+        print("  No relationship facts missing edges.")
+        return result
+
+    print(f"  Found {len(facts)} relationship facts with no linked edges.")
+
+    if dry_run:
+        for f in facts[:5]:
+            print(f"  [dry-run] Would extract edges for: {f['text'][:80]}")
+        if len(facts) > 5:
+            print(f"  [dry-run] ... and {len(facts) - 5} more")
+        return result
+
+    # Build relations list for prompt context
+    relations_list = "\n".join(
+        f"- {r}" for r in [
+            "parent_of", "sibling_of", "spouse_of", "partner_of", "has_pet",
+            "friend_of", "neighbor_of", "colleague_of", "works_at", "lives_in",
+            "owns", "manages", "family_of", "knows",
+        ]
+    )
+
+    # Process in batches
+    batch_size = min(EDGE_BATCH_SIZE, 25)
+    for batch_start in range(0, len(facts), batch_size):
+        batch = facts[batch_start: batch_start + batch_size]
+        edge_lists = batch_extract_edges(batch, graph, metrics, relations_list)
+
+        for fact, edges in zip(batch, edge_lists):
+            for edge in edges:
+                try:
+                    _owner = owner_id or fact.get("owner_id") or _default_owner_id()
+                    edge_result = graph.create_edge(
+                        subject_name=edge["subject"],
+                        relation=edge["relation"],
+                        object_name=edge["object"],
+                        owner_id=_owner,
+                        source_fact_id=edge["fact_id"],
+                    )
+                    if edge_result.get("status") == "created":
+                        result["edges_created"] += 1
+                        print(
+                            f"  + {edge['subject']} --{edge['relation']}--> {edge['object']}"
+                            f" (from: {fact['text'][:60]})"
+                        )
+                except Exception as e:
+                    result["errors"] += 1
+                    print(f"  [edge_backfill] error creating edge: {e}")
+
+    return result
 
 
 # =============================================================================

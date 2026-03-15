@@ -92,6 +92,7 @@ quaid registry list [--project <name>]
 quaid project list
 quaid project create <name> [--description "..."] [--source-root /path]
 quaid project show <name>
+quaid project update <name> [--description "..."] [--source-root /path]  # update existing project fields
 quaid project link <name>     # add current instance to existing project (idempotent)
 quaid project unlink <name>   # remove current instance (does not delete project)
 quaid project delete <name>   # destructive — removes dir + all SQLite rows

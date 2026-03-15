@@ -7,6 +7,7 @@ this module instead of importing datastore modules directly.
 from datastore.memorydb.memory_graph import get_graph
 from datastore.memorydb.maintenance_ops import (
     JanitorMetrics,
+    backfill_edges,
     backfill_embeddings,
     checkpoint_wal,
     count_nodes_by_status,
@@ -26,6 +27,7 @@ from datastore.notedb.soul_snippets import write_journal_entry, write_snippet_en
 
 __all__ = [
     "JanitorMetrics",
+    "backfill_edges",
     "backfill_embeddings",
     "checkpoint_wal",
     "count_nodes_by_status",

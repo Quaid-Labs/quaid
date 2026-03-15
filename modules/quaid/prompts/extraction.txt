@@ -72,6 +72,8 @@ IMPORTANT: Default to "shared". Only use "private" for genuinely secret or sensi
 
 For RELATIONSHIP facts, also extract edges that connect entities. An edge represents a directed relationship between two named entities.
 
+IMPORTANT: Extract ALL relationships from a fact. A single fact may contain multiple relationships — for example, "David is married to Lisa and they have a son named Oliver" has TWO edges: spouse_of AND parent_of. Extract every relationship you see, do not stop at the first one.
+
 EDGE DIRECTION RULES (critical):
 - parent_of: PARENT is subject. "Carol is User's mom" → Carol --parent_of--> User
 - sibling_of: alphabetical order (symmetric). "Beth is User's sister" → Beth --sibling_of--> User
