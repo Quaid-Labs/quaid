@@ -78,6 +78,47 @@ class GlobalLlmScheduler:
         if not seq:
             return []
 
+        # Acquire a platform-level slot before submitting work to the executor.
+        # This bounds total concurrent LLM calls across all instances sharing the
+        # same API credentials. Non-fatal: if no platform client, proceed normally.
+        _platform_client = get_platform_scheduler_client_for_current_instance()
+        if _platform_client is not None:
+            try:
+                _platform_client.acquire(1)
+            except Exception as exc:
+                logger.warning(
+                    "platform slot acquire failed (%s): proceeding without slot gating", exc
+                )
+                _platform_client = None
+
+        try:
+            return self._run_map_inner(
+                workload_key=workload_key,
+                seq=seq,
+                fn=fn,
+                configured_workers=configured_workers,
+                requested_workers=requested_workers,
+                timeout_seconds=timeout_seconds,
+                timeout_retries=timeout_retries,
+            )
+        finally:
+            if _platform_client is not None:
+                try:
+                    _platform_client.release(1)
+                except Exception as exc:
+                    logger.warning("platform slot release failed: %s", exc)
+
+    def _run_map_inner(
+        self,
+        *,
+        workload_key: str,
+        seq: List[Any],
+        fn: Callable[[Any], Any],
+        configured_workers: int,
+        requested_workers: Optional[int] = None,
+        timeout_seconds: float = 300.0,
+        timeout_retries: int = 1,
+    ) -> List[Any]:
         configured = max(1, min(int(configured_workers), self._max_workers))
         worker_count = self._resolve_start_workers(
             workload_key=workload_key,
@@ -182,6 +223,10 @@ class GlobalLlmScheduler:
 _SCHEDULER: Optional[GlobalLlmScheduler] = None
 _SCHEDULER_LOCK = threading.RLock()
 
+_PLATFORM_CLIENT = None
+_PLATFORM_CLIENT_LOCK = threading.RLock()
+_PLATFORM_CLIENT_INITIALIZED = False
+
 
 def _scheduler_max_workers(default_max_workers: int = 32) -> int:
     raw = str(os.environ.get("QUAID_GLOBAL_LLM_MAX_WORKERS", "") or "").strip()
@@ -213,3 +258,59 @@ def reset_global_llm_scheduler(wait: bool = False) -> None:
 
 
 atexit.register(reset_global_llm_scheduler, wait=False)
+
+
+def get_platform_scheduler_client_for_current_instance():
+    """Get the platform-level LLM slot client for the current adapter instance.
+
+    Reads quaid_home and platform from the active adapter, then reads
+    total_slots from config (core.parallel.platform_scheduler_slots, default 8).
+    Result is cached module-level after first successful initialization.
+
+    Returns None if unavailable (non-fatal: callers proceed without slot gating).
+    """
+    global _PLATFORM_CLIENT, _PLATFORM_CLIENT_INITIALIZED
+    with _PLATFORM_CLIENT_LOCK:
+        if _PLATFORM_CLIENT_INITIALIZED:
+            return _PLATFORM_CLIENT
+        try:
+            from lib.adapter import get_adapter
+            from core.platform_scheduler import get_platform_scheduler_client
+            adapter = get_adapter()
+            quaid_home = adapter.quaid_home()
+            platform = adapter.agent_id_prefix()
+            total_slots = 8
+            try:
+                from config import get_config
+                from core.runtime.parallel_runtime import get_parallel_config
+                cfg = get_config()
+                parallel_cfg = get_parallel_config(cfg)
+                raw = getattr(parallel_cfg, "platform_scheduler_slots", None)
+                if raw is not None:
+                    parsed = int(raw)
+                    if parsed > 0:
+                        total_slots = parsed
+            except Exception:
+                pass
+            _PLATFORM_CLIENT = get_platform_scheduler_client(quaid_home, platform, total_slots)
+        except Exception as exc:
+            logger.warning(
+                "platform scheduler client init failed (%s): proceeding without slot gating", exc
+            )
+            _PLATFORM_CLIENT = None
+        _PLATFORM_CLIENT_INITIALIZED = True
+        return _PLATFORM_CLIENT
+
+
+def reset_platform_scheduler_client() -> None:
+    """Reset the cached platform scheduler client (for testing / re-init)."""
+    global _PLATFORM_CLIENT, _PLATFORM_CLIENT_INITIALIZED
+    with _PLATFORM_CLIENT_LOCK:
+        client = _PLATFORM_CLIENT
+        _PLATFORM_CLIENT = None
+        _PLATFORM_CLIENT_INITIALIZED = False
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass

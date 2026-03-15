@@ -21,6 +21,12 @@ import { renderQuaidBanner } from "./lib/quaid_banner.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Platform check — Quaid requires macOS or Linux
+if (os.platform() === 'win32') {
+  console.error('error: Quaid requires macOS or Linux. Windows is not supported.');
+  process.exit(1);
+}
+
 function parseInstallArgs(argv) {
   const opts = {
     workspace: "",

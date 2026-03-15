@@ -17,6 +17,14 @@
 
 set -euo pipefail
 
+# Platform check
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|CYGWIN*|MSYS*|Windows_NT)
+    echo "error: Quaid requires macOS or Linux. Windows is not supported." >&2
+    exit 1
+    ;;
+esac
+
 # --- Constants ---
 QUAID_VERSION="0.2.15-alpha"
 MIN_PYTHON_VERSION="3.10"

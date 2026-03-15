@@ -1660,6 +1660,17 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             result.logs.append(f"Found {len(stale)} stale doc(s):")
             purposes = get_doc_purposes()
             updated = 0
+
+            # Derive quaid_home for per-doc cross-instance flock.
+            # ctx.workspace is QUAID_HOME/<instance_id>/, so parent is QUAID_HOME.
+            _quaid_home = None
+            try:
+                from lib.shared_project_lock import try_claim_project_update, write_checkpoint
+                _quaid_home = Path(ctx.workspace).resolve().parent
+            except Exception:
+                try_claim_project_update = None  # type: ignore[assignment]
+                write_checkpoint = None  # type: ignore[assignment]
+
             for doc_path, info in stale.items():
                 result.logs.append(f"  {doc_path} ({info.gap_hours:.1f}h behind)")
                 for src in info.stale_sources:
@@ -1668,7 +1679,30 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                 allow_apply = not ctx.dry_run
                 if allow_apply and ctx.allow_doc_apply is not None:
                     allow_apply = ctx.allow_doc_apply(doc_path, "staleness update")
-                if allow_apply:
+                if not allow_apply:
+                    continue
+
+                # Use a per-doc flock to prevent multiple instances from running
+                # the same LLM update concurrently. Staleness checking (above) is
+                # read-only and cheap — only the LLM+write phase is locked.
+                if _quaid_home is not None and try_claim_project_update is not None:
+                    # Sanitize doc_path for use as lock directory name.
+                    lock_key = doc_path.replace("/", "__").replace("\\", "__").lstrip("_") or "unknown-doc"
+                    with try_claim_project_update(_quaid_home, lock_key) as claimed:
+                        if not claimed:
+                            result.logs.append(f"  {doc_path}: skipped (another instance is updating or just finished)")
+                            continue
+                        ok = update_doc_from_diffs(
+                            doc_path,
+                            purposes.get(doc_path, ""),
+                            info.stale_sources,
+                            dry_run=False,
+                        )
+                        if ok:
+                            updated += 1
+                            write_checkpoint(_quaid_home, lock_key)
+                else:
+                    # No flock available — proceed without cross-instance coordination.
                     ok = update_doc_from_diffs(
                         doc_path,
                         purposes.get(doc_path, ""),
