@@ -1598,6 +1598,38 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 pendingOrphanChecks.set(prevSessionId, Date.now());
               }
               sessionIndexMessageCounts.delete(prevSessionId);
+            } else if (!prevSessionId && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
+              writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId });
+              for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
+                if (priorKey.startsWith("agent:main:hook:")) continue;
+                if (priorSid === sessionId) continue;
+                if (!sessionLastActivityMs.has(priorSid)) continue;
+                if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
+                let priorSize = -1;
+                try {
+                  priorSize = fs.statSync(getOpenClawSessionFile(priorSid)).size;
+                } catch {
+                }
+                if (priorSize <= 0) continue;
+                if (!facade.shouldProcessLifecycleSignal(priorSid, {
+                  label: "ResetSignal",
+                  source: "session_index",
+                  signature: `session_index:new_key:${key}`
+                })) continue;
+                facade.markLifecycleSignalFromHook(priorSid, "ResetSignal");
+                writeDaemonSignal(priorSid, "reset", {
+                  source: "session_index_new_key",
+                  new_key: key,
+                  new_session_id: sessionId
+                });
+                writeHookTrace("session_index.signal_queued", {
+                  signal: "reset",
+                  source: "new-key",
+                  session_id: priorSid,
+                  session_key: priorKey,
+                  new_key: key
+                });
+              }
             }
             sessionKeyLastSeen.set(key, sessionId);
             sessionTranscriptPaths.set(sessionId, sessionFile);
