@@ -3056,11 +3056,14 @@ notify_memory_extraction(
         const sessionId = ctx?.sessionId;
         const conversationMessages = facade.filterConversationMessages(messages);
         const fallbackInteractiveSessionId = currentInteractiveSession?.sessionId || "";
-        const extractionSessionId = (
-          conversationMessages.length === 0 && fallbackInteractiveSessionId
-            ? fallbackInteractiveSessionId
-            : (sessionId || facade.extractSessionId(messages, ctx))
-        );
+        // Always prefer the directly-passed sessionId (OC always provides ctx.sessionId).
+        // Only fall back to currentInteractiveSession when sessionId is absent AND
+        // the payload is empty (OC sometimes fires before_compaction with no messages).
+        const extractionSessionId =
+          sessionId
+          || (conversationMessages.length === 0 ? fallbackInteractiveSessionId : "")
+          || facade.extractSessionId(messages, ctx)
+          || "";
         writeHookTrace("hook.before_compaction.received", {
           hook_session_id: sessionId || "",
           extraction_session_id: extractionSessionId || "",
