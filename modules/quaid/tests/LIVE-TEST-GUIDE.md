@@ -716,7 +716,7 @@ Fail:
 - `projects/quaid/PROJECT.log` absent after M8's trigger step
 - Any file is structurally malformed (broken JSON, truncated entries)
 
-### M12: OC Multi-Agent Verification
+### M12: OC Multi-Agent Verification ✓ 2026-03-15
 
 This milestone verifies that OpenClaw's multi-agent silo structure is correct
 and that extraction signals route to the right agent's silo.
@@ -842,7 +842,7 @@ Fail:
 - signals land in a shared or flat path instead of the per-agent silo
 - daemon pid file is absent after install
 
-### M13: CC Multi-Instance Verification
+### M13: CC Multi-Instance Verification ✓ 2026-03-15
 
 This milestone verifies that `quaid claudecode make_instance` creates a properly
 isolated Claude Code project instance with the correct silo structure and
