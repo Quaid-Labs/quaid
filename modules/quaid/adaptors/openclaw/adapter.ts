@@ -1914,6 +1914,10 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       sessionIndexWatcherStarted = true;
+      // Timestamp when this watcher instance started. Used to filter out sessions
+      // whose transcripts haven't changed since before we started (stale from
+      // previous gateway lifetimes).
+      const watcherStartMs = Date.now();
       // Tracks sessions where a key transition was detected but the .reset.* backup
       // may not have been created yet. Value is the time the watch was armed (ms).
       // Checked each tick; times out after 60s. Empty most of the time.
@@ -2008,11 +2012,19 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
                 if (priorKey.startsWith("agent:main:hook:")) continue;
                 if (priorSid === sessionId) continue;
-                if (!sessionLastActivityMs.has(priorSid)) continue; // not active this gateway lifetime
                 if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
+                // Only signal sessions whose transcript was modified after this watcher
+                // started — this excludes stale sessions from previous gateway lifetimes
+                // whose messages were already present at startup.
                 let priorSize = -1;
-                try { priorSize = fs.statSync(getOpenClawSessionFile(priorSid)).size; } catch {}
+                let priorMtime = 0;
+                try {
+                  const st = fs.statSync(getOpenClawSessionFile(priorSid));
+                  priorSize = st.size;
+                  priorMtime = st.mtimeMs;
+                } catch {}
                 if (priorSize <= 0) continue;
+                if (priorMtime <= watcherStartMs) continue; // no new content since watcher started
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
                   label: "ResetSignal",
                   source: "session_index",

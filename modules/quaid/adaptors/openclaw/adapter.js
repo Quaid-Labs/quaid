@@ -1546,6 +1546,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       sessionIndexWatcherStarted = true;
+      const watcherStartMs = Date.now();
       const pendingOrphanChecks = /* @__PURE__ */ new Map();
       const ORPHAN_CHECK_DEADLINE_MS = 6e4;
       const tickSessionIndex = () => {
@@ -1603,14 +1604,17 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
                 if (priorKey.startsWith("agent:main:hook:")) continue;
                 if (priorSid === sessionId) continue;
-                if (!sessionLastActivityMs.has(priorSid)) continue;
                 if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
                 let priorSize = -1;
+                let priorMtime = 0;
                 try {
-                  priorSize = fs.statSync(getOpenClawSessionFile(priorSid)).size;
+                  const st = fs.statSync(getOpenClawSessionFile(priorSid));
+                  priorSize = st.size;
+                  priorMtime = st.mtimeMs;
                 } catch {
                 }
                 if (priorSize <= 0) continue;
+                if (priorMtime <= watcherStartMs) continue;
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
                   label: "ResetSignal",
                   source: "session_index",
