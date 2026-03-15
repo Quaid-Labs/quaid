@@ -348,22 +348,21 @@ Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
 
 ### M1: Extraction via `/new`
 
-> **OC TUI behavior:** OC TUI `/new` does NOT update `sessions.json` or create
-> a `.reset.*` backup. It is a visual-only session switch. The extraction path
-> is `before_agent_start` on the new session — it mtime-scans `sessionKeyLastSeen`
-> to find the prior session and writes the daemon signal. This requires sending
-> at least one follow-up message to the new session after `/new`.
+> **OC TUI behavior:** OC TUI `/new` adds a brand-new key to `sessions.json`
+> rather than updating an existing key's session ID. The adapter detects this
+> via a new-key arrival branch in `tickSessionIndex`: when a new key appears,
+> it signals any recently-active sessions with content immediately (within 1s).
+> No follow-up message or `.reset.*` backup needed.
 
 Procedure:
 1. Seed a distinctive `PROOFNEW-<timestamp>` fact in the current session.
 2. Wait for full idle.
 3. Send `/new`.
-4. **Send one follow-up message to the new session** (e.g. `Hello`). This is
-   required — `before_agent_start` only fires when the new session processes
-   its first message, which triggers mtime-based prior-session detection and
-   writes the extraction signal for the pre-/new session.
-5. Wait 30–60 seconds for extraction.
-6. Check DB for the proof token.
+4. Wait 30–60 seconds for extraction.
+5. Check DB for the proof token.
+
+Hook trace markers to confirm: `session_index.new_key_detected` followed by
+`session_index.signal_queued` with `source=new-key`.
 
 Pass:
 - the fact is stored after the lifecycle boundary
