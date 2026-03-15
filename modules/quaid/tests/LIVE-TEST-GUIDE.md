@@ -654,7 +654,7 @@ ssh example.local 'printf "print(\"modified\")\n" > /tmp/quaid-live-src/main.py'
 ```
 
 - `Can you check what changed in the live-test project since the last snapshot?`
-- `Can you sync the live-test project?`
+- `Can you take a new snapshot of the live-test project?`
 - `Can you delete the live-test project?`
 
 Verify from shell:
@@ -684,7 +684,7 @@ Pass:
 - create works
 - show works
 - update works
-- snapshot/sync work
+- snapshot (diff + retake) works
 - delete removes the project but not the source directory
 - `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
 
