@@ -1732,7 +1732,11 @@ notify_user(${JSON.stringify(message)})
         const autoInjectK = facade.computeDynamicK();
         const injectLimit = autoInjectK;
         const injectIntent: "general" = "general";
-        const injectDomain: DomainFilter = { personal: true };
+        // Use all-domain search for auto-inject: domain tagging may be incomplete
+        // on fresh installs or for newly extracted facts. A strict { personal: true }
+        // filter excludes untagged or differently-tagged facts. Retrieve all facts
+        // and let semantic similarity + reranking surface the relevant ones.
+        const injectDomain: DomainFilter = { all: true };
         const allMemories = await recallMemories({
           query,
           limit: injectLimit,

@@ -1371,7 +1371,7 @@ notify_user(${JSON.stringify(message)})
         const autoInjectK = facade.computeDynamicK();
         const injectLimit = autoInjectK;
         const injectIntent = "general";
-        const injectDomain = { personal: true };
+        const injectDomain = { all: true };
         const allMemories = await recallMemories({
           query,
           limit: injectLimit,

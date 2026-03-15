@@ -5217,7 +5217,15 @@ def recall(
         return (final, meta) if return_meta else final
 
     # --- Turn 2+: Drill loop ---
+    # Skip drill turns when fanout returned no results: there is nothing to
+    # refine and each drill turn would just burn a 15s LLM timeout needlessly.
+    if not merged:
+        logger.debug("[recall] no results after turn 1, skipping drill loop")
+        stop_reason = "no_initial_results"
+        bailout_counts["no_initial_results"] = bailout_counts.get("no_initial_results", 0) + 1
     for turn in range(2, max(2, max_turns + 1)):
+        if stop_reason == "no_initial_results":
+            break
         remaining = None if deadline is None else (deadline - _time.monotonic())
         if remaining is not None and remaining < 1.0:
             logger.debug("[recall] time budget exhausted after turn %d (%.0fms remaining)", turn - 1, remaining * 1000)
