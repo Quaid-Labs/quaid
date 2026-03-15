@@ -178,7 +178,7 @@ if p.exists():
     p.write_text(json.dumps(data, indent=2))
 print("Cleared existing Quaid Claude Code hooks if present")
 PY'
-ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/owner/quaid" --source local'
+ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRATION=1 QUAID_OWNER_NAME="Solomon" QUAID_INSTANCE=claude-code-main QUAID_INSTALL_CLAUDE_CODE=1 node setup-quaid.mjs --agent --claude-code --workspace "/Users/owner/quaid" --source local'
 ```
 
 ### Post-install verification
@@ -187,7 +187,7 @@ ssh example.local 'cd ~/quaid/dev && QUAID_INSTALL_AGENT=1 QUAID_TEST_MOCK_MIGRA
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid health 2>&1'
 ssh example.local 'cat ~/.claude/settings.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.get(\"hooks\", {}).keys()))"'
-ssh example.local 'ls -l ~/quaid/openclaw-main/identity/SOUL.md ~/quaid/claude-code/identity/SOUL.md 2>/dev/null || true'
+ssh example.local 'ls -l ~/quaid/openclaw-main/identity/SOUL.md ~/quaid/claude-code-main/identity/SOUL.md 2>/dev/null || true'
 ```
 
 If either instance-local `identity/SOUL.md` is missing, seed it from the shared
@@ -199,7 +199,7 @@ from pathlib import Path
 src = Path("/Users/owner/quaid/SOUL.md")
 for dst in [
     Path("/Users/owner/quaid/openclaw-main/identity/SOUL.md"),
-    Path("/Users/owner/quaid/claude-code/identity/SOUL.md"),
+    Path("/Users/owner/quaid/claude-code-main/identity/SOUL.md"),
 ]:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if not dst.exists():
@@ -208,11 +208,12 @@ for dst in [
 PY'
 ```
 
-Seed the quaid project directory in `openclaw-main` so `PROJECT.log` can be
-written by extraction (the daemon looks for `projects/quaid/PROJECT.md`):
+Seed the quaid project directory in both instance silos so `PROJECT.log` can
+be written by extraction (the daemon looks for `projects/quaid/PROJECT.md`):
 
 ```bash
 ssh example.local 'src=~/quaid/openclaw-main/projects/quaid/PROJECT.md; mkdir -p "$(dirname $src)"; [ -f "$src" ] || cp ~/quaid/projects/quaid/PROJECT.md "$src" && echo "seeded" || echo "already exists"'
+ssh example.local 'src=~/quaid/claude-code-main/projects/quaid/PROJECT.md; mkdir -p "$(dirname $src)"; [ -f "$src" ] || cp ~/quaid/projects/quaid/PROJECT.md "$src" && echo "seeded" || echo "already exists"'
 ```
 
 ## Execution Model
@@ -239,7 +240,7 @@ Then launch the subject under test:
 ```bash
 tmux send-keys -t main:99 "openclaw tui" Enter
 # or
-tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code claude --dangerously-skip-permissions" Enter
+tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main claude --dangerously-skip-permissions" Enter
 ```
 
 Do this again whenever switching from the OpenClaw phase to the Claude Code
@@ -280,7 +281,7 @@ SSH to `example.local`, and launch `claude` from there.
 ```bash
 tmux respawn-pane -k -t main:99 'zsh -il'
 tmux send-keys -t main:99 "ssh example.local" Enter
-tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code claude --dangerously-skip-permissions" Enter
+tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main claude --dangerously-skip-permissions" Enter
 ```
 
 Read replies with:
@@ -292,7 +293,7 @@ tmux capture-pane -t main:99 -p | tail -30
 **Important:** For this live test flow, end the visible CC session with
 `/exit` in pane `99` to return cleanly to the remote shell. After each CC
 session end, explicitly verify that extraction happened by checking
-`~/quaid/claude-code/data/extraction-signals/`, the CC daemon log, or the
+`~/quaid/claude-code-main/data/extraction-signals/`, the CC daemon log, or the
 shared DB at `~/quaid/data/memory.db`. If a session ends cleanly but no
 `session_end` signal appears, do not assume extraction fired.
 
@@ -327,7 +328,7 @@ Quick checks:
 
 ```bash
 ssh example.local 'wc -l ~/.claude/rules/quaid-projects.md && sed -n "1,220p" ~/.claude/rules/quaid-projects.md'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code ~/.openclaw/extensions/quaid/quaid project list 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid project list 2>&1'
 ssh example.local 'find ~/quaid/shared/projects -maxdepth 3 -type f | sort'
 ssh example.local 'python3 - <<\"PY\"
 import json
@@ -443,9 +444,9 @@ Pass:
 - the timeout fact is extracted with no explicit lifecycle command
 - for Claude Code, verify `quaid daemon status` points at the correct
   instance root before idling:
-  - `instance_root: /Users/owner/quaid/claude-code`
-  - `log_file: /Users/owner/quaid/claude-code/logs/daemon/extraction-daemon.log`
-  - `pid_file: /Users/owner/quaid/claude-code/data/extraction-daemon.pid`
+  - `instance_root: /Users/owner/quaid/claude-code-main`
+  - `log_file: /Users/owner/quaid/claude-code-main/logs/daemon/extraction-daemon.log`
+  - `pid_file: /Users/owner/quaid/claude-code-main/data/extraction-daemon.pid`
 
 ### M5: Auto-Inject
 
@@ -780,8 +781,8 @@ for `project logs seen=N written=M` — `written` should be ≥ 1).
 ssh example.local 'echo "=== OC SOUL.snippets ==="; cat ~/quaid/openclaw-main/SOUL.snippets.md 2>/dev/null || echo "(absent)"'
 ssh example.local 'echo "=== OC USER.snippets ==="; cat ~/quaid/openclaw-main/USER.snippets.md 2>/dev/null || echo "(absent)"'
 # CC
-ssh example.local 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
-ssh example.local 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code/USER.snippets.md 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== CC SOUL.snippets ==="; cat ~/quaid/claude-code-main/SOUL.snippets.md 2>/dev/null || echo "(absent — builds via CC extraction sessions)"'
+ssh example.local 'echo "=== CC USER.snippets ==="; cat ~/quaid/claude-code-main/USER.snippets.md 2>/dev/null || echo "(absent)"'
 ```
 
 Pass: OC `SOUL.snippets.md` has at least one entry. The section headers (e.g.
@@ -792,7 +793,7 @@ run. CC snippets may be absent on first install — they build via CC sessions.
 
 ```bash
 ssh example.local 'echo "=== OC journals ==="; ls ~/quaid/openclaw-main/journal/ 2>/dev/null; for f in ~/quaid/openclaw-main/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
-ssh example.local 'echo "=== CC journals ==="; ls ~/quaid/claude-code/journal/ 2>/dev/null || echo "(absent)"; for f in ~/quaid/claude-code/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
+ssh example.local 'echo "=== CC journals ==="; ls ~/quaid/claude-code-main/journal/ 2>/dev/null || echo "(absent)"; for f in ~/quaid/claude-code-main/journal/*.journal.md; do echo "--- $f ---"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; done'
 ```
 
 Pass: Journal directory exists. Presence of entries is correct but not required
@@ -804,7 +805,7 @@ a failure.
 
 ```bash
 ssh example.local 'echo "=== OC quaid PROJECT.log ==="; tail -30 ~/quaid/openclaw-main/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
-ssh example.local 'echo "=== CC quaid PROJECT.log ==="; tail -30 ~/quaid/claude-code/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
+ssh example.local 'echo "=== CC quaid PROJECT.log ==="; tail -30 ~/quaid/claude-code-main/projects/quaid/PROJECT.log 2>/dev/null || echo "(absent)"'
 ```
 
 Pass: `projects/quaid/PROJECT.log` exists and has at least one timestamped
@@ -1099,9 +1100,9 @@ Ask CC naturally:
 Verify from shell:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code ~/.openclaw/extensions/quaid/quaid project show cross-live-test 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid project show cross-live-test 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
 Pass:
@@ -1138,8 +1139,8 @@ Fail:
 After all milestones and the cross-platform project linking test.
 
 Instances on alfie use per-instance subdirectories under `~/quaid/`:
-- OC: `~/quaid/openclaw-main/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw`)
-- CC: `~/quaid/claude-code/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code`)
+- OC: `~/quaid/openclaw-main/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main`)
+- CC: `~/quaid/claude-code-main/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main`)
 
 ```bash
 # OC instance health
@@ -1153,8 +1154,8 @@ ssh example.local 'cat ~/quaid/openclaw-main/data/circuit-breaker.json 2>/dev/nu
 ssh example.local 'cat ~/quaid/openclaw-main/logs/janitor/checkpoint-all.json 2>/dev/null'
 
 # CC instance health
-ssh example.local 'sqlite3 ~/quaid/claude-code/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
-ssh example.local 'ls ~/quaid/claude-code/journal/ 2>/dev/null || echo "CC journal not found"'
+ssh example.local 'sqlite3 ~/quaid/claude-code-main/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
+ssh example.local 'ls ~/quaid/claude-code-main/journal/ 2>/dev/null || echo "CC journal not found"'
 ```
 
 Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirectory):
@@ -1163,7 +1164,7 @@ Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirector
 # OC identity
 ssh example.local 'for f in /Users/owner/quaid/openclaw-main/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 # CC identity
-ssh example.local 'for f in /Users/owner/quaid/claude-code/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/claude-code-main/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
 ```
 
 Audit project docs and snippets/journals:
@@ -1172,14 +1173,14 @@ Audit project docs and snippets/journals:
 # OC project docs
 ssh example.local 'find /Users/owner/quaid/openclaw-main/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
 # CC project docs
-ssh example.local 'find /Users/owner/quaid/claude-code/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
+ssh example.local 'find /Users/owner/quaid/claude-code-main/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
 # Live-test project (shared or per-instance depending on test run)
 ssh example.local 'find /Users/owner/quaid/shared/projects/live-test /Users/owner/quaid/openclaw-main/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
 # Snippets and journals
-ssh example.local 'for f in /Users/owner/quaid/openclaw-main/SOUL.snippets.md /Users/owner/quaid/openclaw-main/USER.snippets.md /Users/owner/quaid/claude-code/SOUL.snippets.md /Users/owner/quaid/claude-code/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
-ssh example.local 'for f in /Users/owner/quaid/openclaw-main/journal/SOUL.journal.md /Users/owner/quaid/openclaw-main/journal/USER.journal.md /Users/owner/quaid/openclaw-main/journal/MEMORY.journal.md /Users/owner/quaid/claude-code/journal/SOUL.journal.md /Users/owner/quaid/claude-code/journal/USER.journal.md /Users/owner/quaid/claude-code/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw-main/SOUL.snippets.md /Users/owner/quaid/openclaw-main/USER.snippets.md /Users/owner/quaid/claude-code-main/SOUL.snippets.md /Users/owner/quaid/claude-code-main/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw-main/journal/SOUL.journal.md /Users/owner/quaid/openclaw-main/journal/USER.journal.md /Users/owner/quaid/openclaw-main/journal/MEMORY.journal.md /Users/owner/quaid/claude-code-main/journal/SOUL.journal.md /Users/owner/quaid/claude-code-main/journal/USER.journal.md /Users/owner/quaid/claude-code-main/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
 # Project logs
-ssh example.local 'find /Users/owner/quaid/openclaw-main/projects /Users/owner/quaid/claude-code/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
+ssh example.local 'find /Users/owner/quaid/openclaw-main/projects /Users/owner/quaid/claude-code-main/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
 ```
 
 Pass criteria:
