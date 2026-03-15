@@ -1601,7 +1601,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               }
               sessionIndexMessageCounts.delete(prevSessionId);
             } else if (!prevSessionId && initialSnapshotDone && isSystemEnabled2("memory") && !isInternalSessionContext({ sessionKey: key }, { sessionId })) {
-              writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId });
+              writeHookTrace("session_index.new_key_detected", { key, session_id: sessionId, watcher_start_ms: watcherStartMs });
               for (const [priorKey, priorSid] of sessionKeyLastSeen.entries()) {
                 if (priorKey.startsWith("agent:main:hook:")) continue;
                 if (priorSid === sessionId) continue;
@@ -1614,8 +1614,14 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   priorMtime = st.mtimeMs;
                 } catch {
                 }
-                if (priorSize <= 0) continue;
-                if (priorMtime <= watcherStartMs) continue;
+                if (priorSize <= 0) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "empty", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize });
+                  continue;
+                }
+                if (priorMtime <= watcherStartMs) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "mtime", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, watcher_start_ms: watcherStartMs });
+                  continue;
+                }
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
                   label: "ResetSignal",
                   source: "session_index",
