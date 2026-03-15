@@ -549,8 +549,24 @@ Pass:
 **Phase 3 — Multi-hop traversal (tests graph reasoning):**
 
 This phase tests that the agent can answer a question that requires chaining
-two edges: `User --sibling_of--> Diana --parent_of--> Alice` → Alice is the
-user's niece.
+two edges: `<owner> --sibling_of--> Diana --parent_of--> Alice` → Alice is the
+user's niece. The owner name (e.g., "Solomon") must appear as the sibling entity,
+not "User" or "User's mom" — the extraction prompt now injects the owner name
+so first-person pronouns resolve correctly.
+
+**Pre-flight: clear any stale niece/Anne facts from prior test runs.**
+If any niece fact exists from a previous run, it will win over Alice in recall.
+
+```bash
+ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db); sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" ORDER BY created_at DESC LIMIT 10;"'
+```
+
+Delete any stale niece/Anne nodes found:
+
+```bash
+# Replace <id1> <id2> with actual IDs found above
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw ~/.openclaw/extensions/quaid/quaid delete-node <id>'
+```
 
 In a fresh session, tell the agent two facts naturally — do NOT say "niece":
 
@@ -558,23 +574,34 @@ In a fresh session, tell the agent two facts naturally — do NOT say "niece":
 - `Diana has a daughter named Alice.`
 
 Then trigger `/reset` to extract those facts and start a new session.
+
+**Verify edges before asking the agent** — if extraction went wrong, fix it
+before wasting a session query:
+
+```bash
+ssh example.local 'DB=$([ -f ~/quaid/openclaw-main/data/memory.db ] && echo ~/quaid/openclaw-main/data/memory.db || echo ~/quaid/data/memory.db); sqlite3 "$DB" "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"Diana\",\"Alice\") OR t.name IN (\"Diana\",\"Alice\") ORDER BY s.name, e.relation;"'
+```
+
+Expected edges (owner = "Solomon" for this install):
+- `Alice --parent_of--` or `Diana --parent_of--> Alice`
+- `Diana --sibling_of--> Solomon` (or `Solomon --sibling_of--> Diana`)
+
+If the sibling edge links to the wrong entity (e.g. "User's mom"), that is a
+first-person entity resolution failure. The fix (owner name injection in prompt)
+is in this build. Delete the wrong edges and re-seed if needed.
+
 In the new session, ask:
 
 - `Who is my niece?`
 
 The agent must traverse: sibling → that sibling's child → answer is the niece.
 
-Verify the edge chain exists:
-
-```bash
-ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT s.name, e.relation, t.name FROM edges e JOIN nodes s ON e.source_id=s.id JOIN nodes t ON e.target_id=t.id WHERE s.name IN (\"Diana\",\"Alice\") OR t.name IN (\"Diana\",\"Alice\") ORDER BY s.name, e.relation;"'
-```
-
 Pass:
+- edge chain `Diana --parent_of--> Alice` exists in DB = Phase 3 extraction pass
+- sibling edge anchors to owner name (e.g. "Solomon"), not "User" or "User's mom"
 - agent correctly answers "Alice" (or "Alice, Diana's daughter")
-- answer is grounded in graph traversal, not a lucky guess or hallucination
-- edge chain `Diana --parent_of--> Alice` and `Diana --sibling_of--> User`
-  (or symmetric equivalent) exist in the DB
+- if agent answers a different name (e.g. "Anne"), check for stale niece facts
+  from prior runs and delete them, then retest
 
 ### M8: Full Project System CRUD
 

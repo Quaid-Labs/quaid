@@ -58,9 +58,22 @@ def _load_soul_snippets_module():
     return _SOUL_SNIPPETS_MODULE
 
 
-def _load_extraction_prompt(domain_defs: Optional[Dict[str, str]] = None) -> str:
+def _load_extraction_prompt(
+    domain_defs: Optional[Dict[str, str]] = None,
+    owner_id: Optional[str] = None,
+) -> str:
     """Load the extraction system prompt from file."""
     prompt = get_prompt("ingest.extraction.system")
+    # Inject the owner name so the LLM knows what entity "I"/"My" refers to.
+    # Without this the LLM must guess, leading to wrong edge subjects like
+    # "User's mom" instead of the actual user when processing first-person statements.
+    if owner_id:
+        prompt = (
+            f"The user who owns this knowledge base is: {owner_id}\n"
+            f"When the transcript uses first-person pronouns (I, my, me, mine), "
+            f"the subject is {owner_id}. Use this name when writing facts and edges "
+            f"about the user themselves.\n\n"
+        ) + prompt
     domain_defs = domain_defs or {}
     if domain_defs:
         lines = [
@@ -442,8 +455,8 @@ def extract_from_transcript(
     if not allowed_domains:
         raise RuntimeError("No active domains are registered in retrieval config")
 
-    # Load extraction prompt
-    system_prompt = _load_extraction_prompt(domain_defs)
+    # Load extraction prompt — inject owner_id so the LLM anchors first-person pronouns correctly
+    system_prompt = _load_extraction_prompt(domain_defs, owner_id=owner_id)
 
     # Chunk transcript for extraction (split at turn boundaries)
     try:
