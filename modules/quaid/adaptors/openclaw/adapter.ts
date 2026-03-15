@@ -141,6 +141,24 @@ function getDaemonSignalDir(agentId: string = "main"): string {
 // Primary instance signal dir (backward-compat constant for non-session-routed callers).
 const DAEMON_SIGNAL_DIR = getDaemonSignalDir("main");
 
+/**
+ * Read the install-time lower bound from data/installed-at.json.
+ * Mirrors Python's _read_installed_at() in core/extraction_daemon.py.
+ * Returns 0 if the file is missing or unreadable (no floor applied).
+ */
+function readInstalledAtMs(): number {
+  try {
+    const instanceId = getInstanceId("main");
+    const p = instanceId
+      ? path.join(WORKSPACE, instanceId, "data", "installed-at.json")
+      : path.join(WORKSPACE, "data", "installed-at.json");
+    const raw = JSON.parse(fs.readFileSync(p, "utf8")) as Record<string, unknown>;
+    const ts = String(raw.installedAt || "").trim();
+    if (ts) return new Date(ts).getTime();
+  } catch {}
+  return 0;
+}
+
 const sessionTranscriptPaths = new Map<string, string>();
 // Maps sessionId → agentId for multi-agent daemon signal routing.
 // Populated by the session index watcher as sessions are discovered.
@@ -1970,8 +1988,13 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         return;
       }
       sessionIndexWatcherStarted = true;
-      // Timestamp when this watcher instance started. Used as secondary filter
-      // on transcript mtime in the new-key path.
+      // Hard floor: sessions whose transcripts were last modified before Quaid
+      // was installed should never be signalled — they predate the install and
+      // we have no cursors for them. Falls back to 0 (no floor) if the file
+      // is missing, which is safe: the watcherStartMs check below still applies.
+      const installedAtMs = readInstalledAtMs();
+      // Soft floor: sessions not touched since this gateway started. Prevents
+      // re-signalling sessions that were idle before the process restarted.
       const watcherStartMs = Date.now();
       // True once the first tick has completed and sessionKeyLastSeen is populated
       // with the initial snapshot from sessions.json. The new-key signal path is
@@ -2086,9 +2109,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                 if (/^agent:[^:]+:hook:/.test(priorKey)) continue;
                 if (priorSid === sessionId) continue;
                 if (isInternalSessionContext({ sessionKey: priorKey }, { sessionId: priorSid })) continue;
-                // Only signal sessions whose transcript was modified after this watcher
-                // started — this excludes stale sessions from previous gateway lifetimes
-                // whose messages were already present at startup.
+                // Only signal sessions whose transcript was modified after Quaid
+                // was installed. installedAtMs is the hard floor: pre-install
+                // sessions must never be signalled (we have no cursors for them).
+                // watcherStartMs is the fallback when installed-at.json is missing.
+                const mtimeFloorMs = installedAtMs > 0 ? installedAtMs : watcherStartMs;
                 let priorSize = -1;
                 let priorMtime = 0;
                 try {
@@ -2100,8 +2125,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   writeHookTrace("session_index.new_key_skip", { reason: "empty", prior_sid: priorSid, prior_key: priorKey, prior_size: priorSize });
                   continue;
                 }
-                if (priorMtime <= watcherStartMs) {
-                  writeHookTrace("session_index.new_key_skip", { reason: "mtime", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, watcher_start_ms: watcherStartMs });
+                if (priorMtime <= mtimeFloorMs) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "mtime", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, installed_at_ms: installedAtMs, watcher_start_ms: watcherStartMs });
                   continue;
                 }
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
