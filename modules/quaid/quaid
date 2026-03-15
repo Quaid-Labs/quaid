@@ -232,13 +232,23 @@ store|stats|recall|get-edges|get-node|delete-node|create-edge|delete-edges-by-fa
     python3 - "$ADAPTER_CMD" "$@" <<'PYEOF'
 import sys, os
 sys.path.insert(0, os.environ.get("QUAID_MODULE_ROOT", os.path.dirname(os.path.abspath(__file__))))
-from lib.adapter import get_adapter
 
 adapter_ns = sys.argv[1]
 subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
 rest = sys.argv[3:]
 
-adapter = get_adapter()
+# Instantiate the adapter directly from the namespace rather than reading
+# config/memory.json via get_adapter(). This allows commands like make_instance
+# to run even when the target silo doesn't have config/memory.json yet.
+if adapter_ns == "claudecode":
+    from adaptors.claude_code.adapter import ClaudeCodeAdapter
+    adapter = ClaudeCodeAdapter()
+elif adapter_ns == "openclaw":
+    from adaptors.openclaw.adapter import OpenClawAdapter
+    adapter = OpenClawAdapter()
+else:
+    from lib.adapter import get_adapter
+    adapter = get_adapter()
 ns = adapter.get_cli_namespace()
 if ns != adapter_ns:
     print(f"error: adapter namespace '{ns}' does not match '{adapter_ns}'", file=sys.stderr)
