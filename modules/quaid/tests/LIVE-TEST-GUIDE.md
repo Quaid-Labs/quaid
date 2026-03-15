@@ -710,35 +710,60 @@ Fail:
 
 ## Post-Test Audit
 
-After all milestones and the cross-platform project linking test:
+After all milestones and the cross-platform project linking test.
+
+Instances on alfie use per-instance subdirectories under `~/quaid/`:
+- OC: `~/quaid/openclaw/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw`)
+- CC: `~/quaid/claude-code/` (`QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code`)
 
 ```bash
-ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
-ssh example.local 'sqlite3 ~/quaid/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
-ssh example.local 'ls ~/quaid/journal/'
-ssh example.local 'cat ~/quaid/USER.snippets.md 2>/dev/null'
-ssh example.local 'ls -lt ~/quaid/logs/ | head -20'
-ssh example.local 'cat ~/quaid/config/memory.json | python3 -m json.tool | head -20'
-ssh example.local 'cat ~/quaid/data/circuit-breaker.json 2>/dev/null'
-ssh example.local 'cat ~/quaid/logs/janitor/checkpoint-all.json 2>/dev/null'
+# OC instance health
+ssh example.local 'sqlite3 ~/quaid/openclaw/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;"'
+ssh example.local 'sqlite3 ~/quaid/openclaw/data/memory.db "SELECT COUNT(*) FROM nodes WHERE embedding IS NOT NULL;"'
+ssh example.local 'ls ~/quaid/openclaw/journal/'
+ssh example.local 'cat ~/quaid/openclaw/USER.snippets.md 2>/dev/null'
+ssh example.local 'ls -lt ~/quaid/openclaw/logs/ | head -20'
+ssh example.local 'cat ~/quaid/openclaw/config/memory.json | python3 -m json.tool | head -20'
+ssh example.local 'cat ~/quaid/openclaw/data/circuit-breaker.json 2>/dev/null'
+ssh example.local 'cat ~/quaid/openclaw/logs/janitor/checkpoint-all.json 2>/dev/null'
+
+# CC instance health
+ssh example.local 'sqlite3 ~/quaid/claude-code/data/memory.db "SELECT COUNT(*) FROM nodes; SELECT COUNT(*) FROM edges;" 2>/dev/null || echo "CC DB not found"'
+ssh example.local 'ls ~/quaid/claude-code/journal/ 2>/dev/null || echo "CC journal not found"'
 ```
 
-Also audit the markdown artifacts directly, not just their existence:
+Audit identity files (SOUL, USER, MEMORY — now live in `identity/` subdirectory):
 
 ```bash
-ssh example.local 'for f in /Users/owner/quaid/{SOUL,USER,IDENTITY,TOOLS,AGENTS,PROJECT,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
-ssh example.local 'find /Users/owner/quaid/shared/projects/live-test -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
-ssh example.local 'for f in /Users/owner/quaid/openclaw/SOUL.snippets.md /Users/owner/quaid/claude-code/SOUL.snippets.md /Users/owner/quaid/openclaw/journal/SOUL.journal.md /Users/owner/quaid/openclaw/journal/USER.journal.md /Users/owner/quaid/openclaw/journal/MEMORY.journal.md /Users/owner/quaid/claude-code/journal/SOUL.journal.md /Users/owner/quaid/claude-code/journal/USER.journal.md /Users/owner/quaid/claude-code/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
-ssh example.local 'find /Users/owner/quaid/shared/projects -name "PROJECT.log" -o -name "*.log" | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
+# OC identity
+ssh example.local 'for f in /Users/owner/quaid/openclaw/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+# CC identity
+ssh example.local 'for f in /Users/owner/quaid/claude-code/identity/{SOUL,USER,MEMORY}.md; do echo "===== $f"; ls -l "$f" 2>/dev/null || true; sed -n "1,80p" "$f" 2>/dev/null || true; echo; done'
+```
+
+Audit project docs and snippets/journals:
+
+```bash
+# OC project docs
+ssh example.local 'find /Users/owner/quaid/openclaw/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
+# CC project docs
+ssh example.local 'find /Users/owner/quaid/claude-code/projects -maxdepth 3 -name "PROJECT.md" -o -name "TOOLS.md" -o -name "AGENTS.md" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f" 2>/dev/null; sed -n "1,30p" "$f" 2>/dev/null; echo; done'
+# Live-test project (shared or per-instance depending on test run)
+ssh example.local 'find /Users/owner/quaid/shared/projects/live-test /Users/owner/quaid/openclaw/projects/live-test 2>/dev/null -maxdepth 2 -type f | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,80p" "$f"; echo; done'
+# Snippets and journals
+ssh example.local 'for f in /Users/owner/quaid/openclaw/SOUL.snippets.md /Users/owner/quaid/openclaw/USER.snippets.md /Users/owner/quaid/claude-code/SOUL.snippets.md /Users/owner/quaid/claude-code/USER.snippets.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || echo "(absent — builds via extraction)"; sed -n "1,60p" "$f" 2>/dev/null; echo; done'
+ssh example.local 'for f in /Users/owner/quaid/openclaw/journal/SOUL.journal.md /Users/owner/quaid/openclaw/journal/USER.journal.md /Users/owner/quaid/openclaw/journal/MEMORY.journal.md /Users/owner/quaid/claude-code/journal/SOUL.journal.md /Users/owner/quaid/claude-code/journal/USER.journal.md /Users/owner/quaid/claude-code/journal/MEMORY.journal.md; do echo "===== $f"; wc -l "$f" 2>/dev/null || true; sed -n "1,60p" "$f" 2>/dev/null || true; echo; done'
+# Project logs
+ssh example.local 'find /Users/owner/quaid/openclaw/projects /Users/owner/quaid/claude-code/projects -name "PROJECT.log" 2>/dev/null | sort | while read f; do echo "===== $f"; wc -l "$f"; sed -n "1,60p" "$f"; echo; done'
 ```
 
 Pass criteria:
-- root markdown files are present and not obviously malformed or empty placeholders
-- the live-test project docs are coherent and point at the correct shared paths
-- if the project is expected to have `TOOLS.md`, `AGENTS.md`, or a richer
-  `PROJECT.md`, verify that explicitly and record any missing file as a finding
-- snippets and journals look structurally sane and consistent with the run
-- project logs, if present, are readable and correspond to real actions taken
+- per-instance identity files (`identity/SOUL.md`, `identity/USER.md`, `identity/MEMORY.md`) are present for both OC and CC; not empty placeholders
+- quaid project docs (`projects/quaid/PROJECT.md`, `TOOLS.md`, `AGENTS.md`) exist for both instances
+- live-test project docs are coherent and point at correct paths
+- OC snippets (`SOUL.snippets.md`, `USER.snippets.md`) are present and building; CC snippets may be absent on first install and build naturally over time
+- journals look structurally sane and consistent with the run
+- project logs are readable and correspond to real actions taken
 
 ## Final Closeout
 

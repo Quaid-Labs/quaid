@@ -1798,6 +1798,32 @@ print('[+] MemoryDB domain init complete')
         fi
     done
 
+    # Create root PROJECT.md if it doesn't exist
+    if [[ ! -f "${WORKSPACE_ROOT}/PROJECT.md" ]]; then
+        cat > "${WORKSPACE_ROOT}/PROJECT.md" << 'PROJROOT'
+# Quaid Workspace
+
+Quaid knowledge layer instance.
+
+## Identity
+- `identity/SOUL.md` — Agent personality and interaction style
+- `identity/USER.md` — About the user (biography, goals, preferences)
+- `identity/MEMORY.md` — Core facts loaded every session
+
+## Projects
+Active projects are tracked in `projects/`. Each project has `PROJECT.md` with
+context, and `TOOLS.md` / `AGENTS.md` which are auto-injected at session start.
+
+See `projects/quaid/` for Quaid system documentation.
+
+## Structure
+- `data/` — Memory database (SQLite)
+- `journal/` — Journal entries (slow-path learning)
+- `logs/` — Janitor and system logs
+PROJROOT
+        info "Created PROJECT.md"
+    fi
+
     # Create journal files if journal enabled
     if $SYS_JOURNAL; then
         for f in SOUL USER MEMORY; do
@@ -2103,7 +2129,8 @@ _write_config() {
       "files": {
         "SOUL.md": { "purpose": "Personality and interaction style", "maxLines": 80 },
         "USER.md": { "purpose": "About the user", "maxLines": 150 },
-        "MEMORY.md": { "purpose": "Core memories loaded every session", "maxLines": 100 }
+        "MEMORY.md": { "purpose": "Core memories loaded every session", "maxLines": 100 },
+        "PROJECT.md": { "purpose": "Workspace instance overview and project index", "maxLines": 60 }
       }
     },
     "journal": {
