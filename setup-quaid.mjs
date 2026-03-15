@@ -3730,17 +3730,24 @@ function enableRequiredOpenClawHooks() {
     }
 
     // Agent-level allow for collectExplicitAllowlist (gate 1 — tool instantiation).
+    // OC agents config is agents.list (array of {id, ...}), not agents.<id> (object map).
+    // Find the "main" agent entry in agents.list, or insert one if absent.
     const agentsCfg = parsed.agents || (parsed.agents = {});
-    const mainAgentCfg = agentsCfg.main || (agentsCfg.main = {});
-    const mainAgentToolsCfg = mainAgentCfg.tools || (mainAgentCfg.tools = {});
+    const agentsList = Array.isArray(agentsCfg.list) ? agentsCfg.list : (agentsCfg.list = []);
+    let mainAgentEntry = agentsList.find(a => a && String(a.id || "").trim() === "main");
+    if (!mainAgentEntry) {
+      mainAgentEntry = { id: "main" };
+      agentsList.push(mainAgentEntry);
+    }
+    const mainAgentToolsCfg = mainAgentEntry.tools || (mainAgentEntry.tools = {});
     const existingAgentAllow = Array.isArray(mainAgentToolsCfg.allow) ? mainAgentToolsCfg.allow : [];
     const missingAgentAllow = quaidToolsToAllow.filter(t => !existingAgentAllow.includes(t));
     if (missingAgentAllow.length > 0) {
       mainAgentToolsCfg.allow = [...existingAgentAllow, ...missingAgentAllow];
       changed = true;
-      log.info(`Added Quaid tools to agents.main.tools.allow: ${missingAgentAllow.join(", ")}`);
+      log.info(`Added Quaid tools to agents.list[main].tools.allow: ${missingAgentAllow.join(", ")}`);
     } else {
-      log.info("Quaid tools already in agents.main.tools.allow");
+      log.info("Quaid tools already in agents.list[main].tools.allow");
     }
 
     if (changed) {
