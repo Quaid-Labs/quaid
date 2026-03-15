@@ -674,7 +674,8 @@ After project CRUD, trigger extraction to generate project logs. Tell the agent
 naturally something about the session, then do `/reset`:
 
 > "We've just tested project creation, show, list, update, and delete for the
-> live-test project. Triggering a reset to capture this."
+> live-test project via the quaid CLI. This is part of the quaid live-test
+> suite M8 run. Triggering a reset to capture project activity."
 
 Then `/reset`. This gives the extraction LLM enough project context to include
 a `project_logs` entry for the quaid project in the extraction JSON.
@@ -761,9 +762,13 @@ may be cached stale). Restart before triggering the trigger extraction:
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon stop 2>&1; sleep 2; QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid daemon start 2>&1'
 ```
 
-Then do a fresh OC session + `/reset` to trigger a full extraction cycle:
+Then do a fresh OC session + `/reset` to trigger a full extraction cycle.
+Send a substantive message that mentions project context so the LLM generates
+a `project_logs` entry for the quaid project:
 
-> "Verifying extraction pipeline artifacts for M11. Triggering reset."
+> "We've been running M0-M11 of the live test suite for the quaid project on
+> alfie. Snippets, journals, and project logs are all being validated.
+> Triggering a reset to capture project activity for M11."
 
 Then `/reset` and wait for the daemon to complete (check `tail -5` of daemon log
 for `project logs seen=N written=M` — `written` should be ≥ 1).
