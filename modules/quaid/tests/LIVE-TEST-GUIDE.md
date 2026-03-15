@@ -404,6 +404,15 @@ journals, and project logs are building from extractions.
 > via a new-key arrival branch in `tickSessionIndex`: when a new key appears,
 > it signals any recently-active sessions with content immediately (within 1s).
 > No follow-up message or `.reset.*` backup needed.
+>
+> **OC 2026.3.13+ note:** `/new` may no longer be intercepted as a built-in TUI
+> slash command in this version — OC passes it through to the model as a user
+> message and the model responds saying it doesn't know the command. In this
+> case the `new_key_detected` path does NOT fire (no new sessions.json key), but
+> the adapter's `handleSlashLifecycleFromMessage` path DOES detect `/new` in the
+> message event and writes a ResetSignal for the pre-/new session. Extraction
+> still fires. Check for `hook.message.command_detected` (command=new) in the
+> hook trace instead of `session_index.new_key_detected`.
 
 Procedure:
 1. Tell the agent something memorable in natural conversation — pick a vivid,
@@ -412,15 +421,19 @@ Procedure:
    using a smoked brisket recipe she's kept secret for twenty years."`
    Note the distinctive keyword(s) you'll search for (e.g. `chili cook-off`).
 2. Wait for full idle.
-3. Send `/new`. (sessions.json is NOT updated yet at this point — visual-only switch)
-4. **Send one message to the new session** (e.g. `Hello`). This is required — OC
-   only writes the new session key to `sessions.json` when the first message is
-   processed. That update is what triggers the `new_key_detected` path.
-5. Wait 30–60 seconds for extraction.
-6. Check DB for the distinctive keyword.
+3. Send `/new`.
+   - **OC < 2026.3.13 (TUI intercepts):** sessions.json is NOT updated yet —
+     visual-only switch. Send one message to the new session (e.g. `Hello`)
+     to write the new key and trigger `new_key_detected`.
+   - **OC 2026.3.13+ (TUI passes to model):** model will reply "no /new
+     command". That's OK — adapter detects it via message event and fires
+     ResetSignal immediately. No follow-up message needed.
+4. Wait 30–60 seconds for extraction.
+5. Check DB for the distinctive keyword.
 
-Hook trace markers to confirm: `session_index.new_key_detected` followed by
-`session_index.signal_queued` with `source=new-key` and the proof session ID.
+Hook trace markers to confirm:
+- **OC < 2026.3.13:** `session_index.new_key_detected` → `session_index.signal_queued` (source=new-key)
+- **OC 2026.3.13+:** `hook.message.command_detected` (command=new) → `daemon.signal_written` (type=reset)
 
 Pass:
 - the fact is stored after the lifecycle boundary
