@@ -716,6 +716,234 @@ Fail:
 - `projects/quaid/PROJECT.log` absent after M8's trigger step
 - Any file is structurally malformed (broken JSON, truncated entries)
 
+### M12: OC Multi-Agent Verification
+
+This milestone verifies that OpenClaw's multi-agent silo structure is correct
+and that extraction signals route to the right agent's silo.
+
+**Step 1 — list_agent_instance_ids returns multiple IDs including openclaw-main:**
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+  python3 -c "
+import sys; sys.path.insert(0, \"/Users/owner/quaid/plugins/quaid\")
+from adaptors.factory import create_adapter
+a = create_adapter(\"openclaw\")
+ids = a.list_agent_instance_ids()
+print(ids)
+assert len(ids) >= 1, \"Expected at least one agent instance ID\"
+assert \"openclaw-main\" in ids, \"openclaw-main not in IDs\"
+print(\"PASS: list_agent_instance_ids =\", ids)
+"'
+```
+
+**Step 2 — each agent has its own silo with a data/ dir:**
+
+```bash
+ssh example.local '
+for agent_id in openclaw-main openclaw-coding; do
+  silo="$HOME/quaid/$agent_id"
+  if [ -d "$silo/data" ]; then
+    echo "PASS: $silo/data exists"
+  else
+    echo "SKIP/ABSENT: $silo/data (agent may not be configured)"
+  fi
+done
+'
+```
+
+**Step 3 — each silo has an extraction-signals/ dir:**
+
+```bash
+ssh example.local '
+for agent_id in openclaw-main openclaw-coding; do
+  sigdir="$HOME/quaid/$agent_id/data/extraction-signals"
+  if [ -d "$sigdir" ]; then
+    echo "PASS: $sigdir exists"
+  elif [ -d "$HOME/quaid/$agent_id" ]; then
+    echo "WARN: silo exists but extraction-signals/ absent — may not have started yet"
+  else
+    echo "SKIP: $HOME/quaid/$agent_id does not exist"
+  fi
+done
+'
+```
+
+**Step 4 — send a tmux message to OC window and verify session is tracked under
+the correct agent's signal dir:**
+
+```bash
+# Send a test message to the OC agent window
+TMUX_MSG_SENDER=tester TMUX_MSG_SOURCE=test \
+  ~/quaid/util/scripts/tmux-msg.sh main:1.0 "Verification ping for M12 multi-agent signal routing check"
+
+# Wait briefly for the hook to process, then verify the signal appears under openclaw-main
+sleep 5
+ssh example.local 'ls -lt ~/quaid/openclaw-main/data/extraction-signals/ 2>/dev/null | head -5 || \
+  ls -lt ~/quaid/openclaw/data/extraction-signals/ 2>/dev/null | head -5 || \
+  echo "(no signal dir found — check instance naming convention on this install)"'
+```
+
+Pass: extraction signal appears under the main agent's silo dir, not a shared
+or flat path.
+
+**Step 5 — quaid instances list shows OC agent silos:**
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main \
+  ~/.openclaw/extensions/quaid/quaid instances list 2>&1 || \
+  echo "(instances list not available — check quaid version)"'
+```
+
+**Step 6 — extraction-daemon.pid exists for main agent (daemon running):**
+
+```bash
+ssh example.local '
+pid_file="$HOME/quaid/openclaw-main/data/extraction-daemon.pid"
+if [ -f "$pid_file" ]; then
+  pid=$(cat "$pid_file")
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "PASS: daemon running, PID=$pid"
+  else
+    echo "WARN: pid file exists but process $pid is not running"
+  fi
+else
+  # Fallback: legacy flat instance path
+  pid_file="$HOME/quaid/openclaw/data/extraction-daemon.pid"
+  if [ -f "$pid_file" ]; then
+    pid=$(cat "$pid_file")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "PASS (legacy path): daemon running, PID=$pid"
+    else
+      echo "WARN: pid file at legacy path but process $pid is not running"
+    fi
+  else
+    echo "FAIL: no extraction-daemon.pid found under openclaw-main or openclaw"
+  fi
+fi
+'
+```
+
+Pass:
+- `list_agent_instance_ids()` returns at least `["openclaw-main"]`
+- each configured agent has its own `data/` and `extraction-signals/` silo dir
+- extraction signals land under the correct per-agent dir, not a shared path
+- `quaid instances list` reports OC agent silos
+- `extraction-daemon.pid` exists and points to a live process for main
+
+Fail:
+- `list_agent_instance_ids()` returns empty list or raises
+- signals land in a shared or flat path instead of the per-agent silo
+- daemon pid file is absent after install
+
+### M13: CC Multi-Instance Verification
+
+This milestone verifies that `quaid claudecode make_instance` creates a properly
+isolated Claude Code project instance with the correct silo structure and
+project wiring.
+
+**Step 1 — create test project dir:**
+
+```bash
+ssh example.local 'mkdir -p /tmp/quaid-m13-test && echo "created /tmp/quaid-m13-test"'
+```
+
+**Step 2 — run make_instance:**
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  ~/.openclaw/extensions/quaid/quaid claudecode make_instance /tmp/quaid-m13-test m13test 2>&1'
+```
+
+Expected output includes:
+- `Created silo: .../claude-code-m13test`
+- `Instance ID:  claude-code-m13test`
+- `Wrote QUAID_INSTANCE=claude-code-m13test to /tmp/quaid-m13-test/.claude/settings.json`
+
+**Step 3 — verify silo created:**
+
+```bash
+ssh example.local 'ls ~/quaid/claude-code-m13test/ && echo "PASS: silo exists"'
+```
+
+**Step 4 — verify silo directory structure:**
+
+```bash
+ssh example.local '
+silo="$HOME/quaid/claude-code-m13test"
+for subdir in config data identity journal logs; do
+  if [ -d "$silo/$subdir" ]; then
+    echo "PASS: $silo/$subdir"
+  else
+    echo "FAIL: $silo/$subdir missing"
+  fi
+done
+'
+```
+
+**Step 5 — verify config/memory.json has adapter type "claude-code":**
+
+```bash
+ssh example.local 'python3 -c "
+import json
+from pathlib import Path
+cfg = json.loads(Path(\"$HOME/quaid/claude-code-m13test/config/memory.json\").read_text())
+adapter_type = cfg.get(\"adapter\", {}).get(\"type\", \"\")
+assert adapter_type == \"claude-code\", f\"Expected claude-code, got {adapter_type!r}\"
+print(\"PASS: adapter.type =\", adapter_type)
+"'
+```
+
+**Step 6 — verify .claude/settings.json written with correct QUAID_INSTANCE:**
+
+```bash
+ssh example.local 'python3 -c "
+import json
+from pathlib import Path
+settings = json.loads(Path(\"/tmp/quaid-m13-test/.claude/settings.json\").read_text())
+iid = settings.get(\"env\", {}).get(\"QUAID_INSTANCE\", \"\")
+assert iid == \"claude-code-m13test\", f\"Expected claude-code-m13test, got {iid!r}\"
+print(\"PASS: QUAID_INSTANCE =\", iid)
+"'
+```
+
+**Step 7 — verify instance appears in quaid instances list:**
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-m13test \
+  ~/.openclaw/extensions/quaid/quaid instances list 2>&1 | grep -i m13test || \
+  echo "(instances list not available — check quaid version)"'
+```
+
+**Step 8 — dry-run creates no silo:**
+
+```bash
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main \
+  ~/.openclaw/extensions/quaid/quaid claudecode make_instance /tmp/quaid-m13-test m13test-dry --dry-run 2>&1'
+ssh example.local 'test ! -d ~/quaid/claude-code-m13test-dry && echo "PASS: dry-run created no silo" || echo "FAIL: dry-run created silo"'
+```
+
+**Step 9 — cleanup:**
+
+```bash
+ssh example.local 'trash /tmp/quaid-m13-test 2>/dev/null || rm -rf /tmp/quaid-m13-test; echo "cleaned project dir"'
+ssh example.local 'trash ~/quaid/claude-code-m13test 2>/dev/null || rm -rf ~/quaid/claude-code-m13test; echo "cleaned silo"'
+```
+
+Pass:
+- `make_instance` prints the silo path and settings confirmation
+- silo directories `config/`, `data/`, `identity/`, `journal/`, `logs/` all exist
+- `config/memory.json` has `adapter.type == "claude-code"`
+- `/tmp/quaid-m13-test/.claude/settings.json` has `env.QUAID_INSTANCE == "claude-code-m13test"`
+- `quaid instances list` includes `claude-code-m13test`
+- dry-run leaves no silo on disk
+
+Fail:
+- `make_instance` errors or produces no output
+- any expected silo subdir is missing
+- settings.json absent or contains wrong instance ID
+- dry-run creates the silo
+
 ## Cross-Platform Project Linking Test
 
 Run this only after both OpenClaw and Claude Code have passed M1-M10.
