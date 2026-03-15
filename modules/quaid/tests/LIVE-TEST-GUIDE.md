@@ -357,12 +357,15 @@ Run M1-M10 on OpenClaw first. After OpenClaw passes, run M1-M10 on Claude Code.
 Procedure:
 1. Seed a distinctive `PROOFNEW-<timestamp>` fact in the current session.
 2. Wait for full idle.
-3. Send `/new`.
-4. Wait 30–60 seconds for extraction.
-5. Check DB for the proof token.
+3. Send `/new`. (sessions.json is NOT updated yet at this point — visual-only switch)
+4. **Send one message to the new session** (e.g. `Hello`). This is required — OC
+   only writes the new session key to `sessions.json` when the first message is
+   processed. That update is what triggers the `new_key_detected` path.
+5. Wait 30–60 seconds for extraction.
+6. Check DB for the proof token.
 
 Hook trace markers to confirm: `session_index.new_key_detected` followed by
-`session_index.signal_queued` with `source=new-key`.
+`session_index.signal_queued` with `source=new-key` and the proof session ID.
 
 Pass:
 - the fact is stored after the lifecycle boundary
