@@ -2904,16 +2904,25 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
 
   // Legacy hook is deprecated; reset/compaction is now handled by lifecycle contracts.
   log.info("Legacy hook quaid-reset-signal is deprecated and no longer needed (no action required).");
-  if (_isPlatform("claude-code")) {
-    // Create per-instance identity directory for SOUL.md, USER.md, MEMORY.md.
-    // Use the resolved QUAID_INSTANCE (e.g. "claude-code-main") so the directory
-    // matches the actual silo path rather than the bare adapter name.
-    const ccInstanceId = (process.env.QUAID_INSTANCE || "claude-code-main").trim();
-    const identityDir = path.join(WORKSPACE, ccInstanceId, "identity");
+  // Create per-instance identity directory for SOUL.md, USER.md, MEMORY.md.
+  // Required by the janitor's snippet processor for all adapter types.
+  // Use the resolved QUAID_INSTANCE so the directory matches the actual silo path.
+  const resolvedInstanceId = (process.env.QUAID_INSTANCE || resolvedInstallerInstanceId()).trim();
+  if (resolvedInstanceId && resolvedInstanceId !== "standalone") {
+    const identityDir = path.join(WORKSPACE, resolvedInstanceId, "identity");
     if (!fs.existsSync(identityDir)) {
       fs.mkdirSync(identityDir, { recursive: true });
       log.info(`Created identity directory: ${identityDir}`);
     }
+    for (const f of ["SOUL.md", "USER.md", "MEMORY.md"]) {
+      const fp = path.join(identityDir, f);
+      if (!fs.existsSync(fp)) {
+        fs.writeFileSync(fp, `# ${f.replace(".md", "")}\n`);
+        log.info(`Created identity/${f}`);
+      }
+    }
+  }
+  if (_isPlatform("claude-code")) {
     setupClaudeCodeHooks();
   }
 
@@ -3658,7 +3667,16 @@ function enableRequiredOpenClawHooks() {
     const entries = internal.entries || (internal.entries = {});
     // Glob patterns for project-level bootstrap files, resolved relative to workspace.
     // Only AGENTS.md and TOOLS.md basenames are loaded by OC; symlinks are not followed.
-    const bootstrapExtraFilePaths = ["projects/*/AGENTS.md", "projects/*/TOOLS.md"];
+    // Use instance-level path when an instance ID is set (e.g. "openclaw-main/projects/*/AGENTS.md")
+    // so OC picks up docs from the same directory DocsRegistry resolves to.
+    const ocInstanceId = resolvedInstallerInstanceId("openclaw");
+    const projectsGlobBase = (ocInstanceId && ocInstanceId !== "standalone")
+      ? `${ocInstanceId}/projects`
+      : "projects";
+    const bootstrapExtraFilePaths = [
+      `${projectsGlobBase}/*/AGENTS.md`,
+      `${projectsGlobBase}/*/TOOLS.md`,
+    ];
     let changed = false;
     for (const hookName of requiredHooks) {
       const entry = entries[hookName] || (entries[hookName] = {});
