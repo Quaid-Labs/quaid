@@ -2122,6 +2122,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const newSessionId = String(ctx?.sessionId || event?.sessionId || "").trim();
       if (!newSessionId) return;
       writeHookTrace("hook.before_agent_start.session_seen", { session_id: newSessionId });
+      const newSessionKey = String(
+        ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(newSessionId)
+      ).trim().toLowerCase();
+      const isInteractiveKey = !newSessionKey || newSessionKey === "agent:main:main" || newSessionKey.startsWith("agent:main:tui-") || newSessionKey.startsWith("agent:main:telegram:");
+      if (!isInteractiveKey) return;
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
       if (!isAlreadyTracked && isSystemEnabled2("memory")) {
         const RECENT_RESET_WINDOW_MS = 12e4;

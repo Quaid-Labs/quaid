@@ -2654,6 +2654,22 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       if (!newSessionId) return;
       writeHookTrace("hook.before_agent_start.session_seen", { session_id: newSessionId });
 
+      // Only trigger a session transition when the NEW session is an interactive
+      // user-facing session. OC embedded/internal operations (compact agent,
+      // slug-gen, tool runners, etc.) also fire before_agent_start with new
+      // session IDs. If we allow those to trigger a transition, we write a reset
+      // signal for the prior interactive session while an embedded op is still
+      // running — which causes OC to clear the command lane and abort the op
+      // (CommandLaneClearedError on /compact).
+      const newSessionKey = String(
+        ctx?.sessionKey || event?.sessionKey || event?.targetSessionKey || resolveSessionKeyForSessionId(newSessionId)
+      ).trim().toLowerCase();
+      const isInteractiveKey = !newSessionKey
+        || newSessionKey === "agent:main:main"
+        || newSessionKey.startsWith("agent:main:tui-")
+        || newSessionKey.startsWith("agent:main:telegram:");
+      if (!isInteractiveKey) return;
+
       const isAlreadyTracked = Array.from(sessionKeyLastSeen.values()).includes(newSessionId);
       if (!isAlreadyTracked && isSystemEnabled("memory")) {
         // Find the prior session. Strategy:
