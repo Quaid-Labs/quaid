@@ -3617,6 +3617,9 @@ function enableRequiredOpenClawHooks() {
     const internal = hooks.internal || (hooks.internal = {});
     internal.enabled = true;
     const entries = internal.entries || (internal.entries = {});
+    // Glob patterns for project-level bootstrap files, resolved relative to workspace.
+    // Only AGENTS.md and TOOLS.md basenames are loaded by OC; symlinks are not followed.
+    const bootstrapExtraFilePaths = ["projects/*/AGENTS.md", "projects/*/TOOLS.md"];
     let changed = false;
     for (const hookName of requiredHooks) {
       const entry = entries[hookName] || (entries[hookName] = {});
@@ -3626,6 +3629,16 @@ function enableRequiredOpenClawHooks() {
         log.info(`Hook enabled (direct): ${hookName}`);
       } else {
         log.info(`Hook already enabled: ${hookName}`);
+      }
+      // Always ensure paths are set correctly (idempotent)
+      if (hookName === "bootstrap-extra-files") {
+        const existing = JSON.stringify(entry.paths || []);
+        const desired = JSON.stringify(bootstrapExtraFilePaths);
+        if (existing !== desired) {
+          entry.paths = bootstrapExtraFilePaths;
+          changed = true;
+          log.info(`bootstrap-extra-files paths set: ${bootstrapExtraFilePaths.join(", ")}`);
+        }
       }
     }
     if (changed) {
@@ -3649,6 +3662,28 @@ function ensureQuaidCliShim(pluginDirPath) {
     fs.mkdirSync(binDir, { recursive: true });
     fs.rmSync(shimPath, { force: true });
     fs.symlinkSync(target, shimPath);
+
+    // Ensure ~/bin is in the PATH exposed to OC agents via env.vars in openclaw.json.
+    // OC's bash tool inherits this PATH so agents can call `quaid` without a full path.
+    try {
+      const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+      if (fs.existsSync(cfgPath)) {
+        const parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+        const env = parsed.env || (parsed.env = {});
+        const vars = env.vars || (env.vars = {});
+        const existing = String(vars.PATH || "").trim();
+        if (!existing.includes(binDir)) {
+          vars.PATH = existing ? `${binDir}:${existing}` : `${binDir}:/usr/local/bin:/usr/bin:/bin`;
+          const tmpPath = `${cfgPath}.tmp-shim-${process.pid}-${Date.now()}`;
+          fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+          fs.renameSync(tmpPath, cfgPath);
+          log.info(`Added ${binDir} to OC agent PATH`);
+        }
+      }
+    } catch {
+      // PATH update is best-effort; shim still works via full path
+    }
+
     return true;
   } catch {
     return false;
