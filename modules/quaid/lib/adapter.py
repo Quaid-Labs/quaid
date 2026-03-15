@@ -340,39 +340,38 @@ class QuaidAdapter(abc.ABC):
     def is_multi_agent(self) -> bool:
         """True if this platform supports multiple first-class agents with own silos.
 
-        When True, each agent has its own Quaid silo derived via agent_instance_id().
+        When True, each agent gets its own Quaid silo named by list_agent_instance_ids().
         Subagents running inside a parent session are NOT first-class agents — they
         inherit the parent's instance automatically.
         """
         return False
 
-    def default_agent_id(self) -> str:
-        """Primary/default agent identifier for this platform."""
-        return "main"
+    def agent_id_prefix(self) -> str:
+        """Prefix used to build per-agent instance IDs.
 
-    def list_agent_ids(self) -> List[str]:
-        """Return all known first-class agent IDs for this platform.
+        For single-agent platforms this is just instance_id() — the prefix IS the
+        full instance ID and no per-agent suffix is needed.
 
-        Called at install time to enumerate agents for silo initialization.
-        Single-agent adapters return [default_agent_id()].
-        Multi-agent adapters override to discover agents from platform config.
-        """
-        return [self.default_agent_id()]
-
-    def agent_instance_id(self, agent_id: str) -> str:
-        """Derive the Quaid instance ID for a given agent.
-
-        Single-agent platforms return instance_id() regardless of agent_id.
-        Multi-agent adapters override to route each agent to its own silo.
-
-        Convention: "<base-instance>-<agent_id>" (e.g. "openclaw-coding").
-        For the default/main agent, returns the primary instance_id().
+        For multi-agent platforms (e.g. OC) this is the base name (e.g. "openclaw")
+        and agents get IDs like "<prefix>-<label>" (e.g. "openclaw-main",
+        "openclaw-coding"). Override in subclasses that have a shared gateway prefix.
         """
         return self.instance_id()
 
-    def agent_instance_root(self, agent_id: str) -> Path:
-        """Resolve the instance root directory for a given agent."""
-        return self.quaid_home() / self.agent_instance_id(agent_id)
+    def list_agent_instance_ids(self) -> List[str]:
+        """Return all Quaid instance IDs for this platform's agents.
+
+        Returns fully-qualified instance IDs with the prefix included.
+        Single-agent: returns [instance_id()].
+        Multi-agent: returns ["openclaw-main", "openclaw-coding", ...].
+
+        Called at install time to enumerate silos to create.
+        """
+        return [self.instance_id()]
+
+    def agent_instance_root(self, agent_instance_id: str) -> Path:
+        """Resolve the instance root directory for a given agent instance ID."""
+        return self.quaid_home() / agent_instance_id
 
     # ---- Identity ----
 

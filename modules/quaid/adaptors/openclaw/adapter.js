@@ -80,12 +80,9 @@ const ADAPTER_PLUGIN_MANIFEST_PATH = path.join(PYTHON_PLUGIN_ROOT, "adaptors", "
 const ADAPTER_BOOT_TIME_MS = Date.now();
 const BACKLOG_NOTIFY_STALE_MS = 9e4;
 const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
-function getInstanceId(agentId = "main") {
-  const normalized = String(agentId || "main").trim().toLowerCase();
-  if (!normalized || normalized === "main") {
-    return _QUAID_INSTANCE;
-  }
-  return _QUAID_INSTANCE ? `${_QUAID_INSTANCE}-${normalized}` : normalized;
+function getInstanceId(agentLabel = "main") {
+  const label = String(agentLabel || "main").trim().toLowerCase() || "main";
+  return _QUAID_INSTANCE ? `${_QUAID_INSTANCE}-${label}` : label;
 }
 function getDaemonSignalDir(agentId = "main") {
   const instanceId = getInstanceId(agentId);
@@ -329,8 +326,8 @@ function writeDaemonSignal(sessionId, signalType, meta) {
       }
     }
   }
-  const agentId = sessionIdToAgentId.get(sessionId) || "main";
-  const signalDir = getDaemonSignalDir(agentId);
+  const agentLabel = sessionIdToAgentId.get(sessionId) || "main";
+  const signalDir = getDaemonSignalDir(agentLabel);
   try {
     fs.mkdirSync(signalDir, { recursive: true });
   } catch {
@@ -1591,8 +1588,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             const sessionId = String(row.sessionId || "").trim();
             if (!sessionId) continue;
             const keyParts = key.split(":");
-            const agentId = keyParts.length >= 3 ? keyParts[1].trim() || "main" : "main";
-            sessionIdToAgentId.set(sessionId, agentId);
+            const agentLabel = keyParts.length >= 3 ? keyParts[1].trim() || "main" : "main";
+            sessionIdToAgentId.set(sessionId, agentLabel);
             recognizedEntries.push({
               key,
               sessionId,

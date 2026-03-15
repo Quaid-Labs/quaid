@@ -2031,35 +2031,46 @@ print(f'[+] Quaid project registered ({len(found)} docs)')
         ) || true
     fi
 
-    # Multi-agent silo init: for each non-main OC agent, create a sibling Quaid silo.
-    # Convention: QUAID_HOME = parent of WORKSPACE_ROOT (e.g. ~/quaid)
-    #             Primary silo = WORKSPACE_ROOT (e.g. ~/quaid/openclaw)
-    #             Agent silos  = QUAID_HOME/<primary-instance>-<agentId>
+    # Multi-agent silo init: create a Quaid silo for each first-class OC agent.
+    # Agent instance IDs are fully-prefixed: "openclaw-main", "openclaw-coding", etc.
+    # QUAID_HOME = parent of WORKSPACE_ROOT; primary silo basename = $(basename WORKSPACE_ROOT).
     if $IS_OPENCLAW; then
-        local quaid_home_dir primary_instance agent_ids
+        local quaid_home_dir primary_basename agent_instance_ids
         quaid_home_dir="$(dirname "$WORKSPACE_ROOT")"
-        primary_instance="$(basename "$WORKSPACE_ROOT")"
-        agent_ids="$(python3 - <<'PY'
+        primary_basename="$(basename "$WORKSPACE_ROOT")"
+        agent_instance_ids="$(
+            cd "$PLUGIN_DIR" && \
+            QUAID_HOME="${WORKSPACE_ROOT}" CLAWDBOT_WORKSPACE="${WORKSPACE_ROOT}" \
+            python3 - "$primary_basename" <<'PY'
 import json, os, sys
+primary = sys.argv[1].strip()
 cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
 try:
     data = json.load(open(cfg_path, "r", encoding="utf-8"))
 except Exception:
     sys.exit(0)
-lst = ((data.get("agents") or {}).get("list")) or []
-ids = [str(a.get("id", "")).strip() for a in lst if isinstance(a, dict) and a.get("id")]
-# Exclude "main" — that is the primary silo already created above
-non_main = [i for i in ids if i and i != "main"]
-print("\n".join(non_main))
+lst = (data.get("agents") or {}).get("list") or []
+labels = [str(a.get("id", "")).strip().lower() for a in lst if isinstance(a, dict) and a.get("id")]
+if not labels:
+    sys.exit(0)
+if "main" in labels:
+    labels = ["main"] + [l for l in labels if l != "main"]
+# Fully-prefixed instance IDs: "openclaw-main", "openclaw-coding", ...
+instance_ids = [f"{primary}-{label}" for label in labels]
+# Skip the one that already exists as WORKSPACE_ROOT (primary silo already created)
+secondary = [i for i in instance_ids if i != primary]
+print("\n".join(secondary))
 PY
         )" || true
-        if [[ -n "$agent_ids" ]]; then
+        if [[ -n "$agent_instance_ids" ]]; then
             info "Multi-agent detected — creating Quaid silos for additional agents..."
-            while IFS= read -r agent_id; do
-                [[ -z "$agent_id" ]] && continue
-                local silo_dir="${quaid_home_dir}/${primary_instance}-${agent_id}"
-                _init_agent_silo "$agent_id" "$silo_dir"
-            done <<< "$agent_ids"
+            while IFS= read -r instance_id; do
+                [[ -z "$instance_id" ]] && continue
+                # Extract agent label from full instance ID for display (e.g. "coding" from "openclaw-coding")
+                local agent_label="${instance_id#${primary_basename}-}"
+                local silo_dir="${quaid_home_dir}/${instance_id}"
+                _init_agent_silo "$agent_label" "$silo_dir"
+            done <<< "$agent_instance_ids"
         fi
     fi
 

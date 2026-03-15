@@ -111,20 +111,17 @@ const BACKLOG_NOTIFY_STALE_MS = 90_000;
 const _QUAID_INSTANCE = String(process.env.QUAID_INSTANCE || "").trim();
 
 /**
- * Derive the Quaid instance ID for a given OC agent ID.
+ * Derive the Quaid instance ID for a given OC agent label.
  *
- * - main agent  → _QUAID_INSTANCE (the configured primary instance, e.g. "openclaw")
- * - other agent → "<_QUAID_INSTANCE>-<agentId>" (e.g. "openclaw-coding")
+ * Always produces "<prefix>-<label>" (e.g. "openclaw-main", "openclaw-coding").
+ * _QUAID_INSTANCE is the prefix (the gateway's configured instance name).
  *
- * Called by the system to compute all instance-specific paths. When QUAID_INSTANCE
- * is not set (legacy flat layout), main returns "" and others return the agentId.
+ * Called frequently by the system to compute all instance-specific paths.
+ * When QUAID_INSTANCE is not set (legacy flat layout), returns the label as-is.
  */
-function getInstanceId(agentId: string = "main"): string {
-  const normalized = String(agentId || "main").trim().toLowerCase();
-  if (!normalized || normalized === "main") {
-    return _QUAID_INSTANCE;
-  }
-  return _QUAID_INSTANCE ? `${_QUAID_INSTANCE}-${normalized}` : normalized;
+function getInstanceId(agentLabel: string = "main"): string {
+  const label = String(agentLabel || "main").trim().toLowerCase() || "main";
+  return _QUAID_INSTANCE ? `${_QUAID_INSTANCE}-${label}` : label;
 }
 
 /** Daemon signal directory for a given agent's Quaid silo. */
@@ -442,8 +439,8 @@ function writeDaemonSignal(
   }
 
   // Route to the agent's own Quaid silo if known, otherwise primary instance.
-  const agentId = sessionIdToAgentId.get(sessionId) || "main";
-  const signalDir = getDaemonSignalDir(agentId);
+  const agentLabel = sessionIdToAgentId.get(sessionId) || "main";
+  const signalDir = getDaemonSignalDir(agentLabel);
   try {
     fs.mkdirSync(signalDir, { recursive: true });
   } catch {}
@@ -2003,9 +2000,11 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
             const sessionId = String((row as any).sessionId || "").trim();
             if (!sessionId) continue;
             // Extract agentId from "agent:<agentId>:<channel>" and register for signal routing.
+            // Extract raw agent label from "agent:<label>:<channel>" and map for signal routing.
+            // getInstanceId(label) builds the full instance ID (e.g. "openclaw-main").
             const keyParts = key.split(":");
-            const agentId = keyParts.length >= 3 ? (keyParts[1].trim() || "main") : "main";
-            sessionIdToAgentId.set(sessionId, agentId);
+            const agentLabel = keyParts.length >= 3 ? (keyParts[1].trim() || "main") : "main";
+            sessionIdToAgentId.set(sessionId, agentLabel);
             recognizedEntries.push({
               key,
               sessionId,

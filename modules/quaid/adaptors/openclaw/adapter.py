@@ -406,56 +406,60 @@ class OpenClawAdapter(QuaidAdapter):
     # ---- Multi-agent support ----
 
     @staticmethod
-    def extract_agent_id_from_session_key(session_key: str) -> Optional[str]:
-        """Parse agentId from OC session key format 'agent:<agentId>:<channel>'.
+    def extract_agent_label_from_session_key(session_key: str) -> Optional[str]:
+        """Parse the raw agent label from an OC session key 'agent:<label>:<channel>'.
 
-        Returns None if the key doesn't match the expected format.
+        Returns the label (e.g. "main", "coding") or None if the key doesn't
+        match the expected format. Use agent_id_prefix() to build the full
+        instance ID: f"{prefix}-{label}".
         """
         parts = str(session_key or "").strip().split(":")
         if len(parts) >= 3 and parts[0] == "agent":
-            agent_id = parts[1].strip()
-            return agent_id if agent_id else None
+            label = parts[1].strip()
+            return label if label else None
         return None
 
     def is_multi_agent(self) -> bool:
         return True
 
-    def default_agent_id(self) -> str:
-        return "main"
+    def agent_id_prefix(self) -> str:
+        """The OC instance prefix used to build per-agent instance IDs.
 
-    def list_agent_ids(self) -> list:
-        """Discover all first-class OC agents from openclaw.json agents.list."""
+        Returns the primary QUAID_INSTANCE value (e.g. "openclaw").
+        All agent instance IDs are "<prefix>-<label>":
+          "openclaw-main", "openclaw-coding", "openclaw-work", etc.
+        """
+        return self.instance_id()
+
+    def list_agent_instance_ids(self) -> list:
+        """Return fully-prefixed Quaid instance IDs for all OC agents.
+
+        Reads agents.list from openclaw.json and prefixes each with the
+        adapter's instance prefix. Always returns at least ["<prefix>-main"].
+
+        Examples: ["openclaw-main", "openclaw-coding", "openclaw-work"]
+        """
+        prefix = self.agent_id_prefix()
         cfg_path = self.get_gateway_config_path()
         if not cfg_path:
-            return [self.default_agent_id()]
+            return [f"{prefix}-main"]
         try:
             with open(cfg_path) as f:
                 cfg = json.load(f)
             agents_list = cfg.get("agents", {}).get("list", []) or []
-            ids = [
-                str(a.get("id", "")).strip()
+            labels = [
+                str(a.get("id", "")).strip().lower()
                 for a in agents_list
                 if isinstance(a, dict) and a.get("id")
             ]
-            if not ids:
-                return [self.default_agent_id()]
+            if not labels:
+                return [f"{prefix}-main"]
             # Ensure "main" is always first
-            if "main" in ids:
-                ids = ["main"] + [i for i in ids if i != "main"]
-            return ids
+            if "main" in labels:
+                labels = ["main"] + [l for l in labels if l != "main"]
+            return [f"{prefix}-{label}" for label in labels]
         except (json.JSONDecodeError, IOError, KeyError):
-            return [self.default_agent_id()]
-
-    def agent_instance_id(self, agent_id: str) -> str:
-        """Derive Quaid instance ID for an OC agent.
-
-        main → primary instance_id() (e.g. "openclaw")
-        other → "<instance_id()>-<agent_id>" (e.g. "openclaw-coding")
-        """
-        normalized = str(agent_id or "").strip().lower()
-        if not normalized or normalized == self.default_agent_id():
-            return self.instance_id()
-        return f"{self.instance_id()}-{normalized}"
+            return [f"{prefix}-main"]
 
     # ---- Internal helpers ----
 
