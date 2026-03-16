@@ -2921,14 +2921,14 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
         log.info(`Created identity/${f}`);
       }
     }
-    // Create per-instance namespaced scratch and temp dirs.
-    // Agents use scratch/$QUAID_INSTANCE/ and temp/$QUAID_INSTANCE/ to avoid
-    // cross-agent collisions when multiple instances share the same workspace.
+    // Create per-instance scratch and temp dirs inside the instance silo.
+    // Lives at WORKSPACE/{instanceId}/scratch and WORKSPACE/{instanceId}/temp,
+    // co-located with config, data, identity, logs, projects.
     for (const base of ["scratch", "temp"]) {
-      const instanceDir = path.join(WORKSPACE, base, resolvedInstanceId);
+      const instanceDir = path.join(WORKSPACE, resolvedInstanceId, base);
       if (!fs.existsSync(instanceDir)) {
         fs.mkdirSync(instanceDir, { recursive: true });
-        log.info(`Created ${base}/${resolvedInstanceId}/`);
+        log.info(`Created ${resolvedInstanceId}/${base}/`);
       }
     }
   }
@@ -3008,7 +3008,14 @@ print('[+] Datastore init hooks complete')
   // Contract-owned project workspace dirs should exist after datastore init hooks.
   // Some runtime profiles trim plugin slots during bootstrap; guard here so
   // install always yields expected workspace shape.
-  const contractOwnedDirs = [instanceProjectsDir(), TEMP_DIR, SCRATCH_DIR];
+  // Instance scratch/temp live inside the silo: WORKSPACE/{instanceId}/scratch|temp
+  const instanceScratchDir = resolvedInstanceId && resolvedInstanceId !== "standalone"
+    ? path.join(WORKSPACE, resolvedInstanceId, "scratch")
+    : SCRATCH_DIR;
+  const instanceTempDir = resolvedInstanceId && resolvedInstanceId !== "standalone"
+    ? path.join(WORKSPACE, resolvedInstanceId, "temp")
+    : TEMP_DIR;
+  const contractOwnedDirs = [instanceProjectsDir(), instanceTempDir, instanceScratchDir];
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
   if (missingContractOwnedDirs.length > 0) {
     for (const dir of missingContractOwnedDirs) {
@@ -3023,20 +3030,20 @@ print('[+] Datastore init hooks complete')
   // Scratch is intentionally workspace-visible and can hold ad-hoc drafts.
   // The directory is contract-owned (docsdb init); installer only bootstraps
   // local history after contract init has run.
-  if (fs.existsSync(SCRATCH_DIR) && !fs.existsSync(path.join(SCRATCH_DIR, ".git"))) {
+  if (fs.existsSync(instanceScratchDir) && !fs.existsSync(path.join(instanceScratchDir, ".git"))) {
     const scratchGitInit = spawnSync("git", ["init"], {
-      cwd: SCRATCH_DIR,
+      cwd: instanceScratchDir,
       stdio: "pipe",
       encoding: "utf8",
     });
     if (scratchGitInit.status === 0) {
-      log.info("Initialized scratch/ local git history");
+      log.info("Initialized instance scratch/ local git history");
     } else {
       const detail = String(scratchGitInit.stderr || scratchGitInit.stdout || "").trim();
       log.warn(`Could not initialize scratch/ git history${detail ? `: ${detail}` : ""}`);
     }
-  } else if (!fs.existsSync(SCRATCH_DIR)) {
-    log.warn("scratch/ directory missing after datastore init hooks; skipping scratch history bootstrap.");
+  } else if (!fs.existsSync(instanceScratchDir)) {
+    log.warn("Instance scratch/ directory missing after datastore init hooks; skipping scratch history bootstrap.");
   }
 
   // Create workspace files
@@ -3070,8 +3077,8 @@ print('[+] Datastore init hooks complete')
       "data/*.db",
       "data/*.db-*",
       "logs/",
-      "temp/",
-      "scratch/",
+      "*/temp/",
+      "*/scratch/",
       ".env",
       ".env.*",
       "",
