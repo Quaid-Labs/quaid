@@ -592,9 +592,10 @@ ${projectHints}
       t?.("tool_hint.llm_response", { raw_len: raw?.length ?? 0, raw_preview: (raw || "").slice(0, 120) });
       if (!raw) return null;
 
-      // Strip markdown code fences that some models wrap around JSON output
-      const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
-      const data = JSON.parse(stripped);
+      // Extract the first JSON object from the response regardless of surrounding text
+      const match = raw.match(/\{[\s\S]*?\}/);
+      if (!match) return null;
+      const data = JSON.parse(match[0]);
       const hint = data?.tool_hint;
       if (hint && typeof hint === "string" && hint.trim().length > 5) {
         t?.("tool_hint.produced", { len: hint.trim().length });
