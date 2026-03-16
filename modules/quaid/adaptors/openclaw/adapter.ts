@@ -1605,46 +1605,60 @@ notify_user(${JSON.stringify(message)})
           } catch (err: unknown) {
             console.warn(`[quaid] Project docs injection failed: ${(err as Error)?.message || String(err)}`);
           }
-          // Prepend a short mandatory file-placement block once per session.
-          // prependSystemContext goes before OC's base system prompt — highest model priority.
-          if (_QUAID_INSTANCE) {
-            const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-            prependSystemContext = [
-              `[Quaid — active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
-              `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
-              ``,
-              `[PROJECT CREATION — MANDATORY BEFORE ANY WORK BEGINS]`,
-              `Before you write a single file, spawn a coding agent, run a build, or execute any multi-step task:`,
-              `  STEP 1: Run quaid registry create-project <name> --source-roots <path>`,
-              `  STEP 2: Then do the work inside that project.`,
-              `DO NOT spawn a coding agent or subagent without completing Step 1 first.`,
-              `DO NOT write any file without completing Step 1 first.`,
-              `DO NOT create directories or PROJECT.md files manually — only the quaid CLI creates projects.`,
-              `This applies to ALL work requests — even quick ones, even "just a script", even "just a test".`,
-              ``,
-              `[FILE PLACEMENT]`,
-              `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
-              `  Misc project path: ${miscPath}/`,
-              `  The misc project already exists — write files there directly, no create-project step needed.`,
-              `For durable new work: run Step 1 above to create a named project first.`,
-              `For work that belongs to an existing project: write there directly.`,
-              ``,
-              `After writing files outside the project directory, register them:`,
-              `  ~/.openclaw/extensions/quaid/quaid registry register <file_path> --project <name>`,
-              ``,
-              `Always tell the user which project received the file.`,
-            ].join("\n");
-            writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
-          }
+        }
+        // Prepend mandatory file-placement rules on EVERY turn (not just first).
+        // appendSystemContext (project docs) is gated once per session — expensive.
+        // prependSystemContext (placement rules) is a cheap template — always inject.
+        if (_QUAID_INSTANCE) {
+          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+          prependSystemContext = [
+            `[Quaid — active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
+            `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
+            ``,
+            `[PROJECT CREATION — MANDATORY BEFORE ANY WORK BEGINS]`,
+            `Before you write a single file, spawn a coding agent, run a build, or execute any multi-step task:`,
+            `  STEP 1: Run quaid registry create-project <name> --source-roots <path>`,
+            `  STEP 2: Then do the work inside that project.`,
+            `DO NOT spawn a coding agent or subagent without completing Step 1 first.`,
+            `DO NOT write any file without completing Step 1 first.`,
+            `DO NOT create directories or PROJECT.md files manually — only the quaid CLI creates projects.`,
+            `This applies to ALL work requests — even quick ones, even "just a script", even "just a test".`,
+            ``,
+            `[FILE PLACEMENT]`,
+            `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
+            `  Misc project path: ${miscPath}/`,
+            `  The misc project already exists — write files there directly, no create-project step needed.`,
+            `For durable new work: run Step 1 above to create a named project first.`,
+            `For work that belongs to an existing project: write there directly.`,
+            ``,
+            `After writing files outside the project directory, register them:`,
+            `  ~/.openclaw/extensions/quaid/quaid registry register <file_path> --project <name>`,
+            ``,
+            `Always tell the user which project received the file.`,
+          ].join("\n");
+          writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
         }
       }
 
+      // Helper: carry any built docs context through all early returns.
+      // The docs gate block above may have set prependSystemContext/appendSystemContext
+      // and added the session to projectDocsInjectedSessions. Any early return after
+      // that point MUST include those values — otherwise the session is marked as
+      // "docs delivered" but the model never received them (e.g. rawPrompt < 5 during
+      // a mass-reset fan-out triggers before_prompt_build before the user's message,
+      // marks the session injected, and on the real message the docs are skipped).
+      const withDocs = (base: { prependContext?: string }) => ({
+        ...base,
+        ...(prependSystemContext ? { prependSystemContext } : {}),
+        ...(appendSystemContext ? { appendSystemContext } : {}),
+      });
+
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
-      if (!autoInjectEnabled) return { prependContext: event.prependContext, ...(appendSystemContext ? { appendSystemContext } : {}) };
+      if (!autoInjectEnabled) return withDocs({ prependContext: event.prependContext });
 
       const rawPrompt = String(event.prompt || "").trim();
       if (rawPrompt.length < 5) {
-        return { prependContext: event.prependContext };
+        return withDocs({ prependContext: event.prependContext });
       }
 
       try {
@@ -1741,20 +1755,20 @@ notify_user(${JSON.stringify(message)})
             writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80), source: recoveredSource });
           } else {
             writeHookTrace("hook.before_prompt_build.startup_skip", { query: query.slice(0, 80), recovered_len: rawRecovered.length });
-            return { prependContext: event.prependContext };
+            return withDocs({ prependContext: event.prependContext });
           }
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
-          return { prependContext: event.prependContext };
+          return withDocs({ prependContext: event.prependContext });
         }
         // Skip janitor/reviewer internal prompts so maintenance flows never trigger auto-injection.
         if (facade.isInternalMaintenancePrompt(query)) {
-          return { prependContext: event.prependContext };
+          return withDocs({ prependContext: event.prependContext });
         }
 
         // Query quality gate — skip acknowledgments and short messages
         if (facade.isLowQualityQuery(query)) {
-          return { prependContext: event.prependContext };
+          return withDocs({ prependContext: event.prependContext });
         }
 
         // Auto-inject always bypasses the LLM router to keep latency low.
@@ -1777,7 +1791,7 @@ notify_user(${JSON.stringify(message)})
         // recall→LLM→recall→... recursive loop.
         if (_beforePromptBuildInFlight) {
           writeHookTrace("hook.before_prompt_build.reentrant_skip", { query: query.slice(0, 80) });
-          return { prependContext: event.prependContext };
+          return withDocs({ prependContext: event.prependContext });
         }
         _beforePromptBuildInFlight = true;
         let allMemories: any[];
@@ -1831,7 +1845,7 @@ notify_user(${JSON.stringify(message)})
           injectLimit,
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION,
         });
-        if (!injection) return { prependContext: event.prependContext };
+        if (!injection) return withDocs({ prependContext: event.prependContext });
         const { toInject, prependContext } = injection;
         event.prependContext = prependContext;
 

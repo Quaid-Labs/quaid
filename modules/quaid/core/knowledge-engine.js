@@ -415,25 +415,13 @@ intent: ${intent}`;
         return null;
       }
       t?.("tool_hint.calling_llm", { commands: commands.length, query_len: clean.length });
-
-      const commandList = commands
-        .map(c => `- [${c.id}] ${c.description}\n  hint: "${c.hint}"`)
-        .join("\n");
-
-      const systemPrompt =
-        "You are a JSON-only router. Your entire response must be exactly one JSON object — no other characters, no markdown, no explanation.";
-      const userMessage =
-        "Respond with exactly one JSON object and nothing else.\n\n" +
-        "Format: {\"command_id\": \"<id>\"} or {\"command_id\": null}\n\n" +
-        "Available commands:\n" + commandList + "\n\n" +
-        "Pick the command whose description best matches the message, or null if none clearly apply.\n\n" +
-        "Message: " + clean;
-
+      const commandList = commands.map((c) => `- [${c.id}] ${c.description}
+  hint: "${c.hint}"`).join("\n");
+      const systemPrompt = "You are a JSON-only router. Your entire response must be exactly one JSON object \u2014 no other characters, no markdown, no explanation.";
+      const userMessage = 'Respond with exactly one JSON object and nothing else.\n\nFormat: {"command_id": "<id>"} or {"command_id": null}\n\nAvailable commands:\n' + commandList + "\n\nPick the command whose description best matches the message, or null if none clearly apply.\n\nMessage: " + clean;
       const raw = await deps.callFastRouter(systemPrompt, userMessage);
       t?.("tool_hint.llm_response", { raw_len: raw?.length ?? 0, raw_preview: (raw || "").slice(0, 120) });
       if (!raw) return null;
-
-      // Extract the first JSON object from the response regardless of surrounding text
       const match = raw.match(/\{[\s\S]*?\}/);
       if (!match) return null;
       const data = JSON.parse(match[0]);
@@ -442,7 +430,7 @@ intent: ${intent}`;
         t?.("tool_hint.null_result", { command_id: String(commandId ?? "null") });
         return null;
       }
-      const entry = commands.find(c => c.id === commandId);
+      const entry = commands.find((c) => c.id === commandId);
       if (!entry) {
         t?.("tool_hint.null_result", { reason: "unknown_command_id", command_id: commandId });
         return null;
@@ -454,7 +442,6 @@ intent: ${intent}`;
       return null;
     }
   }
-
   return {
     normalizeKnowledgeDatastores,
     getKnowledgeDatastoreRegistry,
@@ -462,7 +449,7 @@ intent: ${intent}`;
     routeKnowledgeDatastores,
     routeRecallPlan,
     recall,
-    planToolHint,
+    planToolHint
   };
 }
 export {

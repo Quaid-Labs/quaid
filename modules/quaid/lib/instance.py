@@ -114,7 +114,7 @@ def misc_project_name(name: Optional[str] = None) -> str:
     misc files may stick around. Lives as a tracked project in shared/projects/.
 """
     iid = validate_instance_id(name) if name else instance_id()
-    return f"temp--{iid}"
+    return f"misc--{iid}"
 
 
 def instance_misc_dir(name: Optional[str] = None) -> Path:
