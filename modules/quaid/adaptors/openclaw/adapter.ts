@@ -1720,15 +1720,21 @@ notify_user(${JSON.stringify(message)})
         // try to recover the true current query from the JSON blob in event.prompt.
         const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/;
         if (STARTUP_SKIP_RE.test(query)) {
-          const recovered = extractFromOCPromptJson(rawPrompt);
-          if (recovered.length >= 3 && !STARTUP_SKIP_RE.test(recovered) &&
-              !recovered.startsWith("Extract memorable facts") &&
-              !facade.isInternalMaintenancePrompt(recovered)) {
-            query = recovered;
-            querySource = "oc_prompt_json_recovered";
-            writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80) });
+          // event.messages is stale — try two recovery paths:
+          // 1. JSON blob inside event.prompt (OC JSON-wrapped format)
+          // 2. scrubQuery(rawPrompt) directly (handles "[Tue ...] <user msg>" format
+          //    where scrubQuery strips the leading timestamp bracket)
+          const jsonRecovered = extractFromOCPromptJson(rawPrompt);
+          const rawRecovered = jsonRecovered.length >= 3 ? jsonRecovered : scrubQuery(rawPrompt);
+          const recoveredSource = rawRecovered === jsonRecovered ? "oc_prompt_json_recovered" : "rawPrompt_recovered";
+          if (rawRecovered.length >= 3 && !STARTUP_SKIP_RE.test(rawRecovered) &&
+              !rawRecovered.startsWith("Extract memorable facts") &&
+              !facade.isInternalMaintenancePrompt(rawRecovered)) {
+            query = rawRecovered;
+            querySource = recoveredSource;
+            writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80), source: recoveredSource });
           } else {
-            writeHookTrace("hook.before_prompt_build.startup_skip", { query: query.slice(0, 80), recovered_len: recovered.length });
+            writeHookTrace("hook.before_prompt_build.startup_skip", { query: query.slice(0, 80), recovered_len: rawRecovered.length });
             return { prependContext: event.prependContext };
           }
         }
