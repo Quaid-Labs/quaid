@@ -37,7 +37,7 @@
       "tools": {
         "mode": "declared",
         "exports": [
-          "memory_recall",
+          "recall",
           "memory_store",
           "memory_forget",
           "projects_search",
@@ -91,7 +91,7 @@
       "notifications": {
         "mode": "declared",
         "exports": [
-          "memory_recall"
+          "recall"
         ]
       }
     }
