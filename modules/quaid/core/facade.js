@@ -2408,6 +2408,11 @@ ${header}${journalContent}` : `${header}${journalContent}`;
   function notImplemented(name) {
     throw new Error(`[quaid][facade] ${name} is not yet implemented \u2014 scheduled for a future PR`);
   }
+  function resolveQuaidTemplateVars(text) {
+    const instanceId = deps.instanceRoot ? path.basename(deps.instanceRoot) : "";
+    const instancePrefix = instanceId.endsWith("-main") ? instanceId.slice(0, -5) : instanceId;
+    return text.replace(/\$\{QUAID_INSTANCE\}/g, instanceId).replace(/\$QUAID_INSTANCE\b/g, instanceId).replace(/\$\{QUAID_PREFIX\}/g, instancePrefix).replace(/\$QUAID_PREFIX\b/g, instancePrefix).replace(/\$\{QUAID_HOME\}/g, deps.workspace).replace(/\$QUAID_HOME\b/g, deps.workspace);
+  }
   function injectProjectContext(existingContext) {
     let prepend = existingContext;
     try {
@@ -2441,7 +2446,7 @@ ${content}`);
           const filePath = path.join(projectsDir, projectName, docFile);
           if (fs.existsSync(filePath)) {
             try {
-              const content = fs.readFileSync(filePath, "utf8").trim();
+              const content = resolveQuaidTemplateVars(fs.readFileSync(filePath, "utf8").trim());
               if (content) sections.push(`--- ${projectName}/${docFile} ---
 ${content}`);
             } catch {
