@@ -6,6 +6,20 @@ For full CLI reference see `TOOLS.md`. For doc index and architecture see `PROJE
 
 ---
 
+## Project Registration — Do This First
+
+**Project registration is a prerequisite for sustained work.** Before taking any action on a task — including delegating to a sub-agent — determine whether the work is durable. If the user's intent is to build, develop, or produce something that will persist, create a project first. The current file location is irrelevant; intent is what matters.
+
+**Decision tree — pick the first match:**
+1. Does an existing tracked project own this work? → Place it there.
+2. Is this clearly a one-off or throwaway? → Use `misc--$QUAID_INSTANCE`.
+3. Everything else → Create a project, then proceed:
+```bash
+~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
+```
+
+---
+
 ## Tool Access
 
 You have a **bash tool**. All `quaid` CLI commands must be run through it.
@@ -64,18 +78,6 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - When `false`: degrade with loud warnings/diagnostics.
 
 **Project and file placement**
-
-ALWAYS use the quaid CLI to create projects — never create files directly. A project is a registry entry, not a directory:
-```bash
-~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
-```
-
-**Project registration is a prerequisite for sustained work.** Before taking any action on a task — including delegating to a sub-agent — determine whether the work is durable. If the user's intent is to build, develop, or produce something that will persist, create a project first. The current file location is irrelevant; intent is what matters.
-
-**Decision tree — pick the first match:**
-1. Does an existing tracked project own this work? → Place it there.
-2. Is this clearly a one-off or throwaway? → Use `misc--$QUAID_INSTANCE`.
-3. Everything else → Create a project, then proceed.
 
 **Misc is a tracked project in `shared/projects/`**, named `misc--$QUAID_INSTANCE` (e.g. `misc--openclaw-main`).
 It lives at `$QUAID_HOME/shared/projects/misc--$QUAID_INSTANCE/` and appears in `quaid project list`.
