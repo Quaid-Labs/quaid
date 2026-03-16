@@ -1784,8 +1784,28 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         console.error("[quaid] Auto-injection error:", error);
       }
 
+      // File-placement reminder: prepend a compact, concrete rule block when the
+      // user message mentions file creation or project work. This fires per-message
+      // in the user turn (not just system-prompt-once) so the model sees it
+      // immediately before acting. Intentionally kept very short.
+      let prependContext: string | undefined = event.prependContext;
+      if (isSystemEnabled("projects") && _QUAID_INSTANCE) {
+        const FILE_CREATION_RE = /\b(write|creat|build|generat|make|script|file|project|cli|tool|app|throwaway|quick|hello.?world|temp|scratch|one.?off|snippet)\b/i;
+        if (FILE_CREATION_RE.test(rawPrompt)) {
+          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+          const reminder = [
+            "[Quaid file placement — required]",
+            `- Throwaway / quick / temp / hello-world → write file to: ${miscPath}/`,
+            `- New durable work → FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+            `- NEVER write files to /tmp/, ~/scratch/, or any path outside a tracked quaid project.`,
+          ].join("\n");
+          prependContext = prependContext ? `${reminder}\n\n${prependContext}` : reminder;
+          writeHookTrace("hook.file_placement_reminder_injected", { session_id: String(ctx?.sessionId || "") });
+        }
+      }
+
       return {
-        prependContext: event.prependContext,
+        prependContext,
         ...(appendSystemContext ? { appendSystemContext } : {}),
       };
     };

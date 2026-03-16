@@ -1376,8 +1376,8 @@ notify_user(${JSON.stringify(message)})
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
         });
         if (!injection) return { prependContext: event.prependContext };
-        const { toInject, prependContext } = injection;
-        event.prependContext = prependContext;
+        const { toInject, prependContext: prependContext2 } = injection;
+        event.prependContext = prependContext2;
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
         try {
           if (facade.shouldNotifyFeature("retrieval", "summary")) {
@@ -1406,8 +1406,25 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
       }
+      let prependContext = event.prependContext;
+      if (isSystemEnabled2("projects") && _QUAID_INSTANCE) {
+        const FILE_CREATION_RE = /\b(write|creat|build|generat|make|script|file|project|cli|tool|app|throwaway|quick|hello.?world|temp|scratch|one.?off|snippet)\b/i;
+        if (FILE_CREATION_RE.test(rawPrompt)) {
+          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+          const reminder = [
+            "[Quaid file placement \u2014 required]",
+            `- Throwaway / quick / temp / hello-world \u2192 write file to: ${miscPath}/`,
+            `- New durable work \u2192 FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+            `- NEVER write files to /tmp/, ~/scratch/, or any path outside a tracked quaid project.`
+          ].join("\n");
+          prependContext = prependContext ? `${reminder}
+
+${prependContext}` : reminder;
+          writeHookTrace("hook.file_placement_reminder_injected", { session_id: String(ctx?.sessionId || "") });
+        }
+      }
       return {
-        prependContext: event.prependContext,
+        prependContext,
         ...appendSystemContext ? { appendSystemContext } : {}
       };
     };
