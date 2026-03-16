@@ -431,6 +431,23 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const llm = await deps.callLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
       return String(llm?.text || "");
     },
+    loadToolsContext: (): string | null => {
+      const projectsDir = path.join(deps.workspace, "shared", "projects");
+      const candidates: string[] = [path.join(projectsDir, "quaid", "TOOLS.md")];
+      try {
+        for (const d of fs.readdirSync(projectsDir)) {
+          const p = path.join(projectsDir, d, "TOOLS.md");
+          if (!candidates.includes(p)) candidates.push(p);
+        }
+      } catch { /* no projects dir */ }
+      for (const p of candidates) {
+        try {
+          const content = fs.readFileSync(p, "utf-8").trim();
+          if (content) return content;
+        } catch { /* skip missing */ }
+      }
+      return null;
+    },
     recallMemory: async (query, limit, opts) => {
       return recallMemoryFromBridge(query, limit, opts as RecallMemoryOpts);
     },
@@ -3254,56 +3271,8 @@ ${lines.join("\n")}
     store: (args) => datastoreBridge.store(args),
     forget: (args) => datastoreBridge.forget(args),
 
-    // Tool hint planner — fast-tier LLM call using callLLM directly (no Python
-    // bridge) so it works within before_prompt_build without re-entrancy deadlock.
-    planToolHint: async (query: string): Promise<string | null> => {
-      try {
-        const clean = query.trim().replace(/\s+/g, " ");
-        if (!clean) return null;
-
-        // Load TOOLS.md — prefer quaid project, fall back to any project
-        const projectsDir = path.join(deps.workspace, "shared", "projects");
-        let toolsContent: string | null = null;
-        const candidates: string[] = [path.join(projectsDir, "quaid", "TOOLS.md")];
-        try {
-          for (const d of fs.readdirSync(projectsDir)) {
-            const p = path.join(projectsDir, d, "TOOLS.md");
-            if (!candidates.includes(p)) candidates.push(p);
-          }
-        } catch { /* no projects dir */ }
-        for (const p of candidates) {
-          try {
-            const content = fs.readFileSync(p, "utf-8").trim();
-            if (content) { toolsContent = content; break; }
-          } catch { /* skip missing */ }
-        }
-        if (!toolsContent) return null;
-
-        const cfg = deps.getMemoryConfig();
-        const timeoutMs: number = cfg?.retrieval?.tool_hint_timeout_ms ?? 1500;
-
-        const systemPrompt = "You output compact JSON for tool guidance. No prose.";
-        const userMessage =
-          "You are a tool-routing assistant. Below is a reference guide for available tools.\n\n" +
-          "<tools>\n" + toolsContent + "\n</tools>\n\n" +
-          "Given the message, decide if a specific tool or workflow from the guide clearly applies.\n" +
-          "Return JSON only: {\"tool_hint\": \"<one-line actionable hint>\"} or {\"tool_hint\": null}.\n" +
-          "Only return a hint when the match is obvious. Prefer null when uncertain.\n\n" +
-          "Message: " + clean;
-
-        const result = await deps.callLLM(systemPrompt, userMessage, "fast", 120, timeoutMs);
-        if (!result?.text) return null;
-
-        const data = JSON.parse(result.text.trim());
-        const hint = data?.tool_hint;
-        if (hint && typeof hint === "string" && hint.trim().length > 5) {
-          return `<tool_hint>${hint.trim()}</tool_hint>`;
-        }
-        return null;
-      } catch {
-        return null;
-      }
-    },
+    // Tool hint planner — delegates to knowledge engine (orchestration layer).
+    planToolHint: (query: string): Promise<string | null> => knowledgeEngine.planToolHint(query),
     searchBySession: (sessionId, limit = 20) => datastoreBridge.recall([
       "*",
       "--session-id",
