@@ -7,7 +7,6 @@ export function createDatastoreBridge(exec: PythonBridgeExec) {
     createEdge: (args: string[]) => exec("create-edge", args),
     stats: () => exec("stats", []),
     forget: (args: string[]) => exec("forget", args),
-    planToolHint: (query: string) => exec("plan-tool-hint", [query]),
   };
 }
 
