@@ -1585,7 +1585,7 @@ notify_user(${JSON.stringify(message)})
       let appendSystemContext: string | undefined;
       let prependSystemContext: string | undefined;
       if (isSystemEnabled("projects")) {
-        const sessionKeyDocs = String(ctx?.sessionId || ctx?.session?.id || "");
+        const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
           projectDocsInjectedSessions.add(sessionKeyDocs);
           try {

@@ -1252,7 +1252,7 @@ notify_user(${JSON.stringify(message)})
       let appendSystemContext;
       let prependSystemContext;
       if (isSystemEnabled2("projects")) {
-        const sessionKeyDocs = String(ctx?.sessionId || ctx?.session?.id || "");
+        const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
           projectDocsInjectedSessions.add(sessionKeyDocs);
           try {
