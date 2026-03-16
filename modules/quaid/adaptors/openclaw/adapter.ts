@@ -1720,6 +1720,7 @@ notify_user(${JSON.stringify(message)})
             domain: injectDomain,
             failOpen: true,
             waitForExtraction: false,
+            fast: true,
             sourceTag: "auto_inject"
           });
         } finally {

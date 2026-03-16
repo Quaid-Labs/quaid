@@ -2411,7 +2411,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
   function injectProjectContext(existingContext) {
     let prepend = existingContext;
     try {
-      const projectsDir = path.join(deps.workspace, "projects");
+      const projectsDir = path.join(deps.workspace, "shared", "projects");
       let subdirs = [];
       try {
         subdirs = fs.readdirSync(projectsDir).filter((name) => {

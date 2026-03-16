@@ -3313,7 +3313,8 @@ print(total_docs)
     log.info(C.dim("Your agent can discover more projects — ask it to \"set up projects\""));
 
     // Install Quaid project reference docs and constitutional guidance
-    const quaidProjDir = path.join(instanceProjectsDir(), "quaid");
+    // Lives in shared/projects/quaid/ so all adapter instances share it.
+    const quaidProjDir = path.join(WORKSPACE, "shared", "projects", "quaid");
     fs.mkdirSync(quaidProjDir, { recursive: true });
     const quaidProjSrc = path.join(__dirname, "projects", "quaid");
     for (const f of ["TOOLS.md", "AGENTS.md", "USER.md", "SOUL.md", "MEMORY.md", "ARCHITECTURE.md", "project_onboarding.md"]) {
@@ -3358,7 +3359,7 @@ sys.path.insert(0, '.')
 from datastore.docsdb.registry import DocsRegistry
 reg = DocsRegistry()
 try:
-    reg.create_project('quaid', label='Quaid Knowledge Layer', description='Knowledge layer reference docs and agent instructions.')
+    reg.create_project('quaid', label='Quaid Knowledge Layer', home_dir='shared/projects/quaid/', description='Knowledge layer reference docs and agent instructions.')
 except ValueError:
     pass  # already exists
 found = reg.auto_discover('quaid')

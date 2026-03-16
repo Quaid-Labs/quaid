@@ -3169,7 +3169,7 @@ ${lines.join("\n")}
   function injectProjectContext(existingContext?: string): string | undefined {
     let prepend = existingContext;
     try {
-      const projectsDir = path.join(deps.workspace, "projects");
+      const projectsDir = path.join(deps.workspace, "shared", "projects");
       let subdirs: string[] = [];
       try {
         subdirs = fs.readdirSync(projectsDir)
