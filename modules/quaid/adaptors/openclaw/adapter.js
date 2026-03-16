@@ -1305,10 +1305,21 @@ notify_user(${JSON.stringify(message)})
         return { prependContext: event.prependContext };
       }
       try {
-        let query = rawPrompt.replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").trim();
-        query = query.replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^Sender \(untrusted metadata\):.*$/gim, "").replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "").trim();
+        let query = "";
+        const eventMessages = Array.isArray(event.messages) ? event.messages : [];
+        const lastUserMsg = eventMessages.slice().reverse().find((m) => m?.role === "user");
+        if (lastUserMsg) {
+          const c = lastUserMsg.content;
+          query = typeof c === "string" ? c.trim() : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("\n").trim() : "";
+        }
         if (query.length < 3) {
-          query = rawPrompt;
+          query = rawPrompt.replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^Sender \(untrusted metadata\):.*$/gim, "").replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "").trim();
+          if (query.length < 3) {
+            query = rawPrompt;
+          }
+        }
+        if (query.length > 500) {
+          query = query.slice(0, 500);
         }
         if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/.test(query)) {
           return { prependContext: event.prependContext };

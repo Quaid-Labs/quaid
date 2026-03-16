@@ -1643,19 +1643,32 @@ notify_user(${JSON.stringify(message)})
       }
 
       try {
-        // Extract actual user message from metadata-wrapped prompts
-        let query = rawPrompt
-          .replace(/^System:\s*/i, '')
-          .replace(/^\s*(\[.*?\]\s*)+/s, '')
-          .replace(/^---\s*/m, '')
-          .trim();
-        // Strip gateway metadata wrapper blocks from Telegram/adapter prompts.
-        query = query
-          .replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
-          .replace(/^Sender \(untrusted metadata\):.*$/gim, "")
-          .replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "")
-          .trim();
-        if (query.length < 3) { query = rawPrompt; }
+        // Prefer clean query from last user message in event.messages (no OC metadata wrapper).
+        // Fall back to rawPrompt cleanup when messages are absent or empty.
+        let query = "";
+        const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
+        const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
+        if (lastUserMsg) {
+          const c = lastUserMsg.content;
+          query = typeof c === "string" ? c.trim()
+            : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n").trim()
+            : "";
+        }
+        if (query.length < 3) {
+          // Fallback: clean rawPrompt by stripping OC metadata wrappers
+          query = rawPrompt
+            .replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "")  // strip leading code fence block
+            .replace(/^System:\s*/i, '')
+            .replace(/^\s*(\[.*?\]\s*)+/s, '')
+            .replace(/^---\s*/m, '')
+            .replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
+            .replace(/^Sender \(untrusted metadata\):.*$/gim, "")
+            .replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "")
+            .trim();
+          if (query.length < 3) { query = rawPrompt; }
+        }
+        // Cap query length — vector search on a 2000-char polluted string is wasteful
+        if (query.length > 500) { query = query.slice(0, 500); }
 
         // Skip system/internal prompts, slash commands, and OC gateway error messages
         if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/.test(query)) {
