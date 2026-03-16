@@ -1704,6 +1704,39 @@ class TestRecallLimitEdgeCases:
         assert meta["phases_ms"]["graph_expand_ms"] >= 0
         assert meta["phases_ms"]["total_ms"] >= meta["phases_ms"]["base_recall_ms"]
 
+    def test_graph_aware_recall_uses_cheap_seed_recall_flags(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        recorded = {}
+
+        def _fake_recall(query, **kwargs):
+            recorded["query"] = query
+            recorded["kwargs"] = kwargs
+            return ([], {"mode": "deliberate"})
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "recall", side_effect=_fake_recall), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]):
+            payload = mg.graph_aware_recall(
+                "recipe app UI design layout appearance current",
+                owner_id="maya",
+                limit=20,
+                project="recipe-app",
+            )
+
+        assert recorded["query"] == "recipe app UI design layout appearance current"
+        kwargs = recorded["kwargs"]
+        assert kwargs["limit"] == 40
+        assert kwargs["project"] == "recipe-app"
+        assert kwargs["use_multi_pass"] is False
+        assert kwargs["use_reranker"] is False
+        assert kwargs["include_graph_traversal"] is False
+        assert kwargs["include_co_session"] is False
+        assert kwargs["include_mmr"] is False
+        assert kwargs["max_turns"] == 1
+        assert payload["meta"]["base_recall_meta"] == {"mode": "deliberate"}
+
     def test_resolve_recall_store_request_defaults_to_vector_only(self):
         from datastore.memorydb.memory_graph import _resolve_recall_store_request
 

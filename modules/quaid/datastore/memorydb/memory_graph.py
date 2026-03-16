@@ -2390,12 +2390,21 @@ def graph_aware_recall(
         _base_started_at = time.monotonic()
         direct_all, base_meta = recall(
             query,
-            limit=limit * 3,
+            # Graph-aware recall only needs seed facts. It performs its own graph
+            # traversal below, so avoid recursively paying for the full
+            # deliberate-recall stack (MMR/co-session/graph traversal) here.
+            limit=limit * 2,
             owner_id=owner_id,
             min_similarity=min_similarity,
             domain=domain,
             domain_boost=domain_boost,
             project=project,
+            use_multi_pass=False,
+            use_reranker=False,
+            include_graph_traversal=False,
+            include_co_session=False,
+            include_mmr=False,
+            max_turns=1,
             return_meta=True,
         )
         results["meta"]["phases_ms"]["base_recall_ms"] = round((time.monotonic() - _base_started_at) * 1000)
