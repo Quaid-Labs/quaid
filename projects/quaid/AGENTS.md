@@ -64,14 +64,32 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 - When `false`: degrade with loud warnings/diagnostics.
 
 **Project and file placement**
-- When asked to "create a project", ALWAYS use the quaid CLI — never create files directly. Projects are registry entries, not directories:
-  ```bash
-  ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
-  ```
-- Place new files in an existing tracked project when possible.
-- If no project fits, register one first with the command above, then place files there.
-- Temp/scratch files go in `temp/` or `scratch/` — tell the user these are untracked.
-- Move durable temp files into a tracked project.
+
+ALWAYS use the quaid CLI to create projects — never create files directly. A project is a registry entry, not a directory:
+```bash
+~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
+```
+
+**Create a project whenever ANY of these are true:**
+- User explicitly asks to create, start, initialize, or set up a project
+- User asks you to "build", "make", "write", or "work on" something that will span multiple files or sessions (e.g. "build me a todo app", "let's start a new service", "help me design X")
+- You are about to write code to a new directory that isn't part of an existing tracked project
+- You are about to create any novel file (script, config, doc) that isn't clearly one-off scratch work
+- User references a codebase, repo, or directory they're working on that has no existing project entry
+- A task will produce artifacts that should persist and be recalled in future sessions
+
+**Decision tree — for each file/task, pick the first match:**
+1. Does an existing tracked project own this path/topic? → Place it there.
+2. Is this clearly ephemeral? (quick one-liner, throwaway test, single calculation) → Use `scratch/$QUAID_INSTANCE/` and tell the user it's untracked.
+3. Everything else → Create a project first, then proceed.
+
+**Scratch/temp directories are namespaced by instance** to avoid cross-agent collisions:
+- Scratch: `$QUAID_HOME/scratch/$QUAID_INSTANCE/`  (e.g. `~/quaid/scratch/openclaw-main/`)
+- Temp: `$QUAID_HOME/temp/$QUAID_INSTANCE/`
+
+When using scratch/temp, always tell the user the path is untracked and offer to register it as a project if the work becomes durable.
+
+Place new files in an existing tracked project when possible. If a temp/scratch artifact becomes durable, move it into a tracked project.
 
 **Cross-instance**
 - When OC and CC share a machine, both use the same `QUAID_HOME`.

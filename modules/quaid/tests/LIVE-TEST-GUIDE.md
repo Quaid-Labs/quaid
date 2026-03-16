@@ -711,27 +711,39 @@ Pass:
 
 ### M8: Full Project System CRUD
 
-This is a capability test. Do not tell the agent the exact command names.
+This is a capability test. **Do not tell the agent the exact command names or that you want a "project".**
+The goal is that the agent proactively creates a project in response to natural work requests —
+not just when told to. Test all three trigger categories below.
 
-Prepare a source root:
+Prepare a source root first:
 
 ```bash
 ssh example.local 'mkdir -p /tmp/quaid-live-src && printf "print(\"hello\")\n" > /tmp/quaid-live-src/main.py'
 ```
 
-Ask the agent naturally:
+#### Phase 1: Indirect trigger — work directive (PASS requires project auto-creation)
 
-- `Can you create a project named live-test for /tmp/quaid-live-src with a short description?`
-- `Can you show me what you know about the live-test project?`
-- `Can you update that project's description so it is clearly marked as a live test project?`
+Send a natural work directive that does NOT mention "project" or "create":
 
-Ask the agent to list all projects:
+> `I have a Python script at /tmp/quaid-live-src/main.py. I want to build this out into a
+> proper CLI tool with argument parsing and a test suite. Can you start working on it?`
 
-- `Can you list all the projects you know about?`
+**Expected:** Agent creates a project via `quaid registry create-project` BEFORE writing any files.
+It should NOT write files to /tmp directly without registering a project first.
 
-Then delete the test project:
+If the agent writes files without creating a project first → **FAIL** (report to claude-dev).
 
-- `Can you delete the live-test project?`
+#### Phase 2: Explicit CRUD (after Phase 1 project exists or agent was nudged)
+
+If Phase 1 failed, manually note it as a gap and proceed to verify CRUD with a direct prompt:
+
+> `Can you show me what you know about the live-test project?`
+> `Can you update that project's description so it is clearly marked as a live test project?`
+> `Can you list all the projects you know about?`
+
+#### Phase 3: Delete
+
+> `Can you delete the live-test project?`
 
 Verify from shell:
 
@@ -741,6 +753,20 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main
 ssh example.local 'test -f /tmp/quaid-live-src/main.py && echo source_still_exists'
 ```
 
+#### Phase 4: Scratch dir namespacing
+
+Ask the agent to create a throwaway file:
+
+> `Can you write a quick scratch script at ~/quaid/scratch that prints hello world?`
+
+**Expected:** Agent writes to `~/quaid/scratch/openclaw-main/` (namespaced), NOT `~/quaid/scratch/` directly.
+Verify:
+
+```bash
+ssh example.local 'ls ~/quaid/scratch/openclaw-main/ 2>/dev/null && echo "PASS: namespaced scratch" || echo "FAIL: no namespaced scratch dir"'
+ssh example.local 'ls ~/quaid/scratch/*.py 2>/dev/null && echo "FAIL: file in shared scratch root" || echo "PASS: no leak to shared root"'
+```
+
 After project CRUD, trigger extraction to generate project logs. Tell the agent
 naturally something about the session, then do `/reset`:
 
@@ -748,8 +774,7 @@ naturally something about the session, then do `/reset`:
 > live-test project via the quaid CLI. This is part of the quaid live-test
 > suite M8 run. Triggering a reset to capture project activity."
 
-Then `/reset`. This gives the extraction LLM enough project context to include
-a `project_logs` entry for the quaid project in the extraction JSON.
+Then `/reset`.
 
 Check after extraction:
 
@@ -757,13 +782,14 @@ Check after extraction:
 ssh example.local 'tail -20 ~/quaid/openclaw-main/projects/quaid/PROJECT.log 2>/dev/null || echo "(PROJECT.log absent — check if quaid project exists in instance)"'
 ```
 
-Pass:
-- create works
-- show works (returns project details)
-- list works (live-test appears in output)
-- update works (description reflects the change)
-- delete removes the project but not the source directory
+Pass criteria:
+- **Phase 1 (hard)**: Agent creates project via CLI before writing any files in response to work directive
+- Phase 2: show, update work correctly
+- Phase 3: delete removes the project but not the source directory
+- **Phase 4 (hard)**: Scratch file lands in `scratch/openclaw-main/`, not shared `scratch/`
 - `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
+
+Note: Phase 1 and Phase 4 are new hard requirements. If they fail, report to claude-dev before continuing.
 
 ### M9: Janitor
 
