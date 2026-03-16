@@ -572,20 +572,23 @@ ${projectHints}
       }
       t?.("tool_hint.calling_llm", { tools_len: toolsContent.length, query_len: clean.length });
 
-      const systemPrompt = "You output compact JSON for tool guidance. No prose.";
+      const systemPrompt = "You output compact JSON. No markdown. No prose. No code fences.";
       const userMessage =
         "You are a tool-routing assistant. Below is a reference guide for available tools.\n\n" +
         "<tools>\n" + toolsContent + "\n</tools>\n\n" +
         "Given the message, decide if a specific tool or workflow from the guide clearly applies.\n" +
-        "Return JSON only: {\"tool_hint\": \"<one-line actionable hint>\"} or {\"tool_hint\": null}.\n" +
-        "Only return a hint when the match is obvious. Prefer null when uncertain.\n\n" +
+        "Return raw JSON only (no markdown, no code fences): {\"tool_hint\": \"<one-line actionable hint>\"} or {\"tool_hint\": null}.\n" +
+        "Examples that SHOULD produce a hint: requests to write scripts, create files, store/recall facts, search docs.\n" +
+        "Return null only for conversational or purely analytical questions with no file or tool action.\n\n" +
         "Message: " + clean;
 
       const raw = await deps.callFastRouter(systemPrompt, userMessage);
       t?.("tool_hint.llm_response", { raw_len: raw?.length ?? 0, raw_preview: (raw || "").slice(0, 120) });
       if (!raw) return null;
 
-      const data = JSON.parse(raw.trim());
+      // Strip markdown code fences that some models wrap around JSON output
+      const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+      const data = JSON.parse(stripped);
       const hint = data?.tool_hint;
       if (hint && typeof hint === "string" && hint.trim().length > 5) {
         t?.("tool_hint.produced", { len: hint.trim().length });
