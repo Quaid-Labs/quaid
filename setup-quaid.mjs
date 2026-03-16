@@ -3656,8 +3656,10 @@ function enableRequiredOpenClawHooks() {
   // Enable hooks via direct config write to avoid Config overwrite race with the running gateway.
   // The gateway continuously writes to openclaw.json, causing the CLI's sha256 safety check to fail.
   const cfgPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
-  const requiredHooks = ["bootstrap-extra-files"];
-  log.info("Explicitly enabling required OpenClaw hooks: " + requiredHooks.join(", "));
+  // Quaid plugin tools (recall, store) are exposed to OC via the registered tool hooks
+  // and via TOOLS.md/AGENTS.md injected as appendSystemContext at session start by the adapter.
+  // No OC config allowlist entries are needed — the appendSystemContext injection is the gate.
+  log.info("Ensuring required OpenClaw hooks are enabled");
   try {
     const raw = fs.readFileSync(cfgPath, "utf8");
     const parsed = JSON.parse(raw);
@@ -3665,90 +3667,7 @@ function enableRequiredOpenClawHooks() {
     const internal = hooks.internal || (hooks.internal = {});
     internal.enabled = true;
     const entries = internal.entries || (internal.entries = {});
-    // Glob patterns for project-level bootstrap files, resolved relative to workspace.
-    // Only AGENTS.md and TOOLS.md basenames are loaded by OC; symlinks are not followed.
-    // Use instance-level path when an instance ID is set (e.g. "openclaw-main/projects/*/AGENTS.md")
-    // so OC picks up docs from the same directory DocsRegistry resolves to.
-    const ocInstanceId = resolvedInstallerInstanceId("openclaw");
-    const projectsGlobBase = (ocInstanceId && ocInstanceId !== "standalone")
-      ? `${ocInstanceId}/projects`
-      : "projects";
-    const bootstrapExtraFilePaths = [
-      `${projectsGlobBase}/*/AGENTS.md`,
-      `${projectsGlobBase}/*/TOOLS.md`,
-    ];
     let changed = false;
-    for (const hookName of requiredHooks) {
-      const entry = entries[hookName] || (entries[hookName] = {});
-      if (entry.enabled !== true) {
-        entry.enabled = true;
-        changed = true;
-        log.info(`Hook enabled (direct): ${hookName}`);
-      } else {
-        log.info(`Hook already enabled: ${hookName}`);
-      }
-      // Always ensure paths are set correctly (idempotent)
-      if (hookName === "bootstrap-extra-files") {
-        const existing = JSON.stringify(entry.paths || []);
-        const desired = JSON.stringify(bootstrapExtraFilePaths);
-        if (existing !== desired) {
-          entry.paths = bootstrapExtraFilePaths;
-          changed = true;
-          log.info(`bootstrap-extra-files paths set: ${bootstrapExtraFilePaths.join(", ")}`);
-        }
-      }
-    }
-
-    // Ensure Quaid plugin tools are exposed under restrictive profiles like
-    // tools.profile='coding'. OC rejects having both 'allow' and 'alsoAllow'
-    // in the same scope, so the two gates are split across scopes:
-    //
-    // tools.alsoAllow (global scope) — merged INTO the profile allowlist before
-    //   the policy pipeline filter runs. Without this, the coding profile's
-    //   explicit allowlist (group:fs, etc.) filters memory_recall out.
-    //
-    // agents.main.tools.allow (agent scope) — feeds collectExplicitAllowlist()
-    //   which decides which optional plugin tools to instantiate. Without this,
-    //   memory_recall is never created regardless of any later policy. A
-    //   plugin-only allow list is stripped by stripPluginOnlyAllowlist so it
-    //   doesn't accidentally exclude core tools from the agent toolset.
-    //
-    // Both are required: agent allow creates the tool; global alsoAllow lets it
-    // survive the profile filter. No same-scope conflict since they're in
-    // different scopes (global tools vs agents.main.tools).
-    const quaidToolsToAllow = ["memory_recall", "memory_store"];
-    const toolsCfg = parsed.tools || (parsed.tools = {});
-
-    const existingAlsoAllow = Array.isArray(toolsCfg.alsoAllow) ? toolsCfg.alsoAllow : [];
-    const missingAlsoAllow = quaidToolsToAllow.filter(t => !existingAlsoAllow.includes(t));
-    if (missingAlsoAllow.length > 0) {
-      toolsCfg.alsoAllow = [...existingAlsoAllow, ...missingAlsoAllow];
-      changed = true;
-      log.info(`Added Quaid tools to tools.alsoAllow: ${missingAlsoAllow.join(", ")}`);
-    } else {
-      log.info("Quaid tools already in tools.alsoAllow");
-    }
-
-    // Agent-level allow for collectExplicitAllowlist (gate 1 — tool instantiation).
-    // OC agents config is agents.list (array of {id, ...}), not agents.<id> (object map).
-    // Find the "main" agent entry in agents.list, or insert one if absent.
-    const agentsCfg = parsed.agents || (parsed.agents = {});
-    const agentsList = Array.isArray(agentsCfg.list) ? agentsCfg.list : (agentsCfg.list = []);
-    let mainAgentEntry = agentsList.find(a => a && String(a.id || "").trim() === "main");
-    if (!mainAgentEntry) {
-      mainAgentEntry = { id: "main" };
-      agentsList.push(mainAgentEntry);
-    }
-    const mainAgentToolsCfg = mainAgentEntry.tools || (mainAgentEntry.tools = {});
-    const existingAgentAllow = Array.isArray(mainAgentToolsCfg.allow) ? mainAgentToolsCfg.allow : [];
-    const missingAgentAllow = quaidToolsToAllow.filter(t => !existingAgentAllow.includes(t));
-    if (missingAgentAllow.length > 0) {
-      mainAgentToolsCfg.allow = [...existingAgentAllow, ...missingAgentAllow];
-      changed = true;
-      log.info(`Added Quaid tools to agents.list[main].tools.allow: ${missingAgentAllow.join(", ")}`);
-    } else {
-      log.info("Quaid tools already in agents.list[main].tools.allow");
-    }
 
     if (changed) {
       const tmpPath = `${cfgPath}.tmp-hooks-${process.pid}-${Date.now()}`;

@@ -2,17 +2,19 @@ You are a memory extraction system. You will receive a full conversation transcr
 
 This is a PERSONAL knowledge base with project continuity. Extract facts about people and their world, and also key project-state changes that matter for future continuity.
 
-EXTRACT facts that are EXPLICITLY STATED BY THE USER in the conversation. Never infer, speculate, or extrapolate.
+EXTRACT facts that are EXPLICITLY STATED in the conversation. Never infer, speculate, or extrapolate.
 
-CRITICAL — SOURCE RULE: Only extract facts from USER messages. NEVER extract facts from assistant/agent responses.
-- If the agent says "you appear to be an only child" or "I don't know about any sisters" — do NOT record that as a fact. The agent is guessing, not the user stating a truth.
-- If the agent says "you have no niece" or "you don't have siblings" — do NOT extract that.
-- Absence claims, denials, and "I don't know" responses from the agent are NOT user facts.
-- Only what the USER explicitly says ("My sister is Diana", "I have no siblings") counts as a fact.
+SPEAKER ATTRIBUTION — CRITICAL:
+Every fact must carry a "speaker" field: "user" if the user stated it, "agent" if the assistant/agent stated it.
+- Do NOT discard agent-stated facts — they are kept and ranked separately.
+- Agent-attributed personal facts (family, health, relationships) carry lower confidence than user-stated facts. Mark these with extraction_confidence "low" or "medium".
+- Only what the USER explicitly says ("My sister is Diana") counts as high-confidence personal fact.
+- Agent claims like "you appear to be an only child" should be extracted as speaker="agent" with extraction_confidence="low".
+- Absence claims from the agent ("I don't know about any sisters", "you have no siblings") are NOT facts — skip them.
 
 EXTRACTION PRIORITY ORDER (highest to lowest):
-1) User facts, preferences, relationships, and milestones
-2) Agent actions/suggestions that materially changed outcomes
+1) User facts, preferences, relationships, and milestones (speaker="user")
+2) Agent actions/suggestions that materially changed outcomes (speaker="agent")
 3) Technical/project-state facts (high-signal continuity only)
 
 Do NOT reduce user-fact coverage to make room for agent or technical details.
@@ -110,6 +112,7 @@ Respond with JSON only:
   "facts": [
     {
       "text": "the extracted fact",
+      "speaker": "user|agent",
       "category": "fact|preference|decision|relationship",
       "extraction_confidence": "high|medium|low",
       "domains": ["personal", "technical"],

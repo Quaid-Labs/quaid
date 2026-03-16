@@ -2076,18 +2076,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       const recallStoreGuidance = facade.renderDatastoreGuidance();
       registerToolChecked(
         () => ({
-          name: "memory_recall",
+          name: "recall",
           description: `Search your memory for personal facts, preferences, relationships, project details, and past conversations. Always use this tool when you're unsure about something or need to verify a detail \u2014 if you might know it, search for it.
 
 USE THIS TOOL LIBERALLY. If you're about to say "I don't have information about..." or "I'm not sure...", SEARCH FIRST. It's better to search and find nothing than to miss a memory you have.
 
 COST AWARE RETRIEVAL ORDER:
-1) memory_recall (cheap; default first move)
+1) recall (cheap; default first move)
 2) projects_search / project docs (more expensive; use for file-backed implementation detail)
 3) session_recall (most expensive/noisy; use only when memory+project docs are insufficient)
 
 USE WHEN: Any question about the user, their life, people they know, projects they work on, preferences, history, past decisions, technical details about their projects, or anything that might have come up in a previous conversation.
 SKIP WHEN: General knowledge questions, greetings, short acknowledgments.
+
+SPEAKER ATTRIBUTION: Results tagged [agent-attributed] were originally stated by the assistant, not the user. Treat these with lower confidence, especially for personal facts (family, health, relationships) \u2014 verify with the user when it matters.
 
 QUERY TIPS: Use specific names and topics. Try multiple searches with different phrasings if the first doesn't return what you need.
 options.graph.depth: Set to 2 for relationship queries (e.g., nephew = sibling's child). Default 1 is usually sufficient.

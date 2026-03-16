@@ -97,6 +97,7 @@ export type MemoryResult = {
   direction?: string;
   sourceName?: string;
   via?: string;
+  speaker?: string;
 };
 
 export type DatastoreStats = {
@@ -2246,6 +2247,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
           privacy: item.privacy || undefined,
           ownerId: item.owner_id || item.ownerId || undefined,
           via: expandGraph ? undefined : "vector",
+          speaker: item.speaker || undefined,
         });
       }
 
@@ -2897,7 +2899,8 @@ ${lines.join("\n")}
         const conf = r.extractionConfidence ? ` [conf:${Math.round(r.extractionConfidence * 100)}%]` : "";
         const dateStr = r.createdAt ? ` (${r.createdAt.split("T")[0]})` : "";
         const superseded = r.validUntil ? " [superseded]" : "";
-        text += `${i + 1}. [MEMORY] [${r.category}]${dateStr}${superseded} ${r.text} (${Math.round(r.similarity * 100)}%${conf})\n`;
+        const speakerTag = r.speaker === "agent" ? " [agent-attributed: treat personal facts with lower confidence]" : "";
+        text += `${i + 1}. [MEMORY] [${r.category}]${dateStr}${superseded}${speakerTag} ${r.text} (${Math.round(r.similarity * 100)}%${conf})\n`;
       });
     }
     if (graphResults.length > 0) {

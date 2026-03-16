@@ -1626,7 +1626,8 @@ Consider running: docs staleness updater (update-stale --apply)`;
           validUntil: item.valid_until || item.validUntil || void 0,
           privacy: item.privacy || void 0,
           ownerId: item.owner_id || item.ownerId || void 0,
-          via: expandGraph ? void 0 : "vector"
+          via: expandGraph ? void 0 : "vector",
+          speaker: item.speaker || void 0
         });
       }
       if (expandGraph) {
@@ -2212,7 +2213,8 @@ ${lines.join("\n")}
         const conf = r.extractionConfidence ? ` [conf:${Math.round(r.extractionConfidence * 100)}%]` : "";
         const dateStr = r.createdAt ? ` (${r.createdAt.split("T")[0]})` : "";
         const superseded = r.validUntil ? " [superseded]" : "";
-        text += `${i + 1}. [MEMORY] [${r.category}]${dateStr}${superseded} ${r.text} (${Math.round(r.similarity * 100)}%${conf})
+        const speakerTag = r.speaker === "agent" ? " [agent-attributed: treat personal facts with lower confidence]" : "";
+        text += `${i + 1}. [MEMORY] [${r.category}]${dateStr}${superseded}${speakerTag} ${r.text} (${Math.round(r.similarity * 100)}%${conf})
 `;
       });
     }

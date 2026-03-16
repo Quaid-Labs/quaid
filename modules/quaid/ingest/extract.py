@@ -670,7 +670,11 @@ def extract_from_transcript(
         project = fact.get("project")
         knowledge_type = "preference" if category == "preference" else "fact"
         source_label = f"{label}-extraction"
-        raw_source = str(fact.get("source", "user")).strip().lower()
+        # speaker field from extraction prompt: "user" or "agent"
+        raw_speaker = str(fact.get("speaker", "user")).strip().lower()
+        speaker_label = "agent" if raw_speaker == "agent" else "user"
+        # source_type maps speaker to storage convention
+        raw_source = str(fact.get("source", raw_speaker)).strip().lower()
         source_type = (
             "assistant" if raw_source == "agent"
             else "both" if raw_source == "both"
@@ -694,6 +698,7 @@ def extract_from_transcript(
                 knowledge_type=knowledge_type,
                 keywords=keywords,
                 source_type=source_type,
+                speaker=speaker_label,
                 domains=domains,
                 project=project,
                 actor_id=actor_id,
