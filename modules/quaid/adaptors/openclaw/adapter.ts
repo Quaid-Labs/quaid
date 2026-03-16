@@ -1752,8 +1752,20 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         console.error("[quaid] Auto-injection error:", error);
       }
 
+      // For messages with file-creation signals, inject a 1-line hint in the user turn to
+      // reinforce the /tmp ban directly adjacent to the user's request. LLMs weight recent
+      // instructions highly, so the system prompt alone loses to explicit "put it in /tmp" user text.
+      let userTurnHint: string | undefined;
+      if (_QUAID_INSTANCE) {
+        const rawPromptForHint = String(event.prompt || "").toLowerCase();
+        const hasFileSignal = /\b(write|create|file|script|put|save|temp|tmp|throwaway|throw.?away|quick|scratch|hello.?world|hello world)\b/.test(rawPromptForHint);
+        if (hasFileSignal) {
+          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+          userTurnHint = `[Quaid file rule: write to project dir or misc at ${miscPath}/ — NOT /tmp or /var/tmp]\n`;
+        }
+      }
       return {
-        prependContext: event.prependContext,
+        prependContext: (userTurnHint || "") + (event.prependContext || "") || undefined,
         ...(prependSystemContext ? { prependSystemContext } : {}),
         ...(appendSystemContext ? { appendSystemContext } : {}),
       };

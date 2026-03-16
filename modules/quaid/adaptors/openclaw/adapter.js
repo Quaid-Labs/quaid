@@ -1385,8 +1385,18 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
       }
+      let userTurnHint;
+      if (_QUAID_INSTANCE) {
+        const rawPromptForHint = String(event.prompt || "").toLowerCase();
+        const hasFileSignal = /\b(write|create|file|script|put|save|temp|tmp|throwaway|throw.?away|quick|scratch|hello.?world|hello world)\b/.test(rawPromptForHint);
+        if (hasFileSignal) {
+          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+          userTurnHint = `[Quaid file rule: write to project dir or misc at ${miscPath}/ \u2014 NOT /tmp or /var/tmp]
+`;
+        }
+      }
       return {
-        prependContext: event.prependContext,
+        prependContext: (userTurnHint || "") + (event.prependContext || "") || void 0,
         ...prependSystemContext ? { prependSystemContext } : {},
         ...appendSystemContext ? { appendSystemContext } : {}
       };
