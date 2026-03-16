@@ -105,7 +105,7 @@ quaid global-registry list    # cross-instance project list
 - In-project files → `QUAID_HOME/<instance>/projects/<name>/`
 - Project docs → `QUAID_HOME/<instance>/projects/<name>/docs/`
 - External code files → link with `quaid registry register <path> --project <name>`
-- Temp/scratch → `QUAID_HOME/$QUAID_INSTANCE/scratch/` or `.../temp/` (inside your instance silo — tell user these are untracked)
+- Ephemeral/scratch → project `scratch--$QUAID_INSTANCE` at `$QUAID_HOME/shared/projects/scratch--$QUAID_INSTANCE/` (tell user it's scratch, not a durable project)
 
 ---
 

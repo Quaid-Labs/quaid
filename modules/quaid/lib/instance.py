@@ -105,26 +105,27 @@ def shared_config_path() -> Path:
     return shared_dir() / "config" / "memory.json"
 
 
+def scratch_project_name(name: Optional[str] = None) -> str:
+    """Registry name for an instance's scratch project.
+
+    Convention: scratch--{instance_id}  (e.g. scratch--openclaw-main)
+    Groups all scratch entries together in sorted project listings.
+    Double-dash avoids collision with user project names.
+    """
+    iid = validate_instance_id(name) if name else instance_id()
+    return f"scratch--{iid}"
+
+
 def instance_scratch_dir(name: Optional[str] = None) -> Path:
-    """Per-instance scratch directory: QUAID_HOME/{instance_id}/scratch/
+    """Per-instance scratch project directory in shared/projects.
 
-    Scratch is for ephemeral/untracked work. Namespaced inside the instance
-    silo so it stays co-located with all other per-instance data and is
-    removed when the instance is deleted.
+    Path: QUAID_HOME/shared/projects/scratch--{instance_id}/
+
+    Scratch lives as a real tracked project so all project tooling
+    (doc health, PROJECT.log, registry list) works without modification.
+    Files written here are automatically associated with the scratch project.
     """
-    if name is None:
-        return instance_root() / "scratch"
-    return quaid_home() / validate_instance_id(name) / "scratch"
-
-
-def instance_temp_dir(name: Optional[str] = None) -> Path:
-    """Per-instance temp directory: QUAID_HOME/{instance_id}/temp/
-
-    Temp is for transient working files. Namespaced inside the instance silo.
-    """
-    if name is None:
-        return instance_root() / "temp"
-    return quaid_home() / validate_instance_id(name) / "temp"
+    return shared_projects_dir() / scratch_project_name(name)
 
 
 def instance_exists(name: str) -> bool:
