@@ -1268,16 +1268,19 @@ notify_user(${JSON.stringify(message)})
             const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
             prependSystemContext = [
               `[Quaid \u2014 active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
-              `Quaid tracks files, projects, and knowledge across sessions. Every file you create must be assigned to a project and registered so Quaid can track it.`,
+              `Quaid tracks files, projects, and knowledge across sessions.`,
               ``,
-              `[File tracking \u2014 required for every new file]`,
-              `1. Pick a project: use an existing one if it fits, create one for durable new work, or use misc--${_QUAID_INSTANCE} for ephemeral/throwaway files.`,
-              `2. Register the file: ~/.openclaw/extensions/quaid/quaid registry register <file_path> --project <name>`,
-              `   (If the file lives inside the project directory it is auto-tracked \u2014 no explicit register needed.)`,
-              `3. Always tell the user which project you assigned the file to.`,
+              `[MANDATORY \u2014 before writing any file or spawning any sub-agent]`,
+              `Step 1 \u2014 Decide which project owns this work (BEFORE doing anything else):`,
+              `  - Ephemeral/throwaway \u2192 misc--${_QUAID_INSTANCE} (path: ${miscPath}/)`,
+              `  - Durable new work    \u2192 create a project first: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+              `  - Fits existing project \u2192 use that project`,
+              `Step 2 \u2014 Register external files (files outside the project directory):`,
+              `  ~/.openclaw/extensions/quaid/quaid registry register <file_path> --project <name>`,
+              `  (Files written inside the project directory are auto-tracked \u2014 no explicit register needed.)`,
+              `Step 3 \u2014 Tell the user which project you assigned the work to.`,
               ``,
-              `Misc project (for quick/throwaway work): ${miscPath}/`,
-              `Create a new project: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`
+              `CRITICAL: For any multi-step or build task (e.g. "build a CLI tool", "create a project structure"), run project create FIRST, before any file writes or sub-agent calls.`
             ].join("\n");
             writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
           }
