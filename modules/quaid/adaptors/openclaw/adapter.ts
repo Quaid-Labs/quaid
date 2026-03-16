@@ -865,6 +865,7 @@ type PluginConfig = {
 
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
 const BEFORE_PROMPT_BUILD_DEADLINE_MS = 15_000;
+const TOOL_HINT_HOOK_TIMEOUT_MS = 7_000;
 
 function getOpenClawSessionsPath(): string {
   return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
@@ -1651,6 +1652,8 @@ notify_user(${JSON.stringify(message)})
         // Strip gateway metadata wrapper blocks from Telegram/adapter prompts.
         query = query
           .replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
+          .replace(/^Sender \(untrusted metadata\):.*$/gim, "")
+          .replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "")
           .trim();
         if (query.length < 3) { query = rawPrompt; }
 
@@ -1703,13 +1706,19 @@ notify_user(${JSON.stringify(message)})
               resolve([[], null]);
             }, BEFORE_PROMPT_BUILD_DEADLINE_MS)
           );
+          // planToolHint is best-effort: cap it independently so a slow/retrying
+          // callFastRouter cannot hold up Promise.all and burn the hook deadline.
+          const boundedToolHint = Promise.race([
+            facade.planToolHint(query),
+            new Promise<null>(resolve => setTimeout(() => resolve(null), TOOL_HINT_HOOK_TIMEOUT_MS)),
+          ]);
           [allMemories, toolHint] = await Promise.race([
             Promise.all([
               recallMemories({
                 query,
                 limit: injectLimit,
-                expandGraph: true,
-                datastores: ["vector_basic", "graph"],
+                expandGraph: false,
+                datastores: ["vector_basic"],
                 routeStores: false,
                 intent: injectIntent,
                 domain: injectDomain,
@@ -1718,7 +1727,7 @@ notify_user(${JSON.stringify(message)})
                 fast: true,
                 sourceTag: "auto_inject"
               }),
-              facade.planToolHint(query),
+              boundedToolHint,
             ]),
             deadline,
           ]);
