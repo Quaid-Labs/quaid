@@ -685,7 +685,6 @@ const configSchema = Type.Object({
 });
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
 const BEFORE_PROMPT_BUILD_DEADLINE_MS = 15e3;
-const TOOL_HINT_HOOK_TIMEOUT_MS = 7e3;
 function getOpenClawSessionsPath() {
   return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
 }
@@ -1345,19 +1344,14 @@ notify_user(${JSON.stringify(message)})
         }
         _beforePromptBuildInFlight = true;
         let allMemories;
-        let toolHint = null;
         try {
           const deadline = new Promise(
             (resolve) => setTimeout(() => {
               writeHookTrace("hook.before_prompt_build.deadline_hit", {});
-              resolve([[], null]);
+              resolve([[]]);
             }, BEFORE_PROMPT_BUILD_DEADLINE_MS)
           );
-          const boundedToolHint = Promise.race([
-            facade.planToolHint(query),
-            new Promise((resolve) => setTimeout(() => resolve(null), TOOL_HINT_HOOK_TIMEOUT_MS))
-          ]);
-          [allMemories, toolHint] = await Promise.race([
+          [allMemories] = await Promise.race([
             Promise.all([
               recallMemories({
                 query,
@@ -1371,19 +1365,12 @@ notify_user(${JSON.stringify(message)})
                 waitForExtraction: false,
                 fast: true,
                 sourceTag: "auto_inject"
-              }),
-              boundedToolHint
+              })
             ]),
             deadline
           ]);
         } finally {
           _beforePromptBuildInFlight = false;
-        }
-        if (toolHint) {
-          event.prependContext = event.prependContext ? `${toolHint}
-
-${event.prependContext}` : toolHint;
-          writeHookTrace("hook.tool_hint_injected", { len: toolHint.length });
         }
         const injection = facade.prepareAutoInjectionContext({
           allMemories,
