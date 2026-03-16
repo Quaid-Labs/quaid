@@ -1276,22 +1276,26 @@ notify_user(${JSON.stringify(message)})
             const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
             prependSystemContext = [
               `[Quaid \u2014 active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
-              `Quaid tracks files, projects, and knowledge across sessions. In this system, ALL files live inside tracked projects \u2014 there is no /tmp or scratch space.`,
+              `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
               ``,
-              `[FILE PLACEMENT \u2014 REQUIRED for every file you create]`,
-              `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", they mean the misc project \u2014 NOT /tmp.`,
-              `The misc project IS the scratch pad of this system. /tmp is not available for file writes.`,
+              `[PROJECT CREATION \u2014 MANDATORY BEFORE ANY WORK BEGINS]`,
+              `Before you write a single file, spawn a coding agent, run a build, or execute any multi-step task:`,
+              `  STEP 1: Run quaid registry create-project <name> --source-roots <path>`,
+              `  STEP 2: Then do the work inside that project.`,
+              `DO NOT spawn a coding agent or subagent without completing Step 1 first.`,
+              `DO NOT write any file without completing Step 1 first.`,
+              `This applies to ALL work requests \u2014 even quick ones, even "just a script", even "just a test".`,
               ``,
-              `Before writing any file or spawning any sub-agent, pick exactly one:`,
-              `  (a) Ephemeral/quick/throwaway \u2192 write to misc project: ${miscPath}/`,
-              `  (b) Durable new work \u2192 create project first: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-              `  (c) Belongs to existing project \u2192 write there`,
+              `[FILE PLACEMENT]`,
+              `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", they mean the misc project:`,
+              `  Misc project path: ${miscPath}/`,
+              `For durable new work: create a named project first (Step 1 above).`,
+              `For work that belongs to an existing project: write there directly.`,
               ``,
-              `After writing, register files outside the project directory:`,
+              `After writing files outside the project directory, register them:`,
               `  ~/.openclaw/extensions/quaid/quaid registry register <file_path> --project <name>`,
               ``,
-              `Always tell the user which project received the file.`,
-              `CRITICAL: For any build/multi-step task, run project create FIRST before any file writes or sub-agent spawns.`
+              `Always tell the user which project received the file.`
             ].join("\n");
             writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
           }
