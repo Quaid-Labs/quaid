@@ -864,6 +864,7 @@ type PluginConfig = {
 // ============================================================================
 
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
+const BEFORE_PROMPT_BUILD_DEADLINE_MS = 15_000;
 
 function getOpenClawSessionsPath(): string {
   return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
@@ -1696,21 +1697,30 @@ notify_user(${JSON.stringify(message)})
         let allMemories: any[];
         let toolHint: string | null = null;
         try {
-          [allMemories, toolHint] = await Promise.all([
-            recallMemories({
-              query,
-              limit: injectLimit,
-              expandGraph: true,
-              datastores: ["vector_basic", "graph"],
-              routeStores: false,
-              intent: injectIntent,
-              domain: injectDomain,
-              failOpen: true,
-              waitForExtraction: false,
-              fast: true,
-              sourceTag: "auto_inject"
-            }),
-            facade.planToolHint(query),
+          const deadline = new Promise<[any[], null]>(resolve =>
+            setTimeout(() => {
+              writeHookTrace("hook.before_prompt_build.deadline_hit", {});
+              resolve([[], null]);
+            }, BEFORE_PROMPT_BUILD_DEADLINE_MS)
+          );
+          [allMemories, toolHint] = await Promise.race([
+            Promise.all([
+              recallMemories({
+                query,
+                limit: injectLimit,
+                expandGraph: true,
+                datastores: ["vector_basic", "graph"],
+                routeStores: false,
+                intent: injectIntent,
+                domain: injectDomain,
+                failOpen: true,
+                waitForExtraction: false,
+                fast: true,
+                sourceTag: "auto_inject"
+              }),
+              facade.planToolHint(query),
+            ]),
+            deadline,
           ]);
         } finally {
           _beforePromptBuildInFlight = false;

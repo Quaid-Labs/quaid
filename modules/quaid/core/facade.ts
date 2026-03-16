@@ -383,7 +383,7 @@ export type QuaidFacade = {
 // Factory
 // ---------------------------------------------------------------------------
 
-const FAST_ROUTER_TIMEOUT_MS = 45_000;
+const FAST_ROUTER_TIMEOUT_MS = 10_000;
 const DEEP_ROUTER_TIMEOUT_MS = 60_000;
 const NODE_COUNT_CACHE_MS = 120_000;
 const DATASTORE_STATS_TIMEOUT_MS = 30_000;

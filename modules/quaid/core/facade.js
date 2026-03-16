@@ -1,5 +1,5 @@
-import { createDatastoreBridge } from "./datastore-bridge.js";
 import { COMMAND_REGISTRY } from "./command-registry.js";
+import { createDatastoreBridge } from "./datastore-bridge.js";
 import { createProjectCatalogReader } from "./project-catalog.js";
 import { createKnowledgeEngine } from "./knowledge-engine.js";
 import {
@@ -9,7 +9,7 @@ import {
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-const FAST_ROUTER_TIMEOUT_MS = 45e3;
+const FAST_ROUTER_TIMEOUT_MS = 1e4;
 const DEEP_ROUTER_TIMEOUT_MS = 6e4;
 const NODE_COUNT_CACHE_MS = 12e4;
 const DATASTORE_STATS_TIMEOUT_MS = 3e4;
@@ -87,23 +87,19 @@ function createQuaidFacade(deps) {
     },
     trace: deps.trace,
     getCommandRegistry: () => {
-      // Resolve instance name: prefer instanceRoot, fall back to scanning for misc-- dir
       let instanceName = deps.instanceRoot ? path.basename(deps.instanceRoot) : null;
       if (!instanceName) {
         try {
           const projectsDir = path.join(deps.workspace, "shared", "projects");
-          const found = fs.readdirSync(projectsDir).find(d => d.startsWith("misc--"));
+          const found = fs.readdirSync(projectsDir).find((d) => d.startsWith("misc--"));
           if (found) instanceName = found.replace(/^misc--/, "");
-        } catch { /* no projects dir */ }
+        } catch {
+        }
       }
-      const miscPath = instanceName
-        ? path.join(deps.workspace, "shared", "projects", `misc--${instanceName}`)
-        : null;
-      return COMMAND_REGISTRY.map(entry => ({
+      const miscPath = instanceName ? path.join(deps.workspace, "shared", "projects", `misc--${instanceName}`) : null;
+      return COMMAND_REGISTRY.map((entry) => ({
         ...entry,
-        hint: miscPath
-          ? entry.hint.replace(/\{misc_path\}/g, miscPath).replace(/\{instance\}/g, instanceName)
-          : entry.hint,
+        hint: miscPath ? entry.hint.replace(/\{misc_path\}/g, miscPath).replace(/\{instance\}/g, instanceName) : entry.hint
       }));
     },
     recallMemory: async (query, limit, opts) => {

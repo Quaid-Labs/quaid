@@ -684,6 +684,7 @@ const configSchema = Type.Object({
   autoRecall: Type.Optional(Type.Boolean({ default: true }))
 });
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
+const BEFORE_PROMPT_BUILD_DEADLINE_MS = 15e3;
 function getOpenClawSessionsPath() {
   return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
 }
@@ -1077,7 +1078,7 @@ const facade = createQuaidFacade({
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
-  trace: process.env.QUAID_TOOL_HINT_TRACE === "1" ? writeHookTrace : undefined,
+  trace: process.env.QUAID_TOOL_HINT_TRACE === "1" ? writeHookTrace : void 0,
   transcriptFormat: {
     preprocessText: preprocessTranscriptText,
     shouldSkipText: shouldSkipTranscriptText,
@@ -1332,21 +1333,30 @@ notify_user(${JSON.stringify(message)})
         let allMemories;
         let toolHint = null;
         try {
-          [allMemories, toolHint] = await Promise.all([
-            recallMemories({
-              query,
-              limit: injectLimit,
-              expandGraph: true,
-              datastores: ["vector_basic", "graph"],
-              routeStores: false,
-              intent: injectIntent,
-              domain: injectDomain,
-              failOpen: true,
-              waitForExtraction: false,
-              fast: true,
-              sourceTag: "auto_inject"
-            }),
-            facade.planToolHint(query)
+          const deadline = new Promise(
+            (resolve) => setTimeout(() => {
+              writeHookTrace("hook.before_prompt_build.deadline_hit", {});
+              resolve([[], null]);
+            }, BEFORE_PROMPT_BUILD_DEADLINE_MS)
+          );
+          [allMemories, toolHint] = await Promise.race([
+            Promise.all([
+              recallMemories({
+                query,
+                limit: injectLimit,
+                expandGraph: true,
+                datastores: ["vector_basic", "graph"],
+                routeStores: false,
+                intent: injectIntent,
+                domain: injectDomain,
+                failOpen: true,
+                waitForExtraction: false,
+                fast: true,
+                sourceTag: "auto_inject"
+              }),
+              facade.planToolHint(query)
+            ]),
+            deadline
           ]);
         } finally {
           _beforePromptBuildInFlight = false;
