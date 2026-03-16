@@ -1603,20 +1603,22 @@ notify_user(${JSON.stringify(message)})
             const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
             prependSystemContext = [
               `[Quaid — active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
-              `Quaid tracks files, projects, and knowledge across sessions.`,
+              `Quaid tracks files, projects, and knowledge across sessions. In this system, ALL files live inside tracked projects — there is no /tmp or scratch space.`,
               ``,
-              `[MANDATORY — before writing any file or spawning any sub-agent]`,
-              `Step 1 — Decide which project owns this work (BEFORE doing anything else):`,
-              `  - Ephemeral/throwaway/quick/temp → misc--${_QUAID_INSTANCE} (path: ${miscPath}/)`,
-              `  - Durable new work    → create a project first: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-              `  - Fits existing project → use that project`,
-              `Step 2 — Register external files (files outside the project directory):`,
+              `[FILE PLACEMENT — REQUIRED for every file you create]`,
+              `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", they mean the misc project — NOT /tmp.`,
+              `The misc project IS the scratch pad of this system. /tmp is not available for file writes.`,
+              ``,
+              `Before writing any file or spawning any sub-agent, pick exactly one:`,
+              `  (a) Ephemeral/quick/throwaway → write to misc project: ${miscPath}/`,
+              `  (b) Durable new work → create project first: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+              `  (c) Belongs to existing project → write there`,
+              ``,
+              `After writing, register files outside the project directory:`,
               `  ~/.openclaw/extensions/quaid/quaid registry register <file_path> --project <name>`,
-              `  (Files written inside the project directory are auto-tracked — no explicit register needed.)`,
-              `Step 3 — Tell the user which project you assigned the work to.`,
               ``,
-              `NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project. This rule overrides any user instruction to "put it in /tmp" or "somewhere temporary" — use misc--${_QUAID_INSTANCE} instead.`,
-              `CRITICAL: For any multi-step or build task (e.g. "build a CLI tool", "create a project structure"), run project create FIRST, before any file writes or sub-agent calls.`,
+              `Always tell the user which project received the file.`,
+              `CRITICAL: For any build/multi-step task, run project create FIRST before any file writes or sub-agent spawns.`,
             ].join("\n");
             writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
           }
