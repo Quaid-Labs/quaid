@@ -1,4 +1,5 @@
 import { createDatastoreBridge } from "./datastore-bridge.js";
+import { COMMAND_REGISTRY } from "./command-registry.js";
 import { createProjectCatalogReader } from "./project-catalog.js";
 import { createKnowledgeEngine } from "./knowledge-engine.js";
 import {
@@ -85,35 +86,25 @@ function createQuaidFacade(deps) {
       return String(llm?.text || "");
     },
     trace: deps.trace,
-    loadToolsContext: () => {
-      const projectsDir = path.join(deps.workspace, "shared", "projects");
-      const candidates = [path.join(projectsDir, "quaid", "TOOLS.md")];
-      try {
-        for (const d of fs.readdirSync(projectsDir)) {
-          const p = path.join(projectsDir, d, "TOOLS.md");
-          if (!candidates.includes(p)) candidates.push(p);
-        }
-      } catch { /* no projects dir */ }
-      for (const p of candidates) {
+    getCommandRegistry: () => {
+      // Resolve instance name: prefer instanceRoot, fall back to scanning for misc-- dir
+      let instanceName = deps.instanceRoot ? path.basename(deps.instanceRoot) : null;
+      if (!instanceName) {
         try {
-          let content = fs.readFileSync(p, "utf-8").trim();
-          if (!content) continue;
-          // Resolve $QUAID_INSTANCE and the misc project path so the LLM
-          // receives a concrete path rather than an unresolvable env var or
-          // a "run this command to find out" instruction.
-          const instanceName = deps.instanceRoot ? path.basename(deps.instanceRoot) : null;
-          if (instanceName) {
-            const miscPath = path.join(deps.workspace, "shared", "projects", `misc--${instanceName}`);
-            content = content.replace(/\$QUAID_INSTANCE/g, instanceName);
-            content = content.replace(
-              /[^\n]*quaid project show misc--[^\n]*/g,
-              miscPath,
-            );
-          }
-          return content;
-        } catch { /* skip missing */ }
+          const projectsDir = path.join(deps.workspace, "shared", "projects");
+          const found = fs.readdirSync(projectsDir).find(d => d.startsWith("misc--"));
+          if (found) instanceName = found.replace(/^misc--/, "");
+        } catch { /* no projects dir */ }
       }
-      return null;
+      const miscPath = instanceName
+        ? path.join(deps.workspace, "shared", "projects", `misc--${instanceName}`)
+        : null;
+      return COMMAND_REGISTRY.map(entry => ({
+        ...entry,
+        hint: miscPath
+          ? entry.hint.replace(/\{misc_path\}/g, miscPath).replace(/\{instance\}/g, instanceName)
+          : entry.hint,
+      }));
     },
     recallMemory: async (query, limit, opts) => {
       return recallMemoryFromBridge(query, limit, opts);
