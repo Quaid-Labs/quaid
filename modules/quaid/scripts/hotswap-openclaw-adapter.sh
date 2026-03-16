@@ -11,12 +11,12 @@ Description:
   Default mode is dry-run (shows actions only). Use --apply to execute.
 
 Defaults:
-  --plugin-dir ~/.openclaw/plugins/quaid
+  --plugin-dir ~/.openclaw/extensions/quaid
 USAGE
 }
 
 HOST=""
-PLUGIN_DIR='~/.openclaw/plugins/quaid'
+PLUGIN_DIR='~/.openclaw/extensions/quaid'
 APPLY=0
 
 while [[ $# -gt 0 ]]; do
