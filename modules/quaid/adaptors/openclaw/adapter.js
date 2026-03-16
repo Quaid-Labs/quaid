@@ -1253,6 +1253,12 @@ notify_user(${JSON.stringify(message)})
       let prependSystemContext;
       if (isSystemEnabled2("projects")) {
         const sessionKeyDocs = String(event?.sessionId || ctx?.sessionId || ctx?.session?.id || "");
+        writeHookTrace("hook.docs_gate_check", {
+          session_id: sessionKeyDocs,
+          in_set: projectDocsInjectedSessions.has(sessionKeyDocs),
+          event_session_id: String(event?.sessionId || ""),
+          ctx_session_id: String(ctx?.sessionId || "")
+        });
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
           projectDocsInjectedSessions.add(sessionKeyDocs);
           try {
