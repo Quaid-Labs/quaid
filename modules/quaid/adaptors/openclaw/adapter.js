@@ -1267,7 +1267,7 @@ notify_user(${JSON.stringify(message)})
           if (_QUAID_INSTANCE) {
             const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
             prependSystemContext = [
-              "[Quaid \u2014 active knowledge layer]",
+              `[Quaid \u2014 active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
               `Quaid tracks files, projects, and knowledge across sessions. Every file you create must be assigned to a project and registered so Quaid can track it.`,
               ``,
               `[File tracking \u2014 required for every new file]`,
