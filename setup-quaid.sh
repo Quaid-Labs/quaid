@@ -936,7 +936,7 @@ step1_preflight() {
     echo "  ╔$(printf '═%.0s' $(seq 1 $bw))╗"
     echo "  ║${pad}║"
     printf "  ║   %-$((bw-3))s║\n" "Quaid v${QUAID_VERSION}"
-    printf "  ║   %-$((bw-3))s║\n" "\"If I am not me, then who the hell am I?\""
+    printf "  ║   %-$((bw-3))s║\n" "\"If I'm not me, then who the hell am I?\""
     echo "  ║${pad}║"
     printf "  ║   %-$((bw-3))s║\n" "Long-term memory for your OpenClaw bot."
     echo "  ║${pad}║"
