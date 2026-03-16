@@ -862,15 +862,26 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main
 ```
 
 Then do a fresh OC session + `/reset` to trigger a full extraction cycle.
-Send a substantive message that mentions project context so the LLM generates
-a `project_logs` entry for the quaid project:
+Send **two** messages before the reset — one personal (to seed SOUL snippets)
+and one technical (to seed project logs):
 
+**Message 1 — personal/reflective** (triggers `soul_snippets` extraction):
+> "Running through the M11 milestone now. It's satisfying to see the test
+> harness catching real edge cases — this kind of rigorous validation is exactly
+> what separates reliable software from brittle software. I find myself
+> genuinely enjoying this kind of systematic test coverage work."
+
+**Message 2 — project context** (triggers `project_logs` extraction):
 > "We've been running M0-M11 of the live test suite for the quaid project on
 > alfie. Snippets, journals, and project logs are all being validated.
 > Triggering a reset to capture project activity for M11."
 
 Then `/reset` and wait for the daemon to complete (check `tail -5` of daemon log
 for `project logs seen=N written=M` — `written` should be ≥ 1).
+
+Note: `soul_snippets` are LLM-discretionary observations about the agent's
+experience. They require reflective/personal content in the conversation.
+Purely technical messages produce `project_logs` but not `soul_snippets`.
 
 **Snippets** (written per-extraction when the LLM includes `soul_snippets`):
 
