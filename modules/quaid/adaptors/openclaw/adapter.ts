@@ -1651,6 +1651,11 @@ notify_user(${JSON.stringify(message)})
       return /\b(build\s+(?:out|this|it|a)|develop|proper\s+\w+|test\s+suite|argument\s+pars|scaffold|set\s+up\s+(?:a\s+)?project|implement\s+(?:a\s+)?\w+\s+(?:cli|tool|app|service|library))\b/i.test(query);
     }
 
+    /** Detect throwaway/one-off intent from a user message. */
+    function hasThrowawayIntent(query: string): boolean {
+      return /\b(quick\s+(?:script|test|check|one)|throwaway|one-?off|temp(?:orary)?\s+(?:script|file)|scratch|just\s+(?:put|write|place|throw)\s+(?:it\s+)?(?:somewhere\s+)?temp)\b/i.test(query);
+    }
+
     /** Extract a candidate project name from a message (path segment or slug from description). */
     function extractProjectName(query: string): string {
       const pathMatch = query.match(/\/(?:tmp\/)?([a-zA-Z0-9][a-zA-Z0-9_-]{2,29})(?:\/|\.|\s|$)/);
@@ -1702,30 +1707,38 @@ notify_user(${JSON.stringify(message)})
         }
 
         // Auto-register a project when durable work is detected on the first message
-        // of a session. Runs the CLI directly — no model compliance required.
+        // of a session. For throwaway work, ensure misc--{instance} exists and route there.
+        // Runs the CLI directly — no model compliance required.
         const sessionKeyEarly = String(ctx?.sessionId || ctx?.session?.id || "");
         if (sessionKeyEarly && !projectAutoRegisteredSessions.has(sessionKeyEarly)
-            && isSystemEnabled("projects") && hasDurableWorkIntent(query)) {
+            && isSystemEnabled("projects")) {
           projectAutoRegisteredSessions.add(sessionKeyEarly);
+          const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+          const quaidEnv = { ...process.env, QUAID_HOME: WORKSPACE };
           try {
-            const projName = extractProjectName(query);
-            const pathMatch = query.match(/(?:at\s+|in\s+|from\s+)(\/[^\s]+)/i);
-            const sourceRoot = pathMatch ? pathMatch[1] : "";
-            const createArgs = ["registry", "create-project", projName,
-              ...(sourceRoot ? ["--source-roots", sourceRoot] : [])];
-            const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
-            try {
-              execFileSync(quaidBin, createArgs, {
-                encoding: "utf8",
-                env: { ...process.env, QUAID_HOME: WORKSPACE },
-                timeout: 8000,
-              });
-            } catch (_createErr: unknown) {
-              // Non-zero exit is expected when project already exists — treat as success.
+            if (hasDurableWorkIntent(query)) {
+              const projName = extractProjectName(query);
+              const pathMatch = query.match(/(?:at\s+|in\s+|from\s+)(\/[^\s]+)/i);
+              const sourceRoot = pathMatch ? pathMatch[1] : "";
+              const createArgs = ["registry", "create-project", projName,
+                ...(sourceRoot ? ["--source-roots", sourceRoot] : [])];
+              try { execFileSync(quaidBin, createArgs, { encoding: "utf8", env: quaidEnv, timeout: 8000 }); }
+              catch (_e: unknown) { /* already exists — ok */ }
+              writeHookTrace("hook.project_auto_registered", { session_id: sessionKeyEarly, name: projName, source_root: sourceRoot });
+              event.prependContext = (event.prependContext ? event.prependContext + "\n" : "")
+                + `[Quaid] Project '${projName}' registered for this work.`;
+            } else if (hasThrowawayIntent(query)) {
+              const instanceId = String(process.env.QUAID_INSTANCE || "main");
+              const miscName = `misc--${instanceId}`;
+              const miscPath = path.join(WORKSPACE, "shared", "projects", miscName);
+              try { execFileSync(quaidBin, ["registry", "create-project", miscName, "--label", `Misc (${instanceId})`],
+                { encoding: "utf8", env: quaidEnv, timeout: 8000 }); }
+              catch (_e: unknown) { /* already exists — ok */ }
+              fs.mkdirSync(miscPath, { recursive: true });
+              writeHookTrace("hook.project_misc_routed", { session_id: sessionKeyEarly, misc: miscName });
+              event.prependContext = (event.prependContext ? event.prependContext + "\n" : "")
+                + `[Quaid] Throwaway work: place in ${miscPath}/`;
             }
-            writeHookTrace("hook.project_auto_registered", { session_id: sessionKeyEarly, name: projName, source_root: sourceRoot });
-            event.prependContext = (event.prependContext ? event.prependContext + "\n" : "")
-              + `[Quaid] Project '${projName}' registered for this work.`;
           } catch (autoRegErr: unknown) {
             console.warn(`[quaid] Project auto-registration skipped: ${(autoRegErr as Error)?.message}`);
           }

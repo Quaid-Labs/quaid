@@ -1309,6 +1309,9 @@ notify_user(${JSON.stringify(message)})
     function hasDurableWorkIntent(query) {
       return /\b(build\s+(?:out|this|it|a)|develop|proper\s+\w+|test\s+suite|argument\s+pars|scaffold|set\s+up\s+(?:a\s+)?project|implement\s+(?:a\s+)?\w+\s+(?:cli|tool|app|service|library))\b/i.test(query);
     }
+    function hasThrowawayIntent(query) {
+      return /\b(quick\s+(?:script|test|check|one)|throwaway|one-?off|temp(?:orary)?\s+(?:script|file)|scratch|just\s+(?:put|write|place|throw)\s+(?:it\s+)?(?:somewhere\s+)?temp)\b/i.test(query);
+    }
     function extractProjectName(query) {
       const pathMatch = query.match(/\/(?:tmp\/)?([a-zA-Z0-9][a-zA-Z0-9_-]{2,29})(?:\/|\.|\s|$)/);
       if (pathMatch) return pathMatch[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
@@ -1343,29 +1346,43 @@ notify_user(${JSON.stringify(message)})
           return { prependContext: event.prependContext };
         }
         const sessionKeyEarly = String(ctx?.sessionId || ctx?.session?.id || "");
-        if (sessionKeyEarly && !projectAutoRegisteredSessions.has(sessionKeyEarly) && isSystemEnabled2("projects") && hasDurableWorkIntent(query)) {
+        if (sessionKeyEarly && !projectAutoRegisteredSessions.has(sessionKeyEarly) && isSystemEnabled2("projects")) {
           projectAutoRegisteredSessions.add(sessionKeyEarly);
+          const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+          const quaidEnv = { ...process.env, QUAID_HOME: WORKSPACE };
           try {
-            const projName = extractProjectName(query);
-            const pathMatch = query.match(/(?:at\s+|in\s+|from\s+)(\/[^\s]+)/i);
-            const sourceRoot = pathMatch ? pathMatch[1] : "";
-            const createArgs = [
-              "registry",
-              "create-project",
-              projName,
-              ...sourceRoot ? ["--source-roots", sourceRoot] : []
-            ];
-            const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
-            try {
-              execFileSync(quaidBin, createArgs, {
-                encoding: "utf8",
-                env: { ...process.env, QUAID_HOME: WORKSPACE },
-                timeout: 8e3
-              });
-            } catch (_createErr) {
+            if (hasDurableWorkIntent(query)) {
+              const projName = extractProjectName(query);
+              const pathMatch = query.match(/(?:at\s+|in\s+|from\s+)(\/[^\s]+)/i);
+              const sourceRoot = pathMatch ? pathMatch[1] : "";
+              const createArgs = [
+                "registry",
+                "create-project",
+                projName,
+                ...sourceRoot ? ["--source-roots", sourceRoot] : []
+              ];
+              try {
+                execFileSync(quaidBin, createArgs, { encoding: "utf8", env: quaidEnv, timeout: 8e3 });
+              } catch (_e) {
+              }
+              writeHookTrace("hook.project_auto_registered", { session_id: sessionKeyEarly, name: projName, source_root: sourceRoot });
+              event.prependContext = (event.prependContext ? event.prependContext + "\n" : "") + `[Quaid] Project '${projName}' registered for this work.`;
+            } else if (hasThrowawayIntent(query)) {
+              const instanceId = String(process.env.QUAID_INSTANCE || "main");
+              const miscName = `misc--${instanceId}`;
+              const miscPath = path.join(WORKSPACE, "shared", "projects", miscName);
+              try {
+                execFileSync(
+                  quaidBin,
+                  ["registry", "create-project", miscName, "--label", `Misc (${instanceId})`],
+                  { encoding: "utf8", env: quaidEnv, timeout: 8e3 }
+                );
+              } catch (_e) {
+              }
+              fs.mkdirSync(miscPath, { recursive: true });
+              writeHookTrace("hook.project_misc_routed", { session_id: sessionKeyEarly, misc: miscName });
+              event.prependContext = (event.prependContext ? event.prependContext + "\n" : "") + `[Quaid] Throwaway work: place in ${miscPath}/`;
             }
-            writeHookTrace("hook.project_auto_registered", { session_id: sessionKeyEarly, name: projName, source_root: sourceRoot });
-            event.prependContext = (event.prependContext ? event.prependContext + "\n" : "") + `[Quaid] Project '${projName}' registered for this work.`;
           } catch (autoRegErr) {
             console.warn(`[quaid] Project auto-registration skipped: ${autoRegErr?.message}`);
           }
