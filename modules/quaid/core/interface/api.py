@@ -344,27 +344,13 @@ def projects_search_docs(
     limit: int = 5,
     project: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Search documentation chunks and optionally include project README context."""
+    """Search docs and attach the most indicated project's PROJECT.md."""
     rag = DocsRAG()
-    chunks = rag.search_docs(
+    return rag.search_docs_bundle(
         query=query,
         limit=max(1, min(limit, 20)),
         project=project if project else None,
     )
-    result: Dict[str, Any] = {"chunks": chunks}
-    if project:
-        try:
-            from config import get_config as _get_config
-
-            cfg = _get_config()
-            defn = cfg.projects.definitions.get(project)
-            if defn and defn.home_dir:
-                md_path = get_workspace_dir() / defn.home_dir / "PROJECT.md"
-                if md_path.exists():
-                    result["project_md"] = md_path.read_text(encoding="utf-8")
-        except Exception as exc:
-            logger.debug("projects_search_docs failed to load PROJECT.md for project=%s: %s", project, exc)
-    return result
 
 
 __all__ = [

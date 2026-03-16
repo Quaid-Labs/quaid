@@ -286,6 +286,64 @@ class TestDocsSearchFiltering:
         with pytest.raises(RuntimeError, match="failHard is enabled"):
             rag.search_docs("memory", limit=5)
 
+    def test_search_docs_bundle_infers_project_and_attaches_project_md(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        chunks = [
+            {
+                "content": "Error middleware uses AppError",
+                "source": "/tmp/workspace/projects/recipe-app/docs/api.md",
+                "section_header": "## Errors",
+                "similarity": 0.91,
+                "chunk_index": 0,
+                "project": "recipe-app",
+            }
+        ]
+
+        with patch.object(rag, "search_docs", return_value=chunks), \
+             patch.object(rag, "infer_project_from_chunks", return_value="recipe-app"), \
+             patch.object(rag, "load_project_md", return_value="# Project: Recipe App\n"):
+            bundle = rag.search_docs_bundle("error middleware", project=None)
+
+        assert bundle["project"] == "recipe-app"
+        assert bundle["project_md"] == "# Project: Recipe App\n"
+        assert bundle["chunks"] == chunks
+
+    def test_search_docs_bundle_includes_telemetry_when_enabled(self, tmp_path, monkeypatch):
+        rag = _make_rag(tmp_path)
+        monkeypatch.setenv("QUAID_RECALL_TELEMETRY", "1")
+        chunks = [
+            {
+                "content": "Error middleware uses AppError",
+                "source": "/tmp/workspace/projects/recipe-app/docs/api.md",
+                "section_header": "## Errors",
+                "similarity": 0.91,
+                "chunk_index": 0,
+                "project": "recipe-app",
+            }
+        ]
+
+        with patch.object(rag, "search_docs", return_value=chunks), \
+             patch.object(rag, "infer_project_from_chunks", return_value="recipe-app"), \
+             patch.object(rag, "load_project_md", return_value="# Project: Recipe App\n"):
+            bundle = rag.search_docs_bundle("error middleware", project=None, docs=["api.md"])
+
+        assert bundle["telemetry"]["requested_project"] is None
+        assert bundle["telemetry"]["resolved_project"] == "recipe-app"
+        assert bundle["telemetry"]["chunk_count"] == 1
+        assert bundle["telemetry"]["requested_docs"] == ["api.md"]
+
+    def test_infer_project_from_chunks_prefers_highest_similarity_sum(self, tmp_path):
+        rag = _make_rag(tmp_path)
+        chunks = [
+            {"source": "/tmp/a.md", "similarity": 0.40, "project": "alpha"},
+            {"source": "/tmp/b.md", "similarity": 0.39, "project": "alpha"},
+            {"source": "/tmp/c.md", "similarity": 0.75, "project": "beta"},
+        ]
+
+        project = rag.infer_project_from_chunks(chunks)
+
+        assert project == "alpha"
+
 
 # ---------------------------------------------------------------------------
 # _run_rag_maintenance third pass — doc_registry enumeration
@@ -398,6 +456,46 @@ class TestRagMaintenanceThirdPass:
         # No index attempt, no error raised, metrics counters stay at zero for this path
         mock_index.assert_not_called()
         assert result.errors == []
+
+    def test_registered_project_source_file_inside_project_dir_gets_indexed(self, tmp_path):
+        """Registry-managed source files under a scanned project dir still get indexed."""
+        handler = self._register_and_get_handler()
+        instance_root = tmp_path / "benchrunner"
+        project_dir = instance_root / "projects" / "recipe-app" / "tests"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        test_file = project_dir / "recipe.test.js"
+        test_file.write_text("describe('recipe', () => {})")
+
+        cfg = SimpleNamespace(
+            rag=SimpleNamespace(docs_dir="docs"),
+            projects=SimpleNamespace(
+                enabled=True,
+                definitions={
+                    "recipe-app": SimpleNamespace(
+                        auto_index=True,
+                        home_dir="projects/recipe-app",
+                        source_roots=["projects/recipe-app"],
+                    )
+                },
+            ),
+        )
+        ctx = SimpleNamespace(cfg=cfg, dry_run=False, workspace=tmp_path)
+
+        fake_reg = MagicMock()
+        fake_reg.auto_discover.return_value = []
+        fake_reg.sync_external_files.return_value = None
+        fake_reg.list_docs.return_value = [{"file_path": "projects/recipe-app/tests/recipe.test.js"}]
+
+        with patch("datastore.docsdb.rag.DocsRAG.reindex_all", return_value=_empty_reindex_result()), \
+             patch("datastore.docsdb.rag._workspace", return_value=instance_root), \
+             patch("datastore.docsdb.registry.DocsRegistry", return_value=fake_reg), \
+             patch("datastore.docsdb.rag.DocsRAG.needs_reindex", return_value=True), \
+             patch("datastore.docsdb.rag.DocsRAG.index_document", return_value=4) as mock_index:
+            result = handler(ctx)
+
+        mock_index.assert_called_once_with(str(test_file))
+        assert result.metrics["rag_files_indexed"] >= 1
+        assert result.metrics["rag_chunks_created"] >= 4
 
     def test_list_docs_exception_is_swallowed(self, tmp_path):
         """An exception from DocsRegistry().list_docs() is caught and logged as a warning."""

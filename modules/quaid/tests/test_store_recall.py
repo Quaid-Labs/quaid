@@ -194,8 +194,8 @@ class TestStoreBasic:
         def fake_once(query, **kwargs):
             calls.append(query)
             if query == "Where does Maya work?":
-                return [{"id": "a", "text": "Maya works remotely", "similarity": 0.62}]
-            return [{"id": "b", "text": "Maya works at Acme", "similarity": 0.83}]
+                return [{"id": "a", "text": "Maya works remotely", "category": "fact", "similarity": 0.62}]
+            return [{"id": "b", "text": "Maya works at Acme", "category": "fact", "similarity": 0.83}]
 
         with patch.object(mg, "_recall_once", side_effect=fake_once), \
              patch.object(mg, "_plan_fanout_queries", return_value=["Where does Maya work?", "Maya employer workplace"]), \
@@ -211,7 +211,7 @@ class TestStoreBasic:
     def test_recall_no_fanout_when_routing_disabled(self):
         import datastore.memorydb.memory_graph as mg
 
-        with patch.object(mg, "_recall_once", return_value=[{"id": "a", "similarity": 0.7}]) as mocked_once, \
+        with patch.object(mg, "_recall_once", return_value=[{"id": "a", "text": "Test result", "category": "fact", "similarity": 0.7}]) as mocked_once, \
              patch.object(mg, "_plan_fanout_queries", side_effect=AssertionError("planner should not be called")):
             out = mg.recall("test query", owner_id="quaid", limit=5, use_routing=False)
 
@@ -222,8 +222,8 @@ class TestStoreBasic:
         import datastore.memorydb.memory_graph as mg
 
         with patch.object(mg, "_recall_once", side_effect=[
-            [{"id": "x", "text": "v1", "similarity": 0.61}],
-            [{"id": "x", "text": "v2", "similarity": 0.89}],
+            [{"id": "x", "text": "v1", "category": "fact", "similarity": 0.61}],
+            [{"id": "x", "text": "v2", "category": "fact", "similarity": 0.89}],
         ]), patch.object(mg, "_plan_fanout_queries", return_value=["q1", "q2"]), \
              patch.object(mg, "_drill_plan_queries", return_value=[]):
             out = mg.recall("q1", owner_id="quaid", limit=5, use_routing=True)
@@ -1607,3 +1607,63 @@ class TestRecallLimitEdgeCases:
             rows, meta = result
             assert isinstance(rows, list)
             assert isinstance(meta, dict)
+
+    def test_normalize_doc_chunk_contract_accepts_docs_rag_shape(self):
+        from datastore.memorydb.memory_graph import _normalize_doc_chunk_contract
+
+        chunk = {
+            "content": "Error middleware uses AppError",
+            "source": "/tmp/workspace/projects/recipe-app/docs/api.md",
+            "section_header": "## Error Handling",
+            "similarity": 0.88,
+            "chunk_index": 2,
+            "project": "recipe-app",
+        }
+
+        out = _normalize_doc_chunk_contract(chunk)
+
+        assert out["content"] == chunk["content"]
+        assert out["source"] == chunk["source"]
+        assert out["section_header"] == chunk["section_header"]
+        assert out["similarity"] == 0.88
+        assert out["chunk_index"] == 2
+        assert out["project"] == "recipe-app"
+
+    def test_build_recall_json_payload_includes_validated_docs_bundle(self):
+        from datastore.memorydb.memory_graph import _build_recall_json_payload
+
+        payload = _build_recall_json_payload(
+            [{"text": "Maya lives in South Austin", "category": "fact", "similarity": 0.91}],
+            docs={
+                "chunks": [
+                    {
+                        "content": "The backend uses Express and error middleware.",
+                        "source": "/tmp/workspace/projects/recipe-app/README.md",
+                        "section_header": "# Tech Stack",
+                        "similarity": 0.84,
+                        "chunk_index": 0,
+                        "project": "recipe-app",
+                    }
+                ],
+                "project": "recipe-app",
+                "project_md": "# Project: Recipe App\n",
+                "telemetry": {
+                    "chunk_count": 1,
+                    "resolved_project": "recipe-app",
+                },
+            },
+        )
+
+        assert payload["contract"] == "quaid.recall.v1"
+        assert payload["results"][0]["text"] == "Maya lives in South Austin"
+        assert payload["docs"]["project"] == "recipe-app"
+        assert payload["docs"]["chunks"][0]["content"].startswith("The backend uses Express")
+        assert payload["docs"]["telemetry"]["resolved_project"] == "recipe-app"
+
+    def test_build_recall_json_payload_raises_on_invalid_result_shape(self):
+        from datastore.memorydb.memory_graph import _build_recall_json_payload
+
+        with pytest.raises(RuntimeError, match="Recall contract validation failed"):
+            _build_recall_json_payload(
+                [{"category": "fact", "similarity": 0.5}],
+            )

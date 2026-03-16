@@ -3274,6 +3274,206 @@ def _log_recall(graph, query: str, owner_id: Optional[str], intent: str,
         pass  # Observability logging is strictly best-effort
 
 
+def _contract_error(message: str) -> RuntimeError:
+    return RuntimeError(f"Recall contract validation failed: {message}")
+
+
+def _recall_telemetry_enabled() -> bool:
+    """Enable verbose recall telemetry via opt-in env flag."""
+    raw = str(os.getenv("QUAID_RECALL_TELEMETRY", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on", "debug"}
+
+
+def _sample_recall_rows(rows: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
+    """Return a compact sample of recall rows for telemetry."""
+    sample: List[Dict[str, Any]] = []
+    for row in rows[: max(0, limit)]:
+        if not isinstance(row, dict):
+            continue
+        sample.append({
+            "id": row.get("id"),
+            "category": row.get("category"),
+            "similarity": row.get("similarity"),
+            "source_type": row.get("source_type"),
+            "project": row.get("project"),
+            "text_preview": str(row.get("text") or "")[:120],
+        })
+    return sample
+
+
+def _validate_recall_result_rows(rows: Any) -> List[Dict[str, Any]]:
+    """Validate/normalize recall rows before returning them to callers."""
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise _contract_error(f"results must be a list, got {type(rows).__name__}")
+
+    normalized: List[Dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise _contract_error(f"result[{index}] must be an object, got {type(row).__name__}")
+        text = row.get("text")
+        category = row.get("category")
+        similarity = row.get("similarity")
+        if not isinstance(text, str) or not text.strip():
+            raise _contract_error(f"result[{index}].text must be a non-empty string")
+        if not isinstance(category, str) or not category.strip():
+            raise _contract_error(f"result[{index}].category must be a non-empty string")
+        try:
+            similarity_value = float(similarity)
+        except (TypeError, ValueError) as exc:
+            raise _contract_error(f"result[{index}].similarity must be numeric") from exc
+
+        item = dict(row)
+        item["text"] = text
+        item["category"] = category
+        item["similarity"] = round(similarity_value, 3)
+        normalized.append(item)
+    return normalized
+
+
+def _normalize_doc_chunk_contract(chunk: Any, index: int = 0) -> Dict[str, Any]:
+    """Normalize a docs chunk into the runtime recall contract."""
+    if not isinstance(chunk, dict):
+        raise _contract_error(f"docs.chunks[{index}] must be an object, got {type(chunk).__name__}")
+
+    content = chunk.get("content")
+    source = chunk.get("source")
+    section_header = chunk.get("section_header")
+    similarity = chunk.get("similarity")
+
+    # Backward-compatible repair for older/internal keys.
+    if content is None and isinstance(chunk.get("text"), str):
+        content = chunk.get("text")
+    if section_header is None and isinstance(chunk.get("title"), str):
+        section_header = chunk.get("title")
+    if similarity is None and chunk.get("score") is not None:
+        similarity = chunk.get("score")
+
+    if not isinstance(content, str) or not content.strip():
+        raise _contract_error(f"docs.chunks[{index}].content must be a non-empty string")
+    if not isinstance(source, str) or not source.strip():
+        raise _contract_error(f"docs.chunks[{index}].source must be a non-empty string")
+    if section_header is not None and not isinstance(section_header, str):
+        raise _contract_error(f"docs.chunks[{index}].section_header must be a string or null")
+    try:
+        similarity_value = float(similarity)
+    except (TypeError, ValueError) as exc:
+        raise _contract_error(f"docs.chunks[{index}].similarity must be numeric") from exc
+
+    chunk_index = chunk.get("chunk_index")
+    if chunk_index is not None:
+        try:
+            chunk_index = int(chunk_index)
+        except (TypeError, ValueError) as exc:
+            raise _contract_error(f"docs.chunks[{index}].chunk_index must be an integer or null") from exc
+
+    project = chunk.get("project")
+    if project is not None and not isinstance(project, str):
+        raise _contract_error(f"docs.chunks[{index}].project must be a string or null")
+
+    return {
+        "content": content,
+        "source": source,
+        "section_header": section_header or None,
+        "similarity": round(similarity_value, 3),
+        "chunk_index": chunk_index,
+        "project": project or None,
+    }
+
+
+def _validate_docs_bundle(bundle: Any) -> Dict[str, Any]:
+    """Validate/normalize docs payload returned by unified recall."""
+    if bundle is None:
+        return {"chunks": [], "project": None, "project_md": None, "telemetry": None}
+    if not isinstance(bundle, dict):
+        raise _contract_error(f"docs payload must be an object, got {type(bundle).__name__}")
+
+    chunks = bundle.get("chunks", [])
+    if chunks is None:
+        chunks = []
+    if not isinstance(chunks, list):
+        raise _contract_error("docs.chunks must be a list")
+
+    project = bundle.get("project")
+    project_md = bundle.get("project_md")
+    telemetry = bundle.get("telemetry")
+    if project is not None and not isinstance(project, str):
+        raise _contract_error("docs.project must be a string or null")
+    if project_md is not None and not isinstance(project_md, str):
+        raise _contract_error("docs.project_md must be a string or null")
+    if telemetry is not None and not isinstance(telemetry, dict):
+        raise _contract_error("docs.telemetry must be an object or null")
+
+    return {
+        "chunks": [_normalize_doc_chunk_contract(chunk, index=i) for i, chunk in enumerate(chunks)],
+        "project": project or None,
+        "project_md": project_md,
+        "telemetry": telemetry if isinstance(telemetry, dict) else None,
+    }
+
+
+def _return_validated_recall(rows: Any, meta: Optional[Dict[str, Any]], return_meta: bool) -> Any:
+    validated_rows = _validate_recall_result_rows(rows)
+    if isinstance(meta, dict):
+        _attach_recall_meta(validated_rows, meta)
+    return (validated_rows, meta) if return_meta else validated_rows
+
+
+def _build_recall_json_payload(
+    results: Any,
+    *,
+    meta: Optional[Dict[str, Any]] = None,
+    docs: Optional[Dict[str, Any]] = None,
+    graph_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build a machine-readable recall payload with a strict top-level contract."""
+    payload: Dict[str, Any] = {
+        "contract": "quaid.recall.v1",
+        "results": _validate_recall_result_rows(results),
+    }
+    if isinstance(meta, dict):
+        payload["meta"] = meta
+    if docs is not None:
+        payload["docs"] = _validate_docs_bundle(docs)
+    if graph_payload:
+        payload["direct_results"] = list(payload["results"])
+        for key in ("graph_results", "entities_found", "source_breakdown"):
+            if key in graph_payload:
+                payload[key] = graph_payload[key]
+    return payload
+
+
+def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
+    """Render docs recall results in the same shape as standalone docs search."""
+    docs = _validate_docs_bundle(bundle)
+    chunks = docs["chunks"]
+    project_md = docs.get("project_md")
+    workspace_prefix = ""
+    try:
+        workspace_prefix = str(get_workspace_dir()) + "/"
+    except Exception:
+        workspace_prefix = ""
+
+    if chunks:
+        print("\n=== Documentation ===")
+        for i, chunk in enumerate(chunks, 1):
+            source_short = chunk["source"]
+            if workspace_prefix and source_short.startswith(workspace_prefix):
+                source_short = source_short.replace(workspace_prefix, "~/", 1)
+            header = chunk.get("section_header") or ""
+            header_str = f" > {header}" if header else ""
+            print(f"{i}. {source_short}{header_str} (similarity: {chunk['similarity']})")
+            for line in chunk["content"].splitlines():
+                print(f"   {line}")
+            print()
+    if project_md:
+        print("\n=== PROJECT.md ===")
+        print(project_md[:1000])
+        if len(project_md) > 1000:
+            print("  ... (truncated)")
+
+
 def _normalize_domain_tag(value: Optional[str]) -> Optional[str]:
     """Normalize domain labels for registry and memory attributes."""
     return _normalize_domain_id(value)
@@ -4171,6 +4371,34 @@ def _recall_once(
             "used_hyde": bool(_ollama_up and use_routing and _HAS_LLM_CLIENTS),
         },
     }
+    if _recall_telemetry_enabled():
+        recall_once_meta["telemetry"] = {
+            "inputs": {
+                "limit": limit,
+                "min_similarity": min_similarity,
+                "privacy": list(privacy or []),
+                "owner_id": owner_id,
+                "project": requested_project,
+                "date_from": date_from,
+                "date_to": date_to,
+                "use_routing": bool(use_routing),
+                "use_multi_pass": bool(use_multi_pass),
+                "include_graph_traversal": bool(include_graph_traversal),
+                "include_co_session": bool(include_co_session),
+                "include_mmr": bool(include_mmr),
+            },
+            "filters": {
+                "include_all_domains": include_all_domains,
+                "included_domains": sorted(included_domains),
+                "boosted_domains": dict(boosted_domains),
+                "boosted_node_hits": len(boosted_node_factors),
+                "prefer_fresh": prefer_fresh,
+                "ollama_healthy": bool(_ollama_up),
+            },
+            "samples": {
+                "final_results": _sample_recall_rows(final_output, limit=5),
+            },
+        }
 
     if low_signal_retry:
         low_info_count = sum(1 for r in final_output if _is_low_information_entity_result(r))
@@ -4208,13 +4436,11 @@ def _recall_once(
                     if len(retry_output) > len(final_output):
                         retry_meta = dict(retry_meta or {})
                         retry_meta["retry_from_low_signal"] = True
-                        _attach_recall_meta(retry_output, retry_meta)
-                        return (retry_output, retry_meta) if return_meta else retry_output
+                        return _return_validated_recall(retry_output, retry_meta, return_meta)
                 except Exception:
                     pass
 
-    _attach_recall_meta(final_output, recall_once_meta)
-    return (final_output, recall_once_meta) if return_meta else final_output
+    return _return_validated_recall(final_output, recall_once_meta, return_meta)
 
 
 def _plan_recall_queries(query: str, max_queries: int = 3) -> List[str]:
@@ -5213,8 +5439,7 @@ def recall(
             "stop_reason": stop_reason,
             "bailout_counts": bailout_counts,
         }
-        _attach_recall_meta(final, meta)
-        return (final, meta) if return_meta else final
+        return _return_validated_recall(final, meta, return_meta)
 
     # --- Turn 2+: Drill loop ---
     # Skip drill turns when fanout returned no results: there is nothing to
@@ -5399,8 +5624,29 @@ def recall(
         "bailout_counts": bailout_counts,
         "fanout_count": len(turn_phase_details[0]["fanout"]["queries"]) if turn_phase_details else 0,
     }
-    _attach_recall_meta(final, meta)
-    return (final, meta) if return_meta else final
+    if _recall_telemetry_enabled():
+        meta["telemetry"] = {
+            "inputs": {
+                "limit": limit,
+                "timeout_ms": overall_timeout_ms,
+                "max_turns": max_turns,
+                "planner_profile": planner_profile,
+                "project": _normalize_project_tag(project),
+                "date_from": date_from,
+                "date_to": date_to,
+                "use_routing": bool(use_routing),
+                "use_multi_pass": bool(use_multi_pass),
+                "include_graph_traversal": bool(include_graph_traversal),
+                "include_co_session": bool(include_co_session),
+                "include_mmr": bool(include_mmr),
+            },
+            "samples": {
+                "final_results": _sample_recall_rows(final, limit=5),
+            },
+            "turn_count": len(turn_phase_details),
+            "search_query_count": len(all_searched),
+        }
+    return _return_validated_recall(final, meta, return_meta)
 
 
 def _check_injection_blocklist(text: str) -> Optional[str]:
@@ -7299,6 +7545,9 @@ if __name__ == "__main__":
             candidate_pool  = cfg.get("candidate_pool")
             planner_profile = cfg.get("planner_profile", "full")
 
+            json_payload = None
+            text_memory_results = None
+
             if want_memory and archive:
                 from datastore.memorydb.archive_store import search_archive as _search_archive
                 archive_results = _search_archive(query, limit=limit)
@@ -7319,7 +7568,7 @@ if __name__ == "__main__":
                             "via": "archive",
                             "archive_reason": r.get("archive_reason", ""),
                         })
-                    print(json.dumps(out))
+                    json_payload = _build_recall_json_payload(out)
                 else:
                     for r in archive_results:
                         print(f"[archive] [{r.get('type', '?')}] {r.get('name', '')} |ID:{r.get('id', '')}|archived:{r.get('archived_at', '')}|reason:{r.get('archive_reason', '')}")
@@ -7335,33 +7584,33 @@ if __name__ == "__main__":
                         "ORDER BY created_at DESC LIMIT ?",
                         (session_id, owner, int(limit))
                     ).fetchall()
+                out = []
+                for r in rows:
+                    out.append({
+                        "text": r["content"] or r["name"],
+                        "category": r["type"],
+                        "similarity": 1.0,
+                        "id": r["id"],
+                        "created_at": r["created_at"] or "",
+                        "valid_from": "",
+                        "valid_until": "",
+                        "privacy": r["privacy"] or "shared",
+                        "owner_id": r["owner_id"] or "",
+                        "source_type": "",
+                    })
                 if use_json:
-                    out = []
-                    for r in rows:
-                        out.append({
-                            "text": r["content"] or r["name"],
-                            "category": r["type"],
-                            "similarity": 1.0,
-                            "id": r["id"],
-                            "created_at": r["created_at"] or "",
-                            "valid_from": "",
-                            "valid_until": "",
-                            "privacy": r["privacy"] or "shared",
-                            "owner_id": r["owner_id"] or "",
-                            "source_type": "",
-                        })
-                    print(json.dumps(out))
+                    json_payload = _build_recall_json_payload(out)
                 else:
-                    for r in rows:
-                        conf = r['extraction_confidence'] or 0.5
-                        created = r['created_at'] or ''
+                    for r in out:
+                        conf = r.get('extraction_confidence', 0.5) or 0.5
+                        created = r.get('created_at', '') or ''
                         date_str = f"({created.split('T')[0]})" if created else ""
-                        print(f"[1.00] [{r['type']}]{date_str}[C:{conf:.1f}] {r['content'] or r['name']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
-                    if not rows:
+                        print(f"[1.00] [{r['category']}]{date_str}[C:{conf:.1f}] {r['text']} |ID:{r['id']}|T:{created}|VF:|VU:|P:{r['privacy'] or 'shared'}|O:{r['owner_id'] or ''}")
+                    if not out:
                         print("No facts found for this session")
             elif want_memory and "graph" in store_names:
                 # Graph-aware recall with optional candidate pool
-                results = graph_aware_recall(
+                graph_payload = graph_aware_recall(
                     query,
                     owner_id=owner,
                     limit=limit,
@@ -7372,9 +7621,13 @@ if __name__ == "__main__":
                     candidate_pool=candidate_pool,
                 )
                 if use_json:
-                    print(json.dumps(results, indent=2))
+                    json_payload = _build_recall_json_payload(
+                        graph_payload.get("direct_results", []),
+                        graph_payload=graph_payload,
+                    )
                 else:
-                    for r in results.get("direct_results", []):
+                    text_memory_results = _validate_recall_result_rows(graph_payload.get("direct_results", []))
+                    for r in text_memory_results:
                         flags = []
                         if r.get('verified'): flags.append('V')
                         if r.get('pinned'): flags.append('P')
@@ -7406,11 +7659,11 @@ if __name__ == "__main__":
                 recall_kwargs['planner_profile'] = planner_profile
                 if use_json:
                     results, meta = recall(query, return_meta=True, **recall_kwargs)
-                    print(json.dumps({"results": results, "meta": meta}))
+                    json_payload = _build_recall_json_payload(results, meta=meta)
                 else:
-                    results = recall(query, **recall_kwargs)
-                if not use_json:
-                    for r in results:
+                    text_memory_results = recall(query, **recall_kwargs)
+                if not use_json and text_memory_results is not None:
+                    for r in text_memory_results:
                         flags = []
                         if r.get('verified'): flags.append('V')
                         if r.get('pinned'): flags.append('P')
@@ -7430,47 +7683,45 @@ if __name__ == "__main__":
                             print(f"  [debug] raw_quality={d['raw_quality_score']} composite={d['composite_score']} intent={d['intent']} type_boost={d['type_boost']} conf={d['confidence']} access={d['access_count']} confirms={d['confirmation_count']}")
 
             # docs store
-            if want_docs and not use_json:
+            if want_docs:
                 try:
                     from datastore.docsdb.rag import DocsRAG as _DocsRAG
                     docs_opts = store_opts.get("docs", {})
                     doc_project = docs_opts.get("project", cfg.get("project"))
                     doc_limit = docs_opts.get("limit", limit if not want_memory else 3)
+                    doc_filters = docs_opts.get("docs", cfg.get("docs"))
+                    if isinstance(doc_filters, str):
+                        doc_filters = [d.strip() for d in doc_filters.split(",") if d.strip()]
                     _rag = _DocsRAG()
-                    chunks = _rag.search_docs(
+                    doc_results = _rag.search_docs_bundle(
                         query=query,
                         limit=max(1, min(doc_limit, 20)),
+                        min_similarity=docs_opts.get("min_similarity", cfg.get("min_similarity", 0.30)),
                         project=doc_project if doc_project else None,
+                        docs=doc_filters,
                     )
-                    project_md = None
-                    if doc_project:
-                        try:
-                            from config import get_config as _get_config
-                            from lib.runtime_context import get_workspace_dir as _get_workspace_dir
-                            _cfg = _get_config()
-                            _defn = _cfg.projects.definitions.get(doc_project)
-                            if _defn and _defn.home_dir:
-                                _md = _get_workspace_dir() / _defn.home_dir / "PROJECT.md"
-                                if _md.exists():
-                                    project_md = _md.read_text(encoding="utf-8")
-                        except Exception:
-                            pass
-                    doc_results = {"chunks": chunks, "project_md": project_md}
-                    if chunks:
-                        print("\n=== Documentation ===")
-                        for i, chunk in enumerate(chunks, 1):
-                            title = chunk.get("title", "untitled")
-                            text = chunk.get("text", "")[:300]
-                            score = chunk.get("score") or chunk.get("similarity")
-                            score_str = f" ({score:.2f})" if score else ""
-                            print(f"  {i}. [{title}]{score_str} {text}")
-                    if project_md:
-                        print("\n=== PROJECT.md ===")
-                        print(project_md[:1000])
-                        if len(project_md) > 1000:
-                            print("  ... (truncated)")
+                    if use_json:
+                        if json_payload is None:
+                            json_payload = _build_recall_json_payload([], docs=doc_results)
+                        else:
+                            json_payload["docs"] = _validate_docs_bundle(doc_results)
+                        if _recall_telemetry_enabled():
+                            if json_payload.get("meta") is None or not isinstance(json_payload.get("meta"), dict):
+                                json_payload["meta"] = {}
+                            json_payload["meta"]["docs"] = {
+                                "query": query,
+                                "requested_project": doc_project if doc_project else None,
+                                "resolved_project": doc_results.get("project"),
+                                "chunk_count": len(doc_results.get("chunks", []) or []),
+                                "project_md_attached": bool(doc_results.get("project_md")),
+                            }
+                    else:
+                        _print_docs_bundle(doc_results)
                 except Exception as _docs_err:
                     print(f"[docs] warning: {_docs_err}", file=sys.stderr)
+
+            if use_json and json_payload is not None:
+                print(json.dumps(json_payload, indent=2))
 
         elif args.command == "recall-fast":
             query = " ".join(args.query)

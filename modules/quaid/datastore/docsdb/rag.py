@@ -14,7 +14,7 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple
 
 from lib.config import get_db_path
 from lib.database import get_connection as _lib_get_connection
@@ -37,6 +37,12 @@ def _rag_config():
         return get_config().rag
     except Exception:
         return None
+
+
+def _docs_recall_telemetry_enabled() -> bool:
+    """Enable verbose docs recall telemetry via opt-in env flag."""
+    raw = str(os.getenv("QUAID_RECALL_TELEMETRY", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on", "debug"}
 
 
 def _chunk_max_tokens() -> int:
@@ -404,6 +410,107 @@ class DocsRAG:
             uniq.append(item)
         return uniq
 
+    def infer_project_for_source(self, source_file: str) -> Optional[str]:
+        """Infer project label for a source path from project definitions/registry."""
+        if not source_file:
+            return None
+
+        try:
+            source_path = Path(source_file).resolve()
+        except Exception:
+            source_path = Path(str(source_file))
+
+        try:
+            from config import get_config
+
+            cfg = get_config()
+            workspace = _workspace().resolve()
+            best_match = None
+            best_prefix_len = -1
+
+            for project_name, defn in (cfg.projects.definitions or {}).items():
+                candidate_roots = []
+                if getattr(defn, "home_dir", None):
+                    candidate_roots.append((workspace / defn.home_dir).resolve())
+                for root in getattr(defn, "source_roots", []) or []:
+                    candidate_roots.append((workspace / root).resolve())
+
+                for candidate in candidate_roots:
+                    prefix = str(candidate)
+                    if str(source_path) == prefix or str(source_path).startswith(prefix + os.sep):
+                        if len(prefix) > best_prefix_len:
+                            best_prefix_len = len(prefix)
+                            best_match = project_name
+
+            if best_match:
+                return best_match
+
+            try:
+                from datastore.docsdb.registry import DocsRegistry
+
+                registry = DocsRegistry()
+                for project_name in (cfg.projects.definitions or {}).keys():
+                    for doc in registry.list_docs(project=project_name):
+                        raw_path = str(doc.get("file_path") or "").strip()
+                        if not raw_path:
+                            continue
+                        p = Path(raw_path)
+                        if not p.is_absolute():
+                            p = workspace / p
+                        try:
+                            if p.resolve() == source_path:
+                                return project_name
+                        except Exception:
+                            if str(p) == str(source_path):
+                                return project_name
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        return None
+
+    def infer_project_from_chunks(self, chunks: List[Dict]) -> Optional[str]:
+        """Choose the most indicated project from retrieved chunks."""
+        scores: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+
+        for chunk in chunks or []:
+            project = str(chunk.get("project") or "").strip()
+            if not project:
+                project = self.infer_project_for_source(str(chunk.get("source") or ""))
+            if not project:
+                continue
+            similarity = chunk.get("similarity", 0.0)
+            try:
+                weight = float(similarity)
+            except (TypeError, ValueError):
+                weight = 0.0
+            scores[project] = scores.get(project, 0.0) + weight
+            counts[project] = counts.get(project, 0) + 1
+
+        if not scores:
+            return None
+
+        return max(scores.keys(), key=lambda project: (scores[project], counts.get(project, 0), project))
+
+    def load_project_md(self, project: Optional[str]) -> Optional[str]:
+        """Load PROJECT.md for a given project if available."""
+        if not project:
+            return None
+        try:
+            from config import get_config
+
+            cfg = get_config()
+            defn = cfg.projects.definitions.get(project)
+            if defn and defn.home_dir:
+                md_path = _workspace() / defn.home_dir / "PROJECT.md"
+                if md_path.exists():
+                    return md_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+        return None
+
     def search_docs(self, query: str, limit: int = 5, min_similarity: float = 0.3,
                     project: Optional[str] = None, docs: Optional[List[str]] = None) -> List[Dict]:
         """Semantic search of document chunks.
@@ -484,17 +591,54 @@ class DocsRAG:
                 similarity = _lib_cosine_similarity(query_embedding, chunk_embedding)
 
                 if similarity >= min_similarity:
+                    inferred_project = project or self.infer_project_for_source(row[1])
                     results.append({
                         "content": row[3],  # content
                         "source": row[1],   # source_file
                         "section_header": row[4],  # section_header
                         "similarity": round(similarity, 3),
-                        "chunk_index": row[2]  # chunk_index
+                        "chunk_index": row[2],  # chunk_index
+                        "project": inferred_project,
                     })
 
         # Sort by similarity and limit
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:limit]
+
+    def search_docs_bundle(
+        self,
+        query: str,
+        limit: int = 5,
+        min_similarity: float = 0.3,
+        project: Optional[str] = None,
+        docs: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Search docs and attach the most indicated project's PROJECT.md."""
+        chunks = self.search_docs(
+            query=query,
+            limit=limit,
+            min_similarity=min_similarity,
+            project=project,
+            docs=docs,
+        )
+        inferred_project = project or self.infer_project_from_chunks(chunks)
+        bundle = {
+            "chunks": chunks,
+            "project": inferred_project,
+            "project_md": self.load_project_md(inferred_project),
+        }
+        if _docs_recall_telemetry_enabled():
+            bundle["telemetry"] = {
+                "query": query,
+                "requested_project": project,
+                "resolved_project": inferred_project,
+                "requested_docs": list(docs or []),
+                "chunk_count": len(chunks),
+                "project_md_attached": bool(bundle["project_md"]),
+                "sources": [chunk.get("source") for chunk in chunks[:5]],
+                "top_similarity": chunks[0].get("similarity") if chunks else None,
+            }
+        return bundle
 
     def _get_project_paths(self, project: str) -> dict:
         """Get project path info for filtering."""
@@ -619,9 +763,6 @@ def register_lifecycle_routines(registry, result_factory) -> None:
             skipped = int(rag_result.get("skipped_files", 0))
             chunks = int(rag_result.get("total_chunks", 0))
 
-            # Track scanned directory prefixes so pass 3 can skip already-covered files.
-            scanned_dirs: list = [str(Path(docs_dir).resolve()) + "/"]
-
             if cfg.projects.enabled:
                 for proj_name, proj_defn in cfg.projects.definitions.items():
                     proj_dir = workspace / proj_defn.home_dir
@@ -632,26 +773,22 @@ def register_lifecycle_routines(registry, result_factory) -> None:
                         indexed += int(proj_result.get("indexed_files", 0))
                         skipped += int(proj_result.get("skipped_files", 0))
                         chunks += int(proj_result.get("total_chunks", 0))
-                        scanned_dirs.append(str(proj_dir.resolve()) + "/")
 
-            # Third pass: index files registered via doc_registry that are NOT already
-            # covered by passes 1 or 2 (external files, e.g. outside workspace or in
-            # source-root paths not under any scanned project dir).
+            # Third pass: index files registered via doc_registry, including source
+            # files under project dirs. Passes 1 and 2 only cover markdown/log files,
+            # so registry-managed JS/JSON/CSS/HTML files must still be considered here.
             try:
                 from datastore.docsdb.registry import DocsRegistry as _DR
                 reg_docs = _DR().list_docs()
+                runtime_workspace = _workspace()
                 for doc in reg_docs:
                     raw_path = doc.get("file_path", "")
                     if not raw_path:
                         continue
                     p = Path(raw_path)
                     if not p.is_absolute():
-                        p = workspace / p
+                        p = runtime_workspace / p
                     if not p.is_file():
-                        continue
-                    # Skip files already covered by directory scans in passes 1 and 2
-                    p_resolved = str(p.resolve())
-                    if any(p_resolved.startswith(d) for d in scanned_dirs):
                         continue
                     if rag.needs_reindex(str(p)):
                         doc_chunks = rag.index_document(str(p))
