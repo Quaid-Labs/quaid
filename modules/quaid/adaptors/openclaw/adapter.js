@@ -1349,7 +1349,11 @@ notify_user(${JSON.stringify(message)})
         if (sessionKeyEarly && !projectAutoRegisteredSessions.has(sessionKeyEarly) && isSystemEnabled2("projects")) {
           projectAutoRegisteredSessions.add(sessionKeyEarly);
           const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
-          const quaidEnv = { ...process.env, QUAID_HOME: WORKSPACE };
+          const quaidEnv = {
+            ...process.env,
+            QUAID_HOME: WORKSPACE,
+            ..._QUAID_INSTANCE ? { QUAID_INSTANCE: _QUAID_INSTANCE } : {}
+          };
           try {
             if (hasDurableWorkIntent(query)) {
               const projName = extractProjectName(query);
@@ -1368,7 +1372,7 @@ notify_user(${JSON.stringify(message)})
               writeHookTrace("hook.project_auto_registered", { session_id: sessionKeyEarly, name: projName, source_root: sourceRoot });
               event.prependContext = (event.prependContext ? event.prependContext + "\n" : "") + `[Quaid] Project '${projName}' registered for this work.`;
             } else if (hasThrowawayIntent(query)) {
-              const instanceId = String(process.env.QUAID_INSTANCE || "main");
+              const instanceId = _QUAID_INSTANCE || "main";
               const miscName = `misc--${instanceId}`;
               const miscPath = path.join(WORKSPACE, "shared", "projects", miscName);
               try {
