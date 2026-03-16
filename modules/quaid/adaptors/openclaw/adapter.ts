@@ -1631,23 +1631,21 @@ notify_user(${JSON.stringify(message)})
         }
       }
 
-      // Inject a file-placement hint into the user turn for file-creation messages.
+      // Inject a file-placement hint into the user turn on every message.
       // Must be applied early so ALL return paths carry it (including no-recall early returns).
       // System prompt rules alone lose when users explicitly say "put it in /tmp" (recency bias).
+      // We cannot use event.prompt to detect file signals because it may be empty/preamble-only
+      // when before_prompt_build fires (the actual message content arrives asynchronously).
       if (_QUAID_INSTANCE) {
-        const rawPromptLower = String(event.prompt || "").toLowerCase();
-        const hasFileSignal = /\b(write|creat|build|generat|make|script|file|project|cli|tool|app|throwaway|throw.?away|quick|hello.?world|temp|scratch|one.?off|snippet|put it|save it)\b/.test(rawPromptLower);
-        if (hasFileSignal) {
-          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-          const fileHint = [
-            `[Quaid file rule — REQUIRED]`,
-            `  - Throwaway / quick / temp / hello-world → write to: ${miscPath}/`,
-            `  - New durable work → FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-            `  - NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project.`,
-          ].join("\n");
-          event.prependContext = event.prependContext ? `${fileHint}\n\n${event.prependContext}` : fileHint;
-          writeHookTrace("hook.file_hint_user_turn_injected", { len: fileHint.length });
-        }
+        const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+        const fileHint = [
+          `[Quaid file rule — REQUIRED]`,
+          `  - Throwaway / quick / temp / hello-world → write to: ${miscPath}/`,
+          `  - New durable work → FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+          `  - NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project.`,
+        ].join("\n");
+        event.prependContext = event.prependContext ? `${fileHint}\n\n${event.prependContext}` : fileHint;
+        writeHookTrace("hook.file_hint_user_turn_injected", { len: fileHint.length });
       }
 
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());

@@ -1296,21 +1296,17 @@ notify_user(${JSON.stringify(message)})
         }
       }
       if (_QUAID_INSTANCE) {
-        const rawPromptLower = String(event.prompt || "").toLowerCase();
-        const hasFileSignal = /\b(write|creat|build|generat|make|script|file|project|cli|tool|app|throwaway|throw.?away|quick|hello.?world|temp|scratch|one.?off|snippet|put it|save it)\b/.test(rawPromptLower);
-        if (hasFileSignal) {
-          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-          const fileHint = [
-            `[Quaid file rule \u2014 REQUIRED]`,
-            `  - Throwaway / quick / temp / hello-world \u2192 write to: ${miscPath}/`,
-            `  - New durable work \u2192 FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-            `  - NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project.`
-          ].join("\n");
-          event.prependContext = event.prependContext ? `${fileHint}
+        const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+        const fileHint = [
+          `[Quaid file rule \u2014 REQUIRED]`,
+          `  - Throwaway / quick / temp / hello-world \u2192 write to: ${miscPath}/`,
+          `  - New durable work \u2192 FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+          `  - NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project.`
+        ].join("\n");
+        event.prependContext = event.prependContext ? `${fileHint}
 
 ${event.prependContext}` : fileHint;
-          writeHookTrace("hook.file_hint_user_turn_injected", { len: fileHint.length });
-        }
+        writeHookTrace("hook.file_hint_user_turn_injected", { len: fileHint.length });
       }
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) return { prependContext: event.prependContext, ...appendSystemContext ? { appendSystemContext } : {} };
