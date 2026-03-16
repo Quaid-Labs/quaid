@@ -105,6 +105,28 @@ def shared_config_path() -> Path:
     return shared_dir() / "config" / "memory.json"
 
 
+def instance_scratch_dir(name: Optional[str] = None) -> Path:
+    """Per-instance scratch directory: QUAID_HOME/{instance_id}/scratch/
+
+    Scratch is for ephemeral/untracked work. Namespaced inside the instance
+    silo so it stays co-located with all other per-instance data and is
+    removed when the instance is deleted.
+    """
+    if name is None:
+        return instance_root() / "scratch"
+    return quaid_home() / validate_instance_id(name) / "scratch"
+
+
+def instance_temp_dir(name: Optional[str] = None) -> Path:
+    """Per-instance temp directory: QUAID_HOME/{instance_id}/temp/
+
+    Temp is for transient working files. Namespaced inside the instance silo.
+    """
+    if name is None:
+        return instance_root() / "temp"
+    return quaid_home() / validate_instance_id(name) / "temp"
+
+
 def instance_exists(name: str) -> bool:
     """Check if an instance directory exists and has config."""
     try:

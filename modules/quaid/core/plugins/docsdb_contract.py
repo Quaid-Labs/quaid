@@ -9,9 +9,19 @@ from core.runtime.plugins import PluginHookContext
 
 
 def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
+    # projects/ lives at workspace root (shared across instances via registry)
     root = Path(ctx.workspace_root)
-    for rel in ("projects", "temp", "scratch"):
-        (root / rel).mkdir(parents=True, exist_ok=True)
+    (root / "projects").mkdir(parents=True, exist_ok=True)
+    # scratch/ and temp/ are per-instance: QUAID_HOME/{instance_id}/scratch|temp/
+    # Use lib.instance helpers so the path is authoritative across the codebase.
+    try:
+        from lib.instance import instance_scratch_dir, instance_temp_dir
+        instance_scratch_dir().mkdir(parents=True, exist_ok=True)
+        instance_temp_dir().mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Fallback for standalone/misconfigured instances: workspace-level dirs.
+        for rel in ("scratch", "temp"):
+            (root / rel).mkdir(parents=True, exist_ok=True)
 
 
 class DocsDbPluginContract(PluginContractBase):
