@@ -16,10 +16,30 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
     (root / "temp").mkdir(parents=True, exist_ok=True)
     (root / "scratch").mkdir(parents=True, exist_ok=True)
     # misc lives as a tracked project in shared/projects/misc--{instance}/
-    # Directories are created here so the registry can scaffold them on first use.
+    # Create the directory and auto-register it in the docsdb project registry
+    # so agents can use it immediately without a manual create-project step.
     try:
         from lib.instance import instance_misc_dir
-        instance_misc_dir().mkdir(parents=True, exist_ok=True)
+        misc_dir = instance_misc_dir()
+        misc_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from datastore.docsdb.registry import ProjectRegistry
+            from lib.config import get_db_path
+            misc_name = misc_dir.name  # e.g. "misc--openclaw-main"
+            try:
+                rel_home = str(misc_dir.relative_to(root)) + "/"
+            except ValueError:
+                rel_home = str(misc_dir) + "/"
+            reg = ProjectRegistry(get_db_path())
+            reg.create_project(
+                name=misc_name,
+                home_dir=rel_home,
+                description="Scratch pad for ephemeral and temporary files.",
+            )
+        except ValueError:
+            pass  # Already registered — idempotent
+        except Exception:
+            pass  # Registry not available at this init stage
     except Exception:
         pass  # Standalone/misconfigured — installer handles it
 
