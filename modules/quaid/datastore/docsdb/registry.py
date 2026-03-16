@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from lib.config import get_db_path
 from lib.database import get_connection
-from lib.runtime_context import get_workspace_dir
+from lib.runtime_context import get_quaid_home, get_workspace_dir
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +59,16 @@ def _validate_project_name(name: str) -> None:
 
 
 def _validate_inside_workspace(resolved_path: Path, label: str = "path") -> None:
-    """Validate that a resolved path is inside the workspace."""
+    """Validate that a resolved path is inside the workspace or quaid_home."""
     try:
         real = resolved_path.resolve()
+        # Per-instance paths: must be under instance_root.
+        # Shared paths (shared/projects/...): must be under quaid_home.
         workspace_real = _workspace().resolve()
-        if not str(real).startswith(str(workspace_real) + "/") and real != workspace_real:
+        quaid_home_real = get_quaid_home().resolve()
+        inside_instance = str(real).startswith(str(workspace_real) + "/") or real == workspace_real
+        inside_home = str(real).startswith(str(quaid_home_real) + "/") or real == quaid_home_real
+        if not inside_instance and not inside_home:
             raise ValueError(f"Refusing {label} outside workspace: {real}")
     except (OSError, ValueError) as e:
         raise ValueError(f"Invalid {label}: {e}")
@@ -1311,10 +1316,16 @@ class DocsRegistry:
             return False
 
     def _resolve_path(self, relative: str) -> Path:
-        """Resolve a workspace-relative path to absolute."""
+        """Resolve a workspace-relative path to absolute.
+
+        Paths starting with 'shared/' live at QUAID_HOME (workspace root),
+        not at the per-instance silo returned by _workspace().
+        """
         p = Path(relative)
         if p.is_absolute():
             return p
+        if relative.startswith("shared/"):
+            return get_quaid_home() / relative
         return _workspace() / relative
 
     def _is_excluded(self, file_path: str, patterns: List[str]) -> bool:
