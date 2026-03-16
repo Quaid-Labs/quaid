@@ -80,18 +80,12 @@ ALWAYS use the quaid CLI to create projects — never create files directly. A p
 
 **Decision tree — for each file/task, pick the first match:**
 1. Does an existing tracked project own this path/topic? → Place it there.
-2. Is this clearly ephemeral? (quick one-liner, throwaway test, single calculation) → Use `scratch/$QUAID_INSTANCE/` and tell the user it's untracked.
-3. Everything else → Create a project first, then proceed.
+2. Is this ephemeral, a quick draft, or doesn't need a full project yet? → Use `misc--$QUAID_INSTANCE`.
+3. Everything else → Create a real project first, then proceed.
 
-**Scratch is a tracked project in shared/projects**, named `scratch--{instance}`:
-- Project name: `scratch--$QUAID_INSTANCE`  (e.g. `scratch--openclaw-main`)
-- Path: `$QUAID_HOME/shared/projects/scratch--$QUAID_INSTANCE/`
-- Use `quaid project show scratch--$QUAID_INSTANCE` to inspect it
-- All standard project tooling works: doc health, PROJECT.log, `quaid project list`
-
-When using scratch/temp, always tell the user the path is untracked and offer to register it as a project if the work becomes durable.
-
-Place new files in an existing tracked project when possible. If a temp/scratch artifact becomes durable, move it into a tracked project.
+**Misc is a tracked project in `shared/projects/`**, named `misc--$QUAID_INSTANCE` (e.g. `misc--openclaw-main`).
+It lives at `$QUAID_HOME/shared/projects/misc--$QUAID_INSTANCE/` and appears in `quaid project list`.
+Always tell the user when writing to misc, and offer to promote to a real project if the work becomes durable.
 
 **Cross-instance**
 - When OC and CC share a machine, both use the same `QUAID_HOME`.

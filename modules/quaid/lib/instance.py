@@ -105,27 +105,21 @@ def shared_config_path() -> Path:
     return shared_dir() / "config" / "memory.json"
 
 
-def scratch_project_name(name: Optional[str] = None) -> str:
-    """Registry name for an instance's scratch project.
+def misc_project_name(name: Optional[str] = None) -> str:
+    """Registry name for an instance's temp project.
 
-    Convention: scratch--{instance_id}  (e.g. scratch--openclaw-main)
-    Groups all scratch entries together in sorted project listings.
-    Double-dash avoids collision with user project names.
-    """
+    Convention: misc--{instance_id}  (e.g. misc--openclaw-main)
+    Single shared bucket for miscellaneous work without a proper project home:
+    drafts, one-offs, quick scripts, staging. Not "temp" (implies deletion) —
+    misc files may stick around. Lives as a tracked project in shared/projects/.
+"""
     iid = validate_instance_id(name) if name else instance_id()
-    return f"scratch--{iid}"
+    return f"temp--{iid}"
 
 
-def instance_scratch_dir(name: Optional[str] = None) -> Path:
-    """Per-instance scratch project directory in shared/projects.
-
-    Path: QUAID_HOME/shared/projects/scratch--{instance_id}/
-
-    Scratch lives as a real tracked project so all project tooling
-    (doc health, PROJECT.log, registry list) works without modification.
-    Files written here are automatically associated with the scratch project.
-    """
-    return shared_projects_dir() / scratch_project_name(name)
+def instance_misc_dir(name: Optional[str] = None) -> Path:
+    """Per-instance misc project directory: shared/projects/misc--{instance}/"""
+    return shared_projects_dir() / misc_project_name(name)
 
 
 def instance_exists(name: str) -> bool:

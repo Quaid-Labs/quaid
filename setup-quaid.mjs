@@ -2921,14 +2921,14 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
         log.info(`Created identity/${f}`);
       }
     }
-    // Create instance scratch project in shared/projects/scratch--{instanceId}/.
-    // Scratch lives as a real tracked project so all registry tooling works
-    // (doc health, project list, PROJECT.log) without special-casing.
-    const scratchProjectName = `scratch--${resolvedInstanceId}`;
-    const scratchProjectDir = path.join(WORKSPACE, "shared", "projects", scratchProjectName);
-    if (!fs.existsSync(scratchProjectDir)) {
-      fs.mkdirSync(scratchProjectDir, { recursive: true });
-      log.info(`Created scratch project dir: shared/projects/${scratchProjectName}/`);
+    // Create misc project dir in shared/projects/misc--{instanceId}/.
+    // Lives as a real tracked project — all registry tooling works automatically.
+    for (const bucket of [`misc--${resolvedInstanceId}`]) {
+      const bucketDir = path.join(WORKSPACE, "shared", "projects", bucket);
+      if (!fs.existsSync(bucketDir)) {
+        fs.mkdirSync(bucketDir, { recursive: true });
+        log.info(`Created shared bucket dir: shared/projects/${bucket}/`);
+      }
     }
   }
   if (_isPlatform("claude-code")) {
@@ -3007,11 +3007,11 @@ print('[+] Datastore init hooks complete')
   // Contract-owned project workspace dirs should exist after datastore init hooks.
   // Some runtime profiles trim plugin slots during bootstrap; guard here so
   // install always yields expected workspace shape.
-  // Scratch is a tracked project in shared/projects/scratch--{instanceId}/
-  const instanceScratchDir = (resolvedInstanceId && resolvedInstanceId !== "standalone")
-    ? path.join(WORKSPACE, "shared", "projects", `scratch--${resolvedInstanceId}`)
+  // misc is a tracked project in shared/projects/misc--{instanceId}/
+  const instanceMiscDir = (resolvedInstanceId && resolvedInstanceId !== "standalone")
+    ? path.join(WORKSPACE, "shared", "projects", `misc--${resolvedInstanceId}`)
     : SCRATCH_DIR;
-  const contractOwnedDirs = [instanceProjectsDir(), TEMP_DIR, instanceScratchDir];
+  const contractOwnedDirs = [instanceProjectsDir(), TEMP_DIR, instanceMiscDir];
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
   if (missingContractOwnedDirs.length > 0) {
     for (const dir of missingContractOwnedDirs) {
@@ -3026,20 +3026,20 @@ print('[+] Datastore init hooks complete')
   // Scratch is intentionally workspace-visible and can hold ad-hoc drafts.
   // The directory is contract-owned (docsdb init); installer only bootstraps
   // local history after contract init has run.
-  if (fs.existsSync(instanceScratchDir) && !fs.existsSync(path.join(instanceScratchDir, ".git"))) {
-    const scratchGitInit = spawnSync("git", ["init"], {
-      cwd: instanceScratchDir,
+  if (fs.existsSync(instanceMiscDir) && !fs.existsSync(path.join(instanceMiscDir, ".git"))) {
+    const miscGitInit = spawnSync("git", ["init"], {
+      cwd: instanceMiscDir,
       stdio: "pipe",
       encoding: "utf8",
     });
-    if (scratchGitInit.status === 0) {
-      log.info("Initialized instance scratch/ local git history");
+    if (miscGitInit.status === 0) {
+      log.info("Initialized misc project local git history");
     } else {
-      const detail = String(scratchGitInit.stderr || scratchGitInit.stdout || "").trim();
-      log.warn(`Could not initialize scratch/ git history${detail ? `: ${detail}` : ""}`);
+      const detail = String(miscGitInit.stderr || miscGitInit.stdout || "").trim();
+      log.warn(`Could not initialize misc/ git history${detail ? `: ${detail}` : ""}`);
     }
-  } else if (!fs.existsSync(instanceScratchDir)) {
-    log.warn("Instance scratch/ directory missing after datastore init hooks; skipping scratch history bootstrap.");
+  } else if (!fs.existsSync(instanceMiscDir)) {
+    log.warn("misc project dir missing after datastore init hooks; skipping git history bootstrap.");
   }
 
   // Create workspace files
@@ -3073,8 +3073,7 @@ print('[+] Datastore init hooks complete')
       "data/*.db",
       "data/*.db-*",
       "logs/",
-      "*/temp/",
-      "*/scratch/",
+      "temp/",
       ".env",
       ".env.*",
       "",
@@ -3373,33 +3372,36 @@ print(len(found))
       log.info(`Quaid project installed (${quaidDocCount} new docs discovered)`);
     }
 
-    // Register instance scratch project in the shared/projects registry.
-    // Name: scratch--{instanceId}. Home: shared/projects/scratch--{instanceId}/
-    // Lives as a real tracked project so registry tooling works without modification.
+    // Register instance misc project in shared/projects/misc--{instanceId}/.
+    // Single catch-all bucket for work without a proper project home.
     if (resolvedInstanceId && resolvedInstanceId !== "standalone") {
-      const regScratchScript = `
+      const sharedBuckets = [
+        { name: `misc--${resolvedInstanceId}`, label: `Misc (${resolvedInstanceId})`,
+          description: "Miscellaneous work without a dedicated project: drafts, one-offs, quick scripts." },
+      ];
+      for (const bucket of sharedBuckets) {
+        const regScript = `
 import os, sys
 ${PY_ENV_SETUP}
 os.environ['QUAID_QUIET'] = '1'
 sys.path.insert(0, '.')
 from datastore.docsdb.registry import DocsRegistry
 reg = DocsRegistry()
-name = ${JSON.stringify(`scratch--${resolvedInstanceId}`)}
-home = ${JSON.stringify(`shared/projects/scratch--${resolvedInstanceId}/`)}
 try:
-    reg.create_project(name, label='Scratch (${resolvedInstanceId})', home_dir=home,
-        description='Auto-managed scratch space for ephemeral/untracked work.')
+    reg.create_project(${JSON.stringify(bucket.name)}, label=${JSON.stringify(bucket.label)},
+        home_dir=${JSON.stringify(`shared/projects/${bucket.name}/`)},
+        description=${JSON.stringify(bucket.description)})
     print('created')
 except ValueError:
-    print('exists')  # already registered
+    print('exists')
 `;
-      const regScratchResult = spawnSync("python3", ["-c", regScratchScript], {
-        cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, QUAID_HOME: WORKSPACE },
-      });
-      const scratchStatus = (regScratchResult.stdout || "").trim();
-      if (scratchStatus === "created") {
-        log.info(`Scratch project registered: scratch--${resolvedInstanceId}`);
+        const result = spawnSync("python3", ["-c", regScript], {
+          cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+          env: { ...process.env, QUAID_HOME: WORKSPACE },
+        });
+        if ((result.stdout || "").trim() === "created") {
+          log.info(`Registered shared bucket: ${bucket.name}`);
+        }
       }
     }
 
