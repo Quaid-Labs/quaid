@@ -7814,6 +7814,7 @@ if __name__ == "__main__":
                     recall_kwargs['use_multi_pass'] = False
                     recall_kwargs['use_reranker'] = False
                     recall_kwargs['max_turns'] = 1
+                    recall_kwargs['use_routing'] = False  # skip LLM fanout/HyDE expansion
                 recall_kwargs['planner_profile'] = planner_profile
                 if use_json:
                     results, meta = recall(query, return_meta=True, **recall_kwargs)
