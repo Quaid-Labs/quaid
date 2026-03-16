@@ -10,9 +10,11 @@ from core.runtime.plugins import PluginHookContext
 
 def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
     root = Path(ctx.workspace_root)
-    # projects/ and shared/projects/ at workspace root — registry-owned
+    # projects/, shared/projects/, temp/, scratch/ at workspace root — docsdb-owned
     (root / "projects").mkdir(parents=True, exist_ok=True)
     (root / "shared" / "projects").mkdir(parents=True, exist_ok=True)
+    (root / "temp").mkdir(parents=True, exist_ok=True)
+    (root / "scratch").mkdir(parents=True, exist_ok=True)
     # misc lives as a tracked project in shared/projects/misc--{instance}/
     # Directories are created here so the registry can scaffold them on first use.
     try:
