@@ -1295,19 +1295,6 @@ notify_user(${JSON.stringify(message)})
           }
         }
       }
-      if (_QUAID_INSTANCE) {
-        const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-        const fileHint = [
-          `[Quaid file rule \u2014 REQUIRED]`,
-          `  - Throwaway / quick / temp / hello-world \u2192 write to: ${miscPath}/`,
-          `  - New durable work \u2192 FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-          `  - NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project.`
-        ].join("\n");
-        event.prependContext = event.prependContext ? `${fileHint}
-
-${event.prependContext}` : fileHint;
-        writeHookTrace("hook.file_hint_user_turn_injected", { len: fileHint.length });
-      }
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
       if (!autoInjectEnabled) return { prependContext: event.prependContext, ...appendSystemContext ? { appendSystemContext } : {} };
       const rawPrompt = String(event.prompt || "").trim();
@@ -1342,22 +1329,32 @@ ${event.prependContext}` : fileHint;
         }
         _beforePromptBuildInFlight = true;
         let allMemories;
+        let toolHint = null;
         try {
-          allMemories = await recallMemories({
-            query,
-            limit: injectLimit,
-            expandGraph: true,
-            datastores: ["vector_basic", "graph"],
-            routeStores: false,
-            intent: injectIntent,
-            domain: injectDomain,
-            failOpen: true,
-            waitForExtraction: false,
-            fast: true,
-            sourceTag: "auto_inject"
-          });
+          [allMemories, toolHint] = await Promise.all([
+            recallMemories({
+              query,
+              limit: injectLimit,
+              expandGraph: true,
+              datastores: ["vector_basic", "graph"],
+              routeStores: false,
+              intent: injectIntent,
+              domain: injectDomain,
+              failOpen: true,
+              waitForExtraction: false,
+              fast: true,
+              sourceTag: "auto_inject"
+            }),
+            facade.planToolHint(query)
+          ]);
         } finally {
           _beforePromptBuildInFlight = false;
+        }
+        if (toolHint) {
+          event.prependContext = event.prependContext ? `${toolHint}
+
+${event.prependContext}` : toolHint;
+          writeHookTrace("hook.tool_hint_injected", { len: toolHint.length });
         }
         const injection = facade.prepareAutoInjectionContext({
           allMemories,

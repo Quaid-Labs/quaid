@@ -3253,6 +3253,16 @@ ${lines.join("\n")}
     getStatsParsed,
     store: (args) => datastoreBridge.store(args),
     forget: (args) => datastoreBridge.forget(args),
+
+    // Tool hint planner — fast-tier LLM call, safe to run in parallel with recall
+    planToolHint: async (query: string): Promise<string | null> => {
+      try {
+        const result = await datastoreBridge.planToolHint(query);
+        return result?.trim() || null;
+      } catch {
+        return null;
+      }
+    },
     searchBySession: (sessionId, limit = 20) => datastoreBridge.recall([
       "*",
       "--session-id",

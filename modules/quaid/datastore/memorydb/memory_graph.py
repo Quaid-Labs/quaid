@@ -4873,6 +4873,67 @@ def _plan_fanout_queries(
         return _finish([clean], "planner_exception_fallback")
 
 
+def plan_tool_hint(
+    query: str,
+    timeout_s: Optional[float] = None,
+) -> Optional[str]:
+    """Return a <tool_hint> string if the query warrants one, or None.
+
+    Reads tool_hints from retrieval config. Each entry must have:
+        name: str         - tool identifier
+        description: str  - when to use (used as LLM matching criteria)
+        hint: str         - the hint text to inject into the user turn
+
+    The LLM (fast tier) decides which tool, if any, is relevant.
+    Returns None if no tool applies or if the LLM call fails/times out.
+    """
+    from lib.llm_clients import call_fast_reasoning
+
+    cfg = _get_config()
+    tools: List[Dict[str, str]] = list(getattr(cfg.retrieval, "tool_hints", []) or [])
+    if not tools:
+        return None
+
+    effective_timeout = (timeout_s or (getattr(cfg.retrieval, "tool_hint_timeout_ms", 1500) / 1000))
+    clean = " ".join((query or "").split())
+    if not clean:
+        return None
+
+    tools_block = "\n".join(
+        f'- {t["name"]}: {t["description"]} | hint: "{t["hint"]}"'
+        for t in tools
+        if t.get("name") and t.get("description") and t.get("hint")
+    )
+    if not tools_block:
+        return None
+
+    prompt = (
+        "Given the message below, decide if it matches one of the available tools.\n"
+        "Return JSON only: {\"tool_hint\": \"<hint text>\"} if a tool applies, "
+        "or {\"tool_hint\": null} if none apply.\n"
+        "Only match when the message clearly fits a tool's description.\n\n"
+        f"Available tools:\n{tools_block}\n\n"
+        f"Message: {clean}"
+    )
+    try:
+        result, _ = call_fast_reasoning(
+            prompt=prompt,
+            max_tokens=120,
+            timeout=effective_timeout,
+            system_prompt="You output compact JSON for tool guidance. No prose.",
+            max_retries=0,
+        )
+        if result:
+            import json as _json
+            data = _json.loads(result.strip())
+            hint = data.get("tool_hint")
+            if hint and isinstance(hint, str) and len(hint.strip()) > 5:
+                return f"<tool_hint>{hint.strip()}</tool_hint>"
+    except Exception:
+        pass
+    return None
+
+
 def recall_fast(
     query: str,
     limit: int = 10,
@@ -7096,6 +7157,11 @@ if __name__ == "__main__":
         # --- init ---
         subparsers.add_parser("init", help="Initialize the database")
 
+        # --- plan-tool-hint ---
+        pth_p = subparsers.add_parser("plan-tool-hint", help="Return a tool hint for the given query, or nothing")
+        pth_p.add_argument("query", help="User query to classify")
+        pth_p.add_argument("--timeout-ms", type=int, default=None, help="LLM timeout in ms")
+
         # --- stats ---
         subparsers.add_parser("stats", help="Show database statistics")
         subparsers.add_parser("health", help="Show KB health metrics (detailed)")
@@ -7316,6 +7382,12 @@ if __name__ == "__main__":
                         )
                         count += 1
                 print(f"Backfilled {count} content hashes")
+
+        elif args.command == "plan-tool-hint":
+            timeout_s = (args.timeout_ms / 1000.0) if args.timeout_ms else None
+            hint = plan_tool_hint(args.query, timeout_s=timeout_s)
+            if hint:
+                print(hint)
 
         elif args.command == "store":
             try:

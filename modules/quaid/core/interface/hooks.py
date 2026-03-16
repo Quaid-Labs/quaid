@@ -104,14 +104,22 @@ def hook_inject(args):
 
     try:
         from core.interface.api import recall_fast
+        from datastore.memorydb.memory_graph import plan_tool_hint
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         owner = _get_owner_id()
-        memories = recall_fast(
-            query=query,
-            owner_id=owner,
-            limit=10,
-        )
+
+        # Run recall and tool hint in parallel — both are fast-tier, independent calls.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            recall_future = pool.submit(recall_fast, query=query, owner_id=owner, limit=10)
+            hint_future = pool.submit(plan_tool_hint, query)
+            memories = recall_future.result()
+            tool_hint = hint_future.result()
 
         context_parts = []
+
+        if tool_hint:
+            context_parts.append(tool_hint)
 
         if pending_context:
             context_parts.append(pending_context)

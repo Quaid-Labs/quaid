@@ -240,6 +240,8 @@ class RetrievalConfig:
     injection_fanout_llm_ms: int = 1_500  # LLM budget for query fanout within injection
     domains: Dict[str, str] = field(default_factory=dict)  # Domain id -> brief description
     traversal: TraversalConfig = field(default_factory=TraversalConfig)
+    tool_hints: List[Dict[str, str]] = field(default_factory=list)  # [{name, description, hint}, ...]
+    tool_hint_timeout_ms: int = 1_500  # LLM budget for tool hint planner
 
 
 @dataclass
@@ -594,6 +596,8 @@ _KNOWN_RETRIEVAL_KEYS = {
     "domains",
     "traversal",
     "reranker",
+    "tool_hints",
+    "tool_hint_timeout_ms",
 }
 
 try:

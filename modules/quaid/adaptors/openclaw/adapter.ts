@@ -1631,23 +1631,6 @@ notify_user(${JSON.stringify(message)})
         }
       }
 
-      // Inject a file-placement hint into the user turn on every message.
-      // Must be applied early so ALL return paths carry it (including no-recall early returns).
-      // System prompt rules alone lose when users explicitly say "put it in /tmp" (recency bias).
-      // We cannot use event.prompt to detect file signals because it may be empty/preamble-only
-      // when before_prompt_build fires (the actual message content arrives asynchronously).
-      if (_QUAID_INSTANCE) {
-        const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-        const fileHint = [
-          `[Quaid file rule — REQUIRED]`,
-          `  - Throwaway / quick / temp / hello-world → write to: ${miscPath}/`,
-          `  - New durable work → FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-          `  - NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project.`,
-        ].join("\n");
-        event.prependContext = event.prependContext ? `${fileHint}\n\n${event.prependContext}` : fileHint;
-        writeHookTrace("hook.file_hint_user_turn_injected", { len: fileHint.length });
-      }
-
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return { prependContext: event.prependContext, ...(appendSystemContext ? { appendSystemContext } : {}) };
 
@@ -1710,22 +1693,33 @@ notify_user(${JSON.stringify(message)})
         }
         _beforePromptBuildInFlight = true;
         let allMemories: any[];
+        let toolHint: string | null = null;
         try {
-          allMemories = await recallMemories({
-            query,
-            limit: injectLimit,
-            expandGraph: true,
-            datastores: ["vector_basic", "graph"],
-            routeStores: false,
-            intent: injectIntent,
-            domain: injectDomain,
-            failOpen: true,
-            waitForExtraction: false,
-            fast: true,
-            sourceTag: "auto_inject"
-          });
+          [allMemories, toolHint] = await Promise.all([
+            recallMemories({
+              query,
+              limit: injectLimit,
+              expandGraph: true,
+              datastores: ["vector_basic", "graph"],
+              routeStores: false,
+              intent: injectIntent,
+              domain: injectDomain,
+              failOpen: true,
+              waitForExtraction: false,
+              fast: true,
+              sourceTag: "auto_inject"
+            }),
+            facade.planToolHint(query),
+          ]);
         } finally {
           _beforePromptBuildInFlight = false;
+        }
+
+        if (toolHint) {
+          event.prependContext = event.prependContext
+            ? `${toolHint}\n\n${event.prependContext}`
+            : toolHint;
+          writeHookTrace("hook.tool_hint_injected", { len: toolHint.length });
         }
 
         const injection = facade.prepareAutoInjectionContext({
