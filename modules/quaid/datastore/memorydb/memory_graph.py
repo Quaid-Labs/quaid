@@ -4911,64 +4911,73 @@ def _load_tools_md() -> Optional[str]:
 def plan_tool_hint(
     query: str,
     timeout_s: Optional[float] = None,
-    tools_md: Optional[str] = None,
+    commands: Optional[list] = None,
 ) -> Optional[str]:
     """Return a <tool_hint> string if the query warrants one, or None.
 
-    Loads TOOLS.md from the quaid project docs and passes it to a fast-tier
-    LLM to decide if the query maps to a specific tool workflow. The LLM
-    produces a brief actionable hint, or null if no tool is relevant.
+    Uses the command registry (lib/command_registry.py) to build a compact
+    structured prompt. The LLM returns {command_id} which is looked up in
+    the registry to produce the final hint string.
 
     Args:
         query: The user message to classify.
         timeout_s: Override the LLM timeout (seconds). Defaults to
             retrieval.tool_hint_timeout_ms from config (default 1.5s).
-        tools_md: Override TOOLS.md content (used in tests).
+        commands: Override the resolved command registry (used in tests).
 
     Returns:
         A ``<tool_hint>…</tool_hint>`` string, or None.
     """
     from lib.llm_clients import call_fast_reasoning
+    from lib.command_registry import resolve_command_registry
     import json as _json
+    import re as _re
 
     clean = " ".join((query or "").split())
     if not clean:
         return None
 
-    content = tools_md if tools_md is not None else _load_tools_md()
-    if not content:
+    registry = commands if commands is not None else resolve_command_registry()
+    if not registry:
         return None
 
     cfg = _get_memory_config()
     effective_timeout = timeout_s or (getattr(cfg.retrieval, "tool_hint_timeout_ms", 1500) / 1000)
 
+    command_list = "\n".join(
+        f'- [{c["id"]}] {c["description"]}\n  hint: "{c["hint"]}"'
+        for c in registry
+    )
     prompt = (
-        "You are a tool-routing assistant. Below is a reference guide for available tools.\n\n"
-        "<tools>\n"
-        f"{content}\n"
-        "</tools>\n\n"
-        "Given the message, decide if a specific tool or workflow from the guide clearly applies.\n"
-        "Return JSON only: {\"tool_hint\": \"<one-line actionable hint>\"} or {\"tool_hint\": null}.\n"
-        "Only return a hint when the match is obvious. Prefer null when uncertain.\n\n"
+        "Respond with exactly one JSON object and nothing else.\n\n"
+        'Format: {"command_id": "<id>"} or {"command_id": null}\n\n'
+        f"Available commands:\n{command_list}\n\n"
+        "Pick the command whose description best matches the message, "
+        "or null if none clearly apply.\n\n"
         f"Message: {clean}"
     )
     try:
         result, _ = call_fast_reasoning(
             prompt=prompt,
-            max_tokens=120,
+            max_tokens=60,
             timeout=effective_timeout,
-            system_prompt="You output compact JSON for tool guidance. No prose.",
+            system_prompt=(
+                "You are a JSON-only router. Your entire response must be exactly "
+                "one JSON object — no other characters, no markdown, no explanation."
+            ),
             max_retries=0,
         )
         if result:
-            import re as _re
             _match = _re.search(r'\{[\s\S]*?\}', result)
             if not _match:
                 return None
             data = _json.loads(_match.group(0))
-            hint = data.get("tool_hint")
-            if hint and isinstance(hint, str) and len(hint.strip()) > 5:
-                return f"<tool_hint>{hint.strip()}</tool_hint>"
+            command_id = data.get("command_id")
+            if not command_id or not isinstance(command_id, str):
+                return None
+            entry = next((c for c in registry if c["id"] == command_id), None)
+            if entry:
+                return f"<tool_hint>{entry['hint']}</tool_hint>"
     except Exception:
         pass
     return None
