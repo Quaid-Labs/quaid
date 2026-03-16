@@ -1359,7 +1359,7 @@ const facade = createQuaidFacade({
   getMemoryConfig,
   isSystemEnabled,
   isFailHardEnabled,
-  trace: writeHookTrace,
+  trace: process.env.QUAID_TOOL_HINT_TRACE === "1" ? writeHookTrace : undefined,
   transcriptFormat: {
     preprocessText: preprocessTranscriptText,
     shouldSkipText: shouldSkipTranscriptText,
