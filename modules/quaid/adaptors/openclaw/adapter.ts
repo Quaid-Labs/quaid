@@ -1631,6 +1631,25 @@ notify_user(${JSON.stringify(message)})
         }
       }
 
+      // Inject a file-placement hint into the user turn for file-creation messages.
+      // Must be applied early so ALL return paths carry it (including no-recall early returns).
+      // System prompt rules alone lose when users explicitly say "put it in /tmp" (recency bias).
+      if (_QUAID_INSTANCE) {
+        const rawPromptLower = String(event.prompt || "").toLowerCase();
+        const hasFileSignal = /\b(write|creat|build|generat|make|script|file|project|cli|tool|app|throwaway|throw.?away|quick|hello.?world|temp|scratch|one.?off|snippet|put it|save it)\b/.test(rawPromptLower);
+        if (hasFileSignal) {
+          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+          const fileHint = [
+            `[Quaid file rule — REQUIRED]`,
+            `  - Throwaway / quick / temp / hello-world → write to: ${miscPath}/`,
+            `  - New durable work → FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+            `  - NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project.`,
+          ].join("\n");
+          event.prependContext = event.prependContext ? `${fileHint}\n\n${event.prependContext}` : fileHint;
+          writeHookTrace("hook.file_hint_user_turn_injected", { len: fileHint.length });
+        }
+      }
+
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
       if (!autoInjectEnabled) return { prependContext: event.prependContext, ...(appendSystemContext ? { appendSystemContext } : {}) };
 
@@ -1752,20 +1771,8 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         console.error("[quaid] Auto-injection error:", error);
       }
 
-      // For messages with file-creation signals, inject a 1-line hint in the user turn to
-      // reinforce the /tmp ban directly adjacent to the user's request. LLMs weight recent
-      // instructions highly, so the system prompt alone loses to explicit "put it in /tmp" user text.
-      let userTurnHint: string | undefined;
-      if (_QUAID_INSTANCE) {
-        const rawPromptForHint = String(event.prompt || "").toLowerCase();
-        const hasFileSignal = /\b(write|create|file|script|put|save|temp|tmp|throwaway|throw.?away|quick|scratch|hello.?world|hello world)\b/.test(rawPromptForHint);
-        if (hasFileSignal) {
-          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-          userTurnHint = `[Quaid file rule: write to project dir or misc at ${miscPath}/ — NOT /tmp or /var/tmp]\n`;
-        }
-      }
       return {
-        prependContext: (userTurnHint || "") + (event.prependContext || "") || undefined,
+        prependContext: event.prependContext || undefined,
         ...(prependSystemContext ? { prependSystemContext } : {}),
         ...(appendSystemContext ? { appendSystemContext } : {}),
       };
