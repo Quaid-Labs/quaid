@@ -684,7 +684,7 @@ const configSchema = Type.Object({
   autoRecall: Type.Optional(Type.Boolean({ default: true }))
 });
 const MAX_INJECTION_IDS_PER_SESSION = 4e3;
-const BEFORE_PROMPT_BUILD_DEADLINE_MS = 15e3;
+const BEFORE_PROMPT_BUILD_DEADLINE_MS = 22e3;
 function getOpenClawSessionsPath() {
   return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
 }
@@ -1387,6 +1387,8 @@ notify_user(${JSON.stringify(message)})
               resolve([[]]);
             }, BEFORE_PROMPT_BUILD_DEADLINE_MS)
           );
+          const recallStartMs = Date.now();
+          writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
           [allMemories] = await Promise.race([
             Promise.all([
               recallMemories({
@@ -1405,6 +1407,7 @@ notify_user(${JSON.stringify(message)})
             ]),
             deadline
           ]);
+          writeHookTrace("hook.recall_done", { count: allMemories.length, elapsed_ms: Date.now() - recallStartMs });
         } finally {
           _beforePromptBuildInFlight = false;
         }

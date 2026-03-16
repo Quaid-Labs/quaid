@@ -864,7 +864,7 @@ type PluginConfig = {
 // ============================================================================
 
 const MAX_INJECTION_IDS_PER_SESSION = 4000;
-const BEFORE_PROMPT_BUILD_DEADLINE_MS = 15_000;
+const BEFORE_PROMPT_BUILD_DEADLINE_MS = 22_000;
 
 function getOpenClawSessionsPath(): string {
   return path.join(os.homedir(), ".openclaw", "agents", "main", "sessions", "sessions.json");
@@ -1787,7 +1787,9 @@ notify_user(${JSON.stringify(message)})
           // sessions fire after planToolHint completes (after _beforePromptBuildInFlight
           // is cleared), so the re-entrancy guard cannot block them. The result is
           // several concurrent recall calls stacking up and burning the deadline.
-          // Recall-only injection (typically <10s) is well within the 15s budget.
+          // Recall-only injection (typically <22s) is within the budget.
+          const recallStartMs = Date.now();
+          writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
           [allMemories] = await Promise.race([
             Promise.all([
               recallMemories({
@@ -1806,6 +1808,7 @@ notify_user(${JSON.stringify(message)})
             ]),
             deadline,
           ]);
+          writeHookTrace("hook.recall_done", { count: allMemories.length, elapsed_ms: Date.now() - recallStartMs });
         } finally {
           _beforePromptBuildInFlight = false;
         }
