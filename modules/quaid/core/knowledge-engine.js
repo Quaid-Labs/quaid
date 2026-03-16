@@ -416,20 +416,19 @@ intent: ${intent}`;
       }
       t?.("tool_hint.calling_llm", { tools_len: toolsContent.length, query_len: clean.length });
 
-      const systemPrompt = "You output compact JSON. No markdown. No prose. No code fences.";
+      const systemPrompt =
+        "You are a JSON-only router. Your entire response must be exactly one JSON object — no other characters, no markdown, no explanation.";
       const userMessage =
-        "You are a tool-routing assistant. Below is a reference guide for available tools.\n\n" +
-        "<tools>\n" + toolsContent + "\n</tools>\n\n" +
-        "Given the message, decide if a specific tool or workflow from the guide clearly applies.\n" +
-        "Return raw JSON only (no markdown, no code fences): {\"tool_hint\": \"<one-line actionable hint>\"} or {\"tool_hint\": null}.\n" +
-        "Examples that SHOULD produce a hint:\n" +
-        "- Throwaway/temp/quick/hello-world files or scripts → misc project\n" +
-        "- Durable documents: essays, articles, research notes, reports → create a project\n" +
-        "- Creative content: video scripts, outlines, screenplays, blog posts → create a project\n" +
-        "- Plans and itineraries: travel plans, trip itineraries, project plans → create a project\n" +
-        "- Any multi-file or long-lived work → create a project first\n" +
-        "- Memory/recall/search requests → quaid recall or quaid store\n" +
-        "Return null only for purely conversational or analytical questions with no file, memory, or tool action.\n\n" +
+        "Respond with exactly one JSON object and nothing else.\n\n" +
+        "Format: {\"tool_hint\": \"one-line actionable hint\"} or {\"tool_hint\": null}\n\n" +
+        "Examples:\n" +
+        "  write a hello world script → {\"tool_hint\": \"Throwaway file — use misc project: quaid project show misc--$QUAID_INSTANCE\"}\n" +
+        "  write an essay about Rome → {\"tool_hint\": \"Durable work — create a project first: quaid registry create-project <name>\"}\n" +
+        "  plan a trip to Japan → {\"tool_hint\": \"Durable work — create a project first: quaid registry create-project japan-trip\"}\n" +
+        "  write a video script → {\"tool_hint\": \"Durable work — create a project first: quaid registry create-project <name>\"}\n" +
+        "  what do you remember about me → {\"tool_hint\": \"Search memories: quaid recall \\\"your query\\\"\"}\n" +
+        "  what is 2+2 → {\"tool_hint\": null}\n\n" +
+        "Routing reference:\n<tools>\n" + toolsContent + "\n</tools>\n\n" +
         "Message: " + clean;
 
       const raw = await deps.callFastRouter(systemPrompt, userMessage);
