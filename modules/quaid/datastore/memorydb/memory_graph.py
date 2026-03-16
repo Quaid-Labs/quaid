@@ -2338,8 +2338,19 @@ def graph_aware_recall(
             "graph_count": 0,
             "pronoun_resolved": False,
             "owner_person": None
-        }
+        },
+        "meta": {
+            "selected_path": "graph_aware",
+            "graph_depth": int(graph_depth),
+            "candidate_pool_used": bool(candidate_pool is not None),
+            "phases_ms": {
+                "base_recall_ms": 0,
+                "graph_expand_ms": 0,
+                "total_ms": 0,
+            },
+        },
     }
+    _started_at = time.monotonic()
 
     expand_from: List[str] = []  # Node IDs to expand from
     seen_ids: set = set()
@@ -2376,7 +2387,8 @@ def graph_aware_recall(
     if candidate_pool is not None:
         direct_all = candidate_pool
     else:
-        direct_all = recall(
+        _base_started_at = time.monotonic()
+        direct_all, base_meta = recall(
             query,
             limit=limit * 3,
             owner_id=owner_id,
@@ -2384,7 +2396,11 @@ def graph_aware_recall(
             domain=domain,
             domain_boost=domain_boost,
             project=project,
+            return_meta=True,
         )
+        results["meta"]["phases_ms"]["base_recall_ms"] = round((time.monotonic() - _base_started_at) * 1000)
+        if isinstance(base_meta, dict):
+            results["meta"]["base_recall_meta"] = base_meta
     direct = [r for r in direct_all if str(r.get("category", "")).lower() == "fact"]
     results["direct_results"] = direct[:limit]  # Ensure limit is respected
     results["source_breakdown"]["vector_count"] = len(results["direct_results"])
@@ -2431,6 +2447,7 @@ def graph_aware_recall(
 
     # 5. Bidirectional graph expansion with relation filtering
     max_graph_results = limit * 2  # Cap graph results
+    _graph_started_at = time.monotonic()
     for node_id in set(expand_from):
         if node_id in seen_ids:
             continue
@@ -2475,6 +2492,8 @@ def graph_aware_recall(
             break
 
     results["source_breakdown"]["graph_count"] = len(results["graph_results"])
+    results["meta"]["phases_ms"]["graph_expand_ms"] = round((time.monotonic() - _graph_started_at) * 1000)
+    results["meta"]["phases_ms"]["total_ms"] = round((time.monotonic() - _started_at) * 1000)
 
     return results
 
@@ -3442,6 +3461,20 @@ def _build_recall_json_payload(
             if key in graph_payload:
                 payload[key] = graph_payload[key]
     return payload
+
+
+def _resolve_recall_store_request(cfg: Dict[str, Any]) -> Tuple[List[str], Dict[str, Any]]:
+    """Resolve recall store config with stable default semantics.
+
+    Omitted stores should preserve the standard deliberate memory recall path.
+    Graph-aware recall must be explicitly requested.
+    """
+    stores_cfg = cfg.get("stores")
+    if stores_cfg is None:
+        return ["vector"], {}
+    if isinstance(stores_cfg, list):
+        return stores_cfg, {}
+    return list(stores_cfg.keys()), stores_cfg
 
 
 def _print_docs_bundle(bundle: Dict[str, Any]) -> None:
@@ -7632,13 +7665,7 @@ if __name__ == "__main__":
 
             # Resolve stores config.
             # stores can be a list ["vector","graph","docs"] or a dict {"vector":{...},"docs":{...}}
-            stores_cfg = cfg.get("stores", ["vector", "graph"])
-            if isinstance(stores_cfg, list):
-                store_names = stores_cfg
-                store_opts: dict = {}
-            else:
-                store_names = list(stores_cfg.keys())
-                store_opts = stores_cfg  # per-store option overrides
+            store_names, store_opts = _resolve_recall_store_request(cfg)
 
             want_docs = "docs" in store_names
             want_memory = bool([s for s in store_names if s != "docs"]) or not store_names
@@ -7744,6 +7771,7 @@ if __name__ == "__main__":
                 if use_json:
                     json_payload = _build_recall_json_payload(
                         graph_payload.get("direct_results", []),
+                        meta=graph_payload.get("meta"),
                         graph_payload=graph_payload,
                     )
                 else:

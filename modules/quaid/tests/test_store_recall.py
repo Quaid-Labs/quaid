@@ -1667,3 +1667,55 @@ class TestRecallLimitEdgeCases:
             _build_recall_json_payload(
                 [{"category": "fact", "similarity": 0.5}],
             )
+
+    def test_graph_aware_recall_emits_base_meta_for_diagnostics(self, tmp_path):
+        import datastore.memorydb.memory_graph as mg
+
+        graph, _ = _make_graph(tmp_path)
+        fake_direct = [
+            {
+                "id": "fact-1",
+                "text": "David is Maya's partner",
+                "category": "fact",
+                "similarity": 0.93,
+            }
+        ]
+        fake_meta = {
+            "mode": "deliberate",
+            "flags": {"reranker_enabled": True, "mmr_enabled": True},
+            "phases_ms": {"reranker_ms": 12, "mmr_ms": 7, "total_ms": 40},
+        }
+
+        with patch.object(mg, "get_graph", return_value=graph), \
+             patch.object(mg, "recall", return_value=(fake_direct, fake_meta)), \
+             patch.object(mg, "extract_entities_from_text", return_value=[]), \
+             patch.object(graph, "get_edges", return_value=[]), \
+             patch.object(graph, "get_related_bidirectional", return_value=[]):
+            payload = mg.graph_aware_recall(
+                "Maya's partner",
+                owner_id="maya",
+                limit=5,
+            )
+
+        meta = payload.get("meta") or {}
+        assert meta["selected_path"] == "graph_aware"
+        assert meta["base_recall_meta"] == fake_meta
+        assert meta["phases_ms"]["base_recall_ms"] >= 0
+        assert meta["phases_ms"]["graph_expand_ms"] >= 0
+        assert meta["phases_ms"]["total_ms"] >= meta["phases_ms"]["base_recall_ms"]
+
+    def test_resolve_recall_store_request_defaults_to_vector_only(self):
+        from datastore.memorydb.memory_graph import _resolve_recall_store_request
+
+        store_names, store_opts = _resolve_recall_store_request({})
+
+        assert store_names == ["vector"]
+        assert store_opts == {}
+
+    def test_resolve_recall_store_request_preserves_explicit_graph_request(self):
+        from datastore.memorydb.memory_graph import _resolve_recall_store_request
+
+        store_names, store_opts = _resolve_recall_store_request({"stores": ["vector", "graph"]})
+
+        assert store_names == ["vector", "graph"]
+        assert store_opts == {}
