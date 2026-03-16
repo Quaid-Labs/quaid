@@ -989,11 +989,6 @@ const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 // PROJECT_UPDATER removed — project events now emitted from Python extraction.
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
-const _sessionModelOverrideCache = new Map<string, string>();
-// Tracks when sessions.patch last failed per key so we can skip retries within a TTL.
-const _sessionModelOverrideFailedUntil = new Map<string, number>();
-const _SESSION_OVERRIDE_FAIL_TTL_MS = 30_000;
-const _SESSION_OVERRIDE_TIMEOUT_MS = 5_000;
 // Re-entrancy guard for beforePromptBuildHandler.
 // OC reuses the TUI session key for internal openresponses LLM calls spawned by
 // callConfiguredLLM. This means session-key filtering cannot distinguish user messages
@@ -1050,60 +1045,6 @@ function _getGatewayToken(): string | undefined {
   return undefined;
 }
 
-async function _ensureGatewaySessionOverride(
-  tier: ModelTier,
-  resolved: { provider: string; model: string },
-): Promise<string> {
-  const sessionKey = `agent:main:quaid-llm-${tier}`;
-  const modelRef = `${resolved.provider}/${resolved.model}`;
-
-  // Already confirmed for this key+model — return immediately.
-  if (_sessionModelOverrideCache.get(sessionKey) === modelRef) {
-    return sessionKey;
-  }
-
-  // Skip if sessions.patch failed recently: avoid blocking every LLM call
-  // for the full timeout when the gateway is slow to respond to sessions.patch.
-  // The model is specified in every /v1/responses request body anyway, so
-  // the session override is a best-effort optimisation, not a hard requirement.
-  const failedUntil = _sessionModelOverrideFailedUntil.get(sessionKey);
-  if (failedUntil && Date.now() < failedUntil) {
-    throw new Error(`[quaid][llm] sessions.patch skipped (failure TTL active for ${sessionKey})`);
-  }
-
-  try {
-    const patchOut = await spawnWithTimeout({
-      cwd: WORKSPACE,
-      env: process.env,
-      timeoutMs: _SESSION_OVERRIDE_TIMEOUT_MS,
-      label: "[quaid][gateway] sessions.patch",
-      argv: [
-        "openclaw",
-        "gateway",
-        "call",
-        "sessions.patch",
-        "--json",
-        "--params",
-        JSON.stringify({ key: sessionKey, model: modelRef }),
-      ],
-    });
-    const patchParsed = JSON.parse(String(patchOut || "{}"));
-    if (patchParsed?.ok) {
-      _sessionModelOverrideCache.set(sessionKey, modelRef);
-      _sessionModelOverrideFailedUntil.delete(sessionKey);
-      return sessionKey;
-    }
-    // sessions.patch returned !ok — set failure TTL and throw.
-    _sessionModelOverrideFailedUntil.set(sessionKey, Date.now() + _SESSION_OVERRIDE_FAIL_TTL_MS);
-    throw new Error(`[quaid][llm] sessions.patch returned !ok for ${sessionKey}`);
-  } catch (err: unknown) {
-    // On timeout or any error, cache the failure so we don't retry immediately.
-    if (!_sessionModelOverrideFailedUntil.has(sessionKey) || (_sessionModelOverrideFailedUntil.get(sessionKey) ?? 0) < Date.now()) {
-      _sessionModelOverrideFailedUntil.set(sessionKey, Date.now() + _SESSION_OVERRIDE_FAIL_TTL_MS);
-    }
-    throw err;
-  }
-}
 
 type LLMProxyResponse = {
   text: string;
@@ -1125,12 +1066,6 @@ async function callConfiguredLLM(
   const resolved = facade.resolveTierModel(modelTier);
   const provider = String(resolved.provider || "").trim().toLowerCase();
   const started = Date.now();
-  try {
-    await _ensureGatewaySessionOverride(modelTier, resolved);
-  } catch (err: unknown) {
-    const msg = String((err as Error)?.message || err);
-    console.warn(`[quaid][llm] gateway session override unavailable; continuing without session_id: ${msg}`);
-  }
 
   console.log(
     `[quaid][llm] request tier=${modelTier} provider=${provider} model=${resolved.model} max_tokens=${maxTokens} system_len=${systemPrompt.length} user_len=${userMessage.length}`
@@ -1640,13 +1575,15 @@ notify_user(${JSON.stringify(message)})
     //   2. Recall auto-injection — per-message, semantically relevant memories.
     const projectDocsInjectedSessions = new Set<string>();
 
-    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemContext?: string } | undefined> => {
+    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; prependSystemContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
 
-      // Inject project docs once per session on the first message via appendSystemContext
-      // (existing OC field — no PR needed). Belongs in before_agent_start architecturally;
-      // move it there if/when OC adds hook result support for that phase.
+      // Inject project docs once per session on the first message.
+      // - appendSystemContext: full TOOLS.md + AGENTS.md docs (appended after OC base prompt)
+      // - prependSystemContext: short mandatory file-placement rules (prepended before OC base
+      //   prompt so the model sees them at maximum priority)
       let appendSystemContext: string | undefined;
+      let prependSystemContext: string | undefined;
       if (isSystemEnabled("projects")) {
         const sessionKeyDocs = String(ctx?.sessionId || ctx?.session?.id || "");
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
@@ -1659,6 +1596,18 @@ notify_user(${JSON.stringify(message)})
             }
           } catch (err: unknown) {
             console.warn(`[quaid] Project docs injection failed: ${(err as Error)?.message || String(err)}`);
+          }
+          // Prepend a short mandatory file-placement block once per session.
+          // prependSystemContext goes before OC's base system prompt — highest model priority.
+          if (_QUAID_INSTANCE) {
+            const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+            prependSystemContext = [
+              "[Quaid file placement — mandatory]",
+              `- Throwaway / quick / temp / hello-world → write to: ${miscPath}/`,
+              `- New durable work → FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+              `- NEVER write files to /tmp/, ~/scratch/, or any path outside a tracked quaid project.`,
+            ].join("\n");
+            writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
           }
         }
       }
@@ -1784,28 +1733,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         console.error("[quaid] Auto-injection error:", error);
       }
 
-      // File-placement reminder: prepend a compact, concrete rule block when the
-      // user message mentions file creation or project work. This fires per-message
-      // in the user turn (not just system-prompt-once) so the model sees it
-      // immediately before acting. Intentionally kept very short.
-      let prependContext: string | undefined = event.prependContext;
-      if (isSystemEnabled("projects") && _QUAID_INSTANCE) {
-        const FILE_CREATION_RE = /\b(write|creat|build|generat|make|script|file|project|cli|tool|app|throwaway|quick|hello.?world|temp|scratch|one.?off|snippet)\b/i;
-        if (FILE_CREATION_RE.test(rawPrompt)) {
-          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-          const reminder = [
-            "[Quaid file placement — required]",
-            `- Throwaway / quick / temp / hello-world → write file to: ${miscPath}/`,
-            `- New durable work → FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-            `- NEVER write files to /tmp/, ~/scratch/, or any path outside a tracked quaid project.`,
-          ].join("\n");
-          prependContext = prependContext ? `${reminder}\n\n${prependContext}` : reminder;
-          writeHookTrace("hook.file_placement_reminder_injected", { session_id: String(ctx?.sessionId || "") });
-        }
-      }
-
       return {
-        prependContext,
+        prependContext: event.prependContext,
+        ...(prependSystemContext ? { prependSystemContext } : {}),
         ...(appendSystemContext ? { appendSystemContext } : {}),
       };
     };

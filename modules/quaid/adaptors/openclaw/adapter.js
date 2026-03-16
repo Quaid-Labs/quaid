@@ -792,10 +792,6 @@ const DOCS_UPDATER = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/updater.py"
 const DOCS_RAG = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/rag.py");
 const DOCS_REGISTRY = path.join(PYTHON_PLUGIN_ROOT, "datastore/docsdb/registry.py");
 const EVENTS_SCRIPT = path.join(PYTHON_PLUGIN_ROOT, "core/runtime/events.py");
-const _sessionModelOverrideCache = /* @__PURE__ */ new Map();
-const _sessionModelOverrideFailedUntil = /* @__PURE__ */ new Map();
-const _SESSION_OVERRIDE_FAIL_TTL_MS = 3e4;
-const _SESSION_OVERRIDE_TIMEOUT_MS = 5e3;
 let _beforePromptBuildInFlight = false;
 function _getGatewayCredential(providers) {
   for (const provider of providers) {
@@ -848,57 +844,10 @@ function _getGatewayToken() {
   }
   return void 0;
 }
-async function _ensureGatewaySessionOverride(tier, resolved) {
-  const sessionKey = `agent:main:quaid-llm-${tier}`;
-  const modelRef = `${resolved.provider}/${resolved.model}`;
-  if (_sessionModelOverrideCache.get(sessionKey) === modelRef) {
-    return sessionKey;
-  }
-  const failedUntil = _sessionModelOverrideFailedUntil.get(sessionKey);
-  if (failedUntil && Date.now() < failedUntil) {
-    throw new Error(`[quaid][llm] sessions.patch skipped (failure TTL active for ${sessionKey})`);
-  }
-  try {
-    const patchOut = await spawnWithTimeout({
-      cwd: WORKSPACE,
-      env: process.env,
-      timeoutMs: _SESSION_OVERRIDE_TIMEOUT_MS,
-      label: "[quaid][gateway] sessions.patch",
-      argv: [
-        "openclaw",
-        "gateway",
-        "call",
-        "sessions.patch",
-        "--json",
-        "--params",
-        JSON.stringify({ key: sessionKey, model: modelRef })
-      ]
-    });
-    const patchParsed = JSON.parse(String(patchOut || "{}"));
-    if (patchParsed?.ok) {
-      _sessionModelOverrideCache.set(sessionKey, modelRef);
-      _sessionModelOverrideFailedUntil.delete(sessionKey);
-      return sessionKey;
-    }
-    _sessionModelOverrideFailedUntil.set(sessionKey, Date.now() + _SESSION_OVERRIDE_FAIL_TTL_MS);
-    throw new Error(`[quaid][llm] sessions.patch returned !ok for ${sessionKey}`);
-  } catch (err) {
-    if (!_sessionModelOverrideFailedUntil.has(sessionKey) || (_sessionModelOverrideFailedUntil.get(sessionKey) ?? 0) < Date.now()) {
-      _sessionModelOverrideFailedUntil.set(sessionKey, Date.now() + _SESSION_OVERRIDE_FAIL_TTL_MS);
-    }
-    throw err;
-  }
-}
 async function callConfiguredLLM(systemPrompt, userMessage, modelTier, maxTokens, timeoutMs = 6e5) {
   const resolved = facade.resolveTierModel(modelTier);
   const provider = String(resolved.provider || "").trim().toLowerCase();
   const started = Date.now();
-  try {
-    await _ensureGatewaySessionOverride(modelTier, resolved);
-  } catch (err) {
-    const msg = String(err?.message || err);
-    console.warn(`[quaid][llm] gateway session override unavailable; continuing without session_id: ${msg}`);
-  }
   console.log(
     `[quaid][llm] request tier=${modelTier} provider=${provider} model=${resolved.model} max_tokens=${maxTokens} system_len=${systemPrompt.length} user_len=${userMessage.length}`
   );
@@ -1301,6 +1250,7 @@ notify_user(${JSON.stringify(message)})
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       let appendSystemContext;
+      let prependSystemContext;
       if (isSystemEnabled2("projects")) {
         const sessionKeyDocs = String(ctx?.sessionId || ctx?.session?.id || "");
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
@@ -1313,6 +1263,16 @@ notify_user(${JSON.stringify(message)})
             }
           } catch (err) {
             console.warn(`[quaid] Project docs injection failed: ${err?.message || String(err)}`);
+          }
+          if (_QUAID_INSTANCE) {
+            const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+            prependSystemContext = [
+              "[Quaid file placement \u2014 mandatory]",
+              `- Throwaway / quick / temp / hello-world \u2192 write to: ${miscPath}/`,
+              `- New durable work \u2192 FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
+              `- NEVER write files to /tmp/, ~/scratch/, or any path outside a tracked quaid project.`
+            ].join("\n");
+            writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
           }
         }
       }
@@ -1376,8 +1336,8 @@ notify_user(${JSON.stringify(message)})
           maxInjectionIdsPerSession: MAX_INJECTION_IDS_PER_SESSION
         });
         if (!injection) return { prependContext: event.prependContext };
-        const { toInject, prependContext: prependContext2 } = injection;
-        event.prependContext = prependContext2;
+        const { toInject, prependContext } = injection;
+        event.prependContext = prependContext;
         console.log(`[quaid] Auto-injected ${toInject.length} memories for "${query.slice(0, 50)}..."`);
         try {
           if (facade.shouldNotifyFeature("retrieval", "summary")) {
@@ -1406,25 +1366,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       } catch (error) {
         console.error("[quaid] Auto-injection error:", error);
       }
-      let prependContext = event.prependContext;
-      if (isSystemEnabled2("projects") && _QUAID_INSTANCE) {
-        const FILE_CREATION_RE = /\b(write|creat|build|generat|make|script|file|project|cli|tool|app|throwaway|quick|hello.?world|temp|scratch|one.?off|snippet)\b/i;
-        if (FILE_CREATION_RE.test(rawPrompt)) {
-          const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-          const reminder = [
-            "[Quaid file placement \u2014 required]",
-            `- Throwaway / quick / temp / hello-world \u2192 write file to: ${miscPath}/`,
-            `- New durable work \u2192 FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-            `- NEVER write files to /tmp/, ~/scratch/, or any path outside a tracked quaid project.`
-          ].join("\n");
-          prependContext = prependContext ? `${reminder}
-
-${prependContext}` : reminder;
-          writeHookTrace("hook.file_placement_reminder_injected", { session_id: String(ctx?.sessionId || "") });
-        }
-      }
       return {
-        prependContext,
+        prependContext: event.prependContext,
+        ...prependSystemContext ? { prependSystemContext } : {},
         ...appendSystemContext ? { appendSystemContext } : {}
       };
     };

@@ -3168,18 +3168,6 @@ ${lines.join("\n")}
   // Project context injection for OC before_agent_start
   // -------------------------------------------------------------------------
 
-  function resolveQuaidTemplateVars(text: string): string {
-    const instanceId = deps.instanceRoot ? path.basename(deps.instanceRoot) : "";
-    const instancePrefix = instanceId.endsWith("-main") ? instanceId.slice(0, -5) : instanceId;
-    return text
-      .replace(/\$\{QUAID_INSTANCE\}/g, instanceId)
-      .replace(/\$QUAID_INSTANCE\b/g, instanceId)
-      .replace(/\$\{QUAID_PREFIX\}/g, instancePrefix)
-      .replace(/\$QUAID_PREFIX\b/g, instancePrefix)
-      .replace(/\$\{QUAID_HOME\}/g, deps.workspace)
-      .replace(/\$QUAID_HOME\b/g, deps.workspace);
-  }
-
   function injectProjectContext(existingContext?: string): string | undefined {
     let prepend = existingContext;
     try {
@@ -3214,7 +3202,7 @@ ${lines.join("\n")}
           const filePath = path.join(projectsDir, projectName, docFile);
           if (fs.existsSync(filePath)) {
             try {
-              const content = resolveQuaidTemplateVars(fs.readFileSync(filePath, "utf8").trim());
+              const content = fs.readFileSync(filePath, "utf8").trim();
               if (content) sections.push(`--- ${projectName}/${docFile} ---\n${content}`);
             } catch { /* skip unreadable */ }
           }
@@ -3222,7 +3210,11 @@ ${lines.join("\n")}
       }
 
       if (sections.length === 0) return prepend;
-      const combined = "# Quaid Context\n\n" + sections.join("\n\n") + "\n";
+      const instanceId = deps.instanceRoot ? path.basename(deps.instanceRoot) : "";
+      const runtimeMeta = instanceId
+        ? `[Quaid runtime: instance=${instanceId}, home=${deps.workspace}]\n`
+        : "";
+      const combined = "# Quaid Context\n\n" + runtimeMeta + sections.join("\n\n") + "\n";
       prepend = prepend ? `${prepend}\n\n${combined}` : combined;
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) throw err;
