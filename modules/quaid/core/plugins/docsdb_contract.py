@@ -13,11 +13,11 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
     # projects/ and shared/projects/ at workspace root — registry-owned
     (root / "projects").mkdir(parents=True, exist_ok=True)
     (root / "shared" / "projects").mkdir(parents=True, exist_ok=True)
-    # scratch lives as a tracked project in shared/projects/scratch--{instance}/
-    # The directory is created here so the registry can scaffold it on first use.
+    # misc lives as a tracked project in shared/projects/misc--{instance}/
+    # Directories are created here so the registry can scaffold them on first use.
     try:
-        from lib.instance import instance_scratch_dir
-        instance_scratch_dir().mkdir(parents=True, exist_ok=True)
+        from lib.instance import instance_misc_dir
+        instance_misc_dir().mkdir(parents=True, exist_ok=True)
     except Exception:
         pass  # Standalone/misconfigured — installer handles it
 

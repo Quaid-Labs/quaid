@@ -757,17 +757,16 @@ ssh example.local 'test -f /tmp/quaid-live-src/main.py && echo source_still_exis
 
 Ask the agent to create a throwaway file:
 
-> `Can you write a quick scratch script at ~/quaid/scratch that prints hello world?`
+> `Can you write a quick throwaway script that prints hello world? Just put it somewhere temporary.`
 
-**Expected:** Agent writes to the scratch project `scratch--openclaw-main` at
-`~/quaid/shared/projects/scratch--openclaw-main/`, NOT to `~/quaid/scratch/` or any ad-hoc path.
-The agent should reference the project by name, not by raw path.
+**Expected:** Agent writes to the misc project `misc--openclaw-main` at
+`~/quaid/shared/projects/misc--openclaw-main/`, NOT to any ad-hoc path like `~/quaid/scratch/` or `/tmp/`.
+The agent should reference the project by name and tell the user it's in misc.
 Verify:
 
 ```bash
-ssh example.local 'ls ~/quaid/shared/projects/scratch--openclaw-main/ 2>/dev/null && echo "PASS: file in scratch project" || echo "FAIL: scratch project empty or missing"'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project show scratch--openclaw-main 2>&1'
-ssh example.local 'ls ~/quaid/scratch/ 2>/dev/null && echo "WARN: workspace scratch root exists (should be empty)"'
+ssh example.local 'ls ~/quaid/shared/projects/misc--openclaw-main/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project show misc--openclaw-main 2>&1'
 ```
 
 After project CRUD, trigger extraction to generate project logs. Tell the agent
@@ -789,7 +788,7 @@ Pass criteria:
 - **Phase 1 (hard)**: Agent creates project via CLI before writing any files in response to work directive
 - Phase 2: show, update work correctly
 - Phase 3: delete removes the project but not the source directory
-- **Phase 4 (hard)**: Scratch file lands in `scratch/openclaw-main/`, not shared `scratch/`
+- **Phase 4 (hard)**: Throwaway file lands in `misc--openclaw-main` project, not an ad-hoc path
 - `projects/quaid/PROJECT.log` has at least one timestamped entry added during this session
 
 Note: Phase 1 and Phase 4 are new hard requirements. If they fail, report to claude-dev before continuing.
