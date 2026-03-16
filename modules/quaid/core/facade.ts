@@ -73,6 +73,8 @@ export type QuaidFacadeDeps = {
   getMemoryConfig: () => any;
   isSystemEnabled: (system: "memory" | "journal" | "projects" | "workspace") => boolean;
   isFailHardEnabled: () => boolean;
+  /** Optional trace emitter (e.g. writeHookTrace) for diagnostic events. */
+  trace?: (event: string, payload?: Record<string, unknown>) => void;
   transcriptFormat?: {
     preprocessText?: (text: string) => string;
     shouldSkipText?: (role: "user" | "assistant", text: string) => boolean;
@@ -431,6 +433,7 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       const llm = await deps.callLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
       return String(llm?.text || "");
     },
+    trace: deps.trace,
     loadToolsContext: (): string | null => {
       const projectsDir = path.join(deps.workspace, "shared", "projects");
       const candidates: string[] = [path.join(projectsDir, "quaid", "TOOLS.md")];

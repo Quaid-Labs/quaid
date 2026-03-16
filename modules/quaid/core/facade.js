@@ -84,6 +84,7 @@ function createQuaidFacade(deps) {
       const llm = await deps.callLLM(systemPrompt, userPrompt, "deep", 160, DEEP_ROUTER_TIMEOUT_MS);
       return String(llm?.text || "");
     },
+    trace: deps.trace,
     loadToolsContext: () => {
       const projectsDir = path.join(deps.workspace, "shared", "projects");
       const candidates = [path.join(projectsDir, "quaid", "TOOLS.md")];
