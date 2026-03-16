@@ -6,16 +6,48 @@ For full CLI reference see `TOOLS.md`. For doc index and architecture see `PROJE
 
 ---
 
-## Project Registration — Do This First
+## File Placement — MANDATORY RULES
 
-**Project registration is a prerequisite for sustained work.** Before taking any action on a task — including delegating to a sub-agent — determine whether the work is durable. If the user's intent is to build, develop, or produce something that will persist, create a project first. The current file location is irrelevant; intent is what matters.
+**You MUST NOT write any file to `/tmp/`, `/var/tmp/`, `~/quaid/scratch/`, or any path outside a tracked quaid project.** No exceptions. "Temporary", "throwaway", "quick", or "hello world" files are NOT exempt — they go in the misc project.
 
-**Decision tree — pick the first match:**
-1. Does an existing tracked project own this work? → Place it there.
-2. Is this clearly a one-off or throwaway? → Use `misc--$QUAID_INSTANCE`.
-3. Everything else → Create a project, then proceed:
+**Before writing any file or delegating work to a sub-agent, pick the first matching rule:**
+
+1. **Existing project owns this work** → place the file inside that project's directory.
+2. **Throwaway / one-off / scratch / quick / hello-world** → write it to the misc project:
+   ```bash
+   # The misc project is pre-created. Write directly to its directory:
+   ~/.openclaw/extensions/quaid/quaid project show misc--$QUAID_INSTANCE  # confirm path
+   # Then write your file there, e.g.:
+   # ~/quaid/shared/projects/misc--$QUAID_INSTANCE/hello.py
+   ```
+   Always tell the user you wrote to misc and offer to promote to a real project.
+3. **Durable new work** → create a project first, then write files:
+   ```bash
+   ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
+   # THEN write files / spawn sub-agents
+   ```
+
+**Example — user asks for a throwaway script:**
+> "Can you write a quick hello world script?"
+
+Correct response:
 ```bash
-~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
+# Step 1: confirm misc project path
+~/.openclaw/extensions/quaid/quaid project show misc--$QUAID_INSTANCE
+# Step 2: write the file inside that project
+# e.g. write to ~/quaid/shared/projects/misc--$QUAID_INSTANCE/hello.py
+```
+Tell the user: "I wrote it to the misc project at `~/quaid/shared/projects/misc--$QUAID_INSTANCE/hello.py`."
+Do NOT write to `/tmp/hello.py` or any other path.
+
+**Example — user asks to build a new tool:**
+> "I have a Python script. Can you build it into a proper CLI tool?"
+
+Correct response:
+```bash
+# Step 1: create a project BEFORE doing any work or spawning sub-agents
+~/.openclaw/extensions/quaid/quaid registry create-project my-cli-tool --source-roots /path/to/script
+# Step 2: then proceed with the work
 ```
 
 ---
@@ -79,9 +111,10 @@ Nightly janitor (4 AM default) → review → dedup → decay → graduate to ac
 
 **Project and file placement**
 
-**Misc is a tracked project in `shared/projects/`**, named `misc--$QUAID_INSTANCE` (e.g. `misc--openclaw-main`).
-It lives at `$QUAID_HOME/shared/projects/misc--$QUAID_INSTANCE/` and appears in `quaid project list`.
-Always tell the user when writing to misc, and offer to promote to a real project if the work becomes durable.
+All files go inside a tracked quaid project. `/tmp/` is never acceptable, even for throwaway work.
+- Misc project: `misc--$QUAID_INSTANCE` at `$QUAID_HOME/shared/projects/misc--$QUAID_INSTANCE/` — use this for throwaway/one-off work. It is pre-created.
+- New work: create a project first (`quaid registry create-project`), then write files.
+- See the **File Placement — MANDATORY RULES** section above for decision tree and examples.
 
 **Cross-instance**
 - When OC and CC share a machine, both use the same `QUAID_HOME`.
