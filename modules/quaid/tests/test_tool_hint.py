@@ -192,6 +192,24 @@ class TestPlanToolHint:
             result = plan_tool_hint("write a script", tools_md=_TOOLS_MD)
         assert result is None
 
+    def test_llm_returns_json_with_trailing_text(self):
+        """JSON followed by extra prose must still parse correctly."""
+        def _json_with_trailing(*args, **kwargs):
+            return '{"tool_hint": "Use misc project for throwaway files"}\n\nSome extra explanation here.', {}
+        with patch("lib.llm_clients.call_fast_reasoning", _json_with_trailing):
+            result = plan_tool_hint("write a quick script", tools_md=_TOOLS_MD)
+        assert result is not None
+        assert "misc" in result
+
+    def test_llm_returns_fenced_json(self):
+        """JSON wrapped in markdown code fences must still parse correctly."""
+        def _fenced_json(*args, **kwargs):
+            return '```json\n{"tool_hint": "Use misc project for throwaway files"}\n```', {}
+        with patch("lib.llm_clients.call_fast_reasoning", _fenced_json):
+            result = plan_tool_hint("write a quick script", tools_md=_TOOLS_MD)
+        assert result is not None
+        assert "misc" in result
+
     def test_tools_md_content_passed_to_llm(self):
         """The TOOLS.md content must appear in the prompt sent to the LLM."""
         captured = {}

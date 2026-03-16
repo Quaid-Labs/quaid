@@ -4961,7 +4961,11 @@ def plan_tool_hint(
             max_retries=0,
         )
         if result:
-            data = _json.loads(result.strip())
+            import re as _re
+            _match = _re.search(r'\{[\s\S]*?\}', result)
+            if not _match:
+                return None
+            data = _json.loads(_match.group(0))
             hint = data.get("tool_hint")
             if hint and isinstance(hint, str) and len(hint.strip()) > 5:
                 return f"<tool_hint>{hint.strip()}</tool_hint>"
