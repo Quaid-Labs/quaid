@@ -49,12 +49,7 @@ If you're an agent, go there first and do not use the commands below.
 curl -fsSL https://raw.githubusercontent.com/quaid-labs/quaid/main/install.sh | bash
 ```
 
-**Windows:**
-```powershell
-irm https://raw.githubusercontent.com/quaid-labs/quaid/main/install.ps1 | iex
-```
-
-**Manual (all platforms):**
+**Manual:**
 ```bash
 git clone https://github.com/quaid-labs/quaid.git
 cd quaid && node setup-quaid.mjs
@@ -169,7 +164,7 @@ Quaid is in early alpha. LLM routing is adapter- and config-driven (`deep_reason
 Known limitations for **v0.2.15-alpha**:
 - Parallel-session targeting for `/new` and `/reset` extraction still has edge cases.
 - Multi-user workloads are partially supported but not fully hardened under heavy concurrency.
-- Windows support exists but has less operational coverage than macOS/Linux *(experimental)*.
+- Windows is not supported. macOS and Linux only.
 - OpenClaw is currently the most mature host integration path; broader host coverage is still in progress *(experimental outside OpenClaw)*.
 
 The system is backed by over 1,800 tests in the default gate (1,547 selected pytest + 331 vitest), 15 automated installer scenarios covering fresh installs, dirty upgrades, data preservation, migration, missing dependencies, and provider combinations, plus benchmark evaluation against [LoCoMo](docs/BENCHMARKS.md). LongMemEval integration is implemented and smoke-tested; full benchmark runs are pending.
