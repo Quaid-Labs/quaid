@@ -70,28 +70,12 @@ ALWAYS use the quaid CLI to create projects — never create files directly. A p
 ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
 ```
 
-**BEFORE starting work — mandatory check:**
-Before doing ANY of the following, check if a project exists and create one if not:
-- Spawning a coding agent or sub-agent
-- Writing or editing files
-- Scaffolding a directory structure
-- Running build/test commands on new code
+**Project registration is a prerequisite for sustained work.** Before taking any action on a task — including delegating to a sub-agent — determine whether the work is durable. If the user's intent is to build, develop, or produce something that will persist, create a project first. The current file location is irrelevant; intent is what matters.
 
-**Create a project whenever ANY of these are true:**
-- User explicitly asks to create, start, initialize, or set up a project
-- User asks you to "build", "make", "write", or "work on" something that will span multiple files or sessions (e.g. "build me a todo app", "let's start a new service", "help me design X")
-- User wants to "build out", "develop", or "expand" existing code (even if it's in /tmp or a scratch dir — the intent is what matters, not the current location)
-- You are about to write code to a new directory that isn't part of an existing tracked project
-- You are about to create any novel file (script, config, doc) that isn't clearly one-off scratch work
-- User references a codebase, repo, or directory they're working on that has no existing project entry
-- A task will produce artifacts that should persist and be recalled in future sessions
-
-**Decision tree — for each file/task, pick the first match:**
-1. Does an existing tracked project own this path/topic? → Place it there.
-2. Is this ephemeral, a quick draft, or doesn't need a full project yet? → Use `misc--$QUAID_INSTANCE`.
-3. Everything else → Create a real project first, then proceed.
-
-**Note on /tmp paths:** A file being in /tmp does not mean the work is temporary. If the user intends to develop it into something real, create a project for it first, then proceed.
+**Decision tree — pick the first match:**
+1. Does an existing tracked project own this work? → Place it there.
+2. Is this clearly a one-off or throwaway? → Use `misc--$QUAID_INSTANCE`.
+3. Everything else → Create a project, then proceed.
 
 **Misc is a tracked project in `shared/projects/`**, named `misc--$QUAID_INSTANCE` (e.g. `misc--openclaw-main`).
 It lives at `$QUAID_HOME/shared/projects/misc--$QUAID_INSTANCE/` and appears in `quaid project list`.
