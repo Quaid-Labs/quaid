@@ -536,7 +536,7 @@ const PY_ENV_SETUP =
 // Step-specific quotes — each tied to the step's theme
 const STEP_QUOTES = {
   preflight:  "Get ready for a surprise!",
-  identity:   "If I am not me, then who the hell am I?",
+  identity:   "If I'm not me, then who the hell am I?",
   models:     "What is it that you want, Mr. Quaid?",
   embeddings: "Ever heard of Rekall? They sell fake memories.",
   janitor:    "No wonder you have nightmares, you're always here.",
