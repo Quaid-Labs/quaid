@@ -445,8 +445,23 @@ export function createQuaidFacade(deps: QuaidFacadeDeps): QuaidFacade {
       } catch { /* no projects dir */ }
       for (const p of candidates) {
         try {
-          const content = fs.readFileSync(p, "utf-8").trim();
-          if (content) return content;
+          let content = fs.readFileSync(p, "utf-8").trim();
+          if (!content) continue;
+          // Resolve $QUAID_INSTANCE and the misc project path so the LLM
+          // receives a concrete path rather than an unresolvable env var or
+          // a "run this command to find out" instruction.
+          const instanceName = deps.instanceRoot ? path.basename(deps.instanceRoot) : null;
+          if (instanceName) {
+            const miscPath = path.join(deps.workspace, "shared", "projects", `misc--${instanceName}`);
+            content = content.replace(/\$QUAID_INSTANCE/g, instanceName);
+            // Replace "quaid project show misc--<instance>" command lines with
+            // the actual resolved directory path.
+            content = content.replace(
+              /[^\n]*quaid project show misc--[^\n]*/g,
+              miscPath,
+            );
+          }
+          return content;
         } catch { /* skip missing */ }
       }
       return null;
