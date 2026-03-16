@@ -3312,9 +3312,12 @@ print(total_docs)
 
     log.info(C.dim("Your agent can discover more projects — ask it to \"set up projects\""));
 
-    // Install Quaid project reference docs and constitutional guidance
-    // Lives in shared/projects/quaid/ so all adapter instances share it.
-    const quaidProjDir = path.join(WORKSPACE, "shared", "projects", "quaid");
+    // Install Quaid project reference docs and constitutional guidance.
+    // Lives in shared/projects/quaid/ inside the instance workspace (WORKSPACE/<instanceId>/).
+    const _instanceRootForQuaid = (resolvedInstanceId && resolvedInstanceId !== "standalone")
+      ? path.join(WORKSPACE, resolvedInstanceId)
+      : WORKSPACE;
+    const quaidProjDir = path.join(_instanceRootForQuaid, "shared", "projects", "quaid");
     fs.mkdirSync(quaidProjDir, { recursive: true });
     const quaidProjSrc = path.join(__dirname, "projects", "quaid");
     for (const f of ["TOOLS.md", "AGENTS.md", "USER.md", "SOUL.md", "MEMORY.md", "ARCHITECTURE.md", "project_onboarding.md"]) {
