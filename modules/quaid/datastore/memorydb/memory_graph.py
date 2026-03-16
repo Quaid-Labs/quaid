@@ -4873,46 +4873,83 @@ def _plan_fanout_queries(
         return _finish([clean], "planner_exception_fallback")
 
 
+def _load_tools_md() -> Optional[str]:
+    """Load TOOLS.md content from the quaid project docs, or any project TOOLS.md found.
+
+    Search order:
+      1. shared/projects/quaid/TOOLS.md  (canonical quaid project)
+      2. First TOOLS.md found in shared/projects/*/TOOLS.md
+    Returns None if no file is found or readable.
+    """
+    from pathlib import Path as _Path
+    try:
+        from lib.adapter import get_adapter
+        projects_dir = _Path(get_adapter().projects_dir())
+    except Exception:
+        import os as _os
+        home = _os.environ.get("QUAID_HOME", "").strip()
+        if not home:
+            return None
+        projects_dir = _Path(home) / "shared" / "projects"
+
+    candidates = [projects_dir / "quaid" / "TOOLS.md"]
+    try:
+        candidates += sorted(projects_dir.glob("*/TOOLS.md"))
+    except Exception:
+        pass
+
+    for p in candidates:
+        try:
+            content = p.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+        except Exception:
+            continue
+    return None
+
+
 def plan_tool_hint(
     query: str,
     timeout_s: Optional[float] = None,
+    tools_md: Optional[str] = None,
 ) -> Optional[str]:
     """Return a <tool_hint> string if the query warrants one, or None.
 
-    Reads tool_hints from retrieval config. Each entry must have:
-        name: str         - tool identifier
-        description: str  - when to use (used as LLM matching criteria)
-        hint: str         - the hint text to inject into the user turn
+    Loads TOOLS.md from the quaid project docs and passes it to a fast-tier
+    LLM to decide if the query maps to a specific tool workflow. The LLM
+    produces a brief actionable hint, or null if no tool is relevant.
 
-    The LLM (fast tier) decides which tool, if any, is relevant.
-    Returns None if no tool applies or if the LLM call fails/times out.
+    Args:
+        query: The user message to classify.
+        timeout_s: Override the LLM timeout (seconds). Defaults to
+            retrieval.tool_hint_timeout_ms from config (default 1.5s).
+        tools_md: Override TOOLS.md content (used in tests).
+
+    Returns:
+        A ``<tool_hint>…</tool_hint>`` string, or None.
     """
     from lib.llm_clients import call_fast_reasoning
+    import json as _json
 
-    cfg = _get_config()
-    tools: List[Dict[str, str]] = list(getattr(cfg.retrieval, "tool_hints", []) or [])
-    if not tools:
-        return None
-
-    effective_timeout = (timeout_s or (getattr(cfg.retrieval, "tool_hint_timeout_ms", 1500) / 1000))
     clean = " ".join((query or "").split())
     if not clean:
         return None
 
-    tools_block = "\n".join(
-        f'- {t["name"]}: {t["description"]} | hint: "{t["hint"]}"'
-        for t in tools
-        if t.get("name") and t.get("description") and t.get("hint")
-    )
-    if not tools_block:
+    content = tools_md if tools_md is not None else _load_tools_md()
+    if not content:
         return None
 
+    cfg = _get_memory_config()
+    effective_timeout = timeout_s or (getattr(cfg.retrieval, "tool_hint_timeout_ms", 1500) / 1000)
+
     prompt = (
-        "Given the message below, decide if it matches one of the available tools.\n"
-        "Return JSON only: {\"tool_hint\": \"<hint text>\"} if a tool applies, "
-        "or {\"tool_hint\": null} if none apply.\n"
-        "Only match when the message clearly fits a tool's description.\n\n"
-        f"Available tools:\n{tools_block}\n\n"
+        "You are a tool-routing assistant. Below is a reference guide for available tools.\n\n"
+        "<tools>\n"
+        f"{content}\n"
+        "</tools>\n\n"
+        "Given the message, decide if a specific tool or workflow from the guide clearly applies.\n"
+        "Return JSON only: {\"tool_hint\": \"<one-line actionable hint>\"} or {\"tool_hint\": null}.\n"
+        "Only return a hint when the match is obvious. Prefer null when uncertain.\n\n"
         f"Message: {clean}"
     )
     try:
@@ -4924,7 +4961,6 @@ def plan_tool_hint(
             max_retries=0,
         )
         if result:
-            import json as _json
             data = _json.loads(result.strip())
             hint = data.get("tool_hint")
             if hint and isinstance(hint, str) and len(hint.strip()) > 5:
