@@ -409,26 +409,24 @@ intent: ${intent}`;
         t?.("tool_hint.skip", { reason: "empty_query" });
         return null;
       }
-      const toolsContent = deps.loadToolsContext?.() ?? null;
-      if (!toolsContent) {
-        t?.("tool_hint.skip", { reason: "no_tools_md", workspace: deps.workspace });
+      const commands = deps.getCommandRegistry?.() ?? [];
+      if (commands.length === 0) {
+        t?.("tool_hint.skip", { reason: "empty_registry" });
         return null;
       }
-      t?.("tool_hint.calling_llm", { tools_len: toolsContent.length, query_len: clean.length });
+      t?.("tool_hint.calling_llm", { commands: commands.length, query_len: clean.length });
+
+      const commandList = commands
+        .map(c => `- [${c.id}] ${c.description}\n  hint: "${c.hint}"`)
+        .join("\n");
 
       const systemPrompt =
         "You are a JSON-only router. Your entire response must be exactly one JSON object — no other characters, no markdown, no explanation.";
       const userMessage =
         "Respond with exactly one JSON object and nothing else.\n\n" +
-        "Format: {\"tool_hint\": \"one-line actionable hint\"} or {\"tool_hint\": null}\n\n" +
-        "Examples:\n" +
-        "  write a hello world script → {\"tool_hint\": \"Throwaway file — use misc project: quaid project show misc--$QUAID_INSTANCE\"}\n" +
-        "  write an essay about Rome → {\"tool_hint\": \"Durable work — create a project first: quaid registry create-project <name>\"}\n" +
-        "  plan a trip to Japan → {\"tool_hint\": \"Durable work — create a project first: quaid registry create-project japan-trip\"}\n" +
-        "  write a video script → {\"tool_hint\": \"Durable work — create a project first: quaid registry create-project <name>\"}\n" +
-        "  what do you remember about me → {\"tool_hint\": \"Search memories: quaid recall \\\"your query\\\"\"}\n" +
-        "  what is 2+2 → {\"tool_hint\": null}\n\n" +
-        "Routing reference:\n<tools>\n" + toolsContent + "\n</tools>\n\n" +
+        "Format: {\"command_id\": \"<id>\"} or {\"command_id\": null}\n\n" +
+        "Available commands:\n" + commandList + "\n\n" +
+        "Pick the command whose description best matches the message, or null if none clearly apply.\n\n" +
         "Message: " + clean;
 
       const raw = await deps.callFastRouter(systemPrompt, userMessage);
@@ -439,13 +437,18 @@ intent: ${intent}`;
       const match = raw.match(/\{[\s\S]*?\}/);
       if (!match) return null;
       const data = JSON.parse(match[0]);
-      const hint = data?.tool_hint;
-      if (hint && typeof hint === "string" && hint.trim().length > 5) {
-        t?.("tool_hint.produced", { len: hint.trim().length });
-        return `<tool_hint>${hint.trim()}</tool_hint>`;
+      const commandId = data?.command_id;
+      if (!commandId || typeof commandId !== "string") {
+        t?.("tool_hint.null_result", { command_id: String(commandId ?? "null") });
+        return null;
       }
-      t?.("tool_hint.null_result", { hint_value: String(hint ?? "null") });
-      return null;
+      const entry = commands.find(c => c.id === commandId);
+      if (!entry) {
+        t?.("tool_hint.null_result", { reason: "unknown_command_id", command_id: commandId });
+        return null;
+      }
+      t?.("tool_hint.produced", { command_id: commandId });
+      return `<tool_hint>${entry.hint}</tool_hint>`;
     } catch (err) {
       t?.("tool_hint.error", { error: String(err?.message || err) });
       return null;
