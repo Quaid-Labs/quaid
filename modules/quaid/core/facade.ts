@@ -39,6 +39,8 @@ export type LLMCallResult = {
 /** Platform-specific dependencies that any adapter must provide. */
 export type QuaidFacadeDeps = {
   workspace: string;
+  /** Instance root: QUAID_HOME/QUAID_INSTANCE. Used for identity file injection. */
+  instanceRoot?: string;
   pluginRoot: string;
   dbPath: string;
   eventSource?: string;
@@ -3169,6 +3171,21 @@ ${lines.join("\n")}
   function injectProjectContext(existingContext?: string): string | undefined {
     let prepend = existingContext;
     try {
+      const sections: string[] = [];
+
+      // Identity files: USER.md, SOUL.md, MEMORY.md from the instance identity dir.
+      const identityDir = path.join(deps.instanceRoot || deps.workspace, "identity");
+      for (const idFile of ["USER.md", "SOUL.md", "MEMORY.md"]) {
+        const filePath = path.join(identityDir, idFile);
+        if (fs.existsSync(filePath)) {
+          try {
+            const content = fs.readFileSync(filePath, "utf8").trim();
+            if (content) sections.push(`--- ${idFile} ---\n${content}`);
+          } catch { /* skip unreadable */ }
+        }
+      }
+
+      // Project docs: TOOLS.md + AGENTS.md for every project in shared/projects/.
       const projectsDir = path.join(deps.workspace, "shared", "projects");
       let subdirs: string[] = [];
       try {
@@ -3178,11 +3195,8 @@ ${lines.join("\n")}
             catch { return false; }
           })
           .sort((a: string, b: string) => a === "quaid" ? -1 : b === "quaid" ? 1 : a.localeCompare(b));
-      } catch {
-        return prepend;
-      }
+      } catch { /* no shared/projects yet */ }
 
-      const sections: string[] = [];
       for (const projectName of subdirs) {
         for (const docFile of ["TOOLS.md", "AGENTS.md"]) {
           const filePath = path.join(projectsDir, projectName, docFile);
@@ -3190,13 +3204,13 @@ ${lines.join("\n")}
             try {
               const content = fs.readFileSync(filePath, "utf8").trim();
               if (content) sections.push(`--- ${projectName}/${docFile} ---\n${content}`);
-            } catch { /* skip unreadable files */ }
+            } catch { /* skip unreadable */ }
           }
         }
       }
 
       if (sections.length === 0) return prepend;
-      const combined = "# Quaid Project Context\n\n" + sections.join("\n\n") + "\n";
+      const combined = "# Quaid Context\n\n" + sections.join("\n\n") + "\n";
       prepend = prepend ? `${prepend}\n\n${combined}` : combined;
     } catch (err: unknown) {
       if (deps.isFailHardEnabled()) throw err;

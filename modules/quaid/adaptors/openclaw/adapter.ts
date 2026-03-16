@@ -1358,6 +1358,7 @@ function shouldSkipTranscriptText(roleOrText: "user" | "assistant" | string, may
 
 const facade = createQuaidFacade({
   workspace: WORKSPACE,
+  instanceRoot: _QUAID_INSTANCE ? path.join(WORKSPACE, _QUAID_INSTANCE) : undefined,
   pluginRoot: PYTHON_PLUGIN_ROOT,
   dbPath: DB_PATH,
   eventSource: "openclaw_adapter",
@@ -1532,14 +1533,6 @@ const quaidPlugin = {
       });
       return api.registerHook(eventName as any, wrapHookHandler("registerHook", eventName, handler), options);
     };
-    const registerToolChecked = (factory: () => any) => {
-      const spec = factory();
-      const toolName = String(spec?.name || "").trim();
-      if (contractDecl.enabled) {
-        assertDeclaredRegistration("tools", toolName, contractDecl.tools, strictContracts, (m) => console.warn(m));
-      }
-      return api.registerTool(() => spec);
-    };
     const registerHttpRouteChecked = (route: { path: string; auth: "gateway" | "plugin"; handler: any }) => {
       const routePath = String(route?.path || "").trim();
       if (contractDecl.enabled) {
@@ -1629,47 +1622,49 @@ notify_user(${JSON.stringify(message)})
         return { prependContext: event.prependContext };
       }
 
-      // TOOLS.md and AGENTS.md are injected via appendSystemContext in before_prompt_build
-      // on the first message of each session. No bootstrap-extra-files needed.
       return { prependContext: event.prependContext };
     };
 
     // --- Auto-injection via before_prompt_build ---
-    // OC's before_agent_start fires for subagent sessions without the user's
-    // prompt. before_prompt_build fires per-message with the actual prompt and
-    // messages array, so recall injection works reliably.
     //
-    // Project docs (TOOLS.md + AGENTS.md for every registered project) are
-    // injected as appendSystemContext on the FIRST message of each session so
-    // the model receives them as system-prompt instructions (cached, not user
-    // context). A session-scoped Set prevents re-injection on subsequent turns.
+    // !! CRITICAL — LATENCY AND TOKEN WARNING !!
+    // before_prompt_build runs on EVERY SINGLE message the user sends.
+    // Any code added here adds latency and token usage to every query.
+    // Do NOT add anything here unless it is absolutely necessary and cannot
+    // live in a session-start or lifecycle hook. This path is performance-critical.
+    // Treat additions as a last resort.
+    //
+    // What lives here:
+    //   1. Project docs injection (identity + TOOLS.md/AGENTS.md) — once per session,
+    //      gated by a Set. Belongs in before_agent_start when OC adds support.
+    //   2. Recall auto-injection — per-message, semantically relevant memories.
     const projectDocsInjectedSessions = new Set<string>();
-    const projectAutoRegisteredSessions = new Set<string>();
 
-    /** Detect durable development intent from a user message. */
-    function hasDurableWorkIntent(query: string): boolean {
-      return /\b(build\s+(?:out|this|it|a)|develop|proper\s+\w+|test\s+suite|argument\s+pars|scaffold|set\s+up\s+(?:a\s+)?project|implement\s+(?:a\s+)?\w+\s+(?:cli|tool|app|service|library))\b/i.test(query);
-    }
-
-    /** Detect throwaway/one-off intent from a user message. */
-    function hasThrowawayIntent(query: string): boolean {
-      return /\b(quick\s+(?:script|test|check|one)|throwaway|one-?off|temp(?:orary)?\s+(?:script|file)|scratch|just\s+(?:put|write|place|throw)\s+(?:it\s+)?(?:somewhere\s+)?temp)\b/i.test(query);
-    }
-
-    /** Extract a candidate project name from a message (path segment or slug from description). */
-    function extractProjectName(query: string): string {
-      const pathMatch = query.match(/\/(?:tmp\/)?([a-zA-Z0-9][a-zA-Z0-9_-]{2,29})(?:\/|\.|\s|$)/);
-      if (pathMatch) return pathMatch[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
-      const wordMatch = query.match(/\b([a-zA-Z][a-zA-Z0-9-]{2,20}(?:[-_][a-zA-Z0-9]+)*)\s+(?:cli|tool|app|service|library|project)\b/i);
-      if (wordMatch) return wordMatch[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
-      return `project-${Date.now().toString(36)}`;
-    }
-
-    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemContext?: string } | undefined> => {
+    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemPrompt?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
 
+      // Inject project docs once per session on the first message.
+      // NOTE: This belongs in before_agent_start. Move it there once OC adds
+      // appendSystemPrompt support to the before_agent_start hook result path.
+      let appendSystemPrompt: string | undefined;
+      if (isSystemEnabled("projects")) {
+        const sessionKeyDocs = String(ctx?.sessionId || ctx?.session?.id || "");
+        if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
+          projectDocsInjectedSessions.add(sessionKeyDocs);
+          try {
+            const projectDocs = facade.injectProjectContext(undefined);
+            if (projectDocs) {
+              appendSystemPrompt = projectDocs;
+              writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
+            }
+          } catch (err: unknown) {
+            console.warn(`[quaid] Project docs injection failed: ${(err as Error)?.message || String(err)}`);
+          }
+        }
+      }
+
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
-      if (!autoInjectEnabled) return { prependContext: event.prependContext };
+      if (!autoInjectEnabled) return { prependContext: event.prependContext, ...(appendSystemPrompt ? { appendSystemPrompt } : {}) };
 
       const rawPrompt = String(event.prompt || "").trim();
       if (rawPrompt.length < 5) {
@@ -1704,48 +1699,6 @@ notify_user(${JSON.stringify(message)})
         // Query quality gate — skip acknowledgments and short messages
         if (facade.isLowQualityQuery(query)) {
           return { prependContext: event.prependContext };
-        }
-
-        // Auto-register a project when durable work is detected on the first message
-        // of a session. For throwaway work, ensure misc--{instance} exists and route there.
-        // Runs the CLI directly — no model compliance required.
-        const sessionKeyEarly = String(ctx?.sessionId || ctx?.session?.id || "");
-        if (sessionKeyEarly && !projectAutoRegisteredSessions.has(sessionKeyEarly)
-            && isSystemEnabled("projects")) {
-          projectAutoRegisteredSessions.add(sessionKeyEarly);
-          const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
-          const quaidEnv = {
-            ...process.env,
-            QUAID_HOME: WORKSPACE,
-            ...(_QUAID_INSTANCE ? { QUAID_INSTANCE: _QUAID_INSTANCE } : {}),
-          };
-          try {
-            if (hasDurableWorkIntent(query)) {
-              const projName = extractProjectName(query);
-              const pathMatch = query.match(/(?:at\s+|in\s+|from\s+)(\/[^\s]+)/i);
-              const sourceRoot = pathMatch ? pathMatch[1] : "";
-              const createArgs = ["registry", "create-project", projName,
-                ...(sourceRoot ? ["--source-roots", sourceRoot] : [])];
-              try { execFileSync(quaidBin, createArgs, { encoding: "utf8", env: quaidEnv, timeout: 8000 }); }
-              catch (_e: unknown) { /* already exists — ok */ }
-              writeHookTrace("hook.project_auto_registered", { session_id: sessionKeyEarly, name: projName, source_root: sourceRoot });
-              event.prependContext = (event.prependContext ? event.prependContext + "\n" : "")
-                + `[Quaid] Project '${projName}' registered for this work.`;
-            } else if (hasThrowawayIntent(query)) {
-              const instanceId = _QUAID_INSTANCE || "main";
-              const miscName = `misc--${instanceId}`;
-              const miscPath = path.join(WORKSPACE, "shared", "projects", miscName);
-              try { execFileSync(quaidBin, ["registry", "create-project", miscName, "--label", `Misc (${instanceId})`],
-                { encoding: "utf8", env: quaidEnv, timeout: 8000 }); }
-              catch (_e: unknown) { /* already exists — ok */ }
-              fs.mkdirSync(miscPath, { recursive: true });
-              writeHookTrace("hook.project_misc_routed", { session_id: sessionKeyEarly, misc: miscName });
-              event.prependContext = (event.prependContext ? event.prependContext + "\n" : "")
-                + `[Quaid] Throwaway work: place in ${miscPath}/`;
-            }
-          } catch (autoRegErr: unknown) {
-            console.warn(`[quaid] Project auto-registration skipped: ${(autoRegErr as Error)?.message}`);
-          }
         }
 
         // Auto-inject always bypasses the LLM router to keep latency low.
@@ -1831,26 +1784,9 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
         console.error("[quaid] Auto-injection error:", error);
       }
 
-      // Inject all registered project TOOLS.md + AGENTS.md as appendSystemContext
-      // once per session so the model treats them as system instructions.
-      let appendSystemContext: string | undefined;
-      const sessionKey = String(ctx?.sessionId || ctx?.session?.id || "");
-      if (sessionKey && !projectDocsInjectedSessions.has(sessionKey) && isSystemEnabled("projects")) {
-        try {
-          const projectDocs = facade.injectProjectContext(undefined);
-          if (projectDocs) {
-            appendSystemContext = projectDocs;
-            projectDocsInjectedSessions.add(sessionKey);
-            writeHookTrace("hook.project_docs_injected", { session_id: sessionKey, len: projectDocs.length });
-          }
-        } catch (err: unknown) {
-          console.warn(`[quaid] Project docs appendSystemContext injection failed: ${(err as Error)?.message || String(err)}`);
-        }
-      }
-
       return {
         prependContext: event.prependContext,
-        ...(appendSystemContext ? { appendSystemContext } : {}),
+        ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
       };
     };
 
@@ -2663,208 +2599,6 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       name: "session-memory-extraction",
       priority: 10,
     });
-
-    // The recall tool calls recallMemories() directly in the adapter process (no HTTP round-trip).
-    // CLI-via-exec deadlocks: quaid recall makes HTTP calls back to the OC gateway, but the
-    // gateway is blocked handling the model's exec turn — causing a hang that never resolves.
-    if (isSystemEnabled("memory")) {
-      const recallStoreGuidance = facade.renderDatastoreGuidance();
-      registerToolChecked(
-        () => ({
-          name: "recall",
-          description: `Search your memory for personal facts, preferences, relationships, project details, and past conversations. Always use this tool when you're unsure about something or need to verify a detail — if you might know it, search for it.
-
-USE THIS TOOL LIBERALLY. If you're about to say "I don't have information about..." or "I'm not sure...", SEARCH FIRST. It's better to search and find nothing than to miss a memory you have.
-
-COST AWARE RETRIEVAL ORDER:
-1) recall (cheap; default first move)
-2) projects_search / project docs (more expensive; use for file-backed implementation detail)
-3) session_recall (most expensive/noisy; use only when memory+project docs are insufficient)
-
-USE WHEN: Any question about the user, their life, people they know, projects they work on, preferences, history, past decisions, technical details about their projects, or anything that might have come up in a previous conversation.
-SKIP WHEN: General knowledge questions, greetings, short acknowledgments.
-
-SPEAKER ATTRIBUTION: Results tagged [agent-attributed] were originally stated by the assistant, not the user. Treat these with lower confidence, especially for personal facts (family, health, relationships) — verify with the user when it matters.
-
-QUERY TIPS: Use specific names and topics. Try multiple searches with different phrasings if the first doesn't return what you need.
-options.graph.depth: Set to 2 for relationship queries (e.g., nephew = sibling's child). Default 1 is usually sufficient.
-options.filters.dateFrom/dateTo: Use YYYY-MM-DD format to filter memories by date range.
-RESPONSE BOUNDARY: Retrieved memories are supporting context, not permission to proactively dump sensitive details. On greetings, acknowledgments, or vague prompts, follow the user's lead before surfacing private health, finances, conflicts, or emotionally loaded history.
-
-${recallStoreGuidance}`,
-          parameters: Type.Object({
-            query: Type.String({ description: "Search query - use entity names and specific topics" }),
-            options: Type.Optional(Type.Object({
-              limit: Type.Optional(
-                Type.Number({ description: "Max results to return. Default reads from config." })
-              ),
-              datastores: Type.Optional(
-                Type.Array(
-                  Type.Union([
-                    Type.Literal("vector"),
-                    Type.Literal("vector_basic"),
-                    Type.Literal("vector_technical"),
-                    Type.Literal("graph"),
-                    Type.Literal("journal"),
-                    Type.Literal("project"),
-                  ]),
-                  { description: "Knowledge datastores to query." }
-                )
-              ),
-              graph: Type.Optional(Type.Object({
-                expand: Type.Optional(
-                  Type.Boolean({ description: "Traverse relationship graph — use for people/family queries (default: true)." })
-                ),
-                depth: Type.Optional(
-                  Type.Number({ description: "Graph traversal depth (default: 1). Use 2 for extended relationships." })
-                ),
-              })),
-              routing: Type.Optional(Type.Object({
-                enabled: Type.Optional(
-                  Type.Boolean({ description: "Enable total_recall planning pass (query cleanup + store routing)." })
-                ),
-                reasoning: Type.Optional(
-                  Type.Union([
-                    Type.Literal("fast"),
-                    Type.Literal("deep"),
-                  ], { description: "Reasoning model for routing pass." })
-                ),
-                intent: Type.Optional(
-                  Type.Union([
-                    Type.Literal("general"),
-                    Type.Literal("agent_actions"),
-                    Type.Literal("relationship"),
-                    Type.Literal("technical"),
-                  ], { description: "Intent facet for routing and ranking boosts." })
-                ),
-                failOpen: Type.Optional(
-                  Type.Boolean({ description: "If true, router/prepass failures return no recall instead of throwing." })
-                ),
-              })),
-              filters: Type.Optional(Type.Object({
-                domain: Type.Optional(Type.Object({}, { additionalProperties: Type.Boolean(), description: "Domain filter map. Example: {\"all\":true} or {\"technical\":true}." })),
-                domainBoost: Type.Optional(Type.Union([
-                  Type.Array(Type.String({ description: "Domain IDs to boost at default x1.3." })),
-                  Type.Object({}, { additionalProperties: Type.Number() }),
-                ])),
-                dateFrom: Type.Optional(Type.String({ description: "Only return memories from this date onward (YYYY-MM-DD)." })),
-                dateTo: Type.Optional(Type.String({ description: "Only return memories up to this date (YYYY-MM-DD)." })),
-                project: Type.Optional(Type.String({ description: "Optional project filter for technical memory results." })),
-                docs: Type.Optional(Type.Array(Type.String({ description: "Optional doc path/name filters when project-store recall is used." }))),
-              })),
-            })),
-          }),
-          async execute(_toolCallId: string, params: any) {
-            try {
-              let maxLimit = 50;
-              try {
-                const configData = facade.getConfig();
-                const rawMaxLimit = configData?.retrieval?.maxLimit ?? configData?.retrieval?.max_limit ?? 50;
-                const parsedMaxLimit = Number(rawMaxLimit);
-                maxLimit = Number.isFinite(parsedMaxLimit) && parsedMaxLimit > 0 ? parsedMaxLimit : 50;
-              } catch (err: unknown) {
-                console.warn(`[quaid] memory_recall maxLimit config resolve failed: ${String((err as Error)?.message || err)}`);
-              }
-
-              const dynamicK = facade.computeDynamicK();
-              const { query, options = {} } = params || {};
-              const requestedLimit = options?.limit;
-              const expandGraph = options?.graph?.expand ?? true;
-              const graphDepth = options?.graph?.depth ?? 1;
-              const datastores = options?.datastores;
-              const routeStores = options?.routing?.enabled;
-              const reasoning = options?.routing?.reasoning ?? "fast";
-              const intent = options?.routing?.intent ?? "general";
-              const domain = (options?.filters?.domain && typeof options.filters.domain === "object")
-                ? options.filters.domain
-                : { all: true };
-              const domainBoost = (Array.isArray(options?.filters?.domainBoost) || (options?.filters?.domainBoost && typeof options.filters.domainBoost === "object"))
-                ? options?.filters?.domainBoost as Record<string, number> | string[]
-                : undefined;
-              const dateFrom = options?.filters?.dateFrom;
-              const dateTo = options?.filters?.dateTo;
-              const project = options?.filters?.project;
-              const docs = options?.filters?.docs;
-              const routerFailOpen = Boolean(
-                options?.routing?.failOpen ??
-                getMemoryConfig().retrieval?.routerFailOpen ??
-                getMemoryConfig().retrieval?.router_fail_open ??
-                true
-              );
-              if (typeof query === "string" && query.trim().startsWith("Extract memorable facts and journal entries from this conversation:")) {
-                return {
-                  content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
-                  details: { count: 0, skippedInternalQuery: true },
-                };
-              }
-              const limit = Math.min(requestedLimit ?? dynamicK, maxLimit);
-              const depth = Math.min(Math.max(graphDepth, 1), 3);
-              const shouldRouteStores = routeStores ?? !Array.isArray(datastores);
-              const selectedStores = Array.isArray(datastores) ? datastores : undefined;
-
-              console.log(`[quaid] memory_recall: query="${String(query || "").slice(0, 50)}...", limit=${limit}, dynamicK=${dynamicK}, expandGraph=${expandGraph}, depth=${depth}, routed=${shouldRouteStores}, intent=${intent}`);
-              const results = await recallMemories({
-                query, limit, expandGraph, graphDepth: depth,
-                datastores: selectedStores, routeStores: shouldRouteStores,
-                reasoning, intent, domain, domainBoost,
-                project, failOpen: routerFailOpen,
-                dateFrom, dateTo, docs,
-                waitForExtraction: true, sourceTag: "tool",
-              });
-
-              if (results.length === 0) {
-                return {
-                  content: [{ type: "text", text: "No relevant memories found. Try different keywords or entity names." }],
-                  details: { count: 0 },
-                };
-              }
-
-              const recallFormatted = facade.formatRecallToolResponse(results);
-              const text = recallFormatted.text;
-
-              try {
-                if (facade.shouldNotifyFeature("retrieval", "summary") && results.length > 0) {
-                  const payload = facade.buildRecallNotificationPayload(results, query, "tool", recallFormatted.breakdown);
-                  const dataFile2 = path.join(QUAID_TMP_DIR, `recall-data-${Date.now()}.json`);
-                  fs.writeFileSync(dataFile2, JSON.stringify(payload), { mode: 0o600 });
-                  const launched = spawnNotifyScript(`
-import json
-from core.runtime.notify import notify_memory_recall
-with open(${JSON.stringify(dataFile2)}, 'r') as f:
-    data = json.load(f)
-os.unlink(${JSON.stringify(dataFile2)})
-notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown'])
-`);
-                  if (!launched) { try { fs.unlinkSync(dataFile2); } catch {} }
-                }
-              } catch (notifyErr: unknown) {
-                console.warn(`[quaid] Memory recall notification skipped: ${(notifyErr as Error).message}`);
-              }
-
-              return {
-                content: [{ type: "text", text: text.trim() }],
-                details: {
-                  count: results.length,
-                  memories: results,
-                  vectorCount: recallFormatted.breakdown.vector_count,
-                  graphCount: recallFormatted.breakdown.graph_count,
-                  journalCount: recallFormatted.breakdown.journal_count,
-                  projectCount: recallFormatted.breakdown.project_count,
-                },
-              };
-            } catch (err: unknown) {
-              console.error("[quaid] memory_recall error:", err);
-              if (isFailHardEnabled()) throw err;
-              const errObj = err instanceof Error ? err : new Error(String(err));
-              return {
-                content: [{ type: "text", text: `Error recalling memories: ${errObj.message}` }],
-                details: { error: errObj.message, error_name: errObj.name },
-              };
-            }
-          },
-        }),
-      );
-    }
 
     // Extraction promise gate is facade-owned so adapters remain swappable.
     timeoutManager = new SessionTimeoutManager({

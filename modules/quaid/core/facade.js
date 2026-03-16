@@ -2411,6 +2411,19 @@ ${header}${journalContent}` : `${header}${journalContent}`;
   function injectProjectContext(existingContext) {
     let prepend = existingContext;
     try {
+      const sections = [];
+      const identityDir = path.join(deps.instanceRoot || deps.workspace, "identity");
+      for (const idFile of ["USER.md", "SOUL.md", "MEMORY.md"]) {
+        const filePath = path.join(identityDir, idFile);
+        if (fs.existsSync(filePath)) {
+          try {
+            const content = fs.readFileSync(filePath, "utf8").trim();
+            if (content) sections.push(`--- ${idFile} ---
+${content}`);
+          } catch {
+          }
+        }
+      }
       const projectsDir = path.join(deps.workspace, "shared", "projects");
       let subdirs = [];
       try {
@@ -2422,9 +2435,7 @@ ${header}${journalContent}` : `${header}${journalContent}`;
           }
         }).sort((a, b) => a === "quaid" ? -1 : b === "quaid" ? 1 : a.localeCompare(b));
       } catch {
-        return prepend;
       }
-      const sections = [];
       for (const projectName of subdirs) {
         for (const docFile of ["TOOLS.md", "AGENTS.md"]) {
           const filePath = path.join(projectsDir, projectName, docFile);
@@ -2439,7 +2450,7 @@ ${content}`);
         }
       }
       if (sections.length === 0) return prepend;
-      const combined = "# Quaid Project Context\n\n" + sections.join("\n\n") + "\n";
+      const combined = "# Quaid Context\n\n" + sections.join("\n\n") + "\n";
       prepend = prepend ? `${prepend}
 
 ${combined}` : combined;
