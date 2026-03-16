@@ -31,7 +31,8 @@ directory or should be linked externally.
 **Throwaway / quick / temp / hello-world files** → write to the misc project:
   ~/.openclaw/extensions/quaid/quaid project show misc--$QUAID_INSTANCE
 
-**New durable work** → create a project first:
+**New durable work** (essays, articles, video scripts, travel plans, research notes,
+blog posts, screenplays, outlines, reports) → create a project first:
   ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>
 
 **NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project.**
@@ -98,6 +99,66 @@ class TestPlanToolHint:
             )
         assert result is not None
         assert "create-project" in result or "project" in result.lower()
+
+    def test_essay_query_returns_hint(self):
+        """An essay-writing request should hint at project creation."""
+        with patch("lib.llm_clients.call_fast_reasoning", _llm_returns(
+            "Create a project first: quaid registry create-project essay-title"
+        )):
+            result = plan_tool_hint(
+                "Help me write an essay about the history of the Roman Empire.",
+                tools_md=_TOOLS_MD,
+            )
+        assert result is not None
+        assert "project" in result.lower()
+
+    def test_video_script_query_returns_hint(self):
+        """A video script request should hint at project creation."""
+        with patch("lib.llm_clients.call_fast_reasoning", _llm_returns(
+            "Create a project first: quaid registry create-project my-video"
+        )):
+            result = plan_tool_hint(
+                "Write a YouTube video script for a 10-minute explainer on black holes.",
+                tools_md=_TOOLS_MD,
+            )
+        assert result is not None
+        assert "project" in result.lower()
+
+    def test_travel_plan_query_returns_hint(self):
+        """A travel plan request should hint at project creation."""
+        with patch("lib.llm_clients.call_fast_reasoning", _llm_returns(
+            "Create a project first: quaid registry create-project japan-trip"
+        )):
+            result = plan_tool_hint(
+                "Help me plan a 2-week trip to Japan including hotels and activities.",
+                tools_md=_TOOLS_MD,
+            )
+        assert result is not None
+        assert "project" in result.lower()
+
+    def test_research_notes_query_returns_hint(self):
+        """A research notes request should hint at project creation."""
+        with patch("lib.llm_clients.call_fast_reasoning", _llm_returns(
+            "Create a project first: quaid registry create-project quantum-research"
+        )):
+            result = plan_tool_hint(
+                "I need to write up research notes on quantum computing for my thesis.",
+                tools_md=_TOOLS_MD,
+            )
+        assert result is not None
+        assert "project" in result.lower()
+
+    def test_recall_query_returns_hint(self):
+        """A memory recall request should hint at quaid recall."""
+        with patch("lib.llm_clients.call_fast_reasoning", _llm_returns(
+            "Search memories with: quaid recall \"your query\""
+        )):
+            result = plan_tool_hint(
+                "What do you remember about my diet preferences?",
+                tools_md=_TOOLS_MD,
+            )
+        assert result is not None
+        assert "recall" in result.lower()
 
     def test_empty_query_returns_none(self):
         """Empty or whitespace query must return None without calling the LLM."""

@@ -422,8 +422,14 @@ intent: ${intent}`;
         "<tools>\n" + toolsContent + "\n</tools>\n\n" +
         "Given the message, decide if a specific tool or workflow from the guide clearly applies.\n" +
         "Return raw JSON only (no markdown, no code fences): {\"tool_hint\": \"<one-line actionable hint>\"} or {\"tool_hint\": null}.\n" +
-        "Examples that SHOULD produce a hint: requests to write scripts, create files, store/recall facts, search docs.\n" +
-        "Return null only for conversational or purely analytical questions with no file or tool action.\n\n" +
+        "Examples that SHOULD produce a hint:\n" +
+        "- Throwaway/temp/quick/hello-world files or scripts → misc project\n" +
+        "- Durable documents: essays, articles, research notes, reports → create a project\n" +
+        "- Creative content: video scripts, outlines, screenplays, blog posts → create a project\n" +
+        "- Plans and itineraries: travel plans, trip itineraries, project plans → create a project\n" +
+        "- Any multi-file or long-lived work → create a project first\n" +
+        "- Memory/recall/search requests → quaid recall or quaid store\n" +
+        "Return null only for purely conversational or analytical questions with no file, memory, or tool action.\n\n" +
         "Message: " + clean;
 
       const raw = await deps.callFastRouter(systemPrompt, userMessage);
