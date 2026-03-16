@@ -1657,9 +1657,36 @@ notify_user(${JSON.stringify(message)})
           .replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "")
           .trim();
 
+        // Try to extract the last user message from OC's JSON-wrapped event.prompt.
+        // OC wraps the full prompt in a ```json...``` code fence. The JSON messages array
+        // contains the CURRENT user message and is always up-to-date at hook invocation
+        // time. event.messages, by contrast, is updated via transcript_update which fires
+        // a few milliseconds AFTER before_prompt_build — making it stale on the first
+        // message of a new turn (e.g. after /new, event.messages shows /new as the last
+        // user message even though the actual current message is something else entirely).
+        const extractFromOCPromptJson = (raw: string): string => {
+          try {
+            const m = raw.match(/^```[\w]*\r?\n([\s\S]+?)\r?\n```/m);
+            if (!m) return "";
+            const obj = JSON.parse(m[1]);
+            const msgs: any[] = obj?.messages ?? obj?.prompt?.messages ?? [];
+            const last = [...msgs].reverse().find((x: any) => x?.role === "user");
+            if (!last) return "";
+            const c = last.content;
+            const text = typeof c === "string" ? c
+              : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("")
+              : "";
+            return scrubQuery(text).slice(0, 500);
+          } catch {
+            return "";
+          }
+        };
+
         // Prefer last user message from event.messages — clean structured content.
-        // Falls back to rawPrompt cleanup when messages are absent or themselves polluted.
+        // Falls back to extractFromOCPromptJson (parses event.prompt JSON blob) when
+        // event.messages is stale, and finally to rawPrompt scrubbing.
         let query = "";
+        let querySource = "unknown";
         const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
         const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
         if (lastUserMsg) {
@@ -1668,17 +1695,42 @@ notify_user(${JSON.stringify(message)})
             : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n")
             : "";
           query = scrubQuery(raw);
+          querySource = "event.messages";
         }
         if (query.length < 3) {
           query = scrubQuery(rawPrompt);
-          if (query.length < 3) { query = rawPrompt; }
+          querySource = "rawPrompt";
+          if (query.length < 3) { query = rawPrompt; querySource = "rawPrompt_raw"; }
         }
         // Cap query length — embedding a 2000-char polluted string is wasteful
         if (query.length > 500) { query = query.slice(0, 500); }
 
-        // Skip system/internal prompts, slash commands, and OC gateway error messages
-        if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/.test(query)) {
-          return { prependContext: event.prependContext };
+        writeHookTrace("hook.before_prompt_build.query_extracted", {
+          query: query.slice(0, 80),
+          source: querySource,
+          msg_count: eventMessages.length,
+          raw_prefix: rawPrompt.slice(0, 80),
+        });
+
+        // Skip system/internal prompts, slash commands, and OC gateway error messages.
+        // IMPORTANT: check event.messages staleness before skipping — OC fires
+        // before_prompt_build before transcript_update, so event.messages can show a
+        // prior slash command (e.g. /new) as the last user message even though the
+        // actual current message is a real user query. When the skip pattern fires,
+        // try to recover the true current query from the JSON blob in event.prompt.
+        const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/;
+        if (STARTUP_SKIP_RE.test(query)) {
+          const recovered = extractFromOCPromptJson(rawPrompt);
+          if (recovered.length >= 3 && !STARTUP_SKIP_RE.test(recovered) &&
+              !recovered.startsWith("Extract memorable facts") &&
+              !facade.isInternalMaintenancePrompt(recovered)) {
+            query = recovered;
+            querySource = "oc_prompt_json_recovered";
+            writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80) });
+          } else {
+            writeHookTrace("hook.before_prompt_build.startup_skip", { query: query.slice(0, 80), recovered_len: recovered.length });
+            return { prependContext: event.prependContext };
+          }
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
           return { prependContext: event.prependContext };

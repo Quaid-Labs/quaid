@@ -1305,25 +1305,59 @@ notify_user(${JSON.stringify(message)})
       }
       try {
         const scrubQuery = (raw) => raw.replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "").trim();
+        const extractFromOCPromptJson = (raw) => {
+          try {
+            const m = raw.match(/^```[\w]*\r?\n([\s\S]+?)\r?\n```/m);
+            if (!m) return "";
+            const obj = JSON.parse(m[1]);
+            const msgs = obj?.messages ?? obj?.prompt?.messages ?? [];
+            const last = [...msgs].reverse().find((x) => x?.role === "user");
+            if (!last) return "";
+            const c = last.content;
+            const text = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("") : "";
+            return scrubQuery(text).slice(0, 500);
+          } catch {
+            return "";
+          }
+        };
         let query = "";
+        let querySource = "unknown";
         const eventMessages = Array.isArray(event.messages) ? event.messages : [];
         const lastUserMsg = eventMessages.slice().reverse().find((m) => m?.role === "user");
         if (lastUserMsg) {
           const c = lastUserMsg.content;
           const raw = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("\n") : "";
           query = scrubQuery(raw);
+          querySource = "event.messages";
         }
         if (query.length < 3) {
           query = scrubQuery(rawPrompt);
+          querySource = "rawPrompt";
           if (query.length < 3) {
             query = rawPrompt;
+            querySource = "rawPrompt_raw";
           }
         }
         if (query.length > 500) {
           query = query.slice(0, 500);
         }
-        if (/^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/.test(query)) {
-          return { prependContext: event.prependContext };
+        writeHookTrace("hook.before_prompt_build.query_extracted", {
+          query: query.slice(0, 80),
+          source: querySource,
+          msg_count: eventMessages.length,
+          raw_prefix: rawPrompt.slice(0, 80)
+        });
+        const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/;
+        if (STARTUP_SKIP_RE.test(query)) {
+          const recovered = extractFromOCPromptJson(rawPrompt);
+          if (recovered.length >= 3 && !STARTUP_SKIP_RE.test(recovered) && !recovered.startsWith("Extract memorable facts") && !facade.isInternalMaintenancePrompt(recovered)) {
+            query = recovered;
+            querySource = "oc_prompt_json_recovered";
+            writeHookTrace("hook.before_prompt_build.staleness_recovered", { query: query.slice(0, 80) });
+          } else {
+            writeHookTrace("hook.before_prompt_build.startup_skip", { query: query.slice(0, 80), recovered_len: recovered.length });
+            return { prependContext: event.prependContext };
+          }
         }
         if (query.startsWith("Extract memorable facts and journal entries from this conversation:")) {
           return { prependContext: event.prependContext };
