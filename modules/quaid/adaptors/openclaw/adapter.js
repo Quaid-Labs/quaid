@@ -1305,6 +1305,17 @@ notify_user(${JSON.stringify(message)})
       return { prependContext: event.prependContext };
     };
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
+    const projectAutoRegisteredSessions = /* @__PURE__ */ new Set();
+    function hasDurableWorkIntent(query) {
+      return /\b(build\s+(?:out|this|it|a)|develop|proper\s+\w+|test\s+suite|argument\s+pars|scaffold|set\s+up\s+(?:a\s+)?project|implement\s+(?:a\s+)?\w+\s+(?:cli|tool|app|service|library))\b/i.test(query);
+    }
+    function extractProjectName(query) {
+      const pathMatch = query.match(/\/(?:tmp\/)?([a-zA-Z0-9][a-zA-Z0-9_-]{2,29})(?:\/|\.|\s|$)/);
+      if (pathMatch) return pathMatch[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      const wordMatch = query.match(/\b([a-zA-Z][a-zA-Z0-9-]{2,20}(?:[-_][a-zA-Z0-9]+)*)\s+(?:cli|tool|app|service|library|project)\b/i);
+      if (wordMatch) return wordMatch[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      return `project-${Date.now().toString(36)}`;
+    }
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
@@ -1330,6 +1341,34 @@ notify_user(${JSON.stringify(message)})
         }
         if (facade.isLowQualityQuery(query)) {
           return { prependContext: event.prependContext };
+        }
+        const sessionKeyEarly = String(ctx?.sessionId || ctx?.session?.id || "");
+        if (sessionKeyEarly && !projectAutoRegisteredSessions.has(sessionKeyEarly) && isSystemEnabled2("projects") && hasDurableWorkIntent(query)) {
+          projectAutoRegisteredSessions.add(sessionKeyEarly);
+          try {
+            const projName = extractProjectName(query);
+            const pathMatch = query.match(/(?:at\s+|in\s+|from\s+)(\/[^\s]+)/i);
+            const sourceRoot = pathMatch ? pathMatch[1] : "";
+            const createArgs = [
+              "registry",
+              "create-project",
+              projName,
+              ...sourceRoot ? ["--source-roots", sourceRoot] : []
+            ];
+            const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+            try {
+              execFileSync(quaidBin, createArgs, {
+                encoding: "utf8",
+                env: { ...process.env, QUAID_HOME: WORKSPACE },
+                timeout: 8e3
+              });
+            } catch (_createErr) {
+            }
+            writeHookTrace("hook.project_auto_registered", { session_id: sessionKeyEarly, name: projName, source_root: sourceRoot });
+            event.prependContext = (event.prependContext ? event.prependContext + "\n" : "") + `[Quaid] Project '${projName}' registered for this work.`;
+          } catch (autoRegErr) {
+            console.warn(`[quaid] Project auto-registration skipped: ${autoRegErr?.message}`);
+          }
         }
         const autoInjectK = facade.computeDynamicK();
         const injectLimit = autoInjectK;

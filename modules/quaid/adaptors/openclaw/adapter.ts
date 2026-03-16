@@ -1644,6 +1644,22 @@ notify_user(${JSON.stringify(message)})
     // the model receives them as system-prompt instructions (cached, not user
     // context). A session-scoped Set prevents re-injection on subsequent turns.
     const projectDocsInjectedSessions = new Set<string>();
+    const projectAutoRegisteredSessions = new Set<string>();
+
+    /** Detect durable development intent from a user message. */
+    function hasDurableWorkIntent(query: string): boolean {
+      return /\b(build\s+(?:out|this|it|a)|develop|proper\s+\w+|test\s+suite|argument\s+pars|scaffold|set\s+up\s+(?:a\s+)?project|implement\s+(?:a\s+)?\w+\s+(?:cli|tool|app|service|library))\b/i.test(query);
+    }
+
+    /** Extract a candidate project name from a message (path segment or slug from description). */
+    function extractProjectName(query: string): string {
+      const pathMatch = query.match(/\/(?:tmp\/)?([a-zA-Z0-9][a-zA-Z0-9_-]{2,29})(?:\/|\.|\s|$)/);
+      if (pathMatch) return pathMatch[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      const wordMatch = query.match(/\b([a-zA-Z][a-zA-Z0-9-]{2,20}(?:[-_][a-zA-Z0-9]+)*)\s+(?:cli|tool|app|service|library|project)\b/i);
+      if (wordMatch) return wordMatch[1].toLowerCase().replace(/[^a-z0-9-]/g, "-");
+      return `project-${Date.now().toString(36)}`;
+    }
+
     const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
 
@@ -1683,6 +1699,36 @@ notify_user(${JSON.stringify(message)})
         // Query quality gate — skip acknowledgments and short messages
         if (facade.isLowQualityQuery(query)) {
           return { prependContext: event.prependContext };
+        }
+
+        // Auto-register a project when durable work is detected on the first message
+        // of a session. Runs the CLI directly — no model compliance required.
+        const sessionKeyEarly = String(ctx?.sessionId || ctx?.session?.id || "");
+        if (sessionKeyEarly && !projectAutoRegisteredSessions.has(sessionKeyEarly)
+            && isSystemEnabled("projects") && hasDurableWorkIntent(query)) {
+          projectAutoRegisteredSessions.add(sessionKeyEarly);
+          try {
+            const projName = extractProjectName(query);
+            const pathMatch = query.match(/(?:at\s+|in\s+|from\s+)(\/[^\s]+)/i);
+            const sourceRoot = pathMatch ? pathMatch[1] : "";
+            const createArgs = ["registry", "create-project", projName,
+              ...(sourceRoot ? ["--source-roots", sourceRoot] : [])];
+            const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+            try {
+              execFileSync(quaidBin, createArgs, {
+                encoding: "utf8",
+                env: { ...process.env, QUAID_HOME: WORKSPACE },
+                timeout: 8000,
+              });
+            } catch (_createErr: unknown) {
+              // Non-zero exit is expected when project already exists — treat as success.
+            }
+            writeHookTrace("hook.project_auto_registered", { session_id: sessionKeyEarly, name: projName, source_root: sourceRoot });
+            event.prependContext = (event.prependContext ? event.prependContext + "\n" : "")
+              + `[Quaid] Project '${projName}' registered for this work.`;
+          } catch (autoRegErr: unknown) {
+            console.warn(`[quaid] Project auto-registration skipped: ${(autoRegErr as Error)?.message}`);
+          }
         }
 
         // Auto-inject always bypasses the LLM router to keep latency low.
