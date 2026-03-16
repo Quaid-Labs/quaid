@@ -809,7 +809,12 @@ class DocsRegistry:
                     continue
 
                 # Check exclusions
-                rel_path = str(file_path.relative_to(_workspace()))
+                try:
+                    rel_path = str(file_path.relative_to(_workspace()))
+                except ValueError:
+                    # Project home is outside workspace root (e.g. shared/projects/).
+                    # Use absolute path as the registry key.
+                    rel_path = str(file_path)
                 if self._is_excluded(str(file_path), exclude_patterns):
                     continue
 
