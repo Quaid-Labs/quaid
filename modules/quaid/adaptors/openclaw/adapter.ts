@@ -1643,31 +1643,38 @@ notify_user(${JSON.stringify(message)})
       }
 
       try {
-        // Prefer clean query from last user message in event.messages (no OC metadata wrapper).
-        // Fall back to rawPrompt cleanup when messages are absent or empty.
+        // Scrub OC wrapper noise and our own prior injections from a candidate query string.
+        const scrubQuery = (raw: string): string => raw
+          // Strip our own prior injections that OC persists back into future turns
+          .replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "")
+          .replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "")
+          // Strip leading code fence blocks (OC JSON metadata wrapper)
+          .replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "")
+          // Strip OC metadata prefix patterns
+          .replace(/^System:\s*/i, "")
+          .replace(/^\s*(\[.*?\]\s*)+/s, "")
+          .replace(/^---\s*/m, "")
+          .replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
+          .replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "")
+          .trim();
+
+        // Prefer last user message from event.messages — clean structured content.
+        // Falls back to rawPrompt cleanup when messages are absent or themselves polluted.
         let query = "";
         const eventMessages: any[] = Array.isArray(event.messages) ? event.messages : [];
         const lastUserMsg = eventMessages.slice().reverse().find((m: any) => m?.role === "user");
         if (lastUserMsg) {
           const c = lastUserMsg.content;
-          query = typeof c === "string" ? c.trim()
-            : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n").trim()
+          const raw = typeof c === "string" ? c
+            : Array.isArray(c) ? c.filter((b: any) => b?.type === "text").map((b: any) => String(b.text || "")).join("\n")
             : "";
+          query = scrubQuery(raw);
         }
         if (query.length < 3) {
-          // Fallback: clean rawPrompt by stripping OC metadata wrappers
-          query = rawPrompt
-            .replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "")  // strip leading code fence block
-            .replace(/^System:\s*/i, '')
-            .replace(/^\s*(\[.*?\]\s*)+/s, '')
-            .replace(/^---\s*/m, '')
-            .replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
-            .replace(/^Sender \(untrusted metadata\):.*$/gim, "")
-            .replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "")
-            .trim();
+          query = scrubQuery(rawPrompt);
           if (query.length < 3) { query = rawPrompt; }
         }
-        // Cap query length — vector search on a 2000-char polluted string is wasteful
+        // Cap query length — embedding a 2000-char polluted string is wasteful
         if (query.length > 500) { query = query.slice(0, 500); }
 
         // Skip system/internal prompts, slash commands, and OC gateway error messages
