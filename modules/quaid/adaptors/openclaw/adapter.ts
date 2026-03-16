@@ -1602,10 +1602,17 @@ notify_user(${JSON.stringify(message)})
           if (_QUAID_INSTANCE) {
             const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
             prependSystemContext = [
-              "[Quaid file placement — mandatory]",
-              `- Throwaway / quick / temp / hello-world → write to: ${miscPath}/`,
-              `- New durable work → FIRST run: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
-              `- NEVER write files to /tmp/, ~/scratch/, or any path outside a tracked quaid project.`,
+              "[Quaid — active knowledge layer]",
+              `Quaid tracks files, projects, and knowledge across sessions. Every file you create must be assigned to a project and registered so Quaid can track it.`,
+              ``,
+              `[File tracking — required for every new file]`,
+              `1. Pick a project: use an existing one if it fits, create one for durable new work, or use misc--${_QUAID_INSTANCE} for ephemeral/throwaway files.`,
+              `2. Register the file: ~/.openclaw/extensions/quaid/quaid registry register <file_path> --project <name>`,
+              `   (If the file lives inside the project directory it is auto-tracked — no explicit register needed.)`,
+              `3. Always tell the user which project you assigned the file to.`,
+              ``,
+              `Misc project (for quick/throwaway work): ${miscPath}/`,
+              `Create a new project: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
             ].join("\n");
             writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
           }
