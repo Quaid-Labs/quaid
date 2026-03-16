@@ -1494,6 +1494,33 @@ const quaidPlugin = {
       }
     }
 
+    // Ensure misc project is registered in both SQLite and global JSON registries.
+    // docsdb_contract.py auto-registers in SQLite only; quaid registry create-project
+    // CLI writes to both. "already exists" exit code 1 is not a failure.
+    if (_QUAID_INSTANCE) {
+      try {
+        const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+        const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+        execFileSync(quaidBin, [
+          "registry", "create-project",
+          `misc--${_QUAID_INSTANCE}`,
+          "--source-roots", miscPath,
+          "--description", "Scratch pad for ephemeral and temporary files.",
+        ], {
+          encoding: "utf-8",
+          timeout: 10_000,
+          env: buildPythonEnv(),
+        });
+        console.log(`[quaid] Misc project misc--${_QUAID_INSTANCE} registered`);
+      } catch (err: unknown) {
+        // "already exists" returns non-zero — expected on subsequent startups.
+        const msg = String((err as any)?.stderr || (err as Error)?.message || err);
+        if (!msg.includes("already exists")) {
+          console.warn(`[quaid] misc project registration failed: ${msg.slice(0, 200)}`);
+        }
+      }
+    }
+
     // Log stats
     void facade.getStatsParsed()
       .then((stats) => {
@@ -1627,7 +1654,10 @@ notify_user(${JSON.stringify(message)})
             `[FILE PLACEMENT]`,
             `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
             `  Misc project path: ${miscPath}/`,
-            `  The misc project already exists — write files there directly, no create-project step needed.`,
+            `  The misc project directory already exists — write files there directly.`,
+            `  If quaid commands say "project not found" for misc--${_QUAID_INSTANCE}, register it first:`,
+            `    quaid registry create-project misc--${_QUAID_INSTANCE} --source-roots ${miscPath}/`,
+            `  (If registration says "already exists", that is fine — proceed to write.)`,
             `For durable new work: run Step 1 above to create a named project first.`,
             `For work that belongs to an existing project: write there directly.`,
             ``,

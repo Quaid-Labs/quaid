@@ -1192,6 +1192,31 @@ const quaidPlugin = {
         throw err;
       }
     }
+    if (_QUAID_INSTANCE) {
+      try {
+        const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
+        const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+        execFileSync(quaidBin, [
+          "registry",
+          "create-project",
+          `misc--${_QUAID_INSTANCE}`,
+          "--source-roots",
+          miscPath,
+          "--description",
+          "Scratch pad for ephemeral and temporary files."
+        ], {
+          encoding: "utf-8",
+          timeout: 1e4,
+          env: buildPythonEnv()
+        });
+        console.log(`[quaid] Misc project misc--${_QUAID_INSTANCE} registered`);
+      } catch (err) {
+        const msg = String(err?.stderr || err?.message || err);
+        if (!msg.includes("already exists")) {
+          console.warn(`[quaid] misc project registration failed: ${msg.slice(0, 200)}`);
+        }
+      }
+    }
     void facade.getStatsParsed().then((stats) => {
       if (stats) {
         console.log(
@@ -1291,7 +1316,10 @@ notify_user(${JSON.stringify(message)})
             `[FILE PLACEMENT]`,
             `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
             `  Misc project path: ${miscPath}/`,
-            `  The misc project already exists \u2014 write files there directly, no create-project step needed.`,
+            `  The misc project directory already exists \u2014 write files there directly.`,
+            `  If quaid commands say "project not found" for misc--${_QUAID_INSTANCE}, register it first:`,
+            `    quaid registry create-project misc--${_QUAID_INSTANCE} --source-roots ${miscPath}/`,
+            `  (If registration says "already exists", that is fine \u2014 proceed to write.)`,
             `For durable new work: run Step 1 above to create a named project first.`,
             `For work that belongs to an existing project: write there directly.`,
             ``,
