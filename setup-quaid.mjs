@@ -3713,17 +3713,18 @@ function enableRequiredOpenClawHooks() {
   try {
     const raw = fs.readFileSync(cfgPath, "utf8");
     const parsed = JSON.parse(raw);
-    const hooks = parsed.hooks || (parsed.hooks = {});
-    const internal = hooks.internal || (hooks.internal = {});
-    internal.enabled = true;
-    const entries = internal.entries || (internal.entries = {});
-    let changed = false;
 
-    if (changed) {
-      const tmpPath = `${cfgPath}.tmp-hooks-${process.pid}-${Date.now()}`;
-      fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
-      fs.renameSync(tmpPath, cfgPath);
+    // allowPromptInjection must be true for before_prompt_build to mutate prompts.
+    // Without this, OC silently drops appendSystemContext / prependContext results.
+    const pluginEntry = parsed?.plugins?.entries?.quaid;
+    if (pluginEntry) {
+      if (!pluginEntry.hooks) pluginEntry.hooks = {};
+      pluginEntry.hooks.allowPromptInjection = true;
     }
+
+    const tmpPath = `${cfgPath}.tmp-hooks-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    fs.renameSync(tmpPath, cfgPath);
   } catch (err) {
     throw new Error(`Could not enable required hooks via direct config write: ${String(err)}`);
   }
