@@ -36,18 +36,7 @@
       },
       "tools": {
         "mode": "declared",
-        "exports": [
-          "recall",
-          "memory_store",
-          "memory_forget",
-          "projects_search",
-          "docs_read",
-          "docs_list",
-          "docs_register",
-          "project_create",
-          "project_list",
-          "session_recall"
-        ]
+        "exports": []
       },
       "api": {
         "mode": "declared",
