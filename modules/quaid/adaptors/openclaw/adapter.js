@@ -1381,12 +1381,13 @@ notify_user(${JSON.stringify(message)})
         _beforePromptBuildInFlight = true;
         let allMemories;
         try {
-          const deadline = new Promise(
-            (resolve) => setTimeout(() => {
+          let deadlineTimer;
+          const deadline = new Promise((resolve) => {
+            deadlineTimer = setTimeout(() => {
               writeHookTrace("hook.before_prompt_build.deadline_hit", {});
               resolve([[]]);
-            }, BEFORE_PROMPT_BUILD_DEADLINE_MS)
-          );
+            }, BEFORE_PROMPT_BUILD_DEADLINE_MS);
+          });
           const recallStartMs = Date.now();
           writeHookTrace("hook.recall_start", { query: query.slice(0, 80), ts: recallStartMs });
           [allMemories] = await Promise.race([
@@ -1407,6 +1408,7 @@ notify_user(${JSON.stringify(message)})
             ]),
             deadline
           ]);
+          if (deadlineTimer !== void 0) clearTimeout(deadlineTimer);
           writeHookTrace("hook.recall_done", { count: allMemories.length, elapsed_ms: Date.now() - recallStartMs });
         } finally {
           _beforePromptBuildInFlight = false;

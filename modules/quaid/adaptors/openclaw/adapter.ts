@@ -1776,12 +1776,13 @@ notify_user(${JSON.stringify(message)})
         _beforePromptBuildInFlight = true;
         let allMemories: any[];
         try {
-          const deadline = new Promise<[any[]]>(resolve =>
-            setTimeout(() => {
+          let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+          const deadline = new Promise<[any[]]>(resolve => {
+            deadlineTimer = setTimeout(() => {
               writeHookTrace("hook.before_prompt_build.deadline_hit", {});
               resolve([[]]);
-            }, BEFORE_PROMPT_BUILD_DEADLINE_MS)
-          );
+            }, BEFORE_PROMPT_BUILD_DEADLINE_MS);
+          });
           // planToolHint is intentionally omitted here: callFastRouter spawns OC
           // ephemeral sessions that each re-trigger before_prompt_build. Those
           // sessions fire after planToolHint completes (after _beforePromptBuildInFlight
@@ -1808,6 +1809,9 @@ notify_user(${JSON.stringify(message)})
             ]),
             deadline,
           ]);
+          // Cancel the deadline timer if recall completed first; prevents a ghost
+          // deadline_hit trace from firing 10s after recall already succeeded.
+          if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
           writeHookTrace("hook.recall_done", { count: allMemories.length, elapsed_ms: Date.now() - recallStartMs });
         } finally {
           _beforePromptBuildInFlight = false;
