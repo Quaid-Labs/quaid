@@ -2921,6 +2921,16 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
         log.info(`Created identity/${f}`);
       }
     }
+    // Create per-instance namespaced scratch and temp dirs.
+    // Agents use scratch/$QUAID_INSTANCE/ and temp/$QUAID_INSTANCE/ to avoid
+    // cross-agent collisions when multiple instances share the same workspace.
+    for (const base of ["scratch", "temp"]) {
+      const instanceDir = path.join(WORKSPACE, base, resolvedInstanceId);
+      if (!fs.existsSync(instanceDir)) {
+        fs.mkdirSync(instanceDir, { recursive: true });
+        log.info(`Created ${base}/${resolvedInstanceId}/`);
+      }
+    }
   }
   if (_isPlatform("claude-code")) {
     setupClaudeCodeHooks();
