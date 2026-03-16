@@ -1212,7 +1212,28 @@ const quaidPlugin = {
         console.log(`[quaid] Misc project misc--${_QUAID_INSTANCE} registered`);
       } catch (err) {
         const msg = String(err?.stderr || err?.message || err);
-        if (!msg.includes("already exists")) {
+        if (msg.includes("already exists")) {
+          try {
+            const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
+            execFileSync("python3", [
+              "-c",
+              `import json,os
+from pathlib import Path
+home=os.environ.get('QUAID_HOME','')
+reg=Path(home)/'project-registry.json' if home else None
+if not reg: exit(0)
+data=json.loads(reg.read_text()) if reg.exists() else {'projects':{}}
+n='misc--${_QUAID_INSTANCE}'
+if n not in data.get('projects',{}):
+  data.setdefault('projects',{})[n]={'canonical_path':'${miscPath}','instances':['${_QUAID_INSTANCE}'],'description':'Scratch pad for ephemeral and temporary files.'}
+  reg.write_text(json.dumps(data,indent=2))
+  print('global registry updated')`
+            ], { encoding: "utf-8", timeout: 5e3, env: buildPythonEnv() });
+            console.log(`[quaid] Misc project misc--${_QUAID_INSTANCE} registered in global registry`);
+          } catch (e2) {
+            console.warn(`[quaid] misc project global registry update failed: ${String(e2?.message || e2).slice(0, 200)}`);
+          }
+        } else {
           console.warn(`[quaid] misc project registration failed: ${msg.slice(0, 200)}`);
         }
       }

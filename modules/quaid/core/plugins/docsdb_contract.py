@@ -31,13 +31,26 @@ def _ensure_project_workspace_dirs(ctx: PluginHookContext) -> None:
             except ValueError:
                 rel_home = str(misc_dir) + "/"
             reg = ProjectRegistry(get_db_path())
-            reg.create_project(
-                name=misc_name,
-                home_dir=rel_home,
-                description="Scratch pad for ephemeral and temporary files.",
-            )
-        except ValueError:
-            pass  # Already registered — idempotent
+            desc = "Scratch pad for ephemeral and temporary files."
+            try:
+                reg.create_project(
+                    name=misc_name,
+                    home_dir=rel_home,
+                    description=desc,
+                )
+            except ValueError:
+                pass  # Already registered in SQLite — idempotent
+            # Also register in global JSON registry so quaid global-registry
+            # list and quaid project show can find it. Idempotent.
+            try:
+                from lib.project_registry import register as global_register
+                global_register(
+                    name=misc_name,
+                    canonical_path=str(misc_dir),
+                    description=desc,
+                )
+            except Exception:
+                pass  # Global registry not available at this init stage
         except Exception:
             pass  # Registry not available at this init stage
     except Exception:
