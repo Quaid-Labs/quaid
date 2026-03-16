@@ -1640,13 +1640,13 @@ notify_user(${JSON.stringify(message)})
     //   2. Recall auto-injection — per-message, semantically relevant memories.
     const projectDocsInjectedSessions = new Set<string>();
 
-    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemPrompt?: string } | undefined> => {
+    const beforePromptBuildHandler = async (event: any, ctx: any): Promise<{ prependContext?: string; appendSystemContext?: string } | undefined> => {
       if (isInternalSessionContext(event, ctx)) return;
 
-      // Inject project docs once per session on the first message.
-      // NOTE: This belongs in before_agent_start. Move it there once OC adds
-      // appendSystemPrompt support to the before_agent_start hook result path.
-      let appendSystemPrompt: string | undefined;
+      // Inject project docs once per session on the first message via appendSystemContext
+      // (existing OC field — no PR needed). Belongs in before_agent_start architecturally;
+      // move it there if/when OC adds hook result support for that phase.
+      let appendSystemContext: string | undefined;
       if (isSystemEnabled("projects")) {
         const sessionKeyDocs = String(ctx?.sessionId || ctx?.session?.id || "");
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
@@ -1654,7 +1654,7 @@ notify_user(${JSON.stringify(message)})
           try {
             const projectDocs = facade.injectProjectContext(undefined);
             if (projectDocs) {
-              appendSystemPrompt = projectDocs;
+              appendSystemContext = projectDocs;
               writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
             }
           } catch (err: unknown) {
@@ -1664,7 +1664,7 @@ notify_user(${JSON.stringify(message)})
       }
 
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig());
-      if (!autoInjectEnabled) return { prependContext: event.prependContext, ...(appendSystemPrompt ? { appendSystemPrompt } : {}) };
+      if (!autoInjectEnabled) return { prependContext: event.prependContext, ...(appendSystemContext ? { appendSystemContext } : {}) };
 
       const rawPrompt = String(event.prompt || "").trim();
       if (rawPrompt.length < 5) {
@@ -1786,7 +1786,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
 
       return {
         prependContext: event.prependContext,
-        ...(appendSystemPrompt ? { appendSystemPrompt } : {}),
+        ...(appendSystemContext ? { appendSystemContext } : {}),
       };
     };
 
