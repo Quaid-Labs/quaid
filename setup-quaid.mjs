@@ -1429,10 +1429,14 @@ function _registerOpenClawQuaidPlugin(pluginPath) {
   }
 
   // Restart gateway to pick up the plugin config change.
+  // Note: on some hosts (e.g. SSH + Aqua LaunchAgent) `openclaw gateway restart`
+  // exits non-zero even when the restart succeeds. Don't hard-fail here — the
+  // caller runs ensureGatewayReadyOrThrow immediately after, which is the real
+  // health gate.
   const restartRes = runCliWithTimeout(cli, ["gateway", "restart"], 30_000);
   if (restartRes.status !== 0) {
     const msg = renderCliFailure(restartRes, 30_000);
-    return { ok: false, reason: `gateway restart failed: ${msg || "unknown error"}` };
+    log.warn(`gateway restart exited non-zero (will verify health next): ${msg || "unknown"}`);
   }
 
   try {
