@@ -71,6 +71,8 @@ type KnowledgeEngineDeps<TMemoryResult extends { text: string; similarity: numbe
   ) => Promise<TMemoryResult[]>;
   /** Returns TOOLS.md content for the active instance, or null if unavailable. */
   loadToolsContext?: () => string | null;
+  /** Optional structured trace emitter for diagnostics (e.g. writeHookTrace). */
+  trace?: (event: string, payload?: Record<string, unknown>) => void;
 };
 
 export function createKnowledgeEngine<TMemoryResult extends { text: string; similarity: number; id?: string; category: string; via?: string; sourceType?: string }>(
@@ -556,11 +558,19 @@ ${projectHints}
   // Returns <tool_hint>...</tool_hint> or null. Always fails open.
   // ---------------------------------------------------------------------------
   async function planToolHint(query: string): Promise<string | null> {
+    const t = deps.trace;
     try {
       const clean = query.trim().replace(/\s+/g, " ");
-      if (!clean) return null;
+      if (!clean) {
+        t?.("tool_hint.skip", { reason: "empty_query" });
+        return null;
+      }
       const toolsContent = deps.loadToolsContext?.() ?? null;
-      if (!toolsContent) return null;
+      if (!toolsContent) {
+        t?.("tool_hint.skip", { reason: "no_tools_md", workspace: deps.workspace });
+        return null;
+      }
+      t?.("tool_hint.calling_llm", { tools_len: toolsContent.length, query_len: clean.length });
 
       const systemPrompt = "You output compact JSON for tool guidance. No prose.";
       const userMessage =
@@ -572,15 +582,19 @@ ${projectHints}
         "Message: " + clean;
 
       const raw = await deps.callFastRouter(systemPrompt, userMessage);
+      t?.("tool_hint.llm_response", { raw_len: raw?.length ?? 0, raw_preview: (raw || "").slice(0, 120) });
       if (!raw) return null;
 
       const data = JSON.parse(raw.trim());
       const hint = data?.tool_hint;
       if (hint && typeof hint === "string" && hint.trim().length > 5) {
+        t?.("tool_hint.produced", { len: hint.trim().length });
         return `<tool_hint>${hint.trim()}</tool_hint>`;
       }
+      t?.("tool_hint.null_result", { hint_value: String(hint ?? "null") });
       return null;
-    } catch {
+    } catch (err) {
+      t?.("tool_hint.error", { error: String((err as Error)?.message || err) });
       return null;
     }
   }
