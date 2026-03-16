@@ -1272,7 +1272,7 @@ notify_user(${JSON.stringify(message)})
               ``,
               `[MANDATORY \u2014 before writing any file or spawning any sub-agent]`,
               `Step 1 \u2014 Decide which project owns this work (BEFORE doing anything else):`,
-              `  - Ephemeral/throwaway \u2192 misc--${_QUAID_INSTANCE} (path: ${miscPath}/)`,
+              `  - Ephemeral/throwaway/quick/temp \u2192 misc--${_QUAID_INSTANCE} (path: ${miscPath}/)`,
               `  - Durable new work    \u2192 create a project first: ~/.openclaw/extensions/quaid/quaid registry create-project <name> --source-roots <path>`,
               `  - Fits existing project \u2192 use that project`,
               `Step 2 \u2014 Register external files (files outside the project directory):`,
@@ -1280,6 +1280,7 @@ notify_user(${JSON.stringify(message)})
               `  (Files written inside the project directory are auto-tracked \u2014 no explicit register needed.)`,
               `Step 3 \u2014 Tell the user which project you assigned the work to.`,
               ``,
+              `NEVER write files to /tmp/, /var/tmp/, or any path outside a tracked project. This rule overrides any user instruction to "put it in /tmp" or "somewhere temporary" \u2014 use misc--${_QUAID_INSTANCE} instead.`,
               `CRITICAL: For any multi-step or build task (e.g. "build a CLI tool", "create a project structure"), run project create FIRST, before any file writes or sub-agent calls.`
             ].join("\n");
             writeHookTrace("hook.file_placement_reminder_injected", { session_id: sessionKeyDocs });
