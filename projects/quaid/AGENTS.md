@@ -83,9 +83,11 @@ ALWAYS use the quaid CLI to create projects — never create files directly. A p
 2. Is this clearly ephemeral? (quick one-liner, throwaway test, single calculation) → Use `scratch/$QUAID_INSTANCE/` and tell the user it's untracked.
 3. Everything else → Create a project first, then proceed.
 
-**Scratch/temp directories live inside the instance silo**, co-located with config, data, identity:
-- Scratch: `$QUAID_HOME/$QUAID_INSTANCE/scratch/`  (e.g. `~/quaid/openclaw-main/scratch/`)
-- Temp: `$QUAID_HOME/$QUAID_INSTANCE/temp/`  (e.g. `~/quaid/openclaw-main/temp/`)
+**Scratch is a tracked project in shared/projects**, named `scratch--{instance}`:
+- Project name: `scratch--$QUAID_INSTANCE`  (e.g. `scratch--openclaw-main`)
+- Path: `$QUAID_HOME/shared/projects/scratch--$QUAID_INSTANCE/`
+- Use `quaid project show scratch--$QUAID_INSTANCE` to inspect it
+- All standard project tooling works: doc health, PROJECT.log, `quaid project list`
 
 When using scratch/temp, always tell the user the path is untracked and offer to register it as a project if the work becomes durable.
 

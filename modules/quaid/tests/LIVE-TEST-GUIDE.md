@@ -759,12 +759,15 @@ Ask the agent to create a throwaway file:
 
 > `Can you write a quick scratch script at ~/quaid/scratch that prints hello world?`
 
-**Expected:** Agent writes to `~/quaid/openclaw-main/scratch/` (inside instance silo), NOT `~/quaid/scratch/` or any workspace-root path.
+**Expected:** Agent writes to the scratch project `scratch--openclaw-main` at
+`~/quaid/shared/projects/scratch--openclaw-main/`, NOT to `~/quaid/scratch/` or any ad-hoc path.
+The agent should reference the project by name, not by raw path.
 Verify:
 
 ```bash
-ssh alfie.local 'ls ~/quaid/openclaw-main/scratch/ 2>/dev/null && echo "PASS: file in instance scratch" || echo "FAIL: instance scratch empty or missing"'
-ssh alfie.local 'ls ~/quaid/scratch/*.py 2>/dev/null && echo "FAIL: leaked to workspace scratch root" || echo "PASS: no leak to workspace root"'
+ssh alfie.local 'ls ~/quaid/shared/projects/scratch--openclaw-main/ 2>/dev/null && echo "PASS: file in scratch project" || echo "FAIL: scratch project empty or missing"'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project show scratch--openclaw-main 2>&1'
+ssh alfie.local 'ls ~/quaid/scratch/ 2>/dev/null && echo "WARN: workspace scratch root exists (should be empty)"'
 ```
 
 After project CRUD, trigger extraction to generate project logs. Tell the agent

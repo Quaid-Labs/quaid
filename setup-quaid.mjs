@@ -2921,15 +2921,14 @@ async function step7_install(pluginSrc, owner, models, embeddings, systems, jani
         log.info(`Created identity/${f}`);
       }
     }
-    // Create per-instance scratch and temp dirs inside the instance silo.
-    // Lives at WORKSPACE/{instanceId}/scratch and WORKSPACE/{instanceId}/temp,
-    // co-located with config, data, identity, logs, projects.
-    for (const base of ["scratch", "temp"]) {
-      const instanceDir = path.join(WORKSPACE, resolvedInstanceId, base);
-      if (!fs.existsSync(instanceDir)) {
-        fs.mkdirSync(instanceDir, { recursive: true });
-        log.info(`Created ${resolvedInstanceId}/${base}/`);
-      }
+    // Create instance scratch project in shared/projects/scratch--{instanceId}/.
+    // Scratch lives as a real tracked project so all registry tooling works
+    // (doc health, project list, PROJECT.log) without special-casing.
+    const scratchProjectName = `scratch--${resolvedInstanceId}`;
+    const scratchProjectDir = path.join(WORKSPACE, "shared", "projects", scratchProjectName);
+    if (!fs.existsSync(scratchProjectDir)) {
+      fs.mkdirSync(scratchProjectDir, { recursive: true });
+      log.info(`Created scratch project dir: shared/projects/${scratchProjectName}/`);
     }
   }
   if (_isPlatform("claude-code")) {
@@ -3008,14 +3007,11 @@ print('[+] Datastore init hooks complete')
   // Contract-owned project workspace dirs should exist after datastore init hooks.
   // Some runtime profiles trim plugin slots during bootstrap; guard here so
   // install always yields expected workspace shape.
-  // Instance scratch/temp live inside the silo: WORKSPACE/{instanceId}/scratch|temp
-  const instanceScratchDir = resolvedInstanceId && resolvedInstanceId !== "standalone"
-    ? path.join(WORKSPACE, resolvedInstanceId, "scratch")
+  // Scratch is a tracked project in shared/projects/scratch--{instanceId}/
+  const instanceScratchDir = (resolvedInstanceId && resolvedInstanceId !== "standalone")
+    ? path.join(WORKSPACE, "shared", "projects", `scratch--${resolvedInstanceId}`)
     : SCRATCH_DIR;
-  const instanceTempDir = resolvedInstanceId && resolvedInstanceId !== "standalone"
-    ? path.join(WORKSPACE, resolvedInstanceId, "temp")
-    : TEMP_DIR;
-  const contractOwnedDirs = [instanceProjectsDir(), instanceTempDir, instanceScratchDir];
+  const contractOwnedDirs = [instanceProjectsDir(), TEMP_DIR, instanceScratchDir];
   const missingContractOwnedDirs = contractOwnedDirs.filter((dir) => !fs.existsSync(dir));
   if (missingContractOwnedDirs.length > 0) {
     for (const dir of missingContractOwnedDirs) {
@@ -3375,6 +3371,36 @@ print(len(found))
       const regQuaidResult = spawnSync("python3", ["-c", regQuaidScript], { cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
       const quaidDocCount = (regQuaidResult.stdout || "").trim();
       log.info(`Quaid project installed (${quaidDocCount} new docs discovered)`);
+    }
+
+    // Register instance scratch project in the shared/projects registry.
+    // Name: scratch--{instanceId}. Home: shared/projects/scratch--{instanceId}/
+    // Lives as a real tracked project so registry tooling works without modification.
+    if (resolvedInstanceId && resolvedInstanceId !== "standalone") {
+      const regScratchScript = `
+import os, sys
+${PY_ENV_SETUP}
+os.environ['QUAID_QUIET'] = '1'
+sys.path.insert(0, '.')
+from datastore.docsdb.registry import DocsRegistry
+reg = DocsRegistry()
+name = ${JSON.stringify(`scratch--${resolvedInstanceId}`)}
+home = ${JSON.stringify(`shared/projects/scratch--${resolvedInstanceId}/`)}
+try:
+    reg.create_project(name, label='Scratch (${resolvedInstanceId})', home_dir=home,
+        description='Auto-managed scratch space for ephemeral/untracked work.')
+    print('created')
+except ValueError:
+    print('exists')  # already registered
+`;
+      const regScratchResult = spawnSync("python3", ["-c", regScratchScript], {
+        cwd: PLUGIN_DIR, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, QUAID_HOME: WORKSPACE },
+      });
+      const scratchStatus = (regScratchResult.stdout || "").trim();
+      if (scratchStatus === "created") {
+        log.info(`Scratch project registered: scratch--${resolvedInstanceId}`);
+      }
     }
 
     // Keep projects/quaid/TOOLS.md domain block aligned after install.
