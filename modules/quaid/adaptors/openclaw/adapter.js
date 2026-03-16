@@ -1305,15 +1305,17 @@ notify_user(${JSON.stringify(message)})
         return { prependContext: event.prependContext };
       }
       try {
+        const scrubQuery = (raw) => raw.replace(/<tool_hint>[\s\S]*?<\/tool_hint>/gi, "").replace(/<injected_memories>[\s\S]*?<\/injected_memories>/gi, "").replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "").trim();
         let query = "";
         const eventMessages = Array.isArray(event.messages) ? event.messages : [];
         const lastUserMsg = eventMessages.slice().reverse().find((m) => m?.role === "user");
         if (lastUserMsg) {
           const c = lastUserMsg.content;
-          query = typeof c === "string" ? c.trim() : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("\n").trim() : "";
+          const raw = typeof c === "string" ? c : Array.isArray(c) ? c.filter((b) => b?.type === "text").map((b) => String(b.text || "")).join("\n") : "";
+          query = scrubQuery(raw);
         }
         if (query.length < 3) {
-          query = rawPrompt.replace(/^```[\w]*\r?\n[\s\S]*?```\s*/i, "").replace(/^System:\s*/i, "").replace(/^\s*(\[.*?\]\s*)+/s, "").replace(/^---\s*/m, "").replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "").replace(/^Sender \(untrusted metadata\):.*$/gim, "").replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "").trim();
+          query = scrubQuery(rawPrompt);
           if (query.length < 3) {
             query = rawPrompt;
           }
