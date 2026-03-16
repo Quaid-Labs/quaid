@@ -34,6 +34,14 @@ def get_workspace_dir() -> Path:
     return get_adapter().instance_root()
 
 
+def get_quaid_home() -> Path:
+    """Return the QUAID_HOME root (not the per-instance silo).
+
+    Use this for paths that live at the workspace level, e.g. shared/projects/.
+    """
+    return get_adapter().quaid_home()
+
+
 def get_data_dir() -> Path:
     return get_adapter().data_dir()
 
