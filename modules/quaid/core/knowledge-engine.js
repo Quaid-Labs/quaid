@@ -401,13 +401,44 @@ intent: ${intent}`;
       throw err;
     }
   }
+  async function planToolHint(query) {
+    try {
+      const clean = query.trim().replace(/\s+/g, " ");
+      if (!clean) return null;
+      const toolsContent = deps.loadToolsContext?.() ?? null;
+      if (!toolsContent) return null;
+
+      const systemPrompt = "You output compact JSON for tool guidance. No prose.";
+      const userMessage =
+        "You are a tool-routing assistant. Below is a reference guide for available tools.\n\n" +
+        "<tools>\n" + toolsContent + "\n</tools>\n\n" +
+        "Given the message, decide if a specific tool or workflow from the guide clearly applies.\n" +
+        "Return JSON only: {\"tool_hint\": \"<one-line actionable hint>\"} or {\"tool_hint\": null}.\n" +
+        "Only return a hint when the match is obvious. Prefer null when uncertain.\n\n" +
+        "Message: " + clean;
+
+      const raw = await deps.callFastRouter(systemPrompt, userMessage);
+      if (!raw) return null;
+
+      const data = JSON.parse(raw.trim());
+      const hint = data?.tool_hint;
+      if (hint && typeof hint === "string" && hint.trim().length > 5) {
+        return `<tool_hint>${hint.trim()}</tool_hint>`;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   return {
     normalizeKnowledgeDatastores,
     getKnowledgeDatastoreRegistry,
     renderKnowledgeDatastoreGuidanceForAgents,
     routeKnowledgeDatastores,
     routeRecallPlan,
-    recall
+    recall,
+    planToolHint,
   };
 }
 export {
