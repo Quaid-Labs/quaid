@@ -1300,7 +1300,7 @@ notify_user(${JSON.stringify(message)})
     const projectDocsInjectedSessions = /* @__PURE__ */ new Set();
     const beforePromptBuildHandler = async (event, ctx) => {
       if (isInternalSessionContext(event, ctx)) return;
-      let appendSystemPrompt;
+      let appendSystemContext;
       if (isSystemEnabled2("projects")) {
         const sessionKeyDocs = String(ctx?.sessionId || ctx?.session?.id || "");
         if (sessionKeyDocs && !projectDocsInjectedSessions.has(sessionKeyDocs)) {
@@ -1308,7 +1308,7 @@ notify_user(${JSON.stringify(message)})
           try {
             const projectDocs = facade.injectProjectContext(void 0);
             if (projectDocs) {
-              appendSystemPrompt = projectDocs;
+              appendSystemContext = projectDocs;
               writeHookTrace("hook.project_docs_injected", { session_id: sessionKeyDocs, len: projectDocs.length });
             }
           } catch (err) {
@@ -1317,7 +1317,7 @@ notify_user(${JSON.stringify(message)})
         }
       }
       const autoInjectEnabled = isAutoInjectEnabled(getMemoryConfig2());
-      if (!autoInjectEnabled) return { prependContext: event.prependContext, ...appendSystemPrompt ? { appendSystemPrompt } : {} };
+      if (!autoInjectEnabled) return { prependContext: event.prependContext, ...appendSystemContext ? { appendSystemContext } : {} };
       const rawPrompt = String(event.prompt || "").trim();
       if (rawPrompt.length < 5) {
         return { prependContext: event.prependContext };
@@ -1408,7 +1408,7 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
       }
       return {
         prependContext: event.prependContext,
-        ...appendSystemPrompt ? { appendSystemPrompt } : {}
+        ...appendSystemContext ? { appendSystemContext } : {}
       };
     };
     console.log("[quaid] Registering before_agent_start hook for memory injection");
