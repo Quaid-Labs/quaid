@@ -313,6 +313,13 @@ class ClaudeCodeCLIProvider(LLMProvider):
             truncated=data.get("stop_reason", "") == "max_tokens",
         )
 
+    def get_profiles(self):
+        available = bool(self._claude_bin)
+        return {
+            "deep": {"model": "claude-opus-4-6", "available": available},
+            "fast": {"model": "claude-haiku-4-5", "available": available},
+        }
+
 
 class ClaudeCodeOAuthLLMProvider(LLMProvider):
     """3-layer auth fallback for Claude Code LLM calls.
