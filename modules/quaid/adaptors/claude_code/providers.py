@@ -367,12 +367,37 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         try:
             return self._api_call(token, model, messages, max_tokens, timeout)
         except urllib.error.HTTPError as e:
-            if e.code != 401:
+            if e.code == 401:
+                pass  # handled below
+            else:
                 body = "<unread>"
                 try:
                     body = e.read().decode("utf-8", errors="replace") or "<empty>"
                 except Exception as read_err:
                     body = f"<read failed: {read_err}>"
+
+                # 400 invalid_request_error with generic "Error" message is the
+                # Anthropic API's response when an OAuth token lacks API scope
+                # (e.g. credentials.json token is scoped for Claude.ai web, not
+                # the /v1/messages API endpoint).  Treat it as OAuth unavailable
+                # so the fallback chain (API key layer) can take over.
+                if e.code == 400:
+                    try:
+                        err_type = json.loads(body).get("error", {}).get("type", "")
+                    except Exception:
+                        err_type = ""
+                    if err_type == "invalid_request_error":
+                        logger.warning(
+                            "[claude-code-oauth] HTTP 400 invalid_request_error — "
+                            "OAuth token likely lacks API scope (credentials.json "
+                            "token is scoped for Claude.ai web, not /v1/messages). "
+                            "Fix: run a CC session and copy CLAUDE_CODE_OAUTH_TOKEN "
+                            "to ~/.auth-token via 'quaid config set-auth <token>', "
+                            "or set ANTHROPIC_API_KEY in daemon env. body: %s",
+                            body[:400],
+                        )
+                        raise _OAuthUnavailable("400_invalid_request_error") from e
+
                 logger.error(
                     "[claude-code-oauth] HTTP %d from API — model=%s "
                     "max_tokens=%s system_len=%s user_len=%s body: %s",
