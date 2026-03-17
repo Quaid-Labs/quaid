@@ -1755,7 +1755,7 @@ def main():
         sys.exit(0 if result["renamed"] > 0 else 1)
 
     elif args.command == "archive-project":
-        if not args.yes:
+        if not args.yes and sys.stdin.isatty():
             docs = registry.list_docs(project=args.name)
             print(f"Will archive project '{args.name}' ({len(docs)} docs).")
             confirm = input("Continue? [y/N] ").strip().lower()
@@ -1766,7 +1766,7 @@ def main():
         sys.exit(0 if result["archived"] > 0 else 1)
 
     elif args.command == "delete-project":
-        if not args.yes:
+        if not args.yes and sys.stdin.isatty():
             docs = registry.list_docs(project=args.name)
             print(f"Will DELETE project '{args.name}' ({len(docs)} docs) and remove directory.")
             confirm = input("Continue? [y/N] ").strip().lower()
