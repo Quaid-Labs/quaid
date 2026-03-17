@@ -731,6 +731,11 @@ Send a natural work directive that does NOT mention "project" or "create":
 **Expected:** Agent creates a project via `quaid registry create-project` BEFORE writing any files.
 It should NOT write files to /tmp directly without registering a project first.
 
+**Test runner note:** The agent may ask clarifying questions about the project name, spec, or
+scope before or after creating the project. This is expected and correct behavior — answer them
+as a normal user would. The PASS criterion is that the agent runs `create-project` before writing
+any files, not that it does so silently without any questions.
+
 If the agent writes files without creating a project first → **FAIL** (report to claude-dev).
 
 #### Phase 2: Explicit CRUD (after Phase 1 project exists or agent was nudged)

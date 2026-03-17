@@ -127,6 +127,29 @@ class InstanceManager:
                 encoding="utf-8",
             )
 
+        # Misc project — shared scratch pad registered at silo creation so agents
+        # can find it immediately without a manual create-project step.
+        try:
+            workspace_root = silo_root.parent
+            misc_dir = workspace_root / "shared" / "projects" / f"misc--{instance_id}"
+            misc_dir.mkdir(parents=True, exist_ok=True)
+            misc_name = f"misc--{instance_id}"
+            misc_desc = "Scratch pad for ephemeral and temporary files."
+            try:
+                rel_home = str(misc_dir.relative_to(workspace_root)) + "/"
+            except ValueError:
+                rel_home = str(misc_dir) + "/"
+            from datastore.docsdb.registry import ProjectRegistry
+            reg = ProjectRegistry(db_path)
+            try:
+                reg.create_project(name=misc_name, home_dir=rel_home, description=misc_desc)
+            except ValueError:
+                pass  # Already registered — idempotent
+            from lib.project_registry import register as global_register
+            global_register(name=misc_name, canonical_path=str(misc_dir), description=misc_desc)
+        except Exception:
+            pass  # Non-fatal at silo init
+
     def _default_config(self) -> dict:
         return {
             "adapter": {"type": self.adapter.adapter_id()},

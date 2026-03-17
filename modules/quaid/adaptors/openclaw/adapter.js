@@ -1192,52 +1192,6 @@ const quaidPlugin = {
         throw err;
       }
     }
-    if (_QUAID_INSTANCE) {
-      try {
-        const quaidBin = path.join(PYTHON_PLUGIN_ROOT, "quaid");
-        const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-        execFileSync(quaidBin, [
-          "registry",
-          "create-project",
-          `misc--${_QUAID_INSTANCE}`,
-          "--source-roots",
-          miscPath,
-          "--description",
-          "Scratch pad for ephemeral and temporary files."
-        ], {
-          encoding: "utf-8",
-          timeout: 1e4,
-          env: buildPythonEnv()
-        });
-        console.log(`[quaid] Misc project misc--${_QUAID_INSTANCE} registered`);
-      } catch (err) {
-        const msg = String(err?.stderr || err?.message || err);
-        if (msg.includes("already exists")) {
-          try {
-            const miscPath = path.join(WORKSPACE, "shared", "projects", `misc--${_QUAID_INSTANCE}`);
-            execFileSync("python3", [
-              "-c",
-              `import json,os
-from pathlib import Path
-home=os.environ.get('QUAID_HOME','')
-reg=Path(home)/'project-registry.json' if home else None
-if not reg: exit(0)
-data=json.loads(reg.read_text()) if reg.exists() else {'projects':{}}
-n='misc--${_QUAID_INSTANCE}'
-if n not in data.get('projects',{}):
-  data.setdefault('projects',{})[n]={'canonical_path':'${miscPath}','instances':['${_QUAID_INSTANCE}'],'description':'Scratch pad for ephemeral and temporary files.'}
-  reg.write_text(json.dumps(data,indent=2))
-  print('global registry updated')`
-            ], { encoding: "utf-8", timeout: 5e3, env: buildPythonEnv() });
-            console.log(`[quaid] Misc project misc--${_QUAID_INSTANCE} registered in global registry`);
-          } catch (e2) {
-            console.warn(`[quaid] misc project global registry update failed: ${String(e2?.message || e2).slice(0, 200)}`);
-          }
-        } else {
-          console.warn(`[quaid] misc project registration failed: ${msg.slice(0, 200)}`);
-        }
-      }
-    }
     void facade.getStatsParsed().then((stats) => {
       if (stats) {
         console.log(
@@ -1325,25 +1279,14 @@ notify_user(${JSON.stringify(message)})
             `[Quaid \u2014 active knowledge layer | instance: ${_QUAID_INSTANCE}]`,
             `Quaid tracks files, projects, and knowledge across sessions. ALL files live inside tracked projects.`,
             ``,
-            `[PROJECT CREATION \u2014 MANDATORY, RUN create-project BEFORE ANYTHING ELSE]`,
-            `Your FIRST action on any new task must be running quaid registry create-project. Always. No exceptions.`,
-            ``,
-            `THE ONLY CORRECT SEQUENCE:`,
-            `  1. Infer a project name from the request (e.g. "Python CLI utility" \u2192 "python-cli").`,
-            `  2. Run: quaid registry create-project <name> --source-roots ~/quaid/shared/projects/<name>/`,
-            `  3. THEN do the work, ask questions, write code \u2014 in that order.`,
-            ``,
-            `CRITICAL \u2014 THESE ARE FORBIDDEN:`,
-            `- Saying "once you give me the spec I will set up the project" \u2014 WRONG. Create it NOW with an inferred name.`,
-            `- Asking clarifying questions BEFORE running create-project \u2014 WRONG. Create first, ask after.`,
-            `- Using /tmp, /var, or any system path as source-roots \u2014 WRONG. Use ~/quaid/shared/projects/<name>/ only.`,
-            `- Spawning a coding agent before running create-project \u2014 WRONG.`,
-            `- Writing any file before running create-project \u2014 WRONG.`,
-            `- Creating directories or PROJECT.md manually \u2014 WRONG. Only the quaid CLI creates projects.`,
-            ``,
-            `Example for "build a Python CLI tool": immediately run:`,
-            `  quaid registry create-project python-cli --source-roots ~/quaid/shared/projects/python-cli/`,
-            `Then proceed with the work.`,
+            `[PROJECT CREATION \u2014 MANDATORY BEFORE ANY WORK BEGINS]`,
+            `Before you write a single file, spawn a coding agent, run a build, or execute any multi-step task:`,
+            `  STEP 1: Run quaid registry create-project <name> --source-roots <path>`,
+            `  STEP 2: Then do the work inside that project.`,
+            `DO NOT spawn a coding agent or subagent without completing Step 1 first.`,
+            `DO NOT write any file without completing Step 1 first.`,
+            `DO NOT create directories or PROJECT.md files manually \u2014 only the quaid CLI creates projects.`,
+            `This applies to ALL work requests \u2014 even quick ones, even "just a script", even "just a test".`,
             ``,
             `[FILE PLACEMENT]`,
             `When the user says "temporary", "quick", "throwaway", or "somewhere temporary", use the misc project:`,
