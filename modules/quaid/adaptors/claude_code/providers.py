@@ -288,18 +288,22 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             "anthropic-beta": "prompt-caching-2024-07-31,oauth-2025-04-20",
         }
 
-        body = {
+        if not user_message:
+            raise ValueError("Cannot make API call with empty user message")
+
+        body: dict = {
             "model": model,
             "max_tokens": max_tokens,
-            "system": [
+            "messages": [{"role": "user", "content": user_message}],
+        }
+        if system_prompt:
+            body["system"] = [
                 {
                     "type": "text",
                     "text": system_prompt,
                     "cache_control": {"type": "ephemeral"},
                 }
-            ],
-            "messages": [{"role": "user", "content": user_message}],
-        }
+            ]
 
         start_time = time.time()
         data_bytes = json.dumps(body).encode()
