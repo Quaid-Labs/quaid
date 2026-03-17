@@ -1268,46 +1268,86 @@ def cmd_update_stale(dry_run: bool = True, trivial_only: bool = False) -> int:
             Significant changes will be skipped with a warning.
     """
     stale = check_staleness()
-    if not stale:
-        print("All docs up-to-date.")
-        return 0
-
     purposes = get_doc_purposes()
     cfg = get_config()
     max_docs = cfg.docs.max_docs_per_update
     updated = 0
     skipped_significant = 0
 
-    for doc_path, info in list(stale.items())[:max_docs]:
-        # Check classification if trivial_only mode
-        if trivial_only and info.change_classification:
-            cls = info.change_classification.get("classification", "significant")
-            if cls == "significant":
+    if stale:
+        for doc_path, info in list(stale.items())[:max_docs]:
+            # Check classification if trivial_only mode
+            if trivial_only and info.change_classification:
+                cls = info.change_classification.get("classification", "significant")
+                if cls == "significant":
+                    conf = info.change_classification.get("confidence", 0)
+                    reasons = info.change_classification.get("reasons", [])
+                    print(f"  SKIPPED {doc_path} — significant change "
+                          f"({conf:.0%} confidence): {', '.join(reasons)}")
+                    skipped_significant += 1
+                    continue
+
+            purpose = purposes.get(doc_path, "")
+
+            # Print classification info before updating
+            if info.change_classification:
+                cls = info.change_classification.get("classification", "unknown")
                 conf = info.change_classification.get("confidence", 0)
-                reasons = info.change_classification.get("reasons", [])
-                print(f"  SKIPPED {doc_path} — significant change "
-                      f"({conf:.0%} confidence): {', '.join(reasons)}")
-                skipped_significant += 1
+                print(f"  [{cls} change, {conf:.0%} confidence] {doc_path}")
+
+            ok = update_doc_from_diffs(doc_path, purpose, info.stale_sources, dry_run=dry_run)
+            if ok:
+                updated += 1
+
+        action = "Would update" if dry_run else "Updated"
+        print(f"\n{action} {updated}/{len(stale)} stale doc(s)")
+        if skipped_significant:
+            print(f"  Skipped {skipped_significant} doc(s) with significant changes "
+                  "(use without --trivial-only to update all)")
+
+    # Second pass: index registered docs that have never been indexed (no chunks).
+    # A newly registered doc is effectively infinitely stale — it should be picked
+    # up by 'docs update' without needing a separate 'janitor --task rag' invocation.
+    indexed_new = 0
+    try:
+        from datastore.docsdb.rag import DocsRAG
+        from datastore.docsdb.registry import DocsRegistry
+        registry = DocsRegistry()
+        rag = DocsRAG()
+        all_docs = registry.list_docs()
+        for entry in all_docs:
+            file_path = entry.get("file_path") or entry.get("path", "")
+            if not file_path:
                 continue
+            if not Path(file_path).exists():
+                continue
+            if not rag.needs_reindex(file_path):
+                continue
+            # Skip docs already handled by the stale pass above
+            if file_path in stale:
+                continue
+            if dry_run:
+                print(f"  Would index new doc: {file_path}")
+                indexed_new += 1
+            else:
+                print(f"  Indexing new doc: {file_path}")
+                try:
+                    rag.index_document(file_path)
+                    indexed_new += 1
+                except Exception as exc:
+                    print(f"  WARNING: failed to index {file_path}: {exc}")
+    except Exception as exc:
+        print(f"  WARNING: new-doc indexing pass failed: {exc}")
 
-        purpose = purposes.get(doc_path, "")
+    if indexed_new:
+        action = "Would index" if dry_run else "Indexed"
+        print(f"{action} {indexed_new} new doc(s) with no existing chunks")
 
-        # Print classification info before updating
-        if info.change_classification:
-            cls = info.change_classification.get("classification", "unknown")
-            conf = info.change_classification.get("confidence", 0)
-            print(f"  [{cls} change, {conf:.0%} confidence] {doc_path}")
+    if not stale and not indexed_new:
+        print("All docs up-to-date.")
+        return 0
 
-        ok = update_doc_from_diffs(doc_path, purpose, info.stale_sources, dry_run=dry_run)
-        if ok:
-            updated += 1
-
-    action = "Would update" if dry_run else "Updated"
-    print(f"\n{action} {updated}/{len(stale)} stale doc(s)")
-    if skipped_significant:
-        print(f"  Skipped {skipped_significant} doc(s) with significant changes "
-              "(use without --trivial-only to update all)")
-    return updated
+    return updated + indexed_new
 
 
 def cmd_update_from_transcript(transcript_path: str, dry_run: bool = True, max_docs: int = 3) -> int:
