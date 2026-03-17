@@ -2164,24 +2164,38 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
               if (
                 !isInternalSessionContext({ sessionKey: key }, { sessionId: prevSessionId })
                 && isSystemEnabled("memory")
-                && facade.shouldProcessLifecycleSignal(prevSessionId, {
+              ) {
+                // Apply the same guards as new_key: skip pre-install / wiped transcripts.
+                const mtimeFloorMs = installedAtMs > 0 ? installedAtMs : watcherStartMs;
+                let prevSize = -1;
+                let prevMtime = 0;
+                try {
+                  const prevSt = fs.statSync(getOpenClawSessionFile(prevSessionId));
+                  prevSize = prevSt.size;
+                  prevMtime = prevSt.mtimeMs;
+                } catch {}
+                if (prevSize <= 0) {
+                  writeHookTrace("session_index.key_transition_skip", { reason: "empty", session_id: prevSessionId, key });
+                } else if (prevMtime <= mtimeFloorMs) {
+                  writeHookTrace("session_index.key_transition_skip", { reason: "mtime", session_id: prevSessionId, key, prev_mtime: prevMtime, installed_at_ms: installedAtMs });
+                } else if (facade.shouldProcessLifecycleSignal(prevSessionId, {
                   label: "ResetSignal",
                   source: "session_index",
                   signature: `session_index:key_transition:${key}`,
-                })
-              ) {
-                facade.markLifecycleSignalFromHook(prevSessionId, "ResetSignal");
-                writeDaemonSignal(prevSessionId, "reset", {
-                  source: "session_index_key_transition",
-                  session_key: key,
-                  next_session_id: sessionId,
-                });
-                writeHookTrace("session_index.signal_queued", {
-                  signal: "reset",
-                  source: "key-transition",
-                  session_id: prevSessionId,
-                  session_key: key,
-                });
+                })) {
+                  facade.markLifecycleSignalFromHook(prevSessionId, "ResetSignal");
+                  writeDaemonSignal(prevSessionId, "reset", {
+                    source: "session_index_key_transition",
+                    session_key: key,
+                    next_session_id: sessionId,
+                  });
+                  writeHookTrace("session_index.signal_queued", {
+                    signal: "reset",
+                    source: "key-transition",
+                    session_id: prevSessionId,
+                    session_key: key,
+                  });
+                }
               }
               // Arm a targeted orphan check: OC may not have created the .reset.*
               // backup yet. The pending check runs each tick and emits the signal
