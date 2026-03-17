@@ -338,6 +338,10 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
 
     ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
     ANTHROPIC_VERSION = "2023-06-01"
+    # CC identity required for OAuth tokens to access sonnet/opus.
+    # Without these, the API restricts OAuth callers to haiku.
+    _CC_IDENTITY_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude."
+    _CC_USER_AGENT = "claude-cli/2.1.2 (external, cli)"
 
     # Sentinel values that mean "not configured"
     _MODEL_SENTINELS = ("", "default", None)
@@ -393,21 +397,40 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
 
         headers = {
             "Content-Type": "application/json",
+            "Accept": "application/json",
             "Authorization": f"Bearer {token}",
             "anthropic-version": self.ANTHROPIC_VERSION,
-            "anthropic-beta": "prompt-caching-2024-07-31,oauth-2025-04-20",
+            # claude-code-20250219 identity beta is required for OAuth tokens
+            # to access sonnet/opus — without it the API restricts to haiku.
+            "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+            "User-Agent": self._CC_USER_AGENT,
+            "x-app": "cli",
         }
 
         if not user_message:
             raise ValueError("Cannot make API call with empty user message")
 
+        # CC identity block must be first in the system array.
+        system_blocks = [
+            {
+                "type": "text",
+                "text": self._CC_IDENTITY_SYSTEM,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        if system_prompt:
+            system_blocks.append({
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            })
+
         body: dict = {
             "model": model,
             "max_tokens": max_tokens,
+            "system": system_blocks,
             "messages": [{"role": "user", "content": user_message}],
         }
-        if system_prompt:
-            body["system"] = system_prompt
 
         start_time = time.time()
         data_bytes = json.dumps(body).encode()
