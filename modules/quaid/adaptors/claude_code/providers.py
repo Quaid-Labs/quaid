@@ -395,7 +395,7 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
             "anthropic-version": self.ANTHROPIC_VERSION,
-            "anthropic-beta": "oauth-2025-04-20",
+            "anthropic-beta": "prompt-caching-2024-07-31,oauth-2025-04-20",
         }
 
         if not user_message:
@@ -483,18 +483,15 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             except Exception:
                 pass
             if e.code in (400, 401):
-                # credentials.json tokens are web-scoped and cannot be used
-                # for /v1/messages API calls — always give 400/401.  Do NOT
-                # attempt to refresh: CC manages its own token rotation and
-                # our refresh attempts consume CC's refresh token chain,
-                # breaking CC's own auth.  Fall through to the next layer.
+                # 400/401 can mean web-scoped token OR bad model name OR other
+                # request errors.  Log the actual API body prominently so
+                # failures are diagnosable, then fall through to next layer.
                 logger.warning(
-                    "[claude-code-oauth] HTTP %d from API — token is web-scoped "
-                    "(credentials.json tokens cannot call /v1/messages). "
-                    "Falling back to next auth layer. body: %s",
-                    e.code, body[:200],
+                    "[claude-code-oauth] HTTP %d from API — falling back. "
+                    "model=%s body: %s",
+                    e.code, model, body[:400],
                 )
-                raise _OAuthUnavailable(f"http_{e.code}_web_scoped_token") from e
+                raise _OAuthUnavailable(f"http_{e.code}") from e
             logger.error(
                 "[claude-code-oauth] HTTP %d from API — model=%s "
                 "max_tokens=%s system_len=%s user_len=%s body: %s",
