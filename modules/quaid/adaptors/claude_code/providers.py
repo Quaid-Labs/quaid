@@ -387,15 +387,38 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                     except Exception:
                         err_type = ""
                     if err_type == "invalid_request_error":
-                        logger.warning(
+                        # The stored accessToken is web-scoped (sk-ant-oat01-…) and
+                        # the API rejects it.  Try refreshing credentials — the OAuth
+                        # refresh endpoint returns an API-scoped token that works.
+                        logger.info(
                             "[claude-code-oauth] HTTP 400 invalid_request_error — "
-                            "OAuth token likely lacks API scope (credentials.json "
-                            "token is scoped for Claude.ai web, not /v1/messages). "
-                            "Fix: run a CC session and copy CLAUDE_CODE_OAUTH_TOKEN "
-                            "to ~/.auth-token via 'quaid config set-auth <token>', "
-                            "or set ANTHROPIC_API_KEY in daemon env. body: %s",
+                            "stored token lacks API scope; attempting credential "
+                            "refresh before falling back. body: %s",
                             body[:400],
                         )
+                        oauth = _read_credentials()
+                        refresh_tok = oauth.get("refreshToken", "") if oauth else ""
+                        if refresh_tok:
+                            new_block = _refresh_token(refresh_tok)
+                            if new_block:
+                                _write_credentials(new_block)
+                                try:
+                                    return self._api_call(
+                                        new_block["accessToken"],
+                                        model, messages, max_tokens, timeout,
+                                    )
+                                except Exception:
+                                    pass  # refresh didn't help — fall through
+                            else:
+                                logger.warning(
+                                    "[claude-code-oauth] refresh attempt returned "
+                                    "no block — falling back to API key layer"
+                                )
+                        else:
+                            logger.warning(
+                                "[claude-code-oauth] no refreshToken in credentials "
+                                "— falling back to API key layer"
+                            )
                         raise _OAuthUnavailable("400_invalid_request_error") from e
 
                 logger.error(
