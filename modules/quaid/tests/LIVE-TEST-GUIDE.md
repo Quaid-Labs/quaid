@@ -1271,6 +1271,24 @@ Verify from shell:
 ```bash
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
+```
+
+If the doc file exists but is not listed, register it manually:
+
+```bash
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry register <path-to-doc> --project cross-live-test 2>&1'
+```
+
+After the doc is registered, index it with the RAG janitor task (`docs update --apply` only refreshes
+source-derived docs; new standalone docs need janitor RAG indexing to become searchable):
+
+```bash
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task rag --apply 2>&1 | tail -20'
+```
+
+Then verify recall:
+
+```bash
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
 
