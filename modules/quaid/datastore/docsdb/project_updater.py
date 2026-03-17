@@ -29,7 +29,7 @@ from config import get_config
 from datastore.docsdb.registry import DocsRegistry
 from datastore.docsdb.updater import update_doc_from_diffs, update_doc_from_transcript, get_doc_purposes, log_doc_update
 from lib.delayed_requests import queue_delayed_request
-from lib.runtime_context import get_workspace_dir
+from lib.runtime_context import get_workspace_dir, get_quaid_home
 # llm_clients imported indirectly via docs_updater (update_doc_from_diffs calls Opus)
 PROJECT_HISTORY_FILENAME = "PROJECT.log"
 
@@ -43,6 +43,20 @@ def _resolve_path(relative: str) -> Path:
     if p.is_absolute():
         return p
     return _workspace() / relative
+
+
+def _resolve_project_home(home_dir: str) -> Path:
+    """Resolve a project home_dir to an absolute path.
+
+    Project home_dirs (e.g. 'shared/projects/quaid/') are relative to
+    QUAID_HOME, not to the per-instance workspace root.  Using instance_root
+    as the base (as _resolve_path does) silently points at the wrong directory
+    when the instance silo lives one level below QUAID_HOME.
+    """
+    p = Path(home_dir)
+    if p.is_absolute():
+        return p
+    return get_quaid_home() / home_dir
 
 
 def process_event(event_path: str) -> Dict:
@@ -714,7 +728,7 @@ def append_project_logs(
             print(f"[project-log] unknown project: {project_name}")
             continue
 
-        project_md = _resolve_path(defn.home_dir) / "PROJECT.md"
+        project_md = _resolve_project_home(defn.home_dir) / "PROJECT.md"
         if not project_md.exists():
             metrics["projects_missing_file"] += 1
             print(f"[project-log] missing PROJECT.md: {project_md}")
