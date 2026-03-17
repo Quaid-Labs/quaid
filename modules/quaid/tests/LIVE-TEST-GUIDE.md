@@ -887,7 +887,8 @@ ssh alfie.local 'echo "OC SOUL.snippets:"; wc -l ~/quaid/openclaw-main/SOUL.snip
 Run:
 
 ```bash
-ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1'
+# Dry-run must complete in ≤60s — hang here = regression in dry-run LLM/checkpoint bypass
+ssh alfie.local 'timeout 60 bash -c "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --dry-run 2>&1"; ec=$?; [ $ec -eq 0 ] && echo "PASS: dry-run completed" || echo "FAIL: dry-run exit=$ec (124=timeout=hang)"'
 ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task all --apply --approve 2>&1'
 ```
 
@@ -913,21 +914,58 @@ Fail:
 - snippets review task skipped entirely (all three snippet counters remain 0 and snippets file unchanged)
 - janitor exits with non-zero status
 
-### M10: Docs and Health
+### M10: Docs, Health, and Session CLI
 
-Run:
+Run health and stats:
 
 ```bash
 ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid health 2>&1'
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid doctor 2>&1'
 ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid stats 2>&1'
 ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs list 2>&1'
 ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs check 2>&1'
 ```
 
+**New-doc indexing via `docs update --apply`** (tests 470f9741 fix — newly registered standalone docs
+must be indexed without requiring `janitor --task rag`):
+
+```bash
+# Write a throwaway doc and register it
+ssh alfie.local 'echo "# M10 test\nThe carillon clock rings at noon." > /tmp/m10-test-doc.md'
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry register /tmp/m10-test-doc.md --project quaid 2>&1'
+
+# docs update must pick it up without janitor rag
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1'
+
+# Verify it is now searchable
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs search "carillon clock" 2>&1'
+
+# Cleanup
+ssh alfie.local 'rm -f /tmp/m10-test-doc.md'
+```
+
+Pass for new-doc test: `docs update --apply` output includes "Indexing new doc:" (not "all up-to-date"),
+and `docs search "carillon clock"` returns the doc.
+Fail: "All docs up-to-date" with no indexing = regression in new-doc detection.
+
+**Session CLI** (tests that extracted sessions are accessible via CLI):
+
+```bash
+# Should show sessions from M1–M4 extractions
+ssh alfie.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session list --limit 3 2>&1'
+
+# Load the most recent session
+SESSION_ID=$(ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session list --limit 1 --json 2>&1' | python3 -c "import sys,json; rows=json.load(sys.stdin); print(rows[0]['id'] if rows else '')" 2>/dev/null)
+[ -n "$SESSION_ID" ] && ssh alfie.local "QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid session load --session-id $SESSION_ID 2>&1 | head -40" || echo "WARN: no session ID returned"
+```
+
 Pass:
-- health is good enough to continue
+- health/doctor report no blocking errors
 - stats are sensible
 - docs commands run successfully
+- `docs update --apply` indexes newly registered doc without `janitor --task rag`
+- `session list` returns at least one session from M1–M4
+- `session load` returns a readable transcript
 
 ### M11: Snippet, Journal, and Project Log Generation
 
@@ -1279,12 +1317,16 @@ If the doc file exists but is not listed, register it manually:
 ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry register <path-to-doc> --project cross-live-test 2>&1'
 ```
 
-After the doc is registered, index it with the RAG janitor task (`docs update --apply` only refreshes
-source-derived docs; new standalone docs need janitor RAG indexing to become searchable):
+After the doc is registered, run `docs update --apply` to index it (new standalone docs with no
+existing chunks should be detected and indexed automatically — this is what M10 verifies):
 
 ```bash
-ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid janitor --task rag --apply 2>&1 | tail -20'
+ssh alfie.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs update --apply 2>&1 | tail -20'
 ```
+
+Expected output includes "Indexing new doc:" for the registered file. If it says "All docs up-to-date"
+instead, that is a regression — fall back to `janitor --task rag --apply` to unblock the test and
+report to claude-dev.
 
 Then verify recall:
 
