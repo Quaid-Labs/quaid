@@ -230,6 +230,21 @@ def hook_extract(args):
     try:
         from core.extraction_daemon import write_signal, ensure_alive
 
+        # Capture session-scoped OAuth token for the daemon.
+        # Stop/PreCompact hooks run after CC's auth is established, so
+        # CLAUDE_CODE_OAUTH_TOKEN may be available here even though it
+        # isn't in SessionInit hooks (which run before auth).
+        try:
+            _cc_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+            if _cc_token:
+                from lib.adapter import get_adapter as _get_adapter
+                _tok_path = _get_adapter().store_auth_token(_cc_token)
+                print(f"[quaid][{label}] auth token captured at {_tok_path}", file=sys.stderr)
+            else:
+                print(f"[quaid][{label}] CLAUDE_CODE_OAUTH_TOKEN not in env", file=sys.stderr)
+        except Exception as _te:
+            print(f"[quaid][{label}] auth token capture failed: {_te}", file=sys.stderr)
+
         # Ensure daemon is running (launch if not)
         try:
             ensure_alive()
