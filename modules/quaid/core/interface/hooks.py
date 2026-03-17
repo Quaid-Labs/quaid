@@ -342,6 +342,19 @@ def hook_session_init(args):
 
     current_session_id = hook_input.get("session_id", "")
 
+    # Refresh the adapter's auth token from the session-scoped CC OAuth token.
+    # CLAUDE_CODE_OAUTH_TOKEN is a properly API-scoped token that CC injects
+    # into its own process.  Writing it to .auth-token keeps the daemon and
+    # janitor able to make LLM calls without having to inherit this env var.
+    try:
+        import os as _os
+        _session_token = _os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+        if _session_token:
+            from lib.adapter import get_adapter as _get_adapter
+            _get_adapter().store_auth_token(_session_token)
+    except Exception:
+        pass  # Non-fatal — daemon falls back to credentials.json
+
     # Sweep orphaned sessions via the extraction daemon
     try:
         from core.extraction_daemon import sweep_orphaned_sessions, ensure_alive
