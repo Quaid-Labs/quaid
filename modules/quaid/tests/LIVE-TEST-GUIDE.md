@@ -238,13 +238,19 @@ for dst in [
 PY'
 ```
 
-Seed the quaid project directory in both instance silos so `PROJECT.log` can
-be written by extraction (the daemon looks for `projects/quaid/PROJECT.md`):
+Seed the quaid project in both instance silos so `PROJECT.log` can be written
+by extraction. The project must be **registered** in the docs DB (not just on
+disk) for the extraction daemon to find it:
 
 ```bash
-ssh example.local 'src=~/quaid/openclaw-main/projects/quaid/PROJECT.md; mkdir -p "$(dirname $src)"; [ -f "$src" ] || cp ~/quaid/projects/quaid/PROJECT.md "$src" && echo "seeded" || echo "already exists"'
-ssh example.local 'src=~/quaid/claude-code-main/projects/quaid/PROJECT.md; mkdir -p "$(dirname $src)"; [ -f "$src" ] || cp ~/quaid/projects/quaid/PROJECT.md "$src" && echo "seeded" || echo "already exists"'
+# OC instance
+ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
+# CC instance
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
 ```
+
+If the project already exists (e.g., re-running after a partial test), the
+command exits non-zero with "already exists" — that is fine, just continue.
 
 ## Execution Model
 
@@ -653,6 +659,12 @@ Step 1 — Clear stale nodes from the DB:
 ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(name) LIKE \"%niece%\" OR LOWER(name) LIKE \"%anne%\" OR LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
 ```
 
+Also search the content field — contamination facts about niece often land there:
+
+```bash
+ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT id, name FROM nodes WHERE LOWER(content) LIKE \"%niece%\" OR LOWER(content) LIKE \"%diana%\" OR LOWER(content) LIKE \"%alice%\" ORDER BY created_at DESC LIMIT 20;"'
+```
+
 Delete each found node (replace `<id>` with actual IDs):
 
 ```bash
@@ -662,7 +674,7 @@ ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main
 Verify clean:
 
 ```bash
-ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT COUNT(*) FROM nodes WHERE LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\";"'
+ssh example.local 'DB=~/quaid/data/memory.db; sqlite3 "$DB" "SELECT COUNT(*) FROM nodes WHERE LOWER(name) LIKE \"%diana%\" OR LOWER(name) LIKE \"%alice%\" OR LOWER(name) LIKE \"%niece%\" OR LOWER(content) LIKE \"%niece%\" OR LOWER(content) LIKE \"%diana%\" OR LOWER(content) LIKE \"%alice%\";"'
 # Must return 0
 ```
 
