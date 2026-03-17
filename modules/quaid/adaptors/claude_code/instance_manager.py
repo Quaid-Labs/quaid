@@ -5,6 +5,7 @@ Creates a Quaid silo and writes QUAID_INSTANCE into the target project's
 """
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -45,8 +46,26 @@ class ClaudeCodeInstanceManager(InstanceManager):
 
         if not dry_run:
             self._write_settings(project_dir, instance_id)
+            self._capture_session_token()
 
         return silo_root
+
+    def _capture_session_token(self) -> None:
+        """Write CLAUDE_CODE_OAUTH_TOKEN to the adapter's auth-token file.
+
+        Called at install time so the extraction daemon and janitor can make
+        API calls without needing CLAUDE_CODE_OAUTH_TOKEN in their environment.
+        The session_init hook also calls this on every session start to keep
+        the token fresh (CC issues a new token per session).
+        """
+        token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+        if not token:
+            return
+        try:
+            path = self.adapter.store_auth_token(token)
+            print(f"  Auth token written to {path}")
+        except Exception as e:
+            print(f"  Warning: could not write auth token: {e}")
 
     def _write_settings(self, project_dir: Path, instance_id: str) -> None:
         """Write QUAID_INSTANCE into <project_dir>/.claude/settings.json."""
