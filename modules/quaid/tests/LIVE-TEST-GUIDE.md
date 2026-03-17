@@ -418,7 +418,7 @@ Quick checks:
 
 ```bash
 ssh example.local 'wc -l ~/.claude/rules/quaid-projects.md && sed -n "1,220p" ~/.claude/rules/quaid-projects.md'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid project list 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
 ssh example.local 'find ~/quaid/shared/projects -maxdepth 3 -type f | sort'
 ssh example.local 'python3 - <<\"PY\"
 import json
@@ -827,10 +827,12 @@ If Phase 1 failed, manually note it as a gap and proceed to verify CRUD with a d
 Verify from shell:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project list 2>&1'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project show live-test 2>&1 || true'
+# Use registry list (SQLite backend) — quaid project list reads a separate JSON file not used by the agent
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1'
 ssh example.local 'test -f /tmp/quaid-live-src/main.py && echo source_still_exists'
 ```
+
+Expected: live-test project absent from registry (deleted), source file still present.
 
 #### Phase 4: Scratch dir namespacing
 
@@ -845,7 +847,8 @@ Verify:
 
 ```bash
 ssh example.local 'ls ~/quaid/shared/projects/misc--openclaw-main/ 2>/dev/null && echo "PASS: file in misc project" || echo "FAIL: misc project empty or missing"'
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project show misc--openclaw-main 2>&1'
+# Use registry show (SQLite backend) — quaid project show reads JSON backend
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep misc--openclaw'
 ```
 
 After project CRUD, trigger extraction to generate project logs. Tell the agent
@@ -1266,7 +1269,7 @@ Ask OC naturally:
 Verify from shell:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid project show cross-live-test 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid recall "north pier beacon" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
@@ -1288,7 +1291,7 @@ Ask CC naturally:
 Verify from shell:
 
 ```bash
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid project show cross-live-test 2>&1'
+ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid registry list 2>&1 | grep cross-live-test'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid docs list --project cross-live-test 2>&1'
 ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid recall "Ember Glass" "{\"stores\":[\"docs\"],\"project\":\"cross-live-test\"}" 2>&1'
 ```
