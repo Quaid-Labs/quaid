@@ -26,8 +26,10 @@ class ClaudeCodeInstanceManager(InstanceManager):
         ) + "\n"
 
     # Default model IDs written during installation.
-    # Short aliases only — dated opus IDs return 404 on the OAuth endpoint.
-    DEFAULT_DEEP_MODEL = "claude-opus-4-6"
+    # Both default to haiku: direct OAuth API access (Layer 1b) is capped at
+    # haiku tier for standard tokens.  Override with --deep-model if your
+    # token has higher entitlement (e.g. claude-sonnet-4-6, claude-opus-4-6).
+    DEFAULT_DEEP_MODEL = "claude-haiku-4-5-20251001"
     DEFAULT_FAST_MODEL = "claude-haiku-4-5-20251001"
 
     def make_instance(
