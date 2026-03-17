@@ -25,7 +25,21 @@ class ClaudeCodeInstanceManager(InstanceManager):
             indent=2,
         ) + "\n"
 
-    def make_instance(self, project_path: str, name: str, *, dry_run: bool = False) -> Path:
+    # Default model IDs written during installation.
+    # Short aliases only — dated opus IDs return 404 on the OAuth endpoint.
+    DEFAULT_DEEP_MODEL = "claude-opus-4-6"
+    DEFAULT_FAST_MODEL = "claude-haiku-4-5-20251001"
+
+    def make_instance(
+        self,
+        project_path: str,
+        name: str,
+        *,
+        token: str = "",
+        deep_model: str = "",
+        fast_model: str = "",
+        dry_run: bool = False,
+    ) -> Path:
         """Create a Quaid instance silo and wire it into a CC project.
 
         Args:
@@ -33,6 +47,9 @@ class ClaudeCodeInstanceManager(InstanceManager):
                           receive a .claude/settings.json).
             name: Short label for the instance (e.g. "myapp").
                   Full instance ID will be "<prefix>-<name>" (e.g. "claude-code-myapp").
+            token: API-scoped OAuth token to store for daemon use.
+            deep_model: Override for deep-reasoning model ID.
+            fast_model: Override for fast-reasoning model ID.
 
         Returns:
             The silo root path.
@@ -46,26 +63,67 @@ class ClaudeCodeInstanceManager(InstanceManager):
 
         if not dry_run:
             self._write_settings(project_dir, instance_id)
-            self._capture_session_token()
+            self._store_auth_token(token)
+            self._write_model_config(
+                silo_root,
+                deep_model=deep_model or self.DEFAULT_DEEP_MODEL,
+                fast_model=fast_model or self.DEFAULT_FAST_MODEL,
+            )
 
         return silo_root
 
-    def _capture_session_token(self) -> None:
-        """Write CLAUDE_CODE_OAUTH_TOKEN to the adapter's auth-token file.
+    def _store_auth_token(self, explicit_token: str = "") -> None:
+        """Write an API-scoped OAuth token to the silo's .auth-token file.
 
-        Called at install time so the extraction daemon and janitor can make
-        API calls without needing CLAUDE_CODE_OAUTH_TOKEN in their environment.
-        The session_init hook also calls this on every session start to keep
-        the token fresh (CC issues a new token per session).
+        Token resolution order:
+          1. explicit_token argument (passed by caller / installer CLI)
+          2. QUAID_AUTH_TOKEN env var (set by user or CI environment)
+          3. CLAUDE_CODE_OAUTH_TOKEN env var (available in some CC contexts)
+
+        If no token is found, prints a warning and skips.  The daemon will
+        fall back to 'claude -p' subprocess calls in that case.
         """
-        token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+        token = (
+            explicit_token.strip()
+            or os.environ.get("QUAID_AUTH_TOKEN", "").strip()
+            or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+        )
         if not token:
+            print(
+                "  Warning: no auth token provided.  Daemon LLM calls will fail "
+                "without a token.  Re-run install with --token <your-token> "
+                "or set QUAID_AUTH_TOKEN."
+            )
             return
         try:
             path = self.adapter.store_auth_token(token)
             print(f"  Auth token written to {path}")
         except Exception as e:
             print(f"  Warning: could not write auth token: {e}")
+
+    def _write_model_config(self, silo_root: Path, deep_model: str, fast_model: str) -> None:
+        """Write model IDs into the instance config/memory.json.
+
+        The daemon reads models.deep_reasoning and models.fast_reasoning from
+        this file.  Without explicit values the provider has no fallback and
+        will raise at call time.
+        """
+        config_path = silo_root / "config" / "memory.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cfg = {}
+        if config_path.is_file():
+            try:
+                cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                cfg = {}
+
+        models = cfg.setdefault("models", {})
+        models["deepReasoning"] = deep_model
+        models["fastReasoning"] = fast_model
+
+        config_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        print(f"  Model config written: deep={deep_model} fast={fast_model}")
 
     def _write_settings(self, project_dir: Path, instance_id: str) -> None:
         """Write QUAID_INSTANCE into <project_dir>/.claude/settings.json."""

@@ -170,32 +170,44 @@ class ClaudeCodeAdapter(QuaidAdapter):
         }
 
     def _cli_make_instance(self, args: list) -> None:
-        """quaid claudecode make_instance <path> <name> [--token <token>] [--dry-run]"""
+        """quaid claudecode make_instance <path> <name> [--token <token>] [--deep-model <id>] [--fast-model <id>] [--dry-run]"""
         if len(args) < 2:
-            print("Usage: quaid claudecode make_instance <project-path> <name> [--token <token>] [--dry-run]")
-            print("  project-path  Path to the Claude Code project root")
-            print("  name          Short label for the instance (e.g. 'myapp')")
-            print("  --token       API-scoped OAuth token for daemon LLM calls")
+            print("Usage: quaid claudecode make_instance <project-path> <name> [options]")
+            print("  project-path   Path to the Claude Code project root")
+            print("  name           Short label for the instance (e.g. 'myapp')")
+            print("  --token        API-scoped OAuth token for daemon LLM calls")
+            print("  --deep-model   Deep reasoning model ID (default: claude-opus-4-6)")
+            print("  --fast-model   Fast reasoning model ID (default: claude-haiku-4-5-20251001)")
+            print("  --dry-run      Preview without making changes")
             return
         project_path, name = args[0], args[1]
         dry_run = "--dry-run" in args
         token = ""
+        deep_model = ""
+        fast_model = ""
         for i, a in enumerate(args):
             if a == "--token" and i + 1 < len(args):
                 token = args[i + 1]
-                break
+            elif a == "--deep-model" and i + 1 < len(args):
+                deep_model = args[i + 1]
+            elif a == "--fast-model" and i + 1 < len(args):
+                fast_model = args[i + 1]
 
         mgr = self.get_instance_manager()
         instance_id = mgr.resolve_instance_id(name)
+        _deep = deep_model or mgr.DEFAULT_DEEP_MODEL
+        _fast = fast_model or mgr.DEFAULT_FAST_MODEL
 
         if dry_run:
             print(f"[dry-run] Would create silo: {mgr.adapter.quaid_home() / instance_id}")
             print(f"[dry-run] Would write QUAID_INSTANCE={instance_id} to {project_path}/.claude/settings.json")
+            print(f"[dry-run] Would write models: deep={_deep} fast={_fast}")
             if token:
                 print(f"[dry-run] Would write auth token to adapter config dir")
             return
 
-        silo_root = mgr.make_instance(project_path, name, token=token)
+        silo_root = mgr.make_instance(project_path, name, token=token,
+                                      deep_model=deep_model, fast_model=fast_model)
         print(f"Created silo: {silo_root}")
         print(f"Instance ID:  {instance_id}")
         print(f"Wrote QUAID_INSTANCE={instance_id} to {project_path}/.claude/settings.json")

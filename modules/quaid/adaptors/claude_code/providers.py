@@ -339,10 +339,7 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
     ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
     ANTHROPIC_VERSION = "2023-06-01"
 
-    # CC-specific defaults for each tier
-    _DEFAULT_DEEP_MODEL = "claude-opus-4-6"
-    _DEFAULT_FAST_MODEL = "claude-haiku-4-5"
-    # Config sentinel values meaning "adapter decides"
+    # Sentinel values that mean "not configured"
     _MODEL_SENTINELS = ("", "default", None)
 
     def __init__(
@@ -374,11 +371,14 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         return self._api_key_provider
 
     def _resolve_model(self, model_tier: str) -> str:
-        if model_tier == "fast":
-            m = self._fast_model
-            return m if m not in self._MODEL_SENTINELS else self._DEFAULT_FAST_MODEL
-        m = self._deep_model
-        return m if m not in self._MODEL_SENTINELS else self._DEFAULT_DEEP_MODEL
+        m = self._fast_model if model_tier == "fast" else self._deep_model
+        if m in self._MODEL_SENTINELS:
+            raise RuntimeError(
+                f"No model configured for tier '{model_tier}'. "
+                f"Run 'quaid claudecode make_instance' to set models.deepReasoning "
+                f"and models.fastReasoning in the instance config."
+            )
+        return m
 
     def _api_call(self, token: str, model: str, messages: list,
                   max_tokens: int, timeout: float) -> LLMResult:
