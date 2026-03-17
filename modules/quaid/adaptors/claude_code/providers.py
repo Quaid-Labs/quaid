@@ -285,7 +285,7 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
             "anthropic-version": self.ANTHROPIC_VERSION,
-            "anthropic-beta": "prompt-caching-2024-07-31,oauth-2025-04-20",
+            "anthropic-beta": "oauth-2025-04-20",
         }
 
         if not user_message:
@@ -297,13 +297,7 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             "messages": [{"role": "user", "content": user_message}],
         }
         if system_prompt:
-            body["system"] = [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ]
+            body["system"] = system_prompt
 
         start_time = time.time()
         data_bytes = json.dumps(body).encode()
