@@ -193,20 +193,24 @@ class AnthropicLLMProvider(LLMProvider):
             elif m["role"] == "user":
                 user_message = m["content"]
 
+        if not user_message:
+            raise ValueError("Cannot make API call with empty user message")
+
         headers = _anthropic_headers(self._api_key)
 
-        body = {
+        body: dict = {
             "model": model,
             "max_tokens": max_tokens,
-            "system": [
+            "messages": [{"role": "user", "content": user_message}],
+        }
+        if system_prompt:
+            body["system"] = [
                 {
                     "type": "text",
                     "text": system_prompt,
                     "cache_control": {"type": "ephemeral"},
                 }
-            ],
-            "messages": [{"role": "user", "content": user_message}],
-        }
+            ]
 
         retry_attempts = max(1, int(os.environ.get("ANTHROPIC_RETRY_ATTEMPTS", "1") or "1"))
         backoff_s = max(0.0, float(os.environ.get("ANTHROPIC_RETRY_BACKOFF_S", "2") or "2"))
