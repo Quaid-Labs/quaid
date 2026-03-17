@@ -351,9 +351,12 @@ def hook_session_init(args):
         _session_token = _os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
         if _session_token:
             from lib.adapter import get_adapter as _get_adapter
-            _get_adapter().store_auth_token(_session_token)
-    except Exception:
-        pass  # Non-fatal — daemon falls back to credentials.json
+            _tok_path = _get_adapter().store_auth_token(_session_token)
+            print(f"[quaid][session-init] auth token refreshed at {_tok_path}", file=sys.stderr)
+        else:
+            print("[quaid][session-init] CLAUDE_CODE_OAUTH_TOKEN not in env — .auth-token not updated", file=sys.stderr)
+    except Exception as _e:
+        print(f"[quaid][session-init] auth token capture failed: {_e}", file=sys.stderr)
 
     # Sweep orphaned sessions via the extraction daemon
     try:
