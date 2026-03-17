@@ -19,7 +19,11 @@ function tryImportClackPath() {
       if (cliBin) {
         try {
           const resolved = fs.realpathSync(cliBin);
-          const pkgRoot = path.join(path.dirname(resolved), "..");
+          // pkgRoot is the directory containing the OC package (e.g.
+          // /opt/homebrew/lib/node_modules/openclaw). The binary resolves to
+          // a file inside that dir (e.g. openclaw.mjs), so dirname(resolved)
+          // IS the package root — not its parent.
+          const pkgRoot = path.dirname(resolved);
           candidates.push(path.join(pkgRoot, "node_modules", "@clack", "prompts", "dist", "index.mjs"));
         } catch {}
       }
