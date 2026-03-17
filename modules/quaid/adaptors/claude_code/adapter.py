@@ -170,14 +170,20 @@ class ClaudeCodeAdapter(QuaidAdapter):
         }
 
     def _cli_make_instance(self, args: list) -> None:
-        """quaid claudecode make_instance <path> <name>"""
+        """quaid claudecode make_instance <path> <name> [--token <token>] [--dry-run]"""
         if len(args) < 2:
-            print("Usage: quaid claudecode make_instance <project-path> <name>")
+            print("Usage: quaid claudecode make_instance <project-path> <name> [--token <token>] [--dry-run]")
             print("  project-path  Path to the Claude Code project root")
             print("  name          Short label for the instance (e.g. 'myapp')")
+            print("  --token       API-scoped OAuth token for daemon LLM calls")
             return
         project_path, name = args[0], args[1]
         dry_run = "--dry-run" in args
+        token = ""
+        for i, a in enumerate(args):
+            if a == "--token" and i + 1 < len(args):
+                token = args[i + 1]
+                break
 
         mgr = self.get_instance_manager()
         instance_id = mgr.resolve_instance_id(name)
@@ -185,9 +191,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
         if dry_run:
             print(f"[dry-run] Would create silo: {mgr.adapter.quaid_home() / instance_id}")
             print(f"[dry-run] Would write QUAID_INSTANCE={instance_id} to {project_path}/.claude/settings.json")
+            if token:
+                print(f"[dry-run] Would write auth token to adapter config dir")
             return
 
-        silo_root = mgr.make_instance(project_path, name)
+        silo_root = mgr.make_instance(project_path, name, token=token)
         print(f"Created silo: {silo_root}")
         print(f"Instance ID:  {instance_id}")
         print(f"Wrote QUAID_INSTANCE={instance_id} to {project_path}/.claude/settings.json")
