@@ -363,6 +363,13 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             return self._api_call(token, model, messages, max_tokens, timeout)
         except urllib.error.HTTPError as e:
             if e.code != 401:
+                try:
+                    body = e.read().decode("utf-8", errors="replace")
+                    logger.error(
+                        "[claude-code-oauth] HTTP %d from API — body: %s", e.code, body[:800]
+                    )
+                except Exception:
+                    pass
                 raise
 
             # 401 — try one refresh+retry
