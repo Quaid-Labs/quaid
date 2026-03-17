@@ -359,10 +359,16 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
 
         model = self._resolve_model(model_tier)
 
-        logger.debug(
-            "[claude-code-oauth] API call: model=%s tier=%s max_tokens=%s content_len=%s",
-            model, model_tier, max_tokens,
-            sum(len(m.get("content", "")) for m in messages),
+        system_len = sum(
+            len(m.get("content", "")) for m in messages if m.get("role") == "system"
+        )
+        user_len = sum(
+            len(m.get("content", "")) for m in messages if m.get("role") == "user"
+        )
+        logger.info(
+            "[claude-code-oauth] API call: model=%s tier=%s max_tokens=%s "
+            "system_len=%s user_len=%s",
+            model, model_tier, max_tokens, system_len, user_len,
         )
         try:
             return self._api_call(token, model, messages, max_tokens, timeout)
@@ -374,8 +380,9 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                 except Exception as read_err:
                     body = f"<read failed: {read_err}>"
                 logger.error(
-                    "[claude-code-oauth] HTTP %d from API — model=%s body: %s",
-                    e.code, model, body[:1200],
+                    "[claude-code-oauth] HTTP %d from API — model=%s "
+                    "max_tokens=%s system_len=%s user_len=%s body: %s",
+                    e.code, model, max_tokens, system_len, user_len, body[:1200],
                 )
                 raise
 
