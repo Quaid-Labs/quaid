@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Claude Code OAuth constants
 _CREDS_PATH = Path.home() / ".claude" / ".credentials.json"
-_TOKEN_ENDPOINT = "https://console.anthropic.com/v1/oauth/token"
+_TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token"
 _CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 # Refresh 5 minutes before expiry (same buffer Claude Code uses)
 _REFRESH_BUFFER_MS = 300_000
@@ -79,9 +79,13 @@ def _refresh_token(refresh_token: str) -> Optional[dict]:
         "client_id": client_id,
     }).encode()
 
+    # Cloudflare blocks generic Python UAs on platform.claude.com; use
+    # the same User-Agent as the Claude Code CLI to pass the bot check.
+    cc_version = os.environ.get("CLAUDE_CODE_VERSION", "")
+    ua = f"Claude-Code/{cc_version}" if cc_version else "Claude-Code"
     req = urllib.request.Request(
         endpoint, data=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "User-Agent": ua},
         method="POST",
     )
 
