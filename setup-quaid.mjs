@@ -3147,7 +3147,7 @@ except Exception as e:
     if (_ensureOpenClawPluginsAllowQuaid()) {
       log.info("Ensured plugins.allow includes: quaid");
     }
-    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 8_000);
+    await ensureGatewayReadyOrThrow(_resolveInstallerMessageCli(), "plugin registration", 30_000);
     enableRequiredOpenClawHooks();
   }
 
