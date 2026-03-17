@@ -433,7 +433,12 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             return self._try_oauth_call(messages, model_tier, max_tokens, timeout)
         except _OAuthUnavailable as e:
             reason = str(e)
-            if fail_hard:
+            # 400 scope-mismatch: the token definitively cannot work for this
+            # endpoint (credentials.json token is web-scoped, not API-scoped).
+            # Always fall through to the API key layer — this is a known setup
+            # gap, not a transient failure, so fail-hard should not block it.
+            scope_mismatch = reason == "400_invalid_request_error"
+            if fail_hard and not scope_mismatch:
                 raise RuntimeError(
                     f"OAuth unavailable ({reason}) and failHard is enabled. "
                     f"Set CLAUDE_CODE_OAUTH_TOKEN, run 'claude login', "
