@@ -1,18 +1,27 @@
 """LLM providers for the Claude Code adapter.
 
-3-layer authentication fallback:
-  1. CLAUDE_CODE_OAUTH_TOKEN env var (explicit override)
-  2. On-disk OAuth token from ~/.claude/.credentials.json (with refresh)
-  3. ANTHROPIC_API_KEY env var (direct API key)
+Authentication layers (tried in order):
+  0. claude -p subprocess  — delegates auth to the installed CC binary (primary)
+  1a. CLAUDE_CODE_OAUTH_TOKEN env var  — explicit override
+  1b. .auth-token file  — long-lived token written by install/hooks
+  2. ~/.claude/.credentials.json  — on-disk OAuth token (read-only, no refresh)
+  3. ANTHROPIC_API_KEY env var  — direct API key fallback
+
+Layer 0 is the preferred path for a standard CC installation. The credentials.json
+tokens (layer 2) are web-scoped and cannot be used directly for API calls; the
+refresh flow is intentionally omitted to avoid interfering with CC's own token
+management.
 
 Fail-hard behavior:
   - failHard=true:  fail immediately at the first gate that fails, no fallback
-  - failHard=false: fall through all 3 layers with loud stderr warnings at each step
+  - failHard=false: fall through all layers with loud stderr warnings at each step
 """
 
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -228,6 +237,83 @@ class _OAuthUnavailable(Exception):
     pass
 
 
+class ClaudeCodeCLIProvider(LLMProvider):
+    """Layer 0: LLM calls via 'claude -p' subprocess.
+
+    Delegates authentication entirely to the installed Claude Code binary.
+    No token management required — CC handles its own OAuth flow.
+    This is the primary provider for standard CC installations.
+    """
+
+    _TIER_TO_MODEL = {"deep": "opus", "fast": "haiku"}
+    _SEARCH_PATHS = ("/opt/homebrew/bin/claude", "/usr/local/bin/claude")
+
+    def __init__(self, claude_bin: Optional[str] = None):
+        self._claude_bin = claude_bin or shutil.which("claude") or next(
+            (p for p in self._SEARCH_PATHS if os.path.isfile(p)), None
+        )
+
+    def llm_call(self, messages, model_tier="deep", max_tokens=4000, timeout=600):
+        if not self._claude_bin:
+            raise RuntimeError("claude binary not found in PATH")
+
+        system = next((m["content"] for m in messages if m.get("role") == "system"), "")
+        user = next((m["content"] for m in messages if m.get("role") == "user"), "")
+        if not user:
+            raise ValueError("No user message")
+
+        model = self._TIER_TO_MODEL.get(model_tier, "opus")
+        cmd = [
+            self._claude_bin, "-p", user,
+            "--model", model,
+            "--output-format", "json",
+            "--no-session-persistence",
+            "--dangerously-skip-permissions",
+        ]
+        if system:
+            cmd += ["--system-prompt", system]
+
+        start = time.time()
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout,
+                env={**os.environ, "PATH": os.environ.get("PATH", "") +
+                     ":/opt/homebrew/bin:/usr/local/bin"},
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"claude -p timed out after {timeout}s") from exc
+
+        duration = time.time() - start
+
+        if not proc.stdout.strip():
+            raise RuntimeError(
+                f"claude -p produced no output (rc={proc.returncode}): "
+                f"{proc.stderr[:300]}"
+            )
+
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"claude -p non-JSON output: {proc.stdout[:200]}"
+            ) from exc
+
+        if data.get("is_error"):
+            raise RuntimeError(f"claude -p error: {data.get('result', '')[:300]}")
+
+        usage = data.get("usage", {})
+        return LLMResult(
+            text=data.get("result", ""),
+            duration=duration,
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+            cache_creation_tokens=usage.get("cache_creation_input_tokens", 0),
+            model=model,
+            truncated=data.get("stop_reason", "") == "max_tokens",
+        )
+
+
 class ClaudeCodeOAuthLLMProvider(LLMProvider):
     """3-layer auth fallback for Claude Code LLM calls.
 
@@ -260,6 +346,11 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         self._deep_model = deep_model
         self._fast_model = fast_model
         self._api_key_provider: Optional[AnthropicLLMProvider] = None
+
+    def _get_cli_provider(self) -> Optional[ClaudeCodeCLIProvider]:
+        """Layer 0: claude -p subprocess provider."""
+        p = ClaudeCodeCLIProvider()
+        return p if p._claude_bin else None
 
     def _get_api_key_provider(self) -> Optional[AnthropicLLMProvider]:
         """Layer 3: API key fallback provider."""
@@ -379,107 +470,56 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         try:
             return self._api_call(token, model, messages, max_tokens, timeout)
         except urllib.error.HTTPError as e:
-            if e.code == 401:
-                pass  # handled below
-            else:
-                body = "<unread>"
-                try:
-                    body = e.read().decode("utf-8", errors="replace") or "<empty>"
-                except Exception as read_err:
-                    body = f"<read failed: {read_err}>"
-
-                # 400 invalid_request_error with generic "Error" message is the
-                # Anthropic API's response when an OAuth token lacks API scope
-                # (e.g. credentials.json token is scoped for Claude.ai web, not
-                # the /v1/messages API endpoint).  Treat it as OAuth unavailable
-                # so the fallback chain (API key layer) can take over.
-                if e.code == 400:
-                    try:
-                        err_type = json.loads(body).get("error", {}).get("type", "")
-                    except Exception:
-                        err_type = ""
-                    if err_type == "invalid_request_error":
-                        # The stored accessToken is web-scoped (sk-ant-oat01-…) and
-                        # the API rejects it.  Try refreshing credentials — the OAuth
-                        # refresh endpoint returns an API-scoped token that works.
-                        logger.info(
-                            "[claude-code-oauth] HTTP 400 invalid_request_error — "
-                            "stored token lacks API scope; attempting credential "
-                            "refresh before falling back. body: %s",
-                            body[:400],
-                        )
-                        oauth = _read_credentials()
-                        refresh_tok = oauth.get("refreshToken", "") if oauth else ""
-                        if refresh_tok:
-                            new_block = _refresh_token(refresh_tok)
-                            if new_block:
-                                _write_credentials(new_block)
-                                try:
-                                    return self._api_call(
-                                        new_block["accessToken"],
-                                        model, messages, max_tokens, timeout,
-                                    )
-                                except Exception:
-                                    pass  # refresh didn't help — fall through
-                            else:
-                                logger.warning(
-                                    "[claude-code-oauth] refresh attempt returned "
-                                    "no block — falling back to API key layer"
-                                )
-                        else:
-                            logger.warning(
-                                "[claude-code-oauth] no refreshToken in credentials "
-                                "— falling back to API key layer"
-                            )
-                        raise _OAuthUnavailable("400_invalid_request_error") from e
-
-                logger.error(
-                    "[claude-code-oauth] HTTP %d from API — model=%s "
-                    "max_tokens=%s system_len=%s user_len=%s body: %s",
-                    e.code, model, max_tokens, system_len, user_len, body[:1200],
-                )
-                raise
-
-            # 401 — try one refresh+retry
-            logger.info("[claude-code-oauth] 401 on API call, attempting token refresh")
-            oauth = _read_credentials()
-            refresh_tok = oauth.get("refreshToken", "") if oauth else ""
-            if not refresh_tok:
-                raise _OAuthUnavailable("401_no_refresh_token") from e
-
-            new_block = _refresh_token(refresh_tok)
-            if not new_block:
-                raise _OAuthUnavailable("401_refresh_failed") from e
-
-            _write_credentials(new_block)
+            body = "<unread>"
             try:
-                return self._api_call(
-                    new_block["accessToken"], model, messages, max_tokens, timeout,
-                )
+                body = e.read().decode("utf-8", errors="replace") or "<empty>"
             except Exception:
-                raise _OAuthUnavailable("401_persisted_after_refresh") from e
+                pass
+            if e.code in (400, 401):
+                # credentials.json tokens are web-scoped and cannot be used
+                # for /v1/messages API calls — always give 400/401.  Do NOT
+                # attempt to refresh: CC manages its own token rotation and
+                # our refresh attempts consume CC's refresh token chain,
+                # breaking CC's own auth.  Fall through to the next layer.
+                logger.warning(
+                    "[claude-code-oauth] HTTP %d from API — token is web-scoped "
+                    "(credentials.json tokens cannot call /v1/messages). "
+                    "Falling back to next auth layer. body: %s",
+                    e.code, body[:200],
+                )
+                raise _OAuthUnavailable(f"http_{e.code}_web_scoped_token") from e
+            logger.error(
+                "[claude-code-oauth] HTTP %d from API — model=%s "
+                "max_tokens=%s system_len=%s user_len=%s body: %s",
+                e.code, model, max_tokens, system_len, user_len, body[:1200],
+            )
+            raise
 
     def llm_call(self, messages, model_tier="deep",
                  max_tokens=4000, timeout=600):
         fail_hard = is_fail_hard_enabled()
 
-        # --- Layer 1+2: OAuth (env token or on-disk with refresh) ---
+        # --- Layer 0: claude -p subprocess (primary for CC installations) ---
+        cli = self._get_cli_provider()
+        if cli:
+            try:
+                return cli.llm_call(messages, model_tier=model_tier,
+                                    max_tokens=max_tokens, timeout=timeout)
+            except Exception as e:
+                if fail_hard:
+                    raise
+                logger.warning("[claude-code] claude -p failed (%s), trying OAuth layers", e)
+
+        # --- Layer 1+2: OAuth (env token or on-disk, no refresh) ---
         try:
             return self._try_oauth_call(messages, model_tier, max_tokens, timeout)
         except _OAuthUnavailable as e:
-            reason = str(e)
-            # 400 scope-mismatch: the token definitively cannot work for this
-            # endpoint (credentials.json token is web-scoped, not API-scoped).
-            # Always fall through to the API key layer — this is a known setup
-            # gap, not a transient failure, so fail-hard should not block it.
-            scope_mismatch = reason == "400_invalid_request_error"
-            if fail_hard and not scope_mismatch:
+            if fail_hard:
                 raise RuntimeError(
-                    f"OAuth unavailable ({reason}) and failHard is enabled. "
-                    f"Set CLAUDE_CODE_OAUTH_TOKEN, run 'claude login', "
-                    f"or set ANTHROPIC_API_KEY and disable failHard."
+                    f"OAuth unavailable ({e}) and failHard is enabled. "
+                    f"Ensure 'claude' is installed and authenticated."
                 ) from e
-            _warn_oauth_fallback(reason)
+            _warn_oauth_fallback(str(e))
         except Exception as e:
             if fail_hard:
                 raise
@@ -498,9 +538,10 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
         # All layers exhausted
         raise RuntimeError(
             "All LLM auth methods failed.\n"
+            "  Layer 0: claude -p failed or claude binary not found\n"
             "  Layer 1a: CLAUDE_CODE_OAUTH_TOKEN env var not set\n"
             "  Layer 1b: No adapter auth token (run 'quaid config set-auth <token>')\n"
-            "  Layer 2: On-disk OAuth token expired, refresh failed\n"
+            "  Layer 2: On-disk OAuth token not usable (web-scoped)\n"
             "  Layer 3: ANTHROPIC_API_KEY not set\n"
             "\n"
             "Fix: run 'claude setup-token', then 'quaid config set-auth <token>', "
