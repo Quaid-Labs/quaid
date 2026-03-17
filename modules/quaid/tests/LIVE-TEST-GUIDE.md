@@ -243,14 +243,28 @@ by extraction. The project must be **registered** in the docs DB (not just on
 disk) for the extraction daemon to find it:
 
 ```bash
-# OC instance
+# OC instance — CLI command (works reliably for OC)
 ssh example.local 'QUAID_HOME=~/quaid QUAID_INSTANCE=openclaw-main ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
-# CC instance
-ssh example.local 'cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main ~/.openclaw/extensions/quaid/quaid registry create-project quaid --description "Quaid development project" 2>&1; true'
-```
 
-If the project already exists (e.g., re-running after a partial test), the
-command exits non-zero with "already exists" — that is fine, just continue.
+# CC instance — inject definition directly (CLI "already exists" false-positive
+# can occur due to config singleton state; direct injection is reliable)
+ssh example.local 'python3 -c "
+import json
+p = \"/Users/owner/quaid/claude-code-main/config/memory.json\"
+with open(p) as f: d = json.load(f)
+if \"quaid\" not in d[\"projects\"][\"definitions\"]:
+    d[\"projects\"][\"definitions\"][\"quaid\"] = {
+        \"label\": \"Quaid\", \"home_dir\": \"../shared/projects/quaid/\",
+        \"source_roots\": [], \"auto_index\": True, \"patterns\": [\"*.md\"],
+        \"exclude\": [\"*.db\", \"*.log\", \"*.pyc\", \"__pycache__/\"],
+        \"description\": \"Quaid development project\", \"state\": \"active\"
+    }
+    with open(p, \"w\") as f: json.dump(d, f, indent=2)
+    print(\"Injected quaid project definition\")
+else:
+    print(\"quaid already in definitions\")
+"'
+```
 
 ## Execution Model
 
