@@ -611,6 +611,13 @@ def hook_subagent_stop(args):
 
 
 def main():
+    # Prevent recursive CC session spawning: any LLM calls made from within a
+    # hook must use OAuth/API-key paths directly.  Without this, the query
+    # planner (claude -p "Generate 1 to 5 search queries...") spawns a new CC
+    # session which re-fires the inject hook — infinite recursion.
+    import os as _os
+    _os.environ["QUAID_DAEMON"] = "1"
+
     parser = argparse.ArgumentParser(
         description="Quaid hook entry points for platform lifecycle integration",
     )
