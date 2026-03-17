@@ -755,7 +755,7 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         "current_stage": "",
         "completed_stages": [],
     }
-    if task == "all" and resume_checkpoint and checkpoint_path.exists():
+    if task == "all" and not dry_run and resume_checkpoint and checkpoint_path.exists():
         try:
             loaded = json.loads(checkpoint_path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict) and loaded.get("task") == task and loaded.get("status") == "running":
@@ -766,11 +766,11 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
                 )
         except Exception as exc:
             print(f"[checkpoint] WARNING: failed to parse resume checkpoint {checkpoint_path}: {exc}")
-    if task == "all":
+    if task == "all" and not dry_run:
         _atomic_write_json(checkpoint_path, checkpoint_state)
 
     def _checkpoint_save(stage: str = "", status: Optional[str] = None, completed: bool = False) -> None:
-        if task != "all":
+        if task != "all" or dry_run:
             return
         checkpoint_state["heartbeat_at"] = datetime.now().isoformat()
         if stage:
@@ -840,7 +840,8 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
 
     # ⚠️ LLM PROVIDER CHECK — janitor needs a working LLM provider for most tasks.
     # The adapter layer handles provider selection and authentication.
-    if task not in ("embeddings", "cleanup", "rag"):
+    # Skip in dry-run mode — dry-run never calls the LLM.
+    if not dry_run and task not in ("embeddings", "cleanup", "rag"):
         try:
             _llm = get_llm_provider()
             _profiles = _llm.get_profiles()
