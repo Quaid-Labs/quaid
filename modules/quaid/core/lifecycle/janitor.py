@@ -977,6 +977,22 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # remaining memory tasks are skipped and graduation is blocked.
         # Infrastructure tasks (0, 0b, 1, 7, 8) still run regardless.
         def _run_memory_graph_stage(stage: str, stage_dry_run: bool) -> Any:
+            # In dry-run mode, skip LLM-dependent plugin/lifecycle calls — they block
+            # on the LLM provider even though no changes will be applied. Instead, just
+            # report pending node counts so dry-run completes quickly.
+            if stage_dry_run:
+                result = RoutineResult()
+                try:
+                    with graph._get_conn() as _conn:
+                        pending = _conn.execute(
+                            "SELECT COUNT(*) FROM nodes WHERE status = 'pending'"
+                        ).fetchone()[0]
+                    result.metrics["pending_nodes"] = pending
+                    print(f"  [dry-run] {stage}: {pending} pending nodes would be processed")
+                except Exception:
+                    print(f"  [dry-run] {stage}: (could not count pending nodes)")
+                return result
+
             stage_cap = _stage_item_cap(stage)
             remaining_budget = _time_remaining()
             llm_timeout = 0.0
