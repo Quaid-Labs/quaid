@@ -211,9 +211,17 @@ class MemoryGraph:
             schema = f.read()
 
         with self._get_conn() as conn:
-            # Apply schema with sqlite's parser so inline comments do not
-            # accidentally suppress statements (e.g., FTS/triggers).
-            conn.executescript(schema)
+            # Skip full schema executescript if core tables already exist.
+            # executescript acquires an exclusive write lock for every statement;
+            # on an established DB this causes long contention with concurrent
+            # processes (e.g. daemon vs janitor).  Migrations below still run.
+            _nodes_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='nodes'"
+            ).fetchone()
+            if not _nodes_exists:
+                # Fresh DB — apply schema with sqlite's parser so inline comments
+                # do not accidentally suppress statements (e.g., FTS/triggers).
+                conn.executescript(schema)
 
             # Migrate: add new columns to existing DBs (safe, idempotent)
             for col, typedef in [
