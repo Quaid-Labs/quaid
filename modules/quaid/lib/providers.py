@@ -1082,7 +1082,7 @@ class OllamaEmbeddingsProvider(EmbeddingsProvider):
                     data=data,
                     headers={"Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(req, timeout=30) as resp:
+                with urllib.request.urlopen(req, timeout=120) as resp:
                     result = json.loads(resp.read().decode("utf-8"))
                     embeddings = result.get("embeddings", [])
                     if embeddings and embeddings[0]:

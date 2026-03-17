@@ -820,6 +820,12 @@ def sweep_orphaned_sessions(current_session_id: str = "") -> int:
 
 def daemon_loop(poll_interval: float = 5.0, idle_check_interval: float = 300.0) -> None:
     """Main daemon loop. Polls for signals and processes them."""
+    # Mark this process as the extraction daemon so LLM providers skip the
+    # claude -p subprocess path.  Using claude -p inside the daemon creates new
+    # CC sessions, which fire hooks, which start more daemons — an exponential
+    # process storm.  OAuth / API-key layers are used instead.
+    os.environ["QUAID_DAEMON"] = "1"
+
     logger.info("extraction daemon started (pid=%d, home=%s, instance=%s)", os.getpid(), _quaid_home(), _instance_id())
     write_pid(os.getpid())
 

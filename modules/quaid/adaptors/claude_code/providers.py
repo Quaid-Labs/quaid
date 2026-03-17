@@ -506,9 +506,12 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
                  max_tokens=4000, timeout=600):
         fail_hard = is_fail_hard_enabled()
 
-        # --- Layer 0: claude -p subprocess (primary for CC installations) ---
+        # --- Layer 0: claude -p subprocess ---
+        # Skipped when QUAID_DAEMON=1: spawning a CC subprocess inside the
+        # extraction daemon creates new CC sessions that fire hooks, which start
+        # more daemons, causing an exponential process/session storm.
         cli = self._get_cli_provider()
-        if cli:
+        if cli and not os.environ.get("QUAID_DAEMON"):
             try:
                 return cli.llm_call(messages, model_tier=model_tier,
                                     max_tokens=max_tokens, timeout=timeout)
