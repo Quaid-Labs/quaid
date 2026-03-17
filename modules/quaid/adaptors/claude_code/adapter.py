@@ -341,12 +341,11 @@ class ClaudeCodeAdapter(QuaidAdapter):
         try:
             from config import get_config
             cfg = get_config()
-            _sentinel = ("", "default")
-            deep = cfg.models.deep_reasoning if cfg.models.deep_reasoning not in _sentinel else "claude-opus-4-6"
-            fast = cfg.models.fast_reasoning if cfg.models.fast_reasoning not in _sentinel else "claude-haiku-4-5"
+            deep = cfg.models.deep_reasoning or None
+            fast = cfg.models.fast_reasoning or None
         except Exception:
-            deep = "claude-opus-4-6"
-            fast = "claude-haiku-4-5"
+            deep = None
+            fast = None
         return ClaudeCodeOAuthLLMProvider(deep_model=deep, fast_model=fast)
 
 

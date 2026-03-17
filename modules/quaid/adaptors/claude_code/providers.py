@@ -246,10 +246,16 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
     ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
     ANTHROPIC_VERSION = "2023-06-01"
 
+    # CC-specific defaults for each tier
+    _DEFAULT_DEEP_MODEL = "claude-opus-4-6"
+    _DEFAULT_FAST_MODEL = "claude-haiku-4-5"
+    # Config sentinel values meaning "adapter decides"
+    _MODEL_SENTINELS = ("", "default", None)
+
     def __init__(
         self,
-        deep_model: str = "claude-opus-4-6",
-        fast_model: str = "claude-haiku-4-5",
+        deep_model: Optional[str] = None,
+        fast_model: Optional[str] = None,
     ):
         self._deep_model = deep_model
         self._fast_model = fast_model
@@ -264,15 +270,17 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
             return None
         self._api_key_provider = AnthropicLLMProvider(
             api_key=api_key,
-            deep_model=self._deep_model,
-            fast_model=self._fast_model,
+            deep_model=self._resolve_model("deep"),
+            fast_model=self._resolve_model("fast"),
         )
         return self._api_key_provider
 
     def _resolve_model(self, model_tier: str) -> str:
-        if model_tier == "fast" and self._fast_model:
-            return self._fast_model
-        return self._deep_model
+        if model_tier == "fast":
+            m = self._fast_model
+            return m if m not in self._MODEL_SENTINELS else self._DEFAULT_FAST_MODEL
+        m = self._deep_model
+        return m if m not in self._MODEL_SENTINELS else self._DEFAULT_DEEP_MODEL
 
     def _api_call(self, token: str, model: str, messages: list,
                   max_tokens: int, timeout: float) -> LLMResult:
