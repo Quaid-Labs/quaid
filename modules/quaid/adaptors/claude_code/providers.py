@@ -359,17 +359,24 @@ class ClaudeCodeOAuthLLMProvider(LLMProvider):
 
         model = self._resolve_model(model_tier)
 
+        logger.debug(
+            "[claude-code-oauth] API call: model=%s tier=%s max_tokens=%s content_len=%s",
+            model, model_tier, max_tokens,
+            sum(len(m.get("content", "")) for m in messages),
+        )
         try:
             return self._api_call(token, model, messages, max_tokens, timeout)
         except urllib.error.HTTPError as e:
             if e.code != 401:
+                body = "<unread>"
                 try:
-                    body = e.read().decode("utf-8", errors="replace")
-                    logger.error(
-                        "[claude-code-oauth] HTTP %d from API — body: %s", e.code, body[:800]
-                    )
-                except Exception:
-                    pass
+                    body = e.read().decode("utf-8", errors="replace") or "<empty>"
+                except Exception as read_err:
+                    body = f"<read failed: {read_err}>"
+                logger.error(
+                    "[claude-code-oauth] HTTP %d from API — model=%s body: %s",
+                    e.code, model, body[:1200],
+                )
                 raise
 
             # 401 — try one refresh+retry
