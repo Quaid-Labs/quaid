@@ -557,15 +557,23 @@ Ask natural questions framed so the agent uses explicit recall rather than
 relying on whatever arrived via auto-inject:
 
 - `This is a test of memory recall. Please ignore any context that may have
-  been auto-injected this session and use the quaid memory recall tool
-  directly. What have I told you about my family?`
-- `Same — use explicit quaid recall, not auto-inject. What do you know about
-  my exercise habits or recent plans?`
+  been auto-injected this session and run: quaid recall "my family" — use the
+  quaid CLI directly via your shell/bash tool. What have I told you about my
+  family?`
+- `Same — use quaid recall CLI directly (bash tool), not auto-inject. Run:
+  quaid recall "exercise habits recent plans". What do you know about my
+  exercise habits or recent plans?`
 
 Pass:
-- the agent makes an explicit recall tool call in response
-- the answers are materially grounded in stored memory
+- the agent runs `quaid recall` via bash/shell tool OR makes an equivalent
+  explicit memory lookup (not just reading auto-injected context)
+- the answers are materially grounded in stored memory (facts from M1–M5)
 - the agent does not just repeat what was already in injected context
+
+**Note:** The quaid plugin does not currently register a native OC `memory_recall`
+tool — explicit recall requires the agent to use the `quaid recall` CLI via bash.
+If the agent says "no dedicated recall tool available", prompt it to run
+`quaid recall "query"` via its bash/shell tool instead.
 
 ### M7: Graph Traversal Verification
 
