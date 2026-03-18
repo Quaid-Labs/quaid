@@ -128,7 +128,8 @@ def hook_inject(args):
             # encourage recall where there is likely nothing useful to find.
             context_parts.append(
                 "Note: Treat the above memories as guidance. "
-                "If a specific fact you need is not here, use `quaid recall` to search."
+                "If a specific fact you need is not here, use `quaid recall` to search memories "
+                "or `quaid docs search \"<topic>\"` to search project documentation."
             )
 
         doc_chunks = docs_bundle.get("chunks", []) if isinstance(docs_bundle, dict) else []
