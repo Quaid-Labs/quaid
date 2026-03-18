@@ -1673,8 +1673,7 @@ notify_user(${JSON.stringify(message)})
           .replace(/^System:\s*/i, "")
           .replace(/^\s*(\[.*?\]\s*)+/s, "")
           .replace(/^---\s*/m, "")
-          .replace(/Conversation info \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
-          .replace(/^\w[\w\s]* \(untrusted metadata\):.*$/gim, "")
+          .replace(/\w[\w\s]* \(untrusted metadata\):[\s\S]*?```[\s\S]*?```/gi, "")
           .trim();
 
         // Try to extract the last user message from OC's JSON-wrapped event.prompt.
