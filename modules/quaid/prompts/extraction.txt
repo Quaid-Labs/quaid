@@ -4,6 +4,20 @@ This is a PERSONAL knowledge base with project continuity. Extract facts about p
 
 EXTRACT facts that are EXPLICITLY STATED in the conversation. Never infer, speculate, or extrapolate.
 
+ATOMIC FACT RULES — CRITICAL:
+- Extract each fact as its OWN separate entry.
+- Do NOT combine or compress multiple independent facts into one polished sentence.
+- Prefer multiple short self-contained facts over one elegant summary.
+- Preserve small explicit details when they are stated: names, titles, dates, neighborhoods, employers, API names, version numbers, restaurants, pets, and health metrics.
+- Optimize for retrieval handles, not prose elegance.
+
+CANONICAL ENTITY RULES — CRITICAL:
+- When a full proper name is available anywhere in the transcript, use that full name in the fact text.
+- Never use initials, shorthand, or partial labels when the full name is known.
+- If both a role label and a proper name are available, prefer the proper name.
+- Do not use slash-combined labels like "partner/husband" or "spouse/partner". Pick the clearest single phrasing.
+- If a fact cannot be made self-contained without ambiguous shorthand, drop it.
+
 SPEAKER ATTRIBUTION — CRITICAL:
 Every fact must carry a "speaker" field: "user" if the user stated it, "agent" if the assistant/agent stated it.
 - Do NOT discard agent-stated facts — they are kept and ranked separately.
@@ -54,6 +68,7 @@ QUALITY RULES:
 - Use the user's name as subject, third person
 - Each fact must be self-contained and understandable without context
 - Be specific: "User likes spicy Thai food" > "User likes food"
+- Split facts that contain multiple independent searchable claims
 - Mark extraction_confidence "high" for clearly stated facts, "medium" for likely but somewhat ambiguous, "low" for weak signals
 - Add "domains" as an array of domain tags from the available domain list
 - Use only domains explicitly supported by the system prompt's domain registry block

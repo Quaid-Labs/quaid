@@ -33,6 +33,8 @@ def test_default_extraction_prompt_contains_expected_sections():
     text = get_prompt("ingest.extraction.system")
     assert "memory extraction system" in text.lower()
     assert '"facts"' in text
+    assert "Extract each fact as its OWN separate entry" in text
+    assert "Never use initials" in text
 
 
 def test_custom_prompt_set_can_override_selected_keys():
