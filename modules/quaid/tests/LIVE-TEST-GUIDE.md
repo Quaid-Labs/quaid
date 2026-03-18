@@ -426,6 +426,20 @@ tmux send-keys -t main:99 "ssh alfie.local" Enter
 tmux send-keys -t main:99 "cd ~/quaid && QUAID_HOME=~/quaid QUAID_INSTANCE=claude-code-main claude --dangerously-skip-permissions" Enter
 ```
 
+**MANDATORY — set model before any CC interaction:**
+
+Once CC is open, immediately run `/model` and select `claude-haiku-4-5` (or
+`claude-sonnet-4-6` if Haiku quality is too low). **Never run CC milestones on
+Opus** — it is the most expensive model and live tests do not require it.
+Do not send any test messages until the model is confirmed non-Opus.
+
+```
+# In the CC pane:
+/model
+# Select: claude-haiku-4-5  (preferred)
+# Fallback: claude-sonnet-4-6
+```
+
 Read replies with:
 
 ```bash
