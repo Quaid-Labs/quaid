@@ -1331,7 +1331,7 @@ how to link and use the project without being given function names.
 Prepare a source root:
 
 ```bash
-ssh example.local 'mkdir -p /tmp/quaid-cross-src && cat > /tmp/quaid-cross-src/main.py <<\"PY\"
+ssh example.local 'mkdir -p ~/quaid/shared/projects/cross-live-test-src && cat > ~/quaid/shared/projects/cross-live-test-src/main.py <<\"PY\"
 def harbor_status():
     return "North pier beacon is offline"
 PY'
@@ -1339,7 +1339,7 @@ PY'
 
 Ask OC naturally:
 
-- `Can you create a project named cross-live-test for /tmp/quaid-cross-src?`
+- `Can you create a project named cross-live-test for ~/quaid/shared/projects/cross-live-test-src?`
 - `Do you see the existing cross-live-test project? Can we add a document to it?`
 - `Please add a project document that says the north pier beacon is offline and the maintenance window starts at 02:15 UTC.`
 
