@@ -1358,7 +1358,7 @@ notify_user(${JSON.stringify(message)})
           msg_count: eventMessages.length,
           raw_prefix: rawPrompt.slice(0, 80)
         });
-        const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|\/\w|Exec failed)/;
+        const STARTUP_SKIP_RE = /^(A new session|Read HEARTBEAT|HEARTBEAT|You are being asked to|You are running as a subagent|You are a subagent|\/\w|Exec failed)/;
         if (STARTUP_SKIP_RE.test(query)) {
           const jsonRecovered = extractFromOCPromptJson(rawPrompt);
           const rawRecovered = jsonRecovered.length >= 3 ? jsonRecovered : scrubQuery(rawPrompt);
