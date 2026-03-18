@@ -2246,6 +2246,15 @@ notify_memory_recall(data['memories'], source_breakdown=data['source_breakdown']
                   writeHookTrace("session_index.new_key_skip", { reason: "mtime", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, installed_at_ms: installedAtMs, watcher_start_ms: watcherStartMs });
                   continue;
                 }
+                // Skip sessions older than 2 hours — they were active before the current
+                // work session and would already have been extracted by a prior OC process.
+                // Without this cap, a restart re-signals all sessions since Quaid install,
+                // flooding the daemon queue and delaying the active session by 10+ minutes.
+                const FANOUT_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
+                if (priorMtime < Date.now() - FANOUT_MAX_AGE_MS) {
+                  writeHookTrace("session_index.new_key_skip", { reason: "too_old", prior_sid: priorSid, prior_key: priorKey, prior_mtime: priorMtime, age_ms: Date.now() - priorMtime });
+                  continue;
+                }
                 if (!facade.shouldProcessLifecycleSignal(priorSid, {
                   label: "ResetSignal",
                   source: "session_index",
