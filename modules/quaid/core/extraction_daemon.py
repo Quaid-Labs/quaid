@@ -562,6 +562,21 @@ def process_signal(signal_data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.warning("[%s] session %s: notification failed: %s", label, session_id, e)
 
+        # Index session into session_logs so 'quaid session list/load' can find it.
+        # Run after notification so a failure here doesn't block the main path.
+        try:
+            from core.ingest_runtime import run_session_logs_ingest
+            run_session_logs_ingest(
+                session_id=session_id,
+                owner_id=owner,
+                label=label,
+                transcript_path=str(transcript_path),
+                message_count=len(new_lines),
+                topic_hint=result.get("topic_hint", ""),
+            )
+        except Exception as e:
+            logger.warning("[%s] session %s: session_logs ingest failed: %s", label, session_id, e)
+
         # B054: Only advance cursor if extraction completed all chunks
         chunks_processed = result.get("chunks_processed", 0)
         chunks_total = result.get("chunks_total", 0)
