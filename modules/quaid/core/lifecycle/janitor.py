@@ -894,8 +894,20 @@ def _run_task_optimized_inner(task: str, dry_run: bool = True, incremental: bool
         # Infrastructure tasks (always run): tests, cleanup
     }
 
+    # Tasks that require an active LLM (Opus). Skipped in dry-run mode so that
+    # dry-run completes quickly without blocking on an LLM provider. This enforces
+    # the invariant stated at line 843: "dry-run never calls the LLM".
+    _LLM_TASKS = frozenset({
+        "review", "dedup_review", "decay_review",
+        "workspace", "snippets", "journal",
+        "docs_staleness", "docs_cleanup",
+    })
+
     def _system_enabled_or_skip(task_name: str, task_label: str) -> bool:
         """Check if the system gate for a task is enabled. Prints skip message if disabled."""
+        if dry_run and task_name in _LLM_TASKS:
+            print(f"[{task_label}] SKIPPED — LLM tasks do not run in dry-run mode (use --apply)\n")
+            return False
         if task_name == "contradictions" and not bool(getattr(_cfg.janitor.contradiction, "enabled", False)):
             print(f"[{task_label}] SKIPPED — contradictions disabled in janitor config\n")
             return False
